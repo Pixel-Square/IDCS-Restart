@@ -2,25 +2,15 @@ from rest_framework import generics, permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.contrib.auth import get_user_model
-from .serializers import UserSerializer, RegisterSerializer
+from .serializers import UserSerializer, RegisterSerializer, MeSerializer, IdentifierTokenObtainPairSerializer
 from rest_framework_simplejwt.views import TokenObtainPairView
-from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 User = get_user_model()
 
 
-class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
-    @classmethod
-    def get_token(cls, user):
-        token = super().get_token(user)
-        # add custom claims
-        if hasattr(user, 'role') and user.role:
-            token['role'] = user.role.name
-        return token
-
-
 class CustomTokenObtainPairView(TokenObtainPairView):
-    serializer_class = CustomTokenObtainPairSerializer
+    # Uses identifier-based serializer (identifier may be email, student reg_no, or staff staff_id)
+    serializer_class = IdentifierTokenObtainPairSerializer
 
 
 class RegisterView(generics.CreateAPIView):
@@ -32,5 +22,5 @@ class MeView(APIView):
     permission_classes = (permissions.IsAuthenticated,)
 
     def get(self, request):
-        serializer = UserSerializer(request.user)
+        serializer = MeSerializer(request.user)
         return Response(serializer.data)
