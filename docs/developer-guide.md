@@ -24,6 +24,46 @@ Important models (backend/academics)
 - `StudentProfile` (OneToOne User, reg_no, section FK, batch)
 - `StaffProfile` (OneToOne User, staff_id, department FK, designation)
 
+Attendance models (backend/academics)
+- `TeachingAssignment` (staff FK, subject FK, section FK, academic_year FK, is_active)
+- `AttendanceSession` (teaching_assignment FK, date, period?, created_by, is_locked, created_at)
+- `AttendanceRecord` (attendance_session FK, student FK, status {Present/Absent}, marked_at)
+
+APIs: Attendance
+- Base path: `/api/attendance-sessions/` and `/api/attendance-records/` (registered in `academics/urls.py`)
+
+- `AttendanceSessionViewSet` (`AttendanceSessionSerializer`)
+  - Actions: `list`, `create`, `lock` (POST `/api/attendance-sessions/{id}/lock/`)
+  - Permissions: staff may only see/create sessions for their own `TeachingAssignment`; users with `HOD`/`ADVISOR` roles may manage sessions scoped to their department; admins see all.
+  - Validation: prevents duplicate session for same teaching_assignment+date+period.
+
+- `AttendanceRecordViewSet` (`AttendanceRecordSerializer` / `BulkAttendanceRecordSerializer`)
+  - Actions: `create` (supports bulk list), `list` (students see only their records; staff see records for their sessions)
+  - Constraints: prevents duplicate records per (attendance_session, student); disallows marking when session is locked; staff may only mark for their own sessions.
+
+Serializer & implementation notes
+- `AttendanceSessionSerializer` accepts `teaching_assignment_id` on create and returns expanded `teaching_assignment` info (subject, section, academic_year).
+- `AttendanceRecordSerializer` accepts `attendance_session_id` and student PK; `BulkAttendanceRecordSerializer` enforces all records belong to the same session and uses `bulk_create`.
+- Permission checks currently use role-name checks (`HOD`, `ADVISOR`) and `staff_profile` ownership. Adjust role names or permission codes to match your deployment as needed.
+
+Admin
+- `AttendanceSession` and `AttendanceRecord` are registered in the admin with `raw_id_fields` for lookup performance and filters for dates/department/status.
+
+Developer commands (attendance)
+- Apply migrations added for attendance models:
+```bash
+cd backend
+python manage.py migrate
+```
+
+- Manually test with the admin or DRF browseable API, or use cURL / Postman to exercise the endpoints. Example (create session):
+```bash
+curl -X POST -H "Authorization: Bearer <access>" -H "Content-Type: application/json" \
+  -d '{"teaching_assignment_id": 1, "date": "2026-01-23", "period": "1"}' \
+  https://localhost:8000/api/attendance-sessions/
+```
+
+
 APIs and auth flow
 - Login (`/api/accounts/token/`): accepts `identifier` + `password`. Identifier resolution order:
   1. If identifier contains `@` → lookup `User.email`.

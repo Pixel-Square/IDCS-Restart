@@ -10,6 +10,8 @@ from .models import (
     StudentProfile,
     StaffProfile,
 )
+from .models import TeachingAssignment
+from .models import AttendanceSession, AttendanceRecord
 
 
 @admin.register(StudentProfile)
@@ -88,3 +90,31 @@ class SubjectAdmin(admin.ModelAdmin):
     list_display = ('code', 'name', 'semester')
     search_fields = ('code', 'name')
     list_filter = ('semester',)
+
+
+@admin.register(TeachingAssignment)
+class TeachingAssignmentAdmin(admin.ModelAdmin):
+    list_display = ('staff', 'subject', 'section', 'academic_year', 'is_active')
+    search_fields = (
+        'staff__staff_id', 'staff__user__username', 'subject__code', 'subject__name', 'section__name'
+    )
+    list_filter = ('academic_year', 'is_active', 'section__semester__course__department')
+    raw_id_fields = ('staff', 'subject', 'section', 'academic_year')
+
+
+@admin.register(AttendanceSession)
+class AttendanceSessionAdmin(admin.ModelAdmin):
+    list_display = ('teaching_assignment', 'date', 'period', 'created_by', 'is_locked', 'created_at')
+    search_fields = (
+        'teaching_assignment__staff__staff_id', 'teaching_assignment__subject__code', 'teaching_assignment__section__name'
+    )
+    list_filter = ('date', 'is_locked', 'teaching_assignment__academic_year', 'teaching_assignment__section__semester__course__department')
+    raw_id_fields = ('teaching_assignment', 'created_by')
+
+
+@admin.register(AttendanceRecord)
+class AttendanceRecordAdmin(admin.ModelAdmin):
+    list_display = ('attendance_session', 'student', 'status', 'marked_at')
+    search_fields = ('student__reg_no', 'student__user__username')
+    list_filter = ('status', 'attendance_session__date', 'attendance_session__teaching_assignment__academic_year')
+    raw_id_fields = ('attendance_session', 'student')

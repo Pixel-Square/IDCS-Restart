@@ -101,3 +101,117 @@ class StaffProfile(models.Model):
 
     def __str__(self):
         return f"Staff {self.staff_id} ({self.user.username})"
+
+
+class TeachingAssignment(models.Model):
+    """Assign a staff member to teach a subject for a section in an academic year.
+
+    Ensures a staff–subject–section–academic_year tuple is unique.
+    """
+    staff = models.ForeignKey(
+        StaffProfile,
+        on_delete=models.CASCADE,
+        related_name='teaching_assignments'
+    )
+    subject = models.ForeignKey(
+        Subject,
+        on_delete=models.CASCADE,
+        related_name='teaching_assignments'
+    )
+    section = models.ForeignKey(
+        Section,
+        on_delete=models.CASCADE,
+        related_name='teaching_assignments'
+    )
+    academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.PROTECT,
+        related_name='teaching_assignments'
+    )
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        verbose_name = 'Teaching Assignment'
+        verbose_name_plural = 'Teaching Assignments'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['staff', 'subject', 'section', 'academic_year'],
+                name='unique_staff_subject_section_year'
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.staff.staff_id} -> {self.subject.code} ({self.section} | {self.academic_year})"
+
+
+# Attendance models
+class AttendanceSession(models.Model):
+    """A session when attendance is taken for a teaching assignment.
+
+    `period` is optional and can be used for multi-period days.
+    """
+    teaching_assignment = models.ForeignKey(
+        TeachingAssignment,
+        on_delete=models.CASCADE,
+        related_name='attendance_sessions'
+    )
+    date = models.DateField()
+    period = models.CharField(max_length=32, null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_attendance_sessions'
+    )
+    is_locked = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Attendance Session'
+        verbose_name_plural = 'Attendance Sessions'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['teaching_assignment', 'date', 'period'],
+                name='unique_teaching_date_period'
+            )
+        ]
+
+    def __str__(self):
+        period_part = f" Period {self.period}" if self.period else ""
+        return f"{self.teaching_assignment} — {self.date}{period_part}"
+
+
+class AttendanceRecord(models.Model):
+    PRESENT = 'P'
+    ABSENT = 'A'
+    STATUS_CHOICES = (
+        (PRESENT, 'Present'),
+        (ABSENT, 'Absent'),
+    )
+
+    attendance_session = models.ForeignKey(
+        AttendanceSession,
+        on_delete=models.CASCADE,
+        related_name='records'
+    )
+    student = models.ForeignKey(
+        StudentProfile,
+        on_delete=models.CASCADE,
+        related_name='attendance_records'
+    )
+    status = models.CharField(max_length=1, choices=STATUS_CHOICES)
+    marked_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Attendance Record'
+        verbose_name_plural = 'Attendance Records'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['attendance_session', 'student'],
+                name='unique_session_student'
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.student.reg_no} — {self.get_status_display()} @ {self.attendance_session}"
