@@ -1,4 +1,4 @@
-import axios from 'axios'
+import axios, { AxiosHeaders } from 'axios'
 
 const BASE = `${import.meta.env.VITE_API_BASE || 'http://localhost:8000'}/api/accounts/`
 
@@ -43,7 +43,7 @@ apiClient.interceptors.response.use(
           subscribeTokenRefresh((token: string) => {
             const headers = (originalRequest.headers ?? {}) as Record<string, string>
             headers['Authorization'] = `Bearer ${token}`
-            originalRequest.headers = headers
+            originalRequest.headers = new AxiosHeaders(headers)
             resolve(apiClient(originalRequest))
           })
         })
@@ -55,7 +55,7 @@ apiClient.interceptors.response.use(
         onRefreshed(newAccess)
         const headers = (originalRequest.headers ?? {}) as Record<string, string>
         headers['Authorization'] = `Bearer ${newAccess}`
-        originalRequest.headers = headers
+        originalRequest.headers = new AxiosHeaders(headers)
         return apiClient(originalRequest)
       } catch (refreshErr) {
         // refresh failed -> logout
@@ -93,11 +93,11 @@ export function logout(){
 // Attach access token to outgoing requests
 apiClient.interceptors.request.use(config => {
   const token = localStorage.getItem('access')
-      if (token) {
-    const headers = (config.headers ?? {}) as Record<string, string>
-    headers['Authorization'] = `Bearer ${token}`
-    config.headers = headers
-  }
+    if (token) {
+      const headers = (config.headers ?? {}) as Record<string, string>
+      headers['Authorization'] = `Bearer ${token}`
+      config.headers = new AxiosHeaders(headers)
+    }
   return config
 })
 
