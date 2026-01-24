@@ -6,4 +6,6 @@ urlpatterns = [
     path('api/accounts/', include('accounts.urls')),
     # also expose the same endpoints under /api/auth/ for compatibility
     path('api/auth/', include('accounts.urls')),
+    path('api/applications/', include('applications.urls')),
+    path('api/attachments/', include('applications.attachments_urls')),
 ]

@@ -12,6 +12,7 @@ from .models import (
 )
 from .models import TeachingAssignment
 from .models import AttendanceSession, AttendanceRecord
+from .models import StudentMentorMap, SectionAdvisor, DepartmentRole
 
 
 @admin.register(StudentProfile)
@@ -118,3 +119,27 @@ class AttendanceRecordAdmin(admin.ModelAdmin):
     search_fields = ('student__reg_no', 'student__user__username')
     list_filter = ('status', 'attendance_session__date', 'attendance_session__teaching_assignment__academic_year')
     raw_id_fields = ('attendance_session', 'student')
+
+
+@admin.register(StudentMentorMap)
+class StudentMentorMapAdmin(admin.ModelAdmin):
+    list_display = ('student', 'mentor', 'academic_year', 'is_active')
+    list_filter = ('academic_year', 'is_active', 'student__section__semester__course__department')
+    search_fields = ('student__reg_no', 'mentor__staff_id', 'mentor__user__username')
+    raw_id_fields = ('student', 'mentor', 'academic_year')
+
+
+@admin.register(SectionAdvisor)
+class SectionAdvisorAdmin(admin.ModelAdmin):
+    list_display = ('section', 'advisor', 'academic_year', 'is_active')
+    list_filter = ('academic_year', 'is_active', 'section__semester__course__department')
+    search_fields = ('section__name', 'advisor__staff_id', 'advisor__user__username')
+    raw_id_fields = ('section', 'advisor', 'academic_year')
+
+
+@admin.register(DepartmentRole)
+class DepartmentRoleAdmin(admin.ModelAdmin):
+    list_display = ('department', 'role', 'staff', 'academic_year', 'is_active')
+    list_filter = ('academic_year', 'is_active', 'department', 'role')
+    search_fields = ('staff__staff_id', 'staff__user__username')
+    raw_id_fields = ('staff', 'academic_year')

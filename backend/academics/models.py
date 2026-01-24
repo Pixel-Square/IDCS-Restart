@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import Q
 from django.conf import settings
 
 
@@ -101,6 +102,96 @@ class StaffProfile(models.Model):
 
     def __str__(self):
         return f"Staff {self.staff_id} ({self.user.username})"
+
+
+class StudentMentorMap(models.Model):
+    student = models.ForeignKey(StudentProfile, on_delete=models.CASCADE, related_name='mentor_mappings')
+    mentor = models.ForeignKey(StaffProfile, on_delete=models.CASCADE, related_name='mentee_mappings')
+    academic_year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT, related_name='student_mentors')
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        verbose_name = 'Student Mentor Mapping'
+        verbose_name_plural = 'Student Mentor Mappings'
+        constraints = [
+            models.UniqueConstraint(fields=['student', 'academic_year'], condition=Q(is_active=True), name='unique_active_mentor_per_student_year')
+        ]
+
+    def __str__(self):
+        return f"{self.student.reg_no} -> {self.mentor.staff_id} ({self.academic_year.name})"
+
+    def clean(self):
+        # minimal validation: mentor must belong to same department as student's course department
+        student_dept = None
+        if self.student and self.student.section and self.student.section.semester and self.student.section.semester.course:
+            student_dept = self.student.section.semester.course.department
+
+        mentor_dept = getattr(self.mentor, 'department', None)
+        if student_dept and mentor_dept and student_dept != mentor_dept:
+            from django.core.exceptions import ValidationError
+            raise ValidationError('Mentor must belong to the same department as the student')
+
+
+class SectionAdvisor(models.Model):
+    section = models.ForeignKey(Section, on_delete=models.CASCADE, related_name='advisor_mappings')
+    advisor = models.ForeignKey(StaffProfile, on_delete=models.CASCADE, related_name='section_advisories')
+    academic_year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT, related_name='section_advisors')
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        verbose_name = 'Section Advisor'
+        verbose_name_plural = 'Section Advisors'
+        constraints = [
+            models.UniqueConstraint(fields=['section', 'academic_year'], condition=Q(is_active=True), name='unique_active_advisor_per_section_year')
+        ]
+
+    def __str__(self):
+        return f"{self.section} -> {self.advisor.staff_id} ({self.academic_year.name})"
+
+    def clean(self):
+        # advisor must belong to the department of the section's course
+        sec = self.section
+        section_dept = None
+        try:
+            if sec and sec.semester and sec.semester.course:
+                section_dept = sec.semester.course.department
+        except Exception:
+            section_dept = None
+
+        advisor_dept = getattr(self.advisor, 'department', None)
+        if section_dept and advisor_dept and section_dept != advisor_dept:
+            from django.core.exceptions import ValidationError
+            raise ValidationError('Advisor must belong to the same department as the section')
+
+
+class DepartmentRole(models.Model):
+    class DeptRole(models.TextChoices):
+        HOD = 'HOD', 'Head of Department'
+        AHOD = 'AHOD', 'Assistant HOD'
+
+    department = models.ForeignKey(Department, on_delete=models.CASCADE, related_name='department_roles')
+    staff = models.ForeignKey(StaffProfile, on_delete=models.CASCADE, related_name='department_roles')
+    role = models.CharField(max_length=10, choices=DeptRole.choices)
+    academic_year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT, related_name='department_roles')
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        verbose_name = 'Department Role'
+        verbose_name_plural = 'Department Roles'
+        constraints = [
+            # Only one active HOD per department per academic year
+            models.UniqueConstraint(fields=['department', 'academic_year'], condition=Q(role='HOD', is_active=True), name='unique_active_hod_per_dept_year')
+        ]
+
+    def __str__(self):
+        return f"{self.department.code} - {self.get_role_display()} ({self.staff.staff_id} | {self.academic_year.name})"
+
+    def clean(self):
+        # staff must belong to the same department
+        staff_dept = getattr(self.staff, 'department', None)
+        if staff_dept and self.department and staff_dept != self.department:
+            from django.core.exceptions import ValidationError
+            raise ValidationError('Staff must belong to the selected department')
 
 
 class TeachingAssignment(models.Model):

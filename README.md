@@ -34,3 +34,13 @@ npm run dev
 Notes:
 - The backend `AUTH_USER_MODEL` is `accounts.User` and includes a `role` FK. Role mappings are in `RoleMap`.
 - The frontend expects the backend API base as `VITE_API_BASE` env var; defaults to `http://localhost:8000`.
+
+
+from applications.models import Application
+from accounts.models import User
+from applications.services.approval_engine import process_approval
+
+app = Application.objects.get(pk=1)
+user = User.objects.get(pk=5)   # example approver
+process_approval(app, user, 'REJECT', remarks='not ok')
+print(app.status, app.current_step_id)
