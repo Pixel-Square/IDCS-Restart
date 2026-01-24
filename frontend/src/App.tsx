@@ -1,39 +1,58 @@
-import React, { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import { getMe, logout } from './services/auth'
+import React, { useEffect, useState } from "react";
+import { getMe } from "./services/auth";
+import Navbar from "./components/Navbar";
+import HomePage from "./components/HomePage";
 
-type RoleObj = { name: string }
+type RoleObj = { name: string };
 type Me = {
-  id: number
-  username: string
-  email?: string
-  roles?: string[] | RoleObj[]
-  permissions?: string[]
-}
+  id: number;
+  username: string;
+  email?: string;
+  roles?: string[] | RoleObj[];
+  permissions?: string[];
+};
 
-export default function App(){
-  const [user, setUser] = useState<Me | null>(null)
-  const nav = useNavigate()
+export default function App() {
+  const [user, setUser] = useState<Me | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  useEffect(()=>{
-    getMe().then(r=> setUser(r)).catch(()=>{})
-  },[])
+  useEffect(() => {
+    getMe()
+      .then((r) => {
+        // Normalize roles to string array
+        const normalizedUser = {
+          ...r,
+          roles: Array.isArray(r.roles)
+            ? r.roles.map((role: string | RoleObj) =>
+                typeof role === "string" ? role : role.name,
+              )
+            : [],
+        };
+        setUser(normalizedUser);
+      })
+      .catch(() => setUser(null))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return (
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+          height: "100vh",
+        }}
+      >
+        <p style={{ color: "#6b7280" }}>Loading...</p>
+      </div>
+    );
+  }
 
   return (
-    <div style={{padding:20}}>
-      <h1>College ERP - Demo</h1>
-      {user ? (
-        <div>
-          <p>Welcome, {user.username} — roles: {Array.isArray(user.roles) ? (user.roles as string[]).join(', ') : (Array.isArray(user.roles) ? (user.roles as RoleObj[]).map(r=>r.name).join(', ') : 'none')}</p>
-          <p>Permissions: {Array.isArray(user.permissions) ? user.permissions.join(', ') : ''}</p>
-          <button onClick={() => { logout(); nav('/login') }}>Logout</button>
-        </div>
-      ) : (
-        <div>
-          <p>You are not logged in.</p>
-          <Link to="/login">Login</Link>
-        </div>
-      )}
+    <div>
+      <Navbar user={user} />
+      <HomePage user={user} />
     </div>
-  )
+  );
 }
