@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from "react";
+import { Routes, Route } from "react-router-dom";
 import { getMe } from "./services/auth";
 import Navbar from "./components/Navbar";
 import HomePage from "./components/HomePage";
+import DashboardPage from "./pages/Dashboard";
 
 type RoleObj = { name: string };
 type Me = {
@@ -52,7 +54,11 @@ export default function App() {
   return (
     <div>
       <Navbar user={user} />
-      <HomePage user={user} />
+      <Routes>
+        <Route path="/" element={<HomePage user={user} />} />
+        <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="*" element={<HomePage user={user} />} />
+      </Routes>
     </div>
   );
 }

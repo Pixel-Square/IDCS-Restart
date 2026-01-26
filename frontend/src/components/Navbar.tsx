@@ -37,15 +37,6 @@ export default function Navbar({ user }: NavbarProps) {
         <div className="navbar-links">
           {user ? (
             <>
-              <Link to="/" className="nav-link">
-                Dashboard
-              </Link>
-              <Link to="/academics" className="nav-link">
-                Academics
-              </Link>
-              <Link to="/attendance" className="nav-link">
-                Attendance
-              </Link>
               <div className="user-menu">
                 <span className="user-name">{user.username}</span>
                 <button onClick={handleLogout} className="logout-btn">

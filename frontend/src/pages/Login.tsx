@@ -34,7 +34,8 @@ export default function Login() {
 
     try {
       await login(identifier, password);
-      nav("/");
+      // Redirect to dashboard after successful login
+      nav("/dashboard");
     } catch (err) {
       const serverMsg = extractServerMessage(err) || "Login failed";
       setError(serverMsg);
