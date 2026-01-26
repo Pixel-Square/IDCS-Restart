@@ -1,6 +1,9 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 from django.conf import settings
+from django.core.exceptions import ValidationError
+from django.db.models.signals import m2m_changed
+from django.dispatch import receiver
 
 
 class User(AbstractUser):
@@ -17,6 +20,39 @@ class User(AbstractUser):
 
     def __str__(self):
         return self.username
+
+
+def _get_profile_type(user):
+    # Return 'STUDENT' or 'STAFF' based on attached profile
+    if hasattr(user, 'student_profile') and user.student_profile is not None:
+        return 'STUDENT'
+    if hasattr(user, 'staff_profile') and user.staff_profile is not None:
+        return 'STAFF'
+    return None
+
+
+def validate_roles_for_user(user, roles):
+    """Validate that the given roles (iterable of Role instances) are compatible with user's profile.
+
+    Raises `ValidationError` on invalid assignment.
+    """
+    profile = _get_profile_type(user)
+    if profile is None:
+        raise ValidationError('User must have exactly one profile (student or staff) before assigning roles.')
+
+    # normalize role names
+    role_names = {getattr(r, 'name', str(r)).upper() for r in roles}
+
+    STUDENT_ALLOWED = {'STUDENT'}
+    STAFF_ALLOWED = {'STAFF', 'FACULTY', 'ADVISOR', 'HOD', 'ADMIN'}
+
+    if profile == 'STUDENT':
+        invalid = role_names - STUDENT_ALLOWED
+    else:
+        invalid = role_names & {'STUDENT'}  # staff must not have STUDENT
+
+    if invalid:
+        raise ValidationError(f'Invalid role(s) for profile {profile}: {", ".join(sorted(invalid))}')
 
 class Role(models.Model):
     """
@@ -80,3 +116,41 @@ class UserRole(models.Model):
 
     def __str__(self):
         return f"{self.user.username} -> {self.role.name}"
+
+    def save(self, *args, **kwargs):
+        # Validate role compatibility before saving
+        try:
+            validate_roles_for_user(self.user, [self.role])
+        except ValidationError:
+            # re-raise to surface to callers
+            raise
+        return super().save(*args, **kwargs)
+
+
+# Keep User.roles assignments safe (covers .roles.add/.remove/.clear usage)
+@receiver(m2m_changed, sender=User.roles.through)
+def _user_roles_changed(sender, instance, action, reverse, model, pk_set, **kwargs):
+    # action can be: pre_add, post_add, pre_remove, post_remove, pre_clear, post_clear
+    if action == 'pre_add' and pk_set:
+        # validate roles being added
+        roles_to_add = model.objects.filter(pk__in=pk_set)
+        # final roles = existing + to add
+        existing = set(r.name.upper() for r in instance.roles.all())
+        to_add = set(r.name.upper() for r in roles_to_add)
+        final = existing | to_add
+        try:
+            validate_roles_for_user(instance, [r for r in model.objects.filter(name__in=[n for n in final])])
+        except ValidationError as e:
+            raise
+
+    if action in ('pre_remove', 'pre_clear'):
+        # ensure user will have at least one role left
+        existing_qs = instance.roles.all()
+        existing = set(r.pk for r in existing_qs)
+        if action == 'pre_clear':
+            remaining = set()
+        else:
+            remaining = existing - set(pk_set or [])
+
+        if not remaining:
+            raise ValidationError('User must have at least one role; cannot remove all roles.')

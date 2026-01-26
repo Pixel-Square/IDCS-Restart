@@ -60,6 +60,8 @@ class MeSerializer(serializers.Serializer):
     email = serializers.EmailField(read_only=True)
     roles = serializers.SerializerMethodField()
     permissions = serializers.SerializerMethodField()
+    profile_type = serializers.SerializerMethodField()
+    profile = serializers.SerializerMethodField()
 
     def get_roles(self, obj):
         return [r.name for r in obj.roles.all()]
@@ -70,6 +72,34 @@ class MeSerializer(serializers.Serializer):
         perms = get_user_permissions(obj)
         # return sorted list for consistency
         return sorted(perms)
+
+    def get_profile_type(self, obj):
+        # Explicit profile type for frontend
+        if hasattr(obj, 'student_profile') and obj.student_profile is not None:
+            return 'STUDENT'
+        if hasattr(obj, 'staff_profile') and obj.staff_profile is not None:
+            return 'STAFF'
+        raise serializers.ValidationError('User does not have an associated profile.')
+
+    def get_profile(self, obj):
+        # Minimal profile payload to avoid touching academic serializers
+        if hasattr(obj, 'student_profile') and obj.student_profile is not None:
+            sp = obj.student_profile
+            return {
+                'reg_no': sp.reg_no,
+                'section': getattr(sp.section, 'name', None),
+                'batch': sp.batch,
+                'status': sp.status,
+            }
+        if hasattr(obj, 'staff_profile') and obj.staff_profile is not None:
+            st = obj.staff_profile
+            return {
+                'staff_id': st.staff_id,
+                'department': getattr(st.department, 'code', None),
+                'designation': st.designation,
+                'status': st.status,
+            }
+        return None
 
 
 class IdentifierTokenObtainPairSerializer(serializers.Serializer):
