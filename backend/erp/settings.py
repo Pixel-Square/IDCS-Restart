@@ -1,3 +1,5 @@
+﻿# Added 'OBE.apps.ObeConfig', on 2026-01-27
+# Added backend.OBE.apps.ObeConfig on 2026-01-27
 import os
 from pathlib import Path
 from datetime import timedelta
@@ -25,6 +27,8 @@ INSTALLED_APPS = [
     'accounts',
     'academics',
     'applications',
+
+    'OBE.apps.ObeConfig',
 ]
 
 MIDDLEWARE = [

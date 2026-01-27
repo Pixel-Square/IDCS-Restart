@@ -8,4 +8,6 @@ urlpatterns = [
     path('api/auth/', include('accounts.urls')),
     path('api/applications/', include('applications.urls')),
     path('api/attachments/', include('applications.attachments_urls')),
+
+    path('api/obe/', include('OBE.urls')),
 ]

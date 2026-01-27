@@ -18,7 +18,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   if (entry.student_curriculum_view) items.push({ key: 'student_curriculum_view', label: 'My Curriculum', to: '/curriculum/student' });
 
   // fallback: always show profile
-  items.unshift({ key: 'profile', label: 'Profile', to: '/profile' });
+  items.unshift({ key: 'profile', label: 'Profile\n  { label: 'OBE', href: '/staff/obe', show: dashboard?.is_staff === true },', to: '/profile' });
 
   return (
     <aside className="dsb">
