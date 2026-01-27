@@ -12,6 +12,7 @@ class AcademicYear(models.Model):
 
     def __str__(self):
         return self.name
+ 
 
 
 class Department(models.Model):
@@ -215,3 +216,388 @@ class AttendanceRecord(models.Model):
 
     def __str__(self):
         return f"{self.student.reg_no} — {self.get_status_display()} @ {self.attendance_session}"
+
+class RegulationYear(models.Model):
+    name = models.CharField(max_length=50, unique=True)
+    description = models.TextField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = 'Regulation Year'
+        verbose_name_plural = 'Regulation Years'
+
+    def __str__(self):
+        return self.name
+
+
+class Curriculum(models.Model):
+    CATEGORY_CORE = 'CORE'
+    CATEGORY_PE = 'PE'
+    CATEGORY_OE = 'OE'
+    CATEGORY_EM = 'EM'
+
+    CATEGORY_CHOICES = (
+        (CATEGORY_CORE, 'CORE'),
+        (CATEGORY_PE, 'PE'),
+        (CATEGORY_OE, 'OE'),
+        (CATEGORY_EM, 'EM'),
+    )
+
+    CLASS_THEORY = 'THEORY'
+    CLASS_PRACTICAL = 'PRACTICAL'
+    CLASS_TCPL = 'TCPL'
+    CLASS_PMBL = 'PMBL'
+
+    CLASSIFICATION_CHOICES = (
+        (CLASS_THEORY, 'THEORY'),
+        (CLASS_PRACTICAL, 'PRACTICAL'),
+        (CLASS_TCPL, 'TCPL'),
+        (CLASS_PMBL, 'PMBL'),
+    )
+
+    department = models.ForeignKey(Department, on_delete=models.CASCADE, related_name='curricula')
+    regulation_year = models.ForeignKey(RegulationYear, on_delete=models.CASCADE, related_name='curricula')
+    semester = models.ForeignKey(Semester, on_delete=models.CASCADE, related_name='curricula')
+    subject = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name='curricula')
+
+    category = models.CharField(max_length=10, choices=CATEGORY_CHOICES)
+    classification = models.CharField(max_length=12, choices=CLASSIFICATION_CHOICES)
+
+    l = models.PositiveSmallIntegerField(default=0)
+    t = models.PositiveSmallIntegerField(default=0)
+    p = models.PositiveSmallIntegerField(default=0)
+    s = models.PositiveSmallIntegerField(default=0)
+    c = models.PositiveSmallIntegerField(default=0)
+
+    cia_marks = models.PositiveSmallIntegerField()
+    ese_marks = models.PositiveSmallIntegerField()
+    total_marks = models.PositiveSmallIntegerField()
+    total_hours = models.PositiveSmallIntegerField()
+    exam_pattern = models.CharField(max_length=20)
+
+    class Meta:
+        verbose_name = 'Curriculum'
+        verbose_name_plural = 'Curricula'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['subject', 'semester', 'regulation_year'],
+                name='unique_curriculum_subject_semester_regulation'
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.subject} — {self.semester}"
+
+
+class CurriculumAcademicYearMapping(models.Model):
+    regulation_year = models.ForeignKey(
+        RegulationYear,
+        on_delete=models.CASCADE,
+        related_name='academic_year_mappings'
+    )
+    academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.CASCADE,
+        related_name='regulation_year_mappings'
+    )
+
+    class Meta:
+        verbose_name = 'Curriculum Academic Year Mapping'
+        verbose_name_plural = 'Curriculum Academic Year Mappings'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['regulation_year', 'academic_year'],
+                name='unique_regulation_academicyear_mapping'
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.regulation_year} ↔ {self.academic_year}"
+
+
+class ElectiveOffering(models.Model):
+    subject = models.ForeignKey(
+        Subject,
+        on_delete=models.CASCADE,
+        related_name='elective_offerings'
+    )
+    academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.CASCADE,
+        related_name='elective_offerings'
+    )
+    semester = models.ForeignKey(
+        Semester,
+        on_delete=models.CASCADE,
+        related_name='elective_offerings'
+    )
+    offering_department = models.ForeignKey(
+        Department,
+        on_delete=models.CASCADE,
+        related_name='offered_electives'
+    )
+    assigned_staff = models.ForeignKey(
+        StaffProfile,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='assigned_electives'
+    )
+    max_students = models.PositiveSmallIntegerField()
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        verbose_name = 'Elective Offering'
+        verbose_name_plural = 'Elective Offerings'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['subject', 'academic_year', 'semester'],
+                name='unique_elective_subject_year_semester'
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.subject} - {self.academic_year}"
+
+
+class ElectiveEnrollment(models.Model):
+    elective_offering = models.ForeignKey(
+        'ElectiveOffering',
+        on_delete=models.CASCADE,
+        related_name='enrollments'
+    )
+    student = models.ForeignKey(
+        StudentProfile,
+        on_delete=models.CASCADE,
+        related_name='elective_enrollments'
+    )
+
+    class Meta:
+        verbose_name = 'Elective Enrollment'
+        verbose_name_plural = 'Elective Enrollments'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['elective_offering', 'student'],
+                name='unique_elective_offering_student'
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.student} -> {self.elective_offering}"
+
+
+class ElectiveOfferingBlockedDepartment(models.Model):
+    elective_offering = models.ForeignKey(
+        'ElectiveOffering',
+        on_delete=models.CASCADE,
+        related_name='blocked_departments'
+    )
+    department = models.ForeignKey(
+        Department,
+        on_delete=models.CASCADE,
+        related_name='blocked_elective_offerings'
+    )
+
+    class Meta:
+        verbose_name = 'Elective Offering Blocked Department'
+        verbose_name_plural = 'Elective Offering Blocked Departments'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['elective_offering', 'department'],
+                name='unique_electiveoffering_department_block'
+            )
+        ]
+
+
+class Batch(models.Model):
+    name = models.CharField(max_length=50)
+    subject = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name='batches')
+    academic_year = models.ForeignKey(AcademicYear, on_delete=models.CASCADE, related_name='batches')
+    section = models.ForeignKey(Section, on_delete=models.SET_NULL, null=True, blank=True, related_name='batches')
+    is_elective_batch = models.BooleanField(default=False)
+    created_by = models.ForeignKey(StaffProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name='created_batches')
+
+    class Meta:
+        verbose_name = 'Batch'
+        verbose_name_plural = 'Batches'
+        constraints = [
+            models.CheckConstraint(
+                check=(models.Q(is_elective_batch=False) | models.Q(section__isnull=True)),
+                name='batch_elective_section_null'
+            )
+        ]
+
+    def __str__(self):
+        return self.name
+
+class BatchStudent(models.Model):
+    batch = models.ForeignKey(
+        Batch,
+        on_delete=models.CASCADE,
+        related_name='students'
+    )
+    student = models.ForeignKey(
+        StudentProfile,
+        on_delete=models.CASCADE,
+        related_name='batch_memberships'
+    )
+
+    class Meta:
+        verbose_name = 'Batch Student'
+        verbose_name_plural = 'Batch Students'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['batch', 'student'],
+                name='unique_batch_student'
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.student} in {self.batch}"
+
+
+class TimetableStructure(models.Model):
+    academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.CASCADE,
+        related_name='timetable_structures'
+    )
+    semester = models.ForeignKey(
+        Semester,
+        on_delete=models.CASCADE,
+        related_name='timetable_structures'
+    )
+    working_days = models.PositiveSmallIntegerField()
+    max_periods_per_day = models.PositiveSmallIntegerField()
+    period_duration_minutes = models.PositiveSmallIntegerField()
+    lunch_after_period = models.PositiveSmallIntegerField()
+
+    class Meta:
+        verbose_name = 'Timetable Structure'
+        verbose_name_plural = 'Timetable Structures'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['academic_year', 'semester'],
+                name='unique_timetablestructure_year_semester'
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.academic_year} — {self.semester}"
+
+
+class ClassTimetable(models.Model):
+    section = models.ForeignKey(
+        Section,
+        on_delete=models.CASCADE,
+        related_name='class_timetables'
+    )
+    academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.CASCADE,
+        related_name='class_timetables'
+    )
+    day_of_week = models.PositiveSmallIntegerField()
+    period_number = models.PositiveSmallIntegerField()
+    subject = models.ForeignKey(
+        Subject,
+        on_delete=models.PROTECT,
+        related_name='class_timetables'
+    )
+    staff = models.ForeignKey(
+        StaffProfile,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='class_timetables'
+    )
+    batch = models.ForeignKey(
+        Batch,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='class_timetables'
+    )
+
+    class Meta:
+        verbose_name = 'Class Timetable'
+        verbose_name_plural = 'Class Timetables'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['section', 'day_of_week', 'period_number'],
+                name='unique_section_day_period'
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.section} Day {self.day_of_week} Period {self.period_number}"
+
+
+class SpecialTimetable(models.Model):
+    section = models.ForeignKey(
+        Section,
+        on_delete=models.CASCADE,
+        related_name='special_timetables'
+    )
+    academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.CASCADE,
+        related_name='special_timetables'
+    )
+    date = models.DateField()
+    created_by = models.ForeignKey(
+        StaffProfile,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_special_timetables'
+    )
+    reason = models.CharField(max_length=255, null=True, blank=True)
+
+    class Meta:
+        verbose_name = 'Special Timetable'
+        verbose_name_plural = 'Special Timetables'
+
+    def __str__(self):
+        return f"{self.date} — {self.section}"
+
+
+class SpecialTimetableEntry(models.Model):
+    special_timetable = models.ForeignKey(
+        SpecialTimetable,
+        on_delete=models.CASCADE,
+        related_name='entries'
+    )
+    period_number = models.PositiveSmallIntegerField()
+    subject = models.ForeignKey(
+        Subject,
+        on_delete=models.PROTECT,
+        related_name='special_timetable_entries'
+    )
+    staff = models.ForeignKey(
+        StaffProfile,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='special_timetable_entries'
+    )
+    batch = models.ForeignKey(
+        Batch,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='special_timetable_entries'
+    )
+
+    class Meta:
+        verbose_name = 'Special Timetable Entry'
+        verbose_name_plural = 'Special Timetable Entries'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['special_timetable', 'period_number'],
+                name='unique_specialtimetable_period'
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.special_timetable.date} Period {self.period_number} ({self.subject})"
+
