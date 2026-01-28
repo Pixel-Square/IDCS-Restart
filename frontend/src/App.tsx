@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState } from "react";
 import { Routes, Route } from "react-router-dom";
 import { getMe } from "./services/auth";
 import Navbar from "./components/Navbar";
 import HomePage from "./components/HomePage";
 import DashboardPage from "./pages/Dashboard";
+import OBEPage from "./pages/OBEPage";
 
 type RoleObj = { name: string };
 type Me = {
@@ -57,6 +58,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<HomePage user={user} />} />
         <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/obe" element={<OBEPage />} />
         <Route path="*" element={<HomePage user={user} />} />
       </Routes>
     </div>

@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import { Link } from 'react-router-dom';
 import useDashboard from '../hooks/useDashboard';
 import './DashboardSidebar.css';
@@ -6,7 +6,7 @@ import './DashboardSidebar.css';
 export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string }) {
   const { data, loading, error } = useDashboard(baseUrl);
 
-  if (loading) return <aside className="dsb">Loading…</aside>;
+  if (loading) return <aside className="dsb">Loading</aside>;
   if (error) return <aside className="dsb">Error loading sidebar</aside>;
   if (!data) return <aside className="dsb">No data</aside>;
 
@@ -18,7 +18,10 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   if (entry.student_curriculum_view) items.push({ key: 'student_curriculum_view', label: 'My Curriculum', to: '/curriculum/student' });
 
   // fallback: always show profile
-  items.unshift({ key: 'profile', label: 'Profile\n  { label: 'OBE', href: '/staff/obe', show: dashboard?.is_staff === true },', to: '/profile' });
+  items.unshift({ key: 'profile', label: 'Profile', to: '/profile' });
+
+  // always show OBE link
+  items.push({ key: 'obe', label: 'OBE', to: '/obe' });
 
   return (
     <aside className="dsb">
