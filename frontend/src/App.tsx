@@ -4,6 +4,7 @@ import { getMe } from "./services/auth";
 import Navbar from "./components/Navbar";
 import HomePage from "./components/HomePage";
 import DashboardPage from "./pages/Dashboard";
+import ProfilePage from "./pages/Profile";
 
 type RoleObj = { name: string };
 type Me = {
@@ -57,6 +58,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<HomePage user={user} />} />
         <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/profile" element={<ProfilePage user={user} />} />
         <Route path="*" element={<HomePage user={user} />} />
       </Routes>
     </div>

@@ -3,6 +3,8 @@ import { Link, useNavigate, useLocation } from "react-router-dom";
 import { logout } from "../services/auth";
 import logo from "../assets/idcs-logo.png";
 import "./Navbar.css";
+import { Menu, X } from 'lucide-react';
+import { useSidebar } from './SidebarContext';
 
 interface NavbarProps {
   user: { username: string; email?: string } | null;
@@ -12,6 +14,7 @@ export default function Navbar({ user }: NavbarProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const isLoginPage = location.pathname === "/login";
+  const { collapsed, toggle } = useSidebar();
 
   const handleLogout = () => {
     logout();
@@ -21,7 +24,10 @@ export default function Navbar({ user }: NavbarProps) {
   return (
     <nav className="navbar">
       <div className="navbar-container">
-        <Link to="/" className="navbar-logo">
+        <button className="navbar-toggle" onClick={toggle} aria-label="Toggle sidebar">
+          {collapsed ? <Menu /> : <X />}
+        </button>
+        <Link to="/dashboard" className="navbar-logo">
           <img
             src={logo}
             alt="IDCS Logo"

@@ -1,10 +1,22 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import useDashboard from '../hooks/useDashboard';
+import { User, BookOpen, Layout, Grid, Home } from 'lucide-react';
 import './DashboardSidebar.css';
+import { useSidebar } from './SidebarContext';
+
+const ICON_MAP: Record<string, any> = {
+  profile: User,
+  curriculum_master: BookOpen,
+  department_curriculum: Layout,
+  student_curriculum_view: Grid,
+  home: Home,
+};
 
 export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string }) {
   const { data, loading, error } = useDashboard(baseUrl);
+  const loc = useLocation();
+  const { collapsed } = useSidebar();
 
   if (loading) return <aside className="dsb">Loading…</aside>;
   if (error) return <aside className="dsb">Error loading sidebar</aside>;
@@ -21,14 +33,27 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   items.unshift({ key: 'profile', label: 'Profile', to: '/profile' });
 
   return (
-    <aside className="dsb">
-      <div className="dsb-header">Navigation</div>
+    <aside className={`dsb modern-dsb ${collapsed ? 'collapsed' : ''}`}>
+      <div className="dsb-header">Menu</div>
       <ul className="dsb-list">
-        {items.map(i => (
-          <li key={i.key} className="dsb-item">
-            <Link to={i.to}>{i.label}</Link>
-          </li>
-        ))}
+        <li className="dsb-item">
+          <Link to="/dashboard" className="dsb-link">
+            <span className="dsb-icon"><Home /></span>
+            <span className="dsb-label">Dashboard</span>
+          </Link>
+        </li>
+        {items.map(i => {
+          const Icon = ICON_MAP[i.key] || ICON_MAP.home || User;
+          const active = loc.pathname.startsWith(i.to);
+          return (
+            <li key={i.key} className={`dsb-item ${active ? 'active' : ''}`}>
+              <Link to={i.to} className="dsb-link">
+                <span className="dsb-icon"><Icon /></span>
+                <span className="dsb-label">{i.label}</span>
+              </Link>
+            </li>
+          );
+        })}
       </ul>
     </aside>
   );

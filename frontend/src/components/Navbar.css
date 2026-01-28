@@ -11,6 +11,8 @@
   max-width: 1280px;
   margin: 0 auto;
   padding: 0 24px;
+  position: relative;
+  padding-left: 80px; /* space for left-edge toggle */
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -57,6 +59,29 @@
   align-items: center;
   gap: 32px;
 }
+
+/* Sidebar toggle placed at the left edge */
+.navbar-toggle{
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  color: #374151;
+  cursor: pointer;
+}
+.navbar-toggle:hover{ background: rgba(15,23,42,0.04); }
+.navbar-toggle svg{ width:20px; height:20px; }
+
+/* ensure logo sits near the toggle */
+.navbar-logo{ margin-left: 0; }
 
 .nav-link {
   text-decoration: none;
