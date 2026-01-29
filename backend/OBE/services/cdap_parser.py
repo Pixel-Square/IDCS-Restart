@@ -25,7 +25,7 @@ def _as_bool(v: Any) -> bool:
         return v != 0
     if isinstance(v, str):
         s = v.strip().lower()
-        if s in ("true", "t", "yes", "y", "1", "x"):
+        if s in ("true", "t", "yes", "y", "1", "x", "✓", "✔"):
             return True
         if s in ("false", "f", "no", "n", "0", ""):
             return False
@@ -56,8 +56,28 @@ def parse_cdap_excel(file_obj) -> Dict[str, Any]:
         }
 
     all_sheet_titles = [ws.title for ws in wb.worksheets]
-    ws_cdap_candidate = wb.worksheets[6] if len(wb.worksheets) >= 7 else None
-    ws_cdap = ws_cdap_candidate or wb.worksheets[0]
+
+    def _looks_like_revised_cdp(ws) -> bool:
+        return _find_cdp_header_row(ws) is not None
+
+    ws_cdap = None
+    # Prefer a name match like "REVISED CDP" / "1.REVISED CDP"
+    for ws in wb.worksheets:
+        name_norm = re.sub(r"[^a-z0-9]+", " ", _to_text(ws.title).lower()).strip()
+        if "revised" in name_norm and "cdp" in name_norm:
+            ws_cdap = ws
+            break
+
+    # Fallback: header detection
+    if ws_cdap is None:
+        for ws in wb.worksheets:
+            if _looks_like_revised_cdp(ws):
+                ws_cdap = ws
+                break
+
+    # Final fallback: first sheet
+    if ws_cdap is None:
+        ws_cdap = wb.worksheets[0]
 
     col_start_base = _col_letter_to_index("A")
     col_end_base = _col_letter_to_index("AG")
@@ -106,92 +126,77 @@ def parse_cdap_excel(file_obj) -> Dict[str, Any]:
 
     detected_header_row_2 = _find_cdp_header_row(ws_cdap)
     header_row_2 = detected_header_row_2 or 12
-    header_row_1 = max(1, header_row_2 - 1)
-
     row_delta = header_row_2 - 12
-    data_start = header_row_2 + 1
-    data_end = data_start + 48
-    unit_start_rows = [data_start + (i * 10) for i in range(5)]
-    rows_per_unit = 9
 
-    content_col_actual = _find_header_col(ws_cdap, header_row_2, r"content\s*[- ]?\s*type")
-    expected_content_col = _col_letter_to_index("D")
-    col_shift = 0
-    if content_col_actual is not None:
-        col_shift = content_col_actual - expected_content_col
-    col_start = col_start_base + col_shift
-    col_end = col_end_base + col_shift
-
-    keys: List[str] = [
-        "unit",
-        "unit_name",
-        "co",
-        "content_type",
-        "part_no",
-        "topics",
-        "sub_topics",
-        "bt_level",
-        "total_hours_required",
-        *[f"po{i}" for i in range(1, 12)],
-        *[f"pso{i}" for i in range(1, 4)],
-        "kd_hours",
-        "kd_reference",
-        "kd_support",
-        "kd_activity",
-        "assess_ssa1",
-        "assess_fa1",
-        "assess_cia_qb",
-        "assess_ssa2",
-        "assess_fa2",
-        "assess_activity",
+    # Fixed row ranges per user-provided template
+    unit_ranges = [
+        (13, 21),
+        (23, 31),
+        (33, 41),
+        (43, 51),
+        (53, 61),
     ]
-    if len(keys) != (col_end - col_start + 1):
-        return {
-            "rows": [],
-            "books": {"textbook": "", "reference": ""},
-            "active_learning": {"grid": [], "dropdowns": [], "optionsByRow": []},
-            "warnings": [{"warning": "CDAP parser misconfigured: schema/column count mismatch"}],
-        }
+    unit_ranges = [(start + row_delta, end + row_delta) for start, end in unit_ranges]
+
+    # Column mapping (1-based indices)
+    col_unit = _col_letter_to_index("A")
+    col_unit_name = _col_letter_to_index("B")
+    col_co = _col_letter_to_index("C")
+    col_content_type = _col_letter_to_index("D")
+    col_part_no = _col_letter_to_index("E")
+    col_topics = _col_letter_to_index("F")
+    col_sub_topics = _col_letter_to_index("G")
+    col_bt_level = _col_letter_to_index("H")
+    col_total_hours = _col_letter_to_index("I")
+
+    po_start = _col_letter_to_index("J")  # PO1
+    po_end = _col_letter_to_index("T")    # PO11
+    pso_start = _col_letter_to_index("U") # PSO1
+    pso_end = _col_letter_to_index("W")   # PSO3
 
     parsed_rows: List[Dict[str, Any]] = []
     warnings: List[Dict[str, Any]] = []
 
-    checkbox_keys = {f"po{i}" for i in range(1, 12)} | {f"pso{i}" for i in range(1, 4)}
+    for unit_idx, (start_row, end_row) in enumerate(unit_ranges, start=1):
+        raw_unit_value = _to_text(ws_cdap.cell(row=start_row, column=col_unit).value)
+        unit_value = raw_unit_value
+        # Normalize values like 5.0 -> 5
+        if re.fullmatch(r"\d+(?:\.0+)?", unit_value):
+            unit_value = str(int(float(unit_value)))
 
-    def read_row(r: int, unit_index: int, unit_title: str) -> Dict[str, Any]:
-        values: List[Any] = []
-        for c in range(col_start, col_end + 1):
-            values.append(ws_cdap.cell(row=r, column=c).value)
-        record: Dict[str, Any] = {
-            "excel_row": r,
-            "unit_index": unit_index,
-            "unit_title": unit_title,
-        }
-        for idx, k in enumerate(keys):
-            v = values[idx] if idx < len(values) else None
-            if k in checkbox_keys:
-                record[k] = _as_bool(v)
-            else:
-                record[k] = "" if v is None else v
-        if record.get("unit") in (None, ""):
-            record["unit"] = unit_index
-        if record.get("unit_name") in (None, ""):
-            record["unit_name"] = unit_title
-        return record
-
-    for unit_idx, start_row in enumerate(unit_start_rows, start=1):
-        if start_row < data_start or start_row > data_end:
-            continue
-        unit_title = _to_text(ws_cdap.cell(row=start_row, column=_col_letter_to_index("B")).value)
+        unit_title = _to_text(ws_cdap.cell(row=start_row, column=col_unit_name).value)
+        unit_co = _to_text(ws_cdap.cell(row=start_row, column=col_co).value)
         if not unit_title:
             warnings.append({"unit": unit_idx, "row": start_row, "warning": "Missing unit title in column B"})
 
-        for offset in range(rows_per_unit):
-            r = start_row + offset
-            if r < data_start or r > data_end:
+        for r in range(start_row, end_row + 1):
+            content_type = _to_text(ws_cdap.cell(row=r, column=col_content_type).value)
+            if content_type and "#n/a" in content_type.replace(" ", "").lower():
                 continue
-            rec = read_row(r, unit_idx, unit_title)
-            parsed_rows.append(rec)
+
+            record: Dict[str, Any] = {
+                "excel_row": r,
+                "unit_index": unit_idx,
+                "unit": unit_value if r == start_row else "",
+                "unit_name": unit_title if r == start_row else "",
+                "co": unit_co if r == start_row else "",
+                "content_type": content_type,
+                "part_no": _to_text(ws_cdap.cell(row=r, column=col_part_no).value),
+                "topics": _to_text(ws_cdap.cell(row=r, column=col_topics).value),
+                "sub_topics": _to_text(ws_cdap.cell(row=r, column=col_sub_topics).value),
+                "bt_level": _to_text(ws_cdap.cell(row=r, column=col_bt_level).value),
+                "total_hours_required": _to_text(ws_cdap.cell(row=r, column=col_total_hours).value),
+            }
+
+            # PO1..PO11 (J..T)
+            for i, col in enumerate(range(po_start, po_end + 1), start=1):
+                record[f"po{i}"] = _as_bool(ws_cdap.cell(row=r, column=col).value)
+
+            # PSO1..PSO3 (U..W)
+            for i, col in enumerate(range(pso_start, pso_end + 1), start=1):
+                record[f"pso{i}"] = _as_bool(ws_cdap.cell(row=r, column=col).value)
+
+            parsed_rows.append(record)
 
     def best_text_in_row(r: int, col_a: str = "A", col_b: str = "E") -> str:
         start = _col_letter_to_index(col_a)
@@ -224,8 +229,12 @@ def parse_cdap_excel(file_obj) -> Dict[str, Any]:
                 return up
         return ""
 
-    textbook_text = best_text_near_row(64 + row_delta)
-    reference_text = best_text_near_row(68 + row_delta)
+    # Fixed cells per template: textbook in B64, reference in B68
+    textbook_text = _to_text(ws_cdap.cell(row=64 + row_delta, column=_col_letter_to_index("B")).value)
+    if not textbook_text:
+        textbook_text = best_text_near_row(64 + row_delta)
+
+    reference_text = _to_text(ws_cdap.cell(row=68 + row_delta, column=_col_letter_to_index("B")).value)
 
     def split_dropdown_options(text: str) -> List[str]:
         s = _to_text(text)

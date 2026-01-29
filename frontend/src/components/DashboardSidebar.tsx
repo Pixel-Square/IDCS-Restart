@@ -20,14 +20,12 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // fallback: always show profile
   items.unshift({ key: 'profile', label: 'Profile', to: '/profile' });
 
-  // Only show OBE link if user is staff-like (and not a student)
-  const roleNames = (data.roles || []).map((r) => String(r || '').toUpperCase());
-  const isStudent = Boolean(data.flags?.is_student) || roleNames.includes('STUDENT');
-  const isStaff = Boolean(data.flags?.is_staff) || roleNames.some((role) =>
-    ['STAFF', 'FACULTY', 'ADVISOR', 'HOD', 'ADMIN'].includes(role)
-  );
+  const perms = (data.permissions || []).map((p) => String(p || '').toLowerCase());
+  const canObe = perms.some((p) => ['obe.view', 'obe.cdap.upload', 'obe.master.manage'].includes(p));
+  const canObeMaster = perms.includes('obe.master.manage');
 
-  if (isStaff && !isStudent) items.push({ key: 'obe', label: 'OBE', to: '/obe' });
+  if (canObe) items.push({ key: 'obe', label: 'OBE', to: '/obe' });
+  if (canObeMaster) items.push({ key: 'obe_master', label: 'OBE Master', to: '/obe/master' });
 
   return (
     <aside className="dsb">

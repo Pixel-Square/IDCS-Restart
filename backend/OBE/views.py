@@ -6,38 +6,32 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from .models import CdapRevision, CdapActiveLearningAnalysisMapping
 from .services.cdap_parser import parse_cdap_excel
+from .services.articulation_parser import parse_articulation_matrix_excel
+from .services.articulation_from_revision import build_articulation_matrix_from_revision_rows
+from accounts.utils import get_user_permissions
 
 
-def _require_staff_role(request):
+def _require_permissions(request, required_codes: set[str]):
     user = getattr(request, 'user', None)
     if not user or not user.is_authenticated:
         return Response({'detail': 'Authentication required.'}, status=status.HTTP_401_UNAUTHORIZED)
 
-    # Accept Django staff/superuser or any staff-like role in our Role model
-    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
+    if getattr(user, 'is_superuser', False):
         return None
 
-    try:
-        role_names = set(r.name.upper() for r in user.roles.all())
-    except Exception:
-        role_names = set()
-
-    staff_allowed = {'STAFF', 'FACULTY', 'ADVISOR', 'HOD', 'ADMIN'}
-    if role_names & staff_allowed:
+    user_perms = set(get_user_permissions(user))
+    if user_perms.intersection(required_codes):
         return None
 
-    # Fallback: staff profile attached
-    if hasattr(user, 'staff_profile') and user.staff_profile is not None:
-        return None
-
-    return Response({'detail': 'Staff role required.'}, status=status.HTTP_403_FORBIDDEN)
+    needed = ', '.join(sorted(required_codes))
+    return Response({'detail': f'Permission required: {needed}.'}, status=status.HTTP_403_FORBIDDEN)
 
 
 @api_view(['POST'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def upload_cdap(request):
-    auth = _require_staff_role(request)
+    auth = _require_permissions(request, {'obe.cdap.upload'})
     if auth:
         return auth
     if 'file' not in request.FILES:
@@ -46,11 +40,25 @@ def upload_cdap(request):
     return Response(parsed)
 
 
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def upload_articulation_matrix(request):
+    auth = _require_permissions(request, {'obe.cdap.upload'})
+    if auth:
+        return auth
+    if 'file' not in request.FILES:
+        return Response({'detail': 'Missing file'}, status=status.HTTP_400_BAD_REQUEST)
+    parsed = parse_articulation_matrix_excel(request.FILES['file'])
+    return Response(parsed)
+
+
 @api_view(['GET', 'PUT'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def cdap_revision(request, subject_id):
-    auth = _require_staff_role(request)
+    required = {'obe.view'} if request.method == 'GET' else {'obe.cdap.upload'}
+    auth = _require_permissions(request, required)
     if auth:
         return auth
 
@@ -106,7 +114,7 @@ def cdap_revision(request, subject_id):
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def active_learning_mapping(request):
-    auth = _require_staff_role(request)
+    auth = _require_permissions(request, {'obe.master.manage'})
     if auth:
         return auth
 
@@ -132,3 +140,21 @@ def active_learning_mapping(request):
         row.save()
 
     return Response({'mapping': row.mapping, 'updated_at': row.updated_at.isoformat()})
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def articulation_matrix(request, subject_id: str):
+    auth = _require_permissions(request, {'obe.view'})
+    if auth:
+        return auth
+
+    rev = CdapRevision.objects.filter(subject_id=subject_id).first()
+    rows = []
+    if rev and isinstance(rev.rows, list):
+        rows = rev.rows
+
+    matrix = build_articulation_matrix_from_revision_rows(rows)
+    matrix['meta'] = {**(matrix.get('meta') or {}), 'subject_id': str(subject_id)}
+    return Response(matrix)

@@ -5,6 +5,7 @@ import Navbar from "./components/Navbar";
 import HomePage from "./components/HomePage";
 import DashboardPage from "./pages/Dashboard";
 import OBEPage from "./pages/OBEPage";
+import OBEMasterPage from "./pages/OBEMasterPage";
 import CourseOBEPage from "./pages/CourseOBEPage";
 
 type RoleObj = { name: string };
@@ -53,14 +54,20 @@ export default function App() {
     );
   }
 
+  const userPerms = Array.isArray(user?.permissions) ? user?.permissions : [];
+  const lowerPerms = userPerms.map((p) => String(p || '').toLowerCase());
+  const canObe = lowerPerms.some((p) => ['obe.view', 'obe.cdap.upload', 'obe.master.manage'].includes(p));
+  const canObeMaster = lowerPerms.includes('obe.master.manage');
+
   return (
     <div>
       <Navbar user={user} />
       <Routes>
         <Route path="/" element={<HomePage user={user} />} />
         <Route path="/dashboard" element={<DashboardPage />} />
-        <Route path="/obe" element={<OBEPage />} />
+        <Route path="/obe" element={canObe ? <OBEPage /> : <HomePage user={user} />} />
         <Route path="/obe/course/:code" element={<CourseOBEPage />} />
+        <Route path="/obe/master" element={canObeMaster ? <OBEMasterPage /> : <HomePage user={user} />} />
         <Route path="*" element={<HomePage user={user} />} />
       </Routes>
     </div>

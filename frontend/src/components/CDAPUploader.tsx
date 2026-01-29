@@ -9,7 +9,7 @@ function authHeaders(): Record<string, string> {
 
 function buildFriendlyUploadError(status: number, bodyText: string) {
   if (status === 401) return 'Authentication required. Please login and try again.';
-  if (status === 403) return 'Staff role required to upload CDAP Excel files.';
+  if (status === 403) return 'Permission required to upload CDAP Excel files.';
   if (status === 400) return 'Invalid file. Please upload a valid CDAP Excel template.';
   if (status === 404) return 'Upload endpoint not found. Please contact admin.';
 
@@ -55,6 +55,15 @@ export default function CDAPUploader({ subjectId, onUpload }: { subjectId?: stri
       }
 
       const parsed = await res.json();
+      const normalizedRevision = {
+        rows: Array.isArray(parsed?.rows) ? parsed.rows : [],
+        textbook: parsed?.books?.textbook ?? parsed?.textbook ?? '',
+        reference: parsed?.books?.reference ?? parsed?.reference ?? '',
+        activeLearningOptionsByRow:
+          parsed?.active_learning?.optionsByRow ??
+          parsed?.activeLearningOptions ??
+          [],
+      };
       const rowCount = Array.isArray(parsed?.rows) ? parsed.rows.length : 0;
       if (!rowCount) {
         setStatus('success');
@@ -64,7 +73,7 @@ export default function CDAPUploader({ subjectId, onUpload }: { subjectId?: stri
         setMessage(`Upload complete. Parsed ${rowCount} rows from the Excel file.`);
       }
 
-      onUpload && onUpload({ revision: parsed, uploadedAt: new Date().toISOString() });
+      onUpload && onUpload({ revision: normalizedRevision, uploadedAt: new Date().toISOString() });
     } catch (e: any) {
       setStatus('error');
       setMessage(e?.message || 'Upload failed. Please try again.');

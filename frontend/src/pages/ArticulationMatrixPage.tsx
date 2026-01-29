@@ -1,30 +1,47 @@
 ﻿import React, { useEffect, useState } from 'react';
 import ArticulationMatrix from '../components/ArticulationMatrix';
-import { lsGet, lsSet } from '../utils/localStorage';
+import { fetchArticulationMatrix } from '../services/cdapDb';
 
 type Props = { courseId?: string };
 
 export default function ArticulationMatrixPage({ courseId }: Props) {
   const [subject, setSubject] = useState<string>(courseId || '');
   const [matrix, setMatrix] = useState<any>(null);
+  const [status, setStatus] = useState<'idle' | 'loading' | 'error' | 'success'>('idle');
+  const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (!subject) return;
-    const k = `cdap_articulation_${subject}`;
-    const v = lsGet<any>(k);
-    setMatrix(v || null);
+    // Auto-load matrix from backend (computed from saved CDAP revision)
+    (async () => {
+      setStatus('loading');
+      setMessage(null);
+      try {
+        const data = await fetchArticulationMatrix(subject);
+        setMatrix(data);
+        setStatus('success');
+      } catch (e: any) {
+        setMatrix(null);
+        setStatus('error');
+        setMessage(e?.message || 'Articulation Matrix fetch failed.');
+      }
+    })();
   }, [subject]);
 
-  function generate() {
-    const rev = lsGet<any>(`cdap_revisions_${subject}`) || { rows: [] };
-    const generated = { rowsCount: rev.rows ? rev.rows.length : 0, createdAt: new Date().toISOString() };
-    setMatrix(generated);
-  }
-
-  function save() {
-    if (!subject || !matrix) return alert('No matrix to save');
-    lsSet(`cdap_articulation_${subject}`, matrix);
-    alert('Articulation matrix saved to localStorage');
+  async function refresh() {
+    if (!subject) return;
+    setStatus('loading');
+    setMessage(null);
+    try {
+      const data = await fetchArticulationMatrix(subject);
+      setMatrix(data);
+      setStatus('success');
+      const unitCount = Array.isArray(data?.units) ? data.units.length : 0;
+      setMessage(`Loaded articulation matrix from saved CDAP. Units: ${unitCount}.`);
+    } catch (e: any) {
+      setStatus('error');
+      setMessage(e?.message || 'Articulation Matrix fetch failed.');
+    }
   }
 
   return (
@@ -37,19 +54,31 @@ export default function ArticulationMatrixPage({ courseId }: Props) {
         </div>
       )}
 
-      <div style={{ marginBottom: 12 }}>
-        <button onClick={generate}>Generate Matrix</button>
-        <button onClick={save} style={{ marginLeft: 8 }} disabled={!matrix}>Save Matrix</button>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+        <button onClick={refresh} disabled={status === 'loading' || !subject}>
+          {status === 'loading' ? 'Loading...' : 'Refresh'}
+        </button>
+        <span style={{ fontSize: 12, color: '#6b7280' }}>
+          Uses saved CDAP ticks + hours (no upload).
+        </span>
       </div>
 
-      <div style={{ marginTop: 12 }}>
-        <ArticulationMatrix subjectId={subject} />
-      </div>
+      {message && (
+        <div style={{ marginBottom: 12, fontSize: 12, color: status === 'error' ? '#b91c1c' : '#166534' }}>
+          {message}
+        </div>
+      )}
 
       <div style={{ marginTop: 12 }}>
-        <h4>Preview</h4>
-        <pre style={{ background: '#f7f7f7', padding: 8 }}>{JSON.stringify(matrix, null, 2)}</pre>
+        <ArticulationMatrix subjectId={subject} matrix={matrix} />
       </div>
+
+      {matrix && (
+        <div style={{ marginTop: 12 }}>
+          <h4>Raw JSON (debug)</h4>
+          <pre style={{ background: '#f7f7f7', padding: 8, overflowX: 'auto' }}>{JSON.stringify(matrix, null, 2)}</pre>
+        </div>
+      )}
     </div>
   );
 }

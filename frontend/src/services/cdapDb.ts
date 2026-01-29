@@ -6,12 +6,6 @@ function authHeaders(): Record<string, string> {
 }
 
 async function buildFriendlyError(res: Response, fallback: string) {
-  if (res.status === 401) return `${fallback}: Authentication required. Please login.`;
-  if (res.status === 403) return `${fallback}: Staff role required.`;
-  if (res.status === 404) {
-    return `${fallback}: No CDAP found for this course yet. Upload the Excel to create one.`;
-  }
-
   const contentType = res.headers.get('content-type') || '';
   try {
     if (contentType.includes('application/json')) {
@@ -21,6 +15,12 @@ async function buildFriendlyError(res: Response, fallback: string) {
     }
   } catch {
     // ignore parse errors
+  }
+
+  if (res.status === 401) return `${fallback}: Authentication required. Please login.`;
+  if (res.status === 403) return `${fallback}: Permission required.`;
+  if (res.status === 404) {
+    return `${fallback}: No CDAP found for this course yet. Upload the Excel to create one.`;
   }
 
   let text = '';
@@ -47,6 +47,25 @@ export async function fetchCdapRevision(subjectId: string) {
 
   if (!res.ok) {
     const message = await buildFriendlyError(res, 'CDAP revision fetch failed');
+    throw new Error(message);
+  }
+  return res.json();
+}
+
+export async function fetchArticulationMatrix(subjectId: string) {
+  const url = `${API_BASE}/api/obe/articulation-matrix/${encodeURIComponent(subjectId)}`;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...authHeaders(),
+  };
+
+  const res = await fetch(url, {
+    method: 'GET',
+    headers,
+  });
+
+  if (!res.ok) {
+    const message = await buildFriendlyError(res, 'Articulation Matrix fetch failed');
     throw new Error(message);
   }
   return res.json();
@@ -90,6 +109,49 @@ export async function fetchGlobalAnalysisMapping() {
   }
   const data = await res.json();
   return data?.mapping || {};
+}
+
+export async function saveGlobalAnalysisMapping(mapping: Record<string, boolean[]>) {
+  const url = `${API_BASE}/api/obe/active-learning-mapping`;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...authHeaders(),
+  };
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({ mapping }),
+  });
+
+  if (!res.ok) {
+    const message = await buildFriendlyError(res, 'Active learning mapping save failed');
+    throw new Error(message);
+  }
+
+  const data = await res.json();
+  return data?.mapping || {};
+}
+
+export async function uploadArticulationMatrixExcel(file: File) {
+  const url = `${API_BASE}/api/obe/upload-articulation-matrix`;
+  const headers: Record<string, string> = {
+    ...authHeaders(),
+  };
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const message = await buildFriendlyError(res, 'Articulation Matrix parse failed');
+    throw new Error(message);
+  }
+  return res.json();
 }
 
 export function subscribeToGlobalAnalysisMapping(onChange: () => void, intervalMs = 30000) {
