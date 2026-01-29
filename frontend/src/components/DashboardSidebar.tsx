@@ -20,8 +20,14 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // fallback: always show profile
   items.unshift({ key: 'profile', label: 'Profile', to: '/profile' });
 
-  // always show OBE link
-  items.push({ key: 'obe', label: 'OBE', to: '/obe' });
+  // Only show OBE link if user is staff-like (and not a student)
+  const roleNames = (data.roles || []).map((r) => String(r || '').toUpperCase());
+  const isStudent = Boolean(data.flags?.is_student) || roleNames.includes('STUDENT');
+  const isStaff = Boolean(data.flags?.is_staff) || roleNames.some((role) =>
+    ['STAFF', 'FACULTY', 'ADVISOR', 'HOD', 'ADMIN'].includes(role)
+  );
+
+  if (isStaff && !isStudent) items.push({ key: 'obe', label: 'OBE', to: '/obe' });
 
   return (
     <aside className="dsb">

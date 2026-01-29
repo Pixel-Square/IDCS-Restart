@@ -1,4 +1,5 @@
 from rest_framework import viewsets, status
+from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -10,6 +11,7 @@ from .serializers import (
     AttendanceSessionSerializer,
     AttendanceRecordSerializer,
     BulkAttendanceRecordSerializer,
+    TeachingAssignmentInfoSerializer,
 )
 
 
@@ -105,3 +107,30 @@ def serializer_check_user_can_manage(user, teaching_assignment):
         if staff_profile and staff_profile.department_id == teaching_assignment.section.semester.course.department_id:
             return True
     return False
+
+
+class MyTeachingAssignmentsView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        user = request.user
+        qs = TeachingAssignment.objects.select_related(
+            'subject',
+            'section',
+            'academic_year',
+            'section__semester__course__department',
+        ).filter(is_active=True)
+
+        staff_profile = getattr(user, 'staff_profile', None)
+        role_names = {r.name.upper() for r in user.roles.all()}
+
+        # staff: only their teaching assignments
+        if staff_profile and 'HOD' not in role_names and 'ADVISOR' not in role_names:
+            qs = qs.filter(staff=staff_profile)
+        # HOD/ADVISOR: assignments within their department
+        elif staff_profile and ('HOD' in role_names or 'ADVISOR' in role_names):
+            qs = qs.filter(section__semester__course__department=staff_profile.department)
+        # else: admins can see all
+
+        ser = TeachingAssignmentInfoSerializer(qs.order_by('subject__code', 'section__name'), many=True)
+        return Response(ser.data)

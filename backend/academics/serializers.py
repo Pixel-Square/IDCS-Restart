@@ -8,14 +8,16 @@ from accounts.utils import get_user_permissions
 
 
 class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
+    subject_id = serializers.IntegerField(source='subject.id', read_only=True)
     subject_code = serializers.CharField(source='subject.code', read_only=True)
     subject_name = serializers.CharField(source='subject.name', read_only=True)
+    section_id = serializers.IntegerField(source='section.id', read_only=True)
     section_name = serializers.CharField(source='section.name', read_only=True)
     academic_year = serializers.CharField(source='academic_year.name', read_only=True)
 
     class Meta:
         model = TeachingAssignment
-        fields = ('id', 'subject_code', 'subject_name', 'section_name', 'academic_year')
+        fields = ('id', 'subject_id', 'subject_code', 'subject_name', 'section_id', 'section_name', 'academic_year')
 
 
 class AttendanceSessionSerializer(serializers.ModelSerializer):

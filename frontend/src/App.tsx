@@ -5,6 +5,7 @@ import Navbar from "./components/Navbar";
 import HomePage from "./components/HomePage";
 import DashboardPage from "./pages/Dashboard";
 import OBEPage from "./pages/OBEPage";
+import CourseOBEPage from "./pages/CourseOBEPage";
 
 type RoleObj = { name: string };
 type Me = {
@@ -59,6 +60,7 @@ export default function App() {
         <Route path="/" element={<HomePage user={user} />} />
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/obe" element={<OBEPage />} />
+        <Route path="/obe/course/:code" element={<CourseOBEPage />} />
         <Route path="*" element={<HomePage user={user} />} />
       </Routes>
     </div>
