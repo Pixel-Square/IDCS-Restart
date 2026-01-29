@@ -58,6 +58,7 @@ export default function CDAPPage({ courseId, showHeader = true, showCourseInput 
                   grid: [],
                   dropdowns: [],
                   optionsByRow: revision.activeLearningOptionsByRow || [],
+                  articulation_extras: revision.articulationExtras || {},
                 },
               });
               setAutoSaveStatus('saved');

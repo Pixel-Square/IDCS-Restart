@@ -114,7 +114,8 @@ def cdap_revision(request, subject_id):
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def active_learning_mapping(request):
-    auth = _require_permissions(request, {'obe.master.manage'})
+    required = {'obe.view'} if request.method == 'GET' else {'obe.master.manage'}
+    auth = _require_permissions(request, required)
     if auth:
         return auth
 
@@ -152,9 +153,43 @@ def articulation_matrix(request, subject_id: str):
 
     rev = CdapRevision.objects.filter(subject_id=subject_id).first()
     rows = []
+    extras = {}
     if rev and isinstance(rev.rows, list):
         rows = rev.rows
 
+    if rev and isinstance(getattr(rev, 'active_learning', None), dict):
+        maybe = rev.active_learning.get('articulation_extras')
+        if isinstance(maybe, dict):
+            extras = maybe
+
     matrix = build_articulation_matrix_from_revision_rows(rows)
+
+    # Merge assessment rows (SSA / Active Learning / Special activity) extracted from page-2
+    if extras and isinstance(matrix.get('units'), list):
+        for u in matrix['units']:
+            unit_label = str(u.get('unit') or '')
+            picked = extras.get(unit_label)
+            if not isinstance(picked, list) or not picked:
+                continue
+            base_rows = u.get('rows') or []
+            # append at bottom with fresh serials
+            next_serial = 0
+            try:
+                next_serial = max(int(r.get('s_no') or 0) for r in base_rows) if base_rows else 0
+            except Exception:
+                next_serial = len(base_rows)
+            for rr in picked:
+                next_serial += 1
+                u.setdefault('rows', []).append({
+                    'excel_row': rr.get('excel_row'),
+                    's_no': next_serial,
+                    'co_mapped': rr.get('co_mapped') or rr.get('co_mapped'.upper()) or rr.get('co') or rr.get('label') or '',
+                    'topic_no': rr.get('topic_no') or '',
+                    'topic_name': rr.get('topic_name') or rr.get('topic') or '',
+                    'po': rr.get('po') or [],
+                    'pso': rr.get('pso') or [],
+                    'hours': rr.get('hours') or rr.get('class_session_hours') or '',
+                })
+
     matrix['meta'] = {**(matrix.get('meta') or {}), 'subject_id': str(subject_id)}
     return Response(matrix)

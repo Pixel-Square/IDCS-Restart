@@ -63,6 +63,7 @@ export default function CDAPUploader({ subjectId, onUpload }: { subjectId?: stri
           parsed?.active_learning?.optionsByRow ??
           parsed?.activeLearningOptions ??
           [],
+        articulationExtras: parsed?.articulation_extras ?? {},
       };
       const rowCount = Array.isArray(parsed?.rows) ? parsed.rows.length : 0;
       if (!rowCount) {

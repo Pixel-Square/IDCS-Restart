@@ -89,6 +89,7 @@ export default function CDAPEditor({
     textbook: string;
     reference: string;
     activeLearningOptionsByRow: string[][] | null;
+    articulationExtras?: Record<string, any>;
   };
 }) {
   const autofillDropdownsIfSingleOption = (optionsByRow: string[][], current: string[]) => {
@@ -126,6 +127,7 @@ export default function CDAPEditor({
   const [activeLearningDropdownOptionsByRow, setActiveLearningDropdownOptionsByRow] = useState<string[][]>(() =>
     activeLearningRowLabels.map((label) => fallbackActiveLearningDropdownOptions[label] ?? [])
   );
+  const [articulationExtras, setArticulationExtras] = useState<Record<string, any>>({});
   const [loadingCloud, setLoadingCloud] = useState(false);
   const [cloudError, setCloudError] = useState<string | null>(null);
 
@@ -247,6 +249,8 @@ export default function CDAPEditor({
           : [];
         const grid = Array.isArray(al.grid) ? al.grid : [];
         const optionsByRow = Array.isArray(al.optionsByRow) ? al.optionsByRow : null;
+        const extras = al.articulation_extras && typeof al.articulation_extras === 'object' ? al.articulation_extras : {};
+        setArticulationExtras(extras);
 
         const nextGrid = activeLearningRowLabels.map((_, r) =>
           activeLearningPoLabels.map((__, c) => {
@@ -339,6 +343,10 @@ export default function CDAPEditor({
       setActiveLearningDropdownOptionsByRow(nextOpts);
       setActiveLearningDropdowns(finalDropdowns);
       setActiveLearningGrid((prev) => applyAnalysisMappingToGrid(prev, finalDropdowns));
+    }
+
+    if (imported.articulationExtras && typeof imported.articulationExtras === 'object') {
+      setArticulationExtras(imported.articulationExtras);
     }
   }, [imported]);
 
@@ -434,6 +442,7 @@ export default function CDAPEditor({
           grid: activeLearningGrid,
           dropdowns: activeLearningDropdowns,
           optionsByRow: activeLearningDropdownOptionsByRow,
+          articulation_extras: articulationExtras,
         },
       });
       alert('Saved to cloud.');

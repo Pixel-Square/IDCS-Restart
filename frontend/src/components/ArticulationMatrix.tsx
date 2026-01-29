@@ -106,6 +106,18 @@ export default function ArticulationMatrix({ subjectId, matrix }: { subjectId: s
   const units = Array.isArray(matrix.units) ? matrix.units : [];
   const summary = matrix.summaries?.co_po_summary;
 
+  const unitHeaders = [
+    'S. No',
+    'CO Mapped',
+    'Topic No.',
+    'Topic Name',
+    ...Array.from({ length: 11 }, (_, i) => `PO${i + 1}`),
+    ...Array.from({ length: 3 }, (_, i) => `PSO${i + 1}`),
+    'Hours',
+  ];
+
+  const blankRow = Array.from({ length: unitHeaders.length }, () => '');
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {matrix.meta?.sheet_used && (
@@ -115,16 +127,6 @@ export default function ArticulationMatrix({ subjectId, matrix }: { subjectId: s
       )}
 
       {units.map((u) => {
-        const headers = [
-          'S. No',
-          'CO Mapped',
-          'Topic No.',
-          'Topic Name',
-          ...Array.from({ length: 11 }, (_, i) => `PO${i + 1}`),
-          ...Array.from({ length: 3 }, (_, i) => `PSO${i + 1}`),
-          'Hours',
-        ];
-
         const rows = (u.rows || []).map((r) => [
           r.s_no,
           r.co_mapped,
@@ -138,10 +140,21 @@ export default function ArticulationMatrix({ subjectId, matrix }: { subjectId: s
         return (
           <section key={u.unit}>
             <h3 style={{ margin: '6px 0 10px 0' }}>{u.unit}</h3>
-            <Table headers={headers} rows={rows} />
+            <Table headers={unitHeaders} rows={rows} />
           </section>
         );
       })}
+
+      {/* Placeholder tables (requested): keep visible even without rows */}
+      <section>
+        <h3 style={{ margin: '6px 0 10px 0' }}>BLANK TABLE 1</h3>
+        <Table headers={unitHeaders} rows={[blankRow]} />
+      </section>
+
+      <section>
+        <h3 style={{ margin: '6px 0 10px 0' }}>BLANK TABLE 2</h3>
+        <Table headers={unitHeaders} rows={[blankRow]} />
+      </section>
 
       {summary?.rows?.length ? (
         <section>

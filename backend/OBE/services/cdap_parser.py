@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional
 
 from openpyxl import load_workbook
 
+from .articulation_parser import parse_articulation_matrix_excel
+
 
 def _to_text(v: Any) -> str:
     if v is None:
@@ -53,6 +55,7 @@ def parse_cdap_excel(file_obj) -> Dict[str, Any]:
             "rows": [],
             "books": {"textbook": "", "reference": ""},
             "active_learning": {"grid": [], "dropdowns": [], "optionsByRow": []},
+            "articulation_extras": {},
         }
 
     all_sheet_titles = [ws.title for ws in wb.worksheets]
@@ -257,6 +260,23 @@ def parse_cdap_excel(file_obj) -> Dict[str, Any]:
         cell_text = ws_cdap.cell(row=r, column=g_col).value
         active_learning_dropdown_options.append(split_dropdown_options(_to_text(cell_text)))
 
+    # Extract assessment rows from the Articulation Matrix sheet (page-2)
+    articulation_extras: Dict[str, List[Dict[str, Any]]] = {}
+    try:
+        art = parse_articulation_matrix_excel(io.BytesIO(file_bytes))
+        for u in art.get('units') or []:
+            unit_label = _to_text(u.get('unit'))
+            rows_list = u.get('rows') or []
+            picked: List[Dict[str, Any]] = []
+            for rr in rows_list:
+                label = _to_text(rr.get('co_mapped')).strip().lower()
+                if label.startswith('ssa') or label.startswith('active learning') or label.startswith('special activity'):
+                    picked.append(rr)
+            if picked:
+                articulation_extras[unit_label] = picked
+    except Exception:
+        articulation_extras = {}
+
     return {
         "rows": parsed_rows,
         "books": {"textbook": textbook_text, "reference": reference_text},
@@ -265,6 +285,7 @@ def parse_cdap_excel(file_obj) -> Dict[str, Any]:
             "dropdowns": ["" for _ in range(7)],
             "optionsByRow": active_learning_dropdown_options,
         },
+        "articulation_extras": articulation_extras,
         "meta": {
             "sheet_used": ws_cdap.title,
             "sheet_index_1based": (all_sheet_titles.index(ws_cdap.title) + 1) if ws_cdap.title in all_sheet_titles else None,

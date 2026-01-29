@@ -82,6 +82,37 @@ def build_articulation_matrix_from_revision_rows(rows: List[Dict[str, Any]]) -> 
     # Serial numbers should restart per unit
     serial_by_unit: Dict[int, int] = {}
 
+    def _co_index(co_value: str) -> Optional[int]:
+        m = re.search(r"\bCO\s*(\d+)\b", co_value.strip(), re.I)
+        if not m:
+            return None
+        try:
+            return int(m.group(1))
+        except Exception:
+            return None
+
+    def _normalize_special_label(content_type_value: str, unit_co_value: str) -> str:
+        ct = content_type_value.strip()
+        co_i = _co_index(unit_co_value) or 0
+        if re.search(r"\bssa\b", ct, re.I):
+            # CO1-2 => SSA 1, CO3-4 => SSA 2 (fallback to SSA 1)
+            return "SSA 2" if co_i in (3, 4) else "SSA 1"
+        if re.search(r"active\s*learning", ct, re.I):
+            return "Active Learning 2" if co_i in (3, 4) else "Active Learning 1"
+        if re.search(r"special\s*activity", ct, re.I):
+            return "Special activity"
+        return ct
+
+    def _special_sort_key(co_mapped_value: str) -> int:
+        s = co_mapped_value.strip().lower()
+        if s.startswith("ssa"):
+            return 100
+        if s.startswith("active learning"):
+            return 110
+        if s.startswith("special activity"):
+            return 120
+        return 0
+
     for r in rows or []:
         unit_idx = r.get("unit_index")
         try:
@@ -112,21 +143,21 @@ def build_articulation_matrix_from_revision_rows(rows: List[Dict[str, Any]]) -> 
 
         hours = _parse_hours(r.get("total_hours_required"))
 
-        # Decide label for CO MAPPED column:
-        # - topic rows: use CO (CO1/CO2...)
-        # - special rows (SSA 1 / Active Learning 1): use content_type if it contains those keywords
+        # Decide value for CO MAPPED column:
+        # - topic rows: use unit index (1..N)
+        # - special rows: normalize into two sets based on CO group (CO1-2 vs CO3-4)
         content_type = _to_text(r.get("content_type"))
-        co_mapped = current_unit_co
+        co_mapped: Any = unit_idx_int if unit_idx_int else current_unit_co
         if content_type:
             ct = content_type.strip()
             if re.search(r"\bssa\b", ct, re.I) or re.search(r"active\s*learning", ct, re.I) or re.search(r"special\s*activity", ct, re.I):
-                co_mapped = ct
+                co_mapped = _normalize_special_label(ct, current_unit_co)
 
         topic_no = _to_text(r.get("part_no"))
         topic_name = _to_text(r.get("topics")) or _to_text(r.get("sub_topics"))
 
         # Skip fully empty lines
-        if not (co_mapped or topic_no or topic_name or content_type):
+        if not (_to_text(co_mapped) or topic_no or topic_name or content_type):
             continue
 
         serial_by_unit.setdefault(unit_idx_int, 0)
@@ -145,10 +176,22 @@ def build_articulation_matrix_from_revision_rows(rows: List[Dict[str, Any]]) -> 
                 "po": po_vals,
                 "pso": pso_vals,
                 "hours": int(hours) if float(hours).is_integer() else hours,
+                "_sort": _special_sort_key(_to_text(co_mapped)),
             }
         )
 
     flush_unit()
+
+    # Ensure special rows appear at the bottom of each unit (topics first, then SSA/AL/Special)
+    for u in units_out:
+        rows_list = u.get("rows") or []
+        try:
+            u["rows"] = sorted(rows_list, key=lambda rr: (rr.get("_sort", 0), rr.get("s_no", 0)))
+        except Exception:
+            u["rows"] = rows_list
+        for rr in u["rows"]:
+            if "_sort" in rr:
+                rr.pop("_sort", None)
 
     return {
         "units": units_out,

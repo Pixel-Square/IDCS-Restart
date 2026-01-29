@@ -72,13 +72,6 @@ export default function ArticulationMatrixPage({ courseId }: Props) {
       <div style={{ marginTop: 12 }}>
         <ArticulationMatrix subjectId={subject} matrix={matrix} />
       </div>
-
-      {matrix && (
-        <div style={{ marginTop: 12 }}>
-          <h4>Raw JSON (debug)</h4>
-          <pre style={{ background: '#f7f7f7', padding: 8, overflowX: 'auto' }}>{JSON.stringify(matrix, null, 2)}</pre>
-        </div>
-      )}
     </div>
   );
 }
