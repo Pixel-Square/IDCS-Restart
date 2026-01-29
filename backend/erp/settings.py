@@ -24,6 +24,7 @@ INSTALLED_APPS = [
     'corsheaders',
     'accounts',
     'academics',
+    'curriculum',
     'applications',
 ]
 
@@ -97,6 +98,7 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
+    'EXCEPTION_HANDLER': 'curriculum.views.custom_exception_handler',
 }
 
 from rest_framework_simplejwt.settings import api_settings as jwt_api_settings

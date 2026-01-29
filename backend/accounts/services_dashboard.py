@@ -74,22 +74,53 @@ def resolve_dashboard_capabilities(user) -> Dict:
         group = _group_permission_code(code)
         grouped.setdefault(group, []).append(code)
 
-    lower_perms = [p.lower() for p in perm_codes]
+    lower_perms = {p.lower() for p in perm_codes}
 
-    def _any_contains(subs: List[str]) -> bool:
+    def any_contains_all(parts: List[str]) -> bool:
         for p in lower_perms:
-            if all(s in p for s in subs):
+            if all(s in p for s in parts):
+                return True
+        return False
+
+    # explicit tokens that imply master edit/create/publish
+    master_edit_tokens = ('edit', 'create', 'manage', 'publish', 'write')
+    def has_master_edit():
+        for t in master_edit_tokens:
+            if any_contains_all(['curriculum', 'master', t]):
+                return True
+        # also accept canonical codes like CURRICULUM_MASTER_EDIT
+        if any(p in lower_perms for p in ('curriculum_master_edit', 'curriculum_master_publish')):
+            return True
+        return False
+
+    def has_master_view():
+        # view if there are explicit view/read/list/retrieve permissions for master
+        view_tokens = ('view', 'read', 'list', 'retrieve')
+        for t in view_tokens:
+            if any_contains_all(['curriculum', 'master', t]):
+                return True
+        # fallback: if there is any curriculum.master.* style permission, treat as view
+        if any(p for p in lower_perms if 'curriculum' in p and 'master' in p):
+            return True
+        return False
+
+    def has_department_approve():
+        return any_contains_all(['curriculum', 'approve']) or any_contains_all(['department', 'approve', 'curriculum'])
+
+    def has_department_fill():
+        tokens = ('fill', 'submit', 'complete', 'edit')
+        for t in tokens:
+            if any_contains_all(['curriculum', t]) or any_contains_all(['department', t]):
                 return True
         return False
 
     flags = {
-        'is_student': True if profile_type == 'STUDENT' else False,
-        'is_staff': True if profile_type == 'STAFF' else False,
-        'can_view_curriculum_master': _any_contains(['curriculum', 'view']) or _any_contains(['curriculum', 'read']) or _any_contains(['curriculum', 'retrieve']) or _any_contains(['curriculum', 'list']) or _any_contains(['curriculum', 'master']),
-        # Only treat explicit master permissions as master-edit access
-        'can_edit_curriculum_master': _any_contains(['curriculum', 'master']),
-        'can_approve_department_curriculum': _any_contains(['curriculum', 'approve']) or _any_contains(['department', 'approve', 'curriculum']) or _any_contains(['curriculum', 'approve', 'department']),
-        'can_fill_department_curriculum': _any_contains(['curriculum', 'fill']) or _any_contains(['curriculum', 'submit']) or _any_contains(['department', 'fill']) or _any_contains(['department', 'submit']) or _any_contains(['curriculum', 'complete']),
+        'is_student': profile_type == 'STUDENT',
+        'is_staff': profile_type == 'STAFF',
+        'can_view_curriculum_master': has_master_view(),
+        'can_edit_curriculum_master': has_master_edit(),
+        'can_approve_department_curriculum': has_department_approve(),
+        'can_fill_department_curriculum': has_department_fill(),
     }
 
     entry_points = {
