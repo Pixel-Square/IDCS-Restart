@@ -1,3 +1,48 @@
+.course-textarea {
+	font-family: inherit;
+	overflow: hidden;
+	resize: none;
+	background: #f8fafc;
+	border: 1px solid #d1d5db;
+	border-radius: 6px;
+	padding: 5px 8px;
+	font-size: 15px;
+	color: #1e293b;
+	font-weight: 500;
+	min-height: 32px;
+	max-height: 120px;
+	width: 100%;
+	box-sizing: border-box;
+	line-height: 1.4;
+	white-space: pre-wrap;
+	word-break: break-word;
+	transition: border 0.15s, box-shadow 0.15s;
+}
+.course-textarea:focus {
+	border: 1.5px solid #6366f1;
+	background: #eef2ff;
+}
+/* Inline edit cell for curriculum table */
+.edit-cell-input {
+	width: 100%;
+	min-width: 40px;
+	max-width: 100px;
+	padding: 5px 8px;
+	border: 1px solid #d1d5db;
+	border-radius: 6px;
+	background: #f8fafc;
+	font-size: 14px;
+	color: #1e293b;
+	outline: none;
+	transition: border 0.15s, box-shadow 0.15s;
+	box-shadow: none;
+	height: 32px;
+	margin: 0;
+}
+.edit-cell-input:focus {
+	border: 1.5px solid #6366f1;
+	background: #eef2ff;
+}
 .dashboard-root{
 	display:flex;
 	min-height:100vh;

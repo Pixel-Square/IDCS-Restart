@@ -1,7 +1,13 @@
+
+
 import React, { useEffect, useState } from 'react';
+import PillButton from '../../components/PillButton';
+import '../../components/PillButton.css';
 import { fetchMasters } from '../../services/curriculum';
 import CurriculumLayout from './CurriculumLayout';
 import { Link } from 'react-router-dom';
+import './CurriculumPage.css';
+import '../Dashboard.css';
 
 export default function MasterList() {
   const [data, setData] = useState<any[]>([]);
@@ -22,69 +28,157 @@ export default function MasterList() {
       .finally(() => setLoading(false));
   }, []);
 
-  if (loading) return <CurriculumLayout><div>Loading masters…</div></CurriculumLayout>;
+
+  if (loading) return (
+    <CurriculumLayout>
+      <div className="db-loading">Loading masters…</div>
+    </CurriculumLayout>
+  );
 
   return (
     <CurriculumLayout>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h2>Master Curricula</h2>
-        {(() => {
-          try {
-            const roles = JSON.parse(localStorage.getItem('roles') || '[]');
-            const isIQAC = Array.isArray(roles) && roles.some((r: string) => String(r).toLowerCase() === 'iqac');
-            if (isIQAC) return <Link to="/curriculum/master/new" className="btn-primary">New Master</Link>;
-          } catch (e) {}
-          return null;
-        })()}
-      </div>
-      {uniqueRegs.length > 0 ? (
-        <div style={{ marginBottom: 8 }}>
-          Regulation:&nbsp;
-          <select value={selectedReg ?? ''} onChange={e => setSelectedReg(e.target.value || null)}>
-            {uniqueRegs.map(r => <option key={r} value={r}>{r}</option>)}
-          </select>
+      <div className="curriculum-header">
+        <span className="curriculum-header-icon">
+          <svg width="28" height="28" fill="none" viewBox="0 0 48 48"><rect width="48" height="48" rx="12" fill="#e0e7ff"/><path d="M16 32V16h16v16H16zm2-2h12V18H18v12zm2-2v-8h8v8h-8z" fill="#6366f1"/></svg>
+        </span>
+        <div>
+          <h2 className="curriculum-header-title">Department Curriculum</h2>
+          <div className="curriculum-header-sub">View and manage all department curriculum entries.</div>
         </div>
-      ) : null}
-
-      <table style={{ width: '100%', marginTop: 12, borderCollapse: 'collapse' }}>
-        <thead>
-          <tr style={{ textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>
-            <th>Sem</th>
-            <th>Code</th>
-            <th>Course</th>
-            <th>L</th>
-            <th>T</th>
-            <th>P</th>
-            <th>S</th>
-            <th>C</th>
-            <th>Internal</th>
-            <th>External</th>
-            <th>Total</th>
-            <th>Depts</th>
-            <th>Editable</th>
-            <th /></tr>
-        </thead>
-        <tbody>
-          {data.filter(m => !selectedReg || m.regulation === selectedReg).map(m => (
-            <tr key={m.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
-              <td>{m.semester}</td>
-              <td>{m.course_code || '-'}</td>
-              <td>{m.course_name || '-'}</td>
-              <td>{m.l ?? 0}</td>
-              <td>{m.t ?? 0}</td>
-              <td>{m.p ?? 0}</td>
-              <td>{m.s ?? 0}</td>
-              <td>{m.c ?? 0}</td>
-              <td>{m.internal_mark ?? '-'}</td>
-              <td>{m.external_mark ?? '-'}</td>
-              <td>{m.total_mark ?? '-'}</td>
-              <td>{m.for_all_departments ? 'ALL' : (m.departments_display || []).map((d:any)=>d.code).join(', ')}</td>
-              <td>{m.editable ? 'Yes' : 'No'}</td>
-              <td><Link to={`/curriculum/master/${m.id}`}>Edit</Link></td>
+        <div style={{ marginLeft: 'auto' }}>
+          {(() => {
+            try {
+              const roles = JSON.parse(localStorage.getItem('roles') || '[]');
+              const isIQAC = Array.isArray(roles) && roles.some((r: string) => String(r).toLowerCase() === 'iqac');
+              if (isIQAC) return (
+                <Link to="/curriculum/master/new" className="btn-primary" style={{ textDecoration: 'none', padding: '8px 16px', borderRadius: 8 }}>New Master</Link>
+              );
+            } catch (e) {}
+            return null;
+          })()}
+        </div>
+      </div>
+      {uniqueRegs.length > 0 && (
+        <div className="curriculum-regs-row">
+          <span style={{ color: '#374151', fontWeight: 500 }}>Regulation:</span>
+          <div className="curriculum-regs-pills">
+            {uniqueRegs.map(r => {
+              const isActive = selectedReg === r;
+              return (
+                <PillButton
+                  key={r}
+                  onClick={() => setSelectedReg(r)}
+                  variant={isActive ? 'primary' : 'secondary'}
+                  style={isActive ? { boxShadow: '0 2px 8px #e0e7ff' } : {}}
+                >
+                  {r}
+                </PillButton>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      <div style={{ overflowX: 'auto', marginTop: 8 }}>
+        <table className="curriculum-table">
+          <thead>
+            <tr>
+              <th>Sem</th>
+              <th>Code</th>
+              <th>Course</th>
+              <th>L</th>
+              <th>T</th>
+              <th>P</th>
+              <th>S</th>
+              <th>C</th>
+              <th>Internal</th>
+              <th>External</th>
+              <th>Total</th>
+              <th>Depts</th>
+              <th>Editable</th>
+              <th></th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {data.filter(m => !selectedReg || m.regulation === selectedReg).map(m => (
+              <tr key={m.id} style={{ background: m.editable ? '#f8fafc' : '#fff' }}>
+                <td>{m.semester}</td>
+                <td>{m.course_code || '-'}</td>
+                <td>{m.course_name || '-'}</td>
+                <td>{m.l ?? 0}</td>
+                <td>{m.t ?? 0}</td>
+                <td>{m.p ?? 0}</td>
+                <td>{m.s ?? 0}</td>
+                <td>{m.c ?? 0}</td>
+                <td>{m.internal_mark ?? '-'}</td>
+                <td>{m.external_mark ?? '-'}</td>
+                <td>{m.total_mark ?? '-'}</td>
+                <td>{m.for_all_departments ? 'ALL' : (m.departments_display || []).map((d:any)=>d.code).join(', ')}</td>
+                <td>
+                  <span className={`curriculum-status ${m.status?.toLowerCase()}`}>{
+                    m.status === 'APPROVED' ? 'Approved' :
+                    m.status === 'REJECTED' ? 'Rejected' :
+                    'Pending'
+                  }</span>
+                </td>
+                <td>
+                  <div className="curriculum-actions">
+                    <Link
+                      to={`/curriculum/master/${m.id}`}
+                      style={{ textDecoration: 'none' }}
+                    >
+                      <PillButton variant="secondary" style={{ minWidth: 70, padding: '0 14px', height: 32, borderRadius: 999, fontWeight: 600, fontSize: 15 }}>
+                        Edit
+                      </PillButton>
+                    </Link>
+                    {m.status === 'PENDING' && (
+                      <>
+                        <button
+                          type="button"
+                          style={{
+                            padding: '6px 18px',
+                            borderRadius: 8,
+                            fontWeight: 600,
+                            fontSize: 16,
+                            minWidth: 100,
+                            background: 'linear-gradient(90deg, #22c55e, #16a34a)',
+                            color: '#fff',
+                            border: 'none',
+                            boxShadow: '0 2px 8px #bbf7d0',
+                            cursor: 'pointer',
+                            transition: 'background 0.18s, color 0.18s, box-shadow 0.18s',
+                            letterSpacing: '0.5px'
+                          }}
+                        >
+                          Approve
+                        </button>
+                        <button
+                          type="button"
+                          style={{
+                            padding: '6px 18px',
+                            borderRadius: 8,
+                            fontWeight: 600,
+                            fontSize: 16,
+                            minWidth: 100,
+                            background: 'linear-gradient(90deg, #ef4444, #b91c1c)',
+                            color: '#fff',
+                            border: 'none',
+                            boxShadow: '0 2px 8px #fecaca',
+                            cursor: 'pointer',
+                            transition: 'background 0.18s, color 0.18s, box-shadow 0.18s',
+                            letterSpacing: '0.5px'
+                          }}
+                        >
+                          Reject
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </CurriculumLayout>
   );
 }
