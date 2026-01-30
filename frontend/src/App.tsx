@@ -1,13 +1,19 @@
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState } from "react";
 import { Routes, Route } from "react-router-dom";
 import { getMe } from "./services/auth";
 import Navbar from "./components/Navbar";
 import HomePage from "./components/HomePage";
 import DashboardPage from "./pages/Dashboard";
+<<<<<<< HEAD
 import ProfilePage from "./pages/Profile";
 import MasterList from './pages/curriculum/MasterList';
 import MasterEditor from './pages/curriculum/MasterEditor';
 import DeptList from './pages/curriculum/DeptList';
+=======
+import OBEPage from "./pages/OBEPage";
+import OBEMasterPage from "./pages/OBEMasterPage";
+import CourseOBEPage from "./pages/CourseOBEPage";
+>>>>>>> origin/rohit
 
 type RoleObj = { name: string };
 type Me = {
@@ -55,17 +61,28 @@ export default function App() {
     );
   }
 
+  const userPerms = Array.isArray(user?.permissions) ? user?.permissions : [];
+  const lowerPerms = userPerms.map((p) => String(p || '').toLowerCase());
+  const canObe = lowerPerms.some((p) => ['obe.view', 'obe.cdap.upload', 'obe.master.manage'].includes(p));
+  const canObeMaster = lowerPerms.includes('obe.master.manage');
+
   return (
     <div>
       <Navbar user={user} />
       <Routes>
         <Route path="/" element={<HomePage user={user} />} />
         <Route path="/dashboard" element={<DashboardPage />} />
+<<<<<<< HEAD
         <Route path="/profile" element={<ProfilePage user={user} />} />
         <Route path="/curriculum/master" element={<MasterList />} />
         <Route path="/curriculum/master/:id" element={<MasterEditor />} />
         <Route path="/curriculum/master/new" element={<MasterEditor />} />
         <Route path="/curriculum/department" element={<DeptList />} />
+=======
+        <Route path="/obe" element={canObe ? <OBEPage /> : <HomePage user={user} />} />
+        <Route path="/obe/course/:code" element={<CourseOBEPage />} />
+        <Route path="/obe/master" element={canObeMaster ? <OBEMasterPage /> : <HomePage user={user} />} />
+>>>>>>> origin/rohit
         <Route path="*" element={<HomePage user={user} />} />
       </Routes>
     </div>

@@ -1,5 +1,10 @@
+<<<<<<< HEAD
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
+=======
+﻿import React from 'react';
+import { Link } from 'react-router-dom';
+>>>>>>> origin/rohit
 import useDashboard from '../hooks/useDashboard';
 import { User, BookOpen, Layout, Grid, Home } from 'lucide-react';
 import './DashboardSidebar.css';
@@ -18,7 +23,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   const loc = useLocation();
   const { collapsed } = useSidebar();
 
-  if (loading) return <aside className="dsb">Loading…</aside>;
+  if (loading) return <aside className="dsb">Loading</aside>;
   if (error) return <aside className="dsb">Error loading sidebar</aside>;
   if (!data) return <aside className="dsb">No data</aside>;
 
@@ -31,6 +36,13 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
 
   // fallback: always show profile
   items.unshift({ key: 'profile', label: 'Profile', to: '/profile' });
+
+  const perms = (data.permissions || []).map((p) => String(p || '').toLowerCase());
+  const canObe = perms.some((p) => ['obe.view', 'obe.cdap.upload', 'obe.master.manage'].includes(p));
+  const canObeMaster = perms.includes('obe.master.manage');
+
+  if (canObe) items.push({ key: 'obe', label: 'OBE', to: '/obe' });
+  if (canObeMaster) items.push({ key: 'obe_master', label: 'OBE Master', to: '/obe/master' });
 
   return (
     <aside className={`dsb modern-dsb ${collapsed ? 'collapsed' : ''}`}>

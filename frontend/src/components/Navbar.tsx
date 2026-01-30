@@ -37,7 +37,7 @@ export default function Navbar({ user }: NavbarProps) {
               e.currentTarget.style.display = "none";
             }}
           />
-          <span className="logo-text">IDCS</span>
+          <span className="logo-text">IDCS KR</span>
         </Link>
 
         <div className="navbar-links">
