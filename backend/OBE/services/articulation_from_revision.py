@@ -153,7 +153,7 @@ def build_articulation_matrix_from_revision_rows(rows: List[Dict[str, Any]]) -> 
             if re.search(r"\bssa\b", ct, re.I) or re.search(r"active\s*learning", ct, re.I) or re.search(r"special\s*activity", ct, re.I):
                 co_mapped = _normalize_special_label(ct, current_unit_co)
 
-        topic_no = _to_text(r.get("part_no"))
+        topic_no = _to_text(r.get("topic_no"))
         topic_name = _to_text(r.get("topics")) or _to_text(r.get("sub_topics"))
 
         # Skip fully empty lines

@@ -36,7 +36,7 @@ type ArticulationMatrixPayload = {
 };
 
 function cell(v: any) {
-  if (v === '-' || v === null || v === undefined || v === '') return '';
+  if (v === '-' || v === null || v === undefined || v === '') return ' - ';
   return String(v);
 }
 

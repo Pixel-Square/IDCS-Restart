@@ -153,42 +153,77 @@ def articulation_matrix(request, subject_id: str):
 
     rev = CdapRevision.objects.filter(subject_id=subject_id).first()
     rows = []
-    extras = {}
     if rev and isinstance(rev.rows, list):
         rows = rev.rows
 
-    if rev and isinstance(getattr(rev, 'active_learning', None), dict):
-        maybe = rev.active_learning.get('articulation_extras')
-        if isinstance(maybe, dict):
-            extras = maybe
-
     matrix = build_articulation_matrix_from_revision_rows(rows)
 
-    # Merge assessment rows (SSA / Active Learning / Special activity) extracted from page-2
-    if extras and isinstance(matrix.get('units'), list):
+    # Get global mapping from OBE Master
+    global_mapping_row = CdapActiveLearningAnalysisMapping.objects.filter(id=1).first()
+    global_mapping = global_mapping_row.mapping if global_mapping_row and isinstance(global_mapping_row.mapping, dict) else {}
+
+    # Activity labels used in OBE Master
+    activity_labels = {
+        'SSA1': 'SSA 1',
+        'SSA2': 'SSA 2',
+        'ACTIVE LEARNING 1 (SKILL)': 'Active Learning 1',
+        'ACTIVE LEARNING 2 (SKILL)': 'Active Learning 2',
+        'ACTIVE LEARNING 1 (ATTITUDE)': 'Active Learning 1',
+        'ACTIVE LEARNING 2 (ATTITUDE)': 'Active Learning 2',
+        'SPECIAL ACTIVITY': 'Special activity',
+    }
+
+    # Apply global mapping to units 1-4 (CO1-CO2 use set 1, CO3-CO4 use set 2)
+    if global_mapping and isinstance(matrix.get('units'), list):
         for u in matrix['units']:
-            unit_label = str(u.get('unit') or '')
-            picked = extras.get(unit_label)
-            if not isinstance(picked, list) or not picked:
+            unit_idx = u.get('unit_index', 0)
+            if unit_idx not in [1, 2, 3, 4]:
                 continue
+            
+            # Determine which set: CO1-2 uses set 1, CO3-4 uses set 2
+            use_set_2 = unit_idx in [3, 4]
+            
             base_rows = u.get('rows') or []
-            # append at bottom with fresh serials
             next_serial = 0
             try:
                 next_serial = max(int(r.get('s_no') or 0) for r in base_rows) if base_rows else 0
             except Exception:
                 next_serial = len(base_rows)
-            for rr in picked:
+            
+            # Add three rows: SSA, Active Learning, Special Activity
+            activities_to_add = [
+                ('SSA2' if use_set_2 else 'SSA1', 'SSA 2' if use_set_2 else 'SSA 1', 2),
+                ('ACTIVE LEARNING 2 (SKILL)' if use_set_2 else 'ACTIVE LEARNING 1 (SKILL)', 
+                 'Active Learning 2' if use_set_2 else 'Active Learning 1', 2),
+                ('SPECIAL ACTIVITY', 'Special activity', 0),
+            ]
+            
+            for mapping_key, display_label, default_hours in activities_to_add:
                 next_serial += 1
+                
+                # Get PO mapping from global mapping (array of 11 booleans)
+                po_mapping = global_mapping.get(mapping_key, [])
+                if not isinstance(po_mapping, list):
+                    po_mapping = []
+                
+                # Convert boolean mapping to hours (if checked, use default_hours, else '-')
+                po_vals = []
+                for i in range(11):
+                    is_checked = po_mapping[i] if i < len(po_mapping) else False
+                    po_vals.append(default_hours if is_checked else '-')
+                
+                # PSO values (always '-' for now, can be enhanced later)
+                pso_vals = ['-', '-', '-']
+                
                 u.setdefault('rows', []).append({
-                    'excel_row': rr.get('excel_row'),
+                    'excel_row': None,
                     's_no': next_serial,
-                    'co_mapped': rr.get('co_mapped') or rr.get('co_mapped'.upper()) or rr.get('co') or rr.get('label') or '',
-                    'topic_no': rr.get('topic_no') or '',
-                    'topic_name': rr.get('topic_name') or rr.get('topic') or '',
-                    'po': rr.get('po') or [],
-                    'pso': rr.get('pso') or [],
-                    'hours': rr.get('hours') or rr.get('class_session_hours') or '',
+                    'co_mapped': display_label,
+                    'topic_no': '-',
+                    'topic_name': display_label.upper(),
+                    'po': po_vals,
+                    'pso': pso_vals,
+                    'hours': default_hours if default_hours else '-',
                 })
 
     matrix['meta'] = {**(matrix.get('meta') or {}), 'subject_id': str(subject_id)}

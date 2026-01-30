@@ -262,20 +262,61 @@ def parse_cdap_excel(file_obj) -> Dict[str, Any]:
 
     # Extract assessment rows from the Articulation Matrix sheet (page-2)
     articulation_extras: Dict[str, List[Dict[str, Any]]] = {}
+    topic_numbers_map: Dict[str, Dict[int, str]] = {}  # {unit_label: {s_no: topic_no}}
+    
     try:
         art = parse_articulation_matrix_excel(io.BytesIO(file_bytes))
         for u in art.get('units') or []:
             unit_label = _to_text(u.get('unit'))
             rows_list = u.get('rows') or []
             picked: List[Dict[str, Any]] = []
+            topic_map: Dict[int, str] = {}
+            
             for rr in rows_list:
                 label = _to_text(rr.get('co_mapped')).strip().lower()
+                s_no = rr.get('s_no')
+                topic_no = _to_text(rr.get('topic_no'))
+                
+                # Store topic numbers for all rows (not just special ones)
+                if s_no and topic_no:
+                    try:
+                        topic_map[int(s_no)] = topic_no
+                    except (ValueError, TypeError):
+                        pass
+                
+                # Still collect special activity rows
                 if label.startswith('ssa') or label.startswith('active learning') or label.startswith('special activity'):
                     picked.append(rr)
+            
             if picked:
                 articulation_extras[unit_label] = picked
+            if topic_map:
+                topic_numbers_map[unit_label] = topic_map
     except Exception:
         articulation_extras = {}
+        topic_numbers_map = {}
+    
+    # Merge topic numbers into parsed_rows
+    for row in parsed_rows:
+        unit_idx = row.get('unit_index')
+        if not unit_idx:
+            continue
+        unit_label = f"UNIT {unit_idx}"
+        topic_map = topic_numbers_map.get(unit_label, {})
+        
+        # Find the row's position within its unit to match s_no from articulation sheet
+        # Count non-empty rows in the same unit before this one
+        s_no = 1
+        for prev_row in parsed_rows:
+            if prev_row.get('unit_index') != unit_idx:
+                continue
+            if prev_row is row:
+                break
+            # Only count rows that would appear in articulation matrix (non-empty content)
+            if prev_row.get('topics') or prev_row.get('sub_topics') or prev_row.get('content_type'):
+                s_no += 1
+        
+        row['topic_no'] = topic_map.get(s_no, '')
 
     return {
         "rows": parsed_rows,
