@@ -85,6 +85,34 @@ def upload_docx(request):
     return Response({'saved_path': saved_path, 'file_url': file_url})
 
 
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def list_uploads(request):
+    """List files under the OBE uploads folder. Returns name, path and url for each file."""
+    auth = _require_permissions(request, {'obe.cdap.upload'})
+    if auth:
+        return auth
+
+    upload_dir = os.path.join('obe', 'uploads')
+    files_list = []
+    try:
+        # default_storage.listdir returns (dirs, files)
+        dirs, files = default_storage.listdir(upload_dir)
+        for fname in files:
+            rel_path = os.path.join(upload_dir, fname)
+            try:
+                url = default_storage.url(rel_path)
+            except Exception:
+                url = rel_path
+            files_list.append({'name': fname, 'path': rel_path, 'url': url})
+    except Exception:
+        # If directory doesn't exist or other error, return empty list
+        files_list = []
+
+    return Response({'files': files_list})
+
+
 @api_view(['GET', 'PUT'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])

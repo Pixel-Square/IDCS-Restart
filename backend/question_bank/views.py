@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from django.core.files.storage import default_storage
+from django.core.files.base import ContentFile
 from django.utils.text import slugify
 
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
@@ -60,7 +61,9 @@ def _save_data_url_image(data_url: str, base_path: str, index: int) -> str:
 
     ts = datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')
     rel_path = os.path.join(base_path, f'{ts}_{index}.{ext}')
-    saved = default_storage.save(rel_path, content=blob)
+    # default_storage.save expects a File-like object; wrap raw bytes
+    # in a ContentFile so Django can call .read() / .chunks() on it.
+    saved = default_storage.save(rel_path, ContentFile(blob))
     try:
         return default_storage.url(saved)
     except Exception:
@@ -285,4 +288,52 @@ def import_questions(request):
     return Response({
         'inserted': len(to_create),
         'failed': failures,
+        'title_id': title_obj.id,
     })
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def list_questions(request):
+    """List questions for a given title_id or title string.
+
+    Query params:
+      - title_id: integer
+      - title: exact title string
+    """
+    title_id = request.query_params.get('title_id')
+    title_text = request.query_params.get('title')
+
+    qs = QuestionBankQuestion.objects.none()
+    if title_id:
+        try:
+            tid = int(title_id)
+            qs = QuestionBankQuestion.objects.filter(title_obj_id=tid)
+        except Exception:
+            return Response({'detail': 'Invalid title_id'}, status=status.HTTP_400_BAD_REQUEST)
+    elif title_text:
+        title_obj = QuestionBankTitle.objects.filter(title=str(title_text).strip(), user=request.user).first()
+        if not title_obj:
+            # try without user restriction
+            title_obj = QuestionBankTitle.objects.filter(title=str(title_text).strip()).first()
+        if not title_obj:
+            return Response({'files': []})
+        qs = QuestionBankQuestion.objects.filter(title_obj=title_obj)
+    else:
+        return Response({'detail': 'title_id or title query param required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    out = []
+    for q in qs.order_by('id')[:500]:
+        out.append({
+            'id': q.id,
+            'question_text': q.question_text,
+            'answer_text': q.answer_text,
+            'options': q.options,
+            'image_urls': q.image_urls,
+            'btl': q.btl,
+            'marks': q.marks,
+            'source_file_path': q.source_file_path,
+        })
+
+    return Response({'questions': out})
