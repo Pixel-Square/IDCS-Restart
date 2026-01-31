@@ -29,7 +29,7 @@ export default function CourseOBEPage(): JSX.Element {
         <div style={{ flex: '0 0 240px', background: '#f8fafc', minHeight: '100vh', borderRight: '1px solid #eee' }}>
           <DashboardSidebar />
         </div>
-        <div style={{ flex: 1, padding: '32px', maxWidth: 1200, margin: '0 auto', width: '100%' }}>
+        <div style={{ flex: 1, padding: '32px', width: '100%', minWidth: 0, boxSizing: 'border-box' }}>
           <div style={{ marginBottom: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
               <div>

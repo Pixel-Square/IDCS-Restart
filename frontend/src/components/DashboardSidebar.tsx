@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
@@ -38,24 +37,14 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // fallback: always show profile
   items.unshift({ key: 'profile', label: 'Profile', to: '/profile' });
 
+  // Define obeItem for the OBE button at the bottom
+  const obeItem = items.find((item) => item.key === 'obe') || { key: 'obe', label: 'OBE', to: '/obe' };
 
   const perms = (data.permissions || []).map((p) => String(p || '').toLowerCase());
-<<<<<<< HEAD
-  const roles = (data.roles || []).map((r) => typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase());
-  const isStaff = roles.includes('staff');
-  const canObe = perms.some((p) => ['obe.view', 'obe.cdap.upload', 'obe.master.manage'].includes(p));
-  const canObeMaster = perms.includes('obe.master.manage');
-
-  // Always show OBE button at the end
-  const obeItem = { key: 'obe', label: 'OBE', to: '/obe' };
-  // Show OBE Master only for IQAC role
-  if (roles.includes('iqac')) items.push({ key: 'obe_master', label: 'OBE Master', to: '/obe/master' });
-=======
   const canObeMaster = perms.includes('obe.master.manage');
 
   items.push({ key: 'obe', label: 'OBE', to: '/obe' });
   if (canObeMaster) items.push({ key: 'obe_master', label: 'OBE Master', to: '/obe/master' });
->>>>>>> origin/rohit
 
   return (
     <aside className={`dsb modern-dsb ${collapsed ? 'collapsed' : ''}`}>

@@ -4,6 +4,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
+from django.db.models import Q
 from django.db import transaction
 
 from .models import AttendanceSession, AttendanceRecord, TeachingAssignment, Subject, StudentProfile
@@ -170,3 +171,68 @@ class StudentProfileViewSet(viewsets.ReadOnlyModelViewSet):
         if section:
             qs = qs.filter(section__name__iexact=section)
         return qs
+
+
+class TeachingAssignmentStudentsView(APIView):
+    """Return the roster (students) for a specific teaching assignment.
+
+    Used by mark-entry pages so they can load students from the teaching assignment's section.
+    """
+
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request, ta_id: int):
+        ta = get_object_or_404(
+            TeachingAssignment.objects.select_related(
+                'subject',
+                'section',
+                'academic_year',
+                'section__semester__course__department',
+            ),
+            pk=ta_id,
+            is_active=True,
+        )
+
+        if not serializer_check_user_can_manage(request.user, ta):
+            return Response({'detail': 'You do not have permission to view this roster.'}, status=403)
+
+        section_id = ta.section_id
+        students = (
+            StudentProfile.objects.select_related('user', 'section')
+            .filter(
+                Q(section_id=section_id)
+                | Q(section_assignments__section_id=section_id, section_assignments__end_date__isnull=True)
+            )
+            .distinct()
+            .order_by('reg_no')
+        )
+
+        def student_name(sp: StudentProfile) -> str:
+            try:
+                full = sp.user.get_full_name()
+            except Exception:
+                full = ''
+            return full or getattr(sp.user, 'username', '') or sp.reg_no
+
+        payload = {
+            'teaching_assignment': {
+                'id': ta.id,
+                'subject_id': ta.subject_id,
+                'subject_code': ta.subject.code,
+                'subject_name': ta.subject.name,
+                'section_id': ta.section_id,
+                'section_name': ta.section.name,
+                'academic_year': ta.academic_year.name,
+            },
+            'students': [
+                {
+                    'id': s.id,
+                    'reg_no': s.reg_no,
+                    'name': student_name(s),
+                    'section': getattr(getattr(s, 'current_section', None), 'name', None)
+                    or (getattr(s.section, 'name', None) if getattr(s, 'section', None) else None),
+                }
+                for s in students
+            ],
+        }
+        return Response(payload)

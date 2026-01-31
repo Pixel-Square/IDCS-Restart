@@ -24,29 +24,35 @@ type QuestionDef = {
 // Tune these to match your CIA1 blueprint.
 // The UI (headers, CO/BTL totals, max marks) is generated from this.
 const QUESTIONS: QuestionDef[] = [
-  { key: 'q1', label: 'Q1', max: 1, co: 1, btl: 1 },
-  { key: 'q2', label: 'Q2', max: 1, co: 1, btl: 3 },
-  { key: 'q3', label: 'Q3', max: 1, co: 1, btl: 4 },
+  { key: 'q1', label: 'Q1', max: 2, co: 1, btl: 1 },
+  { key: 'q2', label: 'Q2', max: 2, co: 1, btl: 3 },
+  { key: 'q3', label: 'Q3', max: 2, co: 1, btl: 4 },
   { key: 'q4', label: 'Q4', max: 2, co: 2, btl: 1 },
   { key: 'q5', label: 'Q5', max: 2, co: 2, btl: 1 },
   { key: 'q6', label: 'Q6', max: 2, co: 2, btl: 2 },
-  { key: 'q7', label: 'Q7', max: 1, co: 1, btl: 2 },
-  { key: 'q8', label: 'Q8', max: 2, co: 2, btl: 3 },
-  { key: 'q9', label: 'Q9', max: 2, co: 2, btl: 5 },
+  { key: 'q7', label: 'Q7', max: 16, co: 1, btl: 2 },
+  { key: 'q8', label: 'Q8', max: 16, co: 2, btl: 3 },
+  { key: 'q9', label: 'Q9', max: 16, co: 2, btl: 5 },
 ];
 
 type Cia1RowState = {
   studentId: number;
   absent: boolean;
   // question key -> mark
-  q: Record<string, number>;
+  q: Record<string, number | ''>;
 };
 
 type Cia1Sheet = {
   termLabel: string;
   batchLabel: string;
+  // question key -> selected BTL (1..6) or '' (unset)
+  questionBtl: Record<string, 1 | 2 | 3 | 4 | 5 | 6 | ''>;
   rowsByStudentId: Record<string, Cia1RowState>;
 };
+
+function defaultQuestionBtl(): Record<string, 1 | 2 | 3 | 4 | 5 | 6 | ''> {
+  return Object.fromEntries(QUESTIONS.map((q) => [q.key, q.btl])) as Record<string, 1 | 2 | 3 | 4 | 5 | 6 | ''>;
+}
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
@@ -98,6 +104,7 @@ export default function Cia1Entry({ subjectId }: Props) {
   const [sheet, setSheet] = useState<Cia1Sheet>({
     termLabel: 'KRCT AY25-26',
     batchLabel: subjectId,
+    questionBtl: defaultQuestionBtl(),
     rowsByStudentId: {},
   });
 
@@ -132,9 +139,20 @@ export default function Cia1Entry({ subjectId }: Props) {
             ? {
                 termLabel: String((stored as any).termLabel || 'KRCT AY25-26'),
                 batchLabel: String((stored as any).batchLabel || subjectId),
+                questionBtl:
+                  (stored as any).questionBtl && typeof (stored as any).questionBtl === 'object'
+                    ? (stored as any).questionBtl
+                    : defaultQuestionBtl(),
                 rowsByStudentId: (stored as any).rowsByStudentId && typeof (stored as any).rowsByStudentId === 'object' ? (stored as any).rowsByStudentId : {},
               }
-            : { termLabel: 'KRCT AY25-26', batchLabel: subjectId, rowsByStudentId: {} };
+            : { termLabel: 'KRCT AY25-26', batchLabel: subjectId, questionBtl: defaultQuestionBtl(), rowsByStudentId: {} };
+
+        // Backfill missing questionBtl keys.
+        const nextQuestionBtl: Record<string, 1 | 2 | 3 | 4 | 5 | 6 | ''> = { ...defaultQuestionBtl(), ...(base.questionBtl || {}) };
+        for (const q of QUESTIONS) {
+          const v = (nextQuestionBtl as any)[q.key];
+          if (!(v === '' || v === 1 || v === 2 || v === 3 || v === 4 || v === 5 || v === 6)) nextQuestionBtl[q.key] = '';
+        }
 
         // Ensure every roster student has an entry.
         const merged: Record<string, Cia1RowState> = { ...base.rowsByStudentId };
@@ -150,17 +168,17 @@ export default function Cia1Entry({ subjectId }: Props) {
             merged[key] = {
               studentId: s.id,
               absent: false,
-              q: Object.fromEntries(QUESTIONS.map((q) => [q.key, 0])),
+              q: Object.fromEntries(QUESTIONS.map((q) => [q.key, ''])),
             };
           }
 
           // Backfill missing question keys.
           for (const q of QUESTIONS) {
-            if (!(q.key in (merged[key].q || {}))) merged[key].q[q.key] = 0;
+            if (!(q.key in (merged[key].q || {}))) merged[key].q[q.key] = '';
           }
         }
 
-        setSheet({ ...base, batchLabel: base.batchLabel || subjectId, rowsByStudentId: merged });
+        setSheet({ ...base, questionBtl: nextQuestionBtl, batchLabel: base.batchLabel || subjectId, rowsByStudentId: merged });
       } catch (e: any) {
         if (!mounted) return;
         setError(e?.message || 'Failed to load CIA1 roster');
@@ -181,11 +199,24 @@ export default function Cia1Entry({ subjectId }: Props) {
     const co2 = QUESTIONS.filter((q) => q.co === 2).reduce((sum, q) => sum + q.max, 0);
     return { co1, co2 };
   }, []);
+
+  const visibleBtls = useMemo(() => {
+    const set = new Set<number>();
+    for (const q of QUESTIONS) {
+      const v = (sheet.questionBtl || ({} as any))[q.key];
+      if (v === 1 || v === 2 || v === 3 || v === 4 || v === 5 || v === 6) set.add(v);
+    }
+    return [1, 2, 3, 4, 5, 6].filter((n) => set.has(n));
+  }, [sheet.questionBtl]);
+
   const btlMax = useMemo(() => {
     const out: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
-    for (const q of QUESTIONS) out[q.btl] += q.max;
+    for (const q of QUESTIONS) {
+      const v = (sheet.questionBtl || ({} as any))[q.key];
+      if (v === 1 || v === 2 || v === 3 || v === 4 || v === 5 || v === 6) out[v] += q.max;
+    }
     return out as Record<1 | 2 | 3 | 4 | 5 | 6, number>;
-  }, []);
+  }, [sheet.questionBtl]);
 
   const setAbsent = (studentId: number, absent: boolean) => {
     setSheet((prev) => {
@@ -193,11 +224,11 @@ export default function Cia1Entry({ subjectId }: Props) {
       const existing = prev.rowsByStudentId[key] || {
         studentId,
         absent: false,
-        q: Object.fromEntries(QUESTIONS.map((q) => [q.key, 0])),
+        q: Object.fromEntries(QUESTIONS.map((q) => [q.key, ''])),
       };
 
       const next: Cia1RowState = absent
-        ? { ...existing, absent: true, q: Object.fromEntries(QUESTIONS.map((q) => [q.key, 0])) }
+        ? { ...existing, absent: true, q: Object.fromEntries(QUESTIONS.map((q) => [q.key, ''])) }
         : { ...existing, absent: false };
 
       return {
@@ -210,16 +241,28 @@ export default function Cia1Entry({ subjectId }: Props) {
     });
   };
 
-  const setQuestionMark = (studentId: number, qKey: string, value: number) => {
+  const setQuestionBtl = (qKey: string, value: 1 | 2 | 3 | 4 | 5 | 6 | '') => {
+    setSheet((prev) => ({
+      ...prev,
+      questionBtl: {
+        ...(prev.questionBtl || defaultQuestionBtl()),
+        [qKey]: value,
+      },
+    }));
+  };
+
+  const setQuestionMark = (studentId: number, qKey: string, value: number | '') => {
     setSheet((prev) => {
       const key = String(studentId);
       const existing = prev.rowsByStudentId[key] || {
         studentId,
         absent: false,
-        q: Object.fromEntries(QUESTIONS.map((q) => [q.key, 0])),
+        q: Object.fromEntries(QUESTIONS.map((q) => [q.key, ''])),
       };
       const def = QUESTIONS.find((q) => q.key === qKey);
       const max = def?.max ?? totalsMax;
+
+      const nextValue = value === '' ? '' : clamp(Number(value || 0), 0, max);
 
       return {
         ...prev,
@@ -229,7 +272,7 @@ export default function Cia1Entry({ subjectId }: Props) {
             ...existing,
             q: {
               ...(existing.q || {}),
-              [qKey]: clamp(Number(value || 0), 0, max),
+              [qKey]: nextValue,
             },
           },
         },
@@ -278,7 +321,7 @@ export default function Cia1Entry({ subjectId }: Props) {
       const row = sheet.rowsByStudentId[String(s.id)] || {
         studentId: s.id,
         absent: false,
-        q: Object.fromEntries(QUESTIONS.map((q) => [q.key, 0])),
+        q: Object.fromEntries(QUESTIONS.map((q) => [q.key, ''])),
       };
 
       const qMarks = Object.fromEntries(
@@ -289,18 +332,14 @@ export default function Cia1Entry({ subjectId }: Props) {
       const co1 = QUESTIONS.filter((q) => q.co === 1).reduce((sum, q) => sum + Number(qMarks[q.key] || 0), 0);
       const co2 = QUESTIONS.filter((q) => q.co === 2).reduce((sum, q) => sum + Number(qMarks[q.key] || 0), 0);
 
-      const btl = {
-        1: QUESTIONS.filter((q) => q.btl === 1).reduce((sum, q) => sum + Number(qMarks[q.key] || 0), 0),
-        2: QUESTIONS.filter((q) => q.btl === 2).reduce((sum, q) => sum + Number(qMarks[q.key] || 0), 0),
-        3: QUESTIONS.filter((q) => q.btl === 3).reduce((sum, q) => sum + Number(qMarks[q.key] || 0), 0),
-        4: QUESTIONS.filter((q) => q.btl === 4).reduce((sum, q) => sum + Number(qMarks[q.key] || 0), 0),
-        5: QUESTIONS.filter((q) => q.btl === 5).reduce((sum, q) => sum + Number(qMarks[q.key] || 0), 0),
-        6: QUESTIONS.filter((q) => q.btl === 6).reduce((sum, q) => sum + Number(qMarks[q.key] || 0), 0),
-      } as Record<1 | 2 | 3 | 4 | 5 | 6, number>;
+      const btl: Record<1 | 2 | 3 | 4 | 5 | 6, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
+      for (const q of QUESTIONS) {
+        const v = (sheet.questionBtl || ({} as any))[q.key];
+        if (v === 1 || v === 2 || v === 3 || v === 4 || v === 5 || v === 6) btl[v] += Number(qMarks[q.key] || 0);
+      }
 
       return {
         sno: i + 1,
-        section: s.section ?? '',
         registerNo: s.reg_no,
         name: s.name,
         absent: row.absent ? 1 : 0,
@@ -310,18 +349,12 @@ export default function Cia1Entry({ subjectId }: Props) {
         co1_pct: pct(co1, coMax.co1),
         co2_mark: co2,
         co2_pct: pct(co2, coMax.co2),
-        btl1_mark: btl[1],
-        btl1_pct: pct(btl[1], btlMax[1]),
-        btl2_mark: btl[2],
-        btl2_pct: pct(btl[2], btlMax[2]),
-        btl3_mark: btl[3],
-        btl3_pct: pct(btl[3], btlMax[3]),
-        btl4_mark: btl[4],
-        btl4_pct: pct(btl[4], btlMax[4]),
-        btl5_mark: btl[5],
-        btl5_pct: pct(btl[5], btlMax[5]),
-        btl6_mark: btl[6],
-        btl6_pct: pct(btl[6], btlMax[6]),
+        ...Object.fromEntries(
+          visibleBtls.flatMap((n) => [
+            [`btl${n}_mark`, btl[n as 1 | 2 | 3 | 4 | 5 | 6]],
+            [`btl${n}_pct`, pct(btl[n as 1 | 2 | 3 | 4 | 5 | 6], btlMax[n as 1 | 2 | 3 | 4 | 5 | 6])],
+          ]),
+        ),
       };
     });
 
@@ -434,19 +467,22 @@ export default function Cia1Entry({ subjectId }: Props) {
         <div style={{ color: '#6b7280', fontSize: 14, padding: '12px 0' }}>No students found for this subject.</div>
       ) : (
         <div style={{ overflowX: 'auto', border: '1px solid #111', borderRadius: 6 }}>
-          <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1600 }}>
+          <table style={{ 
+            borderCollapse: 'collapse', 
+            width: '111%', // Reduce width to 90%
+            minWidth: 1440, // Reduce minWidth by 10%
+            transform: 'scale(0.9)', // Scale down by 10%
+            transformOrigin: 'top left'
+          }}>
             <thead>
               <tr>
-                <th style={cellTh} colSpan={5 + QUESTIONS.length + 1 + 4 + 12}>
+                <th style={cellTh} colSpan={4 + QUESTIONS.length + 1 + 4 + visibleBtls.length * 2}>
                   {sheet.termLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {sheet.batchLabel} &nbsp;&nbsp;|&nbsp;&nbsp; CIA1
                 </th>
               </tr>
               <tr>
                 <th style={cellTh} rowSpan={3}>
                   S.No
-                </th>
-                <th style={cellTh} rowSpan={3}>
-                  SECTION
                 </th>
                 <th style={cellTh} rowSpan={3}>
                   Register No.
@@ -467,9 +503,11 @@ export default function Cia1Entry({ subjectId }: Props) {
                 <th style={cellTh} colSpan={4}>
                   CO ATTAINMENT
                 </th>
-                <th style={cellTh} colSpan={12}>
-                  BTL ATTAINMENT
-                </th>
+                {visibleBtls.length ? (
+                  <th style={cellTh} colSpan={visibleBtls.length * 2}>
+                    BTL ATTAINMENT
+                  </th>
+                ) : null}
               </tr>
               <tr>
                 {QUESTIONS.map((q) => (
@@ -483,24 +521,11 @@ export default function Cia1Entry({ subjectId }: Props) {
                 <th style={cellTh} colSpan={2}>
                   CO-2
                 </th>
-                <th style={cellTh} colSpan={2}>
-                  BTL-1
-                </th>
-                <th style={cellTh} colSpan={2}>
-                  BTL-2
-                </th>
-                <th style={cellTh} colSpan={2}>
-                  BTL-3
-                </th>
-                <th style={cellTh} colSpan={2}>
-                  BTL-4
-                </th>
-                <th style={cellTh} colSpan={2}>
-                  BTL-5
-                </th>
-                <th style={cellTh} colSpan={2}>
-                  BTL-6
-                </th>
+                {visibleBtls.map((n) => (
+                  <th key={`btl-head-${n}`} style={cellTh} colSpan={2}>
+                    BTL-{n}
+                  </th>
+                ))}
               </tr>
               <tr>
                 {QUESTIONS.map((q) => (
@@ -508,7 +533,7 @@ export default function Cia1Entry({ subjectId }: Props) {
                     {q.max}
                   </th>
                 ))}
-                {Array.from({ length: 8 }).flatMap((_, i) => (
+                {Array.from({ length: 2 + visibleBtls.length }).flatMap((_, i) => (
                   <React.Fragment key={i}>
                     <th style={cellTh}>Mark</th>
                     <th style={cellTh}>%</th>
@@ -519,7 +544,38 @@ export default function Cia1Entry({ subjectId }: Props) {
 
             <tbody>
               <tr>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} colSpan={4}>
+                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} colSpan={3} />
+                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>BTL</td>
+                {QUESTIONS.map((q) => (
+                  <td key={`btl-select-${q.key}`} style={{ ...cellTd, textAlign: 'center' }}>
+                    <select
+                      value={(sheet.questionBtl || ({} as any))[q.key] ?? ''}
+                      onChange={(e) =>
+                        setQuestionBtl(q.key, e.target.value === '' ? '' : (Number(e.target.value) as 1 | 2 | 3 | 4 | 5 | 6))
+                      }
+                      style={{ width: '100%', fontSize: 12, padding: '2px 4px' }}
+                    >
+                      <option value="">-</option>
+                      {[1, 2, 3, 4, 5, 6].map((n) => (
+                        <option key={n} value={n}>
+                          {n}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                ))}
+                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} />
+                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} colSpan={4} />
+                {visibleBtls.map((n) => (
+                  <React.Fragment key={`btl-pad-${n}`}>
+                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} />
+                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} />
+                  </React.Fragment>
+                ))}
+              </tr>
+
+              <tr>
+                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} colSpan={3}>
                   Name / Max Marks
                 </td>
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>-</td>
@@ -535,49 +591,44 @@ export default function Cia1Entry({ subjectId }: Props) {
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{coMax.co2}</td>
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
-
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{btlMax[1]}</td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{btlMax[2]}</td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{btlMax[3]}</td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{btlMax[4]}</td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{btlMax[5]}</td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{btlMax[6]}</td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
+                {visibleBtls.map((n) => (
+                  <React.Fragment key={`btl-max-${n}`}>
+                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{btlMax[n as 1 | 2 | 3 | 4 | 5 | 6]}</td>
+                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
+                  </React.Fragment>
+                ))}
               </tr>
 
               {students.map((s, i) => {
                 const row = sheet.rowsByStudentId[String(s.id)] || {
                   studentId: s.id,
                   absent: false,
-                  q: Object.fromEntries(QUESTIONS.map((q) => [q.key, 0])),
+                  q: Object.fromEntries(QUESTIONS.map((q) => [q.key, ''])),
                 };
 
-                const qMarks = QUESTIONS.map((q) => (row.absent ? 0 : clamp(Number(row.q?.[q.key] || 0), 0, q.max)));
-                const total = row.absent ? 0 : qMarks.reduce((sum, v) => sum + v, 0);
+                const qMarks = Object.fromEntries(
+                  QUESTIONS.map((q) => [q.key, row.absent ? 0 : clamp(Number(row.q?.[q.key] || 0), 0, q.max)]),
+                ) as Record<string, number>;
+                const total = row.absent ? 0 : QUESTIONS.reduce((sum, q) => sum + Number(qMarks[q.key] || 0), 0);
 
-                const co1 = QUESTIONS.filter((q) => q.co === 1).reduce((sum, q) => sum + (row.absent ? 0 : clamp(Number(row.q?.[q.key] || 0), 0, q.max)), 0);
-                const co2 = QUESTIONS.filter((q) => q.co === 2).reduce((sum, q) => sum + (row.absent ? 0 : clamp(Number(row.q?.[q.key] || 0), 0, q.max)), 0);
+                const co1 = QUESTIONS.filter((q) => q.co === 1).reduce((sum, q) => sum + Number(qMarks[q.key] || 0), 0);
+                const co2 = QUESTIONS.filter((q) => q.co === 2).reduce((sum, q) => sum + Number(qMarks[q.key] || 0), 0);
 
-                const btl = {
-                  1: QUESTIONS.filter((q) => q.btl === 1).reduce((sum, q) => sum + (row.absent ? 0 : clamp(Number(row.q?.[q.key] || 0), 0, q.max)), 0),
-                  2: QUESTIONS.filter((q) => q.btl === 2).reduce((sum, q) => sum + (row.absent ? 0 : clamp(Number(row.q?.[q.key] || 0), 0, q.max)), 0),
-                  3: QUESTIONS.filter((q) => q.btl === 3).reduce((sum, q) => sum + (row.absent ? 0 : clamp(Number(row.q?.[q.key] || 0), 0, q.max)), 0),
-                  4: QUESTIONS.filter((q) => q.btl === 4).reduce((sum, q) => sum + (row.absent ? 0 : clamp(Number(row.q?.[q.key] || 0), 0, q.max)), 0),
-                  5: QUESTIONS.filter((q) => q.btl === 5).reduce((sum, q) => sum + (row.absent ? 0 : clamp(Number(row.q?.[q.key] || 0), 0, q.max)), 0),
-                  6: QUESTIONS.filter((q) => q.btl === 6).reduce((sum, q) => sum + (row.absent ? 0 : clamp(Number(row.q?.[q.key] || 0), 0, q.max)), 0),
-                } as Record<1 | 2 | 3 | 4 | 5 | 6, number>;
+                const btl: Record<1 | 2 | 3 | 4 | 5 | 6, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
+                for (const q of QUESTIONS) {
+                  const v = (sheet.questionBtl || ({} as any))[q.key];
+                  if (v === 1 || v === 2 || v === 3 || v === 4 || v === 5 || v === 6) btl[v] += Number(qMarks[q.key] || 0);
+                }
+
+                const rowStyle: React.CSSProperties | undefined = row.absent
+                  ? { background: '#f3f4f6', color: '#6b7280' }
+                  : undefined;
 
                 const serverTotal = serverTotals[s.id];
 
                 return (
-                  <tr key={s.id}>
+                  <tr key={s.id} style={rowStyle}>
                     <td style={{ ...cellTd, textAlign: 'center' }}>{i + 1}</td>
-                    <td style={cellTd}>{s.section ?? ''}</td>
                     <td style={cellTd}>{s.reg_no}</td>
                     <td style={cellTd}>{s.name}</td>
                     <td style={{ ...cellTd, textAlign: 'center' }}>
@@ -595,8 +646,8 @@ export default function Cia1Entry({ subjectId }: Props) {
                           type="number"
                           min={0}
                           max={q.max}
-                          value={row.absent ? 0 : clamp(Number(row.q?.[q.key] || 0), 0, q.max)}
-                          onChange={(e) => setQuestionMark(s.id, q.key, Number(e.target.value))}
+                          value={row.absent ? '' : row.q?.[q.key] === '' || row.q?.[q.key] == null ? '' : clamp(Number(row.q?.[q.key] || 0), 0, q.max)}
+                          onChange={(e) => setQuestionMark(s.id, q.key, e.target.value === '' ? '' : Number(e.target.value))}
                           disabled={row.absent}
                         />
                       </td>
@@ -611,18 +662,12 @@ export default function Cia1Entry({ subjectId }: Props) {
                     <td style={{ ...cellTd, textAlign: 'center' }}>{co2}</td>
                     <td style={{ ...cellTd, textAlign: 'center' }}>{pct(co2, coMax.co2)}</td>
 
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{btl[1]}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{pct(btl[1], btlMax[1])}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{btl[2]}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{pct(btl[2], btlMax[2])}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{btl[3]}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{pct(btl[3], btlMax[3])}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{btl[4]}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{pct(btl[4], btlMax[4])}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{btl[5]}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{pct(btl[5], btlMax[5])}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{btl[6]}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{pct(btl[6], btlMax[6])}</td>
+                    {visibleBtls.map((n) => (
+                      <React.Fragment key={`btl-row-${s.id}-${n}`}>
+                        <td style={{ ...cellTd, textAlign: 'center' }}>{btl[n as 1 | 2 | 3 | 4 | 5 | 6]}</td>
+                        <td style={{ ...cellTd, textAlign: 'center' }}>{pct(btl[n as 1 | 2 | 3 | 4 | 5 | 6], btlMax[n as 1 | 2 | 3 | 4 | 5 | 6])}</td>
+                      </React.Fragment>
+                    ))}
                   </tr>
                 );
               })}

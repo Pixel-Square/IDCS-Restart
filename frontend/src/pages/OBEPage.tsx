@@ -385,7 +385,7 @@ export default function OBEPage(): JSX.Element {
             <div style={{ flex: '0 0 240px', background: '#f8fafc', minHeight: '100vh', borderRight: '1px solid #eee' }}>
               <DashboardSidebar />
             </div>
-            <div style={{ flex: 1, padding: '32px 32px 24px 32px', maxWidth: 1200, margin: '0 auto', width: '100%' }}>
+            <div style={{ flex: 1, padding: '32px 32px 24px 32px', width: '100%', minWidth: 0, boxSizing: 'border-box' }}>
               <header style={{ marginBottom: 8, marginTop: 0, paddingTop: 0 }}>
                 <div style={{ display: 'flex', flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'flex-end', width: '100%' }}>
                   <div style={{ textAlign: 'right' }}>

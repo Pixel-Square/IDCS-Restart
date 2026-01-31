@@ -3,6 +3,7 @@ import { lsGet, lsSet } from '../utils/localStorage';
 import Cia1Entry from './Cia1Entry';
 import Formative1List from './Formative1List';
 import Ssa1Entry from './Ssa1Entry';
+import { fetchMyTeachingAssignments, TeachingAssignmentItem } from '../services/obe';
 
 type TabKey = 'dashboard' | 'ssa1' | 'formative1' | 'cia1' | 'ssa2' | 'cia2' | 'model';
 
@@ -172,12 +173,48 @@ function MarkEntryTable({
 
 export default function MarkEntryTabs({ subjectId }: Props) {
   const [active, setActive] = useState<TabKey>('dashboard');
+  const [tas, setTas] = useState<TeachingAssignmentItem[]>([]);
+  const [taError, setTaError] = useState<string | null>(null);
+  const [selectedTaId, setSelectedTaId] = useState<number | null>(null);
 
   useEffect(() => {
     if (!subjectId) return;
     const stored = lsGet<TabKey>(`markEntry_activeTab_${subjectId}`);
     if (stored && TABS.some((t) => t.key === stored)) setActive(stored);
   }, [subjectId]);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const all = await fetchMyTeachingAssignments();
+        if (!mounted) return;
+        const filtered = (all || []).filter((a) => a.subject_code === subjectId);
+        setTas(filtered);
+        setTaError(null);
+
+        const stored = lsGet<number>(`markEntry_selectedTa_${subjectId}`);
+        const initial =
+          (typeof stored === 'number' && filtered.some((f) => f.id === stored) && stored) ||
+          (filtered[0]?.id ?? null);
+        setSelectedTaId(initial);
+      } catch (e: any) {
+        if (!mounted) return;
+        setTas([]);
+        setSelectedTaId(null);
+        setTaError(e?.message || 'Failed to load teaching assignments');
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [subjectId]);
+
+  useEffect(() => {
+    if (!subjectId) return;
+    if (selectedTaId == null) return;
+    lsSet(`markEntry_selectedTa_${subjectId}`, selectedTaId);
+  }, [subjectId, selectedTaId]);
 
   useEffect(() => {
     if (!subjectId) return;
@@ -209,6 +246,32 @@ export default function MarkEntryTabs({ subjectId }: Props) {
 
   return (
     <div>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 12 }}>
+        <div style={{ minWidth: 260 }}>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>Teaching Assignment (Section)</div>
+          <select
+            value={selectedTaId ?? ''}
+            onChange={(e) => setSelectedTaId(e.target.value ? Number(e.target.value) : null)}
+            style={{ padding: '8px 10px', borderRadius: 10, border: '1px solid #e5e7eb', width: '100%' }}
+            disabled={tas.length === 0}
+          >
+            {tas.length === 0 ? (
+              <option value="">No teaching assignments</option>
+            ) : (
+              tas.map((ta) => (
+                <option key={ta.id} value={ta.id}>
+                  {ta.section_name} — {ta.academic_year}
+                </option>
+              ))
+            )}
+          </select>
+          {taError && <div style={{ marginTop: 6, fontSize: 12, color: '#b91c1c' }}>{taError}</div>}
+        </div>
+        <div style={{ fontSize: 12, color: '#6b7280', alignSelf: 'center' }}>
+          Student rows load from the selected section roster.
+        </div>
+      </div>
+
       <div aria-label="Mark Entry sub-tabs" style={{ display: 'flex', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
         {TABS.map((t) => (
           <TabButton key={t.key} active={active === t.key} label={t.label} onClick={() => setActive(t.key)} />
@@ -267,9 +330,9 @@ export default function MarkEntryTabs({ subjectId }: Props) {
                 : 'Enter and save marks locally for this assessment.'}
           </div>
           {active === 'formative1' ? (
-            <Formative1List subjectId={subjectId} />
+            <Formative1List subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
           ) : active === 'ssa1' ? (
-            <Ssa1Entry subjectId={subjectId} />
+            <Ssa1Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
           ) : active === 'cia1' ? (
             <Cia1Entry subjectId={subjectId} />
           ) : (

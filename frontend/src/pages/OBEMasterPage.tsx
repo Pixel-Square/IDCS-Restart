@@ -72,7 +72,7 @@ export default function OBEMasterPage(): JSX.Element {
         <div style={{ flex: '0 0 240px', background: '#f8fafc', minHeight: '100vh', borderRight: '1px solid #eee' }}>
           <DashboardSidebar />
         </div>
-        <div style={{ flex: 1, padding: '32px', maxWidth: 1200, margin: '0 auto', width: '100%' }}>
+        <div style={{ flex: 1, padding: '32px', width: '100%', minWidth: 0, boxSizing: 'border-box' }}>
           <div style={{ marginBottom: 16 }}>
             <h2 style={{ margin: 0 }}>OBE Master</h2>
             <div style={{ color: '#666', marginTop: 4 }}>Global PO mapping for Active Learning options</div>

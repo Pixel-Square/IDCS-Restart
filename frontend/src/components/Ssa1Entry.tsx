@@ -1,13 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { lsGet, lsSet } from '../utils/localStorage';
+import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
 
-type Props = { subjectId: string };
+type Props = { subjectId: string; teachingAssignmentId?: number };
 
 type Ssa1Row = {
+  studentId: number;
   section: string;
   registerNo: string;
   name: string;
-  asmt1: number;
+  total: number | '';
 };
 
 type Ssa1Sheet = {
@@ -24,7 +26,12 @@ function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
-function pct(mark: number, max: number) {
+function round1(n: number) {
+  return Math.round(n * 10) / 10;
+}
+
+function pct(mark: number | null, max: number) {
+  if (mark == null) return '';
   if (!max) return '-';
   const p = (mark / max) * 100;
   return `${Number.isFinite(p) ? p.toFixed(0) : 0}`;
@@ -60,13 +67,31 @@ function downloadCsv(filename: string, rows: Array<Record<string, string | numbe
   URL.revokeObjectURL(url);
 }
 
-export default function Ssa1Entry({ subjectId }: Props) {
+export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
   const key = useMemo(() => storageKey(subjectId), [subjectId]);
   const [sheet, setSheet] = useState<Ssa1Sheet>({
     termLabel: 'KRCT AY25-26',
     batchLabel: subjectId,
     rows: [],
   });
+
+  const [rosterLoading, setRosterLoading] = useState(false);
+  const [rosterError, setRosterError] = useState<string | null>(null);
+
+  const [btlPickerOpen, setBtlPickerOpen] = useState(true);
+  const [selectedBtls, setSelectedBtls] = useState<number[]>([]);
+
+  const visibleBtlIndices = useMemo(() => {
+    const set = new Set(selectedBtls);
+    return [1, 2, 3, 4, 5, 6].filter((n) => set.has(n));
+  }, [selectedBtls]);
+
+  const totalTableCols = useMemo(() => {
+    // Base columns (S.No, Section, RegNo, Name, Total) = 5
+    // CO columns (CO1 mark/% + CO2 mark/%) = 4
+    // BTL columns = selected count * 2 (mark/% per BTL)
+    return 9 + visibleBtlIndices.length * 2;
+  }, [visibleBtlIndices.length]);
 
   useEffect(() => {
     if (!subjectId) return;
@@ -82,31 +107,79 @@ export default function Ssa1Entry({ subjectId }: Props) {
     }
   }, [key, subjectId]);
 
+  const mergeRosterIntoRows = (students: TeachingAssignmentRosterStudent[]) => {
+    setSheet((prev) => {
+      const existingById = new Map<number, Ssa1Row>();
+      const existingByReg = new Map<string, Ssa1Row>();
+      for (const r of prev.rows || []) {
+        if (typeof (r as any).studentId === 'number') existingById.set((r as any).studentId, r as any);
+        if (r.registerNo) existingByReg.set(String(r.registerNo), r);
+      }
+
+      const nextRows: Ssa1Row[] = (students || [])
+        .slice()
+        .sort((a, b) => String(a.reg_no || '').localeCompare(String(b.reg_no || '')))
+        .map((s) => {
+          const prevRow = existingById.get(s.id) || existingByReg.get(String(s.reg_no || ''));
+          return {
+            studentId: s.id,
+            section: String(s.section || ''),
+            registerNo: String(s.reg_no || ''),
+            name: String(s.name || ''),
+            total:
+              typeof (prevRow as any)?.total === 'number'
+                ? clamp(Number((prevRow as any).total), 0, MAX_ASMT1)
+                : (prevRow as any)?.total === ''
+                  ? ''
+                  : '',
+          };
+        });
+
+      return { ...prev, rows: nextRows };
+    });
+  };
+
+  const loadRoster = async () => {
+    if (!teachingAssignmentId) {
+      setRosterError('Select a Teaching Assignment/Section to load students.');
+      return;
+    }
+    setRosterLoading(true);
+    setRosterError(null);
+    try {
+      const res = await fetchTeachingAssignmentRoster(teachingAssignmentId);
+      mergeRosterIntoRows(res.students || []);
+    } catch (e: any) {
+      setRosterError(e?.message || 'Failed to load roster');
+    } finally {
+      setRosterLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    // When section changes, refresh roster but preserve existing marks.
+    if (!teachingAssignmentId) return;
+    loadRoster();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teachingAssignmentId]);
+
   const saveLocal = () => {
     lsSet(key, sheet);
     alert('SSA1 sheet saved locally.');
   };
 
-  const addRow = () => {
+  const resetAllMarks = () => {
+    if (!confirm('Reset SSA1 marks for all students in this section?')) return;
     setSheet((prev) => ({
       ...prev,
-      rows: prev.rows.concat({ section: '', registerNo: '', name: '', asmt1: 0 }),
+      rows: (prev.rows || []).map((r) => ({ ...r, total: '' })),
     }));
-  };
-
-  const removeLastRow = () => {
-    setSheet((prev) => ({ ...prev, rows: prev.rows.slice(0, Math.max(0, prev.rows.length - 1)) }));
-  };
-
-  const clearAll = () => {
-    if (!confirm('Clear all rows for SSA1?')) return;
-    setSheet((prev) => ({ ...prev, rows: [] }));
   };
 
   const updateRow = (idx: number, patch: Partial<Ssa1Row>) => {
     setSheet((prev) => {
       const copy = prev.rows.slice();
-      const existing = copy[idx] || { section: '', registerNo: '', name: '', asmt1: 0 };
+      const existing = copy[idx] || ({ studentId: 0, section: '', registerNo: '', name: '', total: '' } as Ssa1Row);
       copy[idx] = { ...existing, ...patch };
       return { ...prev, rows: copy };
     });
@@ -114,40 +187,47 @@ export default function Ssa1Entry({ subjectId }: Props) {
 
   const exportSheetCsv = () => {
     const out = sheet.rows.map((r, i) => {
-      const asmt1 = clamp(Number(r.asmt1 || 0), 0, MAX_ASMT1);
-      const total = asmt1;
-      const co1 = clamp(asmt1, 0, CO_MAX.co1);
-      const co2 = clamp(asmt1 - CO_MAX.co1, 0, CO_MAX.co2);
-      const btl1 = 0;
-      const btl2 = 0;
-      const btl3 = co1;
-      const btl4 = co2;
-      const btl5 = 0;
-      const btl6 = 0;
+      const totalRaw = typeof r.total === 'number' ? clamp(Number(r.total), 0, MAX_ASMT1) : null;
+      const total = totalRaw == null ? '' : round1(totalRaw);
+
+      const coSplitCount = 2;
+      const coShare = totalRaw == null ? null : round1(totalRaw / coSplitCount);
+      const co1 = coShare == null ? null : clamp(coShare, 0, CO_MAX.co1);
+      const co2 = coShare == null ? null : clamp(coShare, 0, CO_MAX.co2);
+
+      const btlMaxByIndex = [BTL_MAX.btl1, BTL_MAX.btl2, BTL_MAX.btl3, BTL_MAX.btl4, BTL_MAX.btl5, BTL_MAX.btl6];
+      const visibleIndicesZeroBased = visibleBtlIndices.map((n) => n - 1);
+      const btlShare = totalRaw == null ? null : visibleIndicesZeroBased.length ? round1(totalRaw / visibleIndicesZeroBased.length) : 0;
+      const btlMarksByIndex = btlMaxByIndex.map((max, idx) => {
+        if (totalRaw == null) return null;
+        if (!visibleIndicesZeroBased.includes(idx)) return null;
+        // If BTL has a configured max (>0) clamp to it, otherwise assign the share directly
+        if (max > 0) return clamp(btlShare as number, 0, max);
+        return round1(btlShare as number);
+      });
 
       return {
         sno: i + 1,
         section: r.section,
         registerNo: r.registerNo,
         name: r.name,
-        asmt1,
         total,
-        co1_mark: co1,
+        co1_mark: co1 ?? '',
         co1_pct: pct(co1, CO_MAX.co1),
-        co2_mark: co2,
+        co2_mark: co2 ?? '',
         co2_pct: pct(co2, CO_MAX.co2),
-        btl1_mark: btl1,
-        btl1_pct: pct(btl1, BTL_MAX.btl1),
-        btl2_mark: btl2,
-        btl2_pct: pct(btl2, BTL_MAX.btl2),
-        btl3_mark: btl3,
-        btl3_pct: pct(btl3, BTL_MAX.btl3),
-        btl4_mark: btl4,
-        btl4_pct: pct(btl4, BTL_MAX.btl4),
-        btl5_mark: btl5,
-        btl5_pct: pct(btl5, BTL_MAX.btl5),
-        btl6_mark: btl6,
-        btl6_pct: pct(btl6, BTL_MAX.btl6),
+        btl1_mark: btlMarksByIndex[0] ?? '',
+        btl1_pct: pct(btlMarksByIndex[0], BTL_MAX.btl1),
+        btl2_mark: btlMarksByIndex[1] ?? '',
+        btl2_pct: pct(btlMarksByIndex[1], BTL_MAX.btl2),
+        btl3_mark: btlMarksByIndex[2] ?? '',
+        btl3_pct: pct(btlMarksByIndex[2], BTL_MAX.btl3),
+        btl4_mark: btlMarksByIndex[3] ?? '',
+        btl4_pct: pct(btlMarksByIndex[3], BTL_MAX.btl4),
+        btl5_mark: btlMarksByIndex[4] ?? '',
+        btl5_pct: pct(btlMarksByIndex[4], BTL_MAX.btl5),
+        btl6_mark: btlMarksByIndex[5] ?? '',
+        btl6_pct: pct(btlMarksByIndex[5], BTL_MAX.btl6),
       };
     });
 
@@ -179,6 +259,13 @@ export default function Ssa1Entry({ subjectId }: Props) {
     fontSize: 12,
   };
 
+  const toggleBtl = (n: number) => {
+    setSelectedBtls((prev) => (prev.includes(n) ? prev.filter((x) => x !== n) : prev.concat(n).sort((a, b) => a - b)));
+  };
+
+  const selectAllBtl = () => setSelectedBtls([1, 2, 3, 4, 5, 6]);
+  const clearAllBtl = () => setSelectedBtls([]);
+
   return (
     <div>
       <div
@@ -199,24 +286,24 @@ export default function Ssa1Entry({ subjectId }: Props) {
         </div>
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button onClick={addRow} style={{ padding: '6px 10px' }}>
-            Add Row
+          <button onClick={() => setBtlPickerOpen((v) => !v)} style={{ padding: '6px 10px' }}>
+            BTL Columns
           </button>
           <button
-            onClick={removeLastRow}
+            onClick={loadRoster}
             style={{ padding: '6px 10px' }}
-            disabled={!sheet.rows.length}
-            title={!sheet.rows.length ? 'No rows to remove' : 'Remove last row'}
+            disabled={rosterLoading || !teachingAssignmentId}
+            title={!teachingAssignmentId ? 'Select a Teaching Assignment/Section first' : 'Reload students from roster'}
           >
-            Remove Last
+            {rosterLoading ? 'Loading…' : 'Reload Students'}
           </button>
           <button
-            onClick={clearAll}
+            onClick={resetAllMarks}
             style={{ padding: '6px 10px' }}
             disabled={!sheet.rows.length}
-            title={!sheet.rows.length ? 'No rows to clear' : 'Clear all rows'}
+            title={!sheet.rows.length ? 'No students loaded' : 'Reset all marks to 0'}
           >
-            Clear
+            Reset Marks
           </button>
           <button onClick={saveLocal} style={{ padding: '6px 10px' }}>
             Save Local
@@ -231,6 +318,45 @@ export default function Ssa1Entry({ subjectId }: Props) {
           </button>
         </div>
       </div>
+
+      {btlPickerOpen && (
+        <div
+          style={{
+            border: '1px solid #e5e7eb',
+            borderRadius: 12,
+            padding: 12,
+            background: '#fff',
+            marginBottom: 10,
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>BTL columns to show</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button onClick={selectAllBtl} style={{ padding: '4px 8px' }}>
+                Select All
+              </button>
+              <button onClick={clearAllBtl} style={{ padding: '4px 8px' }}>
+                Clear
+              </button>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 10 }}>
+            {[1, 2, 3, 4, 5, 6].map((n) => (
+              <label key={n} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#111827' }}>
+                <input type="checkbox" checked={selectedBtls.includes(n)} onChange={() => toggleBtl(n)} />
+                BTL-{n}
+              </label>
+            ))}
+          </div>
+          <div style={{ marginTop: 8, fontSize: 12, color: '#6b7280' }}>
+            Selected: {visibleBtlIndices.length ? visibleBtlIndices.map((n) => `BTL-${n}`).join(', ') : 'None'}
+          </div>
+        </div>
+      )}
+
+      {rosterError && (
+        <div style={{ margin: '6px 0 10px 0', fontSize: 12, color: '#b91c1c' }}>{rosterError}</div>
+      )}
 
       <div
         style={{
@@ -264,11 +390,11 @@ export default function Ssa1Entry({ subjectId }: Props) {
         </div>
       </div>
 
-      <div style={{ overflowX: 'auto', border: '1px solid #111', borderRadius: 6 }}>
+      <div style={{ overflowX: 'auto', border: '1px solid #111', borderRadius: 6, position: 'relative' }}>
         <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1200 }}>
           <thead>
             <tr>
-              <th style={cellTh} colSpan={22}>
+              <th style={cellTh} colSpan={totalTableCols}>
                 {sheet.termLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {sheet.batchLabel} &nbsp;&nbsp;|&nbsp;&nbsp; SSA1
               </th>
             </tr>
@@ -286,17 +412,16 @@ export default function Ssa1Entry({ subjectId }: Props) {
                 Name of the Students
               </th>
               <th style={cellTh} rowSpan={3}>
-                ASMT1
-              </th>
-              <th style={cellTh} rowSpan={3}>
                 Total
               </th>
               <th style={cellTh} colSpan={4}>
                 CO ATTAINMENT
               </th>
-              <th style={cellTh} colSpan={12}>
-                BTL ATTAINMENT
-              </th>
+              {visibleBtlIndices.length > 0 && (
+                <th style={cellTh} colSpan={visibleBtlIndices.length * 2}>
+                  BTL ATTAINMENT
+                </th>
+              )}
             </tr>
             <tr>
               <th style={cellTh} colSpan={2}>
@@ -305,27 +430,14 @@ export default function Ssa1Entry({ subjectId }: Props) {
               <th style={cellTh} colSpan={2}>
                 CO-2
               </th>
-              <th style={cellTh} colSpan={2}>
-                BTL-1
-              </th>
-              <th style={cellTh} colSpan={2}>
-                BTL-2
-              </th>
-              <th style={cellTh} colSpan={2}>
-                BTL-3
-              </th>
-              <th style={cellTh} colSpan={2}>
-                BTL-4
-              </th>
-              <th style={cellTh} colSpan={2}>
-                BTL-5
-              </th>
-              <th style={cellTh} colSpan={2}>
-                BTL-6
-              </th>
+              {visibleBtlIndices.map((n) => (
+                <th key={n} style={cellTh} colSpan={2}>
+                  BTL-{n}
+                </th>
+              ))}
             </tr>
             <tr>
-              {Array.from({ length: 8 }).flatMap((_, i) => (
+              {Array.from({ length: 2 + visibleBtlIndices.length }).flatMap((_, i) => (
                 <React.Fragment key={i}>
                   <th style={cellTh}>Mark</th>
                   <th style={cellTh}>%</th>
@@ -340,110 +452,138 @@ export default function Ssa1Entry({ subjectId }: Props) {
                 Name / Max Marks
               </td>
               <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_ASMT1}</td>
-              <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_ASMT1}</td>
 
               <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{CO_MAX.co1}</td>
               <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
               <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{CO_MAX.co2}</td>
               <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
 
-              <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{BTL_MAX.btl1}</td>
-              <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
-              <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{BTL_MAX.btl2}</td>
-              <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
-              <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{BTL_MAX.btl3}</td>
-              <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
-              <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{BTL_MAX.btl4}</td>
-              <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
-              <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{BTL_MAX.btl5}</td>
-              <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
-              <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{BTL_MAX.btl6}</td>
-              <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
+              {visibleBtlIndices.map((n) => {
+                const maxByIndex = [
+                  BTL_MAX.btl1,
+                  BTL_MAX.btl2,
+                  BTL_MAX.btl3,
+                  BTL_MAX.btl4,
+                  BTL_MAX.btl5,
+                  BTL_MAX.btl6,
+                ];
+                const max = maxByIndex[n - 1] ?? 0;
+                return (
+                  <React.Fragment key={n}>
+                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{max}</td>
+                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
+                  </React.Fragment>
+                );
+              })}
             </tr>
 
             {sheet.rows.length === 0 ? (
               <tr>
-                <td style={{ ...cellTd, textAlign: 'center', color: '#6b7280' }} colSpan={22}>
-                  No rows yet. Click “Add Row” to start.
+                <td style={{ ...cellTd, textAlign: 'center', color: '#6b7280' }} colSpan={totalTableCols}>
+                  No students loaded. Select a Teaching Assignment/Section above.
                 </td>
               </tr>
             ) : (
               sheet.rows.map((r, i) => {
-                const asmt1 = clamp(Number(r.asmt1 || 0), 0, MAX_ASMT1);
-                const total = asmt1;
+                const totalRaw = typeof r.total === 'number' ? clamp(Number(r.total), 0, MAX_ASMT1) : null;
+                const total = totalRaw == null ? '' : round1(totalRaw);
 
-                const co1 = clamp(asmt1, 0, CO_MAX.co1);
-                const co2 = clamp(asmt1 - CO_MAX.co1, 0, CO_MAX.co2);
+                const coSplitCount = 2;
+                const coShare = totalRaw == null ? null : round1(totalRaw / coSplitCount);
+                const co1 = coShare == null ? null : clamp(coShare, 0, CO_MAX.co1);
+                const co2 = coShare == null ? null : clamp(coShare, 0, CO_MAX.co2);
 
-                const btl1 = 0;
-                const btl2 = 0;
-                const btl3 = co1;
-                const btl4 = co2;
-                const btl5 = 0;
-                const btl6 = 0;
+                const btlMaxByIndex = [
+                  BTL_MAX.btl1,
+                  BTL_MAX.btl2,
+                  BTL_MAX.btl3,
+                  BTL_MAX.btl4,
+                  BTL_MAX.btl5,
+                  BTL_MAX.btl6,
+                ];
+                const visibleIndicesZeroBased = visibleBtlIndices.map((n) => n - 1);
+                const btlShare = totalRaw == null ? null : visibleIndicesZeroBased.length ? round1(totalRaw / visibleIndicesZeroBased.length) : 0;
+                const btlMarksByIndex = btlMaxByIndex.map((max, idx) => {
+                  if (totalRaw == null) return null;
+                  if (!visibleIndicesZeroBased.includes(idx)) return null;
+                  if (max > 0) return clamp(btlShare as number, 0, max);
+                  return round1(btlShare as number);
+                });
 
                 return (
                   <tr key={i}>
                     <td style={{ ...cellTd, textAlign: 'center' }}>{i + 1}</td>
-                    <td style={cellTd}>
-                      <input
-                        style={inputStyle}
-                        value={r.section}
-                        onChange={(e) => updateRow(i, { section: e.target.value })}
-                        placeholder="A"
-                      />
-                    </td>
-                    <td style={cellTd}>
-                      <input
-                        style={inputStyle}
-                        value={r.registerNo}
-                        onChange={(e) => updateRow(i, { registerNo: e.target.value })}
-                        placeholder="8117..."
-                      />
-                    </td>
-                    <td style={cellTd}>
-                      <input
-                        style={inputStyle}
-                        value={r.name}
-                        onChange={(e) => updateRow(i, { name: e.target.value })}
-                        placeholder="Student name"
-                      />
-                    </td>
+                    <td style={{ ...cellTd, color: '#111827' }}>{r.section}</td>
+                    <td style={{ ...cellTd, color: '#111827' }}>{r.registerNo}</td>
+                    <td style={{ ...cellTd, color: '#111827' }}>{r.name}</td>
                     <td style={{ ...cellTd, textAlign: 'center' }}>
                       <input
                         style={{ ...inputStyle, textAlign: 'center' }}
                         type="number"
-                        value={asmt1}
+                        value={typeof r.total === 'number' ? r.total : ''}
                         min={0}
                         max={MAX_ASMT1}
-                        onChange={(e) => updateRow(i, { asmt1: Number(e.target.value) })}
+                        step={0.1}
+                        placeholder=""
+                        disabled={selectedBtls.length === 0}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          if (raw === '') {
+                            updateRow(i, { total: '' });
+                            return;
+                          }
+                          const n = clamp(Number(raw), 0, MAX_ASMT1);
+                          updateRow(i, { total: Number.isFinite(n) ? round1(n) : '' });
+                        }}
                       />
                     </td>
-                    <td style={{ ...cellTd, textAlign: 'center', fontWeight: 700 }}>{total}</td>
-
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{co1}</td>
+                    <td style={{ ...cellTd, textAlign: 'center' }}>{co1 == null ? '' : co1.toFixed(1)}</td>
                     <td style={{ ...cellTd, textAlign: 'center' }}>{pct(co1, CO_MAX.co1)}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{co2}</td>
+                    <td style={{ ...cellTd, textAlign: 'center' }}>{co2 == null ? '' : co2.toFixed(1)}</td>
                     <td style={{ ...cellTd, textAlign: 'center' }}>{pct(co2, CO_MAX.co2)}</td>
 
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{btl1}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{pct(btl1, BTL_MAX.btl1)}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{btl2}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{pct(btl2, BTL_MAX.btl2)}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{btl3}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{pct(btl3, BTL_MAX.btl3)}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{btl4}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{pct(btl4, BTL_MAX.btl4)}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{btl5}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{pct(btl5, BTL_MAX.btl5)}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{btl6}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{pct(btl6, BTL_MAX.btl6)}</td>
+                    {visibleBtlIndices.map((n) => {
+                      const mark = btlMarksByIndex[n - 1] ?? 0;
+                      const max = btlMaxByIndex[n - 1] ?? 0;
+                      return (
+                        <React.Fragment key={n}>
+                          <td style={{ ...cellTd, textAlign: 'center' }}>{mark == null ? '' : Number(mark).toFixed(1)}</td>
+                          <td style={{ ...cellTd, textAlign: 'center' }}>{pct(mark == null ? null : Number(mark), max)}</td>
+                        </React.Fragment>
+                      );
+                    })}
                   </tr>
                 );
               })
             )}
           </tbody>
         </table>
+        {selectedBtls.length === 0 && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              background: 'rgba(255,255,255,0.8)',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
+              borderRadius: 6,
+            }}
+          >
+            <div style={{ fontSize: 14, fontWeight: 700 }}>Pick BTL columns to enable editing</div>
+            <div style={{ color: '#6b7280' }}>The table is disabled until at least one BTL column is selected.</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => setBtlPickerOpen(true)} style={{ padding: '6px 10px' }}>
+                Choose BTL Columns
+              </button>
+              <button onClick={() => selectAllBtl()} style={{ padding: '6px 10px' }}>
+                Select All
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       <div style={{ marginTop: 10, fontSize: 12, color: '#6b7280' }}>
