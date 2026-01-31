@@ -6,12 +6,14 @@ from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 from django.db import transaction
 
-from .models import AttendanceSession, AttendanceRecord, TeachingAssignment
+from .models import AttendanceSession, AttendanceRecord, TeachingAssignment, Subject, StudentProfile
 from .serializers import (
     AttendanceSessionSerializer,
     AttendanceRecordSerializer,
     BulkAttendanceRecordSerializer,
     TeachingAssignmentInfoSerializer,
+    SubjectSerializer,
+    StudentProfileSerializer,
 )
 
 
@@ -134,3 +136,37 @@ class MyTeachingAssignmentsView(APIView):
 
         ser = TeachingAssignmentInfoSerializer(qs.order_by('subject__code', 'section__name'), many=True)
         return Response(ser.data)
+
+
+class SubjectViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = Subject.objects.select_related('semester__course__department')
+    serializer_class = SubjectSerializer
+    # Allow anonymous read during local testing; switch back to IsAuthenticated for production
+    permission_classes = ()
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        code = self.request.query_params.get('code')
+        if code:
+            qs = qs.filter(code__iexact=code)
+        return qs
+
+
+class StudentProfileViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = StudentProfile.objects.select_related('user', 'section')
+    serializer_class = StudentProfileSerializer
+    # Allow anonymous read during local testing; switch back to IsAuthenticated for production
+    permission_classes = ()
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        department = self.request.query_params.get('department')
+        year = self.request.query_params.get('year')
+        section = self.request.query_params.get('section')
+        if department:
+            qs = qs.filter(section__semester__course__department__name__iexact=department)
+        if year:
+            qs = qs.filter(section__semester__year=year)
+        if section:
+            qs = qs.filter(section__name__iexact=section)
+        return qs

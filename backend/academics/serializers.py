@@ -3,7 +3,7 @@ from django.db import IntegrityError
 from django.utils import timezone
 
 from .models import AttendanceSession, AttendanceRecord, TeachingAssignment
-from academics.models import Subject, Section
+from academics.models import Subject, Section, StudentProfile, Department
 from accounts.utils import get_user_permissions
 
 
@@ -139,3 +139,23 @@ def _user_can_manage_assignment(user, teaching_assignment: TeachingAssignment) -
             ta_dept = teaching_assignment.section.semester.course.department_id
             return staff_profile.department_id == ta_dept
     return False
+
+
+class SubjectSerializer(serializers.ModelSerializer):
+    department = serializers.CharField(source='semester.course.department.name', read_only=True)
+    department_code = serializers.CharField(source='semester.course.department.code', read_only=True)
+    year = serializers.IntegerField(source='semester.year', read_only=True)
+    section = serializers.CharField(source='semester.name', read_only=True)
+
+    class Meta:
+        model = Subject
+        fields = ('id', 'code', 'name', 'department', 'department_code', 'year', 'section')
+
+
+class StudentProfileSerializer(serializers.ModelSerializer):
+    name = serializers.CharField(source='user.get_full_name', read_only=True)
+    roll_no = serializers.CharField(source='user.username', read_only=True)
+
+    class Meta:
+        model = StudentProfile
+        fields = ('id', 'reg_no', 'roll_no', 'name', 'section', 'batch', 'status')

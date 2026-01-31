@@ -10,7 +10,7 @@ type TabKey = 'cdap' | 'articulation' | 'marks';
 export default function CourseOBEPage(): JSX.Element {
   const { code } = useParams<{ code: string }>();
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = React.useState<TabKey>('cdap');
+  const [activeTab, setActiveTab] = React.useState<TabKey>('marks');
 
   if (!code) {
     return (

@@ -26,7 +26,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
 
   if (loading) return <aside className="dsb">Loading</aside>;
   if (error) return <aside className="dsb">Error loading sidebar</aside>;
-  if (!data) return <aside className="dsb">No data</aside>;
+  if (!data) return <aside className="dsb">Nodata</aside>;
 
   const entry = data.entry_points || {};
 
@@ -40,6 +40,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
 
 
   const perms = (data.permissions || []).map((p) => String(p || '').toLowerCase());
+<<<<<<< HEAD
   const roles = (data.roles || []).map((r) => typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase());
   const isStaff = roles.includes('staff');
   const canObe = perms.some((p) => ['obe.view', 'obe.cdap.upload', 'obe.master.manage'].includes(p));
@@ -49,6 +50,12 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   const obeItem = { key: 'obe', label: 'OBE', to: '/obe' };
   // Show OBE Master only for IQAC role
   if (roles.includes('iqac')) items.push({ key: 'obe_master', label: 'OBE Master', to: '/obe/master' });
+=======
+  const canObeMaster = perms.includes('obe.master.manage');
+
+  items.push({ key: 'obe', label: 'OBE', to: '/obe' });
+  if (canObeMaster) items.push({ key: 'obe_master', label: 'OBE Master', to: '/obe/master' });
+>>>>>>> origin/rohit
 
   return (
     <aside className={`dsb modern-dsb ${collapsed ? 'collapsed' : ''}`}>

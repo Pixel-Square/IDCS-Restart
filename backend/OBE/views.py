@@ -1,3 +1,82 @@
+from decimal import Decimal, InvalidOperation
+
+from django.contrib.auth.decorators import login_required
+from django.db import transaction
+from django.db.models import Q
+from django.db.utils import OperationalError
+from django.http import HttpResponseForbidden
+from django.shortcuts import get_object_or_404, redirect, render
+
+from academics.models import Subject, StudentProfile, TeachingAssignment
+
+# Mark Entry Tabs View (Faculty OBE Section)
+@login_required
+def mark_entry_tabs(request, subject_id):
+    # Faculty-only page (must have a staff profile)
+    if not hasattr(request.user, 'staff_profile'):
+        return HttpResponseForbidden('Faculty access only.')
+
+    subject = get_object_or_404(Subject, code=subject_id)
+    tab = request.GET.get('tab', 'dashboard')
+    saved = request.GET.get('saved') == '1'
+
+    # Basic student list for the subject semester (fallback to all students)
+    students = (
+        StudentProfile.objects.select_related('user', 'section')
+        .filter(section__semester=subject.semester)
+        .order_by('reg_no')
+    )
+    if not students.exists():
+        students = StudentProfile.objects.select_related('user', 'section').all().order_by('reg_no')
+
+    from .models import Cia1Mark
+
+    errors: list[str] = []
+
+    if request.method == 'POST' and tab == 'cia1':
+        with transaction.atomic():
+            for s in students:
+                key = f'mark_{s.id}'
+                raw = (request.POST.get(key) or '').strip()
+
+                if raw == '':
+                    # Blank => clear stored mark
+                    Cia1Mark.objects.filter(subject=subject, student=s).delete()
+                    continue
+
+                try:
+                    mark = Decimal(raw)
+                except (InvalidOperation, ValueError):
+                    errors.append(f'Invalid mark for {s.reg_no}: {raw}')
+                    continue
+
+                Cia1Mark.objects.update_or_create(
+                    subject=subject,
+                    student=s,
+                    defaults={'mark': mark},
+                )
+
+        if not errors:
+            return redirect(f"{request.path}?tab=cia1&saved=1")
+
+    try:
+        marks = {
+            m.student_id: m.mark
+            for m in Cia1Mark.objects.filter(subject=subject, student__in=students)
+        }
+    except OperationalError:
+        marks = {}
+    cia1_rows = [{'student': s, 'mark': marks.get(s.id)} for s in students]
+
+    context = {
+        'subject': subject,
+        'students': students,
+        'tab': tab,
+        'saved': saved,
+        'cia1_rows': cia1_rows,
+        'errors': errors,
+    }
+    return render(request, 'OBE/mark_entry_tabs.html', context)
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -12,6 +91,162 @@ from accounts.utils import get_user_permissions
 from django.core.files.storage import default_storage
 from django.conf import settings
 import os
+
+
+@api_view(['GET', 'PUT'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def cia1_marks(request, subject_id):
+    """CIA1 marks API used by the React Faculty → OBE → Mark Entry → CIA1 screen.
+
+    - GET: returns roster + current marks
+    - PUT: upserts/clears marks
+    """
+    user = request.user
+    staff_profile = getattr(user, 'staff_profile', None)
+    if not staff_profile:
+        return Response({'detail': 'Faculty access only.'}, status=status.HTTP_403_FORBIDDEN)
+
+    subject = get_object_or_404(Subject, code=subject_id)
+
+    role_names = {r.name.upper() for r in user.roles.all()}
+    tas = TeachingAssignment.objects.select_related('section', 'academic_year').filter(
+        subject=subject,
+        is_active=True,
+    )
+
+    # Staff: only their teaching assignments; HOD/ADVISOR: within their department
+    if 'HOD' in role_names or 'ADVISOR' in role_names:
+        if getattr(staff_profile, 'department_id', None):
+            tas = tas.filter(section__semester__course__department=staff_profile.department)
+    else:
+        tas = tas.filter(staff=staff_profile)
+
+    # Prefer active academic year assignments when present
+    if tas.filter(academic_year__is_active=True).exists():
+        tas = tas.filter(academic_year__is_active=True)
+
+    section_ids = list(tas.values_list('section_id', flat=True).distinct())
+    if not section_ids:
+        return Response({'detail': 'No teaching assignment found for this subject.'}, status=status.HTTP_403_FORBIDDEN)
+
+    students = (
+        StudentProfile.objects.select_related('user', 'section')
+        .filter(
+            Q(section_id__in=section_ids)
+            | Q(section_assignments__section_id__in=section_ids, section_assignments__end_date__isnull=True)
+        )
+        .distinct()
+        .order_by('reg_no')
+    )
+
+    from .models import Cia1Mark
+
+    # If the DB hasn't been migrated yet, avoid returning Django's HTML 500 page.
+    try:
+        # Quick touch to ensure table exists.
+        Cia1Mark.objects.none().count()
+    except OperationalError:
+        return Response(
+            {
+                'detail': 'CIA1 marks table is missing. Run database migrations first.',
+                'how_to_fix': [
+                    'cd backend',
+                    'python manage.py migrate',
+                ],
+            },
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    if request.method == 'PUT':
+        payload = request.data or {}
+        incoming = payload.get('marks', {})
+        if incoming is None:
+            incoming = {}
+
+        marks_map: dict[int, object] = {}
+        if isinstance(incoming, list):
+            for item in incoming:
+                try:
+                    sid = int(item.get('student_id'))
+                except Exception:
+                    continue
+                marks_map[sid] = item.get('mark')
+        elif isinstance(incoming, dict):
+            for k, v in incoming.items():
+                try:
+                    marks_map[int(k)] = v
+                except Exception:
+                    continue
+        else:
+            return Response({'detail': 'Invalid marks payload.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        errors: list[str] = []
+        try:
+            with transaction.atomic():
+                for s in students:
+                    if s.id not in marks_map:
+                        continue
+                    raw = marks_map.get(s.id)
+
+                    if raw is None or (isinstance(raw, str) and raw.strip() == ''):
+                        Cia1Mark.objects.filter(subject=subject, student=s).delete()
+                        continue
+
+                    try:
+                        mark = Decimal(str(raw))
+                    except (InvalidOperation, ValueError):
+                        errors.append(f'Invalid mark for {s.reg_no}: {raw}')
+                        continue
+
+                    Cia1Mark.objects.update_or_create(
+                        subject=subject,
+                        student=s,
+                        defaults={'mark': mark},
+                    )
+        except OperationalError:
+            return Response(
+                {
+                    'detail': 'CIA1 marks table is missing. Run database migrations first.',
+                    'how_to_fix': [
+                        'cd backend',
+                        'python manage.py migrate',
+                    ],
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        if errors:
+            return Response({'detail': 'Validation error.', 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        existing = {
+            m.student_id: (str(m.mark) if m.mark is not None else None)
+            for m in Cia1Mark.objects.filter(subject=subject, student__in=students)
+        }
+    except OperationalError:
+        existing = {}
+
+    out_students = []
+    for s in students:
+        full_name = ''
+        try:
+            full_name = s.user.get_full_name()
+        except Exception:
+            full_name = ''
+
+        out_students.append({
+            'id': s.id,
+            'reg_no': s.reg_no,
+            'name': full_name or s.user.username,
+            'section': str(s.section) if s.section else None,
+        })
+
+    return Response({
+        'subject': {'code': subject.code, 'name': subject.name},
+        'students': out_students,
+        'marks': existing,
+    })
 
 
 def _require_permissions(request, required_codes: set[str]):
