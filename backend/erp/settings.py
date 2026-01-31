@@ -30,6 +30,8 @@ INSTALLED_APPS = [
     'applications',
 
     'OBE.apps.ObeConfig',
+    'template_api.apps.TemplateApiConfig',
+    'question_bank.apps.QuestionBankConfig',
 ]
 
 MIDDLEWARE = [
@@ -93,6 +95,9 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = 'static/'
+
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 

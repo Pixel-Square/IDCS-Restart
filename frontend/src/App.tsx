@@ -4,16 +4,14 @@ import { getMe } from "./services/auth";
 import Navbar from "./components/Navbar";
 import HomePage from "./components/HomePage";
 import DashboardPage from "./pages/Dashboard";
-<<<<<<< HEAD
 import ProfilePage from "./pages/Profile";
 import MasterList from './pages/curriculum/MasterList';
 import MasterEditor from './pages/curriculum/MasterEditor';
 import DeptList from './pages/curriculum/DeptList';
-=======
 import OBEPage from "./pages/OBEPage";
 import OBEMasterPage from "./pages/OBEMasterPage";
 import CourseOBEPage from "./pages/CourseOBEPage";
->>>>>>> origin/rohit
+import QuestionImportPage from "./pages/QuestionImportPage";
 
 type RoleObj = { name: string };
 type Me = {
@@ -72,17 +70,15 @@ export default function App() {
       <Routes>
         <Route path="/" element={<HomePage user={user} />} />
         <Route path="/dashboard" element={<DashboardPage />} />
-<<<<<<< HEAD
         <Route path="/profile" element={<ProfilePage user={user} />} />
+        <Route path="/import/questions" element={<QuestionImportPage />} />
         <Route path="/curriculum/master" element={<MasterList />} />
         <Route path="/curriculum/master/:id" element={<MasterEditor />} />
         <Route path="/curriculum/master/new" element={<MasterEditor />} />
         <Route path="/curriculum/department" element={<DeptList />} />
-=======
-        <Route path="/obe" element={canObe ? <OBEPage /> : <HomePage user={user} />} />
+        <Route path="/obe" element={<OBEPage />} />
         <Route path="/obe/course/:code" element={<CourseOBEPage />} />
         <Route path="/obe/master" element={canObeMaster ? <OBEMasterPage /> : <HomePage user={user} />} />
->>>>>>> origin/rohit
         <Route path="*" element={<HomePage user={user} />} />
       </Routes>
     </div>

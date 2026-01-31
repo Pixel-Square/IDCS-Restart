@@ -9,6 +9,9 @@ from .services.cdap_parser import parse_cdap_excel
 from .services.articulation_parser import parse_articulation_matrix_excel
 from .services.articulation_from_revision import build_articulation_matrix_from_revision_rows
 from accounts.utils import get_user_permissions
+from django.core.files.storage import default_storage
+from django.conf import settings
+import os
 
 
 def _require_permissions(request, required_codes: set[str]):
@@ -51,6 +54,35 @@ def upload_articulation_matrix(request):
         return Response({'detail': 'Missing file'}, status=status.HTTP_400_BAD_REQUEST)
     parsed = parse_articulation_matrix_excel(request.FILES['file'])
     return Response(parsed)
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def upload_docx(request):
+    """Accept a .docx file upload for Exam Management. Saves file and returns stored path."""
+    auth = _require_permissions(request, {'obe.cdap.upload'})
+    if auth:
+        return auth
+
+    if 'file' not in request.FILES:
+        return Response({'detail': 'Missing file'}, status=status.HTTP_400_BAD_REQUEST)
+
+    f = request.FILES['file']
+    # Ensure upload directory exists under MEDIA_ROOT if configured
+    upload_dir = os.path.join('obe', 'uploads')
+    try:
+        saved_path = default_storage.save(os.path.join(upload_dir, f.name), f)
+    except Exception as e:
+        return Response({'detail': f'Failed to save file: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    file_url = None
+    try:
+        file_url = default_storage.url(saved_path)
+    except Exception:
+        file_url = saved_path
+
+    return Response({'saved_path': saved_path, 'file_url': file_url})
 
 
 @api_view(['GET', 'PUT'])

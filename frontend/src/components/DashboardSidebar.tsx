@@ -1,10 +1,9 @@
-<<<<<<< HEAD
+
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
-=======
-﻿import React from 'react';
-import { Link } from 'react-router-dom';
->>>>>>> origin/rohit
+
+
+
 import useDashboard from '../hooks/useDashboard';
 import { User, BookOpen, Layout, Grid, Home } from 'lucide-react';
 import './DashboardSidebar.css';
@@ -16,6 +15,8 @@ const ICON_MAP: Record<string, any> = {
   department_curriculum: Layout,
   student_curriculum_view: Grid,
   home: Home,
+  obe: BookOpen,
+  obe_master: BookOpen,
 };
 
 export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string }) {
@@ -37,12 +38,17 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // fallback: always show profile
   items.unshift({ key: 'profile', label: 'Profile', to: '/profile' });
 
+
   const perms = (data.permissions || []).map((p) => String(p || '').toLowerCase());
+  const roles = (data.roles || []).map((r) => typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase());
+  const isStaff = roles.includes('staff');
   const canObe = perms.some((p) => ['obe.view', 'obe.cdap.upload', 'obe.master.manage'].includes(p));
   const canObeMaster = perms.includes('obe.master.manage');
 
-  if (canObe) items.push({ key: 'obe', label: 'OBE', to: '/obe' });
-  if (canObeMaster) items.push({ key: 'obe_master', label: 'OBE Master', to: '/obe/master' });
+  // Always show OBE button at the end
+  const obeItem = { key: 'obe', label: 'OBE', to: '/obe' };
+  // Show OBE Master only for IQAC role
+  if (roles.includes('iqac')) items.push({ key: 'obe_master', label: 'OBE Master', to: '/obe/master' });
 
   return (
     <aside className={`dsb modern-dsb ${collapsed ? 'collapsed' : ''}`}>
@@ -66,6 +72,13 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
             </li>
           );
         })}
+        {/* OBE button at the bottom */}
+        <li key={obeItem.key} className={`dsb-item ${loc.pathname.startsWith(obeItem.to) ? 'active' : ''}`}>
+          <Link to={obeItem.to} className="dsb-link">
+            <span className="dsb-icon">{ICON_MAP.obe ? <ICON_MAP.obe /> : <User />}</span>
+            <span className="dsb-label">{obeItem.label}</span>
+          </Link>
+        </li>
       </ul>
     </aside>
   );
