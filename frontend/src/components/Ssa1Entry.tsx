@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
+import { fetchAssessmentMasterConfig } from '../services/cdapDb';
+import { fetchDraft, publishSsa1, saveDraft } from '../services/obe';
 
 type Props = { subjectId: string; teachingAssignmentId?: number };
 
@@ -18,9 +20,14 @@ type Ssa1Sheet = {
   rows: Ssa1Row[];
 };
 
-const MAX_ASMT1 = 20;
-const CO_MAX = { co1: 10, co2: 10 };
-const BTL_MAX = { btl1: 0, btl2: 0, btl3: 10, btl4: 10, btl5: 0, btl6: 0 };
+type Ssa1DraftPayload = {
+  sheet: Ssa1Sheet;
+  selectedBtls: number[];
+};
+
+const DEFAULT_MAX_ASMT1 = 20;
+const DEFAULT_CO_MAX = { co1: 10, co2: 10 };
+const DEFAULT_BTL_MAX = { btl1: 0, btl2: 0, btl3: 10, btl4: 10, btl5: 0, btl6: 0 };
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
@@ -67,19 +74,78 @@ function downloadCsv(filename: string, rows: Array<Record<string, string | numbe
   URL.revokeObjectURL(url);
 }
 
+function compareStudentName(a: { name?: string; reg_no?: string }, b: { name?: string; reg_no?: string }) {
+  const an = String(a?.name || '').trim().toLowerCase();
+  const bn = String(b?.name || '').trim().toLowerCase();
+  if (an && bn) {
+    const byName = an.localeCompare(bn);
+    if (byName) return byName;
+  } else if (an || bn) {
+    // Put students with a name first
+    return an ? -1 : 1;
+  }
+
+  const ar = String(a?.reg_no || '').trim();
+  const br = String(b?.reg_no || '').trim();
+  const byReg = ar.localeCompare(br, undefined, { numeric: true, sensitivity: 'base' });
+  if (byReg) return byReg;
+  return 0;
+}
+
 export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
   const key = useMemo(() => storageKey(subjectId), [subjectId]);
+  const [masterCfg, setMasterCfg] = useState<any>(null);
   const [sheet, setSheet] = useState<Ssa1Sheet>({
     termLabel: 'KRCT AY25-26',
     batchLabel: subjectId,
     rows: [],
   });
 
+  const masterTermLabel = String(masterCfg?.termLabel || 'KRCT AY25-26');
+  const ssa1Cfg = masterCfg?.assessments?.ssa1 || {};
+  const MAX_ASMT1 = Number.isFinite(Number(ssa1Cfg?.maxTotal)) ? Number(ssa1Cfg.maxTotal) : DEFAULT_MAX_ASMT1;
+  const CO_MAX = {
+    co1: Number.isFinite(Number(ssa1Cfg?.coMax?.co1)) ? Number(ssa1Cfg.coMax.co1) : DEFAULT_CO_MAX.co1,
+    co2: Number.isFinite(Number(ssa1Cfg?.coMax?.co2)) ? Number(ssa1Cfg.coMax.co2) : DEFAULT_CO_MAX.co2,
+  };
+  const BTL_MAX = {
+    btl1: Number.isFinite(Number(ssa1Cfg?.btlMax?.['1'])) ? Number(ssa1Cfg.btlMax['1']) : DEFAULT_BTL_MAX.btl1,
+    btl2: Number.isFinite(Number(ssa1Cfg?.btlMax?.['2'])) ? Number(ssa1Cfg.btlMax['2']) : DEFAULT_BTL_MAX.btl2,
+    btl3: Number.isFinite(Number(ssa1Cfg?.btlMax?.['3'])) ? Number(ssa1Cfg.btlMax['3']) : DEFAULT_BTL_MAX.btl3,
+    btl4: Number.isFinite(Number(ssa1Cfg?.btlMax?.['4'])) ? Number(ssa1Cfg.btlMax['4']) : DEFAULT_BTL_MAX.btl4,
+    btl5: Number.isFinite(Number(ssa1Cfg?.btlMax?.['5'])) ? Number(ssa1Cfg.btlMax['5']) : DEFAULT_BTL_MAX.btl5,
+    btl6: Number.isFinite(Number(ssa1Cfg?.btlMax?.['6'])) ? Number(ssa1Cfg.btlMax['6']) : DEFAULT_BTL_MAX.btl6,
+  };
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const cfg = await fetchAssessmentMasterConfig();
+        if (!mounted) return;
+        setMasterCfg(cfg || null);
+        // Keep local rows, but adopt master term + subject for sheet label.
+        setSheet((p) => ({ ...p, termLabel: String((cfg as any)?.termLabel || p.termLabel || 'KRCT AY25-26'), batchLabel: subjectId }));
+      } catch {
+        // If master config fails, continue with local defaults.
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [subjectId]);
+
   const [rosterLoading, setRosterLoading] = useState(false);
   const [rosterError, setRosterError] = useState<string | null>(null);
 
   const [btlPickerOpen, setBtlPickerOpen] = useState(true);
   const [selectedBtls, setSelectedBtls] = useState<number[]>([]);
+
+  const [savingDraft, setSavingDraft] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [publishedAt, setPublishedAt] = useState<string | null>(null);
 
   const visibleBtlIndices = useMemo(() => {
     const set = new Set(selectedBtls);
@@ -98,14 +164,44 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
     const stored = lsGet<Ssa1Sheet>(key);
     if (stored && typeof stored === 'object' && Array.isArray((stored as any).rows)) {
       setSheet({
-        termLabel: String((stored as any).termLabel || 'KRCT AY25-26'),
-        batchLabel: String((stored as any).batchLabel || subjectId),
+        termLabel: masterCfg?.termLabel ? String(masterCfg.termLabel) : String((stored as any).termLabel || 'KRCT AY25-26'),
+        batchLabel: subjectId,
         rows: (stored as any).rows,
       });
     } else {
-      setSheet({ termLabel: 'KRCT AY25-26', batchLabel: subjectId, rows: [] });
+      setSheet({ termLabel: masterTermLabel || 'KRCT AY25-26', batchLabel: subjectId, rows: [] });
     }
-  }, [key, subjectId]);
+  }, [key, subjectId, masterCfg, masterTermLabel]);
+
+  // Load draft from DB (preferred) and merge into local state.
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      if (!subjectId) return;
+      try {
+        const res = await fetchDraft<Ssa1DraftPayload>('ssa1', subjectId);
+        if (!mounted) return;
+        const d = res?.draft;
+        const draftSheet = (d as any)?.sheet;
+        const draftBtls = (d as any)?.selectedBtls;
+        if (draftSheet && typeof draftSheet === 'object' && Array.isArray((draftSheet as any).rows)) {
+          setSheet({
+            termLabel: String((draftSheet as any).termLabel || masterTermLabel || 'KRCT AY25-26'),
+            batchLabel: subjectId,
+            rows: (draftSheet as any).rows,
+          });
+        }
+        if (Array.isArray(draftBtls)) {
+          setSelectedBtls(draftBtls.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n)));
+        }
+      } catch {
+        // If draft fetch fails, keep local fallback.
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [subjectId, masterTermLabel]);
 
   const mergeRosterIntoRows = (students: TeachingAssignmentRosterStudent[]) => {
     setSheet((prev) => {
@@ -118,7 +214,7 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
 
       const nextRows: Ssa1Row[] = (students || [])
         .slice()
-        .sort((a, b) => String(a.reg_no || '').localeCompare(String(b.reg_no || '')))
+        .sort(compareStudentName)
         .map((s) => {
           const prevRow = existingById.get(s.id) || existingByReg.get(String(s.reg_no || ''));
           return {
@@ -163,9 +259,36 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teachingAssignmentId]);
 
-  const saveLocal = () => {
-    lsSet(key, sheet);
-    alert('SSA1 sheet saved locally.');
+  const saveDraftToDb = async () => {
+    setSavingDraft(true);
+    setSaveError(null);
+    try {
+      const payload: Ssa1DraftPayload = { sheet, selectedBtls };
+      await saveDraft('ssa1', subjectId, payload);
+      setSavedAt(new Date().toLocaleString());
+    } catch (e: any) {
+      setSaveError(e?.message || 'Failed to save SSA1 draft');
+    } finally {
+      setSavingDraft(false);
+    }
+  };
+
+  const publish = async () => {
+    setPublishing(true);
+    setSaveError(null);
+    try {
+      await publishSsa1(subjectId, sheet);
+      setPublishedAt(new Date().toLocaleString());
+      try {
+        window.dispatchEvent(new CustomEvent('obe:published', { detail: { subjectId } }));
+      } catch {
+        // ignore
+      }
+    } catch (e: any) {
+      setSaveError(e?.message || 'Failed to publish SSA1');
+    } finally {
+      setPublishing(false);
+    }
   };
 
   const resetAllMarks = () => {
@@ -305,8 +428,15 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
           >
             Reset Marks
           </button>
-          <button onClick={saveLocal} style={{ padding: '6px 10px' }}>
-            Save Local
+          <button onClick={saveDraftToDb} style={{ padding: '6px 10px' }} disabled={savingDraft || !sheet.rows.length}>
+            {savingDraft ? 'Saving…' : 'Save Draft'}
+          </button>
+          <button
+            onClick={publish}
+            disabled={publishing || !sheet.rows.length}
+            style={{ padding: '6px 10px', background: '#16a34a', color: '#fff', border: '1px solid #15803d' }}
+          >
+            {publishing ? 'Publishing…' : 'Publish'}
           </button>
           <button
             onClick={exportSheetCsv}
@@ -316,8 +446,12 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
           >
             Export CSV
           </button>
+          {savedAt && <div style={{ fontSize: 12, color: '#6b7280', alignSelf: 'center' }}>Draft: {savedAt}</div>}
+          {publishedAt && <div style={{ fontSize: 12, color: '#16a34a', alignSelf: 'center' }}>Published: {publishedAt}</div>}
         </div>
       </div>
+
+      {saveError && <div style={{ margin: '6px 0 10px 0', fontSize: 12, color: '#b91c1c' }}>{saveError}</div>}
 
       {btlPickerOpen && (
         <div
@@ -370,19 +504,11 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
           <label style={{ fontSize: 12, color: '#374151' }}>
             Term
-            <input
-              value={sheet.termLabel}
-              onChange={(e) => setSheet((p) => ({ ...p, termLabel: e.target.value }))}
-              style={{ marginLeft: 8, padding: 6, border: '1px solid #d1d5db', borderRadius: 8 }}
-            />
+            <div style={{ marginLeft: 8, padding: 6, border: '1px solid #d1d5db', borderRadius: 8, minWidth: 160 }}>{sheet.termLabel}</div>
           </label>
           <label style={{ fontSize: 12, color: '#374151' }}>
             Sheet Label
-            <input
-              value={sheet.batchLabel}
-              onChange={(e) => setSheet((p) => ({ ...p, batchLabel: e.target.value }))}
-              style={{ marginLeft: 8, padding: 6, border: '1px solid #d1d5db', borderRadius: 8 }}
-            />
+            <div style={{ marginLeft: 8, padding: 6, border: '1px solid #d1d5db', borderRadius: 8, minWidth: 160 }}>{sheet.batchLabel}</div>
           </label>
           <div style={{ fontSize: 12, color: '#6b7280', alignSelf: 'center' }}>
             CO split: 10 + 10; BTL active: BTL-3, BTL-4

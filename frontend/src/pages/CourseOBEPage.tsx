@@ -3,9 +3,11 @@ import { useParams, useNavigate } from 'react-router-dom';
 import CDAPPage from './CDAPPage';
 import ArticulationMatrixPage from './ArticulationMatrixPage';
 import MarkEntryPage from './MarkEntryPage';
+import LCAInstructionsPage from './LCAInstructionsPage';
+import COAttainmentPage from './COAttainmentPage';
 import DashboardSidebar from '../components/DashboardSidebar';
 
-type TabKey = 'cdap' | 'articulation' | 'marks';
+type TabKey = 'cdap' | 'articulation' | 'marks' | 'lca' | 'co_attainment';
 
 export default function CourseOBEPage(): JSX.Element {
   const { code } = useParams<{ code: string }>();
@@ -47,6 +49,8 @@ export default function CourseOBEPage(): JSX.Element {
               { key: 'cdap', label: 'CDAP' },
               { key: 'articulation', label: 'Articulation Matrix' },
               { key: 'marks', label: 'Mark Entry' },
+              { key: 'lca', label: 'LCA Instructions' },
+              { key: 'co_attainment', label: 'CO ATTAINMENT' },
             ].map((t) => {
               const isActive = activeTab === (t.key as TabKey);
               return (
@@ -74,6 +78,8 @@ export default function CourseOBEPage(): JSX.Element {
             )}
             {activeTab === 'articulation' && <ArticulationMatrixPage courseId={courseId} />}
             {activeTab === 'marks' && <MarkEntryPage courseId={courseId} />}
+            {activeTab === 'lca' && <LCAInstructionsPage />}
+            {activeTab === 'co_attainment' && <COAttainmentPage courseId={courseId} />}
           </div>
         </div>
       </div>

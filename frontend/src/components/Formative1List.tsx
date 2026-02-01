@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
+import { fetchAssessmentMasterConfig } from '../services/cdapDb';
+import { fetchDraft, publishFormative1, saveDraft } from '../services/obe';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
@@ -30,6 +32,11 @@ type F1Sheet = {
   rowsByStudentId: Record<string, F1RowState>;
 };
 
+type F1DraftPayload = {
+  sheet: F1Sheet;
+  selectedBtls: number[];
+};
+
 // Component Props
 interface Formative1ListProps {
   subjectId?: string | null;
@@ -37,9 +44,9 @@ interface Formative1ListProps {
   teachingAssignmentId?: number;
 }
 
-const MAX_PART = 5;
-const MAX_TOTAL = 20;
-const MAX_CO = 10;
+const DEFAULT_MAX_PART = 5;
+const DEFAULT_MAX_TOTAL = 20;
+const DEFAULT_MAX_CO = 10;
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
@@ -84,6 +91,23 @@ function compareRegNo(aRaw: unknown, bRaw: unknown): number {
   return 0;
 }
 
+function compareStudentName(a: { name?: string; reg_no?: string }, b: { name?: string; reg_no?: string }) {
+  const an = String(a?.name || '').trim().toLowerCase();
+  const bn = String(b?.name || '').trim().toLowerCase();
+  if (an && bn) {
+    const byName = an.localeCompare(bn);
+    if (byName) return byName;
+  } else if (an || bn) {
+    return an ? -1 : 1;
+  }
+
+  const ar = String(a?.reg_no || '').trim();
+  const br = String(b?.reg_no || '').trim();
+  const byReg = ar.localeCompare(br, undefined, { numeric: true, sensitivity: 'base' });
+  if (byReg) return byReg;
+  return 0;
+}
+
 function storageKey(subjectId: string) {
   return `formative1_sheet_${subjectId}`;
 }
@@ -122,11 +146,41 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
   const [btlPickerOpen, setBtlPickerOpen] = useState(true);
   const [selectedBtls, setSelectedBtls] = useState<number[]>([]);
 
+  const [savingDraft, setSavingDraft] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [publishedAt, setPublishedAt] = useState<string | null>(null);
+
+  const [masterCfg, setMasterCfg] = useState<any>(null);
+
   const [sheet, setSheet] = useState<F1Sheet>({
     termLabel: 'KRCT AY25-26',
     batchLabel: subjectId || '',
     rowsByStudentId: {},
   });
+
+  const masterTermLabel = String(masterCfg?.termLabel || 'KRCT AY25-26');
+  const f1Cfg = masterCfg?.assessments?.formative1 || {};
+  const MAX_PART = Number.isFinite(Number(f1Cfg?.maxPart)) ? Number(f1Cfg.maxPart) : DEFAULT_MAX_PART;
+  const MAX_TOTAL = Number.isFinite(Number(f1Cfg?.maxTotal)) ? Number(f1Cfg.maxTotal) : DEFAULT_MAX_TOTAL;
+  const MAX_CO = Number.isFinite(Number(f1Cfg?.maxCo)) ? Number(f1Cfg.maxCo) : DEFAULT_MAX_CO;
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const cfg = await fetchAssessmentMasterConfig();
+        if (!mounted) return;
+        setMasterCfg(cfg || null);
+        setSheet((p) => ({ ...p, termLabel: String((cfg as any)?.termLabel || p.termLabel || 'KRCT AY25-26'), batchLabel: subjectId || p.batchLabel }));
+      } catch {
+        // ignore
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [subjectId]);
 
   const key = useMemo(() => (subjectId ? storageKey(subjectId) : ''), [subjectId]);
 
@@ -157,6 +211,36 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
     lsSet(sk, selectedBtls);
     }, [selectedBtls, subjectId]);
 
+  // Load draft from DB (preferred)
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      if (!subjectId) return;
+      try {
+        const res = await fetchDraft<F1DraftPayload>('formative1', subjectId);
+        if (!mounted) return;
+        const d = res?.draft as any;
+        const draftSheet = d?.sheet;
+        const draftBtls = d?.selectedBtls;
+        if (draftSheet && typeof draftSheet === 'object' && typeof draftSheet.rowsByStudentId === 'object') {
+          setSheet({
+            termLabel: String(draftSheet.termLabel || masterTermLabel || 'KRCT AY25-26'),
+            batchLabel: String(subjectId),
+            rowsByStudentId: draftSheet.rowsByStudentId || {},
+          });
+        }
+        if (Array.isArray(draftBtls)) {
+          setSelectedBtls(draftBtls.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n) && n >= 1 && n <= 6));
+        }
+      } catch {
+        // keep local fallback
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [subjectId, masterTermLabel]);
+
   useEffect(() => {
     let mounted = true;
 
@@ -179,7 +263,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
             name: String(s.name ?? ''),
             section: s.section ?? null,
           })).filter((s) => Number.isFinite(s.id));
-          roster.sort((a, b) => compareRegNo(a.reg_no, b.reg_no));
+          roster.sort(compareStudentName);
           setStudents(roster);
         } else {
           const subjectRes = await fetch(`${API_BASE}/api/academics/subjects/?code=${encodeURIComponent(subjectId)}`, {
@@ -225,7 +309,8 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
             }))
             .filter((s) => Number.isFinite(s.id));
 
-          roster.sort((a, b) => compareRegNo(a.reg_no, b.reg_no));
+          // Requested: SSA1/CIA1/Formative1 student list in ascending name order
+          roster.sort(compareStudentName);
 
           if (!mounted) return;
           setStudents(roster);
@@ -236,14 +321,14 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
         const base: F1Sheet =
           stored && typeof stored === 'object'
             ? {
-                termLabel: String((stored as any).termLabel || 'KRCT AY25-26'),
-                batchLabel: String((stored as any).batchLabel || subjectId),
+                termLabel: masterCfg?.termLabel ? String(masterCfg.termLabel) : String((stored as any).termLabel || 'KRCT AY25-26'),
+                batchLabel: String(subjectId || (stored as any).batchLabel || ''),
                 rowsByStudentId:
                   (stored as any).rowsByStudentId && typeof (stored as any).rowsByStudentId === 'object'
                     ? (stored as any).rowsByStudentId
                     : {},
               }
-            : { termLabel: 'KRCT AY25-26', batchLabel: subjectId, rowsByStudentId: {} };
+            : { termLabel: masterTermLabel || 'KRCT AY25-26', batchLabel: String(subjectId || ''), rowsByStudentId: {} };
 
         const merged: Record<string, F1RowState> = { ...base.rowsByStudentId };
         for (const s of roster) {
@@ -258,7 +343,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
           };
         }
 
-        setSheet({ ...base, batchLabel: base.batchLabel || subjectId, rowsByStudentId: merged });
+        setSheet({ ...base, termLabel: base.termLabel || masterTermLabel, batchLabel: String(subjectId || base.batchLabel || ''), rowsByStudentId: merged });
       } catch (e: any) {
         if (!mounted) return;
         setError(e?.message || 'Failed to load Formative 1 roster');
@@ -272,7 +357,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
     return () => {
       mounted = false;
     };
-  }, [subjectId, key]);
+  }, [subjectId, key, masterCfg, masterTermLabel, MAX_PART]);
 
   const updateMark = (studentId: number, patch: Partial<F1RowState>) => {
     setSheet((prev) => {
@@ -303,10 +388,38 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
     });
   };
 
-  const saveLocal = () => {
-    if (!key) return;
-    lsSet(key, sheet);
-    alert('Formative 1 sheet saved locally.');
+  const saveDraftToDb = async () => {
+    if (!subjectId) return;
+    setSavingDraft(true);
+    setError(null);
+    try {
+      const payload: F1DraftPayload = { sheet, selectedBtls };
+      await saveDraft('formative1', subjectId, payload);
+      setSavedAt(new Date().toLocaleString());
+    } catch (e: any) {
+      setError(e?.message || 'Failed to save Formative 1 draft');
+    } finally {
+      setSavingDraft(false);
+    }
+  };
+
+  const publish = async () => {
+    if (!subjectId) return;
+    setPublishing(true);
+    setError(null);
+    try {
+      await publishFormative1(subjectId, sheet);
+      setPublishedAt(new Date().toLocaleString());
+      try {
+        window.dispatchEvent(new CustomEvent('obe:published', { detail: { subjectId } }));
+      } catch {
+        // ignore
+      }
+    } catch (e: any) {
+      setError(e?.message || 'Failed to publish Formative 1');
+    } finally {
+      setPublishing(false);
+    }
   };
 
   const exportSheetCsv = () => {
@@ -444,12 +557,21 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
         </div>
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button onClick={saveLocal} style={{ padding: '6px 10px' }} disabled={students.length === 0}>
-            Save Local
+          <button onClick={saveDraftToDb} style={{ padding: '6px 10px' }} disabled={savingDraft || students.length === 0}>
+            {savingDraft ? 'Saving…' : 'Save Draft'}
+          </button>
+          <button
+            onClick={publish}
+            disabled={publishing || students.length === 0}
+            style={{ padding: '6px 10px', background: '#16a34a', color: '#fff', border: '1px solid #15803d' }}
+          >
+            {publishing ? 'Publishing…' : 'Publish'}
           </button>
           <button onClick={exportSheetCsv} style={{ padding: '6px 10px' }} disabled={students.length === 0}>
             Export CSV
           </button>
+          {savedAt && <div style={{ fontSize: 12, color: '#6b7280', alignSelf: 'center' }}>Draft: {savedAt}</div>}
+          {publishedAt && <div style={{ fontSize: 12, color: '#16a34a', alignSelf: 'center' }}>Published: {publishedAt}</div>}
         </div>
       </div>
 

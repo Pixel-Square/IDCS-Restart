@@ -1,4 +1,11 @@
 from django.contrib import admin
+from django.urls import path, reverse
+from django.http import JsonResponse
+from django.shortcuts import render
+from django.contrib import messages
+from django.db import transaction
+from django.utils import timezone
+import json
 from .models import (
     AcademicYear,
     Department,
@@ -7,6 +14,7 @@ from .models import (
     Semester,
     Section,
     Subject,
+    PROFILE_STATUS_CHOICES,
     StudentProfile,
     StaffProfile,
     StudentSectionAssignment,
@@ -77,6 +85,151 @@ class StudentProfileAdmin(admin.ModelAdmin):
     list_filter = ('section__semester__course__department', 'batch')
     actions = ('deactivate_students', 'mark_alumni', 'delete_profiles_and_users')
 
+    change_list_template = 'admin/academics/studentprofile/change_list.html'
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom = [
+            path('sheets/', self.admin_site.admin_view(self.sheets_view), name='academics_studentprofile_sheets'),
+            path('sheets/data/', self.admin_site.admin_view(self.sheets_data_view), name='academics_studentprofile_sheets_data'),
+            path('sheets/save/', self.admin_site.admin_view(self.sheets_save_view), name='academics_studentprofile_sheets_save'),
+        ]
+        return custom + urls
+
+    def sheets_view(self, request):
+        if not self.has_add_permission(request):
+            messages.error(request, 'You do not have permission to use Sheets.')
+            return render(request, 'admin/academics/studentprofile/sheets.html', {
+                **self.admin_site.each_context(request),
+                'title': 'Student Profiles Sheets',
+                'sections': [],
+                'status_choices': list(PROFILE_STATUS_CHOICES),
+                'data_url': reverse('admin:academics_studentprofile_sheets_data'),
+                'save_url': reverse('admin:academics_studentprofile_sheets_save'),
+            })
+
+        sections_qs = Section.objects.select_related('semester__course__department').all().order_by(
+            'semester__course__department__code', 'semester__course__name', 'semester__number', 'name'
+        )
+        sections = [{'id': s.pk, 'label': str(s)} for s in sections_qs]
+
+        return render(request, 'admin/academics/studentprofile/sheets.html', {
+            **self.admin_site.each_context(request),
+            'title': 'Student Profiles Sheets',
+            'sections': sections,
+            'status_choices': list(PROFILE_STATUS_CHOICES),
+            'data_url': reverse('admin:academics_studentprofile_sheets_data'),
+            'save_url': reverse('admin:academics_studentprofile_sheets_save'),
+        })
+
+    def sheets_data_view(self, request):
+        if request.method != 'GET':
+            return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+        if not self.has_add_permission(request):
+            return JsonResponse({'detail': 'Forbidden'}, status=403)
+
+        # show all users (include existing students). Frontend will mark existing profiles as read-only.
+        from accounts.models import User
+
+        qs = User.objects.all().order_by('username').select_related('student_profile__section', 'staff_profile')
+        rows = []
+        for u in qs:
+            sp = getattr(u, 'student_profile', None)
+            rows.append({
+                'id': u.pk,
+                'username': u.username,
+                'email': u.email or '',
+                'has_student_profile': sp is not None,
+                'reg_no': sp.reg_no if sp is not None else '',
+                'section_id': sp.section.pk if (sp is not None and sp.section) else '',
+                'section_label': str(sp.section) if (sp is not None and sp.section) else '',
+                'batch': sp.batch if sp is not None else '',
+                'status': sp.status if sp is not None else 'ACTIVE',
+            })
+        return JsonResponse({'rows': rows})
+
+    def sheets_save_view(self, request):
+        if request.method != 'POST':
+            return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+        if not self.has_add_permission(request):
+            return JsonResponse({'detail': 'Forbidden'}, status=403)
+
+        try:
+            payload = json.loads((request.body or b'{}').decode('utf-8'))
+        except Exception:
+            return JsonResponse({'detail': 'Invalid JSON body'}, status=400)
+
+        rows = payload.get('rows') or []
+        if not isinstance(rows, list) or not rows:
+            return JsonResponse({'detail': 'No rows provided'}, status=400)
+
+        from accounts.models import User
+
+        created = 0
+        failed = []
+        today = timezone.now().date()
+
+        for idx, r in enumerate(rows, start=1):
+            try:
+                user_id = int(r.get('user_id'))
+            except Exception:
+                failed.append({'index': idx, 'user_id': r.get('user_id'), 'error': 'Invalid user_id'})
+                continue
+
+            reg_no = (r.get('reg_no') or '').strip()
+            batch = (r.get('batch') or '').strip()
+            status = (r.get('status') or 'ACTIVE').strip().upper()
+            section_id = (r.get('section_id') or '').strip()
+
+            if not reg_no:
+                failed.append({'index': idx, 'user_id': user_id, 'error': 'reg_no is required'})
+                continue
+
+            if status not in {c[0] for c in PROFILE_STATUS_CHOICES}:
+                failed.append({'index': idx, 'user_id': user_id, 'error': f'Invalid status: {status}'})
+                continue
+
+            try:
+                user = User.objects.select_related('student_profile', 'staff_profile').get(pk=user_id)
+            except User.DoesNotExist:
+                failed.append({'index': idx, 'user_id': user_id, 'error': 'User not found'})
+                continue
+
+            if getattr(user, 'student_profile', None) is not None:
+                failed.append({'index': idx, 'user_id': user_id, 'error': 'User already has a StudentProfile'})
+                continue
+
+            if getattr(user, 'staff_profile', None) is not None:
+                failed.append({'index': idx, 'user_id': user_id, 'error': 'User already has a StaffProfile'})
+                continue
+
+            section_obj = None
+            if section_id:
+                try:
+                    section_obj = Section.objects.filter(pk=int(section_id)).first()
+                except Exception:
+                    section_obj = None
+
+            try:
+                with transaction.atomic():
+                    sp = StudentProfile.objects.create(
+                        user=user,
+                        reg_no=reg_no,
+                        section=section_obj,
+                        batch=batch,
+                        status=status,
+                    )
+                    # keep history assignment too (optional, but better for later changes)
+                    if section_obj is not None:
+                        StudentSectionAssignment.objects.create(student=sp, section=section_obj, start_date=today)
+                    created += 1
+            except Exception as e:
+                failed.append({'index': idx, 'user_id': user_id, 'error': str(e)})
+
+        return JsonResponse({'created': created, 'failed': failed})
+
     def deactivate_students(self, request, queryset):
         from accounts.services import deactivate_user
         for p in queryset:
@@ -130,6 +283,7 @@ class StaffProfileAdmin(admin.ModelAdmin):
         for p in queryset:
             deactivate_user(p.user, profile_status='INACTIVE', reason='deactivated via admin', actor=request.user)
     deactivate_staff.short_description = 'Deactivate selected staff profiles'
+
     def mark_resigned(self, request, queryset):
         for p in queryset:
             p.status = 'RESIGNED'

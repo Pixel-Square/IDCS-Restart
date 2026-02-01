@@ -1,5 +1,7 @@
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
+const ASSESSMENT_MASTER_CFG_CACHE_KEY = 'obe_assessment_master_config_cache';
+
 function authHeaders(): Record<string, string> {
   const token = window.localStorage.getItem('access');
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -130,6 +132,72 @@ export async function saveGlobalAnalysisMapping(mapping: Record<string, boolean[
 
   const data = await res.json();
   return data?.mapping || {};
+}
+
+export async function fetchAssessmentMasterConfig() {
+  const url = `${API_BASE}/api/obe/assessment-master-config`;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...authHeaders(),
+  };
+
+  const res = await fetch(url, {
+    method: 'GET',
+    headers,
+  });
+
+  if (!res.ok) {
+    // If auth is missing/expired or network fails, fall back to last cached config.
+    try {
+      const cached = window.localStorage.getItem(ASSESSMENT_MASTER_CFG_CACHE_KEY);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && typeof parsed === 'object') return parsed;
+      }
+    } catch {
+      // ignore
+    }
+
+    const message = await buildFriendlyError(res, 'Assessment master config fetch failed');
+    throw new Error(message);
+  }
+
+  const data = await res.json();
+  const cfg = data?.config || {};
+  try {
+    window.localStorage.setItem(ASSESSMENT_MASTER_CFG_CACHE_KEY, JSON.stringify(cfg));
+  } catch {
+    // ignore
+  }
+  return cfg;
+}
+
+export async function saveAssessmentMasterConfig(config: any) {
+  const url = `${API_BASE}/api/obe/assessment-master-config`;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...authHeaders(),
+  };
+
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({ config }),
+  });
+
+  if (!res.ok) {
+    const message = await buildFriendlyError(res, 'Assessment master config save failed');
+    throw new Error(message);
+  }
+
+  const data = await res.json();
+  const cfg = data?.config || {};
+  try {
+    window.localStorage.setItem(ASSESSMENT_MASTER_CFG_CACHE_KEY, JSON.stringify(cfg));
+  } catch {
+    // ignore
+  }
+  return cfg;
 }
 
 export async function uploadArticulationMatrixExcel(file: File) {

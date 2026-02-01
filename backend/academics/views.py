@@ -170,7 +170,8 @@ class StudentProfileViewSet(viewsets.ReadOnlyModelViewSet):
             qs = qs.filter(section__semester__year=year)
         if section:
             qs = qs.filter(section__name__iexact=section)
-        return qs
+        # Ensure deterministic A→Z ordering by student name for all consumers
+        return qs.order_by('user__last_name', 'user__first_name', 'user__username')
 
 
 class TeachingAssignmentStudentsView(APIView):
@@ -204,7 +205,8 @@ class TeachingAssignmentStudentsView(APIView):
                 | Q(section_assignments__section_id=section_id, section_assignments__end_date__isnull=True)
             )
             .distinct()
-            .order_by('reg_no')
+            # Sort by student name A→Z (then username) as requested for SSA1/CIA1/Formative1
+            .order_by('user__last_name', 'user__first_name', 'user__username')
         )
 
         def student_name(sp: StudentProfile) -> str:
