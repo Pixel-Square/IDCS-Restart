@@ -217,10 +217,17 @@ class SectionAdvisorSerializer(serializers.ModelSerializer):
     section = serializers.StringRelatedField(read_only=True)
     advisor = serializers.StringRelatedField(read_only=True)
     academic_year = serializers.PrimaryKeyRelatedField(queryset=AcademicYear.objects.all(), required=False, allow_null=True)
+    department_id = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = SectionAdvisor
-        fields = ('id', 'section', 'section_id', 'advisor', 'advisor_id', 'academic_year', 'is_active')
+        fields = ('id', 'section', 'section_id', 'advisor', 'advisor_id', 'academic_year', 'is_active', 'department_id')
+
+    def get_department_id(self, obj):
+        try:
+            return obj.section.batch.course.department_id
+        except Exception:
+            return None
 
     def __init__(self, *args, **kwargs):
         # Remove UniqueTogetherValidator for (section, academic_year) so we can
@@ -259,6 +266,11 @@ class SectionAdvisorSerializer(serializers.ModelSerializer):
         # and DepartmentRole determine who may assign advisors.
 
         # user must be HOD for the department
+        sec_dept = None
+        try:
+            sec_dept = section.batch.course.department if section and section.batch and section.batch.course else None
+        except Exception:
+            sec_dept = None
         hod_depts = []
         if user and getattr(user, 'staff_profile', None):
             from academics.models import DepartmentRole

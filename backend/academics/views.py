@@ -214,14 +214,16 @@ class HODSectionsView(APIView):
         if not staff_profile:
             return Response({'results': []})
         dept_ids = get_user_effective_departments(user)
-        qs = Section.objects.filter(batch__course__department_id__in=dept_ids).select_related('batch', 'batch__course', 'semester')
+        qs = Section.objects.filter(batch__course__department_id__in=dept_ids).select_related('batch', 'batch__course', 'batch__course__department', 'semester')
         results = []
         for s in qs:
+            dept = getattr(s.batch.course, 'department', None)
             results.append({
                 'id': s.id,
                 'name': s.name,
                 'batch': getattr(s.batch, 'name', None),
                 'department_id': getattr(s.batch.course, 'department_id', None),
+                'department_code': getattr(dept, 'code', None) if dept else None,
                 'semester': getattr(s.semester, 'number', None),
             })
         return Response({'results': results})
