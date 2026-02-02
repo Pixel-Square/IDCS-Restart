@@ -27,6 +27,7 @@ from .serializers import (
 from .serializers import DayAttendanceSessionSerializer, DayAttendanceRecordSerializer, BulkDayAttendanceSerializer
 from accounts.utils import get_user_permissions
 from .utils import get_user_effective_departments
+from .serializers import TeachingAssignmentInfoSerializer
 
 
 # Attendance endpoints removed.
@@ -251,6 +252,63 @@ class HODStaffListView(APIView):
         for s in staff_qs:
             results.append({'id': s.id, 'user': getattr(s.user, 'username', None), 'staff_id': s.staff_id, 'department': getattr(s.department, 'id', None)})
         return Response({'results': results})
+
+
+class StaffAssignedSubjectsView(APIView):
+    """Return teaching assignments (subjects) for a staff member.
+
+    URL patterns:
+    - /api/academics/staff/assigned-subjects/  -> current user's staff_profile
+    - /api/academics/staff/<staff_id>/assigned-subjects/ -> specified staff id
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request, staff_id: int = None):
+        user = request.user
+        # resolve target staff_profile
+        target = None
+        try:
+            if staff_id:
+                target = StaffProfile.objects.filter(pk=int(staff_id)).first()
+            else:
+                target = getattr(user, 'staff_profile', None)
+        except Exception:
+            target = getattr(user, 'staff_profile', None)
+
+        if not target:
+            return Response({'detail': 'Staff not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        # permission: allow if user is the staff themselves, superuser, has explicit perm,
+        # or is HOD for the staff's department
+        if user.is_superuser:
+            allowed = True
+        elif getattr(user, 'id', None) == getattr(getattr(target, 'user', None), 'id', None):
+            allowed = True
+        else:
+            perms = get_user_permissions(user)
+            if 'academics.view_assigned_subjects' in perms or user.has_perm('academics.view_assigned_subjects'):
+                allowed = True
+            else:
+                # HODs may view staff in their mapped departments
+                hod_dept_ids = get_user_effective_departments(user)
+                target_dept_id = None
+                try:
+                    target_dept = getattr(target, 'current_department', None) or target.get_current_department()
+                    if not target_dept:
+                        target_dept = getattr(target, 'department', None)
+                    target_dept_id = getattr(target_dept, 'id', None) if target_dept else None
+                except Exception:
+                    target_dept_id = getattr(getattr(target, 'department', None), 'id', None)
+
+                allowed = bool(target_dept_id and target_dept_id in hod_dept_ids)
+
+        if not allowed:
+            raise PermissionDenied('You do not have permission to view this staff assignments.')
+
+        # fetch teaching assignments
+        qs = TeachingAssignment.objects.filter(staff=target).select_related('curriculum_row', 'section', 'academic_year', 'subject')
+        ser = TeachingAssignmentInfoSerializer(qs, many=True)
+        return Response({'results': ser.data})
 
 
 class AdvisorMyStudentsView(APIView):

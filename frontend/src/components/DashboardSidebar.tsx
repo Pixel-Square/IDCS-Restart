@@ -8,6 +8,7 @@ import { useSidebar } from './SidebarContext';
 const ICON_MAP: Record<string, any> = {
   profile: User,
   curriculum_master: BookOpen,
+    assigned_subjects: BookOpen,
   department_curriculum: Layout,
   student_curriculum_view: Grid,
   home: Home,
@@ -52,6 +53,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // show student/staff personal timetable based on explicit 'timetable.view' permission and profile flags
   if (flags.can_view_timetable && flags.is_student && permsLower.includes('timetable.view')) items.push({ key: 'student_timetable', label: 'My Timetable', to: '/student/timetable' });
   if (flags.can_view_timetable && flags.is_staff && permsLower.includes('timetable.view')) items.push({ key: 'staff_timetable', label: 'My Timetable (Staff)', to: '/staff/timetable' });
+
+  // Staff assigned subjects page
+  if (flags.is_staff && (permsLower.includes('academics.view_assigned_subjects') || rolesUpper.includes('HOD'))) {
+    items.push({ key: 'assigned_subjects', label: 'Assigned Subjects', to: '/staff/assigned-subjects' });
+  }
 
   // Student attendance
   if (flags.is_student && (permsLower.includes('academics.view_attendance') || permsLower.includes('attendance.view') )) items.push({ key: 'student_attendance', label: 'My Attendance', to: '/student/attendance' });

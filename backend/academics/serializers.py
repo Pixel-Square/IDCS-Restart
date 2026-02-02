@@ -13,18 +13,19 @@ from academics.models import StudentProfile, DayAttendanceSession, DayAttendance
 
 
 class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
-    subject_code = serializers.CharField(source='subject.code', read_only=True)
-    subject_name = serializers.CharField(source='subject.name', read_only=True)
+    subject_code = serializers.SerializerMethodField(read_only=True)
+    subject_name = serializers.SerializerMethodField(read_only=True)
     section_name = serializers.CharField(source='section.name', read_only=True)
-    academic_year = serializers.CharField(source='academic_year.name', read_only=True)
-    curriculum_row = serializers.SerializerMethodField(read_only=True)
+    batch = serializers.SerializerMethodField(read_only=True)
+    semester = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = TeachingAssignment
-        fields = ('id', 'subject_code', 'subject_name', 'section_name', 'academic_year', 'curriculum_row')
+        # removed curriculum_row and academic_year as requested; include batch & semester
+        fields = ('id', 'subject_code', 'subject_name', 'section_name', 'batch', 'semester')
 
-    def get_curriculum_row(self, obj):
-        # Try to find a matching CurriculumDepartment row for the Subject
+    def _curriculum_row_for_obj(self, obj):
+        # helper: try to find a matching CurriculumDepartment row for the assignment
         try:
             from curriculum.models import CurriculumDepartment
             dept = None
@@ -32,13 +33,55 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
                 dept = obj.section.batch.course.department
             except Exception:
                 dept = None
-            qs = CurriculumDepartment.objects.filter(models.Q(course_code__iexact=obj.subject.code) | models.Q(course_name__iexact=obj.subject.name))
+            # if subject exists, prefer matching by code/name
+            subj_code = getattr(getattr(obj, 'subject', None), 'code', None)
+            subj_name = getattr(getattr(obj, 'subject', None), 'name', None)
+            qs = CurriculumDepartment.objects.all()
+            from django.db import models as dj_models
+            if subj_code:
+                qs = qs.filter(dj_models.Q(course_code__iexact=subj_code) | dj_models.Q(course_name__iexact=subj_name))
             if dept is not None:
                 qs = qs.filter(department=dept)
-            row = qs.first()
-            if not row:
+            return qs.first()
+        except Exception:
+            return None
+
+    def get_subject_code(self, obj):
+        # prefer explicit subject, then curriculum row
+        try:
+            if getattr(obj, 'subject', None):
+                return getattr(obj.subject, 'code', None)
+            row = self._curriculum_row_for_obj(obj)
+            if row:
+                return getattr(row, 'course_code', None)
+        except Exception:
+            pass
+        return None
+
+    def get_subject_name(self, obj):
+        try:
+            if getattr(obj, 'subject', None):
+                return getattr(obj.subject, 'name', None)
+            row = self._curriculum_row_for_obj(obj)
+            if row:
+                return getattr(row, 'course_name', None)
+        except Exception:
+            pass
+        return None
+
+    def get_batch(self, obj):
+        try:
+            return getattr(getattr(obj.section, 'batch', None), 'name', None)
+        except Exception:
+            return None
+
+    def get_semester(self, obj):
+        try:
+            sem = getattr(obj.section, 'semester', None)
+            if sem is None:
                 return None
-            return {'id': row.pk, 'course_code': row.course_code, 'course_name': row.course_name}
+            # return numeric semester value for simpler consumption
+            return getattr(sem, 'number', str(sem))
         except Exception:
             return None
 

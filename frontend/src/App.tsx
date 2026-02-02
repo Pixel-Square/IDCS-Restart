@@ -19,6 +19,7 @@ import DayAttendancePage from './pages/advisor/DayAttendance';
 import StudentTimetable from './pages/student/TimetableView';
 import StudentAttendance from './pages/student/Attendance';
 import StaffTimetable from './pages/staff/TimetableView';
+import AssignedSubjectsPage from './pages/staff/AssignedSubjects';
 
 type RoleObj = { name: string };
 type Me = {
@@ -110,6 +111,9 @@ export default function App() {
               } />
               <Route path="/staff/timetable" element={
                 <ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={["timetable.view"]} element={<StaffTimetable />} />
+              } />
+              <Route path="/staff/assigned-subjects" element={
+                <ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={["academics.view_assigned_subjects"]} element={<AssignedSubjectsPage />} />
               } />
               <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
             </Routes>
