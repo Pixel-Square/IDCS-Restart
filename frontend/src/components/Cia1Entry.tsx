@@ -323,6 +323,17 @@ export default function Cia1Entry({ subjectId }: Props) {
                 ? (d as any).rowsByStudentId
                 : prev.rowsByStudentId,
           }));
+          try {
+            const sk = sheetKey(subjectId);
+            lsSet(sk, {
+              termLabel: String((d as any).termLabel || 'KRCT AY25-26'),
+              batchLabel: String(subjectId),
+              questionBtl: (d as any).questionBtl && typeof (d as any).questionBtl === 'object' ? (d as any).questionBtl : defaultQuestionBtl(questions),
+              rowsByStudentId: (d as any).rowsByStudentId && typeof (d as any).rowsByStudentId === 'object' ? (d as any).rowsByStudentId : {},
+            });
+          } catch {
+            // ignore localStorage errors
+          }
         }
       } catch (e: any) {
         // If draft fetch fails (permissions/network), keep working locally.
@@ -423,6 +434,39 @@ export default function Cia1Entry({ subjectId }: Props) {
       },
     }));
   };
+
+  // Autosave question BTL changes (debounced) and persist to localStorage
+  useEffect(() => {
+    if (!subjectId) return;
+    let cancelled = false;
+    const tid = setTimeout(async () => {
+      try {
+        const draft: Cia1DraftPayload = {
+          termLabel: sheet.termLabel,
+          batchLabel: subjectId,
+          questionBtl: sheet.questionBtl,
+          rowsByStudentId: sheet.rowsByStudentId,
+        };
+        await saveDraft('cia1', subjectId, draft);
+        try {
+          const sk = sheetKey(subjectId);
+          lsSet(sk, {
+            termLabel: sheet.termLabel,
+            batchLabel: subjectId,
+            questionBtl: sheet.questionBtl,
+            rowsByStudentId: sheet.rowsByStudentId,
+          });
+        } catch {}
+        if (!cancelled) setSavedAt(new Date().toLocaleString());
+      } catch {
+        // ignore autosave errors
+      }
+    }, 700);
+    return () => {
+      cancelled = true;
+      clearTimeout(tid);
+    };
+  }, [sheet.questionBtl, subjectId, sheet.rowsByStudentId]);
 
   const setQuestionMark = (studentId: number, qKey: string, value: number | '') => {
     setSheet((prev) => {

@@ -5,9 +5,10 @@ import ArticulationMatrixPage from './ArticulationMatrixPage';
 import MarkEntryPage from './MarkEntryPage';
 import LCAInstructionsPage from './LCAInstructionsPage';
 import COAttainmentPage from './COAttainmentPage';
+import CQIPage from './CQIPage';
 import DashboardSidebar from '../components/DashboardSidebar';
 
-type TabKey = 'cdap' | 'articulation' | 'marks' | 'lca' | 'co_attainment';
+type TabKey = 'cdap' | 'articulation' | 'marks' | 'lca' | 'co_attainment' | 'cqi';
 
 export default function CourseOBEPage(): JSX.Element {
   const { code } = useParams<{ code: string }>();
@@ -51,6 +52,7 @@ export default function CourseOBEPage(): JSX.Element {
               { key: 'marks', label: 'Mark Entry' },
               { key: 'lca', label: 'LCA Instructions' },
               { key: 'co_attainment', label: 'CO ATTAINMENT' },
+              { key: 'cqi', label: 'CQI' },
             ].map((t) => {
               const isActive = activeTab === (t.key as TabKey);
               return (
@@ -80,6 +82,7 @@ export default function CourseOBEPage(): JSX.Element {
             {activeTab === 'marks' && <MarkEntryPage courseId={courseId} />}
             {activeTab === 'lca' && <LCAInstructionsPage />}
             {activeTab === 'co_attainment' && <COAttainmentPage courseId={courseId} />}
+            {activeTab === 'cqi' && <CQIPage courseId={courseId} />}
           </div>
         </div>
       </div>

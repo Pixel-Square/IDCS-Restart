@@ -211,6 +211,28 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
     lsSet(sk, selectedBtls);
     }, [selectedBtls, subjectId]);
 
+  // Auto-save selected BTLs to server (debounced)
+  useEffect(() => {
+    if (!subjectId) return;
+    let cancelled = false;
+    const tid = setTimeout(async () => {
+      try {
+        const payload: F1DraftPayload = { sheet, selectedBtls };
+        await saveDraft('formative1', subjectId, payload);
+        try {
+          if (key) lsSet(key, { termLabel: sheet.termLabel, batchLabel: sheet.batchLabel, rowsByStudentId: sheet.rowsByStudentId });
+        } catch {}
+        if (!cancelled) setSavedAt(new Date().toLocaleString());
+      } catch {
+        // ignore save errors for autosave
+      }
+    }, 700);
+    return () => {
+      cancelled = true;
+      clearTimeout(tid);
+    };
+  }, [selectedBtls, subjectId]);
+
   // Load draft from DB (preferred)
   useEffect(() => {
     let mounted = true;
@@ -228,9 +250,21 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
             batchLabel: String(subjectId),
             rowsByStudentId: draftSheet.rowsByStudentId || {},
           });
+          // Persist server draft into localStorage so later roster merges use it
+          try {
+            if (key) lsSet(key, { termLabel: String(draftSheet.termLabel || masterTermLabel || 'KRCT AY25-26'), batchLabel: String(subjectId), rowsByStudentId: draftSheet.rowsByStudentId || {} });
+          } catch {
+            // ignore localStorage errors
+          }
         }
         if (Array.isArray(draftBtls)) {
           setSelectedBtls(draftBtls.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n) && n >= 1 && n <= 6));
+          try {
+            const sk = `formative1_selected_btls_${subjectId}`;
+            lsSet(sk, draftBtls.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n) && n >= 1 && n <= 6));
+          } catch {
+            // ignore
+          }
         }
       } catch {
         // keep local fallback

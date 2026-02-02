@@ -159,6 +159,33 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
     return 9 + visibleBtlIndices.length * 2;
   }, [visibleBtlIndices.length]);
 
+  // Persist selected BTLs to localStorage and autosave to server (debounced)
+  useEffect(() => {
+    if (!subjectId) return;
+    try {
+      const sk = `ssa1_selected_btls_${subjectId}`;
+      lsSet(sk, selectedBtls);
+    } catch {}
+
+    let cancelled = false;
+    const tid = setTimeout(async () => {
+      try {
+        const payload: Ssa1DraftPayload = { sheet, selectedBtls };
+        await saveDraft('ssa1', subjectId, payload);
+        try {
+          if (key) lsSet(key, { termLabel: sheet.termLabel, batchLabel: sheet.batchLabel, rows: sheet.rows });
+        } catch {}
+        if (!cancelled) setSavedAt(new Date().toLocaleString());
+      } catch {
+        // ignore autosave errors
+      }
+    }, 700);
+    return () => {
+      cancelled = true;
+      clearTimeout(tid);
+    };
+  }, [selectedBtls, subjectId, sheet]);
+
   useEffect(() => {
     if (!subjectId) return;
     const stored = lsGet<Ssa1Sheet>(key);
@@ -190,9 +217,21 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
             batchLabel: subjectId,
             rows: (draftSheet as any).rows,
           });
+          // Persist server draft into localStorage so roster merge will pick it up
+          try {
+            if (key) lsSet(key, { termLabel: String((draftSheet as any).termLabel || masterTermLabel || 'KRCT AY25-26'), batchLabel: subjectId, rows: (draftSheet as any).rows });
+          } catch {
+            // ignore localStorage errors
+          }
         }
         if (Array.isArray(draftBtls)) {
           setSelectedBtls(draftBtls.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n)));
+          try {
+            const sk = `ssa1_selected_btls_${subjectId}`;
+            lsSet(sk, draftBtls.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n)));
+          } catch {
+            // ignore
+          }
         }
       } catch {
         // If draft fetch fails, keep local fallback.
