@@ -16,18 +16,15 @@ export default function CQIPage({ courseId }: Props): JSX.Element {
       <button
         key={key}
         onClick={() => setActive(key)}
+        className={`obe-sidebar-btn ${isActive ? 'active' : ''}`}
         style={{
           textAlign: 'left',
-          padding: 12,
-          borderRadius: 12,
-          border: isActive ? '1px solid rgba(13, 76, 111, 0.35)' : '1px solid rgba(148, 163, 184, 0.45)',
-          background: isActive ? 'linear-gradient(180deg,#e6f6ff,#ffffff)' : '#ffffff',
-          boxShadow: isActive ? '0 10px 24px rgba(2, 132, 199, 0.12)' : 'none',
-          cursor: 'pointer',
+          display: 'block',
+          width: '100%',
         }}
       >
-        <div style={{ fontWeight: 900, color: isActive ? '#0b4a6f' : '#111827' }}>{label}</div>
-        <div style={{ marginTop: 4, fontSize: 12, color: isActive ? '#0f4c5c' : '#64748b' }}>{desc}</div>
+        <div style={{ fontWeight: 900, color: isActive ? '#ffffff' : '#111827' }}>{label}</div>
+        <div style={{ marginTop: 4, fontSize: 12, color: isActive ? 'rgba(255,255,255,0.85)' : '#64748b' }}>{desc}</div>
       </button>
     );
   };

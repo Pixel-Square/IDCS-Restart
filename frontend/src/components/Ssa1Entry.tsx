@@ -430,7 +430,7 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
 
   return (
     <div>
-      <div
+      <div className="obe-card"
         style={{
           display: 'flex',
           gap: 12,
@@ -467,13 +467,13 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
           >
             Reset Marks
           </button>
-          <button onClick={saveDraftToDb} style={{ padding: '6px 10px' }} disabled={savingDraft || !sheet.rows.length}>
+          <button onClick={saveDraftToDb} className="obe-btn" disabled={savingDraft || !sheet.rows.length}>
             {savingDraft ? 'Saving…' : 'Save Draft'}
           </button>
           <button
             onClick={publish}
             disabled={publishing || !sheet.rows.length}
-            style={{ padding: '6px 10px', background: '#16a34a', color: '#fff', border: '1px solid #15803d' }}
+            className="obe-btn obe-btn-primary"
           >
             {publishing ? 'Publishing…' : 'Publish'}
           </button>
@@ -555,8 +555,8 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
         </div>
       </div>
 
-      <div style={{ overflowX: 'auto', border: '1px solid #111', borderRadius: 6, position: 'relative' }}>
-        <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1200 }}>
+      <div className="obe-table-wrapper" style={{ position: 'relative' }}>
+        <table className="obe-table" style={{ minWidth: 1200 }}>
           <thead>
             <tr>
               <th style={cellTh} colSpan={totalTableCols}>
@@ -683,7 +683,8 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
                     <td style={{ ...cellTd, color: '#111827' }}>{r.name}</td>
                     <td style={{ ...cellTd, textAlign: 'center' }}>
                       <input
-                        style={{ ...inputStyle, textAlign: 'center' }}
+                        className="obe-input"
+                        style={{ textAlign: 'center' }}
                         type="number"
                         value={typeof r.total === 'number' ? r.total : ''}
                         min={0}

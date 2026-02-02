@@ -53,14 +53,7 @@ function TabButton({
   return (
     <button
       onClick={onClick}
-      style={{
-        padding: '10px 14px',
-        borderRadius: 10,
-        border: active ? '2px solid #111827' : '1px solid #e5e7eb',
-        background: active ? '#111827' : '#fff',
-        color: active ? '#fff' : '#111827',
-        cursor: 'pointer',
-      }}
+      className={`obe-sidebar-btn ${active ? 'active' : ''}`}
     >
       {label}
     </button>
@@ -109,15 +102,15 @@ function MarkEntryTable({
   return (
     <div>
       <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-        <button onClick={addRow} style={{ padding: '6px 10px' }}>
+        <button onClick={addRow} className="obe-btn obe-btn-primary">
           Add Row
         </button>
-        <button onClick={saveLocal} style={{ padding: '6px 10px' }}>
+        <button onClick={saveLocal} className="obe-btn obe-btn-success">
           Save Local
         </button>
         <button
           onClick={exportCsv}
-          style={{ padding: '6px 10px' }}
+          className="obe-btn obe-btn-secondary"
           disabled={!marks.length}
           title={!marks.length ? 'Add at least one row to export' : 'Export as CSV'}
         >
@@ -145,17 +138,17 @@ function MarkEntryTable({
                 value={m.studentId}
                 onChange={(e) => update(i, 'studentId', e.target.value)}
                 placeholder="Student ID"
-                style={{ padding: 8, border: '1px solid #d1d5db', borderRadius: 8 }}
+                className="obe-input"
               />
               <input
                 type="number"
                 value={m.mark}
                 onChange={(e) => update(i, 'mark', Number(e.target.value))}
-                style={{ padding: 8, border: '1px solid #d1d5db', borderRadius: 8 }}
+                className="obe-input"
               />
               <button
                 onClick={() => removeRow(i)}
-                style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #e5e7eb' }}
+                className="obe-btn obe-btn-danger"
               >
                 Remove
               </button>
@@ -252,7 +245,7 @@ export default function MarkEntryTabs({ subjectId }: Props) {
           <select
             value={selectedTaId ?? ''}
             onChange={(e) => setSelectedTaId(e.target.value ? Number(e.target.value) : null)}
-            style={{ padding: '8px 10px', borderRadius: 10, border: '1px solid #e5e7eb', width: '100%' }}
+            className="obe-input"
             disabled={tas.length === 0}
           >
             {tas.length === 0 ? (
@@ -272,7 +265,7 @@ export default function MarkEntryTabs({ subjectId }: Props) {
         </div>
       </div>
 
-      <div aria-label="Mark Entry sub-tabs" style={{ display: 'flex', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+      <div className="obe-sidebar-nav" aria-label="Mark Entry sub-tabs">
         {TABS.map((t) => (
           <TabButton key={t.key} active={active === t.key} label={t.label} onClick={() => setActive(t.key)} />
         ))}
@@ -294,20 +287,16 @@ export default function MarkEntryTabs({ subjectId }: Props) {
             {TABS.filter((t) => t.key !== 'dashboard').map((t) => (
               <div
                 key={t.key}
-                style={{
-                  border: '1px solid #e5e7eb',
-                  borderRadius: 10,
-                  padding: 12,
-                  background: '#fff',
-                }}
+                className="obe-card"
               >
-                <div style={{ fontWeight: 700 }}>{t.label}</div>
+                <div style={{ fontWeight: 700, color: '#0f172a' }}>{t.label}</div>
                 <div style={{ marginTop: 6, fontSize: 13, color: '#6b7280' }}>
                   Rows saved: {counts[t.key] ?? 0}
                 </div>
                 <button
                   onClick={() => setActive(t.key)}
-                  style={{ marginTop: 10, padding: '6px 10px' }}
+                  className="obe-btn obe-btn-primary"
+                  style={{ marginTop: 10 }}
                 >
                   Open
                 </button>

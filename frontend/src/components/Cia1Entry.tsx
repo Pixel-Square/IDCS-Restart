@@ -655,7 +655,7 @@ export default function Cia1Entry({ subjectId }: Props) {
         </div>
       )}
 
-      <div
+      <div className="obe-card"
         style={{
           display: 'flex',
           gap: 12,
@@ -673,16 +673,16 @@ export default function Cia1Entry({ subjectId }: Props) {
         </div>
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button onClick={saveDraftToDb} style={{ padding: '6px 10px' }} disabled={saving || students.length === 0}>
+          <button onClick={saveDraftToDb} className="obe-btn" disabled={saving || students.length === 0}>
             {saving ? 'Saving…' : 'Save Draft'}
           </button>
-          <button onClick={exportSheetCsv} style={{ padding: '6px 10px' }} disabled={students.length === 0}>
+          <button onClick={exportSheetCsv} className="obe-btn" disabled={students.length === 0}>
             Export CSV
           </button>
           <button
             onClick={publish}
             disabled={publishing || students.length === 0}
-            style={{ padding: '6px 10px', background: '#16a34a', color: '#fff', border: '1px solid #15803d' }}
+            className="obe-btn obe-btn-primary"
           >
             {publishing ? 'Publishing…' : 'Publish'}
           </button>
@@ -726,13 +726,8 @@ export default function Cia1Entry({ subjectId }: Props) {
       {students.length === 0 ? (
         <div style={{ color: '#6b7280', fontSize: 14, padding: '12px 0' }}>No students found for this subject.</div>
       ) : (
-        <div style={{ overflowX: 'auto', border: '1px solid #111', borderRadius: 6 }}>
-          <table style={{
-            borderCollapse: 'collapse',
-            width: '100%',
-            minWidth: 0,
-            tableLayout: 'fixed',
-          }}>
+        <div className="obe-table-wrapper" style={{ overflowX: 'auto' }}>
+          <table className="obe-table" style={{ minWidth: 0, tableLayout: 'fixed' }}>
             <thead>
               <tr>
                 <th style={cellTh} colSpan={4 + questions.length + 1 + 4 + visibleBtls.length * 2}>

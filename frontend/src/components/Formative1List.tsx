@@ -568,7 +568,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
         </div>
       )}
 
-      <div
+      <div className="obe-card"
         style={{
           display: 'flex',
           gap: 12,
@@ -591,13 +591,13 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
         </div>
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button onClick={saveDraftToDb} style={{ padding: '6px 10px' }} disabled={savingDraft || students.length === 0}>
+          <button onClick={saveDraftToDb} className="obe-btn" disabled={savingDraft || students.length === 0}>
             {savingDraft ? 'Saving…' : 'Save Draft'}
           </button>
           <button
             onClick={publish}
             disabled={publishing || students.length === 0}
-            style={{ padding: '6px 10px', background: '#16a34a', color: '#fff', border: '1px solid #15803d' }}
+            className="obe-btn obe-btn-primary"
           >
             {publishing ? 'Publishing…' : 'Publish'}
           </button>
@@ -667,8 +667,8 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
       {students.length === 0 ? (
         <div style={{ color: '#6b7280', fontSize: 14, padding: '12px 0' }}>No students found for this subject.</div>
       ) : (
-        <div style={{ overflowX: 'auto', border: '1px solid #111', borderRadius: 6, position: 'relative' }}>
-          <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1200 }}>
+        <div className="obe-table-wrapper" style={{ position: 'relative' }}>
+          <table className="obe-table" style={{ minWidth: 1200 }}>
             <thead>
               <tr>
                 <th style={cellTh} colSpan={totalTableCols}>

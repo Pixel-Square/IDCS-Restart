@@ -471,7 +471,7 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
 
       const co1_3pt = co1 == null || !co1MaxTotal ? null : round2((co1 / co1MaxTotal) * 3);
       const co2_3pt = co2 == null || !co2MaxTotal ? null : round2((co2 / co2MaxTotal) * 3);
-      const total = co1 != null && co2 != null ? round1(co1 + co2) : null;
+      const total = co1 != null && co2 != null ? Math.round((co1 + co2) || 0) : null;
 
       const flagCo1 = typeof co1_3pt === 'number' && co1_3pt < THRESHOLD_3PT;
       const flagCo2 = typeof co2_3pt === 'number' && co2_3pt < THRESHOLD_3PT;
@@ -682,7 +682,7 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
                   borderBottom: '1px solid rgba(226, 232, 240, 0.9)',
                 });
 
-                const totalBad = r.total != null && r.total < 50; // visual hint only
+                const totalBad = r.total != null && r.total <= 58; // red background when <= 58
 
                 return (
                   <tr key={r.id} style={{ background: rowBg }}>
@@ -712,11 +712,11 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
                         width: 90,
                         textAlign: 'center',
                         fontWeight: 900,
-                        color: totalBad ? '#9a3412' : '#0f172a',
-                        background: totalBad ? 'rgba(251, 146, 60, 0.14)' : 'transparent',
+                        color: totalBad ? '#991b1b' : '#0f172a',
+                        background: totalBad ? 'rgba(239, 68, 68, 0.12)' : 'transparent',
                       }}
                     >
-                      {r.total == null ? '' : r.total}
+                      {r.total == null ? '' : Number.isFinite(Number(r.total)) ? String(Math.round(Number(r.total))) : r.total}
                     </td>
                     <td style={cell3ptStyle(Boolean(r.flagCo1))}>{r.co1_3pt == null ? '' : r.co1_3pt}</td>
                     <td style={cell3ptStyle(Boolean(r.flagCo2))}>{r.co2_3pt == null ? '' : r.co2_3pt}</td>

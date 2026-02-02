@@ -1,0 +1,200 @@
+/* OBE Theme styles: professional color accents for pages and tables */
+:root{
+  --obe-accent:#0b74b8;
+  --obe-accent-700:#0b5f92;
+  --obe-danger:#ef4444;
+  --obe-muted:#64748b;
+  --obe-surface:#ffffff;
+  --obe-panel:#f8fafc;
+}
+
+.obe-card{
+  background: linear-gradient(180deg, #ffffff, #f6fbff);
+  border: 1px solid rgba(14, 96, 148, 0.06);
+  border-radius: 12px;
+  padding: 14px;
+  box-shadow: 0 8px 20px rgba(2,6,23,0.04);
+}
+
+.obe-btn{
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(15,23,42,0.06);
+  background: linear-gradient(180deg, #ffffff, #f0f9ff);
+  color: #0f172a;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.obe-btn:disabled{ opacity: 0.6; cursor: not-allowed; }
+
+.obe-btn-primary{
+  background: linear-gradient(180deg, var(--obe-accent), var(--obe-accent-700));
+  color: #fff; border: 1px solid rgba(2,6,23,0.08);
+}
+
+.obe-input{
+  padding: 8px 10px; border-radius: 8px; border: 1px solid #e6eef8; outline: none; width: 100%;
+}
+
+.obe-table{
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 720px;
+}
+.obe-table thead th{
+  background: linear-gradient(180deg, rgba(11,74,111,0.06), rgba(240,249,255,0.06));
+  color: #0b4a6f; font-weight: 800; padding: 10px 12px; text-transform: uppercase; font-size: 12px;
+  border-bottom: 1px solid rgba(148,163,184,0.5);
+}
+.obe-table tbody td{ padding: 10px 12px; border-bottom: 1px solid rgba(226,232,240,0.9); font-size: 13px; }
+.obe-table tbody tr:nth-child(odd) { background: #ffffff }
+.obe-table tbody tr:nth-child(even) { background: #fbfdff }
+.obe-table tbody tr:hover { background: rgba(2,132,199,0.03) }
+
+.obe-pill{
+  display:inline-flex; align-items:center; padding:0 10px; height:24px; border-radius:999px; font-weight:800; font-size:12px;
+}
+
+.obe-danger-pill{ background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.25); color: #991b1b }
+.obe-neutral-pill{ background: rgba(2,132,199,0.08); border:1px solid rgba(2,132,199,0.25); color:#0b4a6f }
+
+/* specific small utilities */
+.obe-small-muted{ color: var(--obe-muted); font-size: 13px }
+
+/* responsive table wrapper */
+.obe-table-wrapper{ overflow-x:auto; border-radius:8px; border:1px solid rgba(226,232,240,0.9); }
+
+/* Tab Navigation Styles - Professional OBE Tabs */
+.obe-tab-nav{
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  padding: 6px;
+  background: linear-gradient(180deg, #f8fafc, #ffffff);
+  border-radius: 12px;
+  border: 1px solid rgba(226,232,240,0.8);
+  box-shadow: 0 2px 8px rgba(2,6,23,0.03);
+}
+
+.obe-tab-btn{
+  position: relative;
+  padding: 10px 18px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #475569;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.obe-tab-btn:hover{
+  background: rgba(11,116,184,0.05);
+  color: #0b74b8;
+}
+
+.obe-tab-btn.active{
+  background: linear-gradient(135deg, #0b74b8, #0284c7);
+  color: #ffffff;
+  border: 1px solid rgba(2,6,23,0.1);
+  box-shadow: 0 4px 12px rgba(11,116,184,0.25);
+  font-weight: 700;
+}
+
+.obe-tab-btn.active::after{
+  content: '';
+  position: absolute;
+  bottom: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 40%;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, #0b74b8, transparent);
+  border-radius: 999px;
+}
+
+/* Sidebar Mark Entry Tabs - Vertical Navigation */
+.obe-sidebar-nav{
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.obe-sidebar-btn{
+  padding: 9px 16px;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  color: #334155;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  transition: all 0.15s ease;
+  position: relative;
+}
+
+.obe-sidebar-btn:hover{
+  background: linear-gradient(180deg, #f0f9ff, #ffffff);
+  border-color: #0b74b8;
+  color: #0b74b8;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(11,116,184,0.12);
+}
+
+.obe-sidebar-btn.active{
+  background: linear-gradient(135deg, #1e293b, #334155);
+  color: #ffffff;
+  border: 1px solid #1e293b;
+  box-shadow: 0 3px 10px rgba(30,41,59,0.3);
+  font-weight: 700;
+}
+
+.obe-sidebar-btn.active::before{
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 4px;
+  height: 60%;
+  background: linear-gradient(180deg, #0b74b8, #0284c7);
+  border-radius: 0 4px 4px 0;
+}
+
+/* Enhanced Button Styles */
+.obe-btn-secondary{
+  background: linear-gradient(180deg, #f8fafc, #f1f5f9);
+  color: #334155;
+  border: 1px solid #cbd5e1;
+}
+
+.obe-btn-secondary:hover{
+  background: linear-gradient(180deg, #e2e8f0, #f1f5f9);
+  border-color: #94a3b8;
+}
+
+.obe-btn-danger{
+  background: linear-gradient(180deg, #fee2e2, #fecaca);
+  color: #991b1b;
+  border: 1px solid #fca5a5;
+}
+
+.obe-btn-danger:hover{
+  background: linear-gradient(180deg, #fca5a5, #fee2e2);
+}
+
+.obe-btn-success{
+  background: linear-gradient(180deg, #10b981, #059669);
+  color: #ffffff;
+  border: 1px solid rgba(2,6,23,0.08);
+}
+
+.obe-btn-success:hover{
+  background: linear-gradient(180deg, #059669, #047857);
+}

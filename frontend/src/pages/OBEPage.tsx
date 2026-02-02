@@ -3,6 +3,8 @@
 import CDAPPage from './CDAPPage';
 import ArticulationMatrixPage from './ArticulationMatrixPage';
 import MarkEntryPage from './MarkEntryPage';
+import LcaInstructionsPage from './LcaInstructionsPage';
+import '../styles/obe-theme.css';
 
 import { fetchMyTeachingAssignments, TeachingAssignmentItem } from '../services/obe';
 import { getMe } from '../services/auth';

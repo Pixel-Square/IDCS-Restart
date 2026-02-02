@@ -19,7 +19,7 @@ export default function CourseOBEPage(): JSX.Element {
     return (
       <div style={{ padding: 24 }}>
         <p style={{ color: '#666' }}>No course selected.</p>
-        <button onClick={() => navigate('/obe')} style={{ padding: '8px 12px' }}>Back</button>
+        <button onClick={() => navigate('/obe')} className="obe-btn obe-btn-primary">Back</button>
       </div>
     );
   }
@@ -40,12 +40,12 @@ export default function CourseOBEPage(): JSX.Element {
                 <div style={{ color: '#666', marginTop: 6 }}>Open CDAP workspace for this course</div>
               </div>
               <div>
-                <button onClick={() => navigate('/obe')} style={{ padding: '8px 12px' }}>Back to courses</button>
+                <button onClick={() => navigate('/obe')} className="obe-btn obe-btn-secondary">Back to courses</button>
               </div>
             </div>
           </div>
 
-          <div aria-label="OBE Tabs" style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+          <div className="obe-tab-nav" aria-label="OBE Tabs">
             {[
               { key: 'cdap', label: 'CDAP' },
               { key: 'articulation', label: 'Articulation Matrix' },
@@ -59,14 +59,7 @@ export default function CourseOBEPage(): JSX.Element {
                 <button
                   key={t.key}
                   onClick={() => setActiveTab(t.key as TabKey)}
-                  style={{
-                    padding: '10px 14px',
-                    borderRadius: 10,
-                    border: isActive ? '2px solid #111827' : '1px solid #e5e7eb',
-                    background: isActive ? '#111827' : '#fff',
-                    color: isActive ? '#fff' : '#111827',
-                    cursor: 'pointer',
-                  }}
+                  className={`obe-tab-btn ${isActive ? 'active' : ''}`}
                 >
                   {t.label}
                 </button>
