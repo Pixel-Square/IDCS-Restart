@@ -10,6 +10,7 @@ env/
 backend/.venv/
 
 # Django
+backend/db.sqlite3
 /media/
 /staticfiles/
 
