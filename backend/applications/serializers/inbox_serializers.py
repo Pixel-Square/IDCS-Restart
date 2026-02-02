@@ -25,8 +25,8 @@ class ApproverInboxItemSerializer(serializers.Serializer):
 
     def get_department_name(self, obj):
         sec = getattr(obj, 'student_profile', None) and getattr(obj.student_profile, 'section', None)
-        if sec and getattr(sec, 'semester', None) and getattr(sec.semester, 'course', None):
-            dept = sec.semester.course.department
+        if sec and getattr(sec, 'batch', None) and getattr(sec.batch, 'course', None):
+            dept = sec.batch.course.department
             return getattr(dept, 'name', None)
         # staff_profile department
         if getattr(obj, 'staff_profile', None):

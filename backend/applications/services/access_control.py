@@ -20,7 +20,7 @@ def _resolve_applicant_department(application) -> Optional[object]:
     student = getattr(application, 'student_profile', None)
     try:
         if student is not None and student.section is not None:
-            return student.section.semester.course.department
+            return student.section.batch.course.department
     except Exception:
         return None
 
@@ -75,8 +75,16 @@ def can_user_view_application(application: app_models.Application, user) -> bool
             StaffProfile = None
 
         if StaffProfile is not None:
-            same_dept = StaffProfile.objects.filter(user=user, department=dept).exists()
-            if same_dept:
+            # direct profile match
+            if StaffProfile.objects.filter(user=user, department=dept).exists():
                 return True
+            # allow HODs assigned via DepartmentRole to view applicant dept
+            try:
+                from academics.models import DepartmentRole
+                staff_profile = getattr(user, 'staff_profile', None)
+                if staff_profile and DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True, department=dept).exists():
+                    return True
+            except Exception:
+                pass
 
     return False

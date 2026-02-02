@@ -45,13 +45,22 @@
 }
 .dashboard-root{
 	display:flex;
-	min-height:100vh;
+	/* subtract navbar height so total page fits viewport without extra scroll */
+	min-height: calc(100vh - 64px);
 	background: linear-gradient(180deg, #f7fbff 0%, #ffffff 60%);
 	color: #0f172a;
 }
 .dashboard-main{
-	padding:28px;
-	flex:1;
+  padding:28px;
+  flex:1;
+  /* leave space for the fixed sidebar on the left */
+  margin-left: 260px;
+  transition: margin-left 180ms ease;
+}
+
+/* When sidebar is collapsed adjust main margin */
+.dsb.collapsed ~ .dashboard-main{
+  margin-left: 72px;
 }
 
 /* Welcome */

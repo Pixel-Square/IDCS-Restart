@@ -6,12 +6,17 @@ from academics.models import Department
 CLASS_TYPE_CHOICES = (
     ('THEORY', 'Theory'),
     ('LAB', 'Lab'),
+    ('TCPL', 'Tcpl'),
+    ('TCPR', 'Tcpr'),
+    ('PRACTICAL', 'Practical'),
+    ('AUDIT', 'Audit'),
 )
 
 
 class CurriculumMaster(models.Model):
     regulation = models.CharField(max_length=32)
-    semester = models.PositiveSmallIntegerField()
+    # Use Semester FK so curriculum entries relate to the canonical Semester model
+    semester = models.ForeignKey('academics.Semester', on_delete=models.PROTECT, related_name='master_curricula')
     # For master entries targeted to specific departments only, these fields
     # are optional — departments may provide their own details.
     course_code = models.CharField(max_length=64, blank=True, null=True)
@@ -57,11 +62,11 @@ class CurriculumMaster(models.Model):
 
 
 class CurriculumDepartment(models.Model):
-    master = models.ForeignKey(CurriculumMaster, null=True, blank=True, on_delete=models.SET_NULL, related_name='department_rows')
+    master = models.ForeignKey(CurriculumMaster, null=True, blank=True, on_delete=models.CASCADE, related_name='department_rows')
     department = models.ForeignKey(Department, on_delete=models.CASCADE, related_name='curriculum_rows')
-
     regulation = models.CharField(max_length=32)
-    semester = models.PositiveSmallIntegerField()
+    # link to Semester for consistent filtering with Section.semester
+    semester = models.ForeignKey('academics.Semester', on_delete=models.PROTECT, related_name='department_curricula')
     course_code = models.CharField(max_length=64, blank=True, null=True)
     course_name = models.CharField(max_length=255, blank=True, null=True)
     class_type = models.CharField(max_length=16, choices=CLASS_TYPE_CHOICES, default='THEORY')

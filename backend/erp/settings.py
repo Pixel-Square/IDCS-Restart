@@ -26,6 +26,7 @@ INSTALLED_APPS = [
     'academics',
     'curriculum',
     'applications',
+    'timetable',
 ]
 
 MIDDLEWARE = [

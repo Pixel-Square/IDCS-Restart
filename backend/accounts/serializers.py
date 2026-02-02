@@ -87,6 +87,7 @@ class MeSerializer(serializers.Serializer):
             sp = obj.student_profile
             return {
                 'reg_no': sp.reg_no,
+                'section_id': getattr(sp.section, 'id', None),
                 'section': getattr(sp.section, 'name', None),
                 'batch': sp.batch,
                 'status': sp.status,

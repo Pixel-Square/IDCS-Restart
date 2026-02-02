@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import PillButton from '../../components/PillButton';
 import '../../components/PillButton.css';
 import { fetchMasters } from '../../services/curriculum';
+import { useLocation, useNavigate } from 'react-router-dom';
 import CurriculumLayout from './CurriculumLayout';
 import { Link } from 'react-router-dom';
 import './CurriculumPage.css';
@@ -12,13 +13,21 @@ import '../Dashboard.css';
 export default function MasterList() {
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [flash, setFlash] = useState<string | null>(null);
+  const loc = useLocation();
+  const navigate = useNavigate();
   const uniqueRegs = data && data.length ? Array.from(new Set(data.map(d => d.regulation))) : [];
+  const uniqueSems = data && data.length ? Array.from(new Set(data.map(d => d.semester))).sort((a,b)=>a-b) : [];
   const [selectedReg, setSelectedReg] = useState<string | null>(uniqueRegs.length === 1 ? uniqueRegs[0] : (uniqueRegs[0] ?? null));
+  const [selectedSem, setSelectedSem] = useState<number | null>(uniqueSems.length === 1 ? uniqueSems[0] : (uniqueSems[0] ?? null));
 
   useEffect(() => {
     const regs = data && data.length ? Array.from(new Set(data.map(d => d.regulation))) : [];
     if (regs.length === 1) setSelectedReg(regs[0]);
     else if (!regs.includes(selectedReg || '')) setSelectedReg(regs[0] ?? null);
+    const sems = data && data.length ? Array.from(new Set(data.map(d => d.semester))).sort((a:any,b:any)=>a-b) : [];
+    if (sems.length === 1) setSelectedSem(sems[0]);
+    else if (!sems.includes(selectedSem || -1)) setSelectedSem(sems[0] ?? null);
   }, [data]);
 
   useEffect(() => {
@@ -27,6 +36,17 @@ export default function MasterList() {
       .catch(err => console.error(err))
       .finally(() => setLoading(false));
   }, []);
+
+  // show saved message when navigated from editor after create/update
+  useEffect(() => {
+    const state: any = loc.state as any;
+    if (state && state.savedMessage) {
+      setFlash(state.savedMessage);
+      // clear the state so refresh/refreshing doesn't replay the message
+      navigate(location.pathname, { replace: true, state: {} });
+      setTimeout(() => setFlash(null), 2500);
+    }
+  }, [loc, navigate]);
 
 
   if (loading) return (
@@ -76,34 +96,51 @@ export default function MasterList() {
               );
             })}
           </div>
+          <div style={{ width: 16 }} />
+          <span style={{ color: '#374151', fontWeight: 500 }}>Semester:</span>
+          <select
+            value={selectedSem ?? ''}
+            onChange={e => setSelectedSem(e.target.value ? Number(e.target.value) : null)}
+            style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid #d1d5db', background: '#fff', color: '#1e293b', fontWeight: 500, marginLeft: 8 }}
+          >
+            {uniqueSems.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
         </div>
       )}
       <div style={{ overflowX: 'auto', marginTop: 8 }}>
+        {flash && (
+          <div style={{ marginBottom: 8, display: 'inline-block', background: '#ecfccb', color: '#365314', padding: '8px 12px', borderRadius: 8, fontWeight: 600 }}>{flash}</div>
+        )}
         <table className="curriculum-table">
           <thead>
             <tr>
               <th>Sem</th>
               <th>Code</th>
               <th>Course</th>
+              <th>CAT</th>
+              <th>Class</th>
               <th>L</th>
               <th>T</th>
               <th>P</th>
               <th>S</th>
               <th>C</th>
-              <th>Internal</th>
-              <th>External</th>
-              <th>Total</th>
+              <th>INT</th>
+              <th>EXT</th>
+              <th>TTL</th>
               <th>Depts</th>
               <th>Editable</th>
+              <th>Status</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
-            {data.filter(m => !selectedReg || m.regulation === selectedReg).map(m => (
+            {data.filter(m => (!selectedReg || m.regulation === selectedReg) && (!selectedSem || m.semester === selectedSem)).map(m => (
               <tr key={m.id} style={{ background: m.editable ? '#f8fafc' : '#fff' }}>
                 <td>{m.semester}</td>
                 <td>{m.course_code || '-'}</td>
                 <td>{m.course_name || '-'}</td>
+                <td>{m.category || '-'}</td>
+                <td>{m.class_type || '-'}</td>
                 <td>{m.l ?? 0}</td>
                 <td>{m.t ?? 0}</td>
                 <td>{m.p ?? 0}</td>
@@ -113,8 +150,9 @@ export default function MasterList() {
                 <td>{m.external_mark ?? '-'}</td>
                 <td>{m.total_mark ?? '-'}</td>
                 <td>{m.for_all_departments ? 'ALL' : (m.departments_display || []).map((d:any)=>d.code).join(', ')}</td>
+                <td style={{ padding: '10px 8px' }}>{m.editable ? <span style={{ color: '#059669', fontWeight: 600 }}>Yes</span> : <span style={{ color: '#9ca3af' }}>No</span>}</td>
                 <td>
-                  <span className={`curriculum-status ${m.status?.toLowerCase()}`}>{
+                  <span className={`curriculum-status ${String(m.status || '').toLowerCase()}`}>{
                     m.status === 'APPROVED' ? 'Approved' :
                     m.status === 'REJECTED' ? 'Rejected' :
                     'Pending'

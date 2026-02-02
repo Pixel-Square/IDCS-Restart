@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import PillButton from '../../components/PillButton';
 import { useParams, useNavigate } from 'react-router-dom';
 import CurriculumLayout from './CurriculumLayout';
-import { createMaster, updateMaster, fetchMasters } from '../../services/curriculum';
+import { createMaster, updateMaster, fetchMasters, fetchDeptRows } from '../../services/curriculum';
 
 export default function MasterEditor() {
   const { id } = useParams();
@@ -10,6 +10,8 @@ export default function MasterEditor() {
   const navigate = useNavigate();
   const [form, setForm] = useState<any>({ regulation: '', semester: 1, for_all_departments: true, editable: false });
   const [loading, setLoading] = useState(false);
+  const [departments, setDepartments] = useState<Array<{id:number; code:string; name:string}>>([]);
+  const [savedMessage, setSavedMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (effectiveId && effectiveId !== 'new') {
@@ -21,34 +23,53 @@ export default function MasterEditor() {
     }
   }, [effectiveId]);
 
+  // load departments list for checkboxes
+  useEffect(() => {
+    fetchDeptRows().then(rows => {
+      const map = new Map<number, any>();
+      rows.forEach(r => map.set(r.department.id, r.department));
+      setDepartments(Array.from(map.values()));
+    }).catch(() => setDepartments([]));
+  }, []);
+
   async function save() {
     setLoading(true);
     try {
       // Validate form data
       if (!form.regulation) throw new Error('Regulation is required');
       if (!form.semester || form.semester <= 0) throw new Error('Semester must be a positive number');
-      if (!form.course_code) throw new Error('Course Code is required');
+      // course_code is optional now
       if (!form.course_name) throw new Error('Course Name is required');
-      if (form.internal_mark < 0 || form.external_mark < 0) throw new Error('Marks cannot be negative');
+      if ((form.internal_mark !== '' && form.internal_mark != null && form.internal_mark < 0) || (form.external_mark !== '' && form.external_mark != null && form.external_mark < 0)) throw new Error('Marks cannot be negative');
 
-      // Prepare payload; parse comma-separated department ids if provided
+      // Prepare payload; use selected department ids array
       const payload: any = { ...form };
-      if (form.departments_input) {
-        payload.departments = String(form.departments_input)
-          .split(',')
-          .map((s: string) => Number(s.trim()))
-          .filter((n: number) => !Number.isNaN(n));
+      if (!form.for_all_departments) {
+        payload.departments = Array.isArray(form.departments) ? form.departments : [];
+      } else {
+        payload.departments = [];
       }
+
+      // coerce empty marks to 0 for payload
+      payload.internal_mark = (form.internal_mark === '' || form.internal_mark == null) ? 0 : Number(form.internal_mark);
+      payload.external_mark = (form.external_mark === '' || form.external_mark == null) ? 0 : Number(form.external_mark);
+      // ensure course_code is null when left empty
+      payload.course_code = (form.course_code === '' || form.course_code == null) ? null : form.course_code;
 
       if (effectiveId === 'new') {
         const r = await createMaster(payload);
-        navigate(`/curriculum/master/${r.id}`);
+        // After creating a new master, navigate back to the list and pass
+        // a small saved message so the list can show feedback and reload.
+        navigate('/curriculum/master', { state: { savedMessage: 'Saved', newId: r.id } });
       } else {
         // Only call update when we have a valid numeric id
         const numericId = Number(effectiveId);
         if (Number.isNaN(numericId)) throw new Error('Invalid master id');
-        await updateMaster(numericId, payload);
-        navigate('/curriculum/master');
+        const updated = await updateMaster(numericId, payload);
+        // refresh component with server response and show saved message
+        setForm(updated);
+        setSavedMessage('Saved');
+        setTimeout(() => setSavedMessage(null), 2500);
       }
     } catch (e: any) {
       alert(`Error: ${e.message}`);
@@ -95,11 +116,21 @@ export default function MasterEditor() {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
           <div>
             <label style={{ fontWeight: 600, color: '#3730a3' }}>Course Code</label>
-            <input className="input" value={form.course_code || ''} onChange={e => setForm({...form, course_code: e.target.value})} required style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
+            <input className="input" value={form.course_code ?? ''} onChange={e => setForm({...form, course_code: e.target.value})} placeholder="Optional" style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
           </div>
           <div>
             <label style={{ fontWeight: 600, color: '#3730a3' }}>Course Name</label>
             <input className="input" value={form.course_name || ''} onChange={e => setForm({...form, course_name: e.target.value})} required style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
+          </div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
+          <div>
+            <label style={{ fontWeight: 600, color: '#3730a3' }}>CAT</label>
+            <input className="input" value={form.category || ''} onChange={e => setForm({...form, category: e.target.value})} placeholder="e.g. CORE" style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
+          </div>
+          <div>
+            <label style={{ fontWeight: 600, color: '#3730a3' }}>Class</label>
+            <input className="input" value={form.class_type || ''} onChange={e => setForm({...form, class_type: e.target.value})} placeholder="e.g. Theory" style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
           </div>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 18 }}>
@@ -127,11 +158,25 @@ export default function MasterEditor() {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
           <div>
             <label style={{ fontWeight: 600, color: '#3730a3' }}>Internal Mark</label>
-            <input className="input" type="number" min={0} value={form.internal_mark || 0} onChange={e => setForm({...form, internal_mark: Number(e.target.value)})} style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
+            <input
+              className="input"
+              type="number"
+              min={0}
+              value={form.internal_mark ?? ''}
+              onChange={e => setForm({...form, internal_mark: e.target.value === '' ? '' : Number(e.target.value)})}
+              style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }}
+            />
           </div>
           <div>
             <label style={{ fontWeight: 600, color: '#3730a3' }}>External Mark</label>
-            <input className="input" type="number" min={0} value={form.external_mark || 0} onChange={e => setForm({...form, external_mark: Number(e.target.value)})} style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
+            <input
+              className="input"
+              type="number"
+              min={0}
+              value={form.external_mark ?? ''}
+              onChange={e => setForm({...form, external_mark: e.target.value === '' ? '' : Number(e.target.value)})}
+              style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }}
+            />
           </div>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
@@ -140,14 +185,42 @@ export default function MasterEditor() {
             <label htmlFor="forAllDepts" style={{ fontWeight: 600, color: '#3730a3', marginBottom: 0 }}>For All Departments</label>
           </div>
           <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>Departments (comma-separated IDs)</label>
-            <input className="input" value={form.departments_input || ''} onChange={e => setForm({...form, departments_input: e.target.value})} placeholder="e.g. 1,2,3" style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
+            <label style={{ fontWeight: 600, color: '#3730a3' }}>Departments</label>
+            {form.for_all_departments ? (
+              <div style={{ marginTop: 6, color: '#6b7280' }}>Applies to all departments</div>
+            ) : (
+              <div style={{ marginTop: 6, maxHeight: 220, overflowY: 'auto', padding: 6, border: '1px solid #e5e7eb', borderRadius: 6 }}>
+                {departments.length === 0 && <div style={{ color: '#9ca3af' }}>No departments available</div>}
+                {departments.map(d => (
+                  <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                    <input
+                      type="checkbox"
+                      checked={Array.isArray(form.departments) ? form.departments.includes(d.id) : false}
+                      onChange={e => {
+                        const cur = Array.isArray(form.departments) ? [...form.departments] : [];
+                        if (e.target.checked) {
+                          if (!cur.includes(d.id)) cur.push(d.id);
+                        } else {
+                          const idx = cur.indexOf(d.id); if (idx >= 0) cur.splice(idx, 1);
+                        }
+                        setForm({ ...form, departments: cur });
+                      }}
+                      id={`dept-${d.id}`}
+                    />
+                    <label htmlFor={`dept-${d.id}`} style={{ marginBottom: 0 }}>{d.code} — {d.name}</label>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
           <input type="checkbox" checked={!!form.editable} onChange={e => setForm({...form, editable: e.target.checked})} id="editable" />
           <label htmlFor="editable" style={{ fontWeight: 600, color: '#3730a3', marginBottom: 0 }}>Editable</label>
         </div>
+        {savedMessage && (
+          <div style={{ background: '#ecfccb', color: '#365314', padding: '8px 12px', borderRadius: 8, fontWeight: 600, display: 'inline-block' }}>{savedMessage}</div>
+        )}
         <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
           <button
             type="submit"

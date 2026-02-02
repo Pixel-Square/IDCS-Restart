@@ -1,4 +1,4 @@
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, serializers
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -6,6 +6,7 @@ from .models import CurriculumMaster, CurriculumDepartment
 from .serializers import CurriculumMasterSerializer, CurriculumDepartmentSerializer
 from .permissions import IsIQACOrReadOnly
 from accounts.utils import get_user_permissions
+from academics.utils import get_user_effective_departments
 import logging
 from rest_framework.views import exception_handler
 
@@ -21,7 +22,9 @@ def custom_exception_handler(exc, context):
     return response
 
 class CurriculumMasterViewSet(viewsets.ModelViewSet):
-    queryset = CurriculumMaster.objects.all().order_by('-created_at')
+    # Order master curriculum entries by semester (ascending) so subjects
+    # are arranged sem-wise starting from 1. Tie-break by course_code.
+    queryset = CurriculumMaster.objects.all().order_by('semester', 'course_code')
     serializer_class = CurriculumMasterSerializer
     permission_classes = [IsIQACOrReadOnly]
 
@@ -50,24 +53,18 @@ class CurriculumDepartmentViewSet(viewsets.ModelViewSet):
         # Log the user and their groups for debugging
         logger.debug('get_queryset: user=%s, groups=%s', user.username, [g.name for g in user.groups.all()])
 
-        # compute user's effective department (staff or student)
-        dept = None
-        staff = getattr(user, 'staff_profile', None)
-        if staff:
-            try:
-                dept = getattr(staff, 'current_department', None) or staff.get_current_department()
-            except Exception:
-                dept = getattr(staff, 'department', None)
-
-        if dept is None:
+        # compute user's effective department ids (includes HOD mappings)
+        dept_ids = get_user_effective_departments(user)
+        if not dept_ids:
+            # fallback: try student section
             student = getattr(user, 'student_profile', None)
             if student:
                 try:
                     section = getattr(student, 'current_section', None) or student.get_current_section()
-                    if section and getattr(section, 'semester', None) and getattr(section.semester, 'course', None):
-                        dept = section.semester.course.department
+                    if section and getattr(section, 'batch', None) and getattr(section.batch, 'course', None):
+                        dept_ids = [section.batch.course.department_id]
                 except Exception:
-                    dept = None
+                    dept_ids = []
 
         # Users with global access (superuser, IQAC/HAA groups, or explicit wide perms) see all
         if user.is_superuser or user.groups.filter(name__in=['IQAC', 'HAA']).exists():
@@ -75,16 +72,16 @@ class CurriculumDepartmentViewSet(viewsets.ModelViewSet):
             return qs
 
         perms = get_user_permissions(user)
-        logger.debug('get_queryset: user=%s computed dept=%r perms=%s', getattr(user, 'username', None), dept, perms)
+        logger.debug('get_queryset: user=%s computed dept_ids=%r perms=%s', getattr(user, 'username', None), dept_ids, perms)
         wide_perms = {'curriculum_master_edit', 'curriculum_master_publish', 'CURRICULUM_MASTER_EDIT', 'CURRICULUM_MASTER_PUBLISH'}
         if perms & wide_perms:
             logger.debug('get_queryset: user has wide_perms, returning all; user=%s', user.username)
             return qs
 
         # If we found a department for the user, restrict to it
-        if dept is not None:
-            logger.debug('get_queryset: restricting to department=%s for user=%s', dept, user.username)
-            return qs.filter(department=dept)
+        if dept_ids:
+            logger.debug('get_queryset: restricting to departments=%s for user=%s', dept_ids, user.username)
+            return qs.filter(department_id__in=dept_ids)
 
         # otherwise no rows
         logger.debug('get_queryset: no department found, returning none for user=%s', user.username)
@@ -114,7 +111,8 @@ class CurriculumDepartmentViewSet(viewsets.ModelViewSet):
                 instance.save(update_fields=['approval_status', 'approved_by', 'approved_at'])
             else:
                 # non-privileged -> handled by serializer to mark PENDING
-                serializer.save()
+                # capture returned instance so we can include it in the response
+                instance = serializer.save()
 
             # Return the updated instance as a response
             return Response({

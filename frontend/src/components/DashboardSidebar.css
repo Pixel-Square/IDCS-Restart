@@ -2,7 +2,13 @@
   width: 260px;
   padding: 20px;
   box-sizing: border-box;
-  height: 100vh;
+  /* Fix sidebar to the left of the viewport, below the navbar */
+  position: fixed;
+  left: 0;
+  top: 64px; /* matches .navbar height */
+  height: calc(100vh - 64px);
+  z-index: 90;
+  overflow: auto; /* allow internal scrolling if sidebar content is long */
   background: linear-gradient(180deg,#ffffff,#f8fafc);
   border-right: 1px solid rgba(15,23,42,0.04);
 }

@@ -7,7 +7,9 @@ export default function DeptList() {
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const uniqueRegs = rows && rows.length ? Array.from(new Set(rows.map(r => r.regulation))) : [];
+  const uniqueSems = rows && rows.length ? Array.from(new Set(rows.map(r => r.semester))).sort((a,b)=>a-b) : [];
   const [selectedReg, setSelectedReg] = useState<string | null>(uniqueRegs.length === 1 ? uniqueRegs[0] : (uniqueRegs[0] ?? null));
+  const [selectedSem, setSelectedSem] = useState<number | null>(uniqueSems.length === 1 ? uniqueSems[0] : (uniqueSems[0] ?? null));
   const uniqueDepts = rows && rows.length ? Array.from(new Set(rows.map(r => r.department.id))) : [];
 
   useEffect(() => {
@@ -15,6 +17,9 @@ export default function DeptList() {
     const regs = rows && rows.length ? Array.from(new Set(rows.map(r => r.regulation))) : [];
     if (regs.length === 1) setSelectedReg(regs[0]);
     else if (!regs.includes(selectedReg || '')) setSelectedReg(regs[0] ?? null);
+    const sems = rows && rows.length ? Array.from(new Set(rows.map(r => r.semester))).sort((a:any,b:any)=>a-b) : [];
+    if (sems.length === 1) setSelectedSem(sems[0]);
+    else if (!sems.includes(selectedSem || -1)) setSelectedSem(sems[0] ?? null);
   }, [rows]);
   useEffect(() => {
     fetchDeptRows().then(r => setRows(r)).catch(console.error).finally(() => setLoading(false));
@@ -93,6 +98,15 @@ export default function DeptList() {
           >
             {uniqueRegs.map(r => <option key={r} value={r}>{r}</option>)}
           </select>
+          <div style={{ width: 12 }} />
+          <span style={{ color: '#374151', fontWeight: 500 }}>Semester:</span>
+          <select
+            value={selectedSem ?? ''}
+            onChange={e => setSelectedSem(e.target.value ? Number(e.target.value) : null)}
+            style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid #d1d5db', background: '#fff', color: '#1e293b', fontWeight: 500 }}
+          >
+            {uniqueSems.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
         </div>
       )}
       <div style={{ marginBottom: 18, display: 'flex', flexWrap: 'wrap', gap: 14 }}>
@@ -137,14 +151,16 @@ export default function DeptList() {
               <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>Sem</th>
               <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>Code</th>
               <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>Course</th>
+              <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>CAT</th>
+              <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>Class</th>
               <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>L</th>
               <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>T</th>
               <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>P</th>
               <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>S</th>
               <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>C</th>
-              <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>Internal</th>
-              <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>External</th>
-              <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>Total</th>
+              <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>INT</th>
+              <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>EXT</th>
+              <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>TTL</th>
               <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>Hours</th>
               <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>QP Type</th>
               <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>Editable</th>
@@ -152,7 +168,7 @@ export default function DeptList() {
             </tr>
           </thead>
           <tbody>
-            {rows.filter(r => !currentDept || r.department.id === currentDept).map(r => (
+            {rows.filter(r => (!currentDept || r.department.id === currentDept) && (!selectedReg || r.regulation === selectedReg) && (!selectedSem || r.semester === selectedSem)).map(r => (
               <tr key={r.id} style={{ borderBottom: '1px solid #f3f4f6', transition: 'background 0.2s', background: r.editable ? '#f8fafc' : '#fff' }}>
                 {editingRow === r.id ? (
                   <>
@@ -194,6 +210,17 @@ export default function DeptList() {
                         }}
                       />
                     </td>
+                    <td><input value={r.category || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, category: e.target.value } : row))} className="edit-cell-input" /></td>
+                    <td>
+                      <select value={r.class_type || 'THEORY'} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, class_type: e.target.value } : row))} className="edit-cell-input" style={{ minWidth: 90 }}>
+                        <option value="THEORY">THEORY</option>
+                        <option value="LAB">LAB</option>
+                        <option value="TCPL">TCPL</option>
+                        <option value="TCPR">TCPR</option>
+                        <option value="PRACTICAL">PRACTICAL</option>
+                        <option value="AUDIT">AUDIT</option>
+                      </select>
+                    </td>
                     <td><input value={r.l || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, l: Number(e.target.value) } : row))} className="edit-cell-input" /></td>
                     <td><input value={r.t || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, t: Number(e.target.value) } : row))} className="edit-cell-input" /></td>
                     <td><input value={r.p || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, p: Number(e.target.value) } : row))} className="edit-cell-input" /></td>
@@ -229,6 +256,8 @@ export default function DeptList() {
                     <td style={{ padding: '10px 8px', verticalAlign: 'middle', fontSize: 15, color: '#1e293b', fontWeight: 500 }}>
                       {r.course_name || '-'}
                     </td>
+                    <td style={{ padding: '10px 8px' }}>{r.category || '-'}</td>
+                    <td style={{ padding: '10px 8px' }}>{r.class_type || '-'}</td>
                     <td style={{ padding: '10px 8px' }}>{r.l ?? 0}</td>
                     <td style={{ padding: '10px 8px' }}>{r.t ?? 0}</td>
                     <td style={{ padding: '10px 8px' }}>{r.p ?? 0}</td>

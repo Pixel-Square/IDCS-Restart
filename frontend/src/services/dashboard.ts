@@ -8,21 +8,12 @@ export type DashboardResponse = {
   entry_points: Record<string, boolean>;
 };
 
+import fetchWithAuth from './fetchAuth'
+
 export async function fetchDashboard(baseUrl = ''): Promise<DashboardResponse> {
   const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
   const url = baseUrl ? `${baseUrl}/api/accounts/dashboard/` : `${API_BASE}/api/accounts/dashboard/`
-  const token = window.localStorage.getItem('access');
-  const res = await fetch(url, {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    // Do not include credentials (cookies) for JWT Bearer requests.
-    // Including credentials triggers CORS preflight restrictions when
-    // the backend responds with Access-Control-Allow-Origin='*'.
-    // Leave credentials off because we send the JWT in the Authorization header.
-  });
+  const res = await fetchWithAuth(url, { method: 'GET' })
 
   if (!res.ok) {
     const text = await res.text();
