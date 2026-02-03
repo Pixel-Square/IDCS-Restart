@@ -1,10 +1,5 @@
-<<<<<<< HEAD
 ﻿import React, { useEffect, useState } from "react";
-import { Routes, Route } from "react-router-dom";
-=======
-import React, { useEffect, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
->>>>>>> origin/main
 import { getMe } from "./services/auth";
 import Navbar from "./components/Navbar";
 import DashboardSidebar from './components/DashboardSidebar';
@@ -17,12 +12,10 @@ import ProfilePage from "./pages/Profile";
 import MasterList from './pages/curriculum/MasterList';
 import MasterEditor from './pages/curriculum/MasterEditor';
 import DeptList from './pages/curriculum/DeptList';
-<<<<<<< HEAD
 import OBEPage from "./pages/OBEPage";
 import OBEMasterPage from "./pages/OBEMasterPage";
 import CourseOBEPage from "./pages/CourseOBEPage";
 import QuestionImportPage from "./pages/QuestionImportPage";
-=======
 import AdvisorAssignments from './pages/hod/AdvisorAssignments';
 import TeachingAssignmentsPage from './pages/hod/TeachingAssignments';
 import MyStudentsPage from './pages/advisor/MyStudents';
@@ -31,7 +24,6 @@ import StudentTimetable from './pages/student/TimetableView';
 import StudentAttendance from './pages/student/Attendance';
 import StaffTimetable from './pages/staff/TimetableView';
 import AssignedSubjectsPage from './pages/staff/AssignedSubjects';
->>>>>>> origin/main
 
 type RoleObj = { name: string };
 type Me = {
@@ -90,7 +82,6 @@ export default function App() {
   return (
     <div>
       <Navbar user={user} />
-<<<<<<< HEAD
       <Routes>
         <Route path="/" element={<HomePage user={user} />} />
         <Route path="/dashboard" element={<DashboardPage />} />
@@ -105,7 +96,6 @@ export default function App() {
         <Route path="/obe/master" element={canObeMaster ? <OBEMasterPage /> : <HomePage user={user} />} />
         <Route path="*" element={<HomePage user={user} />} />
       </Routes>
-=======
       {user ? (
         <div className="dashboard-root">
           <DashboardSidebar />
@@ -158,7 +148,6 @@ export default function App() {
           <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
         </Routes>
       )}
->>>>>>> origin/main
     </div>
   );
 }

@@ -28,14 +28,10 @@ INSTALLED_APPS = [
     'academics',
     'curriculum',
     'applications',
-<<<<<<< HEAD
-
     'OBE.apps.ObeConfig',
     'template_api.apps.TemplateApiConfig',
     'question_bank.apps.QuestionBankConfig',
-=======
     'timetable',
->>>>>>> origin/main
 ]
 
 MIDDLEWARE = [

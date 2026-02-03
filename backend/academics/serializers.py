@@ -2,13 +2,8 @@ from rest_framework import serializers
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
-<<<<<<< HEAD
-from .models import AttendanceSession, AttendanceRecord, TeachingAssignment
-from academics.models import Subject, Section, StudentProfile, Department
-=======
 from .models import TeachingAssignment
 from academics.models import Subject, Section
->>>>>>> origin/main
 from accounts.utils import get_user_permissions
 from academics.models import SectionAdvisor, StaffProfile
 from academics.models import AcademicYear
@@ -18,24 +13,14 @@ from academics.models import StudentProfile, DayAttendanceSession, DayAttendance
 
 
 class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
-<<<<<<< HEAD
-    subject_id = serializers.IntegerField(source='subject.id', read_only=True)
-    subject_code = serializers.CharField(source='subject.code', read_only=True)
-    subject_name = serializers.CharField(source='subject.name', read_only=True)
-    section_id = serializers.IntegerField(source='section.id', read_only=True)
-=======
     subject_code = serializers.SerializerMethodField(read_only=True)
     subject_name = serializers.SerializerMethodField(read_only=True)
->>>>>>> origin/main
     section_name = serializers.CharField(source='section.name', read_only=True)
     batch = serializers.SerializerMethodField(read_only=True)
     semester = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = TeachingAssignment
-<<<<<<< HEAD
-        fields = ('id', 'subject_id', 'subject_code', 'subject_name', 'section_id', 'section_name', 'academic_year')
-=======
         # removed curriculum_row and academic_year as requested; include batch & semester
         fields = ('id', 'subject_code', 'subject_name', 'section_name', 'batch', 'semester')
 
@@ -99,7 +84,6 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
             return getattr(sem, 'number', str(sem))
         except Exception:
             return None
->>>>>>> origin/main
 
 
 class TeachingAssignmentSerializer(serializers.ModelSerializer):
@@ -227,26 +211,6 @@ def _user_can_manage_assignment(user, teaching_assignment: TeachingAssignment) -
     return False
 
 
-<<<<<<< HEAD
-class SubjectSerializer(serializers.ModelSerializer):
-    department = serializers.CharField(source='semester.course.department.name', read_only=True)
-    department_code = serializers.CharField(source='semester.course.department.code', read_only=True)
-    year = serializers.IntegerField(source='semester.year', read_only=True)
-    section = serializers.CharField(source='semester.name', read_only=True)
-
-    class Meta:
-        model = Subject
-        fields = ('id', 'code', 'name', 'department', 'department_code', 'year', 'section')
-
-
-class StudentProfileSerializer(serializers.ModelSerializer):
-    name = serializers.CharField(source='user.get_full_name', read_only=True)
-    roll_no = serializers.CharField(source='user.username', read_only=True)
-
-    class Meta:
-        model = StudentProfile
-        fields = ('id', 'reg_no', 'roll_no', 'name', 'section', 'batch', 'status')
-=======
 class SectionAdvisorSerializer(serializers.ModelSerializer):
     section_id = serializers.PrimaryKeyRelatedField(queryset=Section.objects.all(), source='section', write_only=True)
     advisor_id = serializers.PrimaryKeyRelatedField(queryset=StaffProfile.objects.all(), source='advisor', write_only=True)
@@ -386,4 +350,3 @@ class DayAttendanceSessionSerializer(serializers.ModelSerializer):
 
 
  
->>>>>>> origin/main

@@ -9,16 +9,6 @@ from django.shortcuts import get_object_or_404
 from django.db.models import Q
 from django.db import transaction
 
-<<<<<<< HEAD
-from .models import AttendanceSession, AttendanceRecord, TeachingAssignment, Subject, StudentProfile
-from .serializers import (
-    AttendanceSessionSerializer,
-    AttendanceRecordSerializer,
-    BulkAttendanceRecordSerializer,
-    TeachingAssignmentInfoSerializer,
-    SubjectSerializer,
-    StudentProfileSerializer,
-=======
 from .permissions import IsHODOfDepartment
 
 from .models import (
@@ -28,7 +18,6 @@ from .models import (
     Section,
     StaffProfile,
     AcademicYear,
->>>>>>> origin/main
 )
 from .models import DayAttendanceSession, DayAttendanceRecord, StudentProfile
 
@@ -67,9 +56,33 @@ def serializer_check_user_can_manage(user, teaching_assignment):
     return False
 
 
-<<<<<<< HEAD
 class MyTeachingAssignmentsView(APIView):
-=======
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        user = request.user
+        qs = TeachingAssignment.objects.select_related(
+            'subject',
+            'section',
+            'academic_year',
+            'section__semester__course__department',
+        ).filter(is_active=True)
+
+        staff_profile = getattr(user, 'staff_profile', None)
+        role_names = {r.name.upper() for r in user.roles.all()} if getattr(user, 'roles', None) is not None else set()
+
+        # staff: only their teaching assignments
+        if staff_profile and 'HOD' not in role_names and 'ADVISOR' not in role_names:
+            qs = qs.filter(staff=staff_profile)
+        # HOD/ADVISOR: assignments within their department
+        elif staff_profile and ('HOD' in role_names or 'ADVISOR' in role_names):
+            qs = qs.filter(section__semester__course__department=staff_profile.department)
+        # else: admins can see all
+
+        ser = TeachingAssignmentInfoSerializer(qs.order_by('subject__code', 'section__name'), many=True)
+        return Response(ser.data)
+
+
 class SectionAdvisorViewSet(viewsets.ModelViewSet):
     queryset = SectionAdvisor.objects.select_related('section__batch__course__department', 'advisor')
     serializer_class = SectionAdvisorSerializer
@@ -335,134 +348,10 @@ class AdvisorMyStudentsView(APIView):
     Response format:
     { results: [ { section_id, section_name, students: [ { id, reg_no, username } ] } ] }
     """
->>>>>>> origin/main
     permission_classes = (IsAuthenticated,)
 
     def get(self, request):
         user = request.user
-<<<<<<< HEAD
-        qs = TeachingAssignment.objects.select_related(
-            'subject',
-            'section',
-            'academic_year',
-            'section__semester__course__department',
-        ).filter(is_active=True)
-
-        staff_profile = getattr(user, 'staff_profile', None)
-        role_names = {r.name.upper() for r in user.roles.all()}
-
-        # staff: only their teaching assignments
-        if staff_profile and 'HOD' not in role_names and 'ADVISOR' not in role_names:
-            qs = qs.filter(staff=staff_profile)
-        # HOD/ADVISOR: assignments within their department
-        elif staff_profile and ('HOD' in role_names or 'ADVISOR' in role_names):
-            qs = qs.filter(section__semester__course__department=staff_profile.department)
-        # else: admins can see all
-
-        ser = TeachingAssignmentInfoSerializer(qs.order_by('subject__code', 'section__name'), many=True)
-        return Response(ser.data)
-
-
-class SubjectViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = Subject.objects.select_related('semester__course__department')
-    serializer_class = SubjectSerializer
-    # Allow anonymous read during local testing; switch back to IsAuthenticated for production
-    permission_classes = ()
-
-    def get_queryset(self):
-        qs = super().get_queryset()
-        code = self.request.query_params.get('code')
-        if code:
-            qs = qs.filter(code__iexact=code)
-        return qs
-
-
-class StudentProfileViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = StudentProfile.objects.select_related('user', 'section')
-    serializer_class = StudentProfileSerializer
-    # Allow anonymous read during local testing; switch back to IsAuthenticated for production
-    permission_classes = ()
-
-    def get_queryset(self):
-        qs = super().get_queryset()
-        department = self.request.query_params.get('department')
-        year = self.request.query_params.get('year')
-        section = self.request.query_params.get('section')
-        if department:
-            qs = qs.filter(section__semester__course__department__name__iexact=department)
-        if year:
-            qs = qs.filter(section__semester__year=year)
-        if section:
-            qs = qs.filter(section__name__iexact=section)
-        # Ensure deterministic A→Z ordering by student name for all consumers
-        return qs.order_by('user__last_name', 'user__first_name', 'user__username')
-
-
-class TeachingAssignmentStudentsView(APIView):
-    """Return the roster (students) for a specific teaching assignment.
-
-    Used by mark-entry pages so they can load students from the teaching assignment's section.
-    """
-
-    permission_classes = (IsAuthenticated,)
-
-    def get(self, request, ta_id: int):
-        ta = get_object_or_404(
-            TeachingAssignment.objects.select_related(
-                'subject',
-                'section',
-                'academic_year',
-                'section__semester__course__department',
-            ),
-            pk=ta_id,
-            is_active=True,
-        )
-
-        if not serializer_check_user_can_manage(request.user, ta):
-            return Response({'detail': 'You do not have permission to view this roster.'}, status=403)
-
-        section_id = ta.section_id
-        students = (
-            StudentProfile.objects.select_related('user', 'section')
-            .filter(
-                Q(section_id=section_id)
-                | Q(section_assignments__section_id=section_id, section_assignments__end_date__isnull=True)
-            )
-            .distinct()
-            # Sort by student name A→Z (then username) as requested for SSA1/CIA1/Formative1
-            .order_by('user__last_name', 'user__first_name', 'user__username')
-        )
-
-        def student_name(sp: StudentProfile) -> str:
-            try:
-                full = sp.user.get_full_name()
-            except Exception:
-                full = ''
-            return full or getattr(sp.user, 'username', '') or sp.reg_no
-
-        payload = {
-            'teaching_assignment': {
-                'id': ta.id,
-                'subject_id': ta.subject_id,
-                'subject_code': ta.subject.code,
-                'subject_name': ta.subject.name,
-                'section_id': ta.section_id,
-                'section_name': ta.section.name,
-                'academic_year': ta.academic_year.name,
-            },
-            'students': [
-                {
-                    'id': s.id,
-                    'reg_no': s.reg_no,
-                    'name': student_name(s),
-                    'section': getattr(getattr(s, 'current_section', None), 'name', None)
-                    or (getattr(s.section, 'name', None) if getattr(s, 'section', None) else None),
-                }
-                for s in students
-            ],
-        }
-        return Response(payload)
-=======
         staff_profile = getattr(user, 'staff_profile', None)
         if not staff_profile:
             return Response({'results': []})
@@ -503,6 +392,71 @@ class TeachingAssignmentStudentsView(APIView):
             results.append({'section_id': sec.id, 'section_name': str(sec), 'students': ser.data})
 
         return Response({'results': results})
+
+
+class TeachingAssignmentStudentsView(APIView):
+    """Return the roster (students) for a specific teaching assignment.
+
+    Used by mark-entry pages so they can load students from the teaching assignment's section.
+    """
+
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request, ta_id: int):
+        ta = get_object_or_404(
+            TeachingAssignment.objects.select_related(
+                'subject',
+                'section',
+                'academic_year',
+                'section__semester__course__department',
+            ),
+            pk=ta_id,
+            is_active=True,
+        )
+
+        if not serializer_check_user_can_manage(request.user, ta):
+            return Response({'detail': 'You do not have permission to view this roster.'}, status=403)
+
+        section_id = ta.section_id
+        students = (
+            StudentProfile.objects.select_related('user', 'section')
+            .filter(
+                Q(section_id=section_id)
+                | Q(section_assignments__section_id=section_id, section_assignments__end_date__isnull=True)
+            )
+            .distinct()
+            .order_by('user__last_name', 'user__first_name', 'user__username')
+        )
+
+        def student_name(sp: StudentProfile) -> str:
+            try:
+                full = sp.user.get_full_name()
+            except Exception:
+                full = ''
+            return full or getattr(sp.user, 'username', '') or sp.reg_no
+
+        payload = {
+            'teaching_assignment': {
+                'id': ta.id,
+                'subject_id': ta.subject_id,
+                'subject_code': ta.subject.code,
+                'subject_name': ta.subject.name,
+                'section_id': ta.section_id,
+                'section_name': ta.section.name,
+                'academic_year': ta.academic_year.name,
+            },
+            'students': [
+                {
+                    'id': s.id,
+                    'reg_no': s.reg_no,
+                    'name': student_name(s),
+                    'section': getattr(getattr(s, 'current_section', None), 'name', None)
+                    or (getattr(s.section, 'name', None) if getattr(s, 'section', None) else None),
+                }
+                for s in students
+            ],
+        }
+        return Response(payload)
 
 
 
@@ -623,4 +577,3 @@ class StudentDayAttendanceView(APIView):
 
         return Response({'results': results, 'summary': {'overall': {'total': total_records, 'present': total_present, 'percentage': overall_pct}, 'by_section': by_section}})
 
->>>>>>> origin/main
