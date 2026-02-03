@@ -9,20 +9,30 @@ from academics.models import SectionAdvisor, StaffProfile
 from academics.models import AcademicYear
 from django.core.exceptions import ValidationError
 from rest_framework.validators import UniqueTogetherValidator
-from academics.models import StudentProfile, DayAttendanceSession, DayAttendanceRecord
+from academics.models import StudentProfile
+from academics.models import PeriodAttendanceSession, PeriodAttendanceRecord
+from timetable.models import TimetableSlot
+
+
+class AcademicYearSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AcademicYear
+        fields = ('id', 'name', 'is_active', 'parity')
 
 
 class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
     subject_code = serializers.SerializerMethodField(read_only=True)
     subject_name = serializers.SerializerMethodField(read_only=True)
     section_name = serializers.CharField(source='section.name', read_only=True)
+    section_id = serializers.IntegerField(source='section.id', read_only=True)
+    curriculum_row_id = serializers.SerializerMethodField(read_only=True)
     batch = serializers.SerializerMethodField(read_only=True)
     semester = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = TeachingAssignment
         # removed curriculum_row and academic_year as requested; include batch & semester
-        fields = ('id', 'subject_code', 'subject_name', 'section_name', 'batch', 'semester')
+        fields = ('id', 'subject_code', 'subject_name', 'section_name', 'section_id', 'curriculum_row_id', 'batch', 'semester')
 
     def _curriculum_row_for_obj(self, obj):
         # helper: try to find a matching CurriculumDepartment row for the assignment
@@ -36,10 +46,15 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
             # if subject exists, prefer matching by code/name
             subj_code = getattr(getattr(obj, 'subject', None), 'code', None)
             subj_name = getattr(getattr(obj, 'subject', None), 'name', None)
+            # Only attempt to find a CurriculumDepartment when the assignment
+            # has an explicit Subject with a code/name. Do not fallback to the
+            # department's first curriculum row — that can produce unrelated
+            # subjects for assignments with no explicit subject.
+            if not subj_code and not subj_name:
+                return None
             qs = CurriculumDepartment.objects.all()
             from django.db import models as dj_models
-            if subj_code:
-                qs = qs.filter(dj_models.Q(course_code__iexact=subj_code) | dj_models.Q(course_name__iexact=subj_name))
+            qs = qs.filter(dj_models.Q(course_code__iexact=subj_code) | dj_models.Q(course_name__iexact=subj_name))
             if dept is not None:
                 qs = qs.filter(department=dept)
             return qs.first()
@@ -49,8 +64,13 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
     def get_subject_code(self, obj):
         # prefer explicit subject, then curriculum row
         try:
+            # Prefer direct curriculum_row on the assignment first
+            if getattr(obj, 'curriculum_row', None):
+                row = obj.curriculum_row
+                return getattr(row, 'course_code', None)
             if getattr(obj, 'subject', None):
                 return getattr(obj.subject, 'code', None)
+            # As a last resort, try to match a curriculum row explicitly
             row = self._curriculum_row_for_obj(obj)
             if row:
                 return getattr(row, 'course_code', None)
@@ -60,6 +80,9 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
 
     def get_subject_name(self, obj):
         try:
+            if getattr(obj, 'curriculum_row', None):
+                row = obj.curriculum_row
+                return getattr(row, 'course_name', None)
             if getattr(obj, 'subject', None):
                 return getattr(obj.subject, 'name', None)
             row = self._curriculum_row_for_obj(obj)
@@ -85,6 +108,13 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
         except Exception:
             return None
 
+    def get_curriculum_row_id(self, obj):
+        try:
+            row = getattr(obj, 'curriculum_row', None)
+            return getattr(row, 'id', None)
+        except Exception:
+            return None
+
 
 class TeachingAssignmentSerializer(serializers.ModelSerializer):
     # Accept curriculum_department row id to link directly
@@ -93,10 +123,13 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
     section_id = serializers.PrimaryKeyRelatedField(queryset=Section.objects.all(), source='section', write_only=True)
     academic_year = serializers.PrimaryKeyRelatedField(queryset=AcademicYear.objects.all(), required=False)
     subject = serializers.SerializerMethodField(read_only=True)
+    # Readable fields for API consumers
+    staff_details = serializers.SerializerMethodField(read_only=True)
+    section_name = serializers.CharField(source='section.name', read_only=True)
 
     class Meta:
         model = TeachingAssignment
-        fields = ('id', 'staff_id', 'section_id', 'academic_year', 'subject', 'curriculum_row_id', 'is_active')
+        fields = ('id', 'staff_id', 'section_id', 'academic_year', 'subject', 'curriculum_row_id', 'is_active', 'staff_details', 'section_name')
 
     def get_subject(self, obj):
         # prefer curriculum row display
@@ -106,19 +139,22 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
                 return f"{row.course_code or ''} - {row.course_name or ''}".strip(' -')
             if getattr(obj, 'subject', None):
                 return getattr(obj.subject, 'name', str(obj.subject))
-            # fallback: try to pick a curriculum row for the section's department
-            try:
-                dept = obj.section.batch.course.department
-            except Exception:
-                dept = None
-            if dept is not None:
-                from curriculum.models import CurriculumDepartment
-                row = CurriculumDepartment.objects.filter(department=dept).first()
-                if row:
-                    return f"{row.course_code or ''} - {row.course_name or ''}".strip(' -')
+            # Do not fall back to arbitrary department curriculum rows —
+            # that may return an unrelated subject. If neither explicit
+            # curriculum_row nor subject is present, return None so the
+            # frontend doesn't display an incorrect shared subject.
         except Exception:
             pass
         return None
+
+    def get_staff_details(self, obj):
+        try:
+            st = getattr(obj, 'staff', None)
+            if not st:
+                return None
+            return {'id': st.id, 'user': getattr(getattr(st, 'user', None), 'username', None), 'staff_id': getattr(st, 'staff_id', None)}
+        except Exception:
+            return None
 
     def validate(self, attrs):
         # ensure staff belongs to section's department
@@ -195,17 +231,16 @@ def _user_can_manage_assignment(user, teaching_assignment: TeachingAssignment) -
     staff_profile = getattr(user, 'staff_profile', None)
     if staff_profile and teaching_assignment.staff_id == staff_profile.pk:
         return True
-    # role-based HOD/ADVISOR check
+    # role-based ADVISOR check only (HODs no longer have implicit access)
     role_names = {r.name.upper() for r in user.roles.all()}
-    if 'HOD' in role_names or 'ADVISOR' in role_names:
-        # check department match using DepartmentRole entries so staff may
-        # be HOD of multiple departments (don't rely on single profile.department)
+    if 'ADVISOR' in role_names:
         try:
-            if staff_profile:
-                from .models import DepartmentRole
-                hod_depts = DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True).values_list('department_id', flat=True)
-                ta_dept = teaching_assignment.section.batch.course.department_id
-                return ta_dept in list(hod_depts)
+            from .models import SectionAdvisor
+            # active advisor mapping for the assignment's section and academic year
+            sec = getattr(teaching_assignment, 'section', None)
+            ay = getattr(teaching_assignment, 'academic_year', None)
+            if sec and ay and staff_profile:
+                return SectionAdvisor.objects.filter(section=sec, advisor=staff_profile, academic_year=ay, is_active=True).exists()
         except Exception:
             pass
     return False
@@ -313,40 +348,150 @@ class StudentSimpleSerializer(serializers.Serializer):
     section_name = serializers.CharField(allow_null=True)
 
 
-class DayAttendanceRecordSerializer(serializers.ModelSerializer):
-    student_id = serializers.PrimaryKeyRelatedField(queryset=StudentProfile.objects.all(), source='student', write_only=True)
-    student = serializers.StringRelatedField(read_only=True)
+# DayAttendance serializers removed (attendance API being removed).
+
+
+class StudentSubjectBatchSerializer(serializers.ModelSerializer):
+    staff = serializers.SerializerMethodField(read_only=True)
+    student_ids = serializers.ListField(child=serializers.IntegerField(), write_only=True, required=False)
+    students = StudentSimpleSerializer(many=True, read_only=True)
+    academic_year = serializers.PrimaryKeyRelatedField(queryset=AcademicYear.objects.all(), required=False)
+    curriculum_row_id = serializers.IntegerField(write_only=True, required=False)
+    curriculum_row = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
-        model = DayAttendanceRecord
-        fields = ('id', 'session', 'student', 'student_id', 'status', 'marked_at', 'marked_by')
+        model = None  # set at import time to avoid circular import
+        fields = ('id', 'name', 'staff', 'academic_year', 'curriculum_row_id', 'curriculum_row', 'student_ids', 'students', 'is_active', 'created_at', 'updated_at')
+        read_only_fields = ('created_at', 'updated_at')
+
+    def __init__(self, *args, **kwargs):
+        # import model lazily
+        from .models import StudentSubjectBatch
+        self.Meta.model = StudentSubjectBatch
+        super().__init__(*args, **kwargs)
+
+    def get_staff(self, obj):
+        try:
+            st = getattr(obj, 'staff', None)
+            if not st:
+                return None
+            return {'id': st.id, 'user': getattr(getattr(st, 'user', None), 'username', None), 'staff_id': getattr(st, 'staff_id', None)}
+        except Exception:
+            return None
+
+    def get_curriculum_row(self, obj):
+        try:
+            row = getattr(obj, 'curriculum_row', None)
+            if not row:
+                return None
+            return {'id': row.id, 'course_code': getattr(row, 'course_code', None), 'course_name': getattr(row, 'course_name', None)}
+        except Exception:
+            return None
+
+    def create(self, validated_data):
+        student_ids = validated_data.pop('student_ids', []) or []
+        curriculum_row_id = validated_data.pop('curriculum_row_id', None) or self.initial_data.get('curriculum_row_id')
+        # default academic year
+        if 'academic_year' not in validated_data or not validated_data.get('academic_year'):
+            ay = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.order_by('-id').first()
+            if ay:
+                validated_data['academic_year'] = ay
+
+        # staff will be set in view to current user's staff_profile when creating
+        # attach curriculum_row if provided
+        if curriculum_row_id:
+            try:
+                from curriculum.models import CurriculumDepartment
+                row = CurriculumDepartment.objects.filter(pk=int(curriculum_row_id)).first()
+                if row:
+                    validated_data['curriculum_row'] = row
+            except Exception:
+                pass
+
+        batch = super().create(validated_data)
+        if student_ids:
+            sts = StudentProfile.objects.filter(pk__in=student_ids)
+            batch.students.set(sts)
+        return batch
+
+    def update(self, instance, validated_data):
+        student_ids = validated_data.pop('student_ids', None)
+        curriculum_row_id = validated_data.pop('curriculum_row_id', None) or self.initial_data.get('curriculum_row_id')
+        if curriculum_row_id is not None:
+            try:
+                from curriculum.models import CurriculumDepartment
+                row = CurriculumDepartment.objects.filter(pk=int(curriculum_row_id)).first()
+                validated_data['curriculum_row'] = row
+            except Exception:
+                pass
+        inst = super().update(instance, validated_data)
+        if student_ids is not None:
+            sts = StudentProfile.objects.filter(pk__in=student_ids)
+            inst.students.set(sts)
+        return inst
+
+
+class PeriodAttendanceRecordSerializer(serializers.ModelSerializer):
+    from .models import PeriodAttendanceSession as _PeriodAttendanceSession
+
+    # session is optional for nested/bulk payloads; the view will supply the session
+    session = serializers.PrimaryKeyRelatedField(queryset=_PeriodAttendanceSession.objects.all(), required=False, write_only=True)
+    student_id = serializers.PrimaryKeyRelatedField(queryset=StudentProfile.objects.all(), source='student', write_only=True)
+    student = serializers.StringRelatedField(read_only=True)
+    student_pk = serializers.IntegerField(source='student.id', read_only=True)
+
+    class Meta:
+        model = PeriodAttendanceRecord
+        fields = ('id', 'session', 'student', 'student_pk', 'student_id', 'status', 'marked_at', 'marked_by')
         read_only_fields = ('marked_at', 'marked_by')
 
 
-class BulkDayAttendanceSerializer(serializers.Serializer):
+class BulkRecordSerializer(serializers.Serializer):
+    student_id = serializers.IntegerField()
+    status = serializers.CharField()
+
+    def validate_status(self, value):
+        try:
+            from .models import PERIOD_ATTENDANCE_STATUS_CHOICES
+            allowed = {s[0] for s in PERIOD_ATTENDANCE_STATUS_CHOICES}
+        except Exception:
+            allowed = {'P', 'A', 'OD', 'LATE', 'LEAVE'}
+        if value not in allowed:
+            raise serializers.ValidationError(f"Invalid status '{value}'. Allowed: {', '.join(sorted(allowed))}")
+        return value
+
+
+class BulkPeriodAttendanceSerializer(serializers.Serializer):
     section_id = serializers.IntegerField(write_only=True)
+    period_id = serializers.IntegerField(write_only=True)
     date = serializers.DateField()
-    records = DayAttendanceRecordSerializer(many=True)
+    records = BulkRecordSerializer(many=True)
 
     def validate(self, attrs):
         # Basic validation ensuring records correspond to students in the section
-        section_id = attrs.get('section_id')
-        records = attrs.get('records', [])
-        # Collect student ids in payload
-        stud_ids = [r.get('student').id if isinstance(r.get('student'), StudentProfile) else r.get('student_id') for r in records]
-        # Optionally add extra validation later
         return attrs
 
 
-class DayAttendanceSessionSerializer(serializers.ModelSerializer):
+class PeriodAttendanceSessionSerializer(serializers.ModelSerializer):
     section_id = serializers.PrimaryKeyRelatedField(queryset=Section.objects.all(), source='section', write_only=True)
+    period_id = serializers.PrimaryKeyRelatedField(queryset=TimetableSlot.objects.all(), source='period', write_only=True)
     section = serializers.StringRelatedField(read_only=True)
-    records = DayAttendanceRecordSerializer(many=True, read_only=True)
+    period = serializers.SerializerMethodField(read_only=True)
+    records = PeriodAttendanceRecordSerializer(many=True, read_only=True)
 
     class Meta:
-        model = DayAttendanceSession
-        fields = ('id', 'section', 'section_id', 'date', 'created_by', 'is_locked', 'created_at', 'records')
+        model = PeriodAttendanceSession
+        fields = ('id', 'section', 'section_id', 'period', 'period_id', 'date', 'timetable_assignment', 'created_by', 'is_locked', 'created_at', 'records')
         read_only_fields = ('created_by', 'created_at')
+
+    # no custom __init__ required; queryset for `period_id` is statically provided above
+
+    def get_period(self, obj):
+        try:
+            p = obj.period
+            return {'id': p.id, 'index': p.index, 'label': p.label, 'start_time': p.start_time, 'end_time': p.end_time}
+        except Exception:
+            return None
 
 
  

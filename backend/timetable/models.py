@@ -82,6 +82,8 @@ class TimetableAssignment(models.Model):
     staff = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='timetable_assignments')
     # prefer linking to curriculum row; fallback to free-text subject name
     curriculum_row = models.ForeignKey('curriculum.CurriculumDepartment', on_delete=models.SET_NULL, null=True, blank=True, related_name='timetable_assignments')
+    # optional: link to a staff-created subject batch (subject-scoped group of students)
+    subject_batch = models.ForeignKey('academics.StudentSubjectBatch', on_delete=models.SET_NULL, null=True, blank=True, related_name='timetable_assignments')
     subject_text = models.CharField(max_length=256, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -89,7 +91,8 @@ class TimetableAssignment(models.Model):
         verbose_name = 'Timetable Assignment'
         verbose_name_plural = 'Timetable Assignments'
         constraints = [
-            models.UniqueConstraint(fields=['period', 'day', 'section'], name='unique_period_day_section'),
+            # allow multiple assignments for the same period/day/section when they refer to different subject batches
+            models.UniqueConstraint(fields=['period', 'day', 'section', 'subject_batch'], name='unique_period_day_section_batch'),
         ]
 
     def __str__(self):

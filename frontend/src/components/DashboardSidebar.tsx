@@ -41,31 +41,42 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
 
   // HOD pages: require HOD role or explicit permission
   if (entry.hod_advisors && (rolesUpper.includes('HOD') || permsLower.includes('academics.assign_advisor'))) items.push({ key: 'hod_advisors', label: 'Advisor Assignments', to: '/hod/advisors' });
-  if (entry.hod_teaching && (rolesUpper.includes('HOD') || permsLower.includes('academics.assign_teaching'))) items.push({ key: 'hod_teaching', label: 'Teaching Assignments', to: '/hod/teaching' });
+  if (entry.hod_teaching && (rolesUpper.includes('ADVISOR') || permsLower.includes('academics.assign_teaching'))) items.push({ key: 'hod_teaching', label: 'Teaching Assignments', to: '/advisor/teaching' });
 
   // Advisor pages: require ADVISOR role or explicit permission
   if (entry.advisor_students && (rolesUpper.includes('ADVISOR') || permsLower.includes('academics.view_my_students'))) items.push({ key: 'advisor_students', label: 'My Students', to: '/advisor/students' });
-  // Advisor attendance
-  if (rolesUpper.includes('ADVISOR') || permsLower.includes('academics.mark_attendance')) items.push({ key: 'advisor_attendance', label: 'Mark Attendance', to: '/advisor/attendance' });
 
   if (entry.student_curriculum_view && permsLower.some(p => p.includes('curriculum'))) items.push({ key: 'student_curriculum_view', label: 'My Curriculum', to: '/curriculum/student' });
 
   // Timetable-related entries: require explicit timetable permissions or flags/roles
   if ((flags.can_manage_timetable_templates || permsLower.includes('timetable.manage_templates')) && entry.timetable_templates) items.push({ key: 'timetable_templates', label: 'IQAC: Timetable Templates', to: '/iqac/timetable' });
-  const canAssignTimetable = Boolean(flags.can_assign_timetable) || permsLower.includes('timetable.assign') || rolesUpper.includes('ADVISOR') || rolesUpper.includes('HOD')
+  // Only advisors or users with explicit permission/flag may assign timetables.
+  // HODs previously appeared here because they were included in the role check;
+  // remove HOD so the link doesn't show by default for HOD users unless they
+  // also have the 'timetable.assign' permission or a feature flag.
+  const canAssignTimetable = Boolean(flags.can_assign_timetable) || permsLower.includes('timetable.assign') || rolesUpper.includes('ADVISOR')
   if (canAssignTimetable && entry.timetable_assignments) items.push({ key: 'timetable_assignments', label: 'Timetable Assignments', to: '/advisor/timetable' });
 
   // show student/staff personal timetable based on explicit 'timetable.view' permission and profile flags
   if (flags.can_view_timetable && flags.is_student && permsLower.includes('timetable.view')) items.push({ key: 'student_timetable', label: 'My Timetable', to: '/student/timetable' });
   if (flags.can_view_timetable && flags.is_staff && permsLower.includes('timetable.view')) items.push({ key: 'staff_timetable', label: 'My Timetable (Staff)', to: '/staff/timetable' });
 
+  // Student: show My Attendance link for students
+  if (flags.is_student) {
+    items.push({ key: 'student_attendance', label: 'My Attendance', to: '/student/attendance' });
+  }
+
   // Staff assigned subjects page
   if (flags.is_staff && (permsLower.includes('academics.view_assigned_subjects') || rolesUpper.includes('HOD'))) {
     items.push({ key: 'assigned_subjects', label: 'Assigned Subjects', to: '/staff/assigned-subjects' });
   }
 
-  // Student attendance
-  if (flags.is_student && (permsLower.includes('academics.view_attendance') || permsLower.includes('attendance.view') )) items.push({ key: 'student_attendance', label: 'My Attendance', to: '/student/attendance' });
+  // Period attendance for staff
+  if (flags.is_staff && (permsLower.includes('academics.mark_attendance') || rolesUpper.includes('HOD') || rolesUpper.includes('ADVISOR'))) {
+    items.push({ key: 'period_attendance', label: 'Mark Attendance', to: '/staff/period-attendance' });
+  }
+
+  // Attendance menu items removed
 
   // fallback: always show profile
   items.unshift({ key: 'profile', label: 'Profile', to: '/profile' });

@@ -22,6 +22,7 @@ export default function StudentTimetable(){
   const [timetable, setTimetable] = useState<any[]>([])
   const [periods, setPeriods] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
+  const [studentId, setStudentId] = useState<number | null>(null)
 
   useEffect(()=>{ fetchProfile() }, [])
 
@@ -31,6 +32,7 @@ export default function StudentTimetable(){
       if(!res.ok) throw new Error(await res.text())
       const me = await res.json()
       const prof = me.profile || {}
+      setStudentId(me.id)
       if(prof.section_id) setSectionId(prof.section_id)
     }catch(e){ console.error(e) }
   }
@@ -43,10 +45,51 @@ export default function StudentTimetable(){
         const res = await fetchWithAuth(`/api/timetable/section/${sectionId}/timetable/`)
         if(!res.ok) throw new Error(await res.text())
         const data = await res.json()
-        setTimetable(data.results || [])
+        let tt = data.results || []
+        // Attempt to resolve missing subject_batch for this student by
+        // fetching subject-batches for curriculum rows referenced in the
+        // timetable and matching the current student.
+        try{
+          const needs = new Set<number>()
+          for(const d of tt){
+            for(const a of (d.assignments||[])){
+              if(!a.subject_batch && a.curriculum_row && a.curriculum_row.id) needs.add(a.curriculum_row.id)
+            }
+          }
+          if(studentId && needs.size){
+            const crIds = Array.from(needs)
+            const crToBatch: Record<number, any> = {}
+            await Promise.all(crIds.map(async (crId) => {
+              try{
+                const sres = await fetchWithAuth(`/api/academics/subject-batches/?page_size=0&curriculum_row_id=${crId}`)
+                if(!sres.ok) return
+                const sdata = await sres.json()
+                const batches = sdata.results || sdata || []
+                for(const b of batches){
+                  if(Array.isArray(b.students) && b.students.find((s:any) => s.id === studentId)){
+                    crToBatch[crId] = b
+                    break
+                  }
+                }
+              }catch(e){ /* ignore per-batch failures */ }
+            }))
+            if(Object.keys(crToBatch).length){
+              for(const d of tt){
+                for(const a of (d.assignments||[])){
+                  if(!a.subject_batch && a.curriculum_row && a.curriculum_row.id){
+                    const b = crToBatch[a.curriculum_row.id]
+                    if(b) a.subject_batch = { id: b.id, name: b.name }
+                  }
+                }
+              }
+            }
+          }
+        }catch(e){ console.error('resolve student batches failed', e) }
+
+        setTimetable(tt)
         // derive periods from first day's assignments or ask templates endpoint
         const pset = [] as any[]
-        for(const d of (data.results||[])){
+        for(const d of (tt||[])){
           for(const a of (d.assignments||[])){
             if(!pset.find(x=> x.period_id === a.period_id)) pset.push({ id: a.period_id, index: a.period_index, is_break: a.is_break, label: a.label })
           }
@@ -83,14 +126,19 @@ export default function StudentTimetable(){
                   {periods.map(p=> {
                     // find assignment for day+period
                     const dayObj = timetable.find(x=> x.day === di+1) || { assignments: [] }
-                    const a = (dayObj.assignments||[]).find((x:any)=> x.period_id === p.id)
+                      const assignments = (dayObj.assignments||[]).filter((x:any)=> x.period_id === p.id)
                     return (
                       <td key={p.id} style={{border:'1px solid #ddd', padding:8}}>
                         {p.is_break ? <em style={{color:'#666'}}>{p.label||'Break'}</em> : (
-                          a ? (
+                            assignments && assignments.length ? (
                             <div>
-                              <div style={{fontWeight:600}}>{shortLabel(a.curriculum_row || a.subject_text)}</div>
-                              <div style={{fontSize:12, color:'#333'}}>Staff: {a.staff?.username || '—'}</div>
+                                {assignments.map((a:any, i:number)=> (
+                                  <div key={i} style={{marginBottom:8}}>
+                                    <div style={{fontWeight:600}}>{shortLabel(a.curriculum_row || a.subject_text)}</div>
+                                    <div style={{fontSize:12, color:'#333'}}>Staff: {a.staff?.username || '—'}</div>
+                                    {a.subject_batch && <div style={{fontSize:12, color:'#333'}}>Batch: {a.subject_batch.name}</div>}
+                                  </div>
+                                ))}
                             </div>
                           ) : <div style={{color:'#999'}}>—</div>
                         )}

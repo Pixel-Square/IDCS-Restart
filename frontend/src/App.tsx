@@ -19,11 +19,11 @@ import QuestionImportPage from "./pages/QuestionImportPage";
 import AdvisorAssignments from './pages/hod/AdvisorAssignments';
 import TeachingAssignmentsPage from './pages/hod/TeachingAssignments';
 import MyStudentsPage from './pages/advisor/MyStudents';
-import DayAttendancePage from './pages/advisor/DayAttendance';
 import StudentTimetable from './pages/student/TimetableView';
-import StudentAttendance from './pages/student/Attendance';
 import StaffTimetable from './pages/staff/TimetableView';
 import AssignedSubjectsPage from './pages/staff/AssignedSubjects';
+import PeriodAttendance from './pages/staff/PeriodAttendance';
+import StudentAttendancePage from './pages/student/Attendance';
 
 type RoleObj = { name: string };
 type Me = {
@@ -111,8 +111,8 @@ export default function App() {
               <Route path="/hod/advisors" element={
                 <ProtectedRoute user={user} requiredRoles={["HOD"]} requiredPermissions={["academics.assign_advisor"]} element={<AdvisorAssignments />} />
               } />
-              <Route path="/hod/teaching" element={
-                <ProtectedRoute user={user} requiredRoles={["HOD"]} requiredPermissions={["academics.assign_teaching"]} element={<TeachingAssignmentsPage />} />
+              <Route path="/advisor/teaching" element={
+                <ProtectedRoute user={user} requiredRoles={["ADVISOR"]} requiredPermissions={["academics.assign_teaching"]} element={<TeachingAssignmentsPage />} />
               } />
               <Route path="/iqac/timetable" element={
                 <ProtectedRoute user={user} requiredPermissions={["timetable.manage_templates"]} element={<HodTimetableEditor />} />
@@ -123,20 +123,21 @@ export default function App() {
               <Route path="/advisor/students" element={
                 <ProtectedRoute user={user} requiredRoles={["ADVISOR"]} requiredPermissions={["academics.view_my_students"]} element={<MyStudentsPage />} />
               } />
-              <Route path="/advisor/attendance" element={
-                <ProtectedRoute user={user} requiredRoles={["ADVISOR"]} requiredPermissions={["academics.mark_attendance"]} element={<DayAttendancePage />} />
-              } />
               <Route path="/student/timetable" element={
                 <ProtectedRoute user={user} requiredProfile={'STUDENT'} requiredPermissions={["timetable.view"]} element={<StudentTimetable />} />
               } />
               <Route path="/student/attendance" element={
-                <ProtectedRoute user={user} requiredProfile={'STUDENT'} requiredPermissions={["academics.view_attendance"]} element={<StudentAttendance />} />
+                <ProtectedRoute user={user} requiredProfile={'STUDENT'} element={<StudentAttendancePage />} />
               } />
+              {/* Attendance pages removed */}
               <Route path="/staff/timetable" element={
                 <ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={["timetable.view"]} element={<StaffTimetable />} />
               } />
               <Route path="/staff/assigned-subjects" element={
                 <ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={["academics.view_assigned_subjects"]} element={<AssignedSubjectsPage />} />
+              } />
+              <Route path="/staff/period-attendance" element={
+                <ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={['academics.mark_attendance']} element={<PeriodAttendance />} />
               } />
               <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
             </Routes>
