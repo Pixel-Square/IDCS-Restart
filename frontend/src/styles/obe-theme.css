@@ -1,16 +1,22 @@
 /* OBE Theme styles: professional color accents for pages and tables */
 :root{
-  --obe-accent:#0b74b8;
-  --obe-accent-700:#0b5f92;
+  /* Light green + white professional palette */
+  --obe-accent:#10b981;       /* emerald-500 */
+  --obe-accent-700:#059669;   /* emerald-600 */
   --obe-danger:#ef4444;
   --obe-muted:#64748b;
   --obe-surface:#ffffff;
   --obe-panel:#f8fafc;
+  --obe-green-50:#ecfdf5;
+  --obe-green-100:#d1fae5;
+  --obe-green-200:#a7f3d0;
+  --obe-green-700:#047857;
+  --obe-green-800:#065f46;
 }
 
 .obe-card{
-  background: linear-gradient(180deg, #ffffff, #f6fbff);
-  border: 1px solid rgba(14, 96, 148, 0.06);
+  background: linear-gradient(180deg, #ffffff, var(--obe-green-50));
+  border: 1px solid rgba(4, 120, 87, 0.08);
   border-radius: 12px;
   padding: 14px;
   box-shadow: 0 8px 20px rgba(2,6,23,0.04);
@@ -20,7 +26,7 @@
   padding: 8px 12px;
   border-radius: 10px;
   border: 1px solid rgba(15,23,42,0.06);
-  background: linear-gradient(180deg, #ffffff, #f0f9ff);
+  background: linear-gradient(180deg, #ffffff, var(--obe-green-50));
   color: #0f172a;
   cursor: pointer;
   font-weight: 700;
@@ -34,7 +40,7 @@
 }
 
 .obe-input{
-  padding: 8px 10px; border-radius: 8px; border: 1px solid #e6eef8; outline: none; width: 100%;
+  padding: 8px 10px; border-radius: 8px; border: 1px solid #d1fae5; outline: none; width: 100%;
 }
 
 .obe-table{
@@ -44,21 +50,21 @@
   min-width: 720px;
 }
 .obe-table thead th{
-  background: linear-gradient(180deg, rgba(11,74,111,0.06), rgba(240,249,255,0.06));
-  color: #0b4a6f; font-weight: 800; padding: 10px 12px; text-transform: uppercase; font-size: 12px;
+  background: linear-gradient(180deg, var(--obe-green-50), #ffffff);
+  color: var(--obe-green-800); font-weight: 800; padding: 10px 12px; text-transform: uppercase; font-size: 12px;
   border-bottom: 1px solid rgba(148,163,184,0.5);
 }
 .obe-table tbody td{ padding: 10px 12px; border-bottom: 1px solid rgba(226,232,240,0.9); font-size: 13px; }
 .obe-table tbody tr:nth-child(odd) { background: #ffffff }
 .obe-table tbody tr:nth-child(even) { background: #fbfdff }
-.obe-table tbody tr:hover { background: rgba(2,132,199,0.03) }
+.obe-table tbody tr:hover { background: rgba(16,185,129,0.06) }
 
 .obe-pill{
   display:inline-flex; align-items:center; padding:0 10px; height:24px; border-radius:999px; font-weight:800; font-size:12px;
 }
 
 .obe-danger-pill{ background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.25); color: #991b1b }
-.obe-neutral-pill{ background: rgba(2,132,199,0.08); border:1px solid rgba(2,132,199,0.25); color:#0b4a6f }
+.obe-neutral-pill{ background: rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.25); color:var(--obe-green-800) }
 
 /* specific small utilities */
 .obe-small-muted{ color: var(--obe-muted); font-size: 13px }
@@ -94,15 +100,15 @@
 }
 
 .obe-tab-btn:hover{
-  background: rgba(11,116,184,0.05);
-  color: #0b74b8;
+  background: rgba(16,185,129,0.08);
+  color: var(--obe-accent);
 }
 
 .obe-tab-btn.active{
-  background: linear-gradient(135deg, #0b74b8, #0284c7);
+  background: linear-gradient(135deg, var(--obe-accent), var(--obe-accent-700));
   color: #ffffff;
   border: 1px solid rgba(2,6,23,0.1);
-  box-shadow: 0 4px 12px rgba(11,116,184,0.25);
+  box-shadow: 0 4px 12px rgba(16,185,129,0.25);
   font-weight: 700;
 }
 
@@ -114,7 +120,7 @@
   transform: translateX(-50%);
   width: 40%;
   height: 3px;
-  background: linear-gradient(90deg, transparent, #0b74b8, transparent);
+  background: linear-gradient(90deg, transparent, var(--obe-accent), transparent);
   border-radius: 999px;
 }
 
@@ -140,18 +146,18 @@
 }
 
 .obe-sidebar-btn:hover{
-  background: linear-gradient(180deg, #f0f9ff, #ffffff);
-  border-color: #0b74b8;
-  color: #0b74b8;
+  background: linear-gradient(180deg, var(--obe-green-50), #ffffff);
+  border-color: var(--obe-accent);
+  color: var(--obe-accent);
   transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(11,116,184,0.12);
+  box-shadow: 0 2px 8px rgba(16,185,129,0.18);
 }
 
 .obe-sidebar-btn.active{
-  background: linear-gradient(135deg, #1e293b, #334155);
+  background: linear-gradient(135deg, #065f46, #047857);
   color: #ffffff;
-  border: 1px solid #1e293b;
-  box-shadow: 0 3px 10px rgba(30,41,59,0.3);
+  border: 1px solid #064e3b;
+  box-shadow: 0 3px 10px rgba(6,95,70,0.35);
   font-weight: 700;
 }
 
@@ -163,7 +169,7 @@
   transform: translateY(-50%);
   width: 4px;
   height: 60%;
-  background: linear-gradient(180deg, #0b74b8, #0284c7);
+  background: linear-gradient(180deg, var(--obe-accent), var(--obe-accent-700));
   border-radius: 0 4px 4px 0;
 }
 
@@ -197,4 +203,14 @@
 
 .obe-btn-success:hover{
   background: linear-gradient(180deg, #059669, #047857);
+}
+
+/* Percentage badge for % columns */
+.obe-pct-badge{
+  display:inline-flex; align-items:center; justify-content:center;
+  height: 22px; min-width: 36px; padding:0 8px;
+  background: linear-gradient(180deg, var(--obe-green-50), var(--obe-green-100));
+  border:1px solid var(--obe-green-200);
+  color: var(--obe-green-800);
+  border-radius: 999px; font-weight: 700; font-size: 12px;
 }

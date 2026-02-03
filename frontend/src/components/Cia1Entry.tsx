@@ -615,7 +615,8 @@ export default function Cia1Entry({ subjectId }: Props) {
   const cellTh: React.CSSProperties = {
     border: '1px solid #111',
     padding: '6px 6px',
-    background: '#f3f4f6',
+    background: '#ecfdf5',
+    color: '#065f46',
     textAlign: 'center',
     fontWeight: 700,
     fontSize: 12,
@@ -735,16 +736,16 @@ export default function Cia1Entry({ subjectId }: Props) {
                 </th>
               </tr>
               <tr>
-                <th style={cellTh} rowSpan={3}>
+                <th style={{ ...cellTh, position: 'sticky', left: 0, minWidth: 60, zIndex: 5 }} rowSpan={3}>
                   S.No
                 </th>
-                <th style={cellTh} rowSpan={3}>
+                <th style={{ ...cellTh, position: 'sticky', left: 60, minWidth: 140, zIndex: 5 }} rowSpan={3}>
                   Register No.
                 </th>
-                <th style={cellTh} rowSpan={3}>
+                <th style={{ ...cellTh, position: 'sticky', left: 200, minWidth: 260, zIndex: 5 }} rowSpan={3}>
                   Name of the Students
                 </th>
-                <th style={cellTh} rowSpan={3}>
+                <th style={{ ...cellTh, position: 'sticky', left: 460, minWidth: 80, zIndex: 5 }} rowSpan={3}>
                   ABSENT
                 </th>
 
@@ -790,7 +791,7 @@ export default function Cia1Entry({ subjectId }: Props) {
                 {Array.from({ length: 2 + visibleBtls.length }).flatMap((_, i) => (
                   <React.Fragment key={i}>
                     <th style={cellTh}>Mark</th>
-                    <th style={cellTh}>%</th>
+                    <th style={{ ...cellTh, background: '#ecfdf5', color: '#065f46' }}>%</th>
                   </React.Fragment>
                 ))}
               </tr>
@@ -889,10 +890,10 @@ export default function Cia1Entry({ subjectId }: Props) {
 
                 return (
                   <tr key={s.id} style={rowStyle}>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{i + 1}</td>
-                    <td style={cellTd}>{s.reg_no}</td>
-                    <td style={cellTd}>{s.name}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>
+                    <td style={{ ...cellTd, textAlign: 'center', position: 'sticky', left: 0, minWidth: 60, background: '#fff', zIndex: 4 }}>{i + 1}</td>
+                    <td style={{ ...cellTd, position: 'sticky', left: 60, minWidth: 140, background: '#fff', zIndex: 4 }}>{s.reg_no}</td>
+                    <td style={{ ...cellTd, position: 'sticky', left: 200, minWidth: 260, background: '#fff', zIndex: 4 }}>{s.name}</td>
+                    <td style={{ ...cellTd, textAlign: 'center', position: 'sticky', left: 460, minWidth: 80, background: '#fff', zIndex: 4 }}>
                       <input
                         type="checkbox"
                         checked={row.absent}
@@ -919,14 +920,20 @@ export default function Cia1Entry({ subjectId }: Props) {
                     </td>
 
                     <td style={{ ...cellTd, textAlign: 'center' }}>{co1}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{pct(co1, effectiveCoMax.co1)}</td>
+                    <td style={{ ...cellTd, textAlign: 'center', background: 'linear-gradient(180deg,#ecfdf5,#ffffff)' }}>
+                      <span className="obe-pct-badge">{pct(co1, effectiveCoMax.co1)}</span>
+                    </td>
                     <td style={{ ...cellTd, textAlign: 'center' }}>{co2}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{pct(co2, effectiveCoMax.co2)}</td>
+                    <td style={{ ...cellTd, textAlign: 'center', background: 'linear-gradient(180deg,#ecfdf5,#ffffff)' }}>
+                      <span className="obe-pct-badge">{pct(co2, effectiveCoMax.co2)}</span>
+                    </td>
 
                     {visibleBtls.map((n) => (
                       <React.Fragment key={`btl-row-${s.id}-${n}`}>
                         <td style={{ ...cellTd, textAlign: 'center' }}>{btl[n as 1 | 2 | 3 | 4 | 5 | 6]}</td>
-                        <td style={{ ...cellTd, textAlign: 'center' }}>{pct(btl[n as 1 | 2 | 3 | 4 | 5 | 6], effectiveBtlMax[n as 1 | 2 | 3 | 4 | 5 | 6])}</td>
+                        <td style={{ ...cellTd, textAlign: 'center', background: 'linear-gradient(180deg,#ecfdf5,#ffffff)' }}>
+                          <span className="obe-pct-badge">{pct(btl[n as 1 | 2 | 3 | 4 | 5 | 6], effectiveBtlMax[n as 1 | 2 | 3 | 4 | 5 | 6])}</span>
+                        </td>
                       </React.Fragment>
                     ))}
                   </tr>

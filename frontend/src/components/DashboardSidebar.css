@@ -11,10 +11,10 @@
 .dsb-list{ list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:6px; }
 .dsb-item{ border-radius:10px; }
 .dsb-link{ display:flex; gap:10px; align-items:center; padding:10px 12px; color:#0f172a; text-decoration:none; border-radius:8px; }
-.dsb-icon{ width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; color:#6366f1; }
+.dsb-icon{ width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; color:#10b981; }
 .dsb-label{ font-weight:600; }
-.dsb-item.active .dsb-link{ background: linear-gradient(90deg,#eef2ff,#f0f9ff); box-shadow:0 6px 14px rgba(99,102,241,0.06); }
-.dsb-link:hover{ background:rgba(99,102,241,0.06); }
+.dsb-item.active .dsb-link{ background: linear-gradient(90deg,#ecfdf5,#ffffff); box-shadow:0 6px 14px rgba(16,185,129,0.10); }
+.dsb-link:hover{ background:rgba(16,185,129,0.08); }
 
 .dsb a{ color:inherit; }
 

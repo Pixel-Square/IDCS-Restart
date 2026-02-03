@@ -31,7 +31,7 @@
 }
 
 .navbar-logo:hover {
-  color: #2563eb;
+  color: #059669;
 }
 
 .logo-image {
@@ -51,7 +51,7 @@
 .logo-icon {
   width: 28px;
   height: 28px;
-  color: #2563eb;
+  color: #10b981;
 }
 
 .navbar-links {
@@ -103,7 +103,7 @@
   left: 0;
   width: 0;
   height: 2px;
-  background: #2563eb;
+  background: #10b981;
   transition: width 0.2s ease;
 }
 
@@ -144,7 +144,7 @@
 
 .login-btn {
   padding: 10px 24px;
-  background: #2563eb;
+  background: #10b981;
   color: white;
   text-decoration: none;
   border-radius: 8px;
@@ -155,9 +155,9 @@
 }
 
 .login-btn:hover {
-  background: #1d4ed8;
+  background: #059669;
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
 }
 
 @media (max-width: 768px) {
