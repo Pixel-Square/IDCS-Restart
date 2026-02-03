@@ -30,7 +30,7 @@ def get_pending_approvals_for_user(user):
     ).select_related(
         'application_type',
         'applicant_user',
-        'student_profile__section__semester__course__department',
+        'student_profile__section__batch__course__department',
         'current_step__role',
     )
 
@@ -55,5 +55,5 @@ def get_pending_approvals_for_user(user):
         return Application.objects.none()
 
     return Application.objects.filter(id__in=candidate_ids).select_related(
-        'application_type', 'applicant_user', 'student_profile__section__semester__course__department', 'current_step__role'
+        'application_type', 'applicant_user', 'student_profile__section__batch__course__department', 'current_step__role'
     ).order_by('-created_at')

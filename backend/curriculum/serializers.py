@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from .models import CurriculumMaster, CurriculumDepartment
-from academics.models import Department
+from academics.models import Department, Semester
 
 
 class DepartmentSmallSerializer(serializers.ModelSerializer):
@@ -12,11 +12,14 @@ class DepartmentSmallSerializer(serializers.ModelSerializer):
 class CurriculumMasterSerializer(serializers.ModelSerializer):
     departments = serializers.PrimaryKeyRelatedField(queryset=Department.objects.all(), many=True, required=False)
     departments_display = DepartmentSmallSerializer(source='departments', many=True, read_only=True)
+    # expose semester number for frontend convenience and accept semester_id on writes
+    semester = serializers.IntegerField(source='semester.number', read_only=True)
+    semester_id = serializers.PrimaryKeyRelatedField(queryset=Semester.objects.all(), source='semester', write_only=True, required=False)
 
     class Meta:
         model = CurriculumMaster
         fields = [
-            'id', 'regulation', 'semester', 'course_code', 'course_name', 'class_type', 'category',
+            'id', 'regulation', 'semester', 'semester_id', 'course_code', 'course_name', 'class_type', 'category',
             'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark',
             'for_all_departments', 'departments', 'departments_display', 'editable', 'created_by', 'created_at', 'updated_at'
         ]
@@ -37,11 +40,13 @@ class CurriculumMasterSerializer(serializers.ModelSerializer):
 class CurriculumDepartmentSerializer(serializers.ModelSerializer):
     department = DepartmentSmallSerializer(read_only=True)
     department_id = serializers.PrimaryKeyRelatedField(queryset=Department.objects.all(), source='department', write_only=True)
+    semester = serializers.IntegerField(source='semester.number', read_only=True)
+    semester_id = serializers.PrimaryKeyRelatedField(queryset=Semester.objects.all(), source='semester', write_only=True, required=False)
 
     class Meta:
         model = CurriculumDepartment
         fields = [
-            'id', 'master', 'department', 'department_id', 'regulation', 'semester', 'course_code', 'course_name',
+            'id', 'master', 'department', 'department_id', 'regulation', 'semester', 'semester_id', 'course_code', 'course_name',
             'class_type', 'category', 'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark',
             'total_hours', 'question_paper_type', 'editable', 'overridden',
             'approval_status', 'approved_by', 'approved_at',

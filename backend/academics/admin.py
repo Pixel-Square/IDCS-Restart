@@ -13,6 +13,7 @@ from .models import (
     Course,
     Semester,
     Section,
+    Batch,
     Subject,
     PROFILE_STATUS_CHOICES,
     StudentProfile,
@@ -22,9 +23,9 @@ from .models import (
     RoleAssignment,
 )
 from .models import TeachingAssignment
-from .models import AttendanceSession, AttendanceRecord
-from .models import StudentMentorMap, SectionAdvisor, DepartmentRole
+from .models import StudentMentorMap, SectionAdvisor, DepartmentRole, DayAttendanceSession, DayAttendanceRecord
 from django import forms
+from django.db import models
 from django.core.exceptions import ValidationError
 
 
@@ -82,7 +83,7 @@ class StudentProfileAdmin(admin.ModelAdmin):
     list_display = ('user', 'reg_no', 'get_department', 'batch', 'current_section_display', 'status')
     search_fields = ('reg_no', 'user__username', 'user__email')
     # filter by the department through the section->semester->course relation
-    list_filter = ('section__semester__course__department', 'batch')
+    list_filter = ('section__batch__course__department', 'batch')
     actions = ('deactivate_students', 'mark_alumni', 'delete_profiles_and_users')
 
     change_list_template = 'admin/academics/studentprofile/change_list.html'
@@ -247,10 +248,11 @@ class StudentProfileAdmin(admin.ModelAdmin):
         sec = getattr(obj, 'section', None)
         if not sec:
             return None
-        sem = getattr(sec, 'semester', None)
-        if not sem:
+        # section is now batch-wise; resolve course via batch
+        batch = getattr(sec, 'batch', None)
+        if not batch:
             return None
-        course = getattr(sem, 'course', None)
+        course = getattr(batch, 'course', None)
         if not course:
             return None
         dept = getattr(course, 'department', None)
@@ -365,8 +367,9 @@ class RoleAssignmentAdmin(admin.ModelAdmin):
 
 @admin.register(AcademicYear)
 class AcademicYearAdmin(admin.ModelAdmin):
-    list_display = ('name', 'is_active')
+    list_display = ('name', 'parity', 'is_active')
     list_editable = ('is_active',)
+    list_filter = ('parity', 'is_active')
     search_fields = ('name',)
 
 
@@ -391,65 +394,88 @@ class CourseAdmin(admin.ModelAdmin):
 
 @admin.register(Semester)
 class SemesterAdmin(admin.ModelAdmin):
-    list_display = ('course', 'number')
-    search_fields = ('course__name',)
-    list_filter = ('course',)
+    # `course` was removed from Semester; show the semester number only.
+    list_display = ('number',)
+    search_fields = ()
+    list_filter = ('number',)
 
 
 @admin.register(Section)
 class SectionAdmin(admin.ModelAdmin):
-    list_display = ('semester', 'name')
+    list_display = ('batch', 'name', 'semester')
     search_fields = ('name',)
-    list_filter = ('semester',)
+    list_filter = ('batch',)
 
 
 @admin.register(Subject)
 class SubjectAdmin(admin.ModelAdmin):
-    list_display = ('code', 'name', 'semester')
+    list_display = ('code', 'name', 'course', 'semester')
     search_fields = ('code', 'name')
-    list_filter = ('semester',)
+    list_filter = ('course', 'semester')
+
+
+@admin.register(Batch)
+class BatchAdmin(admin.ModelAdmin):
+    list_display = ('name', 'course', 'start_year', 'end_year')
+    search_fields = ('name', 'course__name')
+    list_filter = ('course',)
 
 
 @admin.register(TeachingAssignment)
 class TeachingAssignmentAdmin(admin.ModelAdmin):
-    list_display = ('staff', 'subject', 'section', 'academic_year', 'is_active')
+    list_display = ('staff', 'subject_display', 'section', 'academic_year', 'is_active')
     search_fields = (
         'staff__staff_id', 'staff__user__username', 'subject__code', 'subject__name', 'section__name'
     )
-    list_filter = ('academic_year', 'is_active', 'section__semester__course__department')
-    raw_id_fields = ('staff', 'subject', 'section', 'academic_year')
+    list_filter = ('academic_year', 'is_active', 'section__batch__course__department')
+    raw_id_fields = ('staff', 'curriculum_row', 'section', 'academic_year')
 
+    def subject_display(self, obj):
+        try:
+            from curriculum.models import CurriculumDepartment
+            # prefer explicit curriculum_row if set
+            if getattr(obj, 'curriculum_row', None):
+                cr = obj.curriculum_row
+                return f"{cr.course_code or ''} - {cr.course_name or ''}".strip(' -')
 
-@admin.register(AttendanceSession)
-class AttendanceSessionAdmin(admin.ModelAdmin):
-    list_display = ('teaching_assignment', 'date', 'period', 'created_by', 'is_locked', 'created_at')
-    search_fields = (
-        'teaching_assignment__staff__staff_id', 'teaching_assignment__subject__code', 'teaching_assignment__section__name'
-    )
-    list_filter = ('date', 'is_locked', 'teaching_assignment__academic_year', 'teaching_assignment__section__semester__course__department')
-    raw_id_fields = ('teaching_assignment', 'created_by')
+            # if subject exists, show its name/code
+            if getattr(obj, 'subject', None):
+                try:
+                    return getattr(obj.subject, 'name') or getattr(obj.subject, 'code') or str(obj.subject)
+                except Exception:
+                    return str(obj.subject)
 
+            # fallback: return first curriculum row for section's department
+            dept = None
+            try:
+                dept = obj.section.batch.course.department
+            except Exception:
+                dept = None
+            if dept is not None:
+                row = CurriculumDepartment.objects.filter(department=dept).first()
+            else:
+                row = CurriculumDepartment.objects.first()
+            if row:
+                return f"{row.course_code or ''} - {row.course_name or ''}".strip(' -')
+        except Exception:
+            pass
+        return 'No subject'
 
-@admin.register(AttendanceRecord)
-class AttendanceRecordAdmin(admin.ModelAdmin):
-    list_display = ('attendance_session', 'student', 'status', 'marked_at')
-    search_fields = ('student__reg_no', 'student__user__username')
-    list_filter = ('status', 'attendance_session__date', 'attendance_session__teaching_assignment__academic_year')
-    raw_id_fields = ('attendance_session', 'student')
+    subject_display.short_description = 'Subject (Curriculum)'
 
 
 @admin.register(StudentMentorMap)
 class StudentMentorMapAdmin(admin.ModelAdmin):
-    list_display = ('student', 'mentor', 'academic_year', 'is_active')
-    list_filter = ('academic_year', 'is_active', 'student__section__semester__course__department')
+    list_display = ('student', 'mentor', 'is_active')
+    list_filter = ('is_active', 'student__section__batch__course__department')
     search_fields = ('student__reg_no', 'mentor__staff_id', 'mentor__user__username')
-    raw_id_fields = ('student', 'mentor', 'academic_year')
+    raw_id_fields = ('student', 'mentor')
 
 
 @admin.register(SectionAdvisor)
 class SectionAdvisorAdmin(admin.ModelAdmin):
     list_display = ('section', 'advisor', 'academic_year', 'is_active')
-    list_filter = ('academic_year', 'is_active', 'section__semester__course__department')
+    list_filter = ('academic_year', 'is_active', 'section__batch__course__department')
     search_fields = ('section__name', 'advisor__staff_id', 'advisor__user__username')
     raw_id_fields = ('section', 'advisor', 'academic_year')
 
@@ -460,3 +486,17 @@ class DepartmentRoleAdmin(admin.ModelAdmin):
     list_filter = ('academic_year', 'is_active', 'department', 'role')
     search_fields = ('staff__staff_id', 'staff__user__username')
     raw_id_fields = ('staff', 'academic_year')
+
+
+@admin.register(DayAttendanceSession)
+class DayAttendanceSessionAdmin(admin.ModelAdmin):
+    list_display = ('section', 'date', 'created_by', 'is_locked', 'created_at')
+    list_filter = ('date', 'is_locked', 'section__batch__course__department')
+    raw_id_fields = ('section', 'created_by')
+
+
+@admin.register(DayAttendanceRecord)
+class DayAttendanceRecordAdmin(admin.ModelAdmin):
+    list_display = ('session', 'student', 'status', 'marked_at')
+    list_filter = ('status',)
+    raw_id_fields = ('session', 'student')

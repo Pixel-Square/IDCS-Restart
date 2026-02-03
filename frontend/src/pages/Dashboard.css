@@ -1,12 +1,71 @@
+.course-textarea {
+	font-family: inherit;
+	overflow: hidden;
+	resize: none;
+	background: #f8fafc;
+	border: 1px solid #d1d5db;
+	border-radius: 6px;
+	padding: 5px 8px;
+	font-size: 15px;
+	color: #1e293b;
+	font-weight: 500;
+	min-height: 32px;
+	max-height: 120px;
+	width: 100%;
+	box-sizing: border-box;
+	line-height: 1.4;
+	white-space: pre-wrap;
+	word-break: break-word;
+	transition: border 0.15s, box-shadow 0.15s;
+}
+.course-textarea:focus {
+	border: 1.5px solid #6366f1;
+	background: #eef2ff;
+}
+/* Inline edit cell for curriculum table */
+.edit-cell-input {
+	width: 100%;
+	min-width: 40px;
+	max-width: 100px;
+	padding: 5px 8px;
+	border: 1px solid #d1d5db;
+	border-radius: 6px;
+	background: #f8fafc;
+	font-size: 14px;
+	color: #1e293b;
+	outline: none;
+	transition: border 0.15s, box-shadow 0.15s;
+	box-shadow: none;
+	height: 32px;
+	margin: 0;
+}
+.edit-cell-input:focus {
+	border: 1.5px solid #6366f1;
+	background: #eef2ff;
+}
 .dashboard-root{
 	display:flex;
+<<<<<<< HEAD
 	min-height:100vh;
 	background: linear-gradient(180deg, #ecfdf5 0%, #ffffff 60%);
+=======
+	/* subtract navbar height so total page fits viewport without extra scroll */
+	min-height: calc(100vh - 64px);
+	background: linear-gradient(180deg, #f7fbff 0%, #ffffff 60%);
+>>>>>>> origin/main
 	color: #0f172a;
 }
 .dashboard-main{
-	padding:28px;
-	flex:1;
+  padding:28px;
+  flex:1;
+  /* leave space for the fixed sidebar on the left */
+  margin-left: 260px;
+  transition: margin-left 180ms ease;
+}
+
+/* When sidebar is collapsed adjust main margin */
+.dsb.collapsed ~ .dashboard-main{
+  margin-left: 72px;
 }
 
 /* Welcome */

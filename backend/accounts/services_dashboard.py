@@ -121,12 +121,24 @@ def resolve_dashboard_capabilities(user) -> Dict:
         'can_edit_curriculum_master': has_master_edit(),
         'can_approve_department_curriculum': has_department_approve(),
         'can_fill_department_curriculum': has_department_fill(),
+        'can_manage_timetable_templates': 'timetable.manage_templates' in lower_perms,
+        'can_assign_timetable': 'timetable.assign' in lower_perms,
+        'can_view_timetable': 'timetable.view' in lower_perms,
+        'can_assign_advisor': 'academics.assign_advisor' in lower_perms,
+        'can_assign_teaching': 'academics.assign_teaching' in lower_perms,
+        'can_view_my_students': 'academics.view_my_students' in lower_perms,
     }
 
+    hod_role_present = any(r.upper() == 'HOD' for r in role_names)
     entry_points = {
         'curriculum_master': bool(flags.get('can_edit_curriculum_master') or flags.get('can_view_curriculum_master')),
         'department_curriculum': bool(flags.get('can_fill_department_curriculum') or flags.get('can_approve_department_curriculum')),
         'student_curriculum_view': bool(flags.get('is_student')),
+        'timetable_templates': bool(flags.get('can_manage_timetable_templates') or user.is_staff),
+        'timetable_assignments': bool(flags.get('can_assign_timetable') or any(r.upper() == 'HOD' for r in role_names)),
+        'hod_advisors': bool(flags.get('can_assign_advisor') or hod_role_present),
+        'hod_teaching': bool(flags.get('can_assign_teaching') or hod_role_present),
+        'advisor_students': bool(flags.get('can_view_my_students') or any(r.upper() == 'ADVISOR' for r in role_names)),
     }
 
     return {

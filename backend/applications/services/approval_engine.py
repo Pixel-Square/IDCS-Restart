@@ -24,7 +24,8 @@ def _get_applicant_department(application):
     student = getattr(application, 'student_profile', None)
     try:
         if student is not None and student.section is not None:
-            return student.section.semester.course.department
+            # sections are batch-wise; resolve course via section.batch
+            return student.section.batch.course.department
     except Exception:
         # Defensive: if relationship missing, fall back to None
         return None

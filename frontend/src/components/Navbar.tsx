@@ -42,22 +42,14 @@ export default function Navbar({ user }: NavbarProps) {
 
         <div className="navbar-links">
           {user ? (
-            <>
-              <div className="user-menu">
-                <span className="user-name">{user.username}</span>
-                <button onClick={handleLogout} className="logout-btn">
-                  Logout
-                </button>
-              </div>
-            </>
+            <div className="user-menu">
+              <span className="user-name">{user.username}</span>
+              <button onClick={handleLogout} className="logout-btn">Logout</button>
+            </div>
           ) : isLoginPage ? (
-            <Link to="/" className="login-btn">
-              Home
-            </Link>
+            <Link to="/" className="login-btn">Home</Link>
           ) : (
-            <Link to="/login" className="login-btn">
-              Login
-            </Link>
+            <Link to="/login" className="login-btn">Login</Link>
           )}
         </div>
       </div>

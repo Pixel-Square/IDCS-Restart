@@ -10,15 +10,21 @@ from django.utils.translation import gettext_lazy as _
 
 
 class AcademicYear(models.Model):
-    name = models.CharField(max_length=32, unique=True)
+    name = models.CharField(max_length=32)
     is_active = models.BooleanField(default=False)
+    PARITY_CHOICES = (
+        ('ODD', 'Odd'),
+        ('EVEN', 'Even'),
+    )
+    parity = models.CharField(max_length=4, choices=PARITY_CHOICES, null=True, blank=True)
 
     class Meta:
         verbose_name = 'Academic Year'
         verbose_name_plural = 'Academic Years'
+        unique_together = ('name', 'parity')
 
     def __str__(self):
-        return self.name
+        return f"{self.name}{' (' + self.parity + ')' if self.parity else ''}"
 
 
 class Department(models.Model):
@@ -52,31 +58,108 @@ class Course(models.Model):
 
 
 class Semester(models.Model):
+    # Semesters are numbered terms common across courses/departments (Sem 1..N).
     number = models.PositiveSmallIntegerField()
-    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='semesters')
 
     class Meta:
-        unique_together = ('number', 'course')
+        unique_together = (('number',),)
 
     def __str__(self):
-        return f"{self.course.name} - Sem {self.number}"
+        return f"Sem {self.number}"
 
 
 class Section(models.Model):
+    # Sections are now batch-wise rather than semester-wise. A Batch groups students
+    # (cohort) for a course; sections belong to a Batch.
     name = models.CharField(max_length=8)
-    semester = models.ForeignKey(Semester, on_delete=models.CASCADE, related_name='sections')
+    batch = models.ForeignKey('Batch', on_delete=models.CASCADE, related_name='sections')
+    semester = models.ForeignKey('Semester', on_delete=models.PROTECT, null=True, blank=True, related_name='sections')
 
     class Meta:
-        unique_together = ('name', 'semester')
+        unique_together = ('name', 'batch')
 
     def __str__(self):
-        return f"{self.semester} / {self.name}"
+        return f"{self.batch} / {self.name}"
+
+    def save(self, *args, **kwargs):
+        """Auto-assign `semester` based on the section's batch start year and the
+        currently active AcademicYear parity.
+
+        Formula:
+          sem_number = (academic_start_year - batch_start_year) * 2 + (1 if parity=='ODD' else 2)
+
+        If `batch.start_year` is not set, try to parse an integer from batch.name.
+        """
+        # only attempt if semester is not explicitly set
+        if not self.semester:
+            try:
+                batch = getattr(self, 'batch', None)
+                if batch is None:
+                    return super().save(*args, **kwargs)
+
+                # determine batch start year
+                start_year = getattr(batch, 'start_year', None)
+                if start_year is None:
+                    try:
+                        start_year = int(str(batch.name).split('-')[0])
+                    except Exception:
+                        start_year = None
+
+                if start_year is None:
+                    return super().save(*args, **kwargs)
+
+                # find active academic year (fallback to latest)
+                ay = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.order_by('-id').first()
+                if ay is None:
+                    return super().save(*args, **kwargs)
+
+                # parse academic start year from name like '2025-2026'
+                try:
+                    acad_start = int(str(ay.name).split('-')[0])
+                except Exception:
+                    return super().save(*args, **kwargs)
+
+                delta = acad_start - int(start_year)
+                # parity determines odd/even semester within the academic year
+                offset = 1 if (ay.parity or '').upper() == 'ODD' else 2
+                sem_number = delta * 2 + offset
+                if sem_number and sem_number > 0:
+                    sem_obj, _ = Semester.objects.get_or_create(number=sem_number)
+                    self.semester = sem_obj
+            except Exception:
+                # fail silently and continue saving without semester
+                pass
+
+        return super().save(*args, **kwargs)
+
+
+class Batch(models.Model):
+    """A student cohort/batch for a given course.
+
+    Example: Batch name '2023' for B.Tech CSE course. Sections belong to a Batch.
+    """
+    name = models.CharField(max_length=32)
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='batches')
+    start_year = models.PositiveSmallIntegerField(null=True, blank=True)
+    end_year = models.PositiveSmallIntegerField(null=True, blank=True)
+
+    class Meta:
+        unique_together = ('name', 'course')
+
+    def __str__(self):
+        return f"{self.course.name} - {self.name}"
 
 
 class Subject(models.Model):
     code = models.CharField(max_length=32, unique=True)
     name = models.CharField(max_length=128)
     semester = models.ForeignKey(Semester, on_delete=models.CASCADE, related_name='subjects')
+    # Subjects are defined for a specific course and semester. Add explicit
+    # course FK so semester is a global term and course is directly available.
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='subjects', null=True, blank=True)
+
+    class Meta:
+        unique_together = ('code', 'course')
 
     def __str__(self):
         return f"{self.code} - {self.name}"
@@ -305,24 +388,72 @@ class RoleAssignment(models.Model):
 class StudentMentorMap(models.Model):
     student = models.ForeignKey(StudentProfile, on_delete=models.CASCADE, related_name='mentor_mappings')
     mentor = models.ForeignKey(StaffProfile, on_delete=models.CASCADE, related_name='mentee_mappings')
-    academic_year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT, related_name='student_mentors')
     is_active = models.BooleanField(default=True)
 
     class Meta:
         verbose_name = 'Student Mentor Mapping'
         verbose_name_plural = 'Student Mentor Mappings'
+        # No academic year field on this mapping; uniqueness is per student when active
         constraints = [
-            models.UniqueConstraint(fields=['student', 'academic_year'], condition=Q(is_active=True), name='unique_active_mentor_per_student_year')
+            models.UniqueConstraint(fields=['student'], condition=Q(is_active=True), name='unique_active_mentor_per_student')
         ]
 
+
+# Day-level attendance models (fresh implementation)
+ATTENDANCE_STATUS_CHOICES = (
+    ('P', 'Present'),
+    ('A', 'Absent'),
+    ('OD', 'On Duty'),
+    ('LATE', 'Late'),
+    ('LEAVE', 'Leave'),
+)
+
+
+class DayAttendanceSession(models.Model):
+    """A single-day attendance session for a Section.
+
+    Fields:
+    - section: which section the attendance is for
+    - date: attendance date
+    - created_by: staff who created/marked the session (usually advisor)
+    - is_locked: once locked, records should not be modified
+    - created_at: timestamp
+    """
+    section = models.ForeignKey(Section, on_delete=models.PROTECT, related_name='day_attendance_sessions')
+    date = models.DateField(default=date.today)
+    created_by = models.ForeignKey(StaffProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    is_locked = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = (('section', 'date'),)
+
     def __str__(self):
-        return f"{self.student.reg_no} -> {self.mentor.staff_id} ({self.academic_year.name})"
+        return f"Attendance {self.section} @ {self.date}"
+
+
+class DayAttendanceRecord(models.Model):
+    session = models.ForeignKey(DayAttendanceSession, on_delete=models.CASCADE, related_name='records')
+    student = models.ForeignKey(StudentProfile, on_delete=models.CASCADE, related_name='day_attendance_records')
+    status = models.CharField(max_length=8, choices=ATTENDANCE_STATUS_CHOICES)
+    marked_at = models.DateTimeField(auto_now=True)
+    marked_by = models.ForeignKey(StaffProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+
+    class Meta:
+        unique_together = (('session', 'student'),)
+
+    def __str__(self):
+        return f"{self.student} - {self.get_status_display()} @ {self.session.date}"
+
+    def __str__(self):
+        return f"{self.student.reg_no} -> {self.mentor.staff_id}"
 
     def clean(self):
         # minimal validation: mentor must belong to same department as student's course department
         student_dept = None
-        if self.student and self.student.section and self.student.section.semester and self.student.section.semester.course:
-            student_dept = self.student.section.semester.course.department
+        # Section is now batch-wise; access course via section.batch
+        if self.student and self.student.section and getattr(self.student.section, 'batch', None) and getattr(self.student.section.batch, 'course', None):
+            student_dept = self.student.section.batch.course.department
 
         mentor_dept = getattr(self.mentor, 'department', None)
         if student_dept and mentor_dept and student_dept != mentor_dept:
@@ -347,19 +478,10 @@ class SectionAdvisor(models.Model):
         return f"{self.section} -> {self.advisor.staff_id} ({self.academic_year.name})"
 
     def clean(self):
-        # advisor must belong to the department of the section's course
-        sec = self.section
-        section_dept = None
-        try:
-            if sec and sec.semester and sec.semester.course:
-                section_dept = sec.semester.course.department
-        except Exception:
-            section_dept = None
-
-        advisor_dept = getattr(self.advisor, 'department', None)
-        if section_dept and advisor_dept and section_dept != advisor_dept:
-            from django.core.exceptions import ValidationError
-            raise ValidationError('Advisor must belong to the same department as the section')
+        # Department membership is not enforced at the model level; allow
+        # advisors to be assigned across departments. Permission checks
+        # remain the responsibility of higher-level logic (views/permissions).
+        pass
 
 
 class DepartmentRole(models.Model):
@@ -385,11 +507,11 @@ class DepartmentRole(models.Model):
         return f"{self.department.code} - {self.get_role_display()} ({self.staff.staff_id} | {self.academic_year.name})"
 
     def clean(self):
-        # staff must belong to the same department
-        staff_dept = getattr(self.staff, 'department', None)
-        if staff_dept and self.department and staff_dept != self.department:
-            from django.core.exceptions import ValidationError
-            raise ValidationError('Staff must belong to the selected department')
+        # Department membership is not enforced at the model level for
+        # DepartmentRole. A staff may be assigned roles for departments
+        # independent of their profile.department; permission checks
+        # should be handled at the views/permissions layer.
+        pass
 
 
 class TeachingAssignment(models.Model):
@@ -405,7 +527,18 @@ class TeachingAssignment(models.Model):
     subject = models.ForeignKey(
         Subject,
         on_delete=models.CASCADE,
-        related_name='teaching_assignments'
+        related_name='teaching_assignments',
+        null=True,
+        blank=True,
+    )
+    # Prefer referencing the department curriculum row directly rather than creating
+    # ad-hoc Subject records. New assignments should use `curriculum_row`.
+    curriculum_row = models.ForeignKey(
+        'curriculum.CurriculumDepartment',
+        on_delete=models.CASCADE,
+        related_name='teaching_assignments',
+        null=True,
+        blank=True,
     )
     section = models.ForeignKey(
         Section,
@@ -423,87 +556,33 @@ class TeachingAssignment(models.Model):
         verbose_name = 'Teaching Assignment'
         verbose_name_plural = 'Teaching Assignments'
         constraints = [
+            # Use curriculum_row uniqueness going forward. Keep subject nullable
+            # for backward compatibility.
             models.UniqueConstraint(
-                fields=['staff', 'subject', 'section', 'academic_year'],
-                name='unique_staff_subject_section_year'
+                fields=['staff', 'curriculum_row', 'section', 'academic_year'],
+                name='unique_staff_curriculum_section_year'
             )
         ]
 
     def __str__(self):
-        return f"{self.staff.staff_id} -> {self.subject.code} ({self.section} | {self.academic_year})"
+        # Prefer displaying curriculum row info when available; fall back to Subject
+        subj_part = None
+        try:
+            if getattr(self, 'curriculum_row', None):
+                cr = self.curriculum_row
+                subj_part = f"{cr.course_code or ''} - {cr.course_name or ''}".strip(' -')
+            elif getattr(self, 'subject', None):
+                # subject may be nullable; guard against None
+                subj_part = getattr(self.subject, 'code', None) or str(self.subject)
+            else:
+                subj_part = 'No subject'
+        except Exception:
+            subj_part = getattr(self.subject, 'code', str(self.subject)) if getattr(self, 'subject', None) else 'No subject'
+
+        return f"{self.staff.staff_id} -> {subj_part} ({self.section} | {self.academic_year})"
 
 
-# Attendance models
-class AttendanceSession(models.Model):
-    """A session when attendance is taken for a teaching assignment.
-
-    `period` is optional and can be used for multi-period days.
-    """
-    teaching_assignment = models.ForeignKey(
-        TeachingAssignment,
-        on_delete=models.CASCADE,
-        related_name='attendance_sessions'
-    )
-    date = models.DateField()
-    period = models.CharField(max_length=32, null=True, blank=True)
-    created_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='created_attendance_sessions'
-    )
-    is_locked = models.BooleanField(default=False)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        verbose_name = 'Attendance Session'
-        verbose_name_plural = 'Attendance Sessions'
-        constraints = [
-            models.UniqueConstraint(
-                fields=['teaching_assignment', 'date', 'period'],
-                name='unique_teaching_date_period'
-            )
-        ]
-
-    def __str__(self):
-        period_part = f" Period {self.period}" if self.period else ""
-        return f"{self.teaching_assignment} — {self.date}{period_part}"
-
-
-class AttendanceRecord(models.Model):
-    PRESENT = 'P'
-    ABSENT = 'A'
-    STATUS_CHOICES = (
-        (PRESENT, 'Present'),
-        (ABSENT, 'Absent'),
-    )
-
-    attendance_session = models.ForeignKey(
-        AttendanceSession,
-        on_delete=models.CASCADE,
-        related_name='records'
-    )
-    student = models.ForeignKey(
-        StudentProfile,
-        on_delete=models.CASCADE,
-        related_name='attendance_records'
-    )
-    status = models.CharField(max_length=1, choices=STATUS_CHOICES)
-    marked_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        verbose_name = 'Attendance Record'
-        verbose_name_plural = 'Attendance Records'
-        constraints = [
-            models.UniqueConstraint(
-                fields=['attendance_session', 'student'],
-                name='unique_session_student'
-            )
-        ]
-
-    def __str__(self):
-        return f"{self.student.reg_no} — {self.get_status_display()} @ {self.attendance_session}"
+# Attendance models removed. Tables should be dropped via migration.
 
 
 # Historically the code deleted users when profiles were removed.

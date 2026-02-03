@@ -35,25 +35,17 @@ export type DeptRow = {
 
 // Default to backend dev server if VITE_API_BASE isn't provided
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
-
-function authHeaders() {
-  const token = window.localStorage.getItem('access');
-  return {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  };
-}
+import fetchWithAuth from './fetchAuth';
 
 export async function fetchMasters(): Promise<Master[]> {
-  const res = await fetch(`${API_BASE}/api/curriculum/master/`, { headers: authHeaders() });
+  const res = await fetchWithAuth(`${API_BASE}/api/curriculum/master/`);
   if (!res.ok) throw new Error('Failed to fetch masters');
   return res.json();
 }
 
 export async function createMaster(payload: Partial<Master>) {
-  const res = await fetch(`${API_BASE}/api/curriculum/master/`, {
+  const res = await fetchWithAuth(`${API_BASE}/api/curriculum/master/`, {
     method: 'POST',
-    headers: authHeaders(),
     body: JSON.stringify(payload),
   });
   if (!res.ok) throw new Error(await res.text());
@@ -61,9 +53,8 @@ export async function createMaster(payload: Partial<Master>) {
 }
 
 export async function updateMaster(id: number, payload: Partial<Master>) {
-  const res = await fetch(`${API_BASE}/api/curriculum/master/${id}/`, {
+  const res = await fetchWithAuth(`${API_BASE}/api/curriculum/master/${id}/`, {
     method: 'PATCH',
-    headers: authHeaders(),
     body: JSON.stringify(payload),
   });
 
@@ -85,15 +76,14 @@ export async function updateMaster(id: number, payload: Partial<Master>) {
 }
 
 export async function fetchDeptRows(): Promise<DeptRow[]> {
-  const res = await fetch(`${API_BASE}/api/curriculum/department/`, { headers: authHeaders() });
+  const res = await fetchWithAuth(`${API_BASE}/api/curriculum/department/`);
   if (!res.ok) throw new Error('Failed to fetch dept rows');
   return res.json();
 }
 
 export async function updateDeptRow(id: number, payload: Partial<DeptRow>) {
-  const res = await fetch(`${API_BASE}/api/curriculum/department/${id}/`, {
+  const res = await fetchWithAuth(`${API_BASE}/api/curriculum/department/${id}/`, {
     method: 'PATCH',
-    headers: authHeaders(),
     body: JSON.stringify(payload),
   });
   if (!res.ok) throw new Error(await res.text());
@@ -101,9 +91,8 @@ export async function updateDeptRow(id: number, payload: Partial<DeptRow>) {
 }
 
 export async function approveDeptRow(id: number, action: 'approve' | 'reject') {
-  const res = await fetch(`${API_BASE}/api/curriculum/department/${id}/approve/`, {
+  const res = await fetchWithAuth(`${API_BASE}/api/curriculum/department/${id}/approve/`, {
     method: 'POST',
-    headers: authHeaders(),
     body: JSON.stringify({ action }),
   });
   if (!res.ok) throw new Error(await res.text());

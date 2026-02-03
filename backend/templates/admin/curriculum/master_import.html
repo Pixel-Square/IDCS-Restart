@@ -1,0 +1,16 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+  <h1>Import Curriculum Masters (CSV)</h1>
+  <p>Upload a CSV matching the template. Columns: regulation, semester, course_code, course_name, category, class_type, l, t, p, s, c, internal_mark, external_mark, for_all_departments, editable, departments (comma-separated codes or ids)</p>
+  <form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    <div>
+      <input type="file" name="csv_file" accept="text/csv" required />
+    </div>
+    <div style="margin-top:12px">
+      <button type="submit" class="default">Upload</button>
+      <a href="../" class="button">Back</a>
+    </div>
+  </form>
+{% endblock %}

@@ -12,9 +12,14 @@ urlpatterns = [
     path('api/applications/', include('applications.urls')),
     path('api/attachments/', include('applications.attachments_urls')),
     path('api/curriculum/', include('curriculum.urls')),
+<<<<<<< HEAD
     path('api/obe/', include('OBE.urls')),
     path('api/template/', include('template_api.urls')),
     path('api/import/', include('question_bank.urls')),
+=======
+    path('api/academics/', include('academics.urls')),
+    path('api/timetable/', include('timetable.urls')),
+>>>>>>> origin/main
 ]
 
 if settings.DEBUG:

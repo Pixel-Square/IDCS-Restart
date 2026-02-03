@@ -34,17 +34,18 @@ def is_staff_available(staff: StaffProfile, when=None) -> bool:
     return bool(getattr(user, 'is_active', False))
 
 
-def get_student_mentor(student: StudentProfile, academic_year: AcademicYear) -> Optional[StaffProfile]:
-    """Return the active mentor StaffProfile for `student` in `academic_year`.
+def get_student_mentor(student: StudentProfile) -> Optional[StaffProfile]:
+    """Return the active mentor StaffProfile for `student`.
 
+    Mentor mappings are not year-scoped; return the current active mapping.
     Returns None when no active mapping exists or mentor is unavailable.
     """
-    if student is None or academic_year is None:
+    if student is None:
         return None
 
     mapping = (
         StudentMentorMap.objects
-        .filter(student=student, academic_year=academic_year, is_active=True)
+        .filter(student=student, is_active=True)
         .select_related('mentor__user', 'mentor__department')
         .first()
     )
@@ -87,8 +88,8 @@ def get_department_hod(student: StudentProfile, academic_year: AcademicYear) -> 
     """
     dept = None
     sec = getattr(student, 'section', None)
-    if sec and getattr(sec, 'semester', None) and getattr(sec.semester, 'course', None):
-        dept = sec.semester.course.department
+    if sec and getattr(sec, 'batch', None) and getattr(sec.batch, 'course', None):
+        dept = sec.batch.course.department
 
     if not dept:
         return None
@@ -113,8 +114,8 @@ def get_department_ahod(student: StudentProfile, academic_year: AcademicYear) ->
     """
     dept = None
     sec = getattr(student, 'section', None)
-    if sec and getattr(sec, 'semester', None) and getattr(sec.semester, 'course', None):
-        dept = sec.semester.course.department
+    if sec and getattr(sec, 'batch', None) and getattr(sec.batch, 'course', None):
+        dept = sec.batch.course.department
 
     if not dept:
         return None
@@ -147,8 +148,8 @@ def _get_flow_for_application(application):
     staff_profile = getattr(application, 'staff_profile', None)
     if student is not None:
         sec = getattr(student, 'section', None)
-        if sec and getattr(sec, 'semester', None) and getattr(sec.semester, 'course', None):
-            dept = sec.semester.course.department
+        if sec and getattr(sec, 'batch', None) and getattr(sec.batch, 'course', None):
+            dept = sec.batch.course.department
     elif staff_profile is not None:
         dept = getattr(staff_profile, 'department', None)
 
@@ -192,7 +193,7 @@ def resolve_approver(role_code: str, application_instance) -> Optional[StaffProf
 
     # Role-specific resolution
     if role_key == 'MENTOR':
-        mentor = get_student_mentor(student, academic_year)
+        mentor = get_student_mentor(student)
         if mentor:
             return mentor
         # fallback to advisor if mentor unavailable
