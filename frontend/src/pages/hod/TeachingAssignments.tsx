@@ -24,23 +24,14 @@ export default function TeachingAssignmentsPage(){
 
   const uniqueSems = sections.length ? Array.from(new Set(sections.map(s => s.semester))).sort((a, b) => (a || 0) - (b || 0)) : []
   const [selectedSem, setSelectedSem] = useState<number | null>(uniqueSems.length === 1 ? uniqueSems[0] ?? null : null)
-  
-  const uniqueDepts = sections.length ? Array.from(new Set(sections.map(s => s.department_id || s.department?.id).filter(Boolean))) : []
-  const [currentDept, setCurrentDept] = useState<number | null>(null)
-
-  useEffect(() => {
-    if (currentDept && !uniqueDepts.includes(currentDept)) {
-      setCurrentDept(null)
-    }
-  }, [sections, currentDept, uniqueDepts])
 
   useEffect(() => { fetchData() }, [])
 
   async function fetchData(){
     try{
       setLoading(true)
-      const sres = await fetchWithAuth('/api/academics/sections/?page_size=0')
-      const staffRes = await fetchWithAuth('/api/academics/hod-staff/?page_size=0')
+      const sres = await fetchWithAuth('/api/academics/my-students/?page_size=0')
+      const staffRes = await fetchWithAuth('/api/academics/advisor-staff/?page_size=0')
       const curRes = await fetchWithAuth('/api/curriculum/department/?page_size=0')
       const taRes = await fetchWithAuth('/api/academics/teaching-assignments/?page_size=0')
 
@@ -50,7 +41,7 @@ export default function TeachingAssignmentsPage(){
         return r.json()
       }
 
-      if (sres.ok){ const d = await safeJson(sres); setSections(d.results || d) }
+      if (sres.ok){ const d = await safeJson(sres); setSections((d.results || d).map((r:any) => ({ id: r.section_id, name: r.section_name, batch: r.batch, department_id: r.department_id, semester: r.semester, department: r.department }))) }
       if (staffRes.ok){ const d = await safeJson(staffRes); setStaff(d.results || d) }
       if (curRes.ok){ const d = await safeJson(curRes); setCurriculum(d.results || d) }
       if (taRes.ok){ const d = await safeJson(taRes); setAssignments(d.results || d) }
@@ -76,9 +67,8 @@ export default function TeachingAssignmentsPage(){
   )
 
   const filteredSections = sections.filter(s => {
-    const matchesDept = !currentDept || (s.department_id === currentDept || s.department?.id === currentDept)
     const matchesSem = !selectedSem || s.semester === selectedSem
-    return matchesDept && matchesSem
+    return matchesSem
   })
 
   return (
@@ -109,46 +99,7 @@ export default function TeachingAssignmentsPage(){
         </div>
       )}
 
-      {/* Department Pills */}
-      {uniqueDepts.length > 0 && (
-        <div style={{ marginBottom: '18px', display: 'flex', flexWrap: 'wrap', gap: '14px' }}>
-          {uniqueDepts.map(deptId => {
-            const isActive = currentDept === deptId
-            const deptCode = sections.find(s => (s.department_id === deptId || s.department?.id === deptId))?.department?.code ||
-                           curriculum.find(c => c.department?.id === deptId)?.department?.code ||
-                           `Dept ${deptId}`
-            return (
-              <button
-                key={deptId}
-                onClick={() => setCurrentDept(deptId as number)}
-                style={{
-                  minWidth: 64,
-                  height: 36,
-                  borderRadius: 20,
-                  fontWeight: isActive ? 600 : 500,
-                  fontSize: 16,
-                  border: 'none',
-                  outline: 'none',
-                  boxShadow: isActive ? '0 2px 8px #e0e7ff' : 'none',
-                  background: isActive ? 'linear-gradient(90deg,#4f46e5,#06b6d4)' : '#f3f4f6',
-                  color: isActive ? '#fff' : '#1e293b',
-                  transition: 'background 0.18s, color 0.18s, box-shadow 0.18s',
-                  padding: '0 22px',
-                  margin: 0,
-                  cursor: 'pointer',
-                  letterSpacing: 1,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  boxSizing: 'border-box',
-                }}
-              >
-                {deptCode}
-              </button>
-            )
-          })}
-        </div>
-      )}
+      {/* Department filter removed — advisors see only their assigned sections */}
 
       {/* Assignment Table */}
       <div style={{ overflowX: 'auto', marginTop: '8px', marginBottom: '32px' }}>
@@ -170,7 +121,7 @@ export default function TeachingAssignmentsPage(){
                 <td style={{ padding: '10px 8px', width: '250px' }}>
                   <select id={`subject-${s.id}`} style={{ padding: '6px 10px', borderRadius: '6px', border: '1px solid #d1d5db', background: '#fff', color: '#1e293b', fontWeight: 500, width: '100%', boxSizing: 'border-box' }}>
                     <option value="">-- select subject --</option>
-                    {curriculum.filter(c => c.department && c.department.id === s.department_id && (s.semester ? (c.semester === s.semester) : true)).map(c => (
+                    {curriculum.filter(c => (s.semester ? (c.semester === s.semester) : true)).map(c => (
                       <option key={c.id} value={c.id}>{c.course_code} - {c.course_name || 'Unnamed'}</option>
                     ))}
                   </select>
@@ -197,37 +148,53 @@ export default function TeachingAssignmentsPage(){
         )}
       </div>
 
-      {/* Existing Assignments */}
+      {/* Existing Assignments (cards) */}
       <div>
         <h3 style={{ fontSize: '18px', color: '#111827', fontWeight: 700, marginBottom: '12px', marginTop: '0' }}>Existing Assignments</h3>
-        <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {assignments
-            .filter(a => !currentDept || Number((a as any).department_id) === Number(currentDept))
-            .map(a => {
-              const entries = Object.entries(a)
-              const staffEntry = entries.find(([key, value]) => /staff|faculty/i.test(key) && value !== null && value !== undefined)
-              const sectionEntry = entries.find(([key, value]) => /section/i.test(key) && value !== null && value !== undefined)
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
+          {assignments.map(a => {
+            const staffName = (a as any).staff_details?.user || (a as any).staff_details?.staff_id || (a as any).staff || ''
+            const sectionText = (a as any).section_name || (a as any).section || ''
+            // try to split sectionText like "Program - Batch / SectionName" or "Batch / Section"
+            const parts = String(sectionText).split(' / ')
+            const left = parts[0] || ''
+            const right = parts[1] || ''
+            const leftParts = String(left).split(' - ')
+            const program = leftParts[0] || 'Program'
+            const batch = leftParts[1] || left || 'Batch'
+            const sectionName = right || ''
+            const subject = (a as any).subject || (a as any).curriculum_row?.course_code || ''
 
-              return (
-                <li key={a.id} style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: 12 }}>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginBottom: 8 }}>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: '#111827' }}>
-                      Staff: {staffEntry ? String(staffEntry[1]) : ''}
-                    </div>
-                    <div style={{ fontSize: 14, fontWeight: 600, color: '#1f2937' }}>
-                      Section: {sectionEntry ? String(sectionEntry[1]) : ''}
-                    </div>
-                  </div>
-                  {entries.map(([key, value]) => (
-                    <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#6b7280', marginBottom: 4 }}>
-                      <span style={{ fontWeight: 600, color: '#374151' }}>{key}:</span>
-                      <span style={{ fontWeight: 500 }}>{String(value)}</span>
-                    </div>
-                  ))}
-                </li>
-              )
-            })}
-        </ul>
+            return (
+              <div key={a.id}
+                style={{
+                  background: '#fff',
+                  padding: '12px 14px',
+                  borderRadius: 10,
+                  border: '1px solid #eef2f7',
+                  boxShadow: '0 1px 4px rgba(15,23,42,0.05)',
+                  color: '#1e293b'
+                }}
+              >
+                <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', marginBottom: 6 }}>{program}</div>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 13, color: '#475569', marginBottom: 8 }}>
+                  <span style={{ fontWeight: 600 }}>Batch:</span>
+                  <span>{batch}</span>
+                  <span style={{ color: '#cbd5e1' }}>•</span>
+                  <span style={{ fontWeight: 600 }}>Section:</span>
+                  <span>{sectionName}</span>
+                </div>
+                <div style={{ fontSize: 13, color: '#1e293b', fontWeight: 600, marginBottom: 6 }}>{staffName}</div>
+                {subject && (
+                  <div style={{ fontSize: 13, color: '#475569' }}><span style={{ fontWeight: 600 }}>Subject:</span> <span style={{ fontWeight: 500 }}>{subject}</span></div>
+                )}
+              </div>
+            )
+          })}
+          {assignments.length === 0 && (
+            <div style={{ color: '#64748b', fontSize: 13, fontWeight: 500 }}>No assignments yet.</div>
+          )}
+        </div>
       </div>
     </div>
   )

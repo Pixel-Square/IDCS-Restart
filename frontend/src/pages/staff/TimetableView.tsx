@@ -87,16 +87,20 @@ export default function StaffTimetable(){
                   <td style={{padding:'10px 8px', borderBottom:'1px solid #f3f4f6', fontWeight:500}}>{d}</td>
                   {periods.map(p=> {
                     const dayObj = timetable.find(x=> x.day === di+1) || { assignments: [] }
-                    const a = (dayObj.assignments||[]).find((x:any)=> x.period_id === p.id)
+                      const assignments = (dayObj.assignments||[]).filter((x:any)=> x.period_id === p.id)
                     return (
                       <td key={p.id} style={{padding:'10px 8px', borderBottom:'1px solid #f3f4f6', fontWeight:500}}>
                         {p.is_break || p.is_lunch ? (
                           <em style={{color:'#6b7280'}}>{p.label || (p.is_break ? 'Break' : 'Lunch')}</em>
-                        ) : a ? (
+                        ) : assignments && assignments.length ? (
                           <div>
-                            <div style={{fontWeight:600, color:'#1e293b'}}>{shortLabel(a.curriculum_row || a.subject_text)}</div>
-                            <div style={{fontSize:13, color:'#6b7280', marginTop:2}}>Section: {a.section?.name || a.section?.id || '—'}</div>
-                            {a.section?.batch && <div style={{fontSize:13, color:'#6b7280'}}>Batch: {a.section.batch}</div>}
+                            {assignments.map((a:any, i:number)=> (
+                              <div key={i} style={{marginBottom:8}}>
+                                <div style={{fontWeight:600, color:'#1e293b'}}>{shortLabel(a.curriculum_row || a.subject_text)}</div>
+                                <div style={{fontSize:13, color:'#6b7280', marginTop:2}}>Section: {a.section?.name || a.section?.id || '—'}</div>
+                                {a.subject_batch && <div style={{fontSize:13, color:'#6b7280'}}>Batch: {a.subject_batch.name}</div>}
+                              </div>
+                            ))}
                           </div>
                         ) : (
                           <div style={{color:'#d1d5db'}}>—</div>

@@ -15,7 +15,9 @@ from .models import (
     RoleAssignment,
 )
 from .models import TeachingAssignment
-from .models import StudentMentorMap, SectionAdvisor, DepartmentRole, DayAttendanceSession, DayAttendanceRecord
+from .models import StudentMentorMap, SectionAdvisor, DepartmentRole
+from .models import StudentSubjectBatch
+from .models import PeriodAttendanceSession, PeriodAttendanceRecord
 from django import forms
 from django.db import models
 from django.core.exceptions import ValidationError
@@ -334,15 +336,35 @@ class DepartmentRoleAdmin(admin.ModelAdmin):
     raw_id_fields = ('staff', 'academic_year')
 
 
-@admin.register(DayAttendanceSession)
-class DayAttendanceSessionAdmin(admin.ModelAdmin):
-    list_display = ('section', 'date', 'created_by', 'is_locked', 'created_at')
-    list_filter = ('date', 'is_locked', 'section__batch__course__department')
-    raw_id_fields = ('section', 'created_by')
+# DayAttendance admin removed along with models
 
 
-@admin.register(DayAttendanceRecord)
-class DayAttendanceRecordAdmin(admin.ModelAdmin):
-    list_display = ('session', 'student', 'status', 'marked_at')
+@admin.register(StudentSubjectBatch)
+class StudentSubjectBatchAdmin(admin.ModelAdmin):
+    list_display = ('name', 'staff', 'academic_year', 'curriculum_row', 'is_active', 'created_at')
+    search_fields = ('name', 'staff__staff_id', 'staff__user__username')
+    list_filter = ('academic_year', 'is_active')
+    raw_id_fields = ('staff', 'curriculum_row')
+
+
+
+class PeriodAttendanceRecordInline(admin.TabularInline):
+    model = PeriodAttendanceRecord
+    extra = 0
+    readonly_fields = ('marked_at',)
+
+
+@admin.register(PeriodAttendanceSession)
+class PeriodAttendanceSessionAdmin(admin.ModelAdmin):
+    list_display = ('section', 'period', 'date', 'timetable_assignment', 'created_by', 'is_locked', 'created_at')
+    list_filter = ('date', 'is_locked')
+    raw_id_fields = ('section', 'period', 'timetable_assignment', 'created_by')
+    inlines = (PeriodAttendanceRecordInline,)
+
+
+@admin.register(PeriodAttendanceRecord)
+class PeriodAttendanceRecordAdmin(admin.ModelAdmin):
+    list_display = ('session', 'student', 'status', 'marked_at', 'marked_by')
+    search_fields = ('student__reg_no', 'student__user__username')
     list_filter = ('status',)
-    raw_id_fields = ('session', 'student')
+    raw_id_fields = ('session', 'student', 'marked_by')

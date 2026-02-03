@@ -27,6 +27,50 @@ class AcademicYear(models.Model):
         return f"{self.name}{' (' + self.parity + ')' if self.parity else ''}"
 
 
+# When an AcademicYear is saved and marked active, update timetable templates
+# so a template matching the active year's parity becomes the active template.
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+
+
+@receiver(post_save, sender=AcademicYear)
+def ensure_timetable_template_matches_academic_year(sender, instance: AcademicYear, **kwargs):
+    try:
+        # Only take action when this AcademicYear is active and has a parity
+        if not instance.is_active or not instance.parity:
+            return
+        # import here to avoid circular imports at module load
+        from timetable.models import TimetableTemplate
+
+        desired = (instance.parity or '').upper()
+
+        # find templates that are compatible: either match parity or BOTH
+        compatible_qs = TimetableTemplate.objects.filter(parity__in=[desired, 'BOTH'])
+
+        # If there are no compatible templates, do nothing
+        if not compatible_qs.exists():
+            return
+
+        # Prefer templates that explicitly match parity over BOTH
+        preferred = compatible_qs.filter(parity=desired)
+        if preferred.exists():
+            to_activate = preferred.first()
+        else:
+            to_activate = compatible_qs.filter(parity='BOTH').first()
+
+        if not to_activate:
+            return
+
+        # Deactivate other templates and activate the chosen one
+        TimetableTemplate.objects.exclude(pk=to_activate.pk).update(is_active=False)
+        if not to_activate.is_active:
+            to_activate.is_active = True
+            to_activate.save()
+    except Exception:
+        # Swallow exceptions to avoid breaking AcademicYear save
+        pass
+
+
 class Department(models.Model):
     code = models.CharField(max_length=16, unique=True)
     name = models.CharField(max_length=128)
@@ -399,66 +443,8 @@ class StudentMentorMap(models.Model):
         ]
 
 
-# Day-level attendance models (fresh implementation)
-ATTENDANCE_STATUS_CHOICES = (
-    ('P', 'Present'),
-    ('A', 'Absent'),
-    ('OD', 'On Duty'),
-    ('LATE', 'Late'),
-    ('LEAVE', 'Leave'),
-)
-
-
-class DayAttendanceSession(models.Model):
-    """A single-day attendance session for a Section.
-
-    Fields:
-    - section: which section the attendance is for
-    - date: attendance date
-    - created_by: staff who created/marked the session (usually advisor)
-    - is_locked: once locked, records should not be modified
-    - created_at: timestamp
-    """
-    section = models.ForeignKey(Section, on_delete=models.PROTECT, related_name='day_attendance_sessions')
-    date = models.DateField(default=date.today)
-    created_by = models.ForeignKey(StaffProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
-    is_locked = models.BooleanField(default=False)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        unique_together = (('section', 'date'),)
-
-    def __str__(self):
-        return f"Attendance {self.section} @ {self.date}"
-
-
-class DayAttendanceRecord(models.Model):
-    session = models.ForeignKey(DayAttendanceSession, on_delete=models.CASCADE, related_name='records')
-    student = models.ForeignKey(StudentProfile, on_delete=models.CASCADE, related_name='day_attendance_records')
-    status = models.CharField(max_length=8, choices=ATTENDANCE_STATUS_CHOICES)
-    marked_at = models.DateTimeField(auto_now=True)
-    marked_by = models.ForeignKey(StaffProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
-
-    class Meta:
-        unique_together = (('session', 'student'),)
-
-    def __str__(self):
-        return f"{self.student} - {self.get_status_display()} @ {self.session.date}"
-
-    def __str__(self):
-        return f"{self.student.reg_no} -> {self.mentor.staff_id}"
-
-    def clean(self):
-        # minimal validation: mentor must belong to same department as student's course department
-        student_dept = None
-        # Section is now batch-wise; access course via section.batch
-        if self.student and self.student.section and getattr(self.student.section, 'batch', None) and getattr(self.student.section.batch, 'course', None):
-            student_dept = self.student.section.batch.course.department
-
-        mentor_dept = getattr(self.mentor, 'department', None)
-        if student_dept and mentor_dept and student_dept != mentor_dept:
-            from django.core.exceptions import ValidationError
-            raise ValidationError('Mentor must belong to the same department as the student')
+# Day-level attendance models removed.
+# Tables (if present) should be dropped via a Django migration so the DB stays consistent.
 
 
 class SectionAdvisor(models.Model):
@@ -582,7 +568,87 @@ class TeachingAssignment(models.Model):
         return f"{self.staff.staff_id} -> {subj_part} ({self.section} | {self.academic_year})"
 
 
+class StudentSubjectBatch(models.Model):
+    """A teacher-defined grouping of students for subject-level batching.
+
+    Example: Instructor creates 'Batch 1' containing certain students for
+    a subject's internal assessments.
+    """
+    name = models.CharField(max_length=128)
+    staff = models.ForeignKey(StaffProfile, on_delete=models.CASCADE, related_name='subject_batches')
+    academic_year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT, related_name='subject_batches')
+    # Link the batch to a specific curriculum row (subject) so batches are
+    # subject-scoped. This is optional but recommended for subject-wise grouping.
+    curriculum_row = models.ForeignKey('curriculum.CurriculumDepartment', on_delete=models.CASCADE, null=True, blank=True, related_name='subject_batches')
+    students = models.ManyToManyField(StudentProfile, related_name='subject_batches')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        verbose_name = 'Student Subject Batch'
+        verbose_name_plural = 'Student Subject Batches'
+
+    def __str__(self):
+        return f"{self.name} ({self.staff.staff_id})"
+
+
 # Attendance models removed. Tables should be dropped via migration.
+
+
+# Period-wise attendance models (new implementation)
+PERIOD_ATTENDANCE_STATUS_CHOICES = (
+    ('P', 'Present'),
+    ('A', 'Absent'),
+    ('OD', 'On Duty'),
+    ('LATE', 'Late'),
+    ('LEAVE', 'Leave'),
+)
+
+
+class PeriodAttendanceSession(models.Model):
+    """Attendance for a specific period (TimetableSlot) on a date for a section.
+
+    - section: which section the attendance is for
+    - period: TimetableSlot (period definition)
+    - date: date of the session
+    - timetable_assignment: optional link to the TimetableAssignment that this session corresponds to
+    - created_by: staff who created the session
+    - is_locked: once locked, records should not be modified
+    - created_at: timestamp
+    """
+    section = models.ForeignKey('academics.Section', on_delete=models.PROTECT, related_name='period_attendance_sessions')
+    period = models.ForeignKey('timetable.TimetableSlot', on_delete=models.PROTECT, related_name='attendance_sessions')
+    date = models.DateField(default=timezone.now)
+    timetable_assignment = models.ForeignKey('timetable.TimetableAssignment', on_delete=models.SET_NULL, null=True, blank=True, related_name='attendance_sessions')
+    created_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    is_locked = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Period Attendance Session'
+        verbose_name_plural = 'Period Attendance Sessions'
+        unique_together = (('section', 'period', 'date', 'timetable_assignment'),)
+
+    def __str__(self):
+        return f"PeriodAttendance {self.section} | {self.period} @ {self.date}"
+
+
+
+class PeriodAttendanceRecord(models.Model):
+    session = models.ForeignKey(PeriodAttendanceSession, on_delete=models.CASCADE, related_name='records')
+    student = models.ForeignKey('academics.StudentProfile', on_delete=models.CASCADE, related_name='period_attendance_records')
+    status = models.CharField(max_length=8, choices=PERIOD_ATTENDANCE_STATUS_CHOICES)
+    marked_at = models.DateTimeField(auto_now=True)
+    marked_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+
+    class Meta:
+        verbose_name = 'Period Attendance Record'
+        verbose_name_plural = 'Period Attendance Records'
+        unique_together = (('session', 'student'),)
+
+    def __str__(self):
+        return f"{self.student.reg_no} -> {self.get_status_display()} @ {self.session.date}"
 
 
 # Historically the code deleted users when profiles were removed.

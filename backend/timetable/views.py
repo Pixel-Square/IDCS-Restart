@@ -48,7 +48,13 @@ class SectionTimetableView(APIView):
             return Response({'results': []})
 
         # collect assignments for this section
-        qs = TimetableAssignment.objects.select_related('period', 'staff', 'curriculum_row').filter(section=sec)
+        qs = TimetableAssignment.objects.select_related('period', 'staff', 'curriculum_row', 'subject_batch').filter(section=sec)
+        # If requesting student is a student profile, filter assignments to those
+        # that are either unbatched or belong to a batch that includes the student.
+        student_profile = getattr(request.user, 'student_profile', None)
+        if student_profile:
+            from django.db.models import Q
+            qs = qs.filter(Q(subject_batch__isnull=True) | Q(subject_batch__students=student_profile)).distinct()
         # group by day -> list of assignments with period index and times
         out = {}
         for a in qs:
@@ -69,7 +75,21 @@ class SectionTimetableView(APIView):
                 except Exception:
                     staff_obj = None
 
+            # resolve subject_batch: prefer explicit assignment batch, else if
+            # requesting user is a student try to find a batch for the same
+            # curriculum_row that includes the student so the UI can show the
+            # student's mapped batch for unbatched assignments (e.g. double
+            # period entries created without a batch on one slot).
+            sb = getattr(a, 'subject_batch', None)
+            if sb is None and student_profile:
+                try:
+                    from academics.models import StudentSubjectBatch
+                    sb = StudentSubjectBatch.objects.filter(curriculum_row=a.curriculum_row, students=student_profile).first()
+                except Exception:
+                    sb = None
+
             lst.append({
+                'id': getattr(a, 'id', None),
                 'period_index': getattr(a.period, 'index', None),
                 'period_id': getattr(a.period, 'id', None),
                 'start_time': getattr(a.period, 'start_time', None),
@@ -78,6 +98,7 @@ class SectionTimetableView(APIView):
                 'label': getattr(a.period, 'label', None),
                 'curriculum_row': {'id': a.curriculum_row.pk, 'course_code': a.curriculum_row.course_code, 'course_name': a.curriculum_row.course_name} if a.curriculum_row else None,
                 'subject_text': a.subject_text,
+                'subject_batch': {'id': sb.pk, 'name': getattr(sb, 'name', None)} if sb else None,
                 'staff': {'id': staff_obj.pk, 'staff_id': getattr(staff_obj, 'staff_id', None), 'username': getattr(getattr(staff_obj, 'user', None), 'username', None)} if staff_obj else None,
             })
 
@@ -85,6 +106,57 @@ class SectionTimetableView(APIView):
         results = []
         for day in sorted(out.keys()):
             results.append({'day': day, 'assignments': sorted(out[day], key=lambda x: (x.get('period_index') or 0))})
+        return Response({'results': results})
+
+
+class SectionSubjectsStaffView(APIView):
+    """Return list of subjects (curriculum rows) for a section with assigned staff where available."""
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request, section_id: int):
+        try:
+            sec = Section.objects.select_related('batch__course__department').get(pk=int(section_id))
+        except Exception:
+            return Response({'results': []})
+
+        results = []
+        try:
+            # fetch curriculum rows for the section
+            from curriculum.models import CurriculumDepartment
+            dept = getattr(sec.batch.course, 'department', None)
+            sem = getattr(sec.semester, 'number', None)
+            if dept is None or sem is None:
+                return Response({'results': []})
+            qs = CurriculumDepartment.objects.filter(department=dept, semester__number=sem)
+            # build a map from curriculum_row id -> staff (from TeachingAssignment)
+            staff_map = {}
+            from academics.models import TeachingAssignment
+            tas = TeachingAssignment.objects.filter(section=sec, is_active=True).select_related('staff', 'curriculum_row')
+            for ta in tas:
+                if getattr(ta, 'curriculum_row', None) and getattr(ta, 'staff', None):
+                    staff_map[getattr(ta.curriculum_row, 'id')] = getattr(getattr(ta.staff, 'user', None), 'username', None)
+
+            # also consider direct timetable assignments that may override
+            from .models import TimetableAssignment
+            tassigns = TimetableAssignment.objects.filter(section=sec).select_related('curriculum_row', 'staff')
+            for a in tassigns:
+                cr = getattr(a, 'curriculum_row', None)
+                if cr is not None:
+                    if getattr(a, 'staff', None):
+                        staff_map[getattr(cr, 'id')] = getattr(getattr(a.staff, 'user', None), 'username', None)
+
+            for c in qs:
+                results.append({'id': c.id, 'course_code': c.course_code, 'course_name': c.course_name, 'staff': staff_map.get(c.id)})
+
+            # include any timetable-only subjects (no curriculum_row) with staff
+            for a in tassigns:
+                if not getattr(a, 'curriculum_row', None) and (a.subject_text or getattr(a, 'staff', None)):
+                    key = f"txt-{(a.subject_text or '')[:100]}"
+                    results.append({'id': key, 'course_code': None, 'course_name': a.subject_text, 'staff': getattr(getattr(a.staff, 'user', None), 'username', None)})
+
+        except Exception:
+            return Response({'results': []})
+
         return Response({'results': results})
 
 
@@ -110,7 +182,7 @@ class TimetableSlotViewSet(viewsets.ModelViewSet):
 
 
 class TimetableAssignmentViewSet(viewsets.ModelViewSet):
-    queryset = TimetableAssignment.objects.select_related('period', 'section', 'staff', 'curriculum_row')
+    queryset = TimetableAssignment.objects.select_related('period', 'section', 'staff', 'curriculum_row', 'subject_batch')
     serializer_class = TimetableAssignmentSerializer
     permission_classes = (IsAuthenticated,)
 
@@ -211,7 +283,20 @@ class TimetableAssignmentViewSet(viewsets.ModelViewSet):
                 sec_id = int(sec_id)
                 period_id = int(period_id)
                 day = int(day)
-                existing = TimetableAssignment.objects.filter(section_id=sec_id, period_id=period_id, day=day).first()
+                # consider subject_batch in matching so different batches may occupy same cell
+                sb_raw = request.data.get('subject_batch_id') or request.data.get('subject_batch')
+                sb_id = None
+                try:
+                    if sb_raw is not None and sb_raw != '':
+                        sb_id = int(sb_raw)
+                except Exception:
+                    sb_id = None
+
+                if sb_id is None:
+                    # match unbatched assignment
+                    existing = TimetableAssignment.objects.filter(section_id=sec_id, period_id=period_id, day=day, subject_batch__isnull=True).first()
+                else:
+                    existing = TimetableAssignment.objects.filter(section_id=sec_id, period_id=period_id, day=day, subject_batch_id=sb_id).first()
                 if existing:
                     # perform update via serializer (partial)
                     serializer = self.get_serializer(existing, data=request.data, partial=True)
@@ -313,6 +398,7 @@ class StaffTimetableView(APIView):
                 staff_obj = staff_profile
 
             lst.append({
+                'id': getattr(a, 'id', None),
                 'period_index': getattr(a.period, 'index', None),
                 'period_id': getattr(a.period, 'id', None),
                 'start_time': getattr(a.period, 'start_time', None),
@@ -321,6 +407,7 @@ class StaffTimetableView(APIView):
                 'label': getattr(a.period, 'label', None),
                 'curriculum_row': {'id': a.curriculum_row.pk, 'course_code': a.curriculum_row.course_code, 'course_name': a.curriculum_row.course_name} if a.curriculum_row else None,
                 'subject_text': a.subject_text,
+                'subject_batch': {'id': a.subject_batch.pk, 'name': getattr(a.subject_batch, 'name', None)} if getattr(a, 'subject_batch', None) else None,
                 'staff': {'id': staff_obj.pk, 'staff_id': getattr(staff_obj, 'staff_id', None), 'username': getattr(getattr(staff_obj, 'user', None), 'username', None)} if staff_obj else None,
                 'section': {'id': getattr(a.section, 'pk', None), 'name': getattr(a.section, 'name', None)} if getattr(a, 'section', None) else None,
             })
