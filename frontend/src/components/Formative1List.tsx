@@ -552,14 +552,6 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
     textAlign: 'center',
   };
 
-  // Sticky left column offsets for frozen identity columns
-  const STICKY = {
-    sno: { left: 0, width: 60 },
-    section: { left: 60, width: 100 },
-    reg: { left: 160, width: 120 },
-    name: { left: 280, width: 240 },
-  } as const;
-
   return (
     <div>
       {error && (
@@ -685,16 +677,16 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
                 </th>
               </tr>
               <tr>
-                <th style={{ ...cellTh, position: 'sticky', left: STICKY.sno.left, minWidth: STICKY.sno.width, background: '#ecfdf5', zIndex: 6 }} rowSpan={3}>
+                <th style={cellTh} rowSpan={3}>
                   S.No
                 </th>
-                <th style={{ ...cellTh, position: 'sticky', left: STICKY.section.left, minWidth: STICKY.section.width, background: '#ecfdf5', zIndex: 6 }} rowSpan={3}>
+                <th style={cellTh} rowSpan={3}>
                   SECTION
                 </th>
-                <th style={{ ...cellTh, position: 'sticky', left: STICKY.reg.left, minWidth: STICKY.reg.width, background: '#ecfdf5', zIndex: 6 }} rowSpan={3}>
+                <th style={cellTh} rowSpan={3}>
                   Register No.
                 </th>
-                <th style={{ ...cellTh, position: 'sticky', left: STICKY.name.left, minWidth: STICKY.name.width, background: '#ecfdf5', zIndex: 6 }} rowSpan={3}>
+                <th style={cellTh} rowSpan={3}>
                   Name of the Students
                 </th>
                 <th style={cellTh} colSpan={2}>
@@ -761,9 +753,9 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_PART}</td>
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_TOTAL}</td>
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_CO}</td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center', background: 'linear-gradient(180deg,#ecfdf5,#ffffff)' }}>%</td>
+                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_CO}</td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center', background: 'linear-gradient(180deg,#ecfdf5,#ffffff)' }}>%</td>
+                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
               </tr>
 
               {students.map((s, i) => {
@@ -792,10 +784,10 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
 
                 return (
                   <tr key={s.id}>
-                    <td style={{ ...cellTd, textAlign: 'center', position: 'sticky', left: STICKY.sno.left, minWidth: STICKY.sno.width, background: '#fff', zIndex: 4 }}>{i + 1}</td>
-                    <td style={{ ...cellTd, textAlign: 'center', position: 'sticky', left: STICKY.section.left, minWidth: STICKY.section.width, background: '#fff', zIndex: 4 }}>{s.section ?? ''}</td>
-                    <td style={{ ...cellTd, position: 'sticky', left: STICKY.reg.left, minWidth: STICKY.reg.width, background: '#fff', zIndex: 4 }}>{s.reg_no}</td>
-                    <td style={{ ...cellTd, position: 'sticky', left: STICKY.name.left, minWidth: STICKY.name.width, background: '#fff', zIndex: 4 }}>{s.name || '—'}</td>
+                    <td style={{ ...cellTd, textAlign: 'center' }}>{i + 1}</td>
+                    <td style={{ ...cellTd, textAlign: 'center' }}>{s.section ?? ''}</td>
+                    <td style={cellTd}>{s.reg_no}</td>
+                    <td style={cellTd}>{s.name || '—'}</td>
 
                     <td style={cellTd}>
                       <input
@@ -845,11 +837,11 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
                     <td style={{ ...cellTd, textAlign: 'center', fontWeight: 700 }}>{total}</td>
 
                     <td style={{ ...cellTd, textAlign: 'center' }}>{co1}</td>
-                    <td style={{ ...cellTd, textAlign: 'center', background: 'linear-gradient(180deg,#ecfdf5,#ffffff)' }}>
+                    <td style={{ ...cellTd, textAlign: 'center' }}>
                       {co1 === '' ? '' : <span className="obe-pct-badge">{pct(co1 as number, MAX_CO)}</span>}
                     </td>
                     <td style={{ ...cellTd, textAlign: 'center' }}>{co2}</td>
-                    <td style={{ ...cellTd, textAlign: 'center', background: 'linear-gradient(180deg,#ecfdf5,#ffffff)' }}>
+                    <td style={{ ...cellTd, textAlign: 'center' }}>
                       {co2 === '' ? '' : <span className="obe-pct-badge">{pct(co2 as number, MAX_CO)}</span>}
                     </td>
                     {visibleBtlIndices.map((n) => {
@@ -859,7 +851,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
                       return (
                         <React.Fragment key={`btl-cells-${n}`}>
                           <td style={{ ...cellTd, textAlign: 'center' }}>{mark}</td>
-                          <td style={{ ...cellTd, textAlign: 'center', background: 'linear-gradient(180deg,#ecfdf5,#ffffff)' }}>
+                          <td style={{ ...cellTd, textAlign: 'center' }}>
                             {mark === '' ? '' : <span className="obe-pct-badge">{pct(Number(mark), max)}</span>}
                           </td>
                         </React.Fragment>

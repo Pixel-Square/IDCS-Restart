@@ -7,7 +7,7 @@ type Props = { courseId?: string };
 const styles = {
   container: {
     minHeight: '100vh',
-    background: 'linear-gradient(135deg, #ecfdf5 0%, #ffffff 60%)',
+    background: 'linear-gradient(135deg, #f5f7fa 0%, #e9ecef 100%)',
     padding: '2rem',
   },
   card: {
@@ -19,7 +19,7 @@ const styles = {
     overflow: 'hidden',
   },
   header: {
-    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
     padding: '2rem 2.5rem',
     borderBottom: '1px solid #e5e7eb',
   },
@@ -66,8 +66,8 @@ const styles = {
     fontFamily: 'inherit',
   },
   inputFocus: {
-    borderColor: '#a7f3d0',
-    boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.15)',
+    borderColor: '#667eea',
+    boxShadow: '0 0 0 3px rgba(102, 126, 234, 0.1)',
   },
   actionBar: {
     display: 'flex',
@@ -84,17 +84,17 @@ const styles = {
     fontSize: '0.95rem',
     fontWeight: '600',
     color: '#ffffff',
-    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
     border: 'none',
     borderRadius: '6px',
     cursor: 'pointer',
     transition: 'all 0.2s ease',
-    boxShadow: '0 2px 4px rgba(16, 185, 129, 0.3)',
+    boxShadow: '0 2px 4px rgba(102, 126, 234, 0.3)',
     outline: 'none',
   },
   buttonHover: {
     transform: 'translateY(-1px)',
-    boxShadow: '0 4px 8px rgba(16, 185, 129, 0.4)',
+    boxShadow: '0 4px 8px rgba(102, 126, 234, 0.4)',
   },
   buttonDisabled: {
     background: '#9ca3af',
@@ -113,7 +113,7 @@ const styles = {
     width: '16px',
     height: '16px',
     borderRadius: '50%',
-    background: '#10b981',
+    background: '#667eea',
     color: '#ffffff',
     display: 'inline-flex',
     alignItems: 'center',

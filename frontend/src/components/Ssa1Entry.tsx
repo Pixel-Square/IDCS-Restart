@@ -422,14 +422,6 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
     fontSize: 12,
   };
 
-  // Sticky left columns (freeze on horizontal scroll)
-  const STICKY = {
-    sno: { left: 0, width: 60 },
-    section: { left: 60, width: 100 },
-    reg: { left: 160, width: 140 },
-    name: { left: 300, width: 260 },
-  } as const;
-
   const toggleBtl = (n: number) => {
     setSelectedBtls((prev) => (prev.includes(n) ? prev.filter((x) => x !== n) : prev.concat(n).sort((a, b) => a - b)));
   };
@@ -573,52 +565,16 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
               </th>
             </tr>
             <tr>
-              <th
-                style={{
-                  ...cellTh,
-                  position: 'sticky',
-                  left: STICKY.sno.left,
-                  minWidth: STICKY.sno.width,
-                  zIndex: 5,
-                }}
-                rowSpan={3}
-              >
+              <th style={cellTh} rowSpan={3}>
                 S.No
               </th>
-              <th
-                style={{
-                  ...cellTh,
-                  position: 'sticky',
-                  left: STICKY.section.left,
-                  minWidth: STICKY.section.width,
-                  zIndex: 5,
-                }}
-                rowSpan={3}
-              >
+              <th style={cellTh} rowSpan={3}>
                 SECTION
               </th>
-              <th
-                style={{
-                  ...cellTh,
-                  position: 'sticky',
-                  left: STICKY.reg.left,
-                  minWidth: STICKY.reg.width,
-                  zIndex: 5,
-                }}
-                rowSpan={3}
-              >
+              <th style={cellTh} rowSpan={3}>
                 Register No.
               </th>
-              <th
-                style={{
-                  ...cellTh,
-                  position: 'sticky',
-                  left: STICKY.name.left,
-                  minWidth: STICKY.name.width,
-                  zIndex: 5,
-                }}
-                rowSpan={3}
-              >
+              <th style={cellTh} rowSpan={3}>
                 Name of the Students
               </th>
               <th style={cellTh} rowSpan={3}>
@@ -650,7 +606,7 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
               {Array.from({ length: 2 + visibleBtlIndices.length }).flatMap((_, i) => (
                 <React.Fragment key={i}>
                   <th style={cellTh}>Mark</th>
-                  <th style={{ ...cellTh, background: '#ecfdf5', color: '#065f46' }}>%</th>
+                  <th style={cellTh}>%</th>
                 </React.Fragment>
               ))}
             </tr>
@@ -722,10 +678,10 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
 
                 return (
                   <tr key={i}>
-                    <td style={{ ...cellTd, textAlign: 'center', position: 'sticky', left: STICKY.sno.left, minWidth: STICKY.sno.width, background: '#fff', zIndex: 4 }}>{i + 1}</td>
-                    <td style={{ ...cellTd, color: '#111827', position: 'sticky', left: STICKY.section.left, minWidth: STICKY.section.width, background: '#fff', zIndex: 4 }}>{r.section}</td>
-                    <td style={{ ...cellTd, color: '#111827', position: 'sticky', left: STICKY.reg.left, minWidth: STICKY.reg.width, background: '#fff', zIndex: 4 }}>{r.registerNo}</td>
-                    <td style={{ ...cellTd, color: '#111827', position: 'sticky', left: STICKY.name.left, minWidth: STICKY.name.width, background: '#fff', zIndex: 4 }}>{r.name}</td>
+                    <td style={{ ...cellTd, textAlign: 'center' }}>{i + 1}</td>
+                    <td style={{ ...cellTd, color: '#111827' }}>{r.section}</td>
+                    <td style={{ ...cellTd, color: '#111827' }}>{r.registerNo}</td>
+                    <td style={{ ...cellTd, color: '#111827' }}>{r.name}</td>
                     <td style={{ ...cellTd, textAlign: 'center' }}>
                       <input
                         className="obe-input"
@@ -749,11 +705,11 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
                       />
                     </td>
                     <td style={{ ...cellTd, textAlign: 'center' }}>{co1 == null ? '' : co1.toFixed(1)}</td>
-                    <td style={{ ...cellTd, textAlign: 'center', background: 'linear-gradient(180deg,#ecfdf5,#ffffff)' }}>
+                    <td style={{ ...cellTd, textAlign: 'center' }}>
                       <span className="obe-pct-badge">{pct(co1, CO_MAX.co1)}</span>
                     </td>
                     <td style={{ ...cellTd, textAlign: 'center' }}>{co2 == null ? '' : co2.toFixed(1)}</td>
-                    <td style={{ ...cellTd, textAlign: 'center', background: 'linear-gradient(180deg,#ecfdf5,#ffffff)' }}>
+                    <td style={{ ...cellTd, textAlign: 'center' }}>
                       <span className="obe-pct-badge">{pct(co2, CO_MAX.co2)}</span>
                     </td>
 
@@ -763,7 +719,7 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
                       return (
                         <React.Fragment key={n}>
                           <td style={{ ...cellTd, textAlign: 'center' }}>{mark == null ? '' : Number(mark).toFixed(1)}</td>
-                          <td style={{ ...cellTd, textAlign: 'center', background: 'linear-gradient(180deg,#ecfdf5,#ffffff)' }}>
+                          <td style={{ ...cellTd, textAlign: 'center' }}>
                             <span className="obe-pct-badge">{pct(mark == null ? null : Number(mark), max)}</span>
                           </td>
                         </React.Fragment>
