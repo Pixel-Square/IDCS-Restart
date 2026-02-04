@@ -1,27 +1,10 @@
 
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-<<<<<<< HEAD
-
-# Combined imports from recent branches
-from .views import (
-    MyTeachingAssignmentsView,
-    SectionAdvisorViewSet,
-    HODStaffListView,
-    HODSectionsView,
-    TeachingAssignmentStudentsView,
-    TeachingAssignmentViewSet,
-    AdvisorMyStudentsView,
-    DayAttendanceSessionViewSet,
-    StudentDayAttendanceView,
-    StaffAssignedSubjectsView,
-)
-=======
-from .views import SectionAdvisorViewSet, HODStaffListView, HODSectionsView, TeachingAssignmentViewSet, AdvisorMyStudentsView, AdvisorStaffListView
+from .views import SectionAdvisorViewSet, HODStaffListView, HODSectionsView, TeachingAssignmentViewSet, AdvisorMyStudentsView, AdvisorStaffListView, MyTeachingAssignmentsView, TeachingAssignmentStudentsView
 from .views import AcademicYearViewSet
 from .views import StaffAssignedSubjectsView, SectionStudentsView
 from .views import SubjectBatchViewSet, PeriodAttendanceSessionViewSet, StaffPeriodsView, StudentAttendanceView
->>>>>>> origin/main
 
 router = DefaultRouter()
 router.register(r'section-advisors', SectionAdvisorViewSet, basename='section-advisor')

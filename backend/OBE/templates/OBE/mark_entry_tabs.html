@@ -29,6 +29,7 @@
     <a class="tab {% if tab == 'dashboard' %}active{% endif %}" href="?tab=dashboard">Dashboard</a>
     <a class="tab {% if tab == 'ssa1' %}active{% endif %}" href="?tab=ssa1">SSA1</a>
     <a class="tab {% if tab == 'formative1' %}active{% endif %}" href="?tab=formative1">Formative 1</a>
+    <a class="tab {% if tab == 'lca' %}active{% endif %}" href="?tab=lca">LCA Instructions</a>
     <a class="tab {% if tab == 'cia1' %}active{% endif %}" href="?tab=cia1">CIA1</a>
     <a class="tab {% if tab == 'ssa2' %}active{% endif %}" href="?tab=ssa2">SSA2</a>
     <a class="tab {% if tab == 'cia2' %}active{% endif %}" href="?tab=cia2">CIA2</a>
@@ -127,6 +128,23 @@
     <div class="card">
       <h4 style="margin: 0 0 8px;">MODEL</h4>
       <div class="muted">Model Exam mark entry UI (placeholder)</div>
+    </div>
+  {% elif tab == 'lca' %}
+    <div class="card">
+      <h4 style="margin: 0 0 8px;">LCA Instructions</h4>
+      <div class="muted" style="margin-bottom: 12px;">Learner Centric Approach guidance and planning matrix for this subject.</div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        <div style="flex:1;min-width:260px;border:1px solid #e2e8f0;border-radius:8px;padding:12px;background:#fff;">
+          <img src="/static/obe/lca-1.png" alt="LCA part 1" style="width:100%;display:block;" onerror="this.style.display='none'" />
+          <strong>Step 1 — Learner Profile</strong>
+          <p class="muted">Identify learner profile (L1–L3) and map instruction levels.</p>
+        </div>
+        <div style="flex:1;min-width:260px;border:1px solid #e2e8f0;border-radius:8px;padding:12px;background:#fff;">
+          <img src="/static/obe/lca-2.png" alt="LCA part 2" style="width:100%;display:block;" onerror="this.style.display='none'" />
+          <strong>Step 2 — IL Mapping</strong>
+          <p class="muted">Use IL tables to determine instruction levels and assessment distribution.</p>
+        </div>
+      </div>
     </div>
   {% else %}
     <div class="card">

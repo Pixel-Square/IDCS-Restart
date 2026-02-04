@@ -23,6 +23,7 @@ export type DeptRow = {
   semester: number;
   course_code?: string | null;
   course_name?: string | null;
+  class_type?: string | null;
   l?: number; t?: number; p?: number; s?: number; c?: number;
   internal_mark?: number | null;
   external_mark?: number | null;

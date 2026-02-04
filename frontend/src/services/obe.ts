@@ -41,6 +41,8 @@ type DraftResponse<T> = {
   draft: T | null;
 };
 
+export type DraftAssessmentKey = 'ssa1' | 'ssa2' | 'cia1' | 'cia2' | 'formative1' | 'formative2';
+
 function apiBase() {
   return import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 }
@@ -63,7 +65,7 @@ async function parseError(res: Response, fallback: string) {
   }
 }
 
-export async function fetchDraft<T>(assessment: 'ssa1' | 'cia1' | 'formative1', subjectId: string): Promise<DraftResponse<T>> {
+export async function fetchDraft<T>(assessment: DraftAssessmentKey, subjectId: string): Promise<DraftResponse<T>> {
   const url = `${apiBase()}/api/obe/draft/${encodeURIComponent(assessment)}/${encodeURIComponent(subjectId)}`;
   const res = await fetch(url, {
     method: 'GET',
@@ -76,7 +78,7 @@ export async function fetchDraft<T>(assessment: 'ssa1' | 'cia1' | 'formative1', 
   return res.json();
 }
 
-export async function saveDraft<T>(assessment: 'ssa1' | 'cia1' | 'formative1', subjectId: string, data: T): Promise<{ status: string }> {
+export async function saveDraft<T>(assessment: DraftAssessmentKey, subjectId: string, data: T): Promise<{ status: string }> {
   const url = `${apiBase()}/api/obe/draft/${encodeURIComponent(assessment)}/${encodeURIComponent(subjectId)}`;
   const res = await fetch(url, {
     method: 'PUT',
@@ -113,6 +115,29 @@ export async function publishSsa1(subjectId: string, data: any): Promise<{ statu
   return res.json();
 }
 
+export type PublishedSsa2Response = {
+  subject: { code: string; name: string };
+  marks: Record<string, string | null>;
+};
+
+export async function fetchPublishedSsa2(subjectId: string): Promise<PublishedSsa2Response> {
+  const url = `${apiBase()}/api/obe/ssa2-published/${encodeURIComponent(subjectId)}`;
+  const res = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', ...authHeader() } });
+  if (!res.ok) await parseError(res, 'SSA2 published fetch failed');
+  return res.json();
+}
+
+export async function publishSsa2(subjectId: string, data: any): Promise<{ status: string }> {
+  const url = `${apiBase()}/api/obe/ssa2-publish/${encodeURIComponent(subjectId)}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify({ data }),
+  });
+  if (!res.ok) await parseError(res, 'SSA2 publish failed');
+  return res.json();
+}
+
 export type PublishedFormative1Response = {
   subject: { code: string; name: string };
   marks: Record<string, { skill1: string | null; skill2: string | null; att1: string | null; att2: string | null; total: string | null }>;
@@ -133,6 +158,24 @@ export async function publishFormative1(subjectId: string, data: any): Promise<{
     body: JSON.stringify({ data }),
   });
   if (!res.ok) await parseError(res, 'Formative1 publish failed');
+  return res.json();
+}
+
+export async function fetchPublishedFormative(assessment: 'formative1' | 'formative2', subjectId: string): Promise<PublishedFormative1Response> {
+  const url = `${apiBase()}/api/obe/${encodeURIComponent(assessment)}-published/${encodeURIComponent(subjectId)}`;
+  const res = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', ...authHeader() } });
+  if (!res.ok) await parseError(res, `${assessment} published fetch failed`);
+  return res.json();
+}
+
+export async function publishFormative(assessment: 'formative1' | 'formative2', subjectId: string, data: any): Promise<{ status: string }> {
+  const url = `${apiBase()}/api/obe/${encodeURIComponent(assessment)}-publish/${encodeURIComponent(subjectId)}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify({ data }),
+  });
+  if (!res.ok) await parseError(res, `${assessment} publish failed`);
   return res.json();
 }
 
@@ -159,9 +202,102 @@ export async function publishCia1Sheet(subjectId: string, data: any): Promise<{ 
   return res.json();
 }
 
-export async function fetchCia1Marks(subjectId: string): Promise<Cia1MarksResponse> {
+export type PublishedCiaSheetResponse = {
+  subject: { code: string; name: string };
+  data: any | null;
+};
+
+export async function fetchPublishedCiaSheet(assessment: 'cia1' | 'cia2', subjectId: string): Promise<PublishedCiaSheetResponse> {
+  const url = `${apiBase()}/api/obe/${encodeURIComponent(assessment)}-published-sheet/${encodeURIComponent(subjectId)}`;
+  const res = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', ...authHeader() } });
+  if (!res.ok) await parseError(res, `${assessment} published sheet fetch failed`);
+  return res.json();
+}
+
+export async function publishCiaSheet(assessment: 'cia1' | 'cia2', subjectId: string, data: any): Promise<{ status: string }> {
+  const url = `${apiBase()}/api/obe/${encodeURIComponent(assessment)}-publish-sheet/${encodeURIComponent(subjectId)}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify({ data }),
+  });
+  if (!res.ok) await parseError(res, `${assessment} publish failed`);
+  return res.json();
+}
+
+export async function fetchCiaMarks(assessment: 'cia1' | 'cia2', subjectId: string, teachingAssignmentId?: number): Promise<Cia1MarksResponse> {
+  const sanitizeHttpErrorText = (text: string, limit = 1200) => {
+    const raw = String(text || '');
+    const noScripts = raw.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ');
+    const stripped = noScripts
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/gi, "'")
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const cleaned = stripped || raw.replace(/\s+/g, ' ').trim();
+    if (cleaned.length <= limit) return cleaned;
+    return cleaned.slice(0, limit) + '… (truncated)';
+  };
+
+  const qp = teachingAssignmentId ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
+  const url = `${apiBase()}/api/obe/${encodeURIComponent(assessment)}-marks/${encodeURIComponent(subjectId)}${qp}`;
+  const token = window.localStorage.getItem('access');
+
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    try {
+      const j = JSON.parse(text);
+      const detail = j?.detail || `${assessment.toUpperCase()} roster fetch failed: ${res.status}`;
+      const how = Array.isArray(j?.how_to_fix) ? `\nHow to fix:\n- ${j.how_to_fix.join('\n- ')}` : '';
+      throw new Error(`${detail}${how}`);
+    } catch {
+      const cleaned = sanitizeHttpErrorText(text);
+      throw new Error(
+        `${assessment.toUpperCase()} roster fetch failed: ${res.status}\n${cleaned || 'Server returned a non-JSON error response.'}`,
+      );
+    }
+  }
+
+  return res.json();
+}
+
+export async function fetchCia1Marks(subjectId: string, teachingAssignmentId?: number): Promise<Cia1MarksResponse> {
+  const sanitizeHttpErrorText = (text: string, limit = 1200) => {
+    const raw = String(text || '');
+    const noScripts = raw.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ');
+    const stripped = noScripts
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/gi, "'")
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const cleaned = stripped || raw.replace(/\s+/g, ' ').trim();
+    if (cleaned.length <= limit) return cleaned;
+    return cleaned.slice(0, limit) + '… (truncated)';
+  };
+
   const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
-  const url = `${API_BASE}/api/obe/cia1-marks/${encodeURIComponent(subjectId)}`;
+  const qp = teachingAssignmentId ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
+  const url = `${API_BASE}/api/obe/cia1-marks/${encodeURIComponent(subjectId)}${qp}`;
   const token = window.localStorage.getItem('access');
 
   const res = await fetch(url, {
@@ -180,7 +316,10 @@ export async function fetchCia1Marks(subjectId: string): Promise<Cia1MarksRespon
       const how = Array.isArray(j?.how_to_fix) ? `\nHow to fix:\n- ${j.how_to_fix.join('\n- ')}` : '';
       throw new Error(`${detail}${how}`);
     } catch {
-      throw new Error(`CIA1 roster fetch failed: ${res.status} ${text}`);
+      const cleaned = sanitizeHttpErrorText(text);
+      throw new Error(
+        `CIA1 roster fetch failed: ${res.status}\n${cleaned || 'Server returned a non-JSON error response.'}`,
+      );
     }
   }
 
@@ -188,6 +327,25 @@ export async function fetchCia1Marks(subjectId: string): Promise<Cia1MarksRespon
 }
 
 export async function saveCia1Marks(subjectId: string, marks: Record<number, number | null>): Promise<Cia1MarksResponse> {
+  const sanitizeHttpErrorText = (text: string, limit = 1200) => {
+    const raw = String(text || '');
+    const noScripts = raw.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ');
+    const stripped = noScripts
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/gi, "'")
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const cleaned = stripped || raw.replace(/\s+/g, ' ').trim();
+    if (cleaned.length <= limit) return cleaned;
+    return cleaned.slice(0, limit) + '… (truncated)';
+  };
+
   const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
   const url = `${API_BASE}/api/obe/cia1-marks/${encodeURIComponent(subjectId)}`;
   const token = window.localStorage.getItem('access');
@@ -210,7 +368,8 @@ export async function saveCia1Marks(subjectId: string, marks: Record<number, num
       const errors = Array.isArray(j?.errors) ? `\nErrors:\n- ${j.errors.join('\n- ')}` : '';
       throw new Error(`${detail}${how}${errors}`);
     } catch {
-      throw new Error(`CIA1 save failed: ${res.status} ${dataText}`);
+      const cleaned = sanitizeHttpErrorText(dataText);
+      throw new Error(`CIA1 save failed: ${res.status}\n${cleaned || 'Server returned a non-JSON error response.'}`);
     }
   }
 

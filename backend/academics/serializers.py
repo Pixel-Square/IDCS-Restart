@@ -62,12 +62,14 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
             return None
 
     def get_subject_code(self, obj):
-        # prefer explicit subject, then curriculum row
+        # prefer curriculum_row first, then explicit Subject
         try:
-            # Prefer direct curriculum_row on the assignment first
             if getattr(obj, 'curriculum_row', None):
                 row = obj.curriculum_row
-                return getattr(row, 'course_code', None)
+                # department row may omit code/name; fall back to master entry if present
+                code = getattr(row, 'course_code', None) or (getattr(getattr(row, 'master', None), 'course_code', None) if getattr(row, 'master', None) else None)
+                if code:
+                    return code
             if getattr(obj, 'subject', None):
                 return getattr(obj.subject, 'code', None)
             # As a last resort, try to match a curriculum row explicitly
@@ -82,7 +84,10 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
         try:
             if getattr(obj, 'curriculum_row', None):
                 row = obj.curriculum_row
-                return getattr(row, 'course_name', None)
+                # prefer department row name, else use master.name
+                name = getattr(row, 'course_name', None) or (getattr(getattr(row, 'master', None), 'course_name', None) if getattr(row, 'master', None) else None)
+                if name:
+                    return name
             if getattr(obj, 'subject', None):
                 return getattr(obj.subject, 'name', None)
             row = self._curriculum_row_for_obj(obj)
@@ -132,17 +137,16 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
         fields = ('id', 'staff_id', 'section_id', 'academic_year', 'subject', 'curriculum_row_id', 'is_active', 'staff_details', 'section_name')
 
     def get_subject(self, obj):
-        # prefer curriculum row display
+        # prefer curriculum_row display, then explicit Subject
         try:
             if getattr(obj, 'curriculum_row', None):
                 row = obj.curriculum_row
-                return f"{row.course_code or ''} - {row.course_name or ''}".strip(' -')
+                code = getattr(row, 'course_code', None) or (getattr(getattr(row, 'master', None), 'course_code', None) if getattr(row, 'master', None) else None)
+                name = getattr(row, 'course_name', None) or (getattr(getattr(row, 'master', None), 'course_name', None) if getattr(row, 'master', None) else None)
+                return f"{code or ''}{(' - ' + name) if name else ''}".strip(' -')
             if getattr(obj, 'subject', None):
                 return getattr(obj.subject, 'name', str(obj.subject))
-            # Do not fall back to arbitrary department curriculum rows —
-            # that may return an unrelated subject. If neither explicit
-            # curriculum_row nor subject is present, return None so the
-            # frontend doesn't display an incorrect shared subject.
+            # If neither present, return None
         except Exception:
             pass
         return None

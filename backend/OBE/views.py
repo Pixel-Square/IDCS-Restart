@@ -6,8 +6,9 @@ from django.db.models import Q
 from django.db.utils import OperationalError
 from django.http import HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
+from django.core.exceptions import FieldError
 
-from academics.models import Subject, StudentProfile, TeachingAssignment
+from academics.models import Subject, StudentProfile, TeachingAssignment, Semester
 
 # Mark Entry Tabs View (Faculty OBE Section)
 @login_required
@@ -16,7 +17,7 @@ def mark_entry_tabs(request, subject_id):
     if not hasattr(request.user, 'staff_profile'):
         return HttpResponseForbidden('Faculty access only.')
 
-    subject = get_object_or_404(Subject, code=subject_id)
+    subject = _get_subject(subject_id, request)
     tab = request.GET.get('tab', 'dashboard')
     saved = request.GET.get('saved') == '1'
 
@@ -102,8 +103,59 @@ def _faculty_only(request):
     return staff_profile, None
 
 
-def _get_subject(subject_id: str):
-    return get_object_or_404(Subject, code=subject_id)
+def _get_subject(subject_id: str, request=None):
+    """Resolve a Subject by code.
+
+    If the Subject row does not exist (common when curriculum is used without
+    seeding academics.Subject), create a minimal Subject record so OBE drafts/
+    publish flows do not 404.
+    """
+    code = str(subject_id or '').strip()
+    if not code:
+        return get_object_or_404(Subject, code=code)
+
+    existing = Subject.objects.filter(code=code).select_related('semester').first()
+    if existing:
+        return existing
+
+    # Best-effort: derive name + semester from CurriculumDepartment for the staff's department.
+    name = code
+    semester = None
+    try:
+        from curriculum.models import CurriculumDepartment
+
+        staff_profile = getattr(getattr(request, 'user', None), 'staff_profile', None)
+        dept = getattr(staff_profile, 'current_department', None) if staff_profile else None
+        if dept:
+            row = (
+                CurriculumDepartment.objects.filter(department=dept, course_code=code)
+                .select_related('semester')
+                .order_by('-updated_at')
+                .first()
+            )
+            if row:
+                name = row.course_name or name
+                semester = row.semester
+    except Exception:
+        # Fall back to any semester if curriculum lookup fails.
+        pass
+
+    if semester is None:
+        semester = Semester.objects.order_by('id').first()
+
+    if semester is None:
+        # No semester exists in the DB; cannot create a Subject.
+        return get_object_or_404(Subject, code=code)
+
+    obj, _created = Subject.objects.get_or_create(
+        code=code,
+        defaults={
+            'name': str(name)[:128],
+            'semester': semester,
+            'course': None,
+        },
+    )
+    return obj
 
 
 def _coerce_decimal_or_none(raw):
@@ -126,16 +178,16 @@ def assessment_draft(request, assessment: str, subject_id: str):
     - GET: returns draft JSON (or null)
     - PUT: saves draft JSON
 
-    Assessment: ssa1 | cia1 | formative1
+    Assessment: ssa1 | ssa2 | cia1 | cia2 | formative1 | formative2
     """
     staff_profile, err = _faculty_only(request)
     if err:
         return err
 
-    if assessment not in {'ssa1', 'cia1', 'formative1'}:
+    if assessment not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'formative1', 'formative2'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    subject = _get_subject(subject_id)
+    subject = _get_subject(subject_id, request)
 
     from .models import AssessmentDraft
 
@@ -166,7 +218,7 @@ def ssa1_published(request, subject_id: str):
     if err:
         return err
 
-    subject = _get_subject(subject_id)
+    subject = _get_subject(subject_id, request)
     from .models import Ssa1Mark
     try:
         rows = Ssa1Mark.objects.filter(subject=subject)
@@ -183,7 +235,7 @@ def ssa1_publish(request, subject_id: str):
     staff_profile, err = _faculty_only(request)
     if err:
         return err
-    subject = _get_subject(subject_id)
+    subject = _get_subject(subject_id, request)
 
     body = request.data or {}
     data = body.get('data', None)
@@ -226,12 +278,77 @@ def ssa1_publish(request, subject_id: str):
 @api_view(['GET'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
+def ssa2_published(request, subject_id: str):
+    staff_profile, err = _faculty_only(request)
+    if err:
+        return err
+
+    subject = _get_subject(subject_id, request)
+    from .models import Ssa2Mark
+    try:
+        rows = Ssa2Mark.objects.filter(subject=subject)
+        marks = {str(r.student_id): (str(r.mark) if r.mark is not None else None) for r in rows}
+    except OperationalError:
+        marks = {}
+    return Response({'subject': {'code': subject.code, 'name': subject.name}, 'marks': marks})
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def ssa2_publish(request, subject_id: str):
+    staff_profile, err = _faculty_only(request)
+    if err:
+        return err
+    subject = _get_subject(subject_id, request)
+
+    body = request.data or {}
+    data = body.get('data', None)
+    if data is None or not isinstance(data, dict):
+        return Response({'detail': 'Invalid payload.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    rows = data.get('rows', [])
+    if not isinstance(rows, list):
+        return Response({'detail': 'Invalid rows.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    from .models import Ssa2Mark
+
+    errors: list[str] = []
+    with transaction.atomic():
+        for item in rows:
+            try:
+                sid = int(item.get('studentId'))
+            except Exception:
+                continue
+            student = StudentProfile.objects.filter(id=sid).first()
+            if not student:
+                continue
+
+            mark = _coerce_decimal_or_none(item.get('total'))
+            if item.get('total') not in (None, '',) and mark is None:
+                errors.append(f'Invalid mark for student {sid}: {item.get("total")}')
+                continue
+
+            if mark is None:
+                Ssa2Mark.objects.filter(subject=subject, student=student).delete()
+            else:
+                Ssa2Mark.objects.update_or_create(subject=subject, student=student, defaults={'mark': mark})
+
+    if errors:
+        return Response({'detail': 'Validation error.', 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response({'status': 'published'})
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
 def formative1_published(request, subject_id: str):
     staff_profile, err = _faculty_only(request)
     if err:
         return err
 
-    subject = _get_subject(subject_id)
+    subject = _get_subject(subject_id, request)
     from .models import Formative1Mark
     try:
         rows = Formative1Mark.objects.filter(subject=subject)
@@ -257,7 +374,7 @@ def formative1_publish(request, subject_id: str):
     staff_profile, err = _faculty_only(request)
     if err:
         return err
-    subject = _get_subject(subject_id)
+    subject = _get_subject(subject_id, request)
 
     body = request.data or {}
     data = body.get('data', None)
@@ -307,12 +424,93 @@ def formative1_publish(request, subject_id: str):
 @api_view(['GET'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
+def formative2_published(request, subject_id: str):
+    staff_profile, err = _faculty_only(request)
+    if err:
+        return err
+
+    subject = _get_subject(subject_id, request)
+    from .models import Formative2Mark
+    try:
+        rows = Formative2Mark.objects.filter(subject=subject)
+        marks = {
+            str(r.student_id): {
+                'skill1': str(r.skill1) if r.skill1 is not None else None,
+                'skill2': str(r.skill2) if r.skill2 is not None else None,
+                'att1': str(r.att1) if r.att1 is not None else None,
+                'att2': str(r.att2) if r.att2 is not None else None,
+                'total': str(r.total) if r.total is not None else None,
+            }
+            for r in rows
+        }
+    except OperationalError:
+        marks = {}
+    return Response({'subject': {'code': subject.code, 'name': subject.name}, 'marks': marks})
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def formative2_publish(request, subject_id: str):
+    staff_profile, err = _faculty_only(request)
+    if err:
+        return err
+    subject = _get_subject(subject_id, request)
+
+    body = request.data or {}
+    data = body.get('data', None)
+    if data is None or not isinstance(data, dict):
+        return Response({'detail': 'Invalid payload.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    rows_by = data.get('rowsByStudentId', {})
+    if not isinstance(rows_by, dict):
+        return Response({'detail': 'Invalid rowsByStudentId.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    from .models import Formative2Mark
+
+    errors: list[str] = []
+    with transaction.atomic():
+        for sid_str, item in rows_by.items():
+            try:
+                sid = int(sid_str)
+            except Exception:
+                continue
+            student = StudentProfile.objects.filter(id=sid).first()
+            if not student:
+                continue
+
+            skill1 = _coerce_decimal_or_none((item or {}).get('skill1'))
+            skill2 = _coerce_decimal_or_none((item or {}).get('skill2'))
+            att1 = _coerce_decimal_or_none((item or {}).get('att1'))
+            att2 = _coerce_decimal_or_none((item or {}).get('att2'))
+
+            # If any is missing, treat as no published mark.
+            if skill1 is None or skill2 is None or att1 is None or att2 is None:
+                Formative2Mark.objects.filter(subject=subject, student=student).delete()
+                continue
+
+            total = skill1 + skill2 + att1 + att2
+
+            Formative2Mark.objects.update_or_create(
+                subject=subject,
+                student=student,
+                defaults={'skill1': skill1, 'skill2': skill2, 'att1': att1, 'att2': att2, 'total': total},
+            )
+
+    if errors:
+        return Response({'detail': 'Validation error.', 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
+    return Response({'status': 'published'})
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
 def cia1_published_sheet(request, subject_id: str):
     staff_profile, err = _faculty_only(request)
     if err:
         return err
 
-    subject = _get_subject(subject_id)
+    subject = _get_subject(subject_id, request)
     from .models import Cia1PublishedSheet
     row = Cia1PublishedSheet.objects.filter(subject=subject).first()
     return Response({'subject': {'code': subject.code, 'name': subject.name}, 'data': row.data if row else None})
@@ -326,7 +524,7 @@ def cia1_publish_sheet(request, subject_id: str):
     if err:
         return err
 
-    subject = _get_subject(subject_id)
+    subject = _get_subject(subject_id, request)
     body = request.data or {}
     data = body.get('data', None)
     if data is None or not isinstance(data, dict):
@@ -385,6 +583,91 @@ def cia1_publish_sheet(request, subject_id: str):
     return Response({'status': 'published'})
 
 
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def cia2_published_sheet(request, subject_id: str):
+    staff_profile, err = _faculty_only(request)
+    if err:
+        return err
+
+    subject = _get_subject(subject_id, request)
+    from .models import Cia2PublishedSheet
+    try:
+        row = Cia2PublishedSheet.objects.filter(subject=subject).first()
+        data = row.data if row else None
+    except OperationalError:
+        data = None
+    return Response({'subject': {'code': subject.code, 'name': subject.name}, 'data': data})
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def cia2_publish_sheet(request, subject_id: str):
+    staff_profile, err = _faculty_only(request)
+    if err:
+        return err
+
+    subject = _get_subject(subject_id, request)
+    body = request.data or {}
+    data = body.get('data', None)
+    if data is None or not isinstance(data, dict):
+        return Response({'detail': 'Invalid payload.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    from .models import Cia2PublishedSheet, Cia2Mark
+
+    # Save the snapshot
+    Cia2PublishedSheet.objects.update_or_create(
+        subject=subject,
+        defaults={'data': data, 'updated_by': getattr(request.user, 'id', None)},
+    )
+
+    # Also upsert totals into the existing CIA2 totals table.
+    questions = data.get('questions', [])
+    if not isinstance(questions, list):
+        questions = []
+    rows_by = data.get('rowsByStudentId', {})
+    if not isinstance(rows_by, dict):
+        rows_by = {}
+
+    qkeys = [str(q.get('key')) for q in questions if isinstance(q, dict) and q.get('key')]
+
+    with transaction.atomic():
+        for sid_str, row in rows_by.items():
+            try:
+                sid = int(sid_str)
+            except Exception:
+                continue
+            student = StudentProfile.objects.filter(id=sid).first()
+            if not student:
+                continue
+
+            absent = bool((row or {}).get('absent'))
+            if absent:
+                total_dec = Decimal('0')
+            else:
+                q = (row or {}).get('q', {})
+                if not isinstance(q, dict):
+                    q = {}
+                total = Decimal('0')
+                for k in qkeys:
+                    v = q.get(k)
+                    dec = _coerce_decimal_or_none(v)
+                    if dec is None:
+                        continue
+                    total += dec
+                total_dec = total
+
+            Cia2Mark.objects.update_or_create(
+                subject=subject,
+                student=student,
+                defaults={'mark': total_dec},
+            )
+
+    return Response({'status': 'published'})
+
+
 @api_view(['GET', 'PUT'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
@@ -399,39 +682,88 @@ def cia1_marks(request, subject_id):
     if not staff_profile:
         return Response({'detail': 'Faculty access only.'}, status=status.HTTP_403_FORBIDDEN)
 
-    subject = get_object_or_404(Subject, code=subject_id)
+    # Subject may not exist when teaching assignments reference curriculum rows only.
+    subject = Subject.objects.filter(code=subject_id).first()
 
     role_names = {r.name.upper() for r in user.roles.all()}
-    tas = TeachingAssignment.objects.select_related('section', 'academic_year').filter(
-        subject=subject,
-        is_active=True,
-    )
+    try:
+        tas = TeachingAssignment.objects.select_related('section', 'academic_year', 'curriculum_row').filter(is_active=True)
+        if subject is not None:
+            tas = tas.filter(Q(subject=subject) | Q(curriculum_row__course_code=subject.code))
+        else:
+            tas = tas.filter(Q(subject__code=subject_id) | Q(curriculum_row__course_code=subject_id))
+    except (ValueError, FieldError) as e:
+        return Response(
+            {
+                'detail': 'CIA1 teaching assignment query failed.',
+                'error': str(e),
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
     # Staff: only their teaching assignments; HOD/ADVISOR: within their department
-    if 'HOD' in role_names or 'ADVISOR' in role_names:
-        if getattr(staff_profile, 'department_id', None):
-            tas = tas.filter(section__semester__course__department=staff_profile.department)
-    else:
-        tas = tas.filter(staff=staff_profile)
+    try:
+        if 'HOD' in role_names or 'ADVISOR' in role_names:
+            if getattr(staff_profile, 'department_id', None):
+                # Semester is canonical (no course FK). Department lives on Course -> Batch.
+                tas = tas.filter(section__batch__course__department=staff_profile.department)
+        else:
+            tas = tas.filter(staff=staff_profile)
+    except (ValueError, FieldError) as e:
+        return Response(
+            {
+                'detail': 'CIA1 teaching assignment filtering failed.',
+                'error': str(e),
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
     # Prefer active academic year assignments when present
     if tas.filter(academic_year__is_active=True).exists():
         tas = tas.filter(academic_year__is_active=True)
 
-    section_ids = list(tas.values_list('section_id', flat=True).distinct())
+    # If UI provided an explicit teaching assignment id, scope roster to that section.
+    ta_id_raw = getattr(request, 'query_params', {}).get('teaching_assignment_id') if hasattr(request, 'query_params') else request.GET.get('teaching_assignment_id')
+    ta_id = None
+    try:
+        if ta_id_raw:
+            ta_id = int(str(ta_id_raw))
+    except Exception:
+        ta_id = None
+
+    if ta_id is not None:
+        ta = tas.filter(id=ta_id).first()
+        if not ta:
+            return Response({'detail': 'Teaching assignment not found for this subject.'}, status=status.HTTP_403_FORBIDDEN)
+        section_ids = [ta.section_id]
+    else:
+        section_ids = list(tas.values_list('section_id', flat=True).distinct())
     if not section_ids:
         return Response({'detail': 'No teaching assignment found for this subject.'}, status=status.HTTP_403_FORBIDDEN)
 
     # Order roster by student name
-    students = (
-        StudentProfile.objects.select_related('user', 'section')
-        .filter(
-            Q(section_id__in=section_ids)
-            | Q(section_assignments__section_id__in=section_ids, section_assignments__end_date__isnull=True)
+    try:
+        students = (
+            StudentProfile.objects.select_related('user', 'section')
+            .filter(
+                Q(section_id__in=section_ids)
+                | Q(section_assignments__section_id__in=section_ids, section_assignments__end_date__isnull=True)
+            )
+            .distinct()
+            .order_by('user__last_name', 'user__first_name', 'user__username')
         )
-        .distinct()
-        .order_by('user__last_name', 'user__first_name', 'user__username')
-    )
+    except (ValueError, FieldError) as e:
+        return Response(
+            {
+                'detail': 'CIA1 roster query failed.',
+                'error': str(e),
+                'how_to_fix': [
+                    'Ensure the selected Teaching Assignment has a valid Section and Semester',
+                    'Ensure student section assignments are consistent',
+                ],
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
     from .models import Cia1Mark
 
@@ -535,8 +867,235 @@ def cia1_marks(request, subject_id):
             'section': str(s.section) if s.section else None,
         })
 
+    subject_payload = None
+    if subject is not None:
+        subject_payload = {'code': subject.code, 'name': subject.name}
+    else:
+        # Fall back to curriculum_row info if available.
+        any_ta = tas.first()
+        cr = getattr(any_ta, 'curriculum_row', None) if any_ta else None
+        subject_payload = {
+            'code': str(subject_id),
+            'name': (getattr(cr, 'course_name', None) or str(subject_id)),
+        }
+
     return Response({
-        'subject': {'code': subject.code, 'name': subject.name},
+        'subject': subject_payload,
+        'students': out_students,
+        'marks': existing,
+    })
+
+
+@api_view(['GET', 'PUT'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def cia2_marks(request, subject_id):
+    """CIA2 marks API used by the React Faculty → OBE → Mark Entry → CIA2 screen.
+
+    - GET: returns roster + current marks
+    - PUT: upserts/clears marks
+    """
+    user = request.user
+    staff_profile = getattr(user, 'staff_profile', None)
+    if not staff_profile:
+        return Response({'detail': 'Faculty access only.'}, status=status.HTTP_403_FORBIDDEN)
+
+    # Subject may not exist when teaching assignments reference curriculum rows only.
+    subject = Subject.objects.filter(code=subject_id).first()
+
+    role_names = {r.name.upper() for r in user.roles.all()}
+    try:
+        tas = TeachingAssignment.objects.select_related('section', 'academic_year', 'curriculum_row').filter(is_active=True)
+        if subject is not None:
+            tas = tas.filter(Q(subject=subject) | Q(curriculum_row__course_code=subject.code))
+        else:
+            tas = tas.filter(Q(subject__code=subject_id) | Q(curriculum_row__course_code=subject_id))
+    except (ValueError, FieldError) as e:
+        return Response(
+            {
+                'detail': 'CIA2 teaching assignment query failed.',
+                'error': str(e),
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    # Staff: only their teaching assignments; HOD/ADVISOR: within their department
+    try:
+        if 'HOD' in role_names or 'ADVISOR' in role_names:
+            if getattr(staff_profile, 'department_id', None):
+                tas = tas.filter(section__batch__course__department=staff_profile.department)
+        else:
+            tas = tas.filter(staff=staff_profile)
+    except (ValueError, FieldError) as e:
+        return Response(
+            {
+                'detail': 'CIA2 teaching assignment filtering failed.',
+                'error': str(e),
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    # Prefer active academic year assignments when present
+    if tas.filter(academic_year__is_active=True).exists():
+        tas = tas.filter(academic_year__is_active=True)
+
+    # If UI provided an explicit teaching assignment id, scope roster to that section.
+    ta_id_raw = getattr(request, 'query_params', {}).get('teaching_assignment_id') if hasattr(request, 'query_params') else request.GET.get('teaching_assignment_id')
+    ta_id = None
+    try:
+        if ta_id_raw:
+            ta_id = int(str(ta_id_raw))
+    except Exception:
+        ta_id = None
+
+    if ta_id is not None:
+        ta = tas.filter(id=ta_id).first()
+        if not ta:
+            return Response({'detail': 'Teaching assignment not found for this subject.'}, status=status.HTTP_403_FORBIDDEN)
+        section_ids = [ta.section_id]
+    else:
+        section_ids = list(tas.values_list('section_id', flat=True).distinct())
+    if not section_ids:
+        return Response({'detail': 'No teaching assignment found for this subject.'}, status=status.HTTP_403_FORBIDDEN)
+
+    # Order roster by student name
+    try:
+        students = (
+            StudentProfile.objects.select_related('user', 'section')
+            .filter(
+                Q(section_id__in=section_ids)
+                | Q(section_assignments__section_id__in=section_ids, section_assignments__end_date__isnull=True)
+            )
+            .distinct()
+            .order_by('user__last_name', 'user__first_name', 'user__username')
+        )
+    except (ValueError, FieldError) as e:
+        return Response(
+            {
+                'detail': 'CIA2 roster query failed.',
+                'error': str(e),
+                'how_to_fix': [
+                    'Ensure the selected Teaching Assignment has a valid Section and Semester',
+                    'Ensure student section assignments are consistent',
+                ],
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    from .models import Cia2Mark
+
+    # If the DB hasn't been migrated yet, avoid returning Django's HTML 500 page.
+    try:
+        Cia2Mark.objects.none().count()
+    except OperationalError:
+        return Response(
+            {
+                'detail': 'CIA2 marks table is missing. Run database migrations first.',
+                'how_to_fix': [
+                    'cd backend',
+                    'python manage.py migrate',
+                ],
+            },
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    if request.method == 'PUT':
+        payload = request.data or {}
+        incoming = payload.get('marks', {})
+        if incoming is None:
+            incoming = {}
+
+        marks_map: dict[int, object] = {}
+        if isinstance(incoming, list):
+            for item in incoming:
+                try:
+                    sid = int(item.get('student_id'))
+                except Exception:
+                    continue
+                marks_map[sid] = item.get('mark')
+        elif isinstance(incoming, dict):
+            for k, v in incoming.items():
+                try:
+                    marks_map[int(k)] = v
+                except Exception:
+                    continue
+        else:
+            return Response({'detail': 'Invalid marks payload.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        errors: list[str] = []
+        try:
+            with transaction.atomic():
+                for s in students:
+                    if s.id not in marks_map:
+                        continue
+                    raw = marks_map.get(s.id)
+
+                    if raw is None or (isinstance(raw, str) and raw.strip() == ''):
+                        Cia2Mark.objects.filter(subject=subject, student=s).delete()
+                        continue
+
+                    try:
+                        mark = Decimal(str(raw))
+                    except (InvalidOperation, ValueError):
+                        errors.append(f'Invalid mark for {s.reg_no}: {raw}')
+                        continue
+
+                    Cia2Mark.objects.update_or_create(
+                        subject=subject,
+                        student=s,
+                        defaults={'mark': mark},
+                    )
+        except OperationalError:
+            return Response(
+                {
+                    'detail': 'CIA2 marks table is missing. Run database migrations first.',
+                    'how_to_fix': [
+                        'cd backend',
+                        'python manage.py migrate',
+                    ],
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        if errors:
+            return Response({'detail': 'Validation error.', 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        existing = {
+            m.student_id: (str(m.mark) if m.mark is not None else None)
+            for m in Cia2Mark.objects.filter(subject=subject, student__in=students)
+        }
+    except OperationalError:
+        existing = {}
+
+    out_students = []
+    for s in students:
+        full_name = ''
+        try:
+            full_name = s.user.get_full_name()
+        except Exception:
+            full_name = ''
+
+        out_students.append({
+            'id': s.id,
+            'reg_no': s.reg_no,
+            'name': full_name or s.user.username,
+            'section': str(s.section) if s.section else None,
+        })
+
+    subject_payload = None
+    if subject is not None:
+        subject_payload = {'code': subject.code, 'name': subject.name}
+    else:
+        any_ta = tas.first()
+        cr = getattr(any_ta, 'curriculum_row', None) if any_ta else None
+        subject_payload = {
+            'code': str(subject_id),
+            'name': (getattr(cr, 'course_name', None) or str(subject_id)),
+        }
+
+    return Response({
+        'subject': subject_payload,
         'students': out_students,
         'marks': existing,
     })

@@ -30,8 +30,10 @@ type Me = {
   id: number;
   username: string;
   email?: string;
-  roles?: string[] | RoleObj[];
+  roles?: string[];
   permissions?: string[];
+  profile_type?: string | null;
+  profile?: any | null;
 };
 
 export default function App() {
@@ -76,38 +78,35 @@ export default function App() {
 
   const userPerms = Array.isArray(user?.permissions) ? user?.permissions : [];
   const lowerPerms = userPerms.map((p) => String(p || '').toLowerCase());
-  const canObe = lowerPerms.some((p) => ['obe.view', 'obe.cdap.upload', 'obe.master.manage'].includes(p));
   const canObeMaster = lowerPerms.includes('obe.master.manage');
 
   return (
     <div>
       <Navbar user={user} />
-      <Routes>
-        <Route path="/" element={<HomePage user={user} />} />
-        <Route path="/dashboard" element={<DashboardPage />} />
-        <Route path="/profile" element={<ProfilePage user={user} />} />
-        <Route path="/import/questions" element={<QuestionImportPage />} />
-        <Route path="/curriculum/master" element={<MasterList />} />
-        <Route path="/curriculum/master/:id" element={<MasterEditor />} />
-        <Route path="/curriculum/master/new" element={<MasterEditor />} />
-        <Route path="/curriculum/department" element={<DeptList />} />
-        <Route path="/obe" element={<OBEPage />} />
-        <Route path="/obe/course/:code" element={<CourseOBEPage />} />
-        <Route path="/obe/master" element={canObeMaster ? <OBEMasterPage /> : <HomePage user={user} />} />
-        <Route path="*" element={<HomePage user={user} />} />
-      </Routes>
       {user ? (
         <div className="dashboard-root">
           <DashboardSidebar />
           <main className="dashboard-main">
             <Routes>
-              <Route path="/" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
+              <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/profile" element={<ProfilePage user={user} />} />
+              <Route path="/import/questions" element={<QuestionImportPage />} />
               <Route path="/curriculum/master" element={<MasterList />} />
               <Route path="/curriculum/master/:id" element={<MasterEditor />} />
               <Route path="/curriculum/master/new" element={<MasterEditor />} />
               <Route path="/curriculum/department" element={<DeptList />} />
+              <Route path="/obe" element={<OBEPage />} />
+              <Route path="/obe/course/:code" element={<CourseOBEPage />} />
+              <Route path="/obe/course/:code/cdap" element={<CourseOBEPage />} />
+              <Route path="/obe/course/:code/articulation" element={<CourseOBEPage />} />
+              <Route path="/obe/course/:code/marks" element={<CourseOBEPage />} />
+              <Route path="/obe/course/:code/lca" element={<CourseOBEPage />} />
+              <Route path="/obe/course/:code/lca_instructions" element={<CourseOBEPage />} />
+              <Route path="/obe/course/:code/lca/instructions" element={<CourseOBEPage />} />
+              <Route path="/obe/course/:code/co_attainment" element={<CourseOBEPage />} />
+              <Route path="/obe/course/:code/cqi" element={<CourseOBEPage />} />
+              <Route path="/obe/master" element={canObeMaster ? <OBEMasterPage /> : <HomePage user={user} />} />
               <Route path="/hod/advisors" element={
                 <ProtectedRoute user={user} requiredRoles={["HOD"]} requiredPermissions={["academics.assign_advisor"]} element={<AdvisorAssignments />} />
               } />
@@ -139,14 +138,14 @@ export default function App() {
               <Route path="/staff/period-attendance" element={
                 <ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={['academics.mark_attendance']} element={<PeriodAttendance />} />
               } />
-              <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
+              <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Routes>
           </main>
         </div>
       ) : (
         <Routes>
-          <Route path="/" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
-          <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
+          <Route path="/" element={<HomePage user={user} />} />
+          <Route path="*" element={<HomePage user={user} />} />
         </Routes>
       )}
     </div>

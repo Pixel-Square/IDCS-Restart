@@ -8,7 +8,6 @@ import '../styles/obe-theme.css';
 
 import { fetchMyTeachingAssignments, TeachingAssignmentItem } from '../services/obe';
 import { getMe } from '../services/auth';
-import DashboardSidebar from '../components/DashboardSidebar';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
@@ -383,28 +382,23 @@ export default function OBEPage(): JSX.Element {
 
       return (
         <main className="obe-page" style={{ padding: 0, fontFamily: 'Arial, sans-serif', minHeight: '100vh', background: '#fff' }}>
-          <div style={{ display: 'flex', flexDirection: 'row', minHeight: '100vh' }}>
-            <div style={{ flex: '0 0 240px', background: '#f8fafc', minHeight: '100vh', borderRight: '1px solid #eee' }}>
-              <DashboardSidebar />
-            </div>
-            <div style={{ flex: 1, padding: '32px 32px 24px 32px', width: '100%', minWidth: 0, boxSizing: 'border-box' }}>
-              <header style={{ marginBottom: 8, marginTop: 0, paddingTop: 0 }}>
-                <div style={{ display: 'flex', flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'flex-end', width: '100%' }}>
-                  <div style={{ textAlign: 'right' }}>
-                    <h1 style={{ margin: 0 }}>
-                      Outcome Based Education (OBE)
-                    </h1>
-                    {selectedCourse && (
-                      <div style={{ fontSize: 20, color: '#222', fontWeight: 600, lineHeight: 1.2 }}>
-                        {selectedCourse.subject_name} ({selectedCourse.subject_code})
-                      </div>
-                    )}
-                    <div style={{ marginTop: 4, color: '#444', fontSize: 15 }}>
-                      Select a course, then work through CDAP, Articulation Matrix and Mark Entry.
-                    </div>
+          <header style={{ marginBottom: 8, marginTop: 0, paddingTop: 0 }}>
+            <div style={{ display: 'flex', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', width: '100%' }}>
+              <div style={{ textAlign: 'left' }}>
+                <h1 style={{ margin: 0 }}>
+                  Outcome Based Education (OBE)
+                </h1>
+                {selectedCourse && (
+                  <div style={{ fontSize: 20, color: '#222', fontWeight: 600, lineHeight: 1.2 }}>
+                    {selectedCourse.subject_name} ({selectedCourse.subject_code})
                   </div>
+                )}
+                <div style={{ marginTop: 4, color: '#444', fontSize: 15 }}>
+                  Select a course, then work through CDAP, Articulation Matrix and Mark Entry.
                 </div>
-              </header>
+              </div>
+            </div>
+          </header>
               {/* Tabs header */}
               <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
                 <button
@@ -437,18 +431,15 @@ export default function OBEPage(): JSX.Element {
               {activeTab === 'courses' && (
                 <section
                   aria-label="Course selector"
-                  style={{ marginBottom: 12 }}
+                  style={{ marginBottom: 24 }}
                 >
                   <div style={{ fontSize: 12, color: '#666', marginBottom: 10 }}>Select a course to work on:</div>
                   <div
                     style={{
                       display: 'grid',
-                      gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+                      gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
                       gap: 16,
-                      marginBottom: 8,
-                      minHeight: 180,
-                      alignItems: 'start',
-                      justifyItems: 'center',
+                      marginBottom: 24,
                     }}
                   >
                     {assignments.length === 0 ? (
@@ -487,23 +478,56 @@ export default function OBEPage(): JSX.Element {
                           >
                             <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 4 }}>{it.subject_name}</div>
                             <div style={{ fontSize: 15, color: '#444', marginBottom: 12 }}>{it.subject_code}</div>
-                            <button
-                              onClick={(e) => { e.stopPropagation(); navigateToCourse(it.subject_code); }}
-                              style={{
-                                marginTop: 'auto',
-                                padding: '6px 18px',
-                                borderRadius: 6,
-                                border: 'none',
-                                background: '#2563eb',
-                                color: '#fff',
-                                fontWeight: 600,
-                                fontSize: 15,
-                                cursor: 'pointer',
-                                boxShadow: '0 1px 2px #0001',
-                              }}
-                            >
-                              Open
-                            </button>
+                            <div style={{ marginTop: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); navigateToCourse(it.subject_code); }}
+                                style={{
+                                  padding: '6px 14px',
+                                  borderRadius: 6,
+                                  border: 'none',
+                                  background: '#2563eb',
+                                  color: '#fff',
+                                  fontWeight: 600,
+                                  fontSize: 15,
+                                  cursor: 'pointer',
+                                  boxShadow: '0 1px 2px #0001',
+                                }}
+                              >
+                                Open
+                              </button>
+
+                              <button
+                                onClick={(e) => { e.stopPropagation(); window.location.href = `/obe/course/${encodeURIComponent(it.subject_code)}/lca`; }}
+                                style={{
+                                  padding: '6px 12px',
+                                  borderRadius: 6,
+                                  border: '1px solid #e5e7eb',
+                                  background: '#fff',
+                                  color: '#111827',
+                                  fontWeight: 600,
+                                  fontSize: 13,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                LCA
+                              </button>
+
+                              <button
+                                onClick={(e) => { e.stopPropagation(); window.location.href = `/obe/course/${encodeURIComponent(it.subject_code)}/co_attainment`; }}
+                                style={{
+                                  padding: '6px 12px',
+                                  borderRadius: 6,
+                                  border: '1px solid #e5e7eb',
+                                  background: '#fff',
+                                  color: '#111827',
+                                  fontWeight: 600,
+                                  fontSize: 13,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                CO
+                              </button>
+                            </div>
                           </div>
                         ))
                     )}
@@ -511,13 +535,52 @@ export default function OBEPage(): JSX.Element {
                   {assignmentsError && (
                     <div style={{ marginTop: 6, fontSize: 12, color: '#b91c1c' }}>{assignmentsError}</div>
                   )}
+                  
+                  {/* Course Summary Section */}
+                  {assignments.length > 0 && (
+                    <div style={{ marginTop: 32, paddingTop: 24, borderTop: '1px solid #e5e7eb' }}>
+                      <h2 style={{ margin: '0 0 16px 0', fontSize: 18, fontWeight: 700 }}>Course Overview</h2>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+                        <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, background: '#f9fafb' }}>
+                          <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 8 }}>Total Courses</div>
+                          <div style={{ fontSize: 28, fontWeight: 800, color: '#111827' }}>
+                            {assignments.reduce((acc: TeachingAssignmentItem[], it) => {
+                              if (!acc.some(a => a.subject_code === it.subject_code)) acc.push(it);
+                              return acc;
+                            }, []).length}
+                          </div>
+                          <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>Assigned to you</div>
+                        </div>
+                        
+                        <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, background: '#f9fafb' }}>
+                          <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 8 }}>Ready for OBE</div>
+                          <div style={{ fontSize: 28, fontWeight: 800, color: '#10b981' }}>
+                            0
+                          </div>
+                          <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>Courses with CDAP</div>
+                        </div>
+                        
+                        <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, background: '#f9fafb' }}>
+                          <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 8 }}>Quick Actions</div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            <button style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #e5e7eb', background: '#fff', cursor: 'pointer', fontSize: 12, textAlign: 'left' }}>
+                              → View CDAP Templates
+                            </button>
+                            <button style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #e5e7eb', background: '#fff', cursor: 'pointer', fontSize: 12, textAlign: 'left' }}>
+                              → View Documentation
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </section>
               )}
 
               {/* Exam Management tab (placeholder) */}
               {activeTab === 'exam' && (
-                <section aria-label="Exam management" style={{ minHeight: 240, padding: 20, border: '1px dashed #e5e7eb', borderRadius: 8 }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <section aria-label="Exam management" style={{ padding: 0 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                     {/* Upload area */}
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                       <input
@@ -1158,8 +1221,6 @@ export default function OBEPage(): JSX.Element {
                   </div>
                 </div>
               )}
-            </div>
-          </div>
         </main>
   );
 }

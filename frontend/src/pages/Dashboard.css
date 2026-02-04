@@ -45,14 +45,9 @@
 }
 .dashboard-root{
 	display:flex;
-<<<<<<< HEAD
-	min-height:100vh;
-	background: linear-gradient(180deg, #ecfdf5 0%, #ffffff 60%);
-=======
 	/* subtract navbar height so total page fits viewport without extra scroll */
 	min-height: calc(100vh - 64px);
 	background: linear-gradient(180deg, #f7fbff 0%, #ffffff 60%);
->>>>>>> origin/main
 	color: #0f172a;
 }
 .dashboard-main{

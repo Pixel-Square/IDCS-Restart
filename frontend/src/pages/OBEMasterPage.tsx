@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from 'react';
 
 import { analysisOptionLabels, normalizeAnalysisKey } from '../components/activeLearningAnalysisMapping';
 import { fetchAssessmentMasterConfig, fetchGlobalAnalysisMapping, saveAssessmentMasterConfig, saveGlobalAnalysisMapping } from '../services/cdapDb';
-import DashboardSidebar from '../components/DashboardSidebar';
 
 type Mapping = Record<string, boolean[]>;
 
@@ -301,11 +300,7 @@ export default function OBEMasterPage(): JSX.Element {
 
   return (
     <main className="obe-master-page" style={{ padding: 0, fontFamily: 'Arial, sans-serif', minHeight: '100vh', background: '#fff' }}>
-      <div style={{ display: 'flex', flexDirection: 'row', minHeight: '100vh' }}>
-        <div style={{ flex: '0 0 240px', background: '#f8fafc', minHeight: '100vh', borderRight: '1px solid #eee' }}>
-          <DashboardSidebar />
-        </div>
-        <div style={{ flex: 1, padding: '32px', width: '100%', minWidth: 0, boxSizing: 'border-box' }}>
+      <div style={{ padding: '0px', width: '100%', minWidth: 0, boxSizing: 'border-box' }}>
           <div style={{ marginBottom: 16 }}>
             <h2 style={{ margin: 0 }}>OBE Master</h2>
             <div style={{ color: '#666', marginTop: 4 }}>Global settings for OBE pages</div>
@@ -765,7 +760,6 @@ export default function OBEMasterPage(): JSX.Element {
               {saving ? 'Saving...' : tab === 'po' ? 'Save Global PO Mapping' : 'Save Assessment Headers'}
             </button>
           </div>
-        </div>
       </div>
     </main>
   );

@@ -81,14 +81,16 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // fallback: always show profile
   items.unshift({ key: 'profile', label: 'Profile', to: '/profile' });
 
-  // Define obeItem for the OBE button at the bottom
-  const obeItem = items.find((item) => item.key === 'obe') || { key: 'obe', label: 'OBE', to: '/obe' };
-
   const perms = (data.permissions || []).map((p) => String(p || '').toLowerCase());
   const canObeMaster = perms.includes('obe.master.manage');
 
-  items.push({ key: 'obe', label: 'OBE', to: '/obe' });
-  if (canObeMaster) items.push({ key: 'obe_master', label: 'OBE Master', to: '/obe/master' });
+  // Only add OBE once
+  if (!items.some(item => item.key === 'obe')) {
+    items.push({ key: 'obe', label: 'OBE', to: '/obe' });
+  }
+  if (canObeMaster && !items.some(item => item.key === 'obe_master')) {
+    items.push({ key: 'obe_master', label: 'OBE Master', to: '/obe/master' });
+  }
 
   return (
     <aside className={`dsb modern-dsb ${collapsed ? 'collapsed' : ''}`}>
@@ -112,13 +114,6 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
             </li>
           );
         })}
-        {/* OBE button at the bottom */}
-        <li key={obeItem.key} className={`dsb-item ${loc.pathname.startsWith(obeItem.to) ? 'active' : ''}`}>
-          <Link to={obeItem.to} className="dsb-link">
-            <span className="dsb-icon">{ICON_MAP.obe ? <ICON_MAP.obe /> : <User />}</span>
-            <span className="dsb-label">{obeItem.label}</span>
-          </Link>
-        </li>
       </ul>
     </aside>
   );

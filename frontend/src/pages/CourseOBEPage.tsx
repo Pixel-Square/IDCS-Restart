@@ -1,19 +1,41 @@
 import React from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import CDAPPage from './CDAPPage';
 import ArticulationMatrixPage from './ArticulationMatrixPage';
 import MarkEntryPage from './MarkEntryPage';
 import LCAInstructionsPage from './LCAInstructionsPage';
 import COAttainmentPage from './COAttainmentPage';
 import CQIPage from './CQIPage';
-import DashboardSidebar from '../components/DashboardSidebar';
+import LCAPage from './LCAPage';
+import { fetchMyTeachingAssignments } from '../services/obe';
+import { fetchDeptRows } from '../services/curriculum';
 
-type TabKey = 'cdap' | 'articulation' | 'marks' | 'lca' | 'co_attainment' | 'cqi';
+type TabKey = 'cdap' | 'articulation' | 'marks' | 'lca_instructions' | 'lca' | 'co_attainment' | 'cqi';
 
 export default function CourseOBEPage(): JSX.Element {
   const { code } = useParams<{ code: string }>();
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = React.useState<TabKey>('marks');
+  const location = useLocation();
+
+  const [activeTab, setActiveTab] = React.useState<TabKey>(() => {
+    // default to 'marks'
+    return 'marks';
+  });
+
+  React.useEffect(() => {
+    // Derive active tab from the current pathname so direct URLs open correct tab
+    if (!location || !location.pathname) return;
+    const path = location.pathname.toLowerCase();
+    // Prefer an explicit instructions path if present
+    if (path.includes('/lca/instructions') || path.includes('/lca_instructions')) setActiveTab('lca_instructions');
+    else if (path.includes('/lca')) setActiveTab('lca');
+    else if (path.includes('/cdap')) setActiveTab('cdap');
+    else if (path.includes('/articulation')) setActiveTab('articulation');
+    else if (path.includes('/marks')) setActiveTab('marks');
+    else if (path.includes('/co_attainment')) setActiveTab('co_attainment');
+    else if (path.includes('/cqi')) setActiveTab('cqi');
+    else setActiveTab('marks');
+  }, [location]);
 
   if (!code) {
     return (
@@ -25,19 +47,56 @@ export default function CourseOBEPage(): JSX.Element {
   }
 
   const courseId = decodeURIComponent(code);
+  const [courseName, setCourseName] = React.useState<string | null>(null);
+  const [courseClassType, setCourseClassType] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const list = await fetchMyTeachingAssignments();
+        if (!mounted) return;
+        const found = list.find((a) => String(a.subject_code) === String(courseId));
+        if (found) setCourseName(found.subject_name || null);
+      } catch {
+        // ignore
+      }
+    })();
+    return () => { mounted = false; };
+  }, [courseId]);
+
+  React.useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const rows = await fetchDeptRows();
+        if (!mounted) return;
+        const match = rows.find(r => String(r.course_code) === String(courseId) || String(r.course_code) === String(courseId).toUpperCase());
+        if (match && match.class_type) {
+          const ct = String((match as any).class_type || '').trim();
+          setCourseClassType(ct || null);
+        }
+      } catch (e) {
+        // ignore
+      }
+    })();
+    return () => { mounted = false; };
+  }, [courseId]);
 
   return (
     <main className="obe-course-page" style={{ padding: 0, fontFamily: 'Arial, sans-serif', minHeight: '100vh', background: '#fff' }}>
-      <div style={{ display: 'flex', flexDirection: 'row', minHeight: '100vh' }}>
-        <div style={{ flex: '0 0 240px', background: '#f8fafc', minHeight: '100vh', borderRight: '1px solid #eee' }}>
-          <DashboardSidebar />
-        </div>
-        <div style={{ flex: 1, padding: '32px', width: '100%', minWidth: 0, boxSizing: 'border-box' }}>
+      <div style={{ padding: '0px', width: '100%', minWidth: 0, boxSizing: 'border-box' }}>
           <div style={{ marginBottom: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
               <div>
                 <h2 style={{ margin: 0 }}>CDAP - {courseId}</h2>
                 <div style={{ color: '#666', marginTop: 6 }}>Open CDAP workspace for this course</div>
+                {courseName && (
+                  <div style={{ color: '#222', marginTop: 6, fontWeight: 600 }}>{courseName}</div>
+                )}
+                {courseClassType && (
+                  <div style={{ color: '#374151', marginTop: 4 }}>Class type: <strong style={{ color: '#111827' }}>{String(courseClassType).toLowerCase()[0].toUpperCase() + String(courseClassType).toLowerCase().slice(1)}</strong></div>
+                )}
               </div>
               <div>
                 <button onClick={() => navigate('/obe')} className="obe-btn obe-btn-secondary">Back to courses</button>
@@ -50,7 +109,8 @@ export default function CourseOBEPage(): JSX.Element {
               { key: 'cdap', label: 'CDAP' },
               { key: 'articulation', label: 'Articulation Matrix' },
               { key: 'marks', label: 'Mark Entry' },
-              { key: 'lca', label: 'LCA Instructions' },
+              { key: 'lca_instructions', label: 'LCA Instructions' },
+              { key: 'lca', label: 'LCA' },
               { key: 'co_attainment', label: 'CO ATTAINMENT' },
               { key: 'cqi', label: 'CQI' },
             ].map((t) => {
@@ -58,7 +118,16 @@ export default function CourseOBEPage(): JSX.Element {
               return (
                 <button
                   key={t.key}
-                  onClick={() => setActiveTab(t.key as TabKey)}
+                  onClick={() => {
+                    setActiveTab(t.key as TabKey);
+                    // navigate to a URL so the tab can be opened directly and bookmarked
+                    if (code) {
+                      const enc = encodeURIComponent(code);
+                      // use a clearer path for instructions tab
+                      const tabPath = t.key === 'lca_instructions' ? `lca/instructions` : String(t.key);
+                      navigate(`/obe/course/${enc}/${tabPath}`);
+                    }
+                  }}
                   className={`obe-tab-btn ${isActive ? 'active' : ''}`}
                 >
                   {t.label}
@@ -72,12 +141,12 @@ export default function CourseOBEPage(): JSX.Element {
               <CDAPPage courseId={courseId} showHeader={false} showCourseInput={false} />
             )}
             {activeTab === 'articulation' && <ArticulationMatrixPage courseId={courseId} />}
-            {activeTab === 'marks' && <MarkEntryPage courseId={courseId} />}
-            {activeTab === 'lca' && <LCAInstructionsPage />}
+            {activeTab === 'marks' && <MarkEntryPage courseId={courseId} classType={courseClassType} />}
+            {activeTab === 'lca_instructions' && <LCAInstructionsPage />}
+            {activeTab === 'lca' && <LCAPage courseId={courseId} />}
             {activeTab === 'co_attainment' && <COAttainmentPage courseId={courseId} />}
             {activeTab === 'cqi' && <CQIPage courseId={courseId} />}
           </div>
-        </div>
       </div>
     </main>
   );

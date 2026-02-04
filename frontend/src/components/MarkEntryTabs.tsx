@@ -1,27 +1,55 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { lsGet, lsSet } from '../utils/localStorage';
 import Cia1Entry from './Cia1Entry';
+import Cia2Entry from './Cia2Entry';
 import Formative1List from './Formative1List';
+import Formative2List from './Formative2List';
+import LabEntry from './LabEntry';
 import Ssa1Entry from './Ssa1Entry';
+import Ssa2Entry from './Ssa2Entry';
 import { fetchMyTeachingAssignments, TeachingAssignmentItem } from '../services/obe';
 
-type TabKey = 'dashboard' | 'ssa1' | 'formative1' | 'cia1' | 'ssa2' | 'cia2' | 'model';
+type TabKey = 'dashboard' | 'ssa1' | 'ssa2' | 'formative1' | 'formative2' | 'cia1' | 'cia2' | 'model';
 
 type MarkRow = { studentId: string; mark: number };
 
 type Props = {
   subjectId: string;
+  classType?: string | null;
 };
 
-const TABS: { key: TabKey; label: string }[] = [
+const BASE_TABS: { key: TabKey; label: string }[] = [
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'ssa1', label: 'SSA1' },
-  { key: 'formative1', label: 'Formative 1' },
-  { key: 'cia1', label: 'CIA 1' },
   { key: 'ssa2', label: 'SSA2' },
-  { key: 'cia2', label: 'CIA2' },
+  { key: 'formative1', label: 'Formative 1' },
+  { key: 'formative2', label: 'Formative 2' },
+  { key: 'cia1', label: 'CIA 1' },
+  { key: 'cia2', label: 'CIA 2' },
   { key: 'model', label: 'MODEL' },
 ];
+
+function normalizeClassType(classType: string | null | undefined) {
+  return String(classType ?? '').trim().toUpperCase();
+}
+
+function getVisibleTabs(classType: string | null | undefined): Array<{ key: TabKey; label: string }> {
+  const ct = normalizeClassType(classType);
+
+  // Requirement:
+  // - THEORY / TCPR: show SSA1, SSA2, Formatives, CIA1, CIA2, MODEL
+  // - TCPL: hide Formatives and show LAB1/LAB2 instead (reusing formative keys)
+  if (ct === 'TCPL') {
+    return BASE_TABS.map((t) => {
+      if (t.key === 'formative1') return { ...t, label: 'LAB 1' };
+      if (t.key === 'formative2') return { ...t, label: 'LAB 2' };
+      return t;
+    });
+  }
+
+  // Default (including THEORY/TCPR): show everything
+  return BASE_TABS;
+}
 
 function storageKey(subjectId: string, tab: TabKey) {
   return `marks_${subjectId}_${tab}`;
@@ -164,17 +192,25 @@ function MarkEntryTable({
   );
 }
 
-export default function MarkEntryTabs({ subjectId }: Props) {
+export default function MarkEntryTabs({ subjectId, classType }: Props) {
   const [active, setActive] = useState<TabKey>('dashboard');
   const [tas, setTas] = useState<TeachingAssignmentItem[]>([]);
   const [taError, setTaError] = useState<string | null>(null);
   const [selectedTaId, setSelectedTaId] = useState<number | null>(null);
 
+  const visibleTabs = useMemo(() => getVisibleTabs(classType), [classType]);
+
   useEffect(() => {
     if (!subjectId) return;
     const stored = lsGet<TabKey>(`markEntry_activeTab_${subjectId}`);
-    if (stored && TABS.some((t) => t.key === stored)) setActive(stored);
+    if (stored && visibleTabs.some((t) => t.key === stored)) setActive(stored);
   }, [subjectId]);
+
+  useEffect(() => {
+    // If class type changes or user navigates to a course with different visible tabs,
+    // ensure the active tab is still valid.
+    if (!visibleTabs.some((t) => t.key === active)) setActive('dashboard');
+  }, [visibleTabs, active]);
 
   useEffect(() => {
     let mounted = true;
@@ -217,12 +253,18 @@ export default function MarkEntryTabs({ subjectId }: Props) {
   const counts = useMemo(() => {
     if (!subjectId) return {} as Record<TabKey, number>;
     const map: Partial<Record<TabKey, number>> = {};
-    for (const t of TABS) {
+    for (const t of visibleTabs) {
       if (t.key === 'dashboard') continue;
       if (t.key === 'ssa1') {
         const ssa1 = lsGet<{ rows?: unknown }>(`ssa1_sheet_${subjectId}`);
         const ssa1Rows = (ssa1 as any)?.rows;
         map[t.key] = Array.isArray(ssa1Rows) ? ssa1Rows.length : 0;
+        continue;
+      }
+      if (t.key === 'ssa2') {
+        const ssa2 = lsGet<{ rows?: unknown }>(`ssa2_sheet_${subjectId}`);
+        const ssa2Rows = (ssa2 as any)?.rows;
+        map[t.key] = Array.isArray(ssa2Rows) ? ssa2Rows.length : 0;
         continue;
       }
       if (t.key === 'formative1') {
@@ -231,11 +273,29 @@ export default function MarkEntryTabs({ subjectId }: Props) {
         map[t.key] = rowsByStudentId && typeof rowsByStudentId === 'object' ? Object.keys(rowsByStudentId).length : 0;
         continue;
       }
+      if (t.key === 'formative2') {
+        const f2 = lsGet<{ rowsByStudentId?: unknown }>(`formative2_sheet_${subjectId}`);
+        const rowsByStudentId = (f2 as any)?.rowsByStudentId;
+        map[t.key] = rowsByStudentId && typeof rowsByStudentId === 'object' ? Object.keys(rowsByStudentId).length : 0;
+        continue;
+      }
+      if (t.key === 'cia1') {
+        const c1 = lsGet<{ rowsByStudentId?: unknown }>(`cia1_sheet_${subjectId}`);
+        const rowsByStudentId = (c1 as any)?.rowsByStudentId;
+        map[t.key] = rowsByStudentId && typeof rowsByStudentId === 'object' ? Object.keys(rowsByStudentId).length : 0;
+        continue;
+      }
+      if (t.key === 'cia2') {
+        const c2 = lsGet<{ rowsByStudentId?: unknown }>(`cia2_sheet_${subjectId}`);
+        const rowsByStudentId = (c2 as any)?.rowsByStudentId;
+        map[t.key] = rowsByStudentId && typeof rowsByStudentId === 'object' ? Object.keys(rowsByStudentId).length : 0;
+        continue;
+      }
       const rows = lsGet<MarkRow[]>(storageKey(subjectId, t.key)) || [];
       map[t.key] = Array.isArray(rows) ? rows.length : 0;
     }
     return map as Record<TabKey, number>;
-  }, [subjectId, active]);
+  }, [subjectId, active, visibleTabs]);
 
   return (
     <div>
@@ -266,7 +326,7 @@ export default function MarkEntryTabs({ subjectId }: Props) {
       </div>
 
       <div className="obe-sidebar-nav" aria-label="Mark Entry sub-tabs">
-        {TABS.map((t) => (
+        {visibleTabs.map((t) => (
           <TabButton key={t.key} active={active === t.key} label={t.label} onClick={() => setActive(t.key)} />
         ))}
       </div>
@@ -284,7 +344,7 @@ export default function MarkEntryTabs({ subjectId }: Props) {
               gap: 12,
             }}
           >
-            {TABS.filter((t) => t.key !== 'dashboard').map((t) => (
+            {visibleTabs.filter((t) => t.key !== 'dashboard').map((t) => (
               <div
                 key={t.key}
                 className="obe-card"
@@ -308,22 +368,58 @@ export default function MarkEntryTabs({ subjectId }: Props) {
 
       {active !== 'dashboard' && (
         <div>
-          <h3 style={{ margin: '0 0 6px 0' }}>{TABS.find((t) => t.key === active)?.label}</h3>
+          <h3 style={{ margin: '0 0 6px 0' }}>{visibleTabs.find((t) => t.key === active)?.label}</h3>
           <div style={{ color: '#6b7280', marginBottom: 12, fontSize: 14 }}>
             {active === 'formative1' 
-              ? 'Enter and manage Formative-1 assessment marks with BTL mapping.'
+              ? (normalizeClassType(classType) === 'TCPL' ? 'Enter and manage LAB-1 marks (experiments + totals).' : 'Enter and manage Formative-1 assessment marks with BTL mapping.')
+              : active === 'formative2'
+                ? (normalizeClassType(classType) === 'TCPL' ? 'Enter and manage LAB-2 marks (experiments + totals).' : 'Enter and manage Formative-2 assessment marks with BTL mapping.')
               : active === 'ssa1'
                 ? 'SSA1 sheet-style entry (CO + BTL attainment) matching the Excel layout.'
+              : active === 'ssa2'
+                ? 'SSA2 sheet-style entry (CO + BTL attainment) matching the Excel layout.'
               : active === 'cia1'
-                ? 'CIA 1 sheet-style entry (Q-wise + CO + BTL) matching the Excel layout.' 
+                ? 'CIA 1 sheet-style entry (Q-wise + CO + BTL) matching the Excel layout.'
+              : active === 'cia2'
+                ? 'CIA 2 sheet-style entry (Q-wise + CO + BTL) matching the Excel layout.'
                 : 'Enter and save marks locally for this assessment.'}
           </div>
           {active === 'formative1' ? (
-            <Formative1List subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
+            normalizeClassType(classType) === 'TCPL' ? (
+              <LabEntry
+                subjectId={subjectId}
+                teachingAssignmentId={selectedTaId ?? undefined}
+                assessmentKey="formative1"
+                label="LAB 1"
+                coA={1}
+                coB={2}
+                showCia1Embed
+                cia1Embed={<Cia1Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />}
+              />
+            ) : (
+              <Formative1List subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
+            )
+          ) : active === 'formative2' ? (
+            normalizeClassType(classType) === 'TCPL' ? (
+              <LabEntry
+                subjectId={subjectId}
+                teachingAssignmentId={selectedTaId ?? undefined}
+                assessmentKey="formative2"
+                label="LAB 2"
+                coA={3}
+                coB={4}
+              />
+            ) : (
+              <Formative2List subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
+            )
           ) : active === 'ssa1' ? (
             <Ssa1Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
+          ) : active === 'ssa2' ? (
+            <Ssa2Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
           ) : active === 'cia1' ? (
-            <Cia1Entry subjectId={subjectId} />
+            <Cia1Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
+          ) : active === 'cia2' ? (
+            <Cia2Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
           ) : (
             <MarkEntryTable subjectId={subjectId} tab={active as Exclude<TabKey, 'dashboard'>} />
           )}

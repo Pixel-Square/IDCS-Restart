@@ -8,6 +8,7 @@ from rest_framework.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404
 from django.db.models import Q
 from django.db import transaction
+from django.http import Http404
 
 from .permissions import IsHODOfDepartment
 
@@ -67,9 +68,12 @@ class MyTeachingAssignmentsView(APIView):
         user = request.user
         qs = TeachingAssignment.objects.select_related(
             'subject',
+            'curriculum_row',
+            'curriculum_row__master',
             'section',
             'academic_year',
-            'section__semester__course__department',
+            'section__semester',
+            'section__batch__course__department',
         ).filter(is_active=True)
 
         staff_profile = getattr(user, 'staff_profile', None)
@@ -80,11 +84,118 @@ class MyTeachingAssignmentsView(APIView):
             qs = qs.filter(staff=staff_profile)
         # HOD/ADVISOR: assignments within their department
         elif staff_profile and ('HOD' in role_names or 'ADVISOR' in role_names):
-            qs = qs.filter(section__semester__course__department=staff_profile.department)
+            # Use effective departments (handles multi-dept HOD via DepartmentRole)
+            try:
+                dept_ids = list(get_user_effective_departments(user))
+            except Exception:
+                dept_ids = []
+            if dept_ids:
+                qs = qs.filter(section__batch__course__department_id__in=dept_ids)
+            else:
+                qs = qs.none()
         # else: admins can see all
 
-        ser = TeachingAssignmentInfoSerializer(qs.order_by('subject__code', 'section__name'), many=True)
+        ser = TeachingAssignmentInfoSerializer(qs.order_by('section__name', 'id'), many=True)
         return Response(ser.data)
+
+
+class TeachingAssignmentStudentsView(APIView):
+    """Return the student roster for a given TeachingAssignment (active students in the section).
+
+    URL: /api/academics/teaching-assignments/<ta_id>/students/
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request, ta_id):
+        try:
+            ta = TeachingAssignment.objects.select_related('section', 'academic_year', 'subject', 'curriculum_row').get(pk=ta_id, is_active=True)
+        except TeachingAssignment.DoesNotExist:
+            raise Http404('Teaching assignment not found')
+
+        # basic permission: allow if user is staff owner, HOD/ADVISOR of the dept, or staff/admin
+        user = request.user
+        staff_profile = getattr(user, 'staff_profile', None)
+        allowed = False
+        if staff_profile and ta.staff_id == staff_profile.pk:
+            allowed = True
+        else:
+            role_names = {r.name.upper() for r in getattr(user, 'roles', [])} if getattr(user, 'roles', None) is not None else set()
+            if 'HOD' in role_names or 'ADVISOR' in role_names or user.is_staff:
+                allowed = True
+
+        if not allowed:
+            return Response({'detail': 'You do not have permission to view this roster.'}, status=403)
+
+        # Prefer active StudentSectionAssignment entries for the section, falling back to StudentProfile.section
+        from .models import StudentSectionAssignment, StudentProfile
+
+        section_name = getattr(getattr(ta, 'section', None), 'name', None)
+
+        # Best-effort subject metadata (supports both curriculum_row and legacy subject FK)
+        subject_code = None
+        subject_name = None
+        subject_id = getattr(ta, 'subject_id', None)
+        try:
+            if getattr(ta, 'curriculum_row', None):
+                cr = ta.curriculum_row
+                subject_code = getattr(cr, 'course_code', None) or getattr(getattr(cr, 'master', None), 'course_code', None)
+                subject_name = getattr(cr, 'course_name', None) or getattr(getattr(cr, 'master', None), 'course_name', None)
+            if (not subject_code or not subject_name) and getattr(ta, 'subject', None):
+                subject_code = subject_code or getattr(ta.subject, 'code', None)
+                subject_name = subject_name or getattr(ta.subject, 'name', None)
+        except Exception:
+            pass
+
+        def _student_display_name(user):
+            if not user:
+                return None
+            try:
+                full = ' '.join([
+                    str(getattr(user, 'first_name', '') or '').strip(),
+                    str(getattr(user, 'last_name', '') or '').strip(),
+                ]).strip()
+                if full:
+                    return full
+            except Exception:
+                pass
+            return getattr(user, 'username', None)
+
+        students = []
+        s_qs = StudentSectionAssignment.objects.filter(section=ta.section, end_date__isnull=True).select_related('student__user')
+        for a in s_qs:
+            sp = a.student
+            u = getattr(sp, 'user', None)
+            students.append({
+                'id': sp.id,
+                'reg_no': getattr(sp, 'reg_no', None),
+                'name': _student_display_name(u),
+                'section': section_name,
+            })
+
+        # fallback: include legacy StudentProfile.section entries if none found
+        if not students:
+            sp_qs = StudentProfile.objects.filter(section=ta.section).select_related('user')
+            for sp in sp_qs:
+                u = getattr(sp, 'user', None)
+                students.append({
+                    'id': sp.id,
+                    'reg_no': getattr(sp, 'reg_no', None),
+                    'name': _student_display_name(u),
+                    'section': section_name,
+                })
+
+        return Response({
+            'teaching_assignment': {
+                'id': ta.id,
+                'subject_id': subject_id,
+                'subject_code': subject_code,
+                'subject_name': subject_name,
+                'section_id': getattr(ta, 'section_id', None),
+                'section_name': section_name,
+                'academic_year': getattr(getattr(ta, 'academic_year', None), 'name', None),
+            },
+            'students': students,
+        })
 
 
 class SectionAdvisorViewSet(viewsets.ModelViewSet):
@@ -771,133 +882,6 @@ class AdvisorMyStudentsView(APIView):
                 if not any(x.pk == s.pk for x in present):
                     present.append(s)
 
-<<<<<<< HEAD
-        results = []
-        for sec in sections:
-            studs = students_by_section.get(sec.id, [])
-            ser = StudentSimpleSerializer([
-                {'id': st.pk, 'reg_no': st.reg_no, 'user': getattr(st, 'user', None), 'section_id': getattr(st, 'section_id', None), 'section_name': str(getattr(st, 'section', ''))}
-                for st in studs
-            ], many=True)
-            results.append({'section_id': sec.id, 'section_name': str(sec), 'students': ser.data})
-
-        return Response({'results': results})
-
-
-class TeachingAssignmentStudentsView(APIView):
-    """Return the roster (students) for a specific teaching assignment.
-
-    Used by mark-entry pages so they can load students from the teaching assignment's section.
-    """
-
-    permission_classes = (IsAuthenticated,)
-
-    def get(self, request, ta_id: int):
-        ta = get_object_or_404(
-            TeachingAssignment.objects.select_related(
-                'subject',
-                'section',
-                'academic_year',
-                'section__semester__course__department',
-            ),
-            pk=ta_id,
-            is_active=True,
-        )
-
-        if not serializer_check_user_can_manage(request.user, ta):
-            return Response({'detail': 'You do not have permission to view this roster.'}, status=403)
-
-        section_id = ta.section_id
-        students = (
-            StudentProfile.objects.select_related('user', 'section')
-            .filter(
-                Q(section_id=section_id)
-                | Q(section_assignments__section_id=section_id, section_assignments__end_date__isnull=True)
-            )
-            .distinct()
-            .order_by('user__last_name', 'user__first_name', 'user__username')
-        )
-
-        def student_name(sp: StudentProfile) -> str:
-            try:
-                full = sp.user.get_full_name()
-            except Exception:
-                full = ''
-            return full or getattr(sp.user, 'username', '') or sp.reg_no
-
-        payload = {
-            'teaching_assignment': {
-                'id': ta.id,
-                'subject_id': ta.subject_id,
-                'subject_code': ta.subject.code,
-                'subject_name': ta.subject.name,
-                'section_id': ta.section_id,
-                'section_name': ta.section.name,
-                'academic_year': ta.academic_year.name,
-            },
-            'students': [
-                {
-                    'id': s.id,
-                    'reg_no': s.reg_no,
-                    'name': student_name(s),
-                    'section': getattr(getattr(s, 'current_section', None), 'name', None)
-                    or (getattr(s.section, 'name', None) if getattr(s, 'section', None) else None),
-                }
-                for s in students
-            ],
-        }
-        return Response(payload)
-
-
-
-class DayAttendanceSessionViewSet(viewsets.ViewSet):
-    """Create and manage day attendance sessions. Advisors may create a session
-    for their sections and mark student records in bulk."""
-    permission_classes = (IsAuthenticated,)
-
-    def create(self, request):
-        # Expected payload: { section_id, date, records: [ { student_id, status }, ... ] }
-        data = request.data or {}
-        section_id = data.get('section_id')
-        date = data.get('date')
-        records = data.get('records', [])
-
-        user = request.user
-        staff_profile = getattr(user, 'staff_profile', None)
-        if not staff_profile:
-            raise PermissionDenied('Only staff may mark attendance')
-
-        # permission check: user must have mark permission
-        perms = get_user_permissions(user)
-        if not (('academics.mark_attendance' in perms) or user.has_perm('academics.add_dayattendancesession')):
-            raise PermissionDenied('You do not have permission to mark attendance.')
-
-        # Verify user is advisor for this section (active mapping)
-        is_advisor = SectionAdvisor.objects.filter(section_id=section_id, advisor=staff_profile, is_active=True, academic_year__is_active=True).exists()
-        if not is_advisor:
-            # allow HOD as fallback
-            hod_ok = DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True, department__in=[Section.objects.filter(pk=section_id).first().batch.course.department]).exists() if section_id else False
-            if not hod_ok:
-                raise PermissionDenied('Only assigned advisors or HODs may mark day attendance for the section')
-
-        # upsert session
-        session, created = DayAttendanceSession.objects.get_or_create(section_id=section_id, date=date, defaults={'created_by': staff_profile})
-        if session.is_locked:
-            return Response({'detail': 'Session is locked and cannot be modified.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Bulk create/update records
-        created_count = 0
-        updated_count = 0
-        with transaction.atomic():
-            for r in records:
-                sid = r.get('student_id') or r.get('student')
-                status_val = r.get('status')
-                if not sid or not status_val:
-                    continue
-                obj, was_created = DayAttendanceRecord.objects.update_or_create(session=session, student_id=sid, defaults={'status': status_val, 'marked_by': staff_profile})
-                if was_created:
-                    created_count += 1
-=======
             results = []
             for sec in sections:
                 studs = students_by_section.get(sec.id, [])
@@ -912,7 +896,6 @@ class DayAttendanceSessionViewSet(viewsets.ViewSet):
                 sem_obj = getattr(sec, 'semester', None)
                 if sem_obj is None:
                     sem_val = None
->>>>>>> origin/main
                 else:
                     sem_val = getattr(sem_obj, 'number', str(sem_obj))
 

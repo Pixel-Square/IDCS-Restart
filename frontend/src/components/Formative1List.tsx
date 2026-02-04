@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
-import { fetchDraft, publishFormative1, saveDraft } from '../services/obe';
+import { fetchDraft, publishFormative, saveDraft } from '../services/obe';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
@@ -42,6 +42,7 @@ interface Formative1ListProps {
   subjectId?: string | null;
   subject?: any | null;
   teachingAssignmentId?: number;
+  assessmentKey?: 'formative1' | 'formative2';
 }
 
 const DEFAULT_MAX_PART = 5;
@@ -108,8 +109,10 @@ function compareStudentName(a: { name?: string; reg_no?: string }, b: { name?: s
   return 0;
 }
 
-function storageKey(subjectId: string) {
-  return `formative1_sheet_${subjectId}`;
+type FormativeKey = 'formative1' | 'formative2';
+
+function storageKey(assessmentKey: FormativeKey, subjectId: string) {
+  return `${assessmentKey}_sheet_${subjectId}`;
 }
 
 function downloadCsv(filename: string, rows: Array<Record<string, string | number>>) {
@@ -138,7 +141,11 @@ function downloadCsv(filename: string, rows: Array<Record<string, string | numbe
   URL.revokeObjectURL(url);
 }
 
-export default function Formative1List({ subjectId, teachingAssignmentId }: Formative1ListProps) {
+export default function Formative1List({ subjectId, teachingAssignmentId, assessmentKey: assessmentKeyProp }: Formative1ListProps) {
+  const assessmentKey: FormativeKey = (assessmentKeyProp as FormativeKey) || 'formative1';
+  const assessmentLabel = assessmentKey === 'formative2' ? 'Formative 2' : 'Formative 1';
+  const CO_A = assessmentKey === 'formative2' ? 3 : 1;
+  const CO_B = assessmentKey === 'formative2' ? 4 : 2;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [students, setStudents] = useState<Student[]>([]);
@@ -160,7 +167,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
   });
 
   const masterTermLabel = String(masterCfg?.termLabel || 'KRCT AY25-26');
-  const f1Cfg = masterCfg?.assessments?.formative1 || {};
+  const f1Cfg = (masterCfg as any)?.assessments?.[assessmentKey] ?? (masterCfg as any)?.assessments?.formative1 ?? {};
   const MAX_PART = Number.isFinite(Number(f1Cfg?.maxPart)) ? Number(f1Cfg.maxPart) : DEFAULT_MAX_PART;
   const MAX_TOTAL = Number.isFinite(Number(f1Cfg?.maxTotal)) ? Number(f1Cfg.maxTotal) : DEFAULT_MAX_TOTAL;
   const MAX_CO = Number.isFinite(Number(f1Cfg?.maxCo)) ? Number(f1Cfg.maxCo) : DEFAULT_MAX_CO;
@@ -182,7 +189,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
     };
   }, [subjectId]);
 
-  const key = useMemo(() => (subjectId ? storageKey(subjectId) : ''), [subjectId]);
+  const key = useMemo(() => (subjectId ? storageKey(assessmentKey, subjectId) : ''), [assessmentKey, subjectId]);
 
   const visibleBtlIndices = useMemo(() => {
     const set = new Set(selectedBtls);
@@ -191,7 +198,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
 
   const totalTableCols = useMemo(() => {
     // Base columns: S.No, Section, RegNo, Name, Skill1, Skill2, Att1, Att2, Total = 9
-    // CO columns (CO-1 mark/% + CO-2 mark/%) = 4
+    // CO columns (two CO mark/% pairs) = 4
     // BTL columns = selected count * 2
     return 13 + visibleBtlIndices.length * 2;
   }, [visibleBtlIndices.length]);
@@ -199,17 +206,17 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
   useEffect(() => {
     // load persisted selected BTLs per subject
     if (subjectId) {
-      const sk = `formative1_selected_btls_${subjectId}`;
+      const sk = `${assessmentKey}_selected_btls_${subjectId}`;
       const stored = lsGet<number[]>(sk);
       if (Array.isArray(stored)) setSelectedBtls(stored.filter((n) => Number.isFinite(n) && n >= 1 && n <= 6));
     }
-  }, [subjectId]);
+  }, [subjectId, assessmentKey]);
 
   useEffect(() => {
     if (!subjectId) return;
-    const sk = `formative1_selected_btls_${subjectId}`;
+    const sk = `${assessmentKey}_selected_btls_${subjectId}`;
     lsSet(sk, selectedBtls);
-    }, [selectedBtls, subjectId]);
+    }, [selectedBtls, subjectId, assessmentKey]);
 
   // Auto-save selected BTLs to server (debounced)
   useEffect(() => {
@@ -218,7 +225,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
     const tid = setTimeout(async () => {
       try {
         const payload: F1DraftPayload = { sheet, selectedBtls };
-        await saveDraft('formative1', subjectId, payload);
+        await saveDraft(assessmentKey, subjectId, payload);
         try {
           if (key) lsSet(key, { termLabel: sheet.termLabel, batchLabel: sheet.batchLabel, rowsByStudentId: sheet.rowsByStudentId });
         } catch {}
@@ -231,7 +238,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
       cancelled = true;
       clearTimeout(tid);
     };
-  }, [selectedBtls, subjectId]);
+  }, [selectedBtls, subjectId, assessmentKey, sheet, key]);
 
   // Load draft from DB (preferred)
   useEffect(() => {
@@ -239,7 +246,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
     (async () => {
       if (!subjectId) return;
       try {
-        const res = await fetchDraft<F1DraftPayload>('formative1', subjectId);
+        const res = await fetchDraft<F1DraftPayload>(assessmentKey, subjectId);
         if (!mounted) return;
         const d = res?.draft as any;
         const draftSheet = d?.sheet;
@@ -260,7 +267,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
         if (Array.isArray(draftBtls)) {
           setSelectedBtls(draftBtls.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n) && n >= 1 && n <= 6));
           try {
-            const sk = `formative1_selected_btls_${subjectId}`;
+            const sk = `${assessmentKey}_selected_btls_${subjectId}`;
             lsSet(sk, draftBtls.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n) && n >= 1 && n <= 6));
           } catch {
             // ignore
@@ -273,7 +280,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
     return () => {
       mounted = false;
     };
-  }, [subjectId, masterTermLabel]);
+  }, [subjectId, masterTermLabel, assessmentKey, key]);
 
   useEffect(() => {
     let mounted = true;
@@ -380,7 +387,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
         setSheet({ ...base, termLabel: base.termLabel || masterTermLabel, batchLabel: String(subjectId || base.batchLabel || ''), rowsByStudentId: merged });
       } catch (e: any) {
         if (!mounted) return;
-        setError(e?.message || 'Failed to load Formative 1 roster');
+        setError(e?.message || `Failed to load ${assessmentLabel} roster`);
         setStudents([]);
       } finally {
         if (mounted) setLoading(false);
@@ -391,7 +398,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
     return () => {
       mounted = false;
     };
-  }, [subjectId, key, masterCfg, masterTermLabel, MAX_PART]);
+  }, [subjectId, key, masterCfg, masterTermLabel, MAX_PART, assessmentLabel]);
 
   const updateMark = (studentId: number, patch: Partial<F1RowState>) => {
     setSheet((prev) => {
@@ -428,10 +435,10 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
     setError(null);
     try {
       const payload: F1DraftPayload = { sheet, selectedBtls };
-      await saveDraft('formative1', subjectId, payload);
+      await saveDraft(assessmentKey, subjectId, payload);
       setSavedAt(new Date().toLocaleString());
     } catch (e: any) {
-      setError(e?.message || 'Failed to save Formative 1 draft');
+      setError(e?.message || `Failed to save ${assessmentLabel} draft`);
     } finally {
       setSavingDraft(false);
     }
@@ -442,7 +449,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
     setPublishing(true);
     setError(null);
     try {
-      await publishFormative1(subjectId, sheet);
+      await publishFormative(assessmentKey, subjectId, sheet);
       setPublishedAt(new Date().toLocaleString());
       try {
         window.dispatchEvent(new CustomEvent('obe:published', { detail: { subjectId } }));
@@ -450,7 +457,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
         // ignore
       }
     } catch (e: any) {
-      setError(e?.message || 'Failed to publish Formative 1');
+      setError(e?.message || `Failed to publish ${assessmentLabel}`);
     } finally {
       setPublishing(false);
     }
@@ -497,10 +504,10 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
         att1: att1 ?? '',
         att2: att2 ?? '',
         total: total === '' ? '' : total,
-        co1_mark: co1 === '' ? '' : co1,
-        co1_pct: co1 === '' ? '' : pct(co1 as number, MAX_CO),
-        co2_mark: co2 === '' ? '' : co2,
-        co2_pct: co2 === '' ? '' : pct(co2 as number, MAX_CO),
+        [`co${CO_A}_mark`]: co1 === '' ? '' : co1,
+        [`co${CO_A}_pct`]: co1 === '' ? '' : pct(co1 as number, MAX_CO),
+        [`co${CO_B}_mark`]: co2 === '' ? '' : co2,
+        [`co${CO_B}_pct`]: co2 === '' ? '' : pct(co2 as number, MAX_CO),
         btl1_mark: btlMarksByIndex[0] ?? '',
         btl1_pct: btlMarksByIndex[0] === '' ? '' : pct(Number(btlMarksByIndex[0]), btlMaxByIndex[0]),
         btl2_mark: btlMarksByIndex[1] ?? '',
@@ -516,14 +523,14 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
       };
     });
 
-    downloadCsv(`${subjectId}_FORMATIVE1_sheet.csv`, out);
+    downloadCsv(`${subjectId}_${assessmentKey.toUpperCase()}_sheet.csv`, out);
   };
 
   if (!subjectId) {
-    return <div style={{ color: '#6b7280' }}>Select a course to start Formative 1 entry.</div>;
+    return <div style={{ color: '#6b7280' }}>Select a course to start {assessmentLabel} entry.</div>;
   }
 
-  if (loading) return <div style={{ color: '#6b7280' }}>Loading Formative 1 roster…</div>;
+  if (loading) return <div style={{ color: '#6b7280' }}>Loading {assessmentLabel} roster…</div>;
 
   const cellTh: React.CSSProperties = {
     border: '1px solid #111',
@@ -580,7 +587,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
         }}
       >
         <div>
-          <div style={{ fontWeight: 800, fontSize: 16 }}>Formative 1 Sheet</div>
+          <div style={{ fontWeight: 800, fontSize: 16 }}>{assessmentLabel} Sheet</div>
           <div style={{ color: '#6b7280', fontSize: 13 }}>
             Excel-like layout (Skill + Attitude → Total + CO). Subject: <b>{subjectId}</b>
           </div>
@@ -632,7 +639,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
             <div style={{ marginLeft: 8, padding: 6, border: '1px solid #d1d5db', borderRadius: 8, minWidth: 160 }}>{sheet.batchLabel}</div>
           </label>
           <div style={{ fontSize: 12, color: '#6b7280', alignSelf: 'center' }}>
-            Skill/Attitude max: 5 each | Total: 20 | CO-1: 10 | CO-2: 10
+            Skill/Attitude max: {MAX_PART} each | Total: {MAX_TOTAL} | CO-{CO_A}: {MAX_CO} | CO-{CO_B}: {MAX_CO}
           </div>
         </div>
 
@@ -673,7 +680,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
             <thead>
               <tr>
                 <th style={cellTh} colSpan={totalTableCols}>
-                  {sheet.termLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {sheet.batchLabel} &nbsp;&nbsp;|&nbsp;&nbsp; FORMATIVE 1
+                  {sheet.termLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {sheet.batchLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {assessmentLabel.toUpperCase()}
                 </th>
               </tr>
               <tr>
@@ -713,10 +720,10 @@ export default function Formative1List({ subjectId, teachingAssignmentId }: Form
                 <th style={cellTh}>1</th>
                 <th style={cellTh}>2</th>
                 <th style={cellTh} colSpan={2}>
-                  CO-1
+                  CO-{CO_A}
                 </th>
                 <th style={cellTh} colSpan={2}>
-                  CO-2
+                  CO-{CO_B}
                 </th>
                 {visibleBtlIndices.map((n) => (
                   <th key={`btlhead-${n}`} style={cellTh} colSpan={2}>

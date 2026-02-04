@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { fetchCia1Marks, fetchDraft, publishCia1Sheet, saveDraft } from '../services/obe';
+import { fetchCiaMarks, fetchDraft, publishCiaSheet, saveDraft } from '../services/obe';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
 
@@ -10,16 +10,22 @@ type Student = {
   section?: string | null;
 };
 
+type AssessmentKey = 'cia1' | 'cia2';
+
 type Props = {
   subjectId: string;
+  teachingAssignmentId?: number;
+  assessmentKey?: AssessmentKey;
 };
+
+type CoValue = 1 | 2 | 3 | 4 | '1&2' | '3&4' | 'both';
 
 type QuestionDef = {
   key: string;
   label: string;
   max: number;
   // 1&2 means split 50/50 into both COs (matches Excel pattern: +O/2 for CO-1 and CO-2)
-  co: 1 | 2 | '1&2';
+  co: CoValue;
   btl: 1 | 2 | 3 | 4 | 5 | 6;
 };
 
@@ -37,45 +43,67 @@ const DEFAULT_QUESTIONS: QuestionDef[] = [
   { key: 'q9', label: 'Q9', max: 16, co: '1&2', btl: 5 },
 ];
 
-function parseCo(raw: unknown): 1 | 2 | '1&2' {
-  if (raw === '1&2' || raw === 'both') return '1&2';
+function parseCo(raw: unknown): CoValue {
+  if (raw === 'both') return 'both';
+  if (raw === '1&2' || raw === '3&4') return raw;
   if (typeof raw === 'string') {
     const s = raw.trim();
     if (s === '1&2' || s === '1,2' || s === '1/2' || s === '2/1') return '1&2';
+    if (s === '3&4' || s === '3,4' || s === '3/4' || s === '4/3') return '3&4';
+    if (s === '4') return 4;
+    if (s === '3') return 3;
     if (s === '2') return 2;
     if (s === '1') return 1;
   }
   if (Array.isArray(raw)) {
     const nums = raw.map((v) => Number(v)).filter((n) => Number.isFinite(n));
+    if (nums.includes(3) && nums.includes(4)) return '3&4';
     if (nums.includes(1) && nums.includes(2)) return '1&2';
+    if (nums.includes(4)) return 4;
+    if (nums.includes(3)) return 3;
     if (nums.includes(2)) return 2;
     if (nums.includes(1)) return 1;
   }
   const n = Number(raw);
+  if (n === 4) return 4;
+  if (n === 3) return 3;
   if (n === 2) return 2;
+  if (n === 34) return '3&4';
   if (n === 12) return '1&2';
   return 1;
 }
 
-function coWeights(co: 1 | 2 | '1&2'): { co1: number; co2: number } {
-  if (co === '1&2') return { co1: 0.5, co2: 0.5 };
-  return co === 2 ? { co1: 0, co2: 1 } : { co1: 1, co2: 0 };
+type CoPair = { a: 1 | 3; b: 2 | 4 };
+
+function coPairForAssessment(assessmentKey: AssessmentKey): CoPair {
+  return assessmentKey === 'cia2' ? { a: 3, b: 4 } : { a: 1, b: 2 };
 }
 
-function effectiveCoWeightsForQuestion(questions: QuestionDef[], idx: number): { co1: number; co2: number } {
+function isSplitCo(co: CoValue): boolean {
+  return co === 'both' || co === '1&2' || co === '3&4';
+}
+
+function coWeights(co: CoValue, pair: CoPair): { a: number; b: number } {
+  if (isSplitCo(co)) return { a: 0.5, b: 0.5 };
+  // For CIA2, allow legacy configs that still use 1/2 tagging.
+  if (co === pair.b || (pair.a === 3 && co === 2)) return { a: 0, b: 1 };
+  return { a: 1, b: 0 };
+}
+
+function effectiveCoWeightsForQuestion(questions: QuestionDef[], idx: number, pair: CoPair): { a: number; b: number } {
   const q = questions[idx];
-  if (!q) return { co1: 0, co2: 0 };
+  if (!q) return { a: 0, b: 0 };
   // Primary: explicit split configured.
-  if (q.co === '1&2') return { co1: 0.5, co2: 0.5 };
+  if (isSplitCo(q.co)) return { a: 0.5, b: 0.5 };
 
   // Fallback for legacy configs: if no split question exists, treat the last question
   // (typically the "O" column in the Excel template, often Q9) as split 50/50.
-  const hasAnySplit = questions.some((x) => x.co === '1&2');
+  const hasAnySplit = questions.some((x) => isSplitCo(x.co));
   const isLast = idx === questions.length - 1;
   const looksLikeQ9 = String(q.key || '').toLowerCase() === 'q9' || String(q.label || '').toLowerCase().includes('q9');
-  if (!hasAnySplit && isLast && looksLikeQ9) return { co1: 0.5, co2: 0.5 };
+  if (!hasAnySplit && isLast && looksLikeQ9) return { a: 0.5, b: 0.5 };
 
-  return coWeights(q.co);
+  return coWeights(q.co, pair);
 }
 
 type Cia1RowState = {
@@ -116,8 +144,8 @@ function pct(mark: number, max: number) {
   return s.endsWith('.0') ? s.slice(0, -2) : s;
 }
 
-function sheetKey(subjectId: string) {
-  return `cia1_sheet_${subjectId}`;
+function sheetKey(assessmentKey: AssessmentKey, subjectId: string) {
+  return `${assessmentKey}_sheet_${subjectId}`;
 }
 
 function downloadCsv(filename: string, rows: Array<Record<string, string | number>>) {
@@ -146,11 +174,14 @@ function downloadCsv(filename: string, rows: Array<Record<string, string | numbe
   URL.revokeObjectURL(url);
 }
 
-export default function Cia1Entry({ subjectId }: Props) {
+export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentKey: assessmentKeyProp }: Props) {
+  const assessmentKey: AssessmentKey = assessmentKeyProp || 'cia1';
+  const assessmentLabel = assessmentKey === 'cia2' ? 'CIA 2' : 'CIA 1';
+  const coPair = useMemo(() => coPairForAssessment(assessmentKey), [assessmentKey]);
   const [masterCfg, setMasterCfg] = useState<any>(null);
   const [masterCfgWarning, setMasterCfgWarning] = useState<string | null>(null);
   const questions = useMemo<QuestionDef[]>(() => {
-    const qs = masterCfg?.assessments?.cia1?.questions;
+    const qs = (masterCfg as any)?.assessments?.[assessmentKey]?.questions ?? (masterCfg as any)?.assessments?.cia1?.questions;
     if (Array.isArray(qs) && qs.length) {
       return qs
         .map((q: any) => ({
@@ -163,7 +194,7 @@ export default function Cia1Entry({ subjectId }: Props) {
         .filter((q: any) => q.key);
     }
     return DEFAULT_QUESTIONS;
-  }, [masterCfg]);
+  }, [masterCfg, assessmentKey]);
 
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -211,7 +242,7 @@ export default function Cia1Entry({ subjectId }: Props) {
       setLoading(true);
       setError(null);
       try {
-        const data = await fetchCia1Marks(subjectId);
+        const data = await fetchCiaMarks(assessmentKey, subjectId, teachingAssignmentId);
         if (!mounted) return;
         const roster = (data.students || []).slice().sort((a, b) => {
           const an = String(a?.name || '').trim().toLowerCase();
@@ -240,7 +271,7 @@ export default function Cia1Entry({ subjectId }: Props) {
         setServerTotals(totals);
 
         // Load local sheet and merge with roster.
-        const stored = lsGet<Cia1Sheet>(sheetKey(subjectId));
+        const stored = lsGet<Cia1Sheet>(sheetKey(assessmentKey, subjectId));
         const base: Cia1Sheet =
           stored && typeof stored === 'object'
             ? {
@@ -288,7 +319,7 @@ export default function Cia1Entry({ subjectId }: Props) {
         setSheet({ ...base, questionBtl: nextQuestionBtl, termLabel: base.termLabel || String(masterCfg?.termLabel || 'KRCT AY25-26'), batchLabel: subjectId, rowsByStudentId: merged });
       } catch (e: any) {
         if (!mounted) return;
-        setError(e?.message || 'Failed to load CIA1 roster');
+        setError(e?.message || `Failed to load ${assessmentLabel} roster`);
       } finally {
         if (mounted) setLoading(false);
       }
@@ -298,7 +329,7 @@ export default function Cia1Entry({ subjectId }: Props) {
     return () => {
       mounted = false;
     };
-  }, [subjectId, masterCfg, questions]);
+  }, [subjectId, teachingAssignmentId, masterCfg, questions, assessmentKey, assessmentLabel]);
 
   // Load draft from DB (preferred) and merge into local sheet.
   useEffect(() => {
@@ -306,7 +337,7 @@ export default function Cia1Entry({ subjectId }: Props) {
     (async () => {
       if (!subjectId) return;
       try {
-        const res = await fetchDraft<Cia1DraftPayload>('cia1', subjectId);
+        const res = await fetchDraft<Cia1DraftPayload>(assessmentKey, subjectId);
         if (!mounted) return;
         const d = res?.draft;
         if (d && typeof d === 'object') {
@@ -324,7 +355,7 @@ export default function Cia1Entry({ subjectId }: Props) {
                 : prev.rowsByStudentId,
           }));
           try {
-            const sk = sheetKey(subjectId);
+            const sk = sheetKey(assessmentKey, subjectId);
             lsSet(sk, {
               termLabel: String((d as any).termLabel || 'KRCT AY25-26'),
               batchLabel: String(subjectId),
@@ -343,30 +374,30 @@ export default function Cia1Entry({ subjectId }: Props) {
     return () => {
       mounted = false;
     };
-  }, [subjectId]);
+  }, [subjectId, assessmentKey, questions]);
 
   const totalsMax = useMemo(() => questions.reduce((sum, q) => sum + q.max, 0), [questions]);
   const questionCoMax = useMemo(() => {
-    let co1 = 0;
-    let co2 = 0;
+    let a = 0;
+    let b = 0;
     for (let i = 0; i < questions.length; i++) {
       const q = questions[i];
-      const w = effectiveCoWeightsForQuestion(questions, i);
-      co1 += q.max * w.co1;
-      co2 += q.max * w.co2;
+      const w = effectiveCoWeightsForQuestion(questions, i, coPair);
+      a += q.max * w.a;
+      b += q.max * w.b;
     }
-    return { co1, co2 };
-  }, [questions]);
+    return { a, b };
+  }, [questions, coPair]);
 
   const effectiveCoMax = useMemo(() => {
-    const cfg = (masterCfg as any)?.assessments?.cia1?.coMax as { co1?: unknown; co2?: unknown } | undefined;
-    const rawCo1 = Number(cfg?.co1);
-    const rawCo2 = Number(cfg?.co2);
+    const cfg = ((masterCfg as any)?.assessments?.[assessmentKey]?.coMax ?? (masterCfg as any)?.assessments?.cia1?.coMax) as any;
+    const rawA = Number(cfg?.[`co${coPair.a}`] ?? cfg?.co1);
+    const rawB = Number(cfg?.[`co${coPair.b}`] ?? cfg?.co2);
     return {
-      co1: Number.isFinite(rawCo1) ? Math.max(0, rawCo1) : questionCoMax.co1,
-      co2: Number.isFinite(rawCo2) ? Math.max(0, rawCo2) : questionCoMax.co2,
+      a: Number.isFinite(rawA) ? Math.max(0, rawA) : questionCoMax.a,
+      b: Number.isFinite(rawB) ? Math.max(0, rawB) : questionCoMax.b,
     };
-  }, [masterCfg, questionCoMax]);
+  }, [masterCfg, questionCoMax, assessmentKey, coPair]);
 
   const visibleBtls = useMemo(() => {
     const set = new Set<number>();
@@ -387,7 +418,9 @@ export default function Cia1Entry({ subjectId }: Props) {
   }, [sheet.questionBtl, questions]);
 
   const effectiveBtlMax = useMemo(() => {
-    const cfg = (masterCfg as any)?.assessments?.cia1?.btlMax as Partial<Record<'1' | '2' | '3' | '4' | '5' | '6', unknown>> | undefined;
+    const cfg = (((masterCfg as any)?.assessments?.[assessmentKey]?.btlMax ?? (masterCfg as any)?.assessments?.cia1?.btlMax) as
+      | Partial<Record<'1' | '2' | '3' | '4' | '5' | '6', unknown>>
+      | undefined);
     const get = (k: '1' | '2' | '3' | '4' | '5' | '6', fallback: number) => {
       const raw = Number((cfg as any)?.[k]);
       return Number.isFinite(raw) ? Math.max(0, raw) : fallback;
@@ -400,7 +433,7 @@ export default function Cia1Entry({ subjectId }: Props) {
       5: get('5', questionBtlMax[5]),
       6: get('6', questionBtlMax[6]),
     } as Record<1 | 2 | 3 | 4 | 5 | 6, number>;
-  }, [masterCfg, questionBtlMax]);
+  }, [masterCfg, questionBtlMax, assessmentKey]);
 
   const setAbsent = (studentId: number, absent: boolean) => {
     setSheet((prev) => {
@@ -447,9 +480,9 @@ export default function Cia1Entry({ subjectId }: Props) {
           questionBtl: sheet.questionBtl,
           rowsByStudentId: sheet.rowsByStudentId,
         };
-        await saveDraft('cia1', subjectId, draft);
+        await saveDraft(assessmentKey, subjectId, draft);
         try {
-          const sk = sheetKey(subjectId);
+          const sk = sheetKey(assessmentKey, subjectId);
           lsSet(sk, {
             termLabel: sheet.termLabel,
             batchLabel: subjectId,
@@ -466,7 +499,7 @@ export default function Cia1Entry({ subjectId }: Props) {
       cancelled = true;
       clearTimeout(tid);
     };
-  }, [sheet.questionBtl, subjectId, sheet.rowsByStudentId]);
+  }, [sheet.questionBtl, subjectId, sheet.rowsByStudentId, assessmentKey]);
 
   const setQuestionMark = (studentId: number, qKey: string, value: number | '') => {
     setSheet((prev) => {
@@ -525,10 +558,10 @@ export default function Cia1Entry({ subjectId }: Props) {
         questionBtl: sheet.questionBtl,
         rowsByStudentId: sheet.rowsByStudentId,
       };
-      await saveDraft('cia1', subjectId, draft);
+      await saveDraft(assessmentKey, subjectId, draft);
       setSavedAt(new Date().toLocaleString());
     } catch (e: any) {
-      setError(e?.message || 'Failed to save CIA1 draft');
+      setError(e?.message || `Failed to save ${assessmentLabel} draft`);
     } finally {
       setSaving(false);
     }
@@ -544,7 +577,7 @@ export default function Cia1Entry({ subjectId }: Props) {
         batchLabel: subjectId,
         questions,
       };
-      await publishCia1Sheet(subjectId, data);
+      await publishCiaSheet(assessmentKey, subjectId, data);
       setPublishedAt(new Date().toLocaleString());
       try {
         window.dispatchEvent(new CustomEvent('obe:published', { detail: { subjectId } }));
@@ -552,7 +585,7 @@ export default function Cia1Entry({ subjectId }: Props) {
         // ignore
       }
     } catch (e: any) {
-      setError(e?.message || 'Failed to publish CIA1');
+      setError(e?.message || `Failed to publish ${assessmentLabel}`);
     } finally {
       setPublishing(false);
     }
@@ -575,10 +608,10 @@ export default function Cia1Entry({ subjectId }: Props) {
       let co2 = 0;
       for (let qi = 0; qi < questions.length; qi++) {
         const q = questions[qi];
-        const w = effectiveCoWeightsForQuestion(questions, qi);
+        const w = effectiveCoWeightsForQuestion(questions, qi, coPair);
         const m = Number(qMarks[q.key] || 0);
-        co1 += m * w.co1;
-        co2 += m * w.co2;
+        co1 += m * w.a;
+        co2 += m * w.b;
       }
 
       const btl: Record<1 | 2 | 3 | 4 | 5 | 6, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
@@ -594,10 +627,10 @@ export default function Cia1Entry({ subjectId }: Props) {
         absent: row.absent ? 1 : 0,
         ...qMarks,
         total,
-        co1_mark: co1,
-        co1_pct: pct(co1, effectiveCoMax.co1),
-        co2_mark: co2,
-        co2_pct: pct(co2, effectiveCoMax.co2),
+        [`co${coPair.a}_mark`]: co1,
+        [`co${coPair.a}_pct`]: pct(co1, effectiveCoMax.a),
+        [`co${coPair.b}_mark`]: co2,
+        [`co${coPair.b}_pct`]: pct(co2, effectiveCoMax.b),
         ...Object.fromEntries(
           visibleBtls.flatMap((n) => [
             [`btl${n}_mark`, btl[n as 1 | 2 | 3 | 4 | 5 | 6]],
@@ -607,10 +640,10 @@ export default function Cia1Entry({ subjectId }: Props) {
       };
     });
 
-    downloadCsv(`${subjectId}_CIA1_sheet.csv`, out);
+    downloadCsv(`${subjectId}_${assessmentKey.toUpperCase()}_sheet.csv`, out);
   };
 
-  if (loading) return <div style={{ color: '#6b7280' }}>Loading CIA1 roster…</div>;
+  if (loading) return <div style={{ color: '#6b7280' }}>Loading {assessmentLabel} roster…</div>;
 
   const cellTh: React.CSSProperties = {
     border: '1px solid #111',
@@ -645,7 +678,20 @@ export default function Cia1Entry({ subjectId }: Props) {
   return (
     <div>
       {error && (
-        <div style={{ background: '#fef2f2', border: '1px solid #ef444433', color: '#991b1b', padding: 10, borderRadius: 10, marginBottom: 10 }}>
+        <div
+          style={{
+            background: '#fef2f2',
+            border: '1px solid #ef444433',
+            color: '#991b1b',
+            padding: 10,
+            borderRadius: 10,
+            marginBottom: 10,
+            maxWidth: '100%',
+            whiteSpace: 'pre-wrap',
+            overflowWrap: 'anywhere',
+            wordBreak: 'break-word',
+          }}
+        >
           {error}
         </div>
       )}
@@ -667,7 +713,7 @@ export default function Cia1Entry({ subjectId }: Props) {
         }}
       >
         <div>
-          <div style={{ fontWeight: 800, fontSize: 16 }}>CIA1 Sheet</div>
+          <div style={{ fontWeight: 800, fontSize: 16 }}>{assessmentLabel} Sheet</div>
           <div style={{ color: '#6b7280', fontSize: 13 }}>
             Excel-like layout (Q-wise + CO + BTL). Subject: <b>{subjectId}</b>
           </div>
@@ -719,7 +765,7 @@ export default function Cia1Entry({ subjectId }: Props) {
             <div style={{ marginLeft: 8, padding: 6, border: '1px solid #d1d5db', borderRadius: 8, minWidth: 160 }}>{sheet.batchLabel}</div>
           </label>
           <div style={{ fontSize: 12, color: '#6b7280', alignSelf: 'center' }}>
-            Total max: {totalsMax} | Questions: {questions.length} | COs: 1–2 | BTLs: 1–6
+            Total max: {totalsMax} | Questions: {questions.length} | COs: {coPair.a}–{coPair.b} | BTLs: 1–6
           </div>
         </div>
       </div>
@@ -732,7 +778,7 @@ export default function Cia1Entry({ subjectId }: Props) {
             <thead>
               <tr>
                 <th style={cellTh} colSpan={4 + questions.length + 1 + 4 + visibleBtls.length * 2}>
-                  {sheet.termLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {sheet.batchLabel} &nbsp;&nbsp;|&nbsp;&nbsp; CIA1
+                  {sheet.termLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {sheet.batchLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {assessmentLabel}
                 </th>
               </tr>
               <tr>
@@ -771,10 +817,10 @@ export default function Cia1Entry({ subjectId }: Props) {
                   </th>
                 ))}
                 <th style={cellTh} colSpan={2}>
-                  CO-1
+                  CO-{coPair.a}
                 </th>
                 <th style={cellTh} colSpan={2}>
-                  CO-2
+                  CO-{coPair.b}
                 </th>
                 {visibleBtls.map((n) => (
                   <th key={`btl-head-${n}`} style={cellTh} colSpan={2}>
@@ -842,9 +888,9 @@ export default function Cia1Entry({ subjectId }: Props) {
                 ))}
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{totalsMax}</td>
 
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{effectiveCoMax.co1}</td>
+                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{effectiveCoMax.a}</td>
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{effectiveCoMax.co2}</td>
+                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{effectiveCoMax.b}</td>
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
                 {visibleBtls.map((n) => (
                   <React.Fragment key={`btl-max-${n}`}>
@@ -870,10 +916,10 @@ export default function Cia1Entry({ subjectId }: Props) {
                 let co2 = 0;
                 for (let qi = 0; qi < questions.length; qi++) {
                   const q = questions[qi];
-                  const w = effectiveCoWeightsForQuestion(questions, qi);
+                  const w = effectiveCoWeightsForQuestion(questions, qi, coPair);
                   const m = Number(qMarks[q.key] || 0);
-                  co1 += m * w.co1;
-                  co2 += m * w.co2;
+                  co1 += m * w.a;
+                  co2 += m * w.b;
                 }
 
                 const btl: Record<1 | 2 | 3 | 4 | 5 | 6, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
@@ -921,11 +967,11 @@ export default function Cia1Entry({ subjectId }: Props) {
 
                     <td style={{ ...cellTd, textAlign: 'center' }}>{co1}</td>
                     <td style={{ ...cellTd, textAlign: 'center' }}>
-                      <span className="obe-pct-badge">{pct(co1, effectiveCoMax.co1)}</span>
+                      <span className="obe-pct-badge">{pct(co1, effectiveCoMax.a)}</span>
                     </td>
                     <td style={{ ...cellTd, textAlign: 'center' }}>{co2}</td>
                     <td style={{ ...cellTd, textAlign: 'center' }}>
-                      <span className="obe-pct-badge">{pct(co2, effectiveCoMax.co2)}</span>
+                      <span className="obe-pct-badge">{pct(co2, effectiveCoMax.b)}</span>
                     </td>
 
                     {visibleBtls.map((n) => (
