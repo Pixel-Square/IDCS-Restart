@@ -34,4 +34,24 @@ urlpatterns = [
     path('cia2-marks/<str:subject_id>', views.cia2_marks),
     path('cia2-published-sheet/<str:subject_id>', views.cia2_published_sheet),
     path('cia2-publish-sheet/<str:subject_id>', views.cia2_publish_sheet),
+
+    path('lab-published-sheet/<str:assessment>/<str:subject_id>', views.lab_published_sheet),
+    path('lab-publish-sheet/<str:assessment>/<str:subject_id>', views.lab_publish_sheet),
+
+    # Due schedules + publish requests
+    path('publish-window/<str:assessment>/<str:subject_id>', views.publish_window),
+
+    path('due-schedule-subjects', views.due_schedule_subjects),
+    path('due-schedules', views.due_schedules),
+    path('due-schedule-upsert', views.due_schedule_upsert),
+    path('due-schedule-bulk-upsert', views.due_schedule_bulk_upsert),
+    path('global-publish-controls', views.global_publish_controls),
+    path('global-publish-controls/bulk-set', views.global_publish_controls_bulk_set),
+    path('global-publish-controls/bulk-reset', views.global_publish_controls_bulk_reset),
+
+    path('publish-request', views.publish_request_create),
+    path('publish-requests/pending', views.publish_requests_pending),
+    path('publish-requests/pending-count', views.publish_requests_pending_count),
+    path('publish-requests/<int:req_id>/approve', views.publish_request_approve),
+    path('publish-requests/<int:req_id>/reject', views.publish_request_reject),
 ]

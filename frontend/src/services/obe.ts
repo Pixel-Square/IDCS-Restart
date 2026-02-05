@@ -43,6 +43,8 @@ type DraftResponse<T> = {
 
 export type DraftAssessmentKey = 'ssa1' | 'ssa2' | 'cia1' | 'cia2' | 'formative1' | 'formative2';
 
+export type DueAssessmentKey = DraftAssessmentKey;
+
 function apiBase() {
   return import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 }
@@ -50,6 +52,191 @@ function apiBase() {
 function authHeader(): Record<string, string> {
   const token = window.localStorage.getItem('access');
   return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+export type PublishWindowResponse = {
+  assessment: DueAssessmentKey;
+  subject_code: string;
+  publish_allowed: boolean;
+  allowed_by_due: boolean;
+  allowed_by_approval: boolean;
+  global_override_active?: boolean;
+  global_is_open?: boolean | null;
+  allowed_by_global?: boolean | null;
+  due_at: string | null;
+  now: string | null;
+  remaining_seconds: number | null;
+  approval_until: string | null;
+  academic_year: { id: number; name: string } | null;
+  teaching_assignment_id: number | null;
+};
+
+export async function fetchPublishWindow(assessment: DueAssessmentKey, subjectId: string, teachingAssignmentId?: number): Promise<PublishWindowResponse> {
+  const qp = teachingAssignmentId ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
+  const url = `${apiBase()}/api/obe/publish-window/${encodeURIComponent(assessment)}/${encodeURIComponent(subjectId)}${qp}`;
+  const res = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', ...authHeader() } });
+  // If token expires while the user is on the page, SimpleJWT will respond with 401.
+  // Avoid spamming the UI with a large error blob; treat as publish not allowed.
+  if (res.status === 401) {
+    return {
+      assessment,
+      subject_code: String(subjectId),
+      publish_allowed: false,
+      allowed_by_due: false,
+      allowed_by_approval: false,
+      global_override_active: false,
+      global_is_open: null,
+      allowed_by_global: null,
+      due_at: null,
+      now: null,
+      remaining_seconds: null,
+      approval_until: null,
+      academic_year: null,
+      teaching_assignment_id: typeof teachingAssignmentId === 'number' ? teachingAssignmentId : null,
+    };
+  }
+  if (!res.ok) await parseError(res, 'Publish window fetch failed');
+  return res.json();
+}
+
+export async function fetchGlobalPublishControls(academicYearIds: number[], assessments: string[]): Promise<{ results: Array<{ id: number; academic_year: { id: number; name: string } | null; assessment: string; is_open: boolean; updated_at: string | null; updated_by: number | null }> }> {
+  const qpParts: string[] = [];
+  if (academicYearIds?.length) qpParts.push(`academic_year_ids=${encodeURIComponent(academicYearIds.join(','))}`);
+  if (assessments?.length) qpParts.push(`assessments=${encodeURIComponent(assessments.join(','))}`);
+  const qp = qpParts.length ? `?${qpParts.join('&')}` : '';
+  const url = `${apiBase()}/api/obe/global-publish-controls${qp}`;
+  const res = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', ...authHeader() } });
+  if (!res.ok) await parseError(res, 'Global publish controls fetch failed');
+  return res.json();
+}
+
+export async function bulkSetGlobalPublishControls(payload: { academic_year_ids: number[]; assessments: string[]; is_open: boolean }): Promise<{ status: string; updated: number }> {
+  const url = `${apiBase()}/api/obe/global-publish-controls/bulk-set`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) await parseError(res, 'Bulk set global publish controls failed');
+  return res.json();
+}
+
+export async function bulkResetGlobalPublishControls(payload: { academic_year_ids: number[]; assessments: string[] }): Promise<{ status: string; deleted: number }> {
+  const url = `${apiBase()}/api/obe/global-publish-controls/bulk-reset`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) await parseError(res, 'Bulk reset global publish controls failed');
+  return res.json();
+}
+
+export type DueScheduleRow = {
+  id: number;
+  academic_year: { id: number; name: string };
+  subject_code: string;
+  subject_name: string;
+  assessment: DueAssessmentKey;
+  due_at: string;
+  is_active: boolean;
+  updated_at: string | null;
+};
+
+export async function fetchDueSchedules(academicYearIds: number[]): Promise<{ results: DueScheduleRow[] }> {
+  const qp = academicYearIds?.length ? `?academic_year_ids=${encodeURIComponent(academicYearIds.join(','))}` : '';
+  const url = `${apiBase()}/api/obe/due-schedules${qp}`;
+  const res = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', ...authHeader() } });
+  if (!res.ok) await parseError(res, 'Due schedules fetch failed');
+  return res.json();
+}
+
+export async function fetchDueScheduleSubjects(academicYearIds: number[]): Promise<{ subjects_by_academic_year: Record<string, Array<{ subject_code: string; subject_name: string }>> }> {
+  const qp = `?academic_year_ids=${encodeURIComponent(academicYearIds.join(','))}`;
+  const url = `${apiBase()}/api/obe/due-schedule-subjects${qp}`;
+  const res = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', ...authHeader() } });
+  if (!res.ok) await parseError(res, 'Due schedule subjects fetch failed');
+  return res.json();
+}
+
+export async function upsertDueSchedule(payload: { academic_year_id: number; subject_code: string; subject_name?: string; assessment: DueAssessmentKey; due_at: string }): Promise<any> {
+  const url = `${apiBase()}/api/obe/due-schedule-upsert`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) await parseError(res, 'Due schedule save failed');
+  return res.json();
+}
+
+export async function bulkUpsertDueSchedule(payload: { academic_year_id: number; subject_codes: string[]; assessments: DueAssessmentKey[]; due_at: string }): Promise<{ status: string; updated: number }> {
+  const url = `${apiBase()}/api/obe/due-schedule-bulk-upsert`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) await parseError(res, 'Due schedule bulk save failed');
+  return res.json();
+}
+
+export async function createPublishRequest(payload: { assessment: DueAssessmentKey; subject_code: string; reason?: string; teaching_assignment_id?: number }): Promise<any> {
+  const url = `${apiBase()}/api/obe/publish-request`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) await parseError(res, 'Publish request failed');
+  return res.json();
+}
+
+export type PendingPublishRequestItem = {
+  id: number;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  assessment: DueAssessmentKey;
+  subject_code: string;
+  subject_name: string | null;
+  reason: string | null;
+  requested_at: string | null;
+  academic_year: { id: number; name: string } | null;
+  staff: { id: number; username: string; name: string | null };
+};
+
+export async function fetchPendingPublishRequests(): Promise<{ results: PendingPublishRequestItem[] }> {
+  const url = `${apiBase()}/api/obe/publish-requests/pending`;
+  const res = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', ...authHeader() } });
+  if (!res.ok) await parseError(res, 'Pending requests fetch failed');
+  return res.json();
+}
+
+export async function fetchPendingPublishRequestCount(): Promise<{ pending: number }> {
+  const url = `${apiBase()}/api/obe/publish-requests/pending-count`;
+  const res = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', ...authHeader() } });
+  if (!res.ok) await parseError(res, 'Pending requests count fetch failed');
+  return res.json();
+}
+
+export async function approvePublishRequest(reqId: number, windowMinutes = 120): Promise<any> {
+  const url = `${apiBase()}/api/obe/publish-requests/${encodeURIComponent(String(reqId))}/approve`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify({ window_minutes: windowMinutes }),
+  });
+  if (!res.ok) await parseError(res, 'Approve request failed');
+  return res.json();
+}
+
+export async function rejectPublishRequest(reqId: number): Promise<any> {
+  const url = `${apiBase()}/api/obe/publish-requests/${encodeURIComponent(String(reqId))}/reject`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+  });
+  if (!res.ok) await parseError(res, 'Reject request failed');
+  return res.json();
 }
 
 async function parseError(res: Response, fallback: string) {
@@ -176,6 +363,30 @@ export async function publishFormative(assessment: 'formative1' | 'formative2', 
     body: JSON.stringify({ data }),
   });
   if (!res.ok) await parseError(res, `${assessment} publish failed`);
+  return res.json();
+}
+
+export type PublishedLabSheetResponse = {
+  subject: { code: string; name: string };
+  assessment: 'formative1' | 'formative2';
+  data: any | null;
+};
+
+export async function fetchPublishedLabSheet(assessment: 'formative1' | 'formative2', subjectId: string): Promise<PublishedLabSheetResponse> {
+  const url = `${apiBase()}/api/obe/lab-published-sheet/${encodeURIComponent(assessment)}/${encodeURIComponent(subjectId)}`;
+  const res = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', ...authHeader() } });
+  if (!res.ok) await parseError(res, 'Lab published sheet fetch failed');
+  return res.json();
+}
+
+export async function publishLabSheet(assessment: 'formative1' | 'formative2', subjectId: string, data: any): Promise<{ status: string }> {
+  const url = `${apiBase()}/api/obe/lab-publish-sheet/${encodeURIComponent(assessment)}/${encodeURIComponent(subjectId)}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify({ data }),
+  });
+  if (!res.ok) await parseError(res, 'Lab publish failed');
   return res.json();
 }
 

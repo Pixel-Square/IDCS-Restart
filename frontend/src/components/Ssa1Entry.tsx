@@ -2,7 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
-import { fetchDraft, publishSsa1, saveDraft } from '../services/obe';
+import { createPublishRequest, fetchDraft, publishSsa1, saveDraft } from '../services/obe';
+import { formatRemaining, usePublishWindow } from '../hooks/usePublishWindow';
+import PublishLockOverlay from './PublishLockOverlay';
 
 type Props = { subjectId: string; teachingAssignmentId?: number };
 
@@ -28,6 +30,7 @@ type Ssa1DraftPayload = {
 const DEFAULT_MAX_ASMT1 = 20;
 const DEFAULT_CO_MAX = { co1: 10, co2: 10 };
 const DEFAULT_BTL_MAX = { btl1: 0, btl2: 0, btl3: 10, btl4: 10, btl5: 0, btl6: 0 };
+const DEFAULT_BTL_MAX_WHEN_VISIBLE = 10;
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
@@ -39,9 +42,28 @@ function round1(n: number) {
 
 function pct(mark: number | null, max: number) {
   if (mark == null) return '';
-  if (!max) return '-';
+  if (!Number.isFinite(max) || max <= 0) return '0';
   const p = (mark / max) * 100;
   return `${Number.isFinite(p) ? p.toFixed(0) : 0}`;
+}
+
+function readFiniteNumber(value: any): number | null {
+  if (value === '' || value == null) return null;
+  if (typeof value === 'string' && value.trim() === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function getBtlMaxFromCfg(cfg: any, n: 1 | 2 | 3 | 4 | 5 | 6, fallback: number): number {
+  const btlMax = cfg?.btlMax;
+  const raw = btlMax?.[String(n)] ?? btlMax?.[`btl${n}`] ?? btlMax?.[n];
+  const parsed = readFiniteNumber(raw);
+  return parsed == null ? fallback : parsed;
+}
+
+function displayBtlMax(raw: any): number {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_BTL_MAX_WHEN_VISIBLE;
 }
 
 function storageKey(subjectId: string) {
@@ -92,6 +114,10 @@ function compareStudentName(a: { name?: string; reg_no?: string }, b: { name?: s
   return 0;
 }
 
+function shortenRegisterNo(registerNo: string): string {
+  return registerNo.slice(-8);
+}
+
 export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
   const key = useMemo(() => storageKey(subjectId), [subjectId]);
   const [masterCfg, setMasterCfg] = useState<any>(null);
@@ -109,12 +135,12 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
     co2: Number.isFinite(Number(ssa1Cfg?.coMax?.co2)) ? Number(ssa1Cfg.coMax.co2) : DEFAULT_CO_MAX.co2,
   };
   const BTL_MAX = {
-    btl1: Number.isFinite(Number(ssa1Cfg?.btlMax?.['1'])) ? Number(ssa1Cfg.btlMax['1']) : DEFAULT_BTL_MAX.btl1,
-    btl2: Number.isFinite(Number(ssa1Cfg?.btlMax?.['2'])) ? Number(ssa1Cfg.btlMax['2']) : DEFAULT_BTL_MAX.btl2,
-    btl3: Number.isFinite(Number(ssa1Cfg?.btlMax?.['3'])) ? Number(ssa1Cfg.btlMax['3']) : DEFAULT_BTL_MAX.btl3,
-    btl4: Number.isFinite(Number(ssa1Cfg?.btlMax?.['4'])) ? Number(ssa1Cfg.btlMax['4']) : DEFAULT_BTL_MAX.btl4,
-    btl5: Number.isFinite(Number(ssa1Cfg?.btlMax?.['5'])) ? Number(ssa1Cfg.btlMax['5']) : DEFAULT_BTL_MAX.btl5,
-    btl6: Number.isFinite(Number(ssa1Cfg?.btlMax?.['6'])) ? Number(ssa1Cfg.btlMax['6']) : DEFAULT_BTL_MAX.btl6,
+    btl1: getBtlMaxFromCfg(ssa1Cfg, 1, DEFAULT_BTL_MAX.btl1),
+    btl2: getBtlMaxFromCfg(ssa1Cfg, 2, DEFAULT_BTL_MAX.btl2),
+    btl3: getBtlMaxFromCfg(ssa1Cfg, 3, DEFAULT_BTL_MAX.btl3),
+    btl4: getBtlMaxFromCfg(ssa1Cfg, 4, DEFAULT_BTL_MAX.btl4),
+    btl5: getBtlMaxFromCfg(ssa1Cfg, 5, DEFAULT_BTL_MAX.btl5),
+    btl6: getBtlMaxFromCfg(ssa1Cfg, 6, DEFAULT_BTL_MAX.btl6),
   };
 
   useEffect(() => {
@@ -147,15 +173,31 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
 
+  const {
+    data: publishWindow,
+    loading: publishWindowLoading,
+    error: publishWindowError,
+    remainingSeconds,
+    publishAllowed,
+    refresh: refreshPublishWindow,
+  } = usePublishWindow({ assessment: 'ssa1', subjectCode: subjectId, teachingAssignmentId });
+
+  const globalLocked = Boolean(publishWindow?.global_override_active && publishWindow?.global_is_open === false);
+
+  const [requestReason, setRequestReason] = useState('');
+  const [requesting, setRequesting] = useState(false);
+  const [requestMessage, setRequestMessage] = useState<string | null>(null);
+
   const visibleBtlIndices = useMemo(() => {
     const set = new Set(selectedBtls);
     return [1, 2, 3, 4, 5, 6].filter((n) => set.has(n));
   }, [selectedBtls]);
 
   const totalTableCols = useMemo(() => {
-    // Base columns (S.No, Section, RegNo, Name, Total) = 5
-    // CO columns (CO1 mark/% + CO2 mark/%) = 4
-    // BTL columns = selected count * 2 (mark/% per BTL)
+    // Layout matching the Excel header template, but BTL columns are dynamic.
+    // S.No, RegNo, Name, SSA1, Total = 5
+    // CO Attainment (CO-1 Mark/% + CO-2 Mark/%) = 4
+    // BTL Attainment = selected count * 2 (Mark/% per BTL)
     return 9 + visibleBtlIndices.length * 2;
   }, [visibleBtlIndices.length]);
 
@@ -318,6 +360,7 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
     try {
       await publishSsa1(subjectId, sheet);
       setPublishedAt(new Date().toLocaleString());
+      refreshPublishWindow();
       try {
         window.dispatchEvent(new CustomEvent('obe:published', { detail: { subjectId } }));
       } catch {
@@ -327,6 +370,21 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
       setSaveError(e?.message || 'Failed to publish SSA1');
     } finally {
       setPublishing(false);
+    }
+  };
+
+  const requestApproval = async () => {
+    setRequesting(true);
+    setRequestMessage(null);
+    setSaveError(null);
+    try {
+      await createPublishRequest({ assessment: 'ssa1', subject_code: subjectId, reason: requestReason, teaching_assignment_id: teachingAssignmentId });
+      setRequestMessage('Request sent to IQAC for approval.');
+    } catch (e: any) {
+      setSaveError(e?.message || 'Failed to request approval');
+    } finally {
+      setRequesting(false);
+      refreshPublishWindow();
     }
   };
 
@@ -357,20 +415,22 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
       const co1 = coShare == null ? null : clamp(coShare, 0, CO_MAX.co1);
       const co2 = coShare == null ? null : clamp(coShare, 0, CO_MAX.co2);
 
-      const btlMaxByIndex = [BTL_MAX.btl1, BTL_MAX.btl2, BTL_MAX.btl3, BTL_MAX.btl4, BTL_MAX.btl5, BTL_MAX.btl6];
       const visibleIndicesZeroBased = visibleBtlIndices.map((n) => n - 1);
+      const rawBtlMaxByIndex = [BTL_MAX.btl1, BTL_MAX.btl2, BTL_MAX.btl3, BTL_MAX.btl4, BTL_MAX.btl5, BTL_MAX.btl6];
+      const btlMaxByIndex = rawBtlMaxByIndex.map((rawMax, idx) => {
+        if (!visibleIndicesZeroBased.includes(idx)) return rawMax;
+        return rawMax > 0 ? rawMax : DEFAULT_BTL_MAX_WHEN_VISIBLE;
+      });
       const btlShare = totalRaw == null ? null : visibleIndicesZeroBased.length ? round1(totalRaw / visibleIndicesZeroBased.length) : 0;
       const btlMarksByIndex = btlMaxByIndex.map((max, idx) => {
         if (totalRaw == null) return null;
         if (!visibleIndicesZeroBased.includes(idx)) return null;
-        // If BTL has a configured max (>0) clamp to it, otherwise assign the share directly
         if (max > 0) return clamp(btlShare as number, 0, max);
         return round1(btlShare as number);
       });
 
       return {
         sno: i + 1,
-        section: r.section,
         registerNo: r.registerNo,
         name: r.name,
         total,
@@ -379,17 +439,17 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
         co2_mark: co2 ?? '',
         co2_pct: pct(co2, CO_MAX.co2),
         btl1_mark: btlMarksByIndex[0] ?? '',
-        btl1_pct: pct(btlMarksByIndex[0], BTL_MAX.btl1),
+        btl1_pct: pct(btlMarksByIndex[0], btlMaxByIndex[0]),
         btl2_mark: btlMarksByIndex[1] ?? '',
-        btl2_pct: pct(btlMarksByIndex[1], BTL_MAX.btl2),
+        btl2_pct: pct(btlMarksByIndex[1], btlMaxByIndex[1]),
         btl3_mark: btlMarksByIndex[2] ?? '',
-        btl3_pct: pct(btlMarksByIndex[2], BTL_MAX.btl3),
+        btl3_pct: pct(btlMarksByIndex[2], btlMaxByIndex[2]),
         btl4_mark: btlMarksByIndex[3] ?? '',
-        btl4_pct: pct(btlMarksByIndex[3], BTL_MAX.btl4),
+        btl4_pct: pct(btlMarksByIndex[3], btlMaxByIndex[3]),
         btl5_mark: btlMarksByIndex[4] ?? '',
-        btl5_pct: pct(btlMarksByIndex[4], BTL_MAX.btl5),
+        btl5_pct: pct(btlMarksByIndex[4], btlMaxByIndex[4]),
         btl6_mark: btlMarksByIndex[5] ?? '',
-        btl6_pct: pct(btlMarksByIndex[5], BTL_MAX.btl6),
+        btl6_pct: pct(btlMarksByIndex[5], btlMaxByIndex[5]),
       };
     });
 
@@ -422,6 +482,26 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
     fontSize: 12,
   };
 
+  const btlBoxStyle: React.CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '6px 10px',
+    border: '1px solid #cbd5e1',
+    borderRadius: 999,
+    background: '#fff',
+    cursor: 'pointer',
+    userSelect: 'none',
+    fontSize: 12,
+  };
+
+  const cardStyle: React.CSSProperties = {
+    border: '1px solid #e5e7eb',
+    borderRadius: 12,
+    padding: 12,
+    background: '#fff',
+  };
+
   const toggleBtl = (n: number) => {
     setSelectedBtls((prev) => (prev.includes(n) ? prev.filter((x) => x !== n) : prev.concat(n).sort((a, b) => a - b)));
   };
@@ -431,133 +511,139 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
 
   return (
     <div>
-      <div className="obe-card"
-        style={{
-          display: 'flex',
-          gap: 12,
-          justifyContent: 'space-between',
-          alignItems: 'flex-end',
-          flexWrap: 'wrap',
-          marginBottom: 10,
-        }}
-      >
-        <div>
-          <div style={{ fontWeight: 800, fontSize: 16 }}>SSA1 Sheet</div>
-          <div style={{ color: '#6b7280', fontSize: 13 }}>
-            Excel-like layout (CO + BTL attainment). Subject: <b>{subjectId}</b>
-          </div>
-        </div>
-
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button onClick={() => setBtlPickerOpen((v) => !v)} style={{ padding: '6px 10px' }}>
-            BTL Columns
+          <button onClick={loadRoster} className="obe-btn obe-btn-secondary" disabled={rosterLoading}>
+            {rosterLoading ? 'Loading roster…' : 'Load/Refresh Roster'}
           </button>
-          <button
-            onClick={loadRoster}
-            style={{ padding: '6px 10px' }}
-            disabled={rosterLoading || !teachingAssignmentId}
-            title={!teachingAssignmentId ? 'Select a Teaching Assignment/Section first' : 'Reload students from roster'}
-          >
-            {rosterLoading ? 'Loading…' : 'Reload Students'}
-          </button>
-          <button
-            onClick={resetAllMarks}
-            style={{ padding: '6px 10px' }}
-            disabled={!sheet.rows.length}
-            title={!sheet.rows.length ? 'No students loaded' : 'Reset all marks to 0'}
-          >
+          <button onClick={resetAllMarks} className="obe-btn obe-btn-danger" disabled={!sheet.rows.length}>
             Reset Marks
           </button>
-          <button onClick={saveDraftToDb} className="obe-btn" disabled={savingDraft || !sheet.rows.length}>
-            {savingDraft ? 'Saving…' : 'Save Draft'}
-          </button>
-          <button
-            onClick={publish}
-            disabled={publishing || !sheet.rows.length}
-            className="obe-btn obe-btn-primary"
-          >
-            {publishing ? 'Publishing…' : 'Publish'}
-          </button>
-          <button
-            onClick={exportSheetCsv}
-            style={{ padding: '6px 10px' }}
-            disabled={!sheet.rows.length}
-            title={!sheet.rows.length ? 'Add at least one row to export' : 'Export as CSV'}
-          >
+          <button onClick={exportSheetCsv} className="obe-btn obe-btn-secondary" disabled={!sheet.rows.length}>
             Export CSV
           </button>
-          {savedAt && <div style={{ fontSize: 12, color: '#6b7280', alignSelf: 'center' }}>Draft: {savedAt}</div>}
-          {publishedAt && <div style={{ fontSize: 12, color: '#16a34a', alignSelf: 'center' }}>Published: {publishedAt}</div>}
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <button onClick={saveDraftToDb} className="obe-btn obe-btn-success" disabled={savingDraft}>
+            {savingDraft ? 'Saving…' : 'Save Draft'}
+          </button>
+          <button onClick={publish} className="obe-btn obe-btn-primary" disabled={publishing || !publishAllowed}>
+            {publishing ? 'Publishing…' : 'Publish'}
+          </button>
         </div>
       </div>
 
-      {saveError && <div style={{ margin: '6px 0 10px 0', fontSize: 12, color: '#b91c1c' }}>{saveError}</div>}
+      <div style={{ marginTop: 10, fontSize: 12, color: publishAllowed ? '#065f46' : '#b91c1c' }}>
+        {publishWindowLoading ? (
+          'Checking publish due time…'
+        ) : publishWindowError ? (
+          publishWindowError
+        ) : publishWindow?.due_at ? (
+          <>
+            Due: {new Date(publishWindow.due_at).toLocaleString()} • Remaining: {formatRemaining(remainingSeconds)}
+            {publishWindow.allowed_by_approval && publishWindow.approval_until ? (
+              <> • Approved until {new Date(publishWindow.approval_until).toLocaleString()}</>
+            ) : null}
+          </>
+        ) : (
+          'Due time not set by IQAC.'
+        )}
+      </div>
 
-      {btlPickerOpen && (
-        <div
-          style={{
-            border: '1px solid #e5e7eb',
-            borderRadius: 12,
-            padding: 12,
-            background: '#fff',
-            marginBottom: 10,
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-            <div style={{ fontWeight: 700, fontSize: 13 }}>BTL columns to show</div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button onClick={selectAllBtl} style={{ padding: '4px 8px' }}>
-                Select All
-              </button>
-              <button onClick={clearAllBtl} style={{ padding: '4px 8px' }}>
-                Clear
-              </button>
-            </div>
+      {globalLocked ? (
+        <div style={{ marginTop: 10, border: '1px solid #fde68a', background: '#fffbeb', borderRadius: 12, padding: 12 }}>
+          <div style={{ fontWeight: 800, marginBottom: 6 }}>Publishing disabled by IQAC</div>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>
+            Global publishing is turned OFF for this assessment. You can view the sheet, but editing and publishing are locked.
           </div>
-          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 10 }}>
-            {[1, 2, 3, 4, 5, 6].map((n) => (
-              <label key={n} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#111827' }}>
-                <input type="checkbox" checked={selectedBtls.includes(n)} onChange={() => toggleBtl(n)} />
-                BTL-{n}
-              </label>
-            ))}
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
+            <button className="obe-btn" onClick={() => refreshPublishWindow()} disabled={publishWindowLoading}>Refresh</button>
           </div>
-          <div style={{ marginTop: 8, fontSize: 12, color: '#6b7280' }}>
-            Selected: {visibleBtlIndices.length ? visibleBtlIndices.map((n) => `BTL-${n}`).join(', ') : 'None'}
+        </div>
+      ) : !publishAllowed ? (
+        <div style={{ marginTop: 10, border: '1px solid #fecaca', background: '#fff7ed', borderRadius: 12, padding: 12 }}>
+          <div style={{ fontWeight: 800, marginBottom: 6 }}>Publish time is over</div>
+          <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>Send a request to IQAC to approve publishing.</div>
+          <textarea
+            value={requestReason}
+            onChange={(e) => setRequestReason(e.target.value)}
+            placeholder="Reason (optional)"
+            rows={3}
+            style={{ width: '100%', padding: 10, borderRadius: 10, border: '1px solid #e5e7eb', resize: 'vertical' }}
+          />
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
+            <button className="obe-btn" onClick={() => refreshPublishWindow()} disabled={requesting || publishWindowLoading}>Refresh</button>
+            <button className="obe-btn obe-btn-primary" onClick={requestApproval} disabled={requesting}>{requesting ? 'Requesting…' : 'Request Approval'}</button>
           </div>
+          {requestMessage ? <div style={{ marginTop: 8, fontSize: 12, color: '#065f46' }}>{requestMessage}</div> : null}
+        </div>
+      ) : null}
+
+      {(rosterError || saveError) && (
+        <div style={{ marginTop: 10, color: '#b91c1c', fontSize: 13 }}>
+          {rosterError || saveError}
         </div>
       )}
 
-      {rosterError && (
-        <div style={{ margin: '6px 0 10px 0', fontSize: 12, color: '#b91c1c' }}>{rosterError}</div>
-      )}
-
-      <div
-        style={{
-          border: '1px solid #e5e7eb',
-          borderRadius: 12,
-          padding: 12,
-          background: '#fff',
-          marginBottom: 10,
-        }}
-      >
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-          <label style={{ fontSize: 12, color: '#374151' }}>
-            Term
-            <div style={{ marginLeft: 8, padding: 6, border: '1px solid #d1d5db', borderRadius: 8, minWidth: 160 }}>{sheet.termLabel}</div>
-          </label>
-          <label style={{ fontSize: 12, color: '#374151' }}>
-            Sheet Label
-            <div style={{ marginLeft: 8, padding: 6, border: '1px solid #d1d5db', borderRadius: 8, minWidth: 160 }}>{sheet.batchLabel}</div>
-          </label>
-          <div style={{ fontSize: 12, color: '#6b7280', alignSelf: 'center' }}>
-            CO split: 10 + 10; BTL active: BTL-3, BTL-4
-          </div>
+      <div style={{ marginTop: 10, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        <div style={cardStyle}>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>Term</div>
+          <div style={{ fontWeight: 700 }}>{sheet.termLabel || '—'}</div>
+        </div>
+        <div style={cardStyle}>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>Batch</div>
+          <div style={{ fontWeight: 700 }}>{sheet.batchLabel || '—'}</div>
+        </div>
+        <div style={cardStyle}>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>Saved</div>
+          <div style={{ fontWeight: 700 }}>{savedAt || '—'}</div>
+        </div>
+        <div style={cardStyle}>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>Published</div>
+          <div style={{ fontWeight: 700 }}>{publishedAt || '—'}</div>
         </div>
       </div>
 
-      <div className="obe-table-wrapper" style={{ position: 'relative' }}>
-        <table className="obe-table" style={{ minWidth: 1200 }}>
+      <div style={{ marginTop: 14, ...cardStyle }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ fontWeight: 800 }}>BTL Selection</div>
+          <button className="obe-btn obe-btn-secondary" onClick={() => setBtlPickerOpen((p) => !p)}>
+            {btlPickerOpen ? 'Hide' : 'Show'}
+          </button>
+        </div>
+        {btlPickerOpen && (
+          <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {[1, 2, 3, 4, 5, 6].map((n) => {
+              const active = selectedBtls.includes(n);
+              return (
+                <div
+                  key={n}
+                  style={{
+                    ...btlBoxStyle,
+                    borderColor: active ? '#16a34a' : '#cbd5e1',
+                    background: active ? '#ecfdf5' : '#fff',
+                  }}
+                  onClick={() =>
+                    setSelectedBtls((prev) =>
+                      prev.includes(n) ? prev.filter((x) => x !== n) : [...prev, n].sort((a, b) => a - b),
+                    )
+                  }
+                >
+                  <input type="checkbox" checked={active} readOnly />
+                  <span style={{ fontWeight: 800 }}>BTL{n}</span>
+                  <span style={{ color: '#6b7280' }}>(max {String((BTL_MAX as any)[`btl${n}`] ?? 0)})</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <PublishLockOverlay locked={globalLocked}>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ borderCollapse: 'collapse', minWidth: 920 }}>
           <thead>
             <tr>
               <th style={cellTh} colSpan={totalTableCols}>
@@ -565,44 +651,41 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
               </th>
             </tr>
             <tr>
-              <th style={cellTh} rowSpan={3}>
-                S.No
-              </th>
-              <th style={cellTh} rowSpan={3}>
-                SECTION
-              </th>
-              <th style={cellTh} rowSpan={3}>
-                Register No.
-              </th>
-              <th style={cellTh} rowSpan={3}>
-                Name of the Students
-              </th>
-              <th style={cellTh} rowSpan={3}>
-                Total
-              </th>
-              <th style={cellTh} colSpan={4}>
-                CO ATTAINMENT
-              </th>
-              {visibleBtlIndices.length > 0 && (
-                <th style={cellTh} colSpan={visibleBtlIndices.length * 2}>
-                  BTL ATTAINMENT
-                </th>
-              )}
+              <th style={{ ...cellTh, width: 42, minWidth: 42 }} rowSpan={4}>S.No</th>
+              <th style={cellTh} rowSpan={4}>Register No.</th>
+              <th style={cellTh} rowSpan={3}>Name of the Students</th>
+
+              <th style={cellTh}>SSA1</th>
+              <th style={cellTh}>Total</th>
+
+              <th style={cellTh} colSpan={4}>CO ATTAINMENT</th>
+              {visibleBtlIndices.length ? (
+                <th style={cellTh} colSpan={visibleBtlIndices.length * 2}>BTL ATTAINMENT</th>
+              ) : null}
             </tr>
             <tr>
-              <th style={cellTh} colSpan={2}>
-                CO-1
+              <th style={cellTh}>
+                <div style={{ fontWeight: 800 }}>COs</div>
+                <div style={{ fontSize: 12 }}>1,2</div>
               </th>
-              <th style={cellTh} colSpan={2}>
-                CO-2
-              </th>
+              <th style={cellTh} />
+
+              <th style={cellTh} colSpan={2}>CO-1</th>
+              <th style={cellTh} colSpan={2}>CO-2</th>
+
               {visibleBtlIndices.map((n) => (
-                <th key={n} style={cellTh} colSpan={2}>
+                <th key={`btl-head-${n}`} style={cellTh} colSpan={2}>
                   BTL-{n}
                 </th>
               ))}
             </tr>
             <tr>
+              <th style={cellTh}>
+                <div style={{ fontWeight: 800 }}>BTL</div>
+                <div style={{ fontSize: 12 }}>{visibleBtlIndices.length ? visibleBtlIndices.join(',') : '-'}</div>
+              </th>
+              <th style={cellTh} />
+
               {Array.from({ length: 2 + visibleBtlIndices.length }).flatMap((_, i) => (
                 <React.Fragment key={i}>
                   <th style={cellTh}>Mark</th>
@@ -610,118 +693,85 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
                 </React.Fragment>
               ))}
             </tr>
-          </thead>
-
-          <tbody>
             <tr>
-              <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} colSpan={4}>
-                Name / Max Marks
-              </td>
-              <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_ASMT1}</td>
-
-              <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{CO_MAX.co1}</td>
-              <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
-              <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{CO_MAX.co2}</td>
-              <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
-
-              {visibleBtlIndices.map((n) => {
-                const maxByIndex = [
-                  BTL_MAX.btl1,
-                  BTL_MAX.btl2,
-                  BTL_MAX.btl3,
-                  BTL_MAX.btl4,
-                  BTL_MAX.btl5,
-                  BTL_MAX.btl6,
-                ];
-                const max = maxByIndex[n - 1] ?? 0;
-                return (
-                  <React.Fragment key={n}>
-                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{max}</td>
-                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
-                  </React.Fragment>
-                );
-              })}
+              <th style={cellTh}>Name / Max Marks</th>
+              <th style={cellTh}>{MAX_ASMT1}</th>
+              <th style={cellTh}>{MAX_ASMT1}</th>
+              <th style={cellTh}>{CO_MAX.co1}</th>
+              <th style={cellTh}>%</th>
+              <th style={cellTh}>{CO_MAX.co2}</th>
+              <th style={cellTh}>%</th>
+              {visibleBtlIndices.flatMap((n) => [
+                <th key={`btl-max-${n}`} style={cellTh}>
+                  {String(displayBtlMax((BTL_MAX as any)[`btl${n}`]))}
+                </th>,
+                <th key={`btl-pct-${n}`} style={cellTh}>%</th>,
+              ])}
             </tr>
-
+          </thead>
+          <tbody>
             {sheet.rows.length === 0 ? (
               <tr>
-                <td style={{ ...cellTd, textAlign: 'center', color: '#6b7280' }} colSpan={totalTableCols}>
-                  No students loaded. Select a Teaching Assignment/Section above.
+                <td colSpan={totalTableCols} style={{ padding: 14, color: '#6b7280', fontSize: 13 }}>
+                  No students loaded yet. Choose a Teaching Assignment above, then click “Load/Refresh Roster”.
                 </td>
               </tr>
             ) : (
-              sheet.rows.map((r, i) => {
+              sheet.rows.map((r, idx) => {
                 const totalRaw = typeof r.total === 'number' ? clamp(Number(r.total), 0, MAX_ASMT1) : null;
-                const total = totalRaw == null ? '' : round1(totalRaw);
 
-                const coSplitCount = 2;
-                const coShare = totalRaw == null ? null : round1(totalRaw / coSplitCount);
+                const coShare = totalRaw == null ? null : round1(totalRaw / 2);
                 const co1 = coShare == null ? null : clamp(coShare, 0, CO_MAX.co1);
                 const co2 = coShare == null ? null : clamp(coShare, 0, CO_MAX.co2);
 
-                const btlMaxByIndex = [
-                  BTL_MAX.btl1,
-                  BTL_MAX.btl2,
-                  BTL_MAX.btl3,
-                  BTL_MAX.btl4,
-                  BTL_MAX.btl5,
-                  BTL_MAX.btl6,
-                ];
                 const visibleIndicesZeroBased = visibleBtlIndices.map((n) => n - 1);
+                const rawBtlMaxByIndex = [BTL_MAX.btl1, BTL_MAX.btl2, BTL_MAX.btl3, BTL_MAX.btl4, BTL_MAX.btl5, BTL_MAX.btl6];
+                const btlMaxByIndex = rawBtlMaxByIndex.map((rawMax, idx) => {
+                  if (!visibleIndicesZeroBased.includes(idx)) return rawMax;
+                  return rawMax > 0 ? rawMax : DEFAULT_BTL_MAX_WHEN_VISIBLE;
+                });
                 const btlShare = totalRaw == null ? null : visibleIndicesZeroBased.length ? round1(totalRaw / visibleIndicesZeroBased.length) : 0;
-                const btlMarksByIndex = btlMaxByIndex.map((max, idx) => {
+                const btlMarksByIndex = btlMaxByIndex.map((max, i) => {
                   if (totalRaw == null) return null;
-                  if (!visibleIndicesZeroBased.includes(idx)) return null;
+                  if (!visibleIndicesZeroBased.includes(i)) return null;
                   if (max > 0) return clamp(btlShare as number, 0, max);
                   return round1(btlShare as number);
                 });
 
                 return (
-                  <tr key={i}>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{i + 1}</td>
-                    <td style={{ ...cellTd, color: '#111827' }}>{r.section}</td>
-                    <td style={{ ...cellTd, color: '#111827' }}>{r.registerNo}</td>
-                    <td style={{ ...cellTd, color: '#111827' }}>{r.name}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>
+                  <tr key={String(r.studentId || idx)}>
+                    <td style={{ ...cellTd, textAlign: 'center', width: 42, minWidth: 42, paddingLeft: 2, paddingRight: 2 }}>{idx + 1}</td>
+                    <td style={cellTd}>{shortenRegisterNo(r.registerNo)}</td>
+                    <td style={cellTd}>{r.name}</td>
+                    <td style={{ ...cellTd, width: 90, background: '#fff7ed' }}>
                       <input
-                        className="obe-input"
-                        style={{ textAlign: 'center' }}
+                        style={inputStyle}
                         type="number"
-                        value={typeof r.total === 'number' ? r.total : ''}
+                        value={r.total}
                         min={0}
                         max={MAX_ASMT1}
-                        step={0.1}
-                        placeholder=""
-                        disabled={selectedBtls.length === 0}
                         onChange={(e) => {
                           const raw = e.target.value;
-                          if (raw === '') {
-                            updateRow(i, { total: '' });
-                            return;
-                          }
+                          if (raw === '') return updateRow(idx, { total: '' });
                           const n = clamp(Number(raw), 0, MAX_ASMT1);
-                          updateRow(i, { total: Number.isFinite(n) ? round1(n) : '' });
+                          updateRow(idx, { total: Number.isFinite(n) ? n : '' });
                         }}
                       />
                     </td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{co1 == null ? '' : co1.toFixed(1)}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>
-                      <span className="obe-pct-badge">{pct(co1, CO_MAX.co1)}</span>
-                    </td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{co2 == null ? '' : co2.toFixed(1)}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>
-                      <span className="obe-pct-badge">{pct(co2, CO_MAX.co2)}</span>
-                    </td>
+                    <td style={{ ...cellTd, textAlign: 'right' }}>{totalRaw ?? ''}</td>
+                    <td style={{ ...cellTd, textAlign: 'right' }}>{co1 ?? ''}</td>
+                    <td style={{ ...cellTd, textAlign: 'right' }}>{pct(co1, CO_MAX.co1)}</td>
+                    <td style={{ ...cellTd, textAlign: 'right' }}>{co2 ?? ''}</td>
+                    <td style={{ ...cellTd, textAlign: 'right' }}>{pct(co2, CO_MAX.co2)}</td>
 
-                    {visibleBtlIndices.map((n) => {
-                      const mark = btlMarksByIndex[n - 1] ?? 0;
-                      const max = btlMaxByIndex[n - 1] ?? 0;
+                    {visibleBtlIndices.map((btl) => {
+                      const idx0 = btl - 1;
+                      const mark = btlMarksByIndex[idx0];
+                      const max = btlMaxByIndex[idx0];
                       return (
-                        <React.Fragment key={n}>
-                          <td style={{ ...cellTd, textAlign: 'center' }}>{mark == null ? '' : Number(mark).toFixed(1)}</td>
-                          <td style={{ ...cellTd, textAlign: 'center' }}>
-                            <span className="obe-pct-badge">{pct(mark == null ? null : Number(mark), max)}</span>
-                          </td>
+                        <React.Fragment key={btl}>
+                          <td style={{ ...cellTd, textAlign: 'right' }}>{mark ?? ''}</td>
+                          <td style={{ ...cellTd, textAlign: 'right' }}>{pct(mark, max)}</td>
                         </React.Fragment>
                       );
                     })}
@@ -730,37 +780,9 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
               })
             )}
           </tbody>
-        </table>
-        {selectedBtls.length === 0 && (
-          <div
-            style={{
-              position: 'absolute',
-              inset: 0,
-              background: 'rgba(255,255,255,0.8)',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 8,
-              borderRadius: 6,
-            }}
-          >
-            <div style={{ fontSize: 14, fontWeight: 700 }}>Pick BTL columns to enable editing</div>
-            <div style={{ color: '#6b7280' }}>The table is disabled until at least one BTL column is selected.</div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button onClick={() => setBtlPickerOpen(true)} style={{ padding: '6px 10px' }}>
-                Choose BTL Columns
-              </button>
-              <button onClick={() => selectAllBtl()} style={{ padding: '6px 10px' }}>
-                Select All
-              </button>
-            </div>
+            </table>
           </div>
-        )}
-      </div>
-
-      <div style={{ marginTop: 10, fontSize: 12, color: '#6b7280' }}>
-        Saved key: <span style={{ fontFamily: 'monospace' }}>{key}</span>
+        </PublishLockOverlay>
       </div>
     </div>
   );

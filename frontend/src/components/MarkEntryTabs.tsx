@@ -21,10 +21,10 @@ type Props = {
 const BASE_TABS: { key: TabKey; label: string }[] = [
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'ssa1', label: 'SSA1' },
-  { key: 'ssa2', label: 'SSA2' },
   { key: 'formative1', label: 'Formative 1' },
-  { key: 'formative2', label: 'Formative 2' },
   { key: 'cia1', label: 'CIA 1' },
+  { key: 'ssa2', label: 'SSA2' },
+  { key: 'formative2', label: 'Formative 2' },
   { key: 'cia2', label: 'CIA 2' },
   { key: 'model', label: 'MODEL' },
 ];

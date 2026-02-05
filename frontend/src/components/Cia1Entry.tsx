@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { fetchCiaMarks, fetchDraft, publishCiaSheet, saveDraft } from '../services/obe';
+import { createPublishRequest, fetchCiaMarks, fetchDraft, publishCiaSheet, saveDraft } from '../services/obe';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
+import { formatRemaining, usePublishWindow } from '../hooks/usePublishWindow';
+import PublishLockOverlay from './PublishLockOverlay';
 
 type Student = {
   id: number;
@@ -109,6 +111,7 @@ function effectiveCoWeightsForQuestion(questions: QuestionDef[], idx: number, pa
 type Cia1RowState = {
   studentId: number;
   absent: boolean;
+  reg_no: string;
   // question key -> mark
   q: Record<string, number | ''>;
 };
@@ -204,6 +207,21 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   const [serverTotals, setServerTotals] = useState<Record<number, number | null>>({});
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
+
+  const {
+    data: publishWindow,
+    loading: publishWindowLoading,
+    error: publishWindowError,
+    remainingSeconds,
+    publishAllowed,
+    refresh: refreshPublishWindow,
+  } = usePublishWindow({ assessment: assessmentKey, subjectCode: subjectId, teachingAssignmentId });
+
+  const globalLocked = Boolean(publishWindow?.global_override_active && publishWindow?.global_is_open === false);
+
+  const [requestReason, setRequestReason] = useState('');
+  const [requesting, setRequesting] = useState(false);
+  const [requestMessage, setRequestMessage] = useState<string | null>(null);
   const [sheet, setSheet] = useState<Cia1Sheet>({
     termLabel: 'KRCT AY25-26',
     batchLabel: subjectId,
@@ -300,12 +318,14 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
             merged[key] = {
               studentId: s.id,
               absent: Boolean((merged[key] as any).absent),
+              reg_no: s.reg_no || '', // Ensure reg_no is added
               q: { ...(merged[key] as any).q },
             };
           } else {
             merged[key] = {
               studentId: s.id,
               absent: false,
+              reg_no: s.reg_no || '', // Ensure reg_no is added
               q: Object.fromEntries(questions.map((q) => [q.key, ''])),
             };
           }
@@ -579,6 +599,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       };
       await publishCiaSheet(assessmentKey, subjectId, data);
       setPublishedAt(new Date().toLocaleString());
+      refreshPublishWindow();
       try {
         window.dispatchEvent(new CustomEvent('obe:published', { detail: { subjectId } }));
       } catch {
@@ -588,6 +609,21 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       setError(e?.message || `Failed to publish ${assessmentLabel}`);
     } finally {
       setPublishing(false);
+    }
+  };
+
+  const requestApproval = async () => {
+    setRequesting(true);
+    setRequestMessage(null);
+    setError(null);
+    try {
+      await createPublishRequest({ assessment: assessmentKey, subject_code: subjectId, reason: requestReason, teaching_assignment_id: teachingAssignmentId });
+      setRequestMessage('Request sent to IQAC for approval.');
+    } catch (e: any) {
+      setError(e?.message || 'Failed to request approval');
+    } finally {
+      setRequesting(false);
+      refreshPublishWindow();
     }
   };
 
@@ -647,12 +683,12 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
 
   const cellTh: React.CSSProperties = {
     border: '1px solid #111',
-    padding: '6px 6px',
+    padding: '4px 4px',
     background: '#ecfdf5',
     color: '#065f46',
     textAlign: 'center',
     fontWeight: 700,
-    fontSize: 12,
+    fontSize: 11,
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
@@ -660,8 +696,8 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
 
   const cellTd: React.CSSProperties = {
     border: '1px solid #111',
-    padding: '6px 6px',
-    fontSize: 12,
+    padding: '4px 4px',
+    fontSize: 11,
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
@@ -672,7 +708,17 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
     border: 'none',
     outline: 'none',
     background: 'transparent',
-    fontSize: 12,
+    fontSize: 11,
+  };
+
+  const SNO_COL_WIDTH = 32;
+
+  // Add a CSS class for vertical text
+  const verticalTextStyle = {
+    writingMode: 'vertical-rl',
+    transform: 'rotate(180deg)',
+    textAlign: 'center',
+    whiteSpace: 'nowrap',
   };
 
   return (
@@ -728,7 +774,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
           </button>
           <button
             onClick={publish}
-            disabled={publishing || students.length === 0}
+            disabled={publishing || students.length === 0 || !publishAllowed}
             className="obe-btn obe-btn-primary"
           >
             {publishing ? 'Publishing…' : 'Publish'}
@@ -745,6 +791,52 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
           )}
         </div>
       </div>
+
+      <div style={{ marginBottom: 10, fontSize: 12, color: publishAllowed ? '#065f46' : '#b91c1c' }}>
+        {publishWindowLoading ? (
+          'Checking publish due time…'
+        ) : publishWindowError ? (
+          publishWindowError
+        ) : publishWindow?.due_at ? (
+          <>
+            Due: {new Date(publishWindow.due_at).toLocaleString()} • Remaining: {formatRemaining(remainingSeconds)}
+            {publishWindow.allowed_by_approval && publishWindow.approval_until ? (
+              <> • Approved until {new Date(publishWindow.approval_until).toLocaleString()}</>
+            ) : null}
+          </>
+        ) : (
+          'Due time not set by IQAC.'
+        )}
+      </div>
+
+      {globalLocked ? (
+        <div style={{ marginBottom: 10, border: '1px solid #fde68a', background: '#fffbeb', borderRadius: 12, padding: 12 }}>
+          <div style={{ fontWeight: 800, marginBottom: 6 }}>Publishing disabled by IQAC</div>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>
+            Global publishing is turned OFF for this assessment. You can view the sheet, but editing and publishing are locked.
+          </div>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
+            <button className="obe-btn" onClick={() => refreshPublishWindow()} disabled={publishWindowLoading}>Refresh</button>
+          </div>
+        </div>
+      ) : !publishAllowed ? (
+        <div style={{ marginBottom: 10, border: '1px solid #fecaca', background: '#fff7ed', borderRadius: 12, padding: 12 }}>
+          <div style={{ fontWeight: 800, marginBottom: 6 }}>Publish time is over</div>
+          <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>Send a request to IQAC to approve publishing.</div>
+          <textarea
+            value={requestReason}
+            onChange={(e) => setRequestReason(e.target.value)}
+            placeholder="Reason (optional)"
+            rows={3}
+            style={{ width: '100%', padding: 10, borderRadius: 10, border: '1px solid #e5e7eb', resize: 'vertical' }}
+          />
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
+            <button className="obe-btn" onClick={() => refreshPublishWindow()} disabled={requesting || publishWindowLoading}>Refresh</button>
+            <button className="obe-btn obe-btn-primary" onClick={requestApproval} disabled={requesting}>{requesting ? 'Requesting…' : 'Request Approval'}</button>
+          </div>
+          {requestMessage ? <div style={{ marginTop: 8, fontSize: 12, color: '#065f46' }}>{requestMessage}</div> : null}
+        </div>
+      ) : null}
 
       <div
         style={{
@@ -773,8 +865,9 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       {students.length === 0 ? (
         <div style={{ color: '#6b7280', fontSize: 14, padding: '12px 0' }}>No students found for this subject.</div>
       ) : (
-        <div className="obe-table-wrapper" style={{ overflowX: 'auto' }}>
-          <table className="obe-table" style={{ minWidth: 0, tableLayout: 'fixed' }}>
+        <PublishLockOverlay locked={globalLocked}>
+          <div className="obe-table-wrapper" style={{ overflowX: 'auto' }}>
+            <table className="obe-table" style={{ width: 'max-content', minWidth: '100%', tableLayout: 'auto' }}>
             <thead>
               <tr>
                 <th style={cellTh} colSpan={4 + questions.length + 1 + 4 + visibleBtls.length * 2}>
@@ -782,17 +875,17 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                 </th>
               </tr>
               <tr>
-                <th style={cellTh} rowSpan={3}>
+                <th style={{ ...cellTh, width: SNO_COL_WIDTH, minWidth: SNO_COL_WIDTH }} rowSpan={3}>
                   S.No
                 </th>
-                <th style={cellTh} rowSpan={3}>
-                  Register No.
+                <th style={{ ...cellTh, minWidth: 70, overflow: 'visible', textOverflow: 'clip' }} rowSpan={3}>
+                  R.No
                 </th>
-                <th style={cellTh} rowSpan={3}>
+                <th style={{ ...cellTh, minWidth: 240, overflow: 'visible', textOverflow: 'clip' }} rowSpan={3}>
                   Name of the Students
                 </th>
-                <th style={cellTh} rowSpan={3}>
-                  ABSENT
+                <th style={{ ...cellTh, minWidth: 32 }} rowSpan={3}>
+                  AB
                 </th>
 
                 <th style={cellTh} colSpan={questions.length}>
@@ -812,7 +905,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
               </tr>
               <tr>
                 {questions.map((q) => (
-                  <th key={q.key} style={cellTh}>
+                  <th key={q.key} style={{ ...cellTh, width: 46, minWidth: 46 }}>
                     {q.label}
                   </th>
                 ))}
@@ -830,13 +923,15 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
               </tr>
               <tr>
                 {questions.map((q) => (
-                  <th key={q.key} style={cellTh}>
+                  <th key={q.key} style={{ ...cellTh, width: 46, minWidth: 46 }}>
                     {q.max}
                   </th>
                 ))}
                 {Array.from({ length: 2 + visibleBtls.length }).flatMap((_, i) => (
                   <React.Fragment key={i}>
-                    <th style={cellTh}>Mark</th>
+                    <th style={cellTh}>
+                      <div style={{ whiteSpace: 'pre-line', lineHeight: '0.9', fontSize: '0.7em' }}>{'M\nA\nR\nK'}</div>
+                    </th>
                     <th style={cellTh}>%</th>
                   </React.Fragment>
                 ))}
@@ -849,20 +944,54 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>BTL</td>
                 {questions.map((q) => (
                   <td key={`btl-select-${q.key}`} style={{ ...cellTd, textAlign: 'center' }}>
-                    <select
-                      value={(sheet.questionBtl || ({} as any))[q.key] ?? ''}
-                      onChange={(e) =>
-                        setQuestionBtl(q.key, e.target.value === '' ? '' : (Number(e.target.value) as 1 | 2 | 3 | 4 | 5 | 6))
-                      }
-                      style={{ width: '100%', fontSize: 12, padding: '2px 4px' }}
-                    >
-                      <option value="">-</option>
-                      {[1, 2, 3, 4, 5, 6].map((n) => (
-                        <option key={n} value={n}>
-                          {n}
-                        </option>
-                      ))}
-                    </select>
+                    {(() => {
+                      const v = (sheet.questionBtl || ({} as any))[q.key] ?? '';
+                      const display = v === '' ? '-' : String(v);
+                      return (
+                        <div style={{ position: 'relative', minWidth: 44 }}>
+                          <div
+                            style={{
+                              width: '100%',
+                              fontSize: 12,
+                              padding: '2px 4px',
+                              border: '1px solid #d1d5db',
+                              borderRadius: 8,
+                              background: '#fff',
+                              textAlign: 'center',
+                              userSelect: 'none',
+                            }}
+                            title={`BTL: ${display}`}
+                          >
+                            {display}
+                          </div>
+                          <select
+                            aria-label={`BTL for ${q.label}`}
+                            value={v}
+                            onChange={(e) =>
+                              setQuestionBtl(q.key, e.target.value === '' ? '' : (Number(e.target.value) as 1 | 2 | 3 | 4 | 5 | 6))
+                            }
+                            style={{
+                              position: 'absolute',
+                              inset: 0,
+                              width: '100%',
+                              height: '100%',
+                              opacity: 0,
+                              cursor: 'pointer',
+                              appearance: 'none',
+                              WebkitAppearance: 'none',
+                              MozAppearance: 'none',
+                            }}
+                          >
+                            <option value="">-</option>
+                            {[1, 2, 3, 4, 5, 6].map((n) => (
+                              <option key={n} value={n}>
+                                {n}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      );
+                    })()}
                   </td>
                 ))}
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} />
@@ -936,10 +1065,10 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
 
                 return (
                   <tr key={s.id} style={rowStyle}>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{i + 1}</td>
-                    <td style={cellTd}>{s.reg_no}</td>
-                    <td style={cellTd}>{s.name}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>
+                    <td style={{ ...cellTd, textAlign: 'center', width: SNO_COL_WIDTH, minWidth: SNO_COL_WIDTH, paddingLeft: 2, paddingRight: 2 }}>{i + 1}</td>
+                    <td style={{ ...cellTd, minWidth: 70, overflow: 'visible', textOverflow: 'clip' }}>{shortenRegisterNo(row.reg_no)}</td>
+                    <td style={{ ...cellTd, minWidth: 240, overflow: 'visible', textOverflow: 'clip' }}>{s.name}</td>
+                    <td style={{ ...cellTd, textAlign: 'center', minWidth: 32 }}>
                       <input
                         type="checkbox"
                         checked={row.absent}
@@ -948,7 +1077,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                     </td>
 
                     {questions.map((q) => (
-                      <td key={q.key} style={{ ...cellTd, textAlign: 'center' }}>
+                      <td key={q.key} style={{ ...cellTd, textAlign: 'center', width: 46, minWidth: 46 }}>
                         <input
                           style={{ ...inputStyle, textAlign: 'center', opacity: row.absent ? 0.5 : 1 }}
                           type="number"
@@ -987,8 +1116,13 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
               })}
             </tbody>
           </table>
-        </div>
+          </div>
+        </PublishLockOverlay>
       )}
     </div>
   );
+}
+
+function shortenRegisterNo(registerNo: string): string {
+  return registerNo.slice(-8);
 }

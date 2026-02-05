@@ -1,12 +1,13 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
 
 
 import useDashboard from '../hooks/useDashboard';
-import { User, BookOpen, Layout, Grid, Home } from 'lucide-react';
+import { User, BookOpen, Layout, Grid, Home, Bell, CalendarClock } from 'lucide-react';
 import './DashboardSidebar.css';
 import { useSidebar } from './SidebarContext';
+import { fetchPendingPublishRequestCount } from '../services/obe';
 
 const ICON_MAP: Record<string, any> = {
   profile: User,
@@ -17,12 +18,61 @@ const ICON_MAP: Record<string, any> = {
   home: Home,
   obe: BookOpen,
   obe_master: BookOpen,
+  obe_due_dates: CalendarClock,
+  obe_requests: Bell,
 };
 
 export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string }) {
   const { data, loading, error } = useDashboard(baseUrl);
   const loc = useLocation();
   const { collapsed } = useSidebar();
+  const [pendingObeReqCount, setPendingObeReqCount] = useState<number>(0);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  const perms = (data?.permissions || []).map((p) => String(p || '').toLowerCase());
+  const canObeMaster = perms.includes('obe.master.manage');
+
+  useEffect(() => {
+    let mounted = true;
+    const token = window.localStorage.getItem('access');
+    if (!canObeMaster || !token) {
+      setPendingObeReqCount(0);
+      return () => {
+        mounted = false;
+      };
+    }
+    (async () => {
+      try {
+        const resp = await fetchPendingPublishRequestCount();
+        if (!mounted) return;
+        setPendingObeReqCount(Number(resp.pending || 0));
+      } catch {
+        // badge is best-effort
+      }
+    })();
+    const interval = window.setInterval(() => {
+      (async () => {
+        try {
+          const resp = await fetchPendingPublishRequestCount();
+          if (!mounted) return;
+          setPendingObeReqCount(Number(resp.pending || 0));
+        } catch {
+          // ignore
+        }
+      })();
+    }, 30_000);
+    return () => {
+      mounted = false;
+      window.clearInterval(interval);
+    };
+  }, [canObeMaster]);
+
+  // auto-expand Academic when on /academic routes
+  useEffect(() => {
+    if (loc.pathname.startsWith('/academic')) {
+      setExpanded((p) => ({ ...p, academic: true }));
+    }
+  }, [loc.pathname]);
 
   if (loading) return <aside className="dsb">Loading</aside>;
   if (error) return <aside className="dsb">Error loading sidebar</aside>;
@@ -81,15 +131,17 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // fallback: always show profile
   items.unshift({ key: 'profile', label: 'Profile', to: '/profile' });
 
-  const perms = (data.permissions || []).map((p) => String(p || '').toLowerCase());
-  const canObeMaster = perms.includes('obe.master.manage');
-
   // Only add OBE once
-  if (!items.some(item => item.key === 'obe')) {
-    items.push({ key: 'obe', label: 'OBE', to: '/obe' });
+  // Group OBE-related links under a single Academic page
+  // Show Academic for all staff
+  if (flags.is_staff && !items.some(item => item.key === 'academic')) {
+    items.push({ key: 'academic', label: 'Academic', to: '/academic' });
   }
-  if (canObeMaster && !items.some(item => item.key === 'obe_master')) {
-    items.push({ key: 'obe_master', label: 'OBE Master', to: '/obe/master' });
+  if (canObeMaster && !items.some(item => item.key === 'obe_due_dates')) {
+    items.push({ key: 'obe_due_dates', label: 'OBE: Due Dates', to: '/obe/master/due-dates' });
+  }
+  if (canObeMaster && !items.some(item => item.key === 'obe_requests')) {
+    items.push({ key: 'obe_requests', label: 'OBE: Requests', to: '/obe/master/requests' });
   }
 
   return (
@@ -107,11 +159,39 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
           const active = loc.pathname.startsWith(i.to);
           return (
             <li key={i.key} className={`dsb-item ${active ? 'active' : ''}`}>
-              <Link to={i.to} className="dsb-link">
-                <span className="dsb-icon"><Icon /></span>
-                <span className="dsb-label">{i.label}</span>
-              </Link>
-            </li>
+                <Link to={i.to} className="dsb-link" onClick={(e) => {
+                  if (i.key === 'academic') {
+                    // toggle submenu open/close but allow navigation
+                    setExpanded((p) => ({ ...p, academic: !p.academic }));
+                  }
+                }}>
+                  <span className="dsb-icon"><Icon /></span>
+                  <span className="dsb-label">
+                    {i.label}
+                    {i.key === 'obe_requests' && pendingObeReqCount > 0 ? (
+                      <span className="dsb-badge" aria-label={`${pendingObeReqCount} pending OBE requests`}>{pendingObeReqCount}</span>
+                    ) : null}
+                  </span>
+                </Link>
+
+                {/* Submenu for Academic: show OBE Master and Due Dates as slide items */}
+                {i.key === 'academic' && canObeMaster && expanded.academic ? (
+                  <ul className="dsb-sublist">
+                    <li className={`dsb-item ${loc.pathname.startsWith('/academic') && new URLSearchParams(loc.search).get('tab') === 'obe_master' ? 'active' : ''}`}>
+                      <Link to={'/academic?tab=obe_master'} className="dsb-link dsb-sub-link">
+                        <span className="dsb-icon"><BookOpen /></span>
+                        <span className="dsb-label">OBE Master</span>
+                      </Link>
+                    </li>
+                    <li className={`dsb-item ${loc.pathname.startsWith('/academic') && new URLSearchParams(loc.search).get('tab') === 'due_dates' ? 'active' : ''}`}>
+                      <Link to={'/academic?tab=due_dates'} className="dsb-link dsb-sub-link">
+                        <span className="dsb-icon"><CalendarClock /></span>
+                        <span className="dsb-label">OBE: Due Dates</span>
+                      </Link>
+                    </li>
+                  </ul>
+                ) : null}
+              </li>
           );
         })}
       </ul>

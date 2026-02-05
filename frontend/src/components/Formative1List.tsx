@@ -2,7 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
-import { fetchDraft, publishFormative, saveDraft } from '../services/obe';
+import { createPublishRequest, fetchDraft, publishFormative, saveDraft } from '../services/obe';
+import { formatRemaining, usePublishWindow } from '../hooks/usePublishWindow';
+import PublishLockOverlay from './PublishLockOverlay';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
@@ -141,6 +143,10 @@ function downloadCsv(filename: string, rows: Array<Record<string, string | numbe
   URL.revokeObjectURL(url);
 }
 
+function shortenRegisterNo(registerNo: string): string {
+  return registerNo.slice(-8);
+}
+
 export default function Formative1List({ subjectId, teachingAssignmentId, assessmentKey: assessmentKeyProp }: Formative1ListProps) {
   const assessmentKey: FormativeKey = (assessmentKeyProp as FormativeKey) || 'formative1';
   const assessmentLabel = assessmentKey === 'formative2' ? 'Formative 2' : 'Formative 1';
@@ -157,6 +163,21 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
   const [publishing, setPublishing] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
+
+  const {
+    data: publishWindow,
+    loading: publishWindowLoading,
+    error: publishWindowError,
+    remainingSeconds,
+    publishAllowed,
+    refresh: refreshPublishWindow,
+  } = usePublishWindow({ assessment: assessmentKey, subjectCode: String(subjectId || ''), teachingAssignmentId });
+
+  const globalLocked = Boolean(publishWindow?.global_override_active && publishWindow?.global_is_open === false);
+
+  const [requestReason, setRequestReason] = useState('');
+  const [requesting, setRequesting] = useState(false);
+  const [requestMessage, setRequestMessage] = useState<string | null>(null);
 
   const [masterCfg, setMasterCfg] = useState<any>(null);
 
@@ -197,10 +218,10 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
   }, [selectedBtls]);
 
   const totalTableCols = useMemo(() => {
-    // Base columns: S.No, Section, RegNo, Name, Skill1, Skill2, Att1, Att2, Total = 9
+    // Base columns: S.No, RegNo, Name, Skill1, Skill2, Att1, Att2, Total = 8
     // CO columns (two CO mark/% pairs) = 4
     // BTL columns = selected count * 2
-    return 13 + visibleBtlIndices.length * 2;
+    return 12 + visibleBtlIndices.length * 2;
   }, [visibleBtlIndices.length]);
 
   useEffect(() => {
@@ -451,6 +472,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
     try {
       await publishFormative(assessmentKey, subjectId, sheet);
       setPublishedAt(new Date().toLocaleString());
+      refreshPublishWindow();
       try {
         window.dispatchEvent(new CustomEvent('obe:published', { detail: { subjectId } }));
       } catch {
@@ -460,6 +482,22 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
       setError(e?.message || `Failed to publish ${assessmentLabel}`);
     } finally {
       setPublishing(false);
+    }
+  };
+
+  const requestApproval = async () => {
+    if (!subjectId) return;
+    setRequesting(true);
+    setRequestMessage(null);
+    setError(null);
+    try {
+      await createPublishRequest({ assessment: assessmentKey, subject_code: subjectId, reason: requestReason, teaching_assignment_id: teachingAssignmentId });
+      setRequestMessage('Request sent to IQAC for approval.');
+    } catch (e: any) {
+      setError(e?.message || 'Failed to request approval');
+    } finally {
+      setRequesting(false);
+      refreshPublishWindow();
     }
   };
 
@@ -496,7 +534,6 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
 
       return {
         sno: i + 1,
-        section: s.section ?? '',
         registerNo: s.reg_no,
         name: s.name,
         skill1: skill1 ?? '',
@@ -604,7 +641,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
           </button>
           <button
             onClick={publish}
-            disabled={publishing || students.length === 0}
+            disabled={publishing || students.length === 0 || !publishAllowed}
             className="obe-btn obe-btn-primary"
           >
             {publishing ? 'Publishing…' : 'Publish'}
@@ -616,6 +653,52 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
           {publishedAt && <div style={{ fontSize: 12, color: '#16a34a', alignSelf: 'center' }}>Published: {publishedAt}</div>}
         </div>
       </div>
+
+      <div style={{ marginBottom: 10, fontSize: 12, color: publishAllowed ? '#065f46' : '#b91c1c' }}>
+        {publishWindowLoading ? (
+          'Checking publish due time…'
+        ) : publishWindowError ? (
+          publishWindowError
+        ) : publishWindow?.due_at ? (
+          <>
+            Due: {new Date(publishWindow.due_at).toLocaleString()} • Remaining: {formatRemaining(remainingSeconds)}
+            {publishWindow.allowed_by_approval && publishWindow.approval_until ? (
+              <> • Approved until {new Date(publishWindow.approval_until).toLocaleString()}</>
+            ) : null}
+          </>
+        ) : (
+          'Due time not set by IQAC.'
+        )}
+      </div>
+
+      {globalLocked ? (
+        <div style={{ marginBottom: 10, border: '1px solid #fde68a', background: '#fffbeb', borderRadius: 12, padding: 12 }}>
+          <div style={{ fontWeight: 800, marginBottom: 6 }}>Publishing disabled by IQAC</div>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>
+            Global publishing is turned OFF for this assessment. You can view the sheet, but editing and publishing are locked.
+          </div>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
+            <button className="obe-btn" onClick={() => refreshPublishWindow()} disabled={publishWindowLoading}>Refresh</button>
+          </div>
+        </div>
+      ) : !publishAllowed ? (
+        <div style={{ marginBottom: 10, border: '1px solid #fecaca', background: '#fff7ed', borderRadius: 12, padding: 12 }}>
+          <div style={{ fontWeight: 800, marginBottom: 6 }}>Publish time is over</div>
+          <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>Send a request to IQAC to approve publishing.</div>
+          <textarea
+            value={requestReason}
+            onChange={(e) => setRequestReason(e.target.value)}
+            placeholder="Reason (optional)"
+            rows={3}
+            style={{ width: '100%', padding: 10, borderRadius: 10, border: '1px solid #e5e7eb', resize: 'vertical' }}
+          />
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
+            <button className="obe-btn" onClick={() => refreshPublishWindow()} disabled={requesting || publishWindowLoading}>Refresh</button>
+            <button className="obe-btn obe-btn-primary" onClick={requestApproval} disabled={requesting}>{requesting ? 'Requesting…' : 'Request Approval'}</button>
+          </div>
+          {requestMessage ? <div style={{ marginTop: 8, fontSize: 12, color: '#065f46' }}>{requestMessage}</div> : null}
+        </div>
+      ) : null}
 
       <div
         style={{
@@ -675,8 +758,9 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
       {students.length === 0 ? (
         <div style={{ color: '#6b7280', fontSize: 14, padding: '12px 0' }}>No students found for this subject.</div>
       ) : (
-        <div className="obe-table-wrapper" style={{ position: 'relative' }}>
-          <table className="obe-table" style={{ minWidth: 1200 }}>
+        <PublishLockOverlay locked={globalLocked}>
+          <div className="obe-table-wrapper" style={{ position: 'relative' }}>
+            <table className="obe-table" style={{ minWidth: 1200 }}>
             <thead>
               <tr>
                 <th style={cellTh} colSpan={totalTableCols}>
@@ -684,11 +768,8 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                 </th>
               </tr>
               <tr>
-                <th style={cellTh} rowSpan={3}>
+                <th style={{ ...cellTh, width: 42, minWidth: 42 }} rowSpan={3}>
                   S.No
-                </th>
-                <th style={cellTh} rowSpan={3}>
-                  SECTION
                 </th>
                 <th style={cellTh} rowSpan={3}>
                   Register No.
@@ -751,7 +832,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
 
             <tbody>
               <tr>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} colSpan={4}>
+                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} colSpan={3}>
                   Name / Max Marks
                 </td>
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_PART}</td>
@@ -791,9 +872,8 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
 
                 return (
                   <tr key={s.id}>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{i + 1}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{s.section ?? ''}</td>
-                    <td style={cellTd}>{s.reg_no}</td>
+                    <td style={{ ...cellTd, textAlign: 'center', width: 42, minWidth: 42, paddingLeft: 2, paddingRight: 2 }}>{i + 1}</td>
+                    <td style={cellTd}>{shortenRegisterNo(s.reg_no)}</td>
                     <td style={cellTd}>{s.name || '—'}</td>
 
                     <td style={cellTd}>
@@ -868,7 +948,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                 );
               })}
             </tbody>
-          </table>
+            </table>
 
           {visibleBtlIndices.length === 0 && (
             <div
@@ -901,7 +981,8 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
             </div>
           )}
 
-        </div>
+          </div>
+        </PublishLockOverlay>
       )}
 
       {key && (

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 
 type MatrixRow = {
   excel_row?: number;
@@ -38,6 +38,11 @@ type ArticulationMatrixPayload = {
 function cell(v: any) {
   if (v === '-' || v === null || v === undefined || v === '') return ' - ';
   return String(v);
+}
+
+function roundHalfUp(value: number, decimals: number) {
+  const factor = Math.pow(10, decimals);
+  return Math.round((value + Number.EPSILON) * factor) / factor;
 }
 
 function Table({ headers, rows }: { headers: string[]; rows: Array<Array<any>> }) {
@@ -87,6 +92,50 @@ function Table({ headers, rows }: { headers: string[]; rows: Array<Array<any>> }
         </tbody>
       </table>
     </div>
+  );
+}
+
+function CollapsibleTable({
+  title,
+  headers,
+  rows,
+  collapsedByDefault = false,
+  showToggle = true,
+}: {
+  title: string;
+  headers: string[];
+  rows: Array<Array<any>>;
+  collapsedByDefault?: boolean;
+  showToggle?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(!collapsedByDefault);
+
+  const previewRows = rows?.length ? [rows[0]] : [];
+
+  return (
+    <section>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <h3 style={{ margin: '6px 0 10px 0', flex: 1 }}>{title}</h3>
+        {showToggle ? (
+          <button
+            aria-label={expanded ? 'Collapse table' : 'Expand table'}
+            onClick={() => setExpanded((s) => !s)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              fontSize: 18,
+              padding: 6,
+              color: '#374151',
+            }}
+          >
+            {expanded ? '▼' : '►'}
+          </button>
+        ) : null}
+      </div>
+
+      {expanded ? <Table headers={headers} rows={rows} /> : <Table headers={headers} rows={previewRows} />}
+    </section>
   );
 }
 
@@ -145,16 +194,130 @@ export default function ArticulationMatrix({ subjectId, matrix }: { subjectId: s
         );
       })}
 
-      {/* Placeholder tables (requested): keep visible even without rows */}
-      <section>
-        <h3 style={{ margin: '6px 0 10px 0' }}>BLANK TABLE 1</h3>
-        <Table headers={unitHeaders} rows={[blankRow]} />
-      </section>
+      {/* Filled / placeholder tables (replacing BLANK TABLE 1 & 2) */}
+      {/* First table: collapsed by default, shows only first row preview and dropdown to expand */}
+      {(() => {
+        const courseDeliveryRows: Array<Array<any>> = [];
 
-      <section>
-        <h3 style={{ margin: '6px 0 10px 0' }}>BLANK TABLE 2</h3>
-        <Table headers={unitHeaders} rows={[blankRow]} />
-      </section>
+        const buildRowForUnit = (unitIndex: number, label: string) => {
+          const unit = units[unitIndex];
+          if (!unit || !Array.isArray(unit.rows) || unit.rows.length === 0) {
+            return [label, ...Array.from({ length: 11 }, () => ''), ...Array.from({ length: 3 }, () => ''), ''];
+          }
+
+          // sum of hours (x)
+          const rows = unit.rows;
+          const sumHours = rows.reduce((acc, r) => {
+            const h = Number(r.hours);
+            return acc + (Number.isFinite(h) ? h : 0);
+          }, 0);
+
+          const poValues: Array<number | string> = [];
+          for (let j = 0; j < 11; j++) {
+            const colSum = rows.reduce((acc, r) => {
+              const v = Number((r.po && r.po[j]) ?? 0);
+              return acc + (Number.isFinite(v) ? v : 0);
+            }, 0);
+            if (sumHours > 0) {
+              const raw = colSum / sumHours;
+              const rounded = roundHalfUp(raw, 2);
+              poValues.push(rounded.toFixed(2));
+            } else {
+              poValues.push('');
+            }
+          }
+
+          const psoValues: Array<number | string> = [];
+          for (let j = 0; j < 3; j++) {
+            const colSum = rows.reduce((acc, r) => {
+              const v = Number((r.pso && r.pso[j]) ?? 0);
+              return acc + (Number.isFinite(v) ? v : 0);
+            }, 0);
+            if (sumHours > 0) {
+              const raw = colSum / sumHours;
+              const rounded = roundHalfUp(raw, 2);
+              psoValues.push(rounded.toFixed(2));
+            } else {
+              psoValues.push('');
+            }
+          }
+
+          return [label, ...poValues, ...psoValues, sumHours || ''];
+        };
+
+        for (let i = 0; i < 5; i++) {
+          courseDeliveryRows.push(buildRowForUnit(i, `CO${i + 1}`));
+        }
+
+        const summaryRows: Array<Array<any>> = (() => {
+          const data: Array<Array<any>> = [];
+          const cols = 11 + 3;
+
+          // per-CO rows: multiply each PO/PSO by 3; if result is 0 -> keep as blank to show '-'
+          courseDeliveryRows.forEach((r) => {
+            const label = r[0];
+            const poPso = r.slice(1, 1 + cols);
+            const converted = poPso.map((v) => {
+              if (v === '' || v === null || v === undefined) return '';
+              const n = Number(String(v));
+              if (!Number.isFinite(n)) return '';
+              const mul = n * 3;
+              const rounded = roundHalfUp(mul, 2);
+              return rounded === 0 ? '' : rounded.toFixed(2);
+            });
+
+            const nums = converted.map((s) => (s === '' ? null : Number(s))).filter((n) => n !== null) as number[];
+            const avg = nums.length ? roundHalfUp(nums.reduce((a, b) => a + b, 0) / nums.length, 2).toFixed(2) : '';
+            data.push([label, ...converted, avg]);
+          });
+
+          // column averages
+          const colAverages: Array<any> = [];
+          for (let c = 0; c < cols; c++) {
+            const vals: number[] = [];
+            for (let r = 0; r < data.length; r++) {
+              const v = data[r][1 + c];
+              if (v === '' || v === null || v === undefined) continue;
+              const n = Number(v);
+              if (Number.isFinite(n)) vals.push(n);
+            }
+            if (vals.length) {
+              colAverages.push(roundHalfUp(vals.reduce((a, b) => a + b, 0) / vals.length, 2).toFixed(2));
+            } else {
+              colAverages.push('');
+            }
+          }
+
+          const rowAvgs = data.map((r) => r[r.length - 1]).filter((v) => v !== '' ).map(Number);
+          const overallAvg = rowAvgs.length ? roundHalfUp(rowAvgs.reduce((a, b) => a + b, 0) / rowAvgs.length, 2).toFixed(2) : '';
+
+          data.push(['Average', ...colAverages, overallAvg]);
+
+          return data;
+        })();
+
+        return (
+          <>
+            <CollapsibleTable
+              title="CO → PO/PSO (Course Delivery)"
+              headers={['COs', ...Array.from({ length: 11 }, (_, i) => `PO${i + 1}`), ...Array.from({ length: 3 }, (_, i) => `PSO${i + 1}`), 'Course delivery']}
+              rows={courseDeliveryRows}
+              collapsedByDefault={true}
+            />
+
+            {/* Second table: visible by default and includes Average row */}
+            <CollapsibleTable
+              title="CO → PO/PSO Summary"
+              headers={['COs', ...Array.from({ length: 11 }, (_, i) => `PO${i + 1}`), ...Array.from({ length: 3 }, (_, i) => `PSO${i + 1}`), 'Average']}
+              rows={summaryRows}
+              collapsedByDefault={false}
+              showToggle={false}
+            />
+          </>
+        );
+      })()}
+
+      
 
       {summary?.rows?.length ? (
         <section>

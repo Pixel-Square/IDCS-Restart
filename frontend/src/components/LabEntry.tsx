@@ -2,7 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster } from '../services/roster';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
-import { fetchDraft, saveDraft } from '../services/obe';
+import { fetchDraft, publishLabSheet, saveDraft } from '../services/obe';
+import { formatRemaining, usePublishWindow } from '../hooks/usePublishWindow';
+import PublishLockOverlay from './PublishLockOverlay';
 
 type Student = {
   id: number;
@@ -15,6 +17,7 @@ type LabRowState = {
   studentId: number;
   marksA: Array<number | ''>;
   marksB: Array<number | ''>;
+  ciaExam?: number | '';
 };
 
 type LabSheet = {
@@ -43,6 +46,8 @@ type Props = {
 };
 
 const DEFAULT_EXPERIMENTS = 5;
+const DEFAULT_EXPERIMENT_MAX = 25;
+const DEFAULT_CIA_EXAM_MAX = 30;
 
 function compareRegNo(aRaw: unknown, bRaw: unknown): number {
   const aStr = String(aRaw ?? '').trim();
@@ -73,6 +78,19 @@ function compareRegNo(aRaw: unknown, bRaw: unknown): number {
   return 0;
 }
 
+function compareStudentName(a: { name?: string; reg_no?: string }, b: { name?: string; reg_no?: string }) {
+  const an = String(a?.name || '').trim().toLowerCase();
+  const bn = String(b?.name || '').trim().toLowerCase();
+  if (an && bn) {
+    const byName = an.localeCompare(bn);
+    if (byName) return byName;
+  } else if (an || bn) {
+    return an ? -1 : 1;
+  }
+
+  return compareRegNo(a?.reg_no, b?.reg_no);
+}
+
 function clampInt(n: number, min: number, max: number) {
   if (!Number.isFinite(n)) return min;
   return Math.max(min, Math.min(max, Math.trunc(n)));
@@ -101,6 +119,19 @@ function sumMarks(arr: Array<number | ''>): number {
   return arr.reduce<number>((acc, v) => acc + (typeof v === 'number' && Number.isFinite(v) ? v : 0), 0);
 }
 
+function avgMarks(arr: Array<number | ''>): number | null {
+  const nums = arr.filter((v) => typeof v === 'number' && Number.isFinite(v)) as number[];
+  if (!nums.length) return null;
+  return nums.reduce((a, b) => a + b, 0) / nums.length;
+}
+
+function pct(mark: number | null, max: number): string {
+  if (mark == null) return '';
+  if (!Number.isFinite(max) || max <= 0) return '0';
+  const p = (mark / max) * 100;
+  return `${Number.isFinite(p) ? p.toFixed(0) : 0}`;
+}
+
 export default function LabEntry({
   subjectId,
   teachingAssignmentId,
@@ -118,6 +149,8 @@ export default function LabEntry({
 
   const [savingDraft, setSavingDraft] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [publishing, setPublishing] = useState(false);
+  const [publishedAt, setPublishedAt] = useState<string | null>(null);
 
   const [draft, setDraft] = useState<LabDraftPayload>({
     sheet: {
@@ -132,6 +165,15 @@ export default function LabEntry({
   });
 
   const key = useMemo(() => (subjectId ? storageKey(assessmentKey, subjectId) : ''), [assessmentKey, subjectId]);
+
+  const {
+    data: publishWindow,
+    publishAllowed,
+    remainingSeconds,
+    refresh: refreshPublishWindow,
+  } = usePublishWindow({ assessment: assessmentKey, subjectCode: String(subjectId || ''), teachingAssignmentId });
+
+  const globalLocked = Boolean(publishWindow?.global_override_active && publishWindow?.global_is_open === false);
 
   // Load master config (term label)
   useEffect(() => {
@@ -218,7 +260,7 @@ export default function LabEntry({
         const res = await fetchTeachingAssignmentRoster(teachingAssignmentId);
         if (!mounted) return;
         const roster = (res?.students || []) as Student[];
-        const sorted = [...roster].sort((a, b) => compareRegNo(a.reg_no, b.reg_no));
+        const sorted = [...roster].sort((a, b) => compareStudentName(a, b));
         setStudents(sorted);
       } catch (e: any) {
         if (!mounted) return;
@@ -251,11 +293,15 @@ export default function LabEntry({
             studentId: s.id,
             marksA: Array.from({ length: expCountA }, () => ''),
             marksB: Array.from({ length: expCountB }, () => ''),
+            ciaExam: '',
           };
         } else {
           const marksA = normalizeMarksArray((existing as any).marksA, expCountA);
           const marksB = normalizeMarksArray((existing as any).marksB, expCountB);
-          rowsByStudentId[k] = { ...existing, marksA, marksB };
+          const rawCia = (existing as any).ciaExam;
+          const ciaParsed = rawCia === '' || rawCia == null ? '' : Number(rawCia);
+          const ciaExam = ciaParsed === '' ? '' : Number.isFinite(ciaParsed) ? ciaParsed : '';
+          rowsByStudentId[k] = { ...existing, marksA, marksB, ciaExam };
         }
       }
 
@@ -372,6 +418,25 @@ export default function LabEntry({
     });
   }
 
+  function setCiaExam(studentId: number, value: number | '') {
+    setDraft((p) => {
+      const k = String(studentId);
+      const existing = p.sheet.rowsByStudentId?.[k];
+      if (!existing) return p;
+
+      return {
+        ...p,
+        sheet: {
+          ...p.sheet,
+          rowsByStudentId: {
+            ...p.sheet.rowsByStudentId,
+            [k]: { ...existing, ciaExam: value },
+          },
+        },
+      };
+    });
+  }
+
   async function saveNow() {
     if (!subjectId) return;
     setSavingDraft(true);
@@ -386,7 +451,105 @@ export default function LabEntry({
     }
   }
 
-  const headerCols = 4 + totalExpCols + 1 + 4; // identity + experiments + total + CIA1
+  async function resetSheet() {
+    if (!subjectId) return;
+    const ok = window.confirm('Reset all lab marks for this sheet? This clears the draft (students + experiments + CIA Exam).');
+    if (!ok) return;
+
+    const expCountA2 = clampInt(Number(draft.sheet.expCountA ?? DEFAULT_EXPERIMENTS), 0, 12);
+    const expCountB2 = clampInt(Number(draft.sheet.expCountB ?? DEFAULT_EXPERIMENTS), 0, 12);
+    const clearedRowsByStudentId: Record<string, LabRowState> = {};
+    for (const s of students) {
+      clearedRowsByStudentId[String(s.id)] = {
+        studentId: s.id,
+        marksA: Array.from({ length: expCountA2 }, () => ''),
+        marksB: Array.from({ length: expCountB2 }, () => ''),
+        ciaExam: '',
+      };
+    }
+
+    const nextDraft: LabDraftPayload = {
+      sheet: {
+        ...draft.sheet,
+        rowsByStudentId: clearedRowsByStudentId,
+      },
+    };
+
+    setDraft(nextDraft);
+
+    try {
+      if (key) lsSet(key, { rowsByStudentId: {} });
+    } catch {
+      // ignore
+    }
+
+    try {
+      await saveDraft(assessmentKey, subjectId, nextDraft);
+      setSavedAt(new Date().toLocaleString());
+    } catch {
+      // ignore
+    }
+  }
+
+  async function publish() {
+    if (!subjectId) return;
+    setPublishing(true);
+    try {
+      await publishLabSheet(assessmentKey, subjectId, draft);
+      setPublishedAt(new Date().toLocaleString());
+      refreshPublishWindow();
+      try {
+        window.dispatchEvent(new CustomEvent('obe:published', { detail: { subjectId } }));
+      } catch {
+        // ignore
+      }
+    } catch (e: any) {
+      alert(e?.message || 'Publish failed');
+    } finally {
+      setPublishing(false);
+    }
+  }
+
+  // identity (S.No, RegNo, Name) + experiments + total(avg) + CIA exam + CO(A,B) mark/%
+  const headerCols = 3 + totalExpCols + 1 + 1 + 4;
+
+  const coMax = DEFAULT_EXPERIMENT_MAX + DEFAULT_CIA_EXAM_MAX / 2;
+
+  const cellTh: React.CSSProperties = {
+    border: '1px solid #111',
+    padding: '6px 6px',
+    background: '#ecfdf5',
+    color: '#065f46',
+    textAlign: 'center',
+    fontWeight: 700,
+    fontSize: 12,
+    whiteSpace: 'nowrap',
+  };
+
+  const cellTd: React.CSSProperties = {
+    border: '1px solid #111',
+    padding: '6px 6px',
+    fontSize: 12,
+    whiteSpace: 'nowrap',
+  };
+
+  const inputStyle: React.CSSProperties = {
+    width: '100%',
+    border: 'none',
+    outline: 'none',
+    background: 'transparent',
+    fontSize: 12,
+    textAlign: 'right',
+  };
+
+  const cardStyle: React.CSSProperties = {
+    border: '1px solid #e5e7eb',
+    borderRadius: 12,
+    background: '#fff',
+    padding: 12,
+  };
+
+  const minTableWidth = Math.max(920, 360 + totalExpCols * 80);
 
   return (
     <div>
@@ -435,10 +598,33 @@ export default function LabEntry({
 
         <div style={{ flex: 1 }} />
 
+        <button onClick={resetSheet} className="obe-btn obe-btn-secondary" disabled={!subjectId || publishing || savingDraft || globalLocked}>
+          Reset
+        </button>
+
         <button onClick={saveNow} className="obe-btn obe-btn-success" disabled={savingDraft || !subjectId}>
           {savingDraft ? 'Saving…' : 'Save Draft'}
         </button>
+
+        <button
+          onClick={publish}
+          className="obe-btn obe-btn-primary"
+          disabled={!subjectId || publishing || savingDraft || globalLocked || !publishAllowed}
+          title={
+            globalLocked
+              ? 'Publishing is globally locked.'
+              : !publishAllowed
+                ? 'Publish not allowed (due window / approval / global control).'
+                : ''
+          }
+        >
+          {publishing ? 'Publishing…' : 'Publish'}
+        </button>
         {savedAt && <div style={{ fontSize: 12, color: '#6b7280' }}>Saved: {savedAt}</div>}
+        {publishedAt && <div style={{ fontSize: 12, color: '#6b7280' }}>Published: {publishedAt}</div>}
+        {remainingSeconds != null && !publishAllowed ? (
+          <div style={{ fontSize: 12, color: '#6b7280' }}>Opens in: {formatRemaining(remainingSeconds)}</div>
+        ) : null}
       </div>
 
       {error && <div style={{ marginBottom: 10, color: '#b91c1c' }}>{error}</div>}
@@ -447,74 +633,79 @@ export default function LabEntry({
       ) : students.length === 0 ? (
         <div style={{ color: '#6b7280' }}>Select a Teaching Assignment to load students.</div>
       ) : (
-        <div style={{ overflowX: 'auto' }}>
-          <table className="obe-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <div style={cardStyle}>
+          <PublishLockOverlay locked={globalLocked}>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ borderCollapse: 'collapse', minWidth: minTableWidth, width: '100%' }}>
             <thead>
-              <tr style={{ background: 'linear-gradient(90deg,#f3f4f6,#e0e7ff)', borderBottom: '2px solid #d1d5db' }}>
-                <th style={{ padding: 8 }} rowSpan={4}>S.No</th>
-                <th style={{ padding: 8 }} rowSpan={4}>SECTION</th>
-                <th style={{ padding: 8 }} rowSpan={4}>Register No.</th>
-                <th style={{ padding: 8 }} rowSpan={4}>Name of the Students</th>
-
-                <th style={{ padding: 8, textAlign: 'center' }} colSpan={Math.max(1, totalExpCols)}>
-                  Experiments
+              <tr>
+                <th style={cellTh} colSpan={headerCols}>
+                  {draft.sheet.termLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {draft.sheet.batchLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {label}
                 </th>
-                <th style={{ padding: 8 }} rowSpan={4}>Total</th>
-                <th style={{ padding: 8, textAlign: 'center' }} colSpan={4}>CIA 1</th>
+              </tr>
+              <tr>
+                <th style={cellTh} rowSpan={4}>S.No</th>
+                <th style={cellTh} rowSpan={4}>Register No.</th>
+                <th style={cellTh} rowSpan={4}>Name of the Students</th>
+
+                <th style={cellTh} colSpan={Math.max(1, totalExpCols)}>Experiments</th>
+                <th style={cellTh} rowSpan={4}>Total (Avg)</th>
+                <th style={cellTh} rowSpan={4}>CIA Exam</th>
+                <th style={cellTh} colSpan={4}>CO ATTAINMENT</th>
               </tr>
 
               {/* CO mapping numbers row: 11111 / 22222 (or 33333 / 44444 for LAB2) */}
-              <tr style={{ background: '#fff', borderBottom: '1px solid #e5e7eb' }}>
+              <tr>
                 {totalExpCols === 0 ? (
-                  <th style={{ padding: 8, textAlign: 'center', color: '#6b7280' }}>—</th>
+                  <th style={cellTh}>—</th>
                 ) : (
                   <>
                     {Array.from({ length: visibleExpCountA }, (_, i) => (
-                      <th key={`coa_${i}`} style={{ padding: 8, textAlign: 'center' }}>{coA}</th>
+                      <th key={`coa_${i}`} style={cellTh}>{coA}</th>
                     ))}
                     {Array.from({ length: visibleExpCountB }, (_, i) => (
-                      <th key={`cob_${i}`} style={{ padding: 8, textAlign: 'center' }}>{coB}</th>
+                      <th key={`cob_${i}`} style={cellTh}>{coB}</th>
                     ))}
                   </>
                 )}
 
-                <th style={{ padding: 8, textAlign: 'center' }} colSpan={2}>CO-{coA}</th>
-                <th style={{ padding: 8, textAlign: 'center' }} colSpan={2}>CO-{coB}</th>
+                <th style={cellTh} colSpan={2}>CO-{coA}</th>
+                <th style={cellTh} colSpan={2}>CO-{coB}</th>
               </tr>
 
               {/* Max marks row for experiments */}
-              <tr style={{ background: '#fff', borderBottom: '1px solid #e5e7eb' }}>
+              <tr>
                 {totalExpCols === 0 ? (
-                  <th style={{ padding: 8, textAlign: 'center', color: '#6b7280' }}>—</th>
+                  <th style={cellTh}>—</th>
                 ) : (
                   <>
                     {Array.from({ length: totalExpCols }, (_, i) => (
-                      <th key={`max_${i}`} style={{ padding: 8, textAlign: 'center' }}>25</th>
+                      <th key={`max_${i}`} style={cellTh}>{DEFAULT_EXPERIMENT_MAX}</th>
                     ))}
                   </>
                 )}
 
-                <th style={{ padding: 8, textAlign: 'center' }}>Mark</th>
-                <th style={{ padding: 8, textAlign: 'center' }}>%</th>
-                <th style={{ padding: 8, textAlign: 'center' }}>Mark</th>
-                <th style={{ padding: 8, textAlign: 'center' }}>%</th>
+                <th style={cellTh}>{coMax}</th>
+                <th style={cellTh}>%</th>
+                <th style={cellTh}>{coMax}</th>
+                <th style={cellTh}>%</th>
               </tr>
 
               {/* Experiment index row (E1..En) */}
-              <tr style={{ background: '#fff', borderBottom: '1px solid #e5e7eb' }}>
+              <tr>
                 {totalExpCols === 0 ? (
-                  <th style={{ padding: 8, textAlign: 'center', color: '#6b7280' }}>No experiments</th>
+                  <th style={cellTh}>No experiments</th>
                 ) : (
                   <>
                     {Array.from({ length: visibleExpCountA }, (_, i) => (
-                      <th key={`ea_${i}`} style={{ padding: 8, textAlign: 'center' }}>E{i + 1}</th>
+                      <th key={`ea_${i}`} style={cellTh}>E{i + 1}</th>
                     ))}
                     {Array.from({ length: visibleExpCountB }, (_, i) => (
-                      <th key={`eb_${i}`} style={{ padding: 8, textAlign: 'center' }}>E{i + 1}</th>
+                      <th key={`eb_${i}`} style={cellTh}>E{i + 1}</th>
                     ))}
                   </>
                 )}
-                <th style={{ padding: 8 }} colSpan={4} />
+                <th style={cellTh} colSpan={4} />
               </tr>
             </thead>
 
@@ -523,49 +714,72 @@ export default function LabEntry({
                 const row = draft.sheet.rowsByStudentId?.[String(s.id)];
                 const marksA = normalizeMarksArray((row as any)?.marksA, expCountA);
                 const marksB = normalizeMarksArray((row as any)?.marksB, expCountB);
-                const totalA = sumMarks(marksA);
-                const totalB = sumMarks(marksB);
-                const total = totalA + totalB;
+                const ciaExamRaw = (row as any)?.ciaExam;
+                const ciaExamNum = typeof ciaExamRaw === 'number' && Number.isFinite(ciaExamRaw) ? ciaExamRaw : null;
+
+                const visibleMarksA = marksA.slice(0, visibleExpCountA);
+                const visibleMarksB = marksB.slice(0, visibleExpCountB);
+                const allVisibleMarks = visibleMarksA.concat(visibleMarksB);
+
+                const avgTotal = avgMarks(allVisibleMarks);
+                const avgA = avgMarks(visibleMarksA);
+                const avgB = avgMarks(visibleMarksB);
+
+                // CO formula requested (Excel-style):
+                // CO-A = AVERAGEIF(experiments, CO-A) + CIAExam/2
+                // CO-B = AVERAGEIF(experiments, CO-B) + CIAExam/2
+                const coAMarkNum = avgA == null && avgTotal == null && ciaExamNum == null ? null : (avgA ?? 0) + (ciaExamNum ?? 0) / 2;
+                const coBMarkNum = avgB == null && avgTotal == null && ciaExamNum == null ? null : (avgB ?? 0) + (ciaExamNum ?? 0) / 2;
 
                 return (
-                  <tr key={s.id} style={{ borderBottom: '1px solid #e5e7eb' }}>
-                    <td style={{ padding: 8 }}>{idx + 1}</td>
-                    <td style={{ padding: 8 }}>{s.section || ''}</td>
-                    <td style={{ padding: 8 }}>{s.reg_no}</td>
-                    <td style={{ padding: 8 }}>{s.name}</td>
+                  <tr key={s.id}>
+                    <td style={{ ...cellTd, textAlign: 'center', width: 42, minWidth: 42 }}>{idx + 1}</td>
+                    <td style={cellTd}>{s.reg_no}</td>
+                    <td style={cellTd}>{s.name}</td>
 
                     {/* Experiments for CO-A */}
                     {Array.from({ length: visibleExpCountA }, (_, i) => (
-                      <td key={`ma${s.id}_${i}`} style={{ padding: 6 }}>
+                      <td key={`ma${s.id}_${i}`} style={{ ...cellTd, width: 78, minWidth: 78, background: '#fff7ed' }}>
                         <input
                           type="number"
                           value={marksA[i]}
                           onChange={(e) => setMark(s.id, 'A', i, e.target.value === '' ? '' : Number(e.target.value))}
-                          className="obe-input"
-                          style={{ width: 70 }}
+                          style={inputStyle}
+                          min={0}
+                          max={DEFAULT_EXPERIMENT_MAX}
                         />
                       </td>
                     ))}
 
                     {/* Experiments for CO-B */}
                     {Array.from({ length: visibleExpCountB }, (_, i) => (
-                      <td key={`mb${s.id}_${i}`} style={{ padding: 6 }}>
+                      <td key={`mb${s.id}_${i}`} style={{ ...cellTd, width: 78, minWidth: 78, background: '#fff7ed' }}>
                         <input
                           type="number"
                           value={marksB[i]}
                           onChange={(e) => setMark(s.id, 'B', i, e.target.value === '' ? '' : Number(e.target.value))}
-                          className="obe-input"
-                          style={{ width: 70 }}
+                          style={inputStyle}
+                          min={0}
+                          max={DEFAULT_EXPERIMENT_MAX}
                         />
                       </td>
                     ))}
 
-                    <td style={{ padding: 8, fontWeight: 800 }}>{total}</td>
-
-                    {/* CIA1 columns are part of the exact sheet header; values come from the embedded CIA1 table */}
-                    <td style={{ padding: 8, color: '#6b7280' }} colSpan={4}>
-                      —
+                    <td style={{ ...cellTd, textAlign: 'right', fontWeight: 800 }}>{avgTotal == null ? '' : avgTotal.toFixed(1)}</td>
+                    <td style={{ ...cellTd, width: 90, minWidth: 90, background: '#fff7ed' }}>
+                      <input
+                        type="number"
+                        value={(row as any)?.ciaExam ?? ''}
+                        onChange={(e) => setCiaExam(s.id, e.target.value === '' ? '' : Number(e.target.value))}
+                        style={inputStyle}
+                        min={0}
+                        max={DEFAULT_CIA_EXAM_MAX}
+                      />
                     </td>
+                    <td style={{ ...cellTd, textAlign: 'right' }}>{coAMarkNum == null ? '' : coAMarkNum.toFixed(1)}</td>
+                    <td style={{ ...cellTd, textAlign: 'right' }}>{pct(coAMarkNum, coMax)}</td>
+                    <td style={{ ...cellTd, textAlign: 'right' }}>{coBMarkNum == null ? '' : coBMarkNum.toFixed(1)}</td>
+                    <td style={{ ...cellTd, textAlign: 'right' }}>{pct(coBMarkNum, coMax)}</td>
                   </tr>
                 );
               })}
@@ -578,7 +792,9 @@ export default function LabEntry({
                 </tr>
               )}
             </tbody>
-          </table>
+              </table>
+            </div>
+          </PublishLockOverlay>
         </div>
       )}
 
