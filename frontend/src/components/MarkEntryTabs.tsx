@@ -5,6 +5,8 @@ import Cia2Entry from './Cia2Entry';
 import Formative1List from './Formative1List';
 import Formative2List from './Formative2List';
 import LabEntry from './LabEntry';
+import LabCourseMarksEntry from './LabCourseMarksEntry';
+import ModelEntry from './ModelEntry';
 import Ssa1Entry from './Ssa1Entry';
 import Ssa2Entry from './Ssa2Entry';
 import { fetchMyTeachingAssignments, TeachingAssignmentItem } from '../services/obe';
@@ -16,6 +18,7 @@ type MarkRow = { studentId: string; mark: number };
 type Props = {
   subjectId: string;
   classType?: string | null;
+  questionPaperType?: string | null;
 };
 
 const BASE_TABS: { key: TabKey; label: string }[] = [
@@ -43,6 +46,16 @@ function getVisibleTabs(classType: string | null | undefined): Array<{ key: TabK
     return BASE_TABS.map((t) => {
       if (t.key === 'formative1') return { ...t, label: 'LAB 1' };
       if (t.key === 'formative2') return { ...t, label: 'LAB 2' };
+      return t;
+    });
+  }
+
+  // LAB: only show lab assessments (no SSA/Formative)
+  if (ct === 'LAB') {
+    return BASE_TABS.filter((t) => ['dashboard', 'cia1', 'cia2', 'model'].includes(t.key)).map((t) => {
+      if (t.key === 'cia1') return { ...t, label: 'CIA 1 LAB' };
+      if (t.key === 'cia2') return { ...t, label: 'CIA 2 LAB' };
+      if (t.key === 'model') return { ...t, label: 'MODEL LAB' };
       return t;
     });
   }
@@ -192,7 +205,7 @@ function MarkEntryTable({
   );
 }
 
-export default function MarkEntryTabs({ subjectId, classType }: Props) {
+export default function MarkEntryTabs({ subjectId, classType, questionPaperType }: Props) {
   const [active, setActive] = useState<TabKey>('dashboard');
   const [tas, setTas] = useState<TeachingAssignmentItem[]>([]);
   const [taError, setTaError] = useState<string | null>(null);
@@ -252,7 +265,7 @@ export default function MarkEntryTabs({ subjectId, classType }: Props) {
 
   const counts = useMemo(() => {
     if (!subjectId) return {} as Record<TabKey, number>;
-    const map: Partial<Record<TabKey, number>> = {};
+    const map: Record<string, number> = {};
     for (const t of visibleTabs) {
       if (t.key === 'dashboard') continue;
       if (t.key === 'ssa1') {
@@ -288,6 +301,12 @@ export default function MarkEntryTabs({ subjectId, classType }: Props) {
       if (t.key === 'cia2') {
         const c2 = lsGet<{ rowsByStudentId?: unknown }>(`cia2_sheet_${subjectId}`);
         const rowsByStudentId = (c2 as any)?.rowsByStudentId;
+        map[t.key] = rowsByStudentId && typeof rowsByStudentId === 'object' ? Object.keys(rowsByStudentId).length : 0;
+        continue;
+      }
+      if (t.key === 'model') {
+        const m = lsGet<{ rowsByStudentId?: unknown }>(`model_sheet_${subjectId}`);
+        const rowsByStudentId = (m as any)?.rowsByStudentId;
         map[t.key] = rowsByStudentId && typeof rowsByStudentId === 'object' ? Object.keys(rowsByStudentId).length : 0;
         continue;
       }
@@ -379,9 +398,11 @@ export default function MarkEntryTabs({ subjectId, classType }: Props) {
               : active === 'ssa2'
                 ? 'SSA2 sheet-style entry (CO + BTL attainment) matching the Excel layout.'
               : active === 'cia1'
-                ? 'CIA 1 sheet-style entry (Q-wise + CO + BTL) matching the Excel layout.'
+                ? (normalizeClassType(classType) === 'LAB' ? 'CIA 1 LAB entry (CO-1/CO-2 experiments + CIA exam).' : 'CIA 1 sheet-style entry (Q-wise + CO + BTL) matching the Excel layout.')
               : active === 'cia2'
-                ? 'CIA 2 sheet-style entry (Q-wise + CO + BTL) matching the Excel layout.'
+                ? (normalizeClassType(classType) === 'LAB' ? 'CIA 2 LAB entry (CO-3/CO-4 experiments + CIA exam).' : 'CIA 2 sheet-style entry (Q-wise + CO + BTL) matching the Excel layout.')
+              : active === 'model'
+                ? (normalizeClassType(classType) === 'LAB' ? 'MODEL LAB entry (CO-5 experiments + CIA exam).' : 'MODEL blank table template (same layout style as CIA sheets).')
                 : 'Enter and save marks locally for this assessment.'}
           </div>
           {active === 'formative1' ? (
@@ -417,9 +438,49 @@ export default function MarkEntryTabs({ subjectId, classType }: Props) {
           ) : active === 'ssa2' ? (
             <Ssa2Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
           ) : active === 'cia1' ? (
-            <Cia1Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
+            normalizeClassType(classType) === 'LAB' ? (
+              <LabCourseMarksEntry
+                subjectId={subjectId}
+                teachingAssignmentId={selectedTaId ?? undefined}
+                assessmentKey="cia1"
+                label="CIA 1 LAB"
+                coA={1}
+                coB={2}
+              />
+            ) : (
+              <Cia1Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
+            )
           ) : active === 'cia2' ? (
-            <Cia2Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
+            normalizeClassType(classType) === 'LAB' ? (
+              <LabCourseMarksEntry
+                subjectId={subjectId}
+                teachingAssignmentId={selectedTaId ?? undefined}
+                assessmentKey="cia2"
+                label="CIA 2 LAB"
+                coA={3}
+                coB={4}
+              />
+            ) : (
+              <Cia2Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
+            )
+          ) : active === 'model' ? (
+            normalizeClassType(classType) === 'LAB' ? (
+              <LabCourseMarksEntry
+                subjectId={subjectId}
+                teachingAssignmentId={selectedTaId ?? undefined}
+                assessmentKey="model"
+                label="MODEL LAB"
+                coA={5}
+                coB={null}
+              />
+            ) : (
+              <ModelEntry
+                subjectId={subjectId}
+                teachingAssignmentId={selectedTaId ?? undefined}
+                classType={classType ?? null}
+                questionPaperType={questionPaperType ?? null}
+              />
+            )
           ) : (
             <MarkEntryTable subjectId={subjectId} tab={active as Exclude<TabKey, 'dashboard'>} />
           )}

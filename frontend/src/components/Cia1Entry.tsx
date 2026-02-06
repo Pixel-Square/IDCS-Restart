@@ -14,6 +14,8 @@ type Student = {
 
 type AssessmentKey = 'cia1' | 'cia2';
 
+type AbsenceKind = 'AL' | 'ML' | 'SKL';
+
 type Props = {
   subjectId: string;
   teachingAssignmentId?: number;
@@ -111,6 +113,7 @@ function effectiveCoWeightsForQuestion(questions: QuestionDef[], idx: number, pa
 type Cia1RowState = {
   studentId: number;
   absent: boolean;
+  absentKind?: AbsenceKind;
   reg_no: string;
   // question key -> mark
   q: Record<string, number | ''>;
@@ -207,6 +210,9 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   const [serverTotals, setServerTotals] = useState<Record<number, number | null>>({});
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
+  const [showAbsenteesOnly, setShowAbsenteesOnly] = useState(false);
+  const [absenteesSnapshot, setAbsenteesSnapshot] = useState<number[] | null>(null);
+  const [limitDialog, setLimitDialog] = useState<{ title: string; message: string } | null>(null);
 
   const {
     data: publishWindow,
@@ -315,9 +321,17 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         for (const s of data.students || []) {
           const key = String(s.id);
           if (merged[key]) {
+            const isAbsent = Boolean((merged[key] as any).absent);
+            const rawKind = String((merged[key] as any).absentKind || '').toUpperCase();
+            const kind: AbsenceKind | undefined = isAbsent
+              ? rawKind === 'ML' || rawKind === 'SKL' || rawKind === 'AL'
+                ? (rawKind as AbsenceKind)
+                : 'AL'
+              : undefined;
             merged[key] = {
               studentId: s.id,
-              absent: Boolean((merged[key] as any).absent),
+              absent: isAbsent,
+              absentKind: kind,
               reg_no: s.reg_no || '', // Ensure reg_no is added
               q: { ...(merged[key] as any).q },
             };
@@ -325,6 +339,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
             merged[key] = {
               studentId: s.id,
               absent: false,
+              absentKind: undefined,
               reg_no: s.reg_no || '', // Ensure reg_no is added
               q: Object.fromEntries(questions.map((q) => [q.key, ''])),
             };
@@ -461,18 +476,42 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       const existing = prev.rowsByStudentId[key] || {
         studentId,
         absent: false,
+        absentKind: undefined,
         q: Object.fromEntries(questions.map((q) => [q.key, ''])),
       };
 
       const next: Cia1RowState = absent
-        ? { ...existing, absent: true, q: Object.fromEntries(questions.map((q) => [q.key, ''])) }
-        : { ...existing, absent: false };
+        ? { ...existing, absent: true, absentKind: (existing as any).absentKind || 'AL', q: Object.fromEntries(questions.map((q) => [q.key, ''])) }
+        : { ...existing, absent: false, absentKind: undefined };
 
       return {
         ...prev,
         rowsByStudentId: {
           ...prev.rowsByStudentId,
           [key]: next,
+        },
+      };
+    });
+  };
+
+  const setAbsentKind = (studentId: number, absentKind: AbsenceKind) => {
+    setSheet((prev) => {
+      const key = String(studentId);
+      const existing = prev.rowsByStudentId[key] || {
+        studentId,
+        absent: true,
+        absentKind: 'AL' as AbsenceKind,
+        q: Object.fromEntries(questions.map((q) => [q.key, ''])),
+      };
+      return {
+        ...prev,
+        rowsByStudentId: {
+          ...prev.rowsByStudentId,
+          [key]: {
+            ...existing,
+            absent: true,
+            absentKind,
+          },
         },
       };
     });
@@ -527,12 +566,37 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       const existing = prev.rowsByStudentId[key] || {
         studentId,
         absent: false,
+        absentKind: undefined,
         q: Object.fromEntries(questions.map((q) => [q.key, ''])),
       };
+
+      // Allow mark edits for absentees only when user explicitly opened the absentees list
+      // and the absence is ML/SKL (AL is treated as 0).
+      const isAbsent = Boolean((existing as any).absent);
+      const absenceKind = isAbsent ? String((existing as any).absentKind || 'AL').toUpperCase() : '';
+      const canEditAbsent = Boolean(showAbsenteesOnly && isAbsent && (absenceKind === 'ML' || absenceKind === 'SKL'));
+      if (isAbsent && !canEditAbsent) return prev;
       const def = questions.find((q) => q.key === qKey);
       const max = def?.max ?? totalsMax;
 
       const nextValue = value === '' ? '' : clamp(Number(value || 0), 0, max);
+
+      const kind: AbsenceKind | null = existing.absent ? ((existing as any).absentKind || 'AL') : null;
+      const cap = kind === 'ML' ? 60 : kind === 'SKL' ? 75 : null;
+      if (cap != null) {
+        const nextTotal = questions.reduce((sum, q) => {
+          const v = q.key === qKey ? nextValue : (existing.q || {})[q.key];
+          return sum + clamp(Number(v || 0), 0, q.max);
+        }, 0);
+
+        if (nextTotal > cap) {
+          setLimitDialog({
+            title: 'Mark limit exceeded',
+            message: absenceKind === 'ML' ? 'For malpractice the total mark assigned is 60' : 'For Sick leave the Total mark assigned is 75',
+          });
+          return prev;
+        }
+      }
 
       return {
         ...prev,
@@ -559,8 +623,12 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         continue;
       }
       if (row.absent) {
-        out[s.id] = 0;
-        continue;
+        const kind = String((row as any).absentKind || 'AL').toUpperCase();
+        // AL: always 0. ML/SKL: allow entering marks (capped in UI).
+        if (kind === 'AL') {
+          out[s.id] = 0;
+          continue;
+        }
       }
       const total = questions.reduce((sum, q) => sum + clamp(Number(row.q?.[q.key] || 0), 0, q.max), 0);
       out[s.id] = total;
@@ -632,13 +700,14 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       const row = sheet.rowsByStudentId[String(s.id)] || {
         studentId: s.id,
         absent: false,
+        absentKind: undefined,
         q: Object.fromEntries(questions.map((q) => [q.key, ''])),
       };
 
       const qMarks = Object.fromEntries(
-        questions.map((q) => [q.key, row.absent ? 0 : clamp(Number(row.q?.[q.key] || 0), 0, q.max)]),
+        questions.map((q) => [q.key, clamp(Number(row.q?.[q.key] || 0), 0, q.max)]),
       );
-      const total = row.absent ? 0 : questions.reduce((sum, q) => sum + Number(qMarks[q.key] || 0), 0);
+      const total = questions.reduce((sum, q) => sum + Number(qMarks[q.key] || 0), 0);
 
       let co1 = 0;
       let co2 = 0;
@@ -661,6 +730,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         registerNo: s.reg_no,
         name: s.name,
         absent: row.absent ? 1 : 0,
+        absentKind: row.absent ? String((row as any).absentKind || 'AL') : '',
         ...qMarks,
         total,
         [`co${coPair.a}_mark`]: co1,
@@ -680,6 +750,15 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   };
 
   if (loading) return <div style={{ color: '#6b7280' }}>Loading {assessmentLabel} roster…</div>;
+
+  const hasAbsentees = students.some((s) => Boolean(sheet.rowsByStudentId[String(s.id)]?.absent));
+  const visibleStudents = showAbsenteesOnly
+    ? students.filter((s) => {
+        // When the user opens the absentees list, keep the list stable while they edit.
+        if (absenteesSnapshot && absenteesSnapshot.length) return absenteesSnapshot.includes(s.id);
+        return Boolean(sheet.rowsByStudentId[String(s.id)]?.absent);
+      })
+    : students;
 
   const cellTh: React.CSSProperties = {
     border: '1px solid #111',
@@ -723,6 +802,44 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
 
   return (
     <div>
+      {limitDialog ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15,23,42,0.45)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+            zIndex: 50,
+          }}
+          onClick={() => setLimitDialog(null)}
+        >
+          <div
+            style={{
+              width: 'min(520px, 100%)',
+              background: '#fff',
+              borderRadius: 14,
+              border: '1px solid rgba(15,23,42,0.10)',
+              boxShadow: '0 20px 60px rgba(2,6,23,0.25)',
+              padding: 14,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>{limitDialog.title}</div>
+            <div style={{ fontSize: 13, color: '#334155', marginBottom: 12 }}>{limitDialog.message}</div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button className="obe-btn" onClick={() => setLimitDialog(null)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {error && (
         <div
           style={{
@@ -766,6 +883,51 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         </div>
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button
+            className="obe-btn"
+            disabled={!hasAbsentees}
+            onClick={() => {
+              if (showAbsenteesOnly) return;
+              const snap = students
+                .filter((s) => Boolean(sheet.rowsByStudentId[String(s.id)]?.absent))
+                .map((s) => s.id);
+              setAbsenteesSnapshot(snap);
+              setShowAbsenteesOnly(true);
+            }}
+            title={hasAbsentees ? 'Filter the table to show only absentees' : 'No absentees marked yet'}
+            style={showAbsenteesOnly ? { background: 'linear-gradient(180deg, #111827, #334155)', color: '#fff', borderColor: 'rgba(2,6,23,0.12)' } : undefined}
+          >
+            Show absentees list
+            {showAbsenteesOnly ? (
+              <span
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowAbsenteesOnly(false);
+                  setAbsenteesSnapshot(null);
+                }}
+                role="button"
+                aria-label="Close absentees list"
+                title="Close absentees list"
+                style={{
+                  marginLeft: 10,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 20,
+                  height: 20,
+                  borderRadius: 999,
+                  background: 'rgba(255,255,255,0.18)',
+                  border: '1px solid rgba(255,255,255,0.25)',
+                  fontWeight: 900,
+                  lineHeight: 1,
+                  cursor: 'pointer',
+                  userSelect: 'none',
+                }}
+              >
+                ×
+              </span>
+            ) : null}
+          </button>
           <button onClick={saveDraftToDb} className="obe-btn" disabled={saving || students.length === 0}>
             {saving ? 'Saving…' : 'Save Draft'}
           </button>
@@ -884,7 +1046,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                 <th style={{ ...cellTh, minWidth: 240, overflow: 'visible', textOverflow: 'clip' }} rowSpan={3}>
                   Name of the Students
                 </th>
-                <th style={{ ...cellTh, minWidth: 32 }} rowSpan={3}>
+                <th style={{ ...cellTh, minWidth: 88 }} rowSpan={3}>
                   AB
                 </th>
 
@@ -1029,17 +1191,19 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                 ))}
               </tr>
 
-              {students.map((s, i) => {
+              {visibleStudents.map((s, i) => {
                 const row = sheet.rowsByStudentId[String(s.id)] || {
                   studentId: s.id,
                   absent: false,
+                  absentKind: undefined,
                   q: Object.fromEntries(questions.map((q) => [q.key, ''])),
                 };
 
-                const qMarks = Object.fromEntries(
-                  questions.map((q) => [q.key, row.absent ? 0 : clamp(Number(row.q?.[q.key] || 0), 0, q.max)]),
-                ) as Record<string, number>;
-                const total = row.absent ? 0 : questions.reduce((sum, q) => sum + Number(qMarks[q.key] || 0), 0);
+                const qMarks = Object.fromEntries(questions.map((q) => [q.key, clamp(Number(row.q?.[q.key] || 0), 0, q.max)])) as Record<
+                  string,
+                  number
+                >;
+                const total = questions.reduce((sum, q) => sum + Number(qMarks[q.key] || 0), 0);
 
                 let co1 = 0;
                 let co2 = 0;
@@ -1057,9 +1221,10 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                   if (v === 1 || v === 2 || v === 3 || v === 4 || v === 5 || v === 6) btl[v] += Number(qMarks[q.key] || 0);
                 }
 
-                const rowStyle: React.CSSProperties | undefined = row.absent
-                  ? { background: '#f3f4f6', color: '#6b7280' }
-                  : undefined;
+                const rowStyle: React.CSSProperties | undefined = row.absent ? { background: '#f1f5f9' } : undefined;
+
+                const kind = row.absent ? String((row as any).absentKind || 'AL').toUpperCase() : '';
+                const canEditAbsent = Boolean(showAbsenteesOnly && row.absent && (kind === 'ML' || kind === 'SKL'));
 
                 const serverTotal = serverTotals[s.id];
 
@@ -1068,24 +1233,36 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                     <td style={{ ...cellTd, textAlign: 'center', width: SNO_COL_WIDTH, minWidth: SNO_COL_WIDTH, paddingLeft: 2, paddingRight: 2 }}>{i + 1}</td>
                     <td style={{ ...cellTd, minWidth: 70, overflow: 'visible', textOverflow: 'clip' }}>{shortenRegisterNo(row.reg_no)}</td>
                     <td style={{ ...cellTd, minWidth: 240, overflow: 'visible', textOverflow: 'clip' }}>{s.name}</td>
-                    <td style={{ ...cellTd, textAlign: 'center', minWidth: 32 }}>
-                      <input
-                        type="checkbox"
-                        checked={row.absent}
-                        onChange={(e) => setAbsent(s.id, e.target.checked)}
-                      />
+                    <td style={{ ...cellTd, textAlign: 'center', minWidth: 88 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+                        <input type="checkbox" checked={row.absent} onChange={(e) => setAbsent(s.id, e.target.checked)} />
+                        {row.absent ? (
+                          <div className="obe-ios-select" title="Absent type">
+                            <span className="obe-ios-select-value">{String((row as any).absentKind || 'AL')}</span>
+                            <select
+                              aria-label="Absent type"
+                              value={((row as any).absentKind || 'AL') as any}
+                              onChange={(e) => setAbsentKind(s.id, e.target.value as AbsenceKind)}
+                            >
+                              <option value="AL">AL</option>
+                              <option value="ML">ML</option>
+                              <option value="SKL">SKL</option>
+                            </select>
+                          </div>
+                        ) : null}
+                      </div>
                     </td>
 
                     {questions.map((q) => (
                       <td key={q.key} style={{ ...cellTd, textAlign: 'center', width: 46, minWidth: 46 }}>
                         <input
-                          style={{ ...inputStyle, textAlign: 'center', opacity: row.absent ? 0.5 : 1 }}
+                          style={{ ...inputStyle, textAlign: 'center' }}
                           type="number"
                           min={0}
                           max={q.max}
-                          value={row.absent ? '' : row.q?.[q.key] === '' || row.q?.[q.key] == null ? '' : clamp(Number(row.q?.[q.key] || 0), 0, q.max)}
+                          disabled={row.absent && !canEditAbsent}
+                          value={row.q?.[q.key] === '' || row.q?.[q.key] == null ? '' : clamp(Number(row.q?.[q.key] || 0), 0, q.max)}
                           onChange={(e) => setQuestionMark(s.id, q.key, e.target.value === '' ? '' : Number(e.target.value))}
-                          disabled={row.absent}
                         />
                       </td>
                     ))}

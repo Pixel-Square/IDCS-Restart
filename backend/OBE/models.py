@@ -66,6 +66,7 @@ class AssessmentDraft(models.Model):
         ('cia2', 'CIA2'),
         ('formative1', 'Formative1'),
         ('formative2', 'Formative2'),
+        ('model', 'MODEL'),
     )
 
     subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='obe_drafts')
@@ -179,6 +180,9 @@ class LabPublishedSheet(models.Model):
     """Published Lab sheet snapshot (experiment-wise) used for CO attainment calculations."""
 
     ASSESSMENT_CHOICES = (
+        ('cia1', 'CIA 1 LAB'),
+        ('cia2', 'CIA 2 LAB'),
+        ('model', 'MODEL LAB'),
         ('formative1', 'Lab 1 (Formative1)'),
         ('formative2', 'Lab 2 (Formative2)'),
     )

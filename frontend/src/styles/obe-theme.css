@@ -198,3 +198,48 @@
 .obe-btn-success:hover{
   background: linear-gradient(180deg, #059669, #047857);
 }
+
+/* iOS-like pill select (used in CIA AB column) */
+.obe-ios-select{
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  min-width: 62px;
+  padding: 0 22px 0 10px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #ffffff, #f1f5f9);
+  border: 1px solid rgba(15,23,42,0.10);
+  box-shadow: 0 1px 0 rgba(2,6,23,0.08);
+  color: #0f172a;
+  font-weight: 800;
+  font-size: 11px;
+  line-height: 1;
+  user-select: none;
+}
+
+.obe-ios-select::after{
+  content: '▾';
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-52%);
+  color: #64748b;
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.obe-ios-select-value{ pointer-events: none; }
+
+.obe-ios-select select{
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+}

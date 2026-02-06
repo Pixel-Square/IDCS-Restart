@@ -27,6 +27,8 @@ type LabSheet = {
   coBEnabled: boolean;
   expCountA: number;
   expCountB: number;
+  btlsA: Array<1 | 2 | 3 | 4 | 5 | 6>;
+  btlsB: Array<1 | 2 | 3 | 4 | 5 | 6>;
   rowsByStudentId: Record<string, LabRowState>;
 };
 
@@ -115,6 +117,18 @@ function normalizeMarksArray(raw: unknown, length: number): Array<number | ''> {
   return out;
 }
 
+function normalizeBtlArray(raw: unknown, length: number): Array<1 | 2 | 3 | 4 | 5 | 6> {
+  const arr = Array.isArray(raw) ? raw : [];
+  const out: Array<1 | 2 | 3 | 4 | 5 | 6> = [];
+  for (let i = 0; i < length; i++) {
+    const v = arr[i];
+    const n = typeof v === 'number' ? v : Number(v);
+    if (n === 1 || n === 2 || n === 3 || n === 4 || n === 5 || n === 6) out.push(n);
+    else out.push(1);
+  }
+  return out;
+}
+
 function sumMarks(arr: Array<number | ''>): number {
   return arr.reduce<number>((acc, v) => acc + (typeof v === 'number' && Number.isFinite(v) ? v : 0), 0);
 }
@@ -160,6 +174,8 @@ export default function LabEntry({
       coBEnabled: true,
       expCountA: DEFAULT_EXPERIMENTS,
       expCountB: DEFAULT_EXPERIMENTS,
+      btlsA: Array.from({ length: DEFAULT_EXPERIMENTS }, () => 1),
+      btlsB: Array.from({ length: DEFAULT_EXPERIMENTS }, () => 1),
       rowsByStudentId: {},
     },
   });
@@ -214,6 +230,8 @@ export default function LabEntry({
           const coBEnabled = Boolean((d.sheet as any).coBEnabled ?? true);
           const expCountA = clampInt(Number((d.sheet as any).expCountA ?? DEFAULT_EXPERIMENTS), 0, 12);
           const expCountB = clampInt(Number((d.sheet as any).expCountB ?? DEFAULT_EXPERIMENTS), 0, 12);
+          const btlsA = normalizeBtlArray((d.sheet as any).btlsA, expCountA);
+          const btlsB = normalizeBtlArray((d.sheet as any).btlsB, expCountB);
           setDraft({
             sheet: {
               termLabel: String((d.sheet as any).termLabel || (masterCfg as any)?.termLabel || 'KRCT AY25-26'),
@@ -222,6 +240,8 @@ export default function LabEntry({
               coBEnabled,
               expCountA,
               expCountB,
+              btlsA,
+              btlsB,
               rowsByStudentId: (d.sheet as any).rowsByStudentId && typeof (d.sheet as any).rowsByStudentId === 'object' ? (d.sheet as any).rowsByStudentId : {},
             },
           });
@@ -283,6 +303,8 @@ export default function LabEntry({
     setDraft((p) => {
       const expCountA = clampInt(Number(p.sheet.expCountA ?? DEFAULT_EXPERIMENTS), 0, 12);
       const expCountB = clampInt(Number(p.sheet.expCountB ?? DEFAULT_EXPERIMENTS), 0, 12);
+      const btlsA = normalizeBtlArray((p.sheet as any).btlsA, expCountA);
+      const btlsB = normalizeBtlArray((p.sheet as any).btlsB, expCountB);
       const rowsByStudentId: Record<string, LabRowState> = { ...(p.sheet.rowsByStudentId || {}) };
 
       for (const s of students) {
@@ -312,6 +334,8 @@ export default function LabEntry({
           batchLabel: String(subjectId),
           expCountA,
           expCountB,
+          btlsA,
+          btlsB,
           rowsByStudentId,
         },
       };
@@ -356,6 +380,16 @@ export default function LabEntry({
   const visibleExpCountB = coBEnabled ? expCountB : 0;
   const totalExpCols = visibleExpCountA + visibleExpCountB;
 
+  const visibleBtlIndices = useMemo(() => {
+    if (totalExpCols === 0) return [] as number[];
+    const btlsA = normalizeBtlArray((draft.sheet as any).btlsA, expCountA).slice(0, visibleExpCountA);
+    const btlsB = normalizeBtlArray((draft.sheet as any).btlsB, expCountB).slice(0, visibleExpCountB);
+    const set = new Set<number>();
+    for (const v of btlsA) set.add(v);
+    for (const v of btlsB) set.add(v);
+    return [1, 2, 3, 4, 5, 6].filter((n) => set.has(n));
+  }, [draft.sheet, expCountA, expCountB, totalExpCols, visibleExpCountA, visibleExpCountB]);
+
   function setCoEnabled(which: 'A' | 'B', enabled: boolean) {
     setDraft((p) => ({
       ...p,
@@ -382,13 +416,41 @@ export default function LabEntry({
         }
       }
 
+      const expCountA2 = which === 'A' ? next : clampInt(Number(p.sheet.expCountA ?? DEFAULT_EXPERIMENTS), 0, 12);
+      const expCountB2 = which === 'B' ? next : clampInt(Number(p.sheet.expCountB ?? DEFAULT_EXPERIMENTS), 0, 12);
+      const btlsA = normalizeBtlArray((p.sheet as any).btlsA, expCountA2);
+      const btlsB = normalizeBtlArray((p.sheet as any).btlsB, expCountB2);
+
       return {
         ...p,
         sheet: {
           ...p.sheet,
           expCountA: which === 'A' ? next : p.sheet.expCountA,
           expCountB: which === 'B' ? next : p.sheet.expCountB,
+          btlsA,
+          btlsB,
           rowsByStudentId,
+        },
+      };
+    });
+  }
+
+  function setBtl(which: 'A' | 'B', expIndex: number, value: 1 | 2 | 3 | 4 | 5 | 6) {
+    setDraft((p) => {
+      const expCountA = clampInt(Number(p.sheet.expCountA ?? DEFAULT_EXPERIMENTS), 0, 12);
+      const expCountB = clampInt(Number(p.sheet.expCountB ?? DEFAULT_EXPERIMENTS), 0, 12);
+      const btlsA = normalizeBtlArray((p.sheet as any).btlsA, expCountA);
+      const btlsB = normalizeBtlArray((p.sheet as any).btlsB, expCountB);
+
+      if (which === 'A') btlsA[expIndex] = value;
+      else btlsB[expIndex] = value;
+
+      return {
+        ...p,
+        sheet: {
+          ...p.sheet,
+          btlsA,
+          btlsB,
         },
       };
     });
@@ -510,8 +572,8 @@ export default function LabEntry({
     }
   }
 
-  // identity (S.No, RegNo, Name) + experiments + total(avg) + CIA exam + CO(A,B) mark/%
-  const headerCols = 3 + totalExpCols + 1 + 1 + 4;
+  // identity (S.No, RegNo, Name) + experiments + total(avg) + CIA exam + CO(A,B) mark/% + BTL mark/%
+  const headerCols = 3 + totalExpCols + 1 + 1 + 4 + visibleBtlIndices.length * 2;
 
   const coMax = DEFAULT_EXPERIMENT_MAX + DEFAULT_CIA_EXAM_MAX / 2;
 
@@ -549,7 +611,7 @@ export default function LabEntry({
     padding: 12,
   };
 
-  const minTableWidth = Math.max(920, 360 + totalExpCols * 80);
+  const minTableWidth = Math.max(920, 360 + (totalExpCols + visibleBtlIndices.length * 2) * 80);
 
   return (
     <div>
@@ -644,14 +706,15 @@ export default function LabEntry({
                 </th>
               </tr>
               <tr>
-                <th style={cellTh} rowSpan={4}>S.No</th>
-                <th style={cellTh} rowSpan={4}>Register No.</th>
-                <th style={cellTh} rowSpan={4}>Name of the Students</th>
+                <th style={cellTh} rowSpan={5}>S.No</th>
+                <th style={cellTh} rowSpan={5}>Register No.</th>
+                <th style={cellTh} rowSpan={5}>Name of the Students</th>
 
                 <th style={cellTh} colSpan={Math.max(1, totalExpCols)}>Experiments</th>
-                <th style={cellTh} rowSpan={4}>Total (Avg)</th>
-                <th style={cellTh} rowSpan={4}>CIA Exam</th>
+                <th style={cellTh} rowSpan={5}>Total (Avg)</th>
+                <th style={cellTh} rowSpan={5}>CIA Exam</th>
                 <th style={cellTh} colSpan={4}>CO ATTAINMENT</th>
+                {visibleBtlIndices.length ? <th style={cellTh} colSpan={visibleBtlIndices.length * 2}>BTL ATTAINMENT</th> : null}
               </tr>
 
               {/* CO mapping numbers row: 11111 / 22222 (or 33333 / 44444 for LAB2) */}
@@ -671,6 +734,11 @@ export default function LabEntry({
 
                 <th style={cellTh} colSpan={2}>CO-{coA}</th>
                 <th style={cellTh} colSpan={2}>CO-{coB}</th>
+                {visibleBtlIndices.map((n) => (
+                  <th key={`btl_${n}`} style={cellTh} colSpan={2}>
+                    BTL-{n}
+                  </th>
+                ))}
               </tr>
 
               {/* Max marks row for experiments */}
@@ -689,6 +757,12 @@ export default function LabEntry({
                 <th style={cellTh}>%</th>
                 <th style={cellTh}>{coMax}</th>
                 <th style={cellTh}>%</th>
+                {visibleBtlIndices.map((n) => (
+                  <React.Fragment key={`btlmax_${n}`}>
+                    <th style={cellTh}>{DEFAULT_EXPERIMENT_MAX}</th>
+                    <th style={cellTh}>%</th>
+                  </React.Fragment>
+                ))}
               </tr>
 
               {/* Experiment index row (E1..En) */}
@@ -705,7 +779,103 @@ export default function LabEntry({
                     ))}
                   </>
                 )}
-                <th style={cellTh} colSpan={4} />
+                <th style={cellTh} colSpan={4 + visibleBtlIndices.length * 2} />
+              </tr>
+
+              <tr>
+                {totalExpCols === 0 ? (
+                  <th style={cellTh}>—</th>
+                ) : (
+                  <>
+                    {Array.from({ length: visibleExpCountA }, (_, i) => {
+                      const v = normalizeBtlArray((draft.sheet as any).btlsA, expCountA)[i] ?? 1;
+                      return (
+                        <th key={`btla_${i}`} style={cellTh}>
+                          <div style={{ position: 'relative', display: 'grid', placeItems: 'center' }} title={`BTL: ${v}`}>
+                            <div
+                              style={{
+                                width: '100%',
+                                padding: '4px 6px',
+                                background: '#fff',
+                                textAlign: 'center',
+                                userSelect: 'none',
+                                fontWeight: 800,
+                              }}
+                            >
+                              {v}
+                            </div>
+                            <select
+                              aria-label={`BTL for CO${coA} E${i + 1}`}
+                              value={v}
+                              onChange={(e) => setBtl('A', i, Number(e.target.value) as 1 | 2 | 3 | 4 | 5 | 6)}
+                              style={{
+                                position: 'absolute',
+                                inset: 0,
+                                width: '100%',
+                                height: '100%',
+                                opacity: 0,
+                                cursor: 'pointer',
+                                appearance: 'none',
+                                WebkitAppearance: 'none',
+                                MozAppearance: 'none',
+                              }}
+                            >
+                              {[1, 2, 3, 4, 5, 6].map((n) => (
+                                <option key={n} value={n}>
+                                  {n}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </th>
+                      );
+                    })}
+                    {Array.from({ length: visibleExpCountB }, (_, i) => {
+                      const v = normalizeBtlArray((draft.sheet as any).btlsB, expCountB)[i] ?? 1;
+                      return (
+                        <th key={`btlb_${i}`} style={cellTh}>
+                          <div style={{ position: 'relative', display: 'grid', placeItems: 'center' }} title={`BTL: ${v}`}>
+                            <div
+                              style={{
+                                width: '100%',
+                                padding: '4px 6px',
+                                background: '#fff',
+                                textAlign: 'center',
+                                userSelect: 'none',
+                                fontWeight: 800,
+                              }}
+                            >
+                              {v}
+                            </div>
+                            <select
+                              aria-label={`BTL for CO${coB} E${i + 1}`}
+                              value={v}
+                              onChange={(e) => setBtl('B', i, Number(e.target.value) as 1 | 2 | 3 | 4 | 5 | 6)}
+                              style={{
+                                position: 'absolute',
+                                inset: 0,
+                                width: '100%',
+                                height: '100%',
+                                opacity: 0,
+                                cursor: 'pointer',
+                                appearance: 'none',
+                                WebkitAppearance: 'none',
+                                MozAppearance: 'none',
+                              }}
+                            >
+                              {[1, 2, 3, 4, 5, 6].map((n) => (
+                                <option key={n} value={n}>
+                                  {n}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </th>
+                      );
+                    })}
+                  </>
+                )}
+                <th style={cellTh} colSpan={4 + visibleBtlIndices.length * 2} />
               </tr>
             </thead>
 
@@ -721,6 +891,9 @@ export default function LabEntry({
                 const visibleMarksB = marksB.slice(0, visibleExpCountB);
                 const allVisibleMarks = visibleMarksA.concat(visibleMarksB);
 
+                const visibleBtlsA = normalizeBtlArray((draft.sheet as any).btlsA, expCountA).slice(0, visibleExpCountA);
+                const visibleBtlsB = normalizeBtlArray((draft.sheet as any).btlsB, expCountB).slice(0, visibleExpCountB);
+
                 const avgTotal = avgMarks(allVisibleMarks);
                 const avgA = avgMarks(visibleMarksA);
                 const avgB = avgMarks(visibleMarksB);
@@ -730,6 +903,24 @@ export default function LabEntry({
                 // CO-B = AVERAGEIF(experiments, CO-B) + CIAExam/2
                 const coAMarkNum = avgA == null && avgTotal == null && ciaExamNum == null ? null : (avgA ?? 0) + (ciaExamNum ?? 0) / 2;
                 const coBMarkNum = avgB == null && avgTotal == null && ciaExamNum == null ? null : (avgB ?? 0) + (ciaExamNum ?? 0) / 2;
+
+                const btlAvgByIndex: Record<number, number | null> = {};
+                for (const n of visibleBtlIndices) {
+                  const marks: number[] = [];
+                  for (let i = 0; i < visibleMarksA.length; i++) {
+                    if (visibleBtlsA[i] === n) {
+                      const v = visibleMarksA[i];
+                      if (typeof v === 'number' && Number.isFinite(v)) marks.push(v);
+                    }
+                  }
+                  for (let i = 0; i < visibleMarksB.length; i++) {
+                    if (visibleBtlsB[i] === n) {
+                      const v = visibleMarksB[i];
+                      if (typeof v === 'number' && Number.isFinite(v)) marks.push(v);
+                    }
+                  }
+                  btlAvgByIndex[n] = marks.length ? marks.reduce((a, b) => a + b, 0) / marks.length : null;
+                }
 
                 return (
                   <tr key={s.id}>
@@ -780,6 +971,15 @@ export default function LabEntry({
                     <td style={{ ...cellTd, textAlign: 'right' }}>{pct(coAMarkNum, coMax)}</td>
                     <td style={{ ...cellTd, textAlign: 'right' }}>{coBMarkNum == null ? '' : coBMarkNum.toFixed(1)}</td>
                     <td style={{ ...cellTd, textAlign: 'right' }}>{pct(coBMarkNum, coMax)}</td>
+                    {visibleBtlIndices.map((n) => {
+                      const m = btlAvgByIndex[n] ?? null;
+                      return (
+                        <React.Fragment key={`btlcell_${s.id}_${n}`}>
+                          <td style={{ ...cellTd, textAlign: 'right' }}>{m == null ? '' : m.toFixed(1)}</td>
+                          <td style={{ ...cellTd, textAlign: 'right' }}>{pct(m, DEFAULT_EXPERIMENT_MAX)}</td>
+                        </React.Fragment>
+                      );
+                    })}
                   </tr>
                 );
               })}

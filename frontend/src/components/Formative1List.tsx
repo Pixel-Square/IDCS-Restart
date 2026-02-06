@@ -36,7 +36,7 @@ type F1Sheet = {
 
 type F1DraftPayload = {
   sheet: F1Sheet;
-  selectedBtls: number[];
+  partBtl: Record<string, 1 | 2 | 3 | 4 | 5 | 6 | ''>;
 };
 
 // Component Props
@@ -156,8 +156,12 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
   const [error, setError] = useState<string | null>(null);
   const [students, setStudents] = useState<Student[]>([]);
   const [subjectData, setSubjectData] = useState<any>(null);
-  const [btlPickerOpen, setBtlPickerOpen] = useState(true);
-  const [selectedBtls, setSelectedBtls] = useState<number[]>([]);
+  const [partBtl, setPartBtl] = useState<Record<string, 1 | 2 | 3 | 4 | 5 | 6 | ''>>({
+    skill1: 3,
+    skill2: 4,
+    att1: 3,
+    att2: 4,
+  });
 
   const [savingDraft, setSavingDraft] = useState(false);
   const [publishing, setPublishing] = useState(false);
@@ -212,10 +216,26 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
 
   const key = useMemo(() => (subjectId ? storageKey(assessmentKey, subjectId) : ''), [assessmentKey, subjectId]);
 
+  const parts = useMemo(
+    () => [
+      { key: 'skill1', label: 'Skill 1', max: MAX_PART },
+      { key: 'skill2', label: 'Skill 2', max: MAX_PART },
+      { key: 'att1', label: 'Attitude 1', max: MAX_PART },
+      { key: 'att2', label: 'Attitude 2', max: MAX_PART },
+    ],
+    [MAX_PART],
+  );
+
+  const lastPartKey = parts[parts.length - 1]?.key as string | undefined;
+
   const visibleBtlIndices = useMemo(() => {
-    const set = new Set(selectedBtls);
+    const set = new Set<number>();
+    for (const k of Object.keys(partBtl)) {
+      const v = (partBtl as any)[k];
+      if (v === 1 || v === 2 || v === 3 || v === 4 || v === 5 || v === 6) set.add(v);
+    }
     return [1, 2, 3, 4, 5, 6].filter((n) => set.has(n));
-  }, [selectedBtls]);
+  }, [partBtl]);
 
   const totalTableCols = useMemo(() => {
     // Base columns: S.No, RegNo, Name, Skill1, Skill2, Att1, Att2, Total = 8
@@ -225,19 +245,33 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
   }, [visibleBtlIndices.length]);
 
   useEffect(() => {
-    // load persisted selected BTLs per subject
+    // load persisted per-part BTL mapping per subject
     if (subjectId) {
-      const sk = `${assessmentKey}_selected_btls_${subjectId}`;
-      const stored = lsGet<number[]>(sk);
-      if (Array.isArray(stored)) setSelectedBtls(stored.filter((n) => Number.isFinite(n) && n >= 1 && n <= 6));
+      const sk = `${assessmentKey}_part_btl_${subjectId}`;
+      const stored = lsGet<any>(sk);
+      if (stored && typeof stored === 'object') {
+        try {
+          const next: any = {};
+          for (const k of Object.keys(partBtl)) {
+            const v = stored[k];
+            next[k] = v === '' || v == null ? '' : Number(v);
+            if (!(next[k] === '' || (Number.isFinite(next[k]) && next[k] >= 1 && next[k] <= 6))) next[k] = '';
+          }
+          setPartBtl(next);
+        } catch {
+          // ignore
+        }
+      }
     }
   }, [subjectId, assessmentKey]);
 
   useEffect(() => {
     if (!subjectId) return;
-    const sk = `${assessmentKey}_selected_btls_${subjectId}`;
-    lsSet(sk, selectedBtls);
-    }, [selectedBtls, subjectId, assessmentKey]);
+    const sk = `${assessmentKey}_part_btl_${subjectId}`;
+    try {
+      lsSet(sk, partBtl);
+    } catch {}
+  }, [partBtl, subjectId, assessmentKey]);
 
   // Auto-save selected BTLs to server (debounced)
   useEffect(() => {
@@ -245,7 +279,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
     let cancelled = false;
     const tid = setTimeout(async () => {
       try {
-        const payload: F1DraftPayload = { sheet, selectedBtls };
+        const payload: F1DraftPayload = { sheet, partBtl } as any;
         await saveDraft(assessmentKey, subjectId, payload);
         try {
           if (key) lsSet(key, { termLabel: sheet.termLabel, batchLabel: sheet.batchLabel, rowsByStudentId: sheet.rowsByStudentId });
@@ -259,7 +293,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
       cancelled = true;
       clearTimeout(tid);
     };
-  }, [selectedBtls, subjectId, assessmentKey, sheet, key]);
+  }, [partBtl, subjectId, assessmentKey, sheet, key]);
 
   // Load draft from DB (preferred)
   useEffect(() => {
@@ -271,6 +305,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
         if (!mounted) return;
         const d = res?.draft as any;
         const draftSheet = d?.sheet;
+        const draftPartBtl = d?.partBtl;
         const draftBtls = d?.selectedBtls;
         if (draftSheet && typeof draftSheet === 'object' && typeof draftSheet.rowsByStudentId === 'object') {
           setSheet({
@@ -285,13 +320,35 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
             // ignore localStorage errors
           }
         }
-        if (Array.isArray(draftBtls)) {
-          setSelectedBtls(draftBtls.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n) && n >= 1 && n <= 6));
+        if (draftPartBtl && typeof draftPartBtl === 'object') {
+          const next: any = {};
+          for (const k of Object.keys(partBtl)) {
+            const v = (draftPartBtl as any)[k];
+            next[k] = v === '' || v == null ? '' : Number(v);
+            if (!(next[k] === '' || (Number.isFinite(next[k]) && next[k] >= 1 && next[k] <= 6))) next[k] = '';
+          }
+          setPartBtl(next);
           try {
-            const sk = `${assessmentKey}_selected_btls_${subjectId}`;
-            lsSet(sk, draftBtls.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n) && n >= 1 && n <= 6));
-          } catch {
-            // ignore
+            const sk = `${assessmentKey}_part_btl_${subjectId}`;
+            lsSet(sk, next);
+          } catch {}
+        } else if (Array.isArray(draftBtls)) {
+          const isBtl = (n: number): n is 1 | 2 | 3 | 4 | 5 | 6 => Number.isFinite(n) && n >= 1 && n <= 6;
+          const arr = draftBtls.map((n: any) => Number(n)).filter(isBtl);
+          if (arr.length === 1) {
+            const next = { skill1: arr[0], skill2: arr[0], att1: arr[0], att2: arr[0] };
+            setPartBtl(next);
+            try {
+              const sk = `${assessmentKey}_part_btl_${subjectId}`;
+              lsSet(sk, next);
+            } catch {}
+          } else if (arr.length >= 2) {
+            const next = { skill1: arr[0], skill2: arr[1], att1: arr[0], att2: arr[1] };
+            setPartBtl(next);
+            try {
+              const sk = `${assessmentKey}_part_btl_${subjectId}`;
+              lsSet(sk, next);
+            } catch {}
           }
         }
       } catch {
@@ -455,7 +512,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
     setSavingDraft(true);
     setError(null);
     try {
-      const payload: F1DraftPayload = { sheet, selectedBtls };
+      const payload: F1DraftPayload = { sheet, partBtl } as any;
       await saveDraft(assessmentKey, subjectId, payload);
       setSavedAt(new Date().toLocaleString());
     } catch (e: any) {
@@ -522,7 +579,13 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
       const co1 = skill1 != null && att1 != null ? clamp(skill1 + att1, 0, MAX_CO) : '';
       const co2 = skill2 != null && att2 != null ? clamp(skill2 + att2, 0, MAX_CO) : '';
 
-      const btlMaxByIndex = [0, 0, 10, 10, 0, 0];
+      const btlMaxByIndex = [0, 0, 0, 0, 0, 0];
+      for (const p of parts) {
+        const v = (partBtl as any)[p.key];
+        if (v === 1 || v === 2 || v === 3 || v === 4 || v === 5 || v === 6) {
+          btlMaxByIndex[v - 1] += p.max;
+        }
+      }
       const visibleIndicesZeroBased = visibleBtlIndices.map((n) => n - 1);
       const btlShare = typeof total === 'number' && visibleIndicesZeroBased.length ? round1((total as number) / visibleIndicesZeroBased.length) : '';
       const btlMarksByIndex = btlMaxByIndex.map((max, idx) => {
@@ -595,6 +658,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
     fontSize: 12,
     textAlign: 'center',
   };
+
 
   return (
     <div>
@@ -710,9 +774,6 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
         }}
       >
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <button onClick={() => setBtlPickerOpen((v) => !v)} style={{ padding: '6px 10px' }}>
-              BTL Columns
-            </button>
           <label style={{ fontSize: 12, color: '#374151', display: 'flex', alignItems: 'center' }}>
             Term
             <div style={{ marginLeft: 8, padding: 6, border: '1px solid #d1d5db', borderRadius: 8, minWidth: 160 }}>{sheet.termLabel}</div>
@@ -725,34 +786,6 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
             Skill/Attitude max: {MAX_PART} each | Total: {MAX_TOTAL} | CO-{CO_A}: {MAX_CO} | CO-{CO_B}: {MAX_CO}
           </div>
         </div>
-
-          {btlPickerOpen && (
-            <div
-              style={{
-                border: '1px solid #e5e7eb',
-                borderRadius: 12,
-                padding: 12,
-                background: '#fff',
-                marginBottom: 10,
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-                <div style={{ fontWeight: 700, fontSize: 13 }}>BTL columns to show</div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }} />
-              </div>
-              <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 10 }}>
-                {[1, 2, 3, 4, 5, 6].map((n) => (
-                  <label key={n} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#111827' }}>
-                    <input type="checkbox" checked={selectedBtls.includes(n)} onChange={() => setSelectedBtls((p) => (p.includes(n) ? p.filter((x) => x !== n) : p.concat(n).sort((a, b) => a - b)))} />
-                    BTL-{n}
-                  </label>
-                ))}
-              </div>
-              <div style={{ marginTop: 8, fontSize: 12, color: '#6b7280' }}>
-                Selected: {visibleBtlIndices.length ? visibleBtlIndices.map((n) => `BTL-${n}`).join(', ') : 'None'}
-              </div>
-            </div>
-          )}
       </div>
 
       {students.length === 0 ? (
@@ -832,6 +865,80 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
 
             <tbody>
               <tr>
+                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>
+                  {(() => {
+                    const v = lastPartKey ? (partBtl as any)[lastPartKey] : '';
+                    return v === '' || v == null ? '-' : String(v);
+                  })()}
+                </td>
+                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} />
+                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>BTL</td>
+                {parts.map((p) => (
+                  <td key={`btl-select-${p.key}`} style={{ ...cellTd, textAlign: 'center' }}>
+                    {(() => {
+                      const v = (partBtl as any)[p.key] ?? '';
+                      const display = v === '' ? '-' : String(v);
+                      return (
+                        <div style={{ position: 'relative', minWidth: 44 }}>
+                          <div
+                            style={{
+                              width: '100%',
+                              fontSize: 12,
+                              padding: '2px 4px',
+                              border: '1px solid #d1d5db',
+                              borderRadius: 8,
+                              background: '#fff',
+                              textAlign: 'center',
+                              userSelect: 'none',
+                            }}
+                            title={`BTL: ${display}`}
+                          >
+                            {display}
+                          </div>
+                          <select
+                            aria-label={`BTL for ${p.label}`}
+                            value={v}
+                            onChange={(e) =>
+                              setPartBtl((prev) => ({
+                                ...(prev || {}),
+                                [p.key]: e.target.value === '' ? '' : (Number(e.target.value) as 1 | 2 | 3 | 4 | 5 | 6),
+                              }))
+                            }
+                            style={{
+                              position: 'absolute',
+                              inset: 0,
+                              width: '100%',
+                              height: '100%',
+                              opacity: 0,
+                              cursor: 'pointer',
+                              appearance: 'none',
+                              WebkitAppearance: 'none',
+                              MozAppearance: 'none',
+                            }}
+                          >
+                            <option value="">-</option>
+                            {[1, 2, 3, 4, 5, 6].map((n) => (
+                              <option key={n} value={n}>
+                                {n}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      );
+                    })()}
+                  </td>
+                ))}
+                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} />
+                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} colSpan={4} />
+                {visibleBtlIndices.map((n) => (
+                  <React.Fragment key={`btl-pad-${n}`}>
+                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} />
+                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} />
+                  </React.Fragment>
+                ))}
+              </tr>
+
+              <tr>
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} colSpan={3}>
                   Name / Max Marks
                 </td>
@@ -858,7 +965,13 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                 const co1 = skill1 !== '' && att1 !== '' ? clamp((skill1 as number) + (att1 as number), 0, MAX_CO) : '';
                 const co2 = skill2 !== '' && att2 !== '' ? clamp((skill2 as number) + (att2 as number), 0, MAX_CO) : '';
 
-                const btlMaxByIndex = [0, 0, 10, 10, 0, 0];
+                const btlMaxByIndex = [0, 0, 0, 0, 0, 0];
+                for (const p of parts) {
+                  const v = (partBtl as any)[p.key];
+                  if (v === 1 || v === 2 || v === 3 || v === 4 || v === 5 || v === 6) {
+                    btlMaxByIndex[v - 1] += p.max;
+                  }
+                }
                 const visibleIndicesZeroBased = visibleBtlIndices.map((n) => n - 1);
                 const btlShare = typeof total === 'number' && visibleIndicesZeroBased.length ? round1((total as number) / visibleIndicesZeroBased.length) : '';
                 const btlMarksByIndex = btlMaxByIndex.map((max, idx) => {
@@ -968,13 +1081,10 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                 borderRadius: 6,
               }}
             >
-              <div style={{ fontSize: 16, fontWeight: 700 }}>BTL columns not selected</div>
-              <div style={{ color: '#6b7280' }}>Select one or more BTL columns to enable entry.</div>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>BTL values not selected</div>
+              <div style={{ color: '#6b7280' }}>Assign BTL values in the BTL row below Skill/Attitude to enable entry.</div>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button onClick={() => setBtlPickerOpen(true)} style={{ padding: '6px 10px' }}>
-                  Open BTL Picker
-                </button>
-                <button onClick={() => setSelectedBtls([3, 4])} style={{ padding: '6px 10px' }}>
+                <button onClick={() => setPartBtl({ skill1: 3, skill2: 4, att1: 3, att2: 4 })} style={{ padding: '6px 10px' }}>
                   Quick: BTL-3/4
                 </button>
               </div>

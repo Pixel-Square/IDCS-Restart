@@ -82,6 +82,12 @@ export async function fetchDeptRows(): Promise<DeptRow[]> {
   return res.json();
 }
 
+export async function fetchDeptRow(id: number): Promise<DeptRow> {
+  const res = await fetchWithAuth(`${API_BASE}/api/curriculum/department/${encodeURIComponent(String(id))}/`);
+  if (!res.ok) throw new Error('Failed to fetch dept row');
+  return res.json();
+}
+
 export async function updateDeptRow(id: number, payload: Partial<DeptRow>) {
   const res = await fetchWithAuth(`${API_BASE}/api/curriculum/department/${id}/`, {
     method: 'PATCH',

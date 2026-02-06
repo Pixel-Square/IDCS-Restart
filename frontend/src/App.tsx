@@ -12,13 +12,10 @@ import ProfilePage from "./pages/Profile";
 import MasterList from './pages/curriculum/MasterList';
 import MasterEditor from './pages/curriculum/MasterEditor';
 import DeptList from './pages/curriculum/DeptList';
-import OBEPage from "./pages/OBEPage";
-import OBEMasterPage from "./pages/OBEMasterPage";
-import OBEDueDatesPage from "./pages/OBEDueDatesPage";
-import OBERequestsPage from "./pages/OBERequestsPage";
 import AcademicPage from './pages/AcademicPage';
-import CourseOBEPage from "./pages/CourseOBEPage";
 import QuestionImportPage from "./pages/QuestionImportPage";
+import OBEPage from './pages/OBEPage';
+import CourseOBEPage from './pages/CourseOBEPage';
 import AdvisorAssignments from './pages/hod/AdvisorAssignments';
 import TeachingAssignmentsPage from './pages/hod/TeachingAssignments';
 import MyStudentsPage from './pages/advisor/MyStudents';
@@ -81,7 +78,7 @@ export default function App() {
 
   const userPerms = Array.isArray(user?.permissions) ? user?.permissions : [];
   const lowerPerms = userPerms.map((p) => String(p || '').toLowerCase());
-  const canObeMaster = lowerPerms.includes('obe.master.manage');
+  // const canObeMaster = lowerPerms.includes('obe.master.manage');
 
   return (
     <div>
@@ -99,19 +96,9 @@ export default function App() {
               <Route path="/curriculum/master/:id" element={<MasterEditor />} />
               <Route path="/curriculum/master/new" element={<MasterEditor />} />
               <Route path="/curriculum/department" element={<DeptList />} />
-              <Route path="/obe" element={<Navigate to="/academic?tab=obe" replace />} />
-              <Route path="/obe/course/:code" element={<CourseOBEPage />} />
-              <Route path="/obe/course/:code/cdap" element={<CourseOBEPage />} />
-              <Route path="/obe/course/:code/articulation" element={<CourseOBEPage />} />
-              <Route path="/obe/course/:code/marks" element={<CourseOBEPage />} />
-              <Route path="/obe/course/:code/lca" element={<CourseOBEPage />} />
-              <Route path="/obe/course/:code/lca_instructions" element={<CourseOBEPage />} />
-              <Route path="/obe/course/:code/lca/instructions" element={<CourseOBEPage />} />
-              <Route path="/obe/course/:code/co_attainment" element={<CourseOBEPage />} />
-              <Route path="/obe/course/:code/cqi" element={<CourseOBEPage />} />
-              <Route path="/obe/master" element={canObeMaster ? <Navigate to="/academic?tab=obe_master" replace /> : <HomePage user={user} />} />
-              <Route path="/obe/master/due-dates" element={canObeMaster ? <OBEDueDatesPage /> : <HomePage user={user} />} />
-              <Route path="/obe/master/requests" element={canObeMaster ? <OBERequestsPage /> : <HomePage user={user} />} />
+              {/* OBE/marks/COAttainment routes removed */}
+              <Route path="/obe" element={<OBEPage />} />
+              <Route path="/obe/course/:code/*" element={<CourseOBEPage />} />
               <Route path="/academic" element={<AcademicPage />} />
               <Route path="/hod/advisors" element={
                 <ProtectedRoute user={user} requiredRoles={["HOD"]} requiredPermissions={["academics.assign_advisor"]} element={<AdvisorAssignments />} />

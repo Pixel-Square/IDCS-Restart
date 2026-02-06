@@ -3,11 +3,12 @@
 import CDAPPage from './CDAPPage';
 import ArticulationMatrixPage from './ArticulationMatrixPage';
 import MarkEntryPage from './MarkEntryPage';
-import LcaInstructionsPage from './LcaInstructionsPage';
+// import LcaInstructionsPage from './LcaInstructionsPage';
 import '../styles/obe-theme.css';
 
-import { fetchMyTeachingAssignments, TeachingAssignmentItem } from '../services/obe';
+// OBE/marks/COAttainment fetch and types removed
 import { getMe } from '../services/auth';
+import { fetchMyTeachingAssignments, TeachingAssignmentItem } from '../services/obe';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
@@ -57,12 +58,13 @@ type TabKey = 'courses' | 'exam';
 export default function OBEPage(): JSX.Element {
   const [data, setData] = useState<OBEItem[]>([]);
 
-  const [assignments, setAssignments] = useState<TeachingAssignmentItem[]>([]);
-  const [assignmentsError, setAssignmentsError] = useState<string | null>(null);
-  const [selectedCourseKey, setSelectedCourseKey] = useState<string>('');
+  // OBE/marks/COAttainment UI removed
   const [activeTab, setActiveTab] = useState<TabKey>('courses');
 
   const [me, setMe] = useState<Me | null>(null);
+
+  const [assignments, setAssignments] = useState<TeachingAssignmentItem[]>([]);
+  const [loadingAssignments, setLoadingAssignments] = useState(false);
 
   // Import wizard state (Exam Management)
   const [importWizardOpen, setImportWizardOpen] = useState(false);
@@ -112,7 +114,7 @@ export default function OBEPage(): JSX.Element {
         }
       }
       if (img instanceof Uint8Array) {
-        const blob = new Blob([img], { type: 'image/png' });
+        const blob = new Blob([img as any], { type: 'image/png' });
         return URL.createObjectURL(blob);
       }
       return null;
@@ -121,35 +123,28 @@ export default function OBEPage(): JSX.Element {
     }
   }
 
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const res = await fetchMyTeachingAssignments();
-        if (!mounted) return;
-        setAssignments(res);
-        setAssignmentsError(null);
-
-        // pick a sensible default
-        if (!selectedCourseKey && res.length) {
-          setSelectedCourseKey(res[0].subject_code);
-        }
-      } catch (e: any) {
-        if (!mounted) return;
-        setAssignmentsError(e?.message || 'Failed to load courses');
-        setAssignments([]);
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, []);
+  // OBE/marks/COAttainment effect removed
 
   useEffect(() => {
     // Fetch current user for Faculty ID display
     getMe()
       .then((u) => setMe(u as Me))
       .catch(() => setMe(null));
+
+    // load teaching assignments (non-blocking; 401 treated as empty)
+    (async () => {
+      try {
+        setLoadingAssignments(true);
+        const r = await fetchMyTeachingAssignments();
+        if (Array.isArray(r)) setAssignments(r);
+      } catch (e) {
+        // ignore errors here to avoid blocking UI
+        console.warn('Failed to load teaching assignments', e);
+        setAssignments([]);
+      } finally {
+        setLoadingAssignments(false);
+      }
+    })();
 
     // load uploaded files list for the uploads folder (used when no recents)
     (async () => {
@@ -169,16 +164,9 @@ export default function OBEPage(): JSX.Element {
     return me.faculty_id ?? me.staff_id ?? me.employee_id ?? me.id ?? null;
   }, [me]);
 
-  const selectedCourse = useMemo(() => {
-    if (!selectedCourseKey) return null;
-    // we key by subject_code for now (it matches existing localStorage flows)
-    const first = assignments.find(a => a.subject_code === selectedCourseKey);
-    if (!first) return null;
-    return {
-      subject_code: first.subject_code,
-      subject_name: first.subject_name,
-    };
-  }, [assignments, selectedCourseKey]);
+
+  // OBE/marks/COAttainment course selection removed
+  const selectedCourse = null;
 
  
 
@@ -388,11 +376,7 @@ export default function OBEPage(): JSX.Element {
                 <h1 style={{ margin: 0 }}>
                   Outcome Based Education (OBE)
                 </h1>
-                {selectedCourse && (
-                  <div style={{ fontSize: 20, color: '#222', fontWeight: 600, lineHeight: 1.2 }}>
-                    {selectedCourse.subject_name} ({selectedCourse.subject_code})
-                  </div>
-                )}
+                {/* OBE/marks/COAttainment course header removed */}
                 <div style={{ marginTop: 4, color: '#444', fontSize: 15 }}>
                   Select a course, then work through CDAP, Articulation Matrix and Mark Entry.
                 </div>
@@ -442,18 +426,20 @@ export default function OBEPage(): JSX.Element {
                       marginBottom: 24,
                     }}
                   >
-                    {assignments.length === 0 ? (
+                    {/* Course list: show assignments when available (safe fetch) */}
+                    {loadingAssignments ? (
+                      <div style={{ gridColumn: '1/-1', color: '#666', fontSize: 16, textAlign: 'center', padding: 40 }}>Loading courses…</div>
+                    ) : assignments.length === 0 ? (
                       <div style={{ gridColumn: '1/-1', color: '#888', fontSize: 20, textAlign: 'center', padding: 40 }}>
                         No courses found. You have no teaching assignments.<br />
-                        (If you expect to see courses here, please check your backend/API or contact admin.)
+                        (If you expect to see courses here, please check with your backend/API or contact admin.)
                       </div>
                     ) : (
                       assignments
                         .reduce((acc: TeachingAssignmentItem[], it) => {
-                          // de-dupe by subject_code for this selector
                           if (!acc.some(a => a.subject_code === it.subject_code)) acc.push(it);
                           return acc;
-                        }, [])
+                        }, [] as TeachingAssignmentItem[])
                         .map((it) => (
                           <div
                             key={it.subject_code}
@@ -462,11 +448,11 @@ export default function OBEPage(): JSX.Element {
                             tabIndex={0}
                             onKeyDown={(e) => { if (e.key === 'Enter') navigateToCourse(it.subject_code); }}
                             style={{
-                              border: selectedCourseKey === it.subject_code ? '2px solid #2563eb' : '1px solid #e5e7eb',
+                              border: '1px solid #e5e7eb',
                               borderRadius: 10,
                               padding: 18,
-                              background: selectedCourseKey === it.subject_code ? '#f0f6ff' : '#fff',
-                              boxShadow: selectedCourseKey === it.subject_code ? '0 2px 8px #2563eb22' : '0 1px 4px #0001',
+                              background: '#fff',
+                              boxShadow: '0 1px 4px #0001',
                               display: 'flex',
                               flexDirection: 'column',
                               alignItems: 'flex-start',
@@ -532,48 +518,8 @@ export default function OBEPage(): JSX.Element {
                         ))
                     )}
                   </div>
-                  {assignmentsError && (
-                    <div style={{ marginTop: 6, fontSize: 12, color: '#b91c1c' }}>{assignmentsError}</div>
-                  )}
-                  
-                  {/* Course Summary Section */}
-                  {assignments.length > 0 && (
-                    <div style={{ marginTop: 32, paddingTop: 24, borderTop: '1px solid #e5e7eb' }}>
-                      <h2 style={{ margin: '0 0 16px 0', fontSize: 18, fontWeight: 700 }}>Course Overview</h2>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-                        <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, background: '#f9fafb' }}>
-                          <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 8 }}>Total Courses</div>
-                          <div style={{ fontSize: 28, fontWeight: 800, color: '#111827' }}>
-                            {assignments.reduce((acc: TeachingAssignmentItem[], it) => {
-                              if (!acc.some(a => a.subject_code === it.subject_code)) acc.push(it);
-                              return acc;
-                            }, []).length}
-                          </div>
-                          <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>Assigned to you</div>
-                        </div>
-                        
-                        <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, background: '#f9fafb' }}>
-                          <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 8 }}>Ready for OBE</div>
-                          <div style={{ fontSize: 28, fontWeight: 800, color: '#10b981' }}>
-                            0
-                          </div>
-                          <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>Courses with CDAP</div>
-                        </div>
-                        
-                        <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, background: '#f9fafb' }}>
-                          <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 8 }}>Quick Actions</div>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                            <button style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #e5e7eb', background: '#fff', cursor: 'pointer', fontSize: 12, textAlign: 'left' }}>
-                              → View CDAP Templates
-                            </button>
-                            <button style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #e5e7eb', background: '#fff', cursor: 'pointer', fontSize: 12, textAlign: 'left' }}>
-                              → View Documentation
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )}
+
+                  {/* OBE/marks/COAttainment error display removed */}
                 </section>
               )}
 
@@ -686,8 +632,8 @@ export default function OBEPage(): JSX.Element {
                                         </div>
                                         <div>
                                           <div style={{ fontSize: 16, fontWeight: 800, color: '#111827' }}>{me?.username || '—'}</div>
-                                          <div style={{ fontSize: 13, color: '#6b7280' }}>{me?.position || me?.role || 'Faculty'}</div>
-                                          <div style={{ fontSize: 13, color: '#6b7280' }}>{me?.department || (selectedCourse ? selectedCourse.subject_name : '—')}</div>
+                                          <div style={{ fontSize: 13, color: '#6b7280' }}>Faculty</div>
+                                          <div style={{ fontSize: 13, color: '#6b7280' }}>—</div>
                                         </div>
                                       </div>
                                       <div style={{ marginTop: 10, fontSize: 12, color: '#6b7280' }}>Faculty ID: <strong style={{ color: '#111827' }}>{facultyId ?? '—'}</strong></div>
@@ -695,9 +641,9 @@ export default function OBEPage(): JSX.Element {
 
                                     <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, background: '#fff' }}>
                                       <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 8 }}>Course details</div>
-                                      <div style={{ fontWeight: 700 }}>{selectedCourse?.subject_name || '—'}</div>
-                                      <div style={{ fontSize: 13, color: '#6b7280' }}>{selectedCourse?.subject_code || '—'}</div>
-                                      <div style={{ marginTop: 8, fontSize: 12, color: '#6b7280' }}>Assignments: <strong style={{ color: '#111827' }}>{assignments.length}</strong></div>
+                                      <div style={{ fontWeight: 700 }}>—</div>
+                                      <div style={{ fontSize: 13, color: '#6b7280' }}>—</div>
+                                      <div style={{ marginTop: 8, fontSize: 12, color: '#6b7280' }}>Assignments: <strong style={{ color: '#111827' }}>—</strong></div>
                                     </div>
                                   </div>
 
@@ -982,8 +928,8 @@ export default function OBEPage(): JSX.Element {
                                   </div>
                                   <div>
                                     <div style={{ fontSize: 16, fontWeight: 800, color: '#111827' }}>{me?.username || '—'}</div>
-                                    <div style={{ fontSize: 13, color: '#6b7280' }}>{me?.position || me?.role || 'Faculty'}</div>
-                                    <div style={{ fontSize: 13, color: '#6b7280' }}>{me?.department || (selectedCourse ? selectedCourse.subject_name : '—')}</div>
+                                    <div style={{ fontSize: 13, color: '#6b7280' }}>Faculty</div>
+                                    <div style={{ fontSize: 13, color: '#6b7280' }}>—</div>
                                   </div>
                                 </div>
                                 <div style={{ marginTop: 10, fontSize: 12, color: '#6b7280' }}>Faculty ID: <strong style={{ color: '#111827' }}>{facultyId ?? '—'}</strong></div>
@@ -991,9 +937,9 @@ export default function OBEPage(): JSX.Element {
 
                               <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, background: '#fff' }}>
                                 <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 8 }}>Course details</div>
-                                <div style={{ fontWeight: 700 }}>{selectedCourse?.subject_name || '—'}</div>
-                                <div style={{ fontSize: 13, color: '#6b7280' }}>{selectedCourse?.subject_code || '—'}</div>
-                                <div style={{ marginTop: 8, fontSize: 12, color: '#6b7280' }}>Assignments: <strong style={{ color: '#111827' }}>{assignments.length}</strong></div>
+                                <div style={{ fontWeight: 700 }}>—</div>
+                                <div style={{ fontSize: 13, color: '#6b7280' }}>—</div>
+                                <div style={{ marginTop: 8, fontSize: 12, color: '#6b7280' }}>Assignments: <strong style={{ color: '#111827' }}>—</strong></div>
                               </div>
                             </div>
 
@@ -1166,8 +1112,8 @@ export default function OBEPage(): JSX.Element {
                               </div>
                               <div>
                                 <div style={{ fontSize: 16, fontWeight: 800, color: '#111827' }}>{me?.username || '—'}</div>
-                                <div style={{ fontSize: 13, color: '#6b7280' }}>{me?.position || me?.role || 'Faculty'}</div>
-                                <div style={{ fontSize: 13, color: '#6b7280' }}>{me?.department || (selectedCourse ? selectedCourse.subject_name : '—')}</div>
+                                <div style={{ fontSize: 13, color: '#6b7280' }}>Faculty</div>
+                                <div style={{ fontSize: 13, color: '#6b7280' }}>—</div>
                               </div>
                             </div>
                             <div style={{ marginTop: 10, fontSize: 12, color: '#6b7280' }}>Faculty ID: <strong style={{ color: '#111827' }}>{facultyId ?? '—'}</strong></div>

@@ -49,6 +49,7 @@ export default function CourseOBEPage(): JSX.Element {
   const courseId = decodeURIComponent(code);
   const [courseName, setCourseName] = React.useState<string | null>(null);
   const [courseClassType, setCourseClassType] = React.useState<string | null>(null);
+  const [courseQpType, setCourseQpType] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     let mounted = true;
@@ -71,11 +72,30 @@ export default function CourseOBEPage(): JSX.Element {
       try {
         const rows = await fetchDeptRows();
         if (!mounted) return;
-        const match = rows.find(r => String(r.course_code) === String(courseId) || String(r.course_code) === String(courseId).toUpperCase());
-        if (match && match.class_type) {
-          const ct = String((match as any).class_type || '').trim();
+        const code = String(courseId);
+        const codeU = code.toUpperCase();
+        const matches = (rows || []).filter(
+          (r) => String((r as any)?.course_code || '').trim() === code || String((r as any)?.course_code || '').trim().toUpperCase() === codeU,
+        );
+        const normQp = (v: any) => String(v || '').trim().toUpperCase();
+        // Prefer the row that has a non-default QP type (this is what drives TCPR subtype behavior).
+        const pick =
+          matches.find((m) => {
+            const qp = normQp((m as any)?.question_paper_type);
+            return qp && qp !== 'QP1';
+          }) ||
+          // Otherwise pick any row with a QP type.
+          matches.find((m) => normQp((m as any)?.question_paper_type)) ||
+          // Fallbacks.
+          matches.find((m) => String((m as any)?.class_type || '').trim()) ||
+          matches[0];
+
+        if (pick && (pick as any).class_type) {
+          const ct = String((pick as any).class_type || '').trim();
           setCourseClassType(ct || null);
         }
+        const qp = String((pick as any)?.question_paper_type || '').trim();
+        setCourseQpType(qp || null);
       } catch (e) {
         // ignore
       }
@@ -96,6 +116,9 @@ export default function CourseOBEPage(): JSX.Element {
                 )}
                 {courseClassType && (
                   <div style={{ color: '#374151', marginTop: 4 }}>Class type: <strong style={{ color: '#111827' }}>{String(courseClassType).toLowerCase()[0].toUpperCase() + String(courseClassType).toLowerCase().slice(1)}</strong></div>
+                )}
+                {courseQpType && (
+                  <div style={{ color: '#374151', marginTop: 2 }}>QP Type: <strong style={{ color: '#111827' }}>{String(courseQpType)}</strong></div>
                 )}
               </div>
               <div>
@@ -141,8 +164,8 @@ export default function CourseOBEPage(): JSX.Element {
               <CDAPPage courseId={courseId} showHeader={false} showCourseInput={false} />
             )}
             {activeTab === 'articulation' && <ArticulationMatrixPage courseId={courseId} />}
-            {activeTab === 'marks' && <MarkEntryPage courseId={courseId} classType={courseClassType} />}
-            {activeTab === 'lca_instructions' && <LCAInstructionsPage />}
+            {activeTab === 'marks' && <MarkEntryPage courseId={courseId} classType={courseClassType} questionPaperType={courseQpType} />}
+            {activeTab === 'lca_instructions' && <LCAInstructionsPage courseCode={courseId} courseName={courseName} />}
             {activeTab === 'lca' && <LCAPage courseId={courseId} />}
             {activeTab === 'co_attainment' && <COAttainmentPage courseId={courseId} />}
             {activeTab === 'cqi' && <CQIPage courseId={courseId} />}

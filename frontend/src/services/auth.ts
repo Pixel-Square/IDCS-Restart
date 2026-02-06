@@ -4,7 +4,7 @@ const BASE = `${import.meta.env.VITE_API_BASE || 'http://localhost:8000'}/api/ac
 
 // Create an axios instance used across the app so we can centrally handle
 // automatic access-token refresh on 401 responses.
-const apiClient = axios.create({ baseURL: BASE })
+export const apiClient = axios.create({ baseURL: BASE })
 
 let isRefreshing = false
 let refreshSubscribers: Array<(token: string) => void> = []

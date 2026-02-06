@@ -370,13 +370,13 @@ def assessment_draft(request, assessment: str, subject_id: str):
     - GET: returns draft JSON (or null)
     - PUT: saves draft JSON
 
-    Assessment: ssa1 | ssa2 | cia1 | cia2 | formative1 | formative2
+    Assessment: ssa1 | ssa2 | cia1 | cia2 | formative1 | formative2 | model
     """
     staff_profile, err = _faculty_only(request)
     if err:
         return err
 
-    if assessment not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'formative1', 'formative2'}:
+    if assessment not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
     subject = _get_subject(subject_id, request)
@@ -893,7 +893,7 @@ def lab_published_sheet(request, assessment: str, subject_id: str):
         return err
 
     assessment = str(assessment or '').lower().strip()
-    if assessment not in ('formative1', 'formative2'):
+    if assessment not in ('cia1', 'cia2', 'model', 'formative1', 'formative2'):
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
     subject = _get_subject(subject_id, request)
@@ -915,7 +915,7 @@ def lab_publish_sheet(request, assessment: str, subject_id: str):
         return err
 
     assessment = str(assessment or '').lower().strip()
-    if assessment not in ('formative1', 'formative2'):
+    if assessment not in ('cia1', 'cia2', 'model', 'formative1', 'formative2'):
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
     subject = _get_subject(subject_id, request)

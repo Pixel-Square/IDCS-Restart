@@ -1,3 +1,5 @@
+import fetchWithAuth from './fetchAuth';
+
 export type TeachingAssignmentRosterStudent = {
   id: number;
   reg_no: string;
@@ -19,9 +21,7 @@ export type TeachingAssignmentRosterResponse = {
 };
 
 export async function fetchTeachingAssignmentRoster(taId: number): Promise<TeachingAssignmentRosterResponse> {
-  const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
-  const url = `${API_BASE}/api/academics/teaching-assignments/${encodeURIComponent(String(taId))}/students/`;
-  const token = window.localStorage.getItem('access');
+  const url = `/api/academics/teaching-assignments/${encodeURIComponent(String(taId))}/students/`;
 
   const sanitizeHttpErrorText = (text: string, limit = 800) => {
     const raw = String(text || '');
@@ -42,13 +42,7 @@ export async function fetchTeachingAssignmentRoster(taId: number): Promise<Teach
     return cleaned.slice(0, limit) + '… (truncated)';
   };
 
-  const res = await fetch(url, {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-  });
+  const res = await fetchWithAuth(url, { method: 'GET' });
 
   if (!res.ok) {
     const text = await res.text();

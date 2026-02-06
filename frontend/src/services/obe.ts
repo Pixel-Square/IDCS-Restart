@@ -8,25 +8,18 @@ export type TeachingAssignmentItem = {
   academic_year: string;
 };
 
+// Safe fetch for teaching assignments: use axios apiClient so automatic refresh runs
+import { apiClient } from './auth';
+
 export async function fetchMyTeachingAssignments(): Promise<TeachingAssignmentItem[]> {
-  const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
-  const url = `${API_BASE}/api/academics/my-teaching-assignments/`;
-  const token = window.localStorage.getItem('access');
-
-  const res = await fetch(url, {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Teaching assignments fetch failed: ${res.status} ${text}`);
+  const url = `${apiBase()}/api/academics/my-teaching-assignments/`;
+  try {
+    const res = await apiClient.get(url);
+    return res.data as TeachingAssignmentItem[];
+  } catch (e: any) {
+    if (e?.response?.status === 401) return [];
+    throw e;
   }
-
-  return res.json();
 }
 
 
@@ -41,7 +34,7 @@ type DraftResponse<T> = {
   draft: T | null;
 };
 
-export type DraftAssessmentKey = 'ssa1' | 'ssa2' | 'cia1' | 'cia2' | 'formative1' | 'formative2';
+export type DraftAssessmentKey = 'ssa1' | 'ssa2' | 'cia1' | 'cia2' | 'formative1' | 'formative2' | 'model';
 
 export type DueAssessmentKey = DraftAssessmentKey;
 
@@ -368,18 +361,18 @@ export async function publishFormative(assessment: 'formative1' | 'formative2', 
 
 export type PublishedLabSheetResponse = {
   subject: { code: string; name: string };
-  assessment: 'formative1' | 'formative2';
+  assessment: 'cia1' | 'cia2' | 'model' | 'formative1' | 'formative2';
   data: any | null;
 };
 
-export async function fetchPublishedLabSheet(assessment: 'formative1' | 'formative2', subjectId: string): Promise<PublishedLabSheetResponse> {
+export async function fetchPublishedLabSheet(assessment: 'cia1' | 'cia2' | 'model' | 'formative1' | 'formative2', subjectId: string): Promise<PublishedLabSheetResponse> {
   const url = `${apiBase()}/api/obe/lab-published-sheet/${encodeURIComponent(assessment)}/${encodeURIComponent(subjectId)}`;
   const res = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', ...authHeader() } });
   if (!res.ok) await parseError(res, 'Lab published sheet fetch failed');
   return res.json();
 }
 
-export async function publishLabSheet(assessment: 'formative1' | 'formative2', subjectId: string, data: any): Promise<{ status: string }> {
+export async function publishLabSheet(assessment: 'cia1' | 'cia2' | 'model' | 'formative1' | 'formative2', subjectId: string, data: any): Promise<{ status: string }> {
   const url = `${apiBase()}/api/obe/lab-publish-sheet/${encodeURIComponent(assessment)}/${encodeURIComponent(subjectId)}`;
   const res = await fetch(url, {
     method: 'POST',
