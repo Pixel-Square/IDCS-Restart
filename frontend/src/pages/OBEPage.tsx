@@ -10,7 +10,20 @@ import '../styles/obe-theme.css';
 import { getMe } from '../services/auth';
 import { fetchMyTeachingAssignments, TeachingAssignmentItem } from '../services/obe';
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+const PRIMARY_API_BASE = import.meta.env.VITE_API_BASE || 'https://db.zynix.us';
+const FALLBACK_API_BASE = 'http://localhost:8000';
+
+async function fetchWithFallback(url, options) {
+  try {
+    const res = await fetch(`${PRIMARY_API_BASE}${url}`, options);
+    if (!res.ok) throw new Error('Primary failed');
+    return res;
+  } catch (e) {
+    // Try fallback
+    const res = await fetch(`${FALLBACK_API_BASE}${url}`, options);
+    return res;
+  }
+}
 
 function authHeaders(): Record<string, string> {
   const token = window.localStorage.getItem('access');

@@ -527,7 +527,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
     setPublishing(true);
     setError(null);
     try {
-      await publishFormative(assessmentKey, subjectId, sheet);
+      await publishFormative(assessmentKey, subjectId, sheet, teachingAssignmentId);
       setPublishedAt(new Date().toLocaleString());
       refreshPublishWindow();
       try {

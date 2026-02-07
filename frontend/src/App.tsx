@@ -5,6 +5,9 @@ import Navbar from "./components/Navbar";
 import DashboardSidebar from './components/DashboardSidebar';
 import TimetableEditor from './pages/advisor/TimetableEditor';
 import HodTimetableEditor from './pages/iqac/TimetableEditor';
+import ObeRequestsPage from './pages/iqac/ObeRequestsPage';
+import OBERequestsPage from './pages/OBERequestsPage';
+import OBEDueDatesPage from './pages/OBEDueDatesPage';
 import ProtectedRoute from './components/ProtectedRoute';
 import HomePage from "./components/HomePage";
 import DashboardPage from "./pages/Dashboard";
@@ -16,6 +19,7 @@ import AcademicPage from './pages/AcademicPage';
 import QuestionImportPage from "./pages/QuestionImportPage";
 import OBEPage from './pages/OBEPage';
 import CourseOBEPage from './pages/CourseOBEPage';
+import OBERequestPage from './pages/OBERequestPage';
 import AdvisorAssignments from './pages/hod/AdvisorAssignments';
 import TeachingAssignmentsPage from './pages/hod/TeachingAssignments';
 import MyStudentsPage from './pages/advisor/MyStudents';
@@ -99,6 +103,12 @@ export default function App() {
               {/* OBE/marks/COAttainment routes removed */}
               <Route path="/obe" element={<OBEPage />} />
               <Route path="/obe/course/:code/*" element={<CourseOBEPage />} />
+              <Route
+                path="/obe/request"
+                element={<ProtectedRoute user={user} requiredProfile={'STAFF'} element={<OBERequestPage />} />}
+              />
+              <Route path="/obe/master/requests" element={<ProtectedRoute user={user} requiredPermissions={["obe.master.manage"]} element={<OBERequestsPage />} />} />
+              <Route path="/obe/master/due-dates" element={<ProtectedRoute user={user} requiredPermissions={["obe.master.manage"]} element={<OBEDueDatesPage />} />} />
               <Route path="/academic" element={<AcademicPage />} />
               <Route path="/hod/advisors" element={
                 <ProtectedRoute user={user} requiredRoles={["HOD"]} requiredPermissions={["academics.assign_advisor"]} element={<AdvisorAssignments />} />
@@ -109,6 +119,10 @@ export default function App() {
               <Route path="/iqac/timetable" element={
                 <ProtectedRoute user={user} requiredPermissions={["timetable.manage_templates"]} element={<HodTimetableEditor />} />
               } />
+              <Route
+                path="/iqac/obe-requests"
+                element={<ProtectedRoute user={user} requiredPermissions={["obe.master.manage"]} element={<ObeRequestsPage />} />}
+              />
               <Route path="/advisor/timetable" element={
                 <ProtectedRoute user={user} requiredRoles={["ADVISOR"]} requiredPermissions={["timetable.assign"]} element={<TimetableEditor />} />
               } />

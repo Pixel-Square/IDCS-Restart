@@ -119,7 +119,7 @@ class TeachingAssignmentStudentsView(APIView):
         if staff_profile and ta.staff_id == staff_profile.pk:
             allowed = True
         else:
-            role_names = {r.name.upper() for r in getattr(user, 'roles', [])} if getattr(user, 'roles', None) is not None else set()
+            role_names = {r.name.upper() for r in user.roles.all()} if getattr(user, 'roles', None) is not None else set()
             if 'HOD' in role_names or 'ADVISOR' in role_names or user.is_staff:
                 allowed = True
 

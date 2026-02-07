@@ -86,6 +86,7 @@ from rest_framework import status
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
+from django.apps import apps
 
 from .models import CdapRevision, CdapActiveLearningAnalysisMapping, ObeAssessmentMasterConfig
 from .services.cdap_parser import parse_cdap_excel
@@ -95,6 +96,143 @@ from accounts.utils import get_user_permissions
 from django.core.files.storage import default_storage
 from django.conf import settings
 import os
+
+
+def _parse_int(value):
+    try:
+        if value is None:
+            return None
+        s = str(value).strip()
+        if not s:
+            return None
+        return int(s)
+    except Exception:
+        return None
+
+
+def _get_query_params(request):
+    return getattr(request, 'query_params', {}) if hasattr(request, 'query_params') else request.GET
+
+
+def _get_teaching_assignment_id_from_request(request, body: dict | None = None) -> int | None:
+    if body and isinstance(body, dict) and body.get('teaching_assignment_id') is not None:
+        ta_id = _parse_int(body.get('teaching_assignment_id'))
+        if ta_id is not None:
+            return ta_id
+    qp = _get_query_params(request)
+    return _parse_int(qp.get('teaching_assignment_id'))
+
+
+def _resolve_section_name_from_ta(ta) -> str:
+    if not ta:
+        return ''
+    sec = getattr(ta, 'section', None)
+    if not sec:
+        return ''
+    return str(getattr(sec, 'name', None) or str(sec) or '').strip()
+
+
+def _get_mark_table_lock_if_exists(*, staff_user, subject_code: str, assessment: str, teaching_assignment=None, academic_year=None, section_name: str = ''):
+    from .models import ObeMarkTableLock
+
+    if teaching_assignment is not None:
+        return ObeMarkTableLock.objects.filter(teaching_assignment=teaching_assignment, assessment=str(assessment).lower()).first()
+
+    qs = ObeMarkTableLock.objects.filter(
+        teaching_assignment__isnull=True,
+        staff_user=staff_user,
+        subject_code=str(subject_code),
+        assessment=str(assessment).lower(),
+        section_name=str(section_name or ''),
+    )
+    if academic_year is not None:
+        qs = qs.filter(academic_year=academic_year)
+    return qs.order_by('-updated_at').first()
+
+
+def _upsert_mark_table_lock(
+    *,
+    staff_user,
+    subject_code: str,
+    subject_name: str,
+    assessment: str,
+    teaching_assignment=None,
+    academic_year=None,
+    section_name: str = '',
+    updated_by: int | None = None,
+):
+    from .models import ObeMarkTableLock
+
+    assessment_key = str(assessment).lower()
+    section_name = str(section_name or '').strip()
+    subject_code = str(subject_code or '').strip()
+    subject_name = str(subject_name or '').strip()
+
+    defaults = {
+        'staff_user': staff_user,
+        'academic_year': academic_year,
+        'subject_code': subject_code,
+        'subject_name': subject_name,
+        'section_name': section_name,
+        'updated_by': updated_by,
+    }
+
+    if teaching_assignment is not None:
+        obj, _created = ObeMarkTableLock.objects.update_or_create(
+            teaching_assignment=teaching_assignment,
+            assessment=assessment_key,
+            defaults=defaults,
+        )
+        return obj
+
+    obj, _created = ObeMarkTableLock.objects.update_or_create(
+        teaching_assignment=None,
+        staff_user=staff_user,
+        subject_code=subject_code,
+        assessment=assessment_key,
+        section_name=section_name,
+        academic_year=academic_year,
+        defaults=defaults,
+    )
+    return obj
+
+
+def _touch_lock_after_publish(request, *, subject_code: str, subject_name: str, assessment: str, teaching_assignment_id: int | None = None):
+    from .models import ObeMarkTableLock
+
+    ta = _resolve_staff_teaching_assignment(request, subject_code=subject_code, teaching_assignment_id=teaching_assignment_id)
+    academic_year = getattr(ta, 'academic_year', None) if ta else None
+    section_name = _resolve_section_name_from_ta(ta)
+
+    lock = _upsert_mark_table_lock(
+        staff_user=getattr(request, 'user', None),
+        subject_code=subject_code,
+        subject_name=subject_name,
+        assessment=assessment,
+        teaching_assignment=ta,
+        academic_year=academic_year,
+        section_name=section_name,
+        updated_by=getattr(getattr(request, 'user', None), 'id', None),
+    )
+
+    lock.is_published = True
+    lock.mark_manager_locked = True
+    lock.mark_entry_unblocked_until = None
+    lock.mark_manager_unlocked_until = None
+    lock.recompute_blocks()
+    lock.save(
+        update_fields=[
+            'is_published',
+            'published_blocked',
+            'mark_entry_blocked',
+            'mark_manager_locked',
+            'mark_entry_unblocked_until',
+            'mark_manager_unlocked_until',
+            'updated_by',
+            'updated_at',
+        ]
+    )
+    return lock
 
 
 def _has_obe_master_access(user) -> bool:
@@ -213,9 +351,16 @@ def _get_due_schedule_for_request(request, subject_code: str, assessment: str, t
             global_updated_by = getattr(global_override, 'updated_by', None)
             allowed_by_global = global_is_open
 
-    # Final decision: global override (if present) wins, otherwise due/approval logic
+    # Final decision:
+    # - If a global override exists and it is OPEN, publishing is allowed regardless of due time.
+    # - If a global override exists and it is CLOSED, publishing is allowed only when an explicit
+    #   IQAC approval exists (so approving a request actually enables publishing).
+    # - If no global override exists, normal due/approval logic applies.
     if global_override_active:
-        publish_allowed = bool(allowed_by_global)
+        if bool(global_is_open):
+            publish_allowed = True
+        else:
+            publish_allowed = bool(allowed_by_approval)
     else:
         publish_allowed = bool(allowed_by_due or allowed_by_approval)
 
@@ -399,7 +544,19 @@ def assessment_draft(request, assessment: str, subject_id: str):
         return Response({'status': 'draft_saved'})
 
     draft = AssessmentDraft.objects.filter(subject=subject, assessment=assessment).first()
-    return Response({'subject': {'code': subject.code, 'name': subject.name}, 'draft': draft.data if draft else None})
+    draft_data = draft.data if draft else None
+    updated_at = draft.updated_at.isoformat() if draft and getattr(draft, 'updated_at', None) else None
+    updated_by = None
+    if draft and getattr(draft, 'updated_by', None):
+        try:
+            User = apps.get_model(settings.AUTH_USER_MODEL)
+            u = User.objects.filter(id=getattr(draft, 'updated_by')).first()
+            if u:
+                updated_by = {'id': getattr(u, 'id', None), 'username': getattr(u, 'username', None), 'name': ' '.join(filter(None, [getattr(u, 'first_name', ''), getattr(u, 'last_name', '')])).strip() or getattr(u, 'username', None)}
+        except Exception:
+            updated_by = {'id': getattr(draft, 'updated_by', None)}
+
+    return Response({'subject': {'code': subject.code, 'name': subject.name}, 'draft': draft_data, 'updated_at': updated_at, 'updated_by': updated_by})
 
 
 @api_view(['GET'])
@@ -467,6 +624,18 @@ def ssa1_publish(request, subject_id: str):
 
     if errors:
         return Response({'detail': 'Validation error.', 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        ta_id = _get_teaching_assignment_id_from_request(request)
+        _touch_lock_after_publish(
+            request,
+            subject_code=subject.code,
+            subject_name=subject.name,
+            assessment='ssa1',
+            teaching_assignment_id=ta_id,
+        )
+    except OperationalError:
+        pass
 
     return Response({'status': 'published'})
 
@@ -536,6 +705,18 @@ def ssa2_publish(request, subject_id: str):
 
     if errors:
         return Response({'detail': 'Validation error.', 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        ta_id = _get_teaching_assignment_id_from_request(request)
+        _touch_lock_after_publish(
+            request,
+            subject_code=subject.code,
+            subject_name=subject.name,
+            assessment='ssa2',
+            teaching_assignment_id=ta_id,
+        )
+    except OperationalError:
+        pass
 
     return Response({'status': 'published'})
 
@@ -622,6 +803,18 @@ def formative1_publish(request, subject_id: str):
 
     if errors:
         return Response({'detail': 'Validation error.', 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        ta_id = _get_teaching_assignment_id_from_request(request)
+        _touch_lock_after_publish(
+            request,
+            subject_code=subject.code,
+            subject_name=subject.name,
+            assessment='formative1',
+            teaching_assignment_id=ta_id,
+        )
+    except OperationalError:
+        pass
     return Response({'status': 'published'})
 
 
@@ -707,6 +900,18 @@ def formative2_publish(request, subject_id: str):
 
     if errors:
         return Response({'detail': 'Validation error.', 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        ta_id = _get_teaching_assignment_id_from_request(request)
+        _touch_lock_after_publish(
+            request,
+            subject_code=subject.code,
+            subject_name=subject.name,
+            assessment='formative2',
+            teaching_assignment_id=ta_id,
+        )
+    except OperationalError:
+        pass
     return Response({'status': 'published'})
 
 
@@ -791,6 +996,18 @@ def cia1_publish_sheet(request, subject_id: str):
                 student=student,
                 defaults={'mark': total_dec},
             )
+
+    try:
+        ta_id = _get_teaching_assignment_id_from_request(request)
+        _touch_lock_after_publish(
+            request,
+            subject_code=subject.code,
+            subject_name=subject.name,
+            assessment='cia1',
+            teaching_assignment_id=ta_id,
+        )
+    except OperationalError:
+        pass
 
     return Response({'status': 'published'})
 
@@ -881,6 +1098,18 @@ def cia2_publish_sheet(request, subject_id: str):
                 defaults={'mark': total_dec},
             )
 
+    try:
+        ta_id = _get_teaching_assignment_id_from_request(request)
+        _touch_lock_after_publish(
+            request,
+            subject_code=subject.code,
+            subject_name=subject.name,
+            assessment='cia2',
+            teaching_assignment_id=ta_id,
+        )
+    except OperationalError:
+        pass
+
     return Response({'status': 'published'})
 
 
@@ -936,6 +1165,18 @@ def lab_publish_sheet(request, assessment: str, subject_id: str):
         assessment=assessment,
         defaults={'data': data, 'updated_by': getattr(request.user, 'id', None)},
     )
+
+    try:
+        ta_id = _get_teaching_assignment_id_from_request(request)
+        _touch_lock_after_publish(
+            request,
+            subject_code=subject.code,
+            subject_name=subject.name,
+            assessment=str(assessment).lower(),
+            teaching_assignment_id=ta_id,
+        )
+    except OperationalError:
+        pass
 
     return Response({'status': 'published'})
 
@@ -1717,7 +1958,7 @@ def publish_window(request, assessment: str, subject_id: str):
         return err
 
     assessment_key = str(assessment or '').strip().lower()
-    if assessment_key not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'formative1', 'formative2'}:
+    if assessment_key not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
     subject_code = str(subject_id or '').strip()
@@ -1757,6 +1998,262 @@ def publish_window(request, assessment: str, subject_id: str):
             if academic_year
             else None,
             'teaching_assignment_id': getattr(ta, 'id', None) if ta else None,
+        }
+    )
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def edit_window(request, assessment: str, subject_id: str):
+    """Return edit window status for a staff user after publishing.
+
+    This is separate from `publish_window` and is scoped:
+    - MARK_ENTRY: unblock the marks entry table after publish
+    - MARK_MANAGER: allow changing the mark manager configuration after confirmation
+    """
+    staff_profile, err = _faculty_only(request)
+    if err:
+        return err
+
+    assessment_key = str(assessment or '').strip().lower()
+    if assessment_key not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
+        return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    qp = getattr(request, 'query_params', {}) if hasattr(request, 'query_params') else request.GET
+    scope_raw = str(qp.get('scope') or '').strip().upper()
+    if scope_raw in {'MARKS', 'MARKS_ENTRY', 'MARK_ENTRY', 'TABLE'}:
+        scope = 'MARK_ENTRY'
+    elif scope_raw in {'MARK_MANAGER', 'MANAGER'}:
+        scope = 'MARK_MANAGER'
+    else:
+        return Response({'detail': 'scope is required (MARK_ENTRY or MARK_MANAGER).'}, status=status.HTTP_400_BAD_REQUEST)
+
+    subject_code = str(subject_id or '').strip()
+    ta_id_raw = qp.get('teaching_assignment_id')
+    ta_id = None
+    try:
+        if ta_id_raw:
+            ta_id = int(str(ta_id_raw))
+    except Exception:
+        ta_id = None
+
+    # Reuse schedule resolver to determine academic year for this staff+subject.
+    info = _get_due_schedule_for_request(request, subject_code=subject_code, assessment=assessment_key, teaching_assignment_id=ta_id)
+    academic_year = info.get('academic_year')
+    ta = info.get('teaching_assignment')
+    now = timezone.now()
+
+    allowed_by_approval = False
+    approval_until = None
+    if academic_year is not None:
+        from .models import ObeEditRequest
+
+        qs = ObeEditRequest.objects.filter(
+            staff_user=getattr(request, 'user', None),
+            academic_year=academic_year,
+            subject_code=str(subject_code),
+            assessment=str(assessment_key).lower(),
+            scope=str(scope),
+            status='APPROVED',
+            approved_until__gt=now,
+        )
+        if ta is not None:
+            qs = qs.filter(teaching_assignment=ta)
+        approval = qs.order_by('-updated_at').first()
+        if approval is not None:
+            allowed_by_approval = True
+            approval_until = getattr(approval, 'approved_until', None)
+
+    return Response(
+        {
+            'assessment': assessment_key,
+            'subject_code': subject_code,
+            'scope': scope,
+            'allowed_by_approval': bool(allowed_by_approval),
+            'approval_until': approval_until.isoformat() if approval_until else None,
+            'now': now.isoformat() if now else None,
+            'academic_year': {
+                'id': getattr(academic_year, 'id', None),
+                'name': getattr(academic_year, 'name', None),
+            }
+            if academic_year
+            else None,
+            'teaching_assignment_id': getattr(ta, 'id', None) if ta else None,
+        }
+    )
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def mark_table_lock_status(request, assessment: str, subject_id: str):
+    """Faculty: return authoritative lock state for a mark-entry table.
+
+    Query params:
+    - teaching_assignment_id (optional but recommended)
+
+    Derived semantics:
+    - entry_open is True only when mark_entry is unblocked AND mark manager is locked/confirmed.
+    """
+    staff_profile, err = _faculty_only(request)
+    if err:
+        return err
+
+    assessment_key = str(assessment or '').strip().lower()
+    if assessment_key not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
+        return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    subject_code = str(subject_id or '').strip()
+    qp = _get_query_params(request)
+    ta_id = _parse_int(qp.get('teaching_assignment_id'))
+
+    ta = _resolve_staff_teaching_assignment(request, subject_code=subject_code, teaching_assignment_id=ta_id)
+    academic_year = getattr(ta, 'academic_year', None) if ta else None
+    section_name = _resolve_section_name_from_ta(ta)
+
+    try:
+        lock = _get_mark_table_lock_if_exists(
+            staff_user=getattr(request, 'user', None),
+            subject_code=subject_code,
+            assessment=assessment_key,
+            teaching_assignment=ta,
+            academic_year=academic_year,
+            section_name=section_name,
+        )
+    except OperationalError:
+        lock = None
+
+    # Default for pre-publish or legacy flows: open + editable.
+    if lock is None:
+        return Response(
+            {
+                'assessment': assessment_key,
+                'subject_code': subject_code,
+                'teaching_assignment_id': getattr(ta, 'id', None) if ta else None,
+                'academic_year': {
+                    'id': getattr(academic_year, 'id', None),
+                    'name': getattr(academic_year, 'name', None),
+                }
+                if academic_year
+                else None,
+                'section_name': section_name or None,
+                'exists': False,
+                'is_published': False,
+                'published_blocked': False,
+                'mark_entry_blocked': False,
+                'mark_manager_locked': False,
+                'mark_entry_unblocked_until': None,
+                'mark_manager_unlocked_until': None,
+                'entry_open': True,
+                'mark_manager_editable': True,
+            }
+        )
+
+    # Effective values (apply time windows without needing cron)
+    try:
+        lock.recompute_blocks()
+    except Exception:
+        pass
+
+    is_published = bool(getattr(lock, 'is_published', False))
+    entry_open = (not bool(getattr(lock, 'mark_entry_blocked', False))) and bool(getattr(lock, 'mark_manager_locked', False))
+    mark_manager_editable = not bool(getattr(lock, 'mark_manager_locked', False))
+
+    return Response(
+        {
+            'assessment': assessment_key,
+            'subject_code': subject_code,
+            'teaching_assignment_id': getattr(getattr(lock, 'teaching_assignment', None), 'id', None),
+            'academic_year': {
+                'id': getattr(getattr(lock, 'academic_year', None), 'id', None),
+                'name': getattr(getattr(lock, 'academic_year', None), 'name', None),
+            }
+            if getattr(lock, 'academic_year', None)
+            else None,
+            'section_name': getattr(lock, 'section_name', None) or None,
+            'exists': True,
+            'is_published': is_published,
+            'published_blocked': bool(getattr(lock, 'published_blocked', False)),
+            'mark_entry_blocked': bool(getattr(lock, 'mark_entry_blocked', False)),
+            'mark_manager_locked': bool(getattr(lock, 'mark_manager_locked', False)),
+            'mark_entry_unblocked_until': getattr(lock, 'mark_entry_unblocked_until', None).isoformat() if getattr(lock, 'mark_entry_unblocked_until', None) else None,
+            'mark_manager_unlocked_until': getattr(lock, 'mark_manager_unlocked_until', None).isoformat() if getattr(lock, 'mark_manager_unlocked_until', None) else None,
+            'entry_open': bool(entry_open),
+            'mark_manager_editable': bool(mark_manager_editable),
+            'updated_at': getattr(lock, 'updated_at', None).isoformat() if getattr(lock, 'updated_at', None) else None,
+        }
+    )
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def mark_table_lock_confirm_mark_manager(request, assessment: str, subject_id: str):
+    """Faculty: confirm/re-lock Mark Manager in DB.
+
+    This is used after an IQAC MARK_MANAGER approval window: when the staff
+    presses Confirm, we re-lock Mark Manager immediately so the marks table can
+    open (if MARK_ENTRY is unblocked).
+    """
+    staff_profile, err = _faculty_only(request)
+    if err:
+        return err
+
+    assessment_key = str(assessment or '').strip().lower()
+    if assessment_key not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
+        return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    subject_code = str(subject_id or '').strip()
+    ta_id = _get_teaching_assignment_id_from_request(request, request.data if isinstance(request.data, dict) else None)
+
+    ta = _resolve_staff_teaching_assignment(request, subject_code=subject_code, teaching_assignment_id=ta_id)
+    academic_year = getattr(ta, 'academic_year', None) if ta else None
+    section_name = _resolve_section_name_from_ta(ta)
+
+    subject = _get_subject(subject_code, request)
+
+    try:
+        lock = _upsert_mark_table_lock(
+            staff_user=getattr(request, 'user', None),
+            subject_code=subject_code,
+            subject_name=getattr(subject, 'name', '') or subject_code,
+            assessment=assessment_key,
+            teaching_assignment=ta,
+            academic_year=academic_year,
+            section_name=section_name,
+            updated_by=getattr(getattr(request, 'user', None), 'id', None),
+        )
+
+        lock.mark_manager_locked = True
+        lock.mark_manager_unlocked_until = None
+        lock.recompute_blocks()
+        lock.save(
+            update_fields=[
+                'mark_manager_locked',
+                'mark_manager_unlocked_until',
+                'published_blocked',
+                'mark_entry_blocked',
+                'updated_by',
+                'updated_at',
+            ]
+        )
+    except OperationalError:
+        return Response({'detail': 'Database unavailable.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+    entry_open = (not bool(getattr(lock, 'mark_entry_blocked', False))) and bool(getattr(lock, 'mark_manager_locked', False))
+    return Response(
+        {
+            'status': 'ok',
+            'assessment': assessment_key,
+            'subject_code': subject_code,
+            'exists': True,
+            'is_published': bool(getattr(lock, 'is_published', False)),
+            'mark_entry_blocked': bool(getattr(lock, 'mark_entry_blocked', False)),
+            'mark_manager_locked': bool(getattr(lock, 'mark_manager_locked', False)),
+            'mark_entry_unblocked_until': getattr(lock, 'mark_entry_unblocked_until', None).isoformat() if getattr(lock, 'mark_entry_unblocked_until', None) else None,
+            'mark_manager_unlocked_until': getattr(lock, 'mark_manager_unlocked_until', None).isoformat() if getattr(lock, 'mark_manager_unlocked_until', None) else None,
+            'entry_open': bool(entry_open),
         }
     )
 
@@ -1907,7 +2404,7 @@ def due_schedule_upsert(request):
     if not ay_id or not subject_code or not assessment or due_at is None:
         return Response({'detail': 'academic_year_id, subject_code, assessment, due_at are required.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    if assessment not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'formative1', 'formative2'}:
+    if assessment not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
     from academics.models import AcademicYear, Subject
@@ -1973,7 +2470,7 @@ def due_schedule_bulk_upsert(request):
         return Response({'detail': 'subject_codes must be a non-empty list.'}, status=status.HTTP_400_BAD_REQUEST)
 
     norm_assessments = [str(a).strip().lower() for a in assessments]
-    bad = [a for a in norm_assessments if a not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'formative1', 'formative2'}]
+    bad = [a for a in norm_assessments if a not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}]
     if bad:
         return Response({'detail': f'Invalid assessments: {bad}'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -2145,6 +2642,7 @@ def publish_request_create(request):
     assessment = str(body.get('assessment') or '').strip().lower()
     subject_code = str(body.get('subject_code') or body.get('subject_id') or '').strip()
     reason = str(body.get('reason') or '').strip()
+    force = bool(body.get('force'))
     ta_id = None
     try:
         if body.get('teaching_assignment_id') is not None:
@@ -2152,13 +2650,13 @@ def publish_request_create(request):
     except Exception:
         ta_id = None
 
-    if assessment not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'formative1', 'formative2'}:
+    if assessment not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
     if not subject_code:
         return Response({'detail': 'subject_code is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
     info = _get_due_schedule_for_request(request, subject_code=subject_code, assessment=assessment, teaching_assignment_id=ta_id)
-    if info.get('publish_allowed') and info.get('allowed_by_due'):
+    if (not force) and info.get('publish_allowed') and info.get('allowed_by_due'):
         return Response({'detail': 'Publish is still open; request is not needed.'}, status=status.HTTP_400_BAD_REQUEST)
 
     academic_year = info.get('academic_year')
@@ -2258,6 +2756,105 @@ def publish_requests_pending(request):
 @api_view(['GET'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
+def publish_requests_history(request):
+    """IQAC: list reviewed publish requests (approved/rejected)."""
+    auth = _require_obe_master(request)
+    if auth:
+        return auth
+
+    from .models import ObePublishRequest
+
+    qp = getattr(request, 'query_params', {}) if hasattr(request, 'query_params') else request.GET
+    statuses_raw = str(qp.get('statuses') or '').strip()
+    if statuses_raw:
+        statuses = [s.strip().upper() for s in statuses_raw.split(',') if s.strip()]
+    else:
+        statuses = ['APPROVED', 'REJECTED']
+    statuses = [s for s in statuses if s in {'APPROVED', 'REJECTED'}]
+    if not statuses:
+        statuses = ['APPROVED', 'REJECTED']
+
+    try:
+        limit = int(qp.get('limit') or 200)
+    except Exception:
+        limit = 200
+    limit = max(1, min(500, limit))
+
+    qs = (
+        ObePublishRequest.objects.select_related('staff_user', 'academic_year', 'reviewed_by')
+        .filter(status__in=statuses)
+        .order_by('-updated_at')
+    )[:limit]
+
+    def user_name(u):
+        if not u:
+            return None
+        try:
+            full = ' '.join([
+                str(getattr(u, 'first_name', '') or '').strip(),
+                str(getattr(u, 'last_name', '') or '').strip(),
+            ]).strip()
+            return full or getattr(u, 'username', None)
+        except Exception:
+            return getattr(u, 'username', None)
+
+    def staff_department(u):
+        try:
+            sp = getattr(u, 'staff_profile', None)
+            if not sp:
+                return None
+            dept = None
+            try:
+                dept = sp.get_current_department()
+            except Exception:
+                dept = getattr(sp, 'department', None)
+            return getattr(dept, 'name', None) if dept else None
+        except Exception:
+            return None
+
+    out = []
+    for r in qs:
+        u = getattr(r, 'staff_user', None)
+        reviewer = getattr(r, 'reviewed_by', None)
+        out.append(
+            {
+                'id': r.id,
+                'status': r.status,
+                'assessment': r.assessment,
+                'subject_code': r.subject_code,
+                'subject_name': r.subject_name,
+                'reason': r.reason,
+                'requested_at': r.created_at.isoformat() if r.created_at else None,
+                'academic_year': {
+                    'id': r.academic_year_id,
+                    'name': getattr(getattr(r, 'academic_year', None), 'name', None),
+                }
+                if r.academic_year_id
+                else None,
+                'staff': {
+                    'id': getattr(u, 'id', None),
+                    'username': getattr(u, 'username', None),
+                    'name': user_name(u),
+                    'department': staff_department(u),
+                },
+                'reviewed_by': {
+                    'id': getattr(reviewer, 'id', None),
+                    'username': getattr(reviewer, 'username', None),
+                    'name': user_name(reviewer),
+                }
+                if reviewer
+                else None,
+                'reviewed_at': r.reviewed_at.isoformat() if getattr(r, 'reviewed_at', None) else None,
+                'approved_until': r.approved_until.isoformat() if getattr(r, 'approved_until', None) else None,
+            }
+        )
+
+    return Response({'results': out})
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
 def publish_requests_pending_count(request):
     auth = _require_obe_master(request)
     if auth:
@@ -2306,3 +2903,332 @@ def publish_request_reject(request, req_id: int):
     row.mark_rejected(request.user)
     row.save(update_fields=['status', 'approved_until', 'reviewed_by', 'reviewed_at', 'updated_at'])
     return Response({'status': 'rejected'})
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def edit_request_create(request):
+    """Faculty: create a scoped edit request after publishing."""
+    staff_profile, err = _faculty_only(request)
+    if err:
+        return err
+
+    body = request.data if isinstance(request.data, dict) else {}
+    assessment = str(body.get('assessment') or '').strip().lower()
+    subject_code = str(body.get('subject_code') or '').strip()
+    reason = str(body.get('reason') or '').strip()
+    scope_raw = str(body.get('scope') or '').strip().upper()
+    ta_id = None
+    try:
+        if body.get('teaching_assignment_id') is not None:
+            ta_id = int(str(body.get('teaching_assignment_id')))
+    except Exception:
+        ta_id = None
+
+    if assessment not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
+        return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
+    if not subject_code:
+        return Response({'detail': 'subject_code is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if scope_raw in {'MARKS', 'MARKS_ENTRY', 'MARK_ENTRY', 'TABLE'}:
+        scope = 'MARK_ENTRY'
+    elif scope_raw in {'MARK_MANAGER', 'MANAGER'}:
+        scope = 'MARK_MANAGER'
+    else:
+        return Response({'detail': 'scope is required (MARK_ENTRY or MARK_MANAGER).'}, status=status.HTTP_400_BAD_REQUEST)
+
+    info = _get_due_schedule_for_request(request, subject_code=subject_code, assessment=assessment, teaching_assignment_id=ta_id)
+    academic_year = info.get('academic_year')
+    if academic_year is None:
+        return Response({'detail': 'Unable to resolve academic year for this subject.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    ta = _resolve_staff_teaching_assignment(request, subject_code=subject_code, teaching_assignment_id=ta_id)
+    section_name = _resolve_section_name_from_ta(ta)
+
+    from .models import ObeEditRequest
+
+    existing = ObeEditRequest.objects.filter(
+        staff_user=request.user,
+        academic_year=academic_year,
+        subject_code=subject_code,
+        assessment=assessment,
+        scope=scope,
+        status='PENDING',
+    ).order_by('-created_at').first()
+
+    if existing:
+        existing.reason = reason
+        existing.subject_name = existing.subject_name or (getattr(info.get('schedule'), 'subject_name', '') or '')
+        if getattr(existing, 'teaching_assignment_id', None) is None and ta is not None:
+            existing.teaching_assignment = ta
+        if not getattr(existing, 'section_name', None) and section_name:
+            existing.section_name = section_name
+        existing.save(update_fields=['reason', 'subject_name', 'teaching_assignment', 'section_name', 'updated_at'])
+        req = existing
+    else:
+        req = ObeEditRequest.objects.create(
+            staff_user=request.user,
+            academic_year=academic_year,
+            subject_code=subject_code,
+            subject_name=(getattr(info.get('schedule'), 'subject_name', '') or ''),
+            assessment=assessment,
+            scope=scope,
+            reason=reason,
+            teaching_assignment=ta,
+            section_name=section_name,
+        )
+
+    return Response({'id': req.id, 'status': req.status, 'scope': req.scope, 'created_at': req.created_at.isoformat() if req.created_at else None})
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def edit_requests_pending(request):
+    """IQAC: list pending edit requests."""
+    auth = _require_obe_master(request)
+    if auth:
+        return auth
+
+    from .models import ObeEditRequest
+
+    qp = getattr(request, 'query_params', {}) if hasattr(request, 'query_params') else request.GET
+    scope_raw = str(qp.get('scope') or '').strip().upper()
+    scope_filter = None
+    if scope_raw in {'MARK_ENTRY', 'MARK_MANAGER'}:
+        scope_filter = scope_raw
+
+    qs = ObeEditRequest.objects.select_related('staff_user', 'academic_year').filter(status='PENDING')
+    if scope_filter:
+        qs = qs.filter(scope=scope_filter)
+    qs = qs.order_by('-created_at')
+
+    def staff_name(u):
+        if not u:
+            return None
+        try:
+            full = ' '.join([str(getattr(u, 'first_name', '') or '').strip(), str(getattr(u, 'last_name', '') or '').strip()]).strip()
+            return full or getattr(u, 'username', None)
+        except Exception:
+            return getattr(u, 'username', None)
+
+    out = []
+    for r in qs:
+        u = getattr(r, 'staff_user', None)
+        out.append(
+            {
+                'id': r.id,
+                'status': r.status,
+                'assessment': r.assessment,
+                'scope': r.scope,
+                'subject_code': r.subject_code,
+                'subject_name': r.subject_name,
+                'reason': r.reason,
+                'requested_at': r.created_at.isoformat() if r.created_at else None,
+                'academic_year': {
+                    'id': r.academic_year_id,
+                    'name': getattr(getattr(r, 'academic_year', None), 'name', None),
+                }
+                if r.academic_year_id
+                else None,
+                'staff': {
+                    'id': getattr(u, 'id', None),
+                    'username': getattr(u, 'username', None),
+                    'name': staff_name(u),
+                },
+            }
+        )
+
+    return Response({'results': out})
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def edit_requests_history(request):
+    """IQAC: list reviewed edit requests (approved/rejected)."""
+    auth = _require_obe_master(request)
+    if auth:
+        return auth
+
+    from .models import ObeEditRequest
+
+    qp = getattr(request, 'query_params', {}) if hasattr(request, 'query_params') else request.GET
+    statuses_raw = str(qp.get('statuses') or '').strip()
+    if statuses_raw:
+        statuses = [s.strip().upper() for s in statuses_raw.split(',') if s.strip()]
+    else:
+        statuses = ['APPROVED', 'REJECTED']
+    statuses = [s for s in statuses if s in {'APPROVED', 'REJECTED'}]
+    if not statuses:
+        statuses = ['APPROVED', 'REJECTED']
+
+    scope_raw = str(qp.get('scope') or '').strip().upper()
+    scope_filter = None
+    if scope_raw in {'MARK_ENTRY', 'MARK_MANAGER'}:
+        scope_filter = scope_raw
+
+    try:
+        limit = int(qp.get('limit') or 200)
+    except Exception:
+        limit = 200
+    limit = max(1, min(500, limit))
+
+    qs = ObeEditRequest.objects.select_related('staff_user', 'academic_year', 'reviewed_by').filter(status__in=statuses)
+    if scope_filter:
+        qs = qs.filter(scope=scope_filter)
+    qs = qs.order_by('-updated_at')[:limit]
+
+    def user_name(u):
+        if not u:
+            return None
+        try:
+            full = ' '.join([
+                str(getattr(u, 'first_name', '') or '').strip(),
+                str(getattr(u, 'last_name', '') or '').strip(),
+            ]).strip()
+            return full or getattr(u, 'username', None)
+        except Exception:
+            return getattr(u, 'username', None)
+
+    out = []
+    for r in qs:
+        u = getattr(r, 'staff_user', None)
+        reviewer = getattr(r, 'reviewed_by', None)
+        out.append(
+            {
+                'id': r.id,
+                'status': r.status,
+                'assessment': r.assessment,
+                'scope': r.scope,
+                'subject_code': r.subject_code,
+                'subject_name': r.subject_name,
+                'reason': r.reason,
+                'requested_at': r.created_at.isoformat() if r.created_at else None,
+                'academic_year': {
+                    'id': r.academic_year_id,
+                    'name': getattr(getattr(r, 'academic_year', None), 'name', None),
+                }
+                if r.academic_year_id
+                else None,
+                'staff': {
+                    'id': getattr(u, 'id', None),
+                    'username': getattr(u, 'username', None),
+                    'name': user_name(u),
+                },
+                'reviewed_by': {
+                    'id': getattr(reviewer, 'id', None),
+                    'username': getattr(reviewer, 'username', None),
+                    'name': user_name(reviewer),
+                }
+                if reviewer
+                else None,
+                'reviewed_at': r.reviewed_at.isoformat() if getattr(r, 'reviewed_at', None) else None,
+                'approved_until': r.approved_until.isoformat() if getattr(r, 'approved_until', None) else None,
+            }
+        )
+
+    return Response({'results': out})
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def edit_requests_pending_count(request):
+    auth = _require_obe_master(request)
+    if auth:
+        return auth
+    from .models import ObeEditRequest
+    qp = getattr(request, 'query_params', {}) if hasattr(request, 'query_params') else request.GET
+    scope_raw = str(qp.get('scope') or '').strip().upper()
+    qs = ObeEditRequest.objects.filter(status='PENDING')
+    if scope_raw in {'MARK_ENTRY', 'MARK_MANAGER'}:
+        qs = qs.filter(scope=scope_raw)
+    return Response({'pending': int(qs.count())})
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def edit_request_approve(request, req_id: int):
+    auth = _require_obe_master(request)
+    if auth:
+        return auth
+
+    from .models import ObeEditRequest
+    row = ObeEditRequest.objects.filter(id=req_id).first()
+    if not row:
+        return Response({'detail': 'Request not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    minutes = (request.data or {}).get('window_minutes')
+    try:
+        minutes_int = int(minutes) if minutes is not None else 120
+    except Exception:
+        minutes_int = 120
+
+    row.mark_approved(request.user, window_minutes=minutes_int)
+    row.save(update_fields=['status', 'approved_until', 'reviewed_by', 'reviewed_at', 'updated_at'])
+
+    # Sync to authoritative lock row so the UI can use one source of truth.
+    try:
+        ta = getattr(row, 'teaching_assignment', None)
+        academic_year = getattr(row, 'academic_year', None)
+        section_name = str(getattr(row, 'section_name', '') or '').strip() or _resolve_section_name_from_ta(ta)
+
+        lock = _upsert_mark_table_lock(
+            staff_user=getattr(row, 'staff_user', None),
+            subject_code=str(getattr(row, 'subject_code', '') or ''),
+            subject_name=str(getattr(row, 'subject_name', '') or ''),
+            assessment=str(getattr(row, 'assessment', '') or ''),
+            teaching_assignment=ta,
+            academic_year=academic_year,
+            section_name=section_name,
+            updated_by=getattr(getattr(request, 'user', None), 'id', None),
+        )
+
+        lock.is_published = True
+
+        if str(getattr(row, 'scope', '')).upper() == 'MARK_ENTRY':
+            lock.mark_entry_unblocked_until = getattr(row, 'approved_until', None)
+        elif str(getattr(row, 'scope', '')).upper() == 'MARK_MANAGER':
+            lock.mark_manager_unlocked_until = getattr(row, 'approved_until', None)
+            # While Mark Manager is editable, the mark-entry table must be blocked.
+            lock.mark_entry_unblocked_until = None
+            lock.mark_manager_locked = False
+
+        lock.recompute_blocks()
+        lock.save(
+            update_fields=[
+                'is_published',
+                'published_blocked',
+                'mark_entry_blocked',
+                'mark_manager_locked',
+                'mark_entry_unblocked_until',
+                'mark_manager_unlocked_until',
+                'updated_by',
+                'updated_at',
+            ]
+        )
+    except OperationalError:
+        pass
+
+    return Response({'status': 'approved', 'scope': row.scope, 'approved_until': row.approved_until.isoformat() if row.approved_until else None})
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def edit_request_reject(request, req_id: int):
+    auth = _require_obe_master(request)
+    if auth:
+        return auth
+
+    from .models import ObeEditRequest
+    row = ObeEditRequest.objects.filter(id=req_id).first()
+    if not row:
+        return Response({'detail': 'Request not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    row.mark_rejected(request.user)
+    row.save(update_fields=['status', 'approved_until', 'reviewed_by', 'reviewed_at', 'updated_at'])
+    return Response({'status': 'rejected', 'scope': row.scope})

@@ -5,10 +5,12 @@ import {
   fetchMyTeachingAssignments,
   fetchPublishedCia1Sheet,
   fetchPublishedFormative1,
+  fetchPublishedLabSheet,
   fetchPublishedSsa1,
   TeachingAssignmentItem,
 } from '../services/obe';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
+import { fetchDeptRow } from '../services/curriculum';
 import { lsGet, lsSet } from '../utils/localStorage';
 
 type Props = {
@@ -144,6 +146,10 @@ function weightedBlendMark(args: {
 export default function C1CQIPage({ courseId }: Props): JSX.Element {
   const [masterCfg, setMasterCfg] = useState<any>(null);
 
+  const [classType, setClassType] = useState<string | null>(null);
+  const normalizedClassType = useMemo(() => String(classType ?? '').trim().toUpperCase(), [classType]);
+  const isLabCourse = normalizedClassType === 'LAB';
+
   const [tas, setTas] = useState<TeachingAssignmentItem[]>([]);
   const [taError, setTaError] = useState<string | null>(null);
   const [selectedTaId, setSelectedTaId] = useState<number | null>(null);
@@ -157,6 +163,8 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
   const [published, setPublished] = useState<{ ssa: Record<string, string | null>; f1: Record<string, any>; cia: any | null }>(
     { ssa: {}, f1: {}, cia: null },
   );
+
+  const [publishedLab, setPublishedLab] = useState<{ cia1: any | null }>({ cia1: null });
 
   const [search, setSearch] = useState('');
 
@@ -220,6 +228,29 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
     lsSet(`coAttainment_selectedTa_${courseId}`, selectedTaId);
   }, [courseId, selectedTaId]);
 
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const ta = (tas || []).find((t) => t.id === selectedTaId) || null;
+        const curriculumRowId = (ta as any)?.curriculum_row_id;
+        if (!curriculumRowId) {
+          if (mounted) setClassType(null);
+          return;
+        }
+        const row = await fetchDeptRow(Number(curriculumRowId));
+        if (!mounted) return;
+        const ct = String((row as any)?.class_type || '').trim();
+        setClassType(ct || null);
+      } catch {
+        if (mounted) setClassType(null);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [selectedTaId, tas]);
+
   const questions = useMemo<QuestionDef[]>(() => {
     const qs = masterCfg?.assessments?.cia1?.questions;
     if (Array.isArray(qs) && qs.length) {
@@ -280,18 +311,26 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
     setLoadingPublished(true);
     setPublishedError(null);
     try {
-      const [ssaRes, f1Res, ciaRes] = await Promise.all([
-        fetchPublishedSsa1(courseId),
-        fetchPublishedFormative1(courseId),
-        fetchPublishedCia1Sheet(courseId),
-      ]);
-      setPublished({
-        ssa: (ssaRes as any)?.marks && typeof (ssaRes as any).marks === 'object' ? (ssaRes as any).marks : {},
-        f1: (f1Res as any)?.marks && typeof (f1Res as any).marks === 'object' ? (f1Res as any).marks : {},
-        cia: (ciaRes as any)?.data ?? null,
-      });
+      if (isLabCourse) {
+        const cia1Res = await fetchPublishedLabSheet('cia1', courseId);
+        setPublished({ ssa: {}, f1: {}, cia: null });
+        setPublishedLab({ cia1: (cia1Res as any)?.data ?? null });
+      } else {
+        const [ssaRes, f1Res, ciaRes] = await Promise.all([
+          fetchPublishedSsa1(courseId),
+          fetchPublishedFormative1(courseId),
+          fetchPublishedCia1Sheet(courseId),
+        ]);
+        setPublished({
+          ssa: (ssaRes as any)?.marks && typeof (ssaRes as any).marks === 'object' ? (ssaRes as any).marks : {},
+          f1: (f1Res as any)?.marks && typeof (f1Res as any).marks === 'object' ? (f1Res as any).marks : {},
+          cia: (ciaRes as any)?.data ?? null,
+        });
+        setPublishedLab({ cia1: null });
+      }
     } catch (e: any) {
       setPublished({ ssa: {}, f1: {}, cia: null });
+      setPublishedLab({ cia1: null });
       setPublishedError(e?.message || 'Failed to load published marks');
     } finally {
       setLoadingPublished(false);
@@ -302,7 +341,7 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
     if (!courseId) return;
     loadPublished();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [courseId]);
+  }, [courseId, isLabCourse]);
 
   useEffect(() => {
     const handler = (ev: Event) => {
@@ -364,6 +403,70 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
         f1Co2: number | null;
       }
     >();
+
+    if (isLabCourse) {
+      // For LAB courses, CQI should reflect the lab CIA1 published sheet.
+      // We compute CO1/CO2 from (avg experiment marks) + (CIAExam/2), consistent with CO Attainment.
+      const CO_MAX = 25 + 30 / 2; // avg experiment (25) + CIAExam/2 (15)
+
+      const snapshot = publishedLab.cia1;
+      const sheet = snapshot?.sheet && typeof snapshot.sheet === 'object' ? snapshot.sheet : {};
+      const rowsByStudentId = sheet?.rowsByStudentId && typeof sheet.rowsByStudentId === 'object' ? sheet.rowsByStudentId : {};
+      const expCountA = clamp(Number(sheet?.expCountA ?? 0), 0, 12);
+      const expCountB = clamp(Number(sheet?.expCountB ?? 0), 0, 12);
+      const coAEnabled = Boolean(sheet?.coAEnabled);
+      const coBEnabled = Boolean(sheet?.coBEnabled);
+
+      const normalizeMarksArrayLocal = (raw: unknown, length: number): Array<number | ''> => {
+        const arr = Array.isArray(raw) ? raw : [];
+        const out2: Array<number | ''> = [];
+        for (let i = 0; i < length; i++) {
+          const v = arr[i];
+          if (v === '' || v == null) {
+            out2.push('');
+            continue;
+          }
+          const n = typeof v === 'number' ? v : Number(v);
+          out2.push(Number.isFinite(n) ? n : '');
+        }
+        return out2;
+      };
+
+      const avgMarksLocal = (arr: Array<number | ''>): number | null => {
+        const nums = arr.filter((v) => typeof v === 'number' && Number.isFinite(v)) as number[];
+        if (!nums.length) return null;
+        return nums.reduce((a, b) => a + b, 0) / nums.length;
+      };
+
+      for (const s of students) {
+        const row = rowsByStudentId[String(s.id)] || {};
+        const marksA = normalizeMarksArrayLocal((row as any).marksA, expCountA).slice(0, coAEnabled ? expCountA : 0);
+        const marksB = normalizeMarksArrayLocal((row as any).marksB, expCountB).slice(0, coBEnabled ? expCountB : 0);
+        const avgA = avgMarksLocal(marksA);
+        const avgB = avgMarksLocal(marksB);
+
+        const ciaExamRaw = (row as any)?.ciaExam;
+        const ciaExamNum = typeof ciaExamRaw === 'number' && Number.isFinite(ciaExamRaw) ? ciaExamRaw : null;
+        const hasAny = avgA != null || avgB != null || ciaExamNum != null;
+
+        const a = !hasAny ? null : (avgA ?? 0) + (ciaExamNum ?? 0) / 2;
+        const b = !hasAny ? null : (avgB ?? 0) + (ciaExamNum ?? 0) / 2;
+
+        // We store in the same shape expected by the CQI theory path, but reuse fields.
+        out.set(s.id, {
+          ssaCo1: null,
+          ssaCo2: null,
+          ciaCo1: a == null ? null : clamp(a, 0, CO_MAX),
+          ciaCo2: b == null ? null : clamp(b, 0, CO_MAX),
+          f1Co1: null,
+          f1Co2: null,
+          // @ts-expect-error - attach a private helper
+          __labCoMax: CO_MAX,
+        } as any);
+      }
+
+      return out;
+    }
 
     const ssaById = new Map<number, number | null>();
     for (const [sidStr, markStr] of Object.entries(published.ssa || {})) {
@@ -432,9 +535,46 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
     }
 
     return out;
-  }, [published, students, maxes, questions]);
+  }, [published, publishedLab, students, maxes, questions, isLabCourse]);
 
   const computedRows = useMemo(() => {
+    if (isLabCourse) {
+      const first = students[0]?.id != null ? (byStudentId.get(students[0].id) as any) : null;
+      const coMax = Number(first?.__labCoMax);
+      const denom = Number.isFinite(coMax) && coMax > 0 ? coMax : 40;
+
+      const pt3 = (v: number | null) => (v == null || !denom ? null : round2((v / denom) * 3));
+      const total100 = (a: number | null, b: number | null) => {
+        if (a == null || b == null || !denom) return null;
+        const t = ((a + b) / (2 * denom)) * 100;
+        return Number.isFinite(t) ? Math.round(clamp(t, 0, 100)) : null;
+      };
+
+      return students.map((s, idx) => {
+        const m: any = byStudentId.get(s.id) || {};
+        const co1Raw = typeof m.ciaCo1 === 'number' ? (m.ciaCo1 as number) : null;
+        const co2Raw = typeof m.ciaCo2 === 'number' ? (m.ciaCo2 as number) : null;
+        const co1_3pt = pt3(co1Raw);
+        const co2_3pt = pt3(co2Raw);
+        const total = total100(co1Raw, co2Raw);
+
+        const flagCo1 = typeof co1_3pt === 'number' && co1_3pt < THRESHOLD_3PT;
+        const flagCo2 = typeof co2_3pt === 'number' && co2_3pt < THRESHOLD_3PT;
+        const cos = [flagCo1 ? 'CO1' : null, flagCo2 ? 'CO2' : null].filter(Boolean).join('+');
+
+        return {
+          sno: idx + 1,
+          ...s,
+          co1_3pt,
+          co2_3pt,
+          total,
+          flagCo1,
+          flagCo2,
+          cos,
+        };
+      });
+    }
+
     const ssaW = weights.ssa1;
     const ciaW = weights.cia1;
     const f1W = weights.formative1;
@@ -489,7 +629,7 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
         cos,
       };
     });
-  }, [students, byStudentId, maxes, weights]);
+  }, [students, byStudentId, maxes, weights, isLabCourse]);
 
   const visibleRows = useMemo(() => {
     const q = search.trim().toLowerCase();

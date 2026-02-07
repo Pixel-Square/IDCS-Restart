@@ -50,7 +50,7 @@ ROOT_URLCONF = 'erp.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -119,3 +119,14 @@ SIMPLE_JWT = {
 }
 
 CORS_ALLOW_ALL_ORIGINS = True
+
+# Allow configuring CSRF trusted origins via environment variable
+# Provide comma-separated origins including scheme, e.g. 'https://db.zynix.us'
+csrf_env = os.getenv('CSRF_TRUSTED_ORIGINS', '')
+CSRF_TRUSTED_ORIGINS = [h.strip() for h in csrf_env.split(',') if h.strip()]
+# In DEBUG add localhost aliases for convenience
+if DEBUG:
+    CSRF_TRUSTED_ORIGINS += ['http://localhost', 'http://127.0.0.1']
+# Always allow the production dashboard hostname if not already present
+if 'https://db.zynix.us' not in CSRF_TRUSTED_ORIGINS:
+    CSRF_TRUSTED_ORIGINS.append('https://db.zynix.us')

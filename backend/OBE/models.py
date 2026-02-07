@@ -1,6 +1,6 @@
 import uuid
 from django.db import models
-from django.db.models import UniqueConstraint
+from django.db.models import UniqueConstraint, Q
 from django.conf import settings
 from django.utils import timezone
 from datetime import timedelta
@@ -288,6 +288,69 @@ class ObePublishRequest(models.Model):
         self.approved_until = None
 
 
+class ObeEditRequest(models.Model):
+    """Faculty request to edit after publishing.
+
+    This is distinct from `ObePublishRequest` (which is only for extending the publish window).
+    Edit requests are scoped so IQAC can approve Mark Entry edits separately from Mark Manager edits.
+    """
+
+    STATUS_CHOICES = ObePublishRequest.STATUS_CHOICES
+    ASSESSMENT_CHOICES = AssessmentDraft.ASSESSMENT_CHOICES
+
+    SCOPE_CHOICES = (
+        ('MARK_ENTRY', 'Mark Entry'),
+        ('MARK_MANAGER', 'Mark Manager'),
+    )
+
+    staff_user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='obe_edit_requests')
+    academic_year = models.ForeignKey('academics.AcademicYear', on_delete=models.SET_NULL, null=True, blank=True, related_name='obe_edit_requests')
+    teaching_assignment = models.ForeignKey('academics.TeachingAssignment', on_delete=models.SET_NULL, null=True, blank=True, related_name='obe_edit_requests')
+    subject_code = models.CharField(max_length=64, db_index=True)
+    subject_name = models.CharField(max_length=255, blank=True, default='')
+    section_name = models.CharField(max_length=64, blank=True, default='')
+    assessment = models.CharField(max_length=20, choices=ASSESSMENT_CHOICES)
+    scope = models.CharField(max_length=24, choices=SCOPE_CHOICES, db_index=True)
+    reason = models.TextField(blank=True, default='')
+
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default='PENDING', db_index=True)
+    approved_until = models.DateTimeField(null=True, blank=True)
+
+    reviewed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='obe_edit_requests_reviewed')
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['status', 'created_at']),
+            models.Index(fields=['staff_user', 'assessment']),
+            models.Index(fields=['academic_year', 'assessment']),
+            models.Index(fields=['subject_code', 'assessment', 'scope']),
+            models.Index(fields=['teaching_assignment', 'assessment', 'scope']),
+        ]
+
+    def mark_approved(self, reviewer, window_minutes: int = 120):
+        now = timezone.now()
+        self.status = 'APPROVED'
+        self.reviewed_by = reviewer
+        self.reviewed_at = now
+        try:
+            mins = int(window_minutes)
+        except Exception:
+            mins = 120
+        mins = max(5, min(24 * 60, mins))
+        self.approved_until = now + timedelta(minutes=mins)
+
+    def mark_rejected(self, reviewer):
+        now = timezone.now()
+        self.status = 'REJECTED'
+        self.reviewed_by = reviewer
+        self.reviewed_at = now
+        self.approved_until = None
+
+
 class ObeGlobalPublishControl(models.Model):
     """Optional global override per Academic Year + Assessment.
 
@@ -314,4 +377,128 @@ class ObeGlobalPublishControl(models.Model):
 
     def __str__(self) -> str:
         return f"global:{self.academic_year_id}:{self.assessment} open={self.is_open}"
+
+
+class ObeMarkTableLock(models.Model):
+    """Authoritative lock state for an OBE mark-entry table.
+
+    Why this exists:
+    - Frontend currently infers lock state from multiple signals (published snapshot exists,
+      local flags like `publishedEditLocked`, and edit-window approvals).
+    - A single DB row per (teaching assignment + assessment) makes locking deterministic
+      and reusable for SSA1/SSA2/CIA1/CIA2/Formative1/Formative2/MODEL.
+
+    Semantics (aligned to current UX):
+    - `mark_entry_blocked=True` means mark-entry cells must be blocked/readonly.
+    - `mark_manager_locked=True` means Mark Manager config must be locked.
+    - Mark entry is considered OPEN only when BOTH:
+        - `mark_entry_blocked` is False
+        - `mark_manager_locked` is True (manager confirmed/locked)
+
+    Note on approvals:
+    - If you want time-bound IQAC approvals, store the *_unblocked_until fields
+      and recompute the booleans at request time.
+    """
+
+    ASSESSMENT_CHOICES = AssessmentDraft.ASSESSMENT_CHOICES
+
+    teaching_assignment = models.ForeignKey(
+        'academics.TeachingAssignment',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='obe_mark_table_locks',
+    )
+
+    # Who owns this table in the UI (faculty user)
+    staff_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='obe_mark_table_locks',
+    )
+
+    # Denormalized identifiers (kept for stable lookup even if TA changes)
+    academic_year = models.ForeignKey(
+        'academics.AcademicYear',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='obe_mark_table_locks',
+    )
+    subject_code = models.CharField(max_length=64, db_index=True)
+    subject_name = models.CharField(max_length=255, blank=True, default='')
+    section_name = models.CharField(max_length=64, blank=True, default='')
+
+    assessment = models.CharField(max_length=20, choices=ASSESSMENT_CHOICES, db_index=True)
+
+    # Published indicates the faculty has published at least once.
+    is_published = models.BooleanField(default=False, db_index=True)
+
+    # Lock flags
+    published_blocked = models.BooleanField(default=False)
+    mark_entry_blocked = models.BooleanField(default=False)
+
+    # IMPORTANT: locked=True means Mark Manager is NOT editable.
+    # (This matches current frontend `markManagerLocked` usage.)
+    mark_manager_locked = models.BooleanField(default=False)
+
+    # Optional time-bound override windows (for IQAC approvals)
+    mark_entry_unblocked_until = models.DateTimeField(null=True, blank=True)
+    mark_manager_unlocked_until = models.DateTimeField(null=True, blank=True)
+
+    updated_by = models.IntegerField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            # Preferred key (no collisions): one lock row per TeachingAssignment + assessment.
+            UniqueConstraint(
+                fields=['teaching_assignment', 'assessment'],
+                condition=Q(teaching_assignment__isnull=False),
+                name='unique_obe_mark_table_lock_ta',
+            ),
+            # Fallback key for legacy flows where teaching_assignment is not provided.
+            UniqueConstraint(
+                fields=['staff_user', 'subject_code', 'assessment', 'section_name', 'academic_year'],
+                condition=Q(teaching_assignment__isnull=True),
+                name='unique_obe_mark_table_lock_fallback',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['subject_code', 'assessment']),
+            models.Index(fields=['staff_user', 'assessment']),
+            models.Index(fields=['academic_year', 'assessment']),
+            models.Index(fields=['assessment', 'updated_at']),
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover
+        sec = f"/{self.section_name}" if self.section_name else ''
+        return f"lock:{self.subject_code}{sec}:{self.assessment} published={self.is_published} entry_blocked={self.mark_entry_blocked} manager_locked={self.mark_manager_locked}"
+
+    def recompute_blocks(self, now=None):
+        """Recompute boolean flags from time-window fields.
+
+        This avoids needing cron jobs to re-lock after an approval window expires.
+        """
+        now = now or timezone.now()
+
+        # published_blocked is a convenience mirror: a published sheet implies the
+        # published-lock overlay should be shown (unless mark-entry is unblocked).
+        self.published_blocked = bool(self.is_published)
+
+        if self.mark_entry_unblocked_until and self.mark_entry_unblocked_until > now:
+            self.mark_entry_blocked = False
+        else:
+            # Default: block mark-entry after publish; allow before publish.
+            self.mark_entry_blocked = bool(self.is_published)
+
+        if self.mark_manager_unlocked_until and self.mark_manager_unlocked_until > now:
+            self.mark_manager_locked = False
+        else:
+            # If an unlock window is not active, the Mark Manager should be locked.
+            # This ensures time-bound approvals automatically re-lock when they expire.
+            # Pre-publish flows may keep this False, but after publish we default to locked.
+            self.mark_manager_locked = bool(self.is_published) or bool(self.mark_manager_locked)
+
 

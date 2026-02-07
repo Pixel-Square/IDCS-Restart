@@ -46,6 +46,15 @@ export async function fetchWithAuth(input: RequestInfo | URL, init: RequestInit 
   } catch (e) {
     // failed to refresh -> clear tokens
     try { window.localStorage.removeItem('access'); window.localStorage.removeItem('refresh'); } catch(_){}
+    try {
+      // redirect to login so user can re-authenticate
+      if (typeof window !== 'undefined') {
+        // small delay to allow any UI handlers to run
+        setTimeout(() => {
+          try { window.location.href = '/login'; } catch (_) {}
+        }, 50);
+      }
+    } catch (_){ }
     return res
   }
 }

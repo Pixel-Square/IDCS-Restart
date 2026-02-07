@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900">
+  <defs>
+    <linearGradient id="g" x1="0" x2="1">
+      <stop offset="0" stop-color="#0f172a"/>
+      <stop offset="1" stop-color="#0b1220"/>
+    </linearGradient>
+    <linearGradient id="g2" x1="0" x2="1">
+      <stop offset="0" stop-color="#2b8cff" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#6c5cff" stop-opacity="0.12"/>
+    </linearGradient>
+  </defs>
+  <rect width="100%" height="100%" fill="url(#g)"/>
+  <rect width="100%" height="100%" fill="url(#g2)"/>
+  <!-- subtle diagonal pattern -->
+  <g opacity="0.05" fill="#fff">
+    <rect x="0" y="0" width="1600" height="900" transform="skewX(-12) scale(1.4) translate(-200, -50)"/>
+  </g>
+  <!-- soft shape -->
+  <g fill="#fff" opacity="0.02">
+    <path d="M0,700 C300,550 600,650 900,560 C1200,460 1500,620 1600,520 L1600,900 L0,900 Z"/>
+  </g>
+</svg>

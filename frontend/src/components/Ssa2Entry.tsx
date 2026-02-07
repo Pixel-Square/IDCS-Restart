@@ -366,7 +366,7 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
     setPublishing(true);
     setSaveError(null);
     try {
-      await publishSsa2(subjectId, sheet);
+      await publishSsa2(subjectId, sheet, teachingAssignmentId);
       setPublishedAt(new Date().toLocaleString());
       refreshPublishWindow();
       try {

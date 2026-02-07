@@ -665,7 +665,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         batchLabel: subjectId,
         questions,
       };
-      await publishCiaSheet(assessmentKey, subjectId, data);
+      await publishCiaSheet(assessmentKey, subjectId, data, teachingAssignmentId);
       setPublishedAt(new Date().toLocaleString());
       refreshPublishWindow();
       try {

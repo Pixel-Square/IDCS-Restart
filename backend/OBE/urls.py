@@ -41,6 +41,13 @@ urlpatterns = [
     # Due schedules + publish requests
     path('publish-window/<str:assessment>/<str:subject_id>', views.publish_window),
 
+    # Edit approvals (separate from publish window)
+    path('edit-window/<str:assessment>/<str:subject_id>', views.edit_window),
+
+    # Authoritative lock state per mark-entry table
+    path('mark-table-lock/<str:assessment>/<str:subject_id>', views.mark_table_lock_status),
+    path('mark-table-lock/<str:assessment>/<str:subject_id>/confirm-mark-manager', views.mark_table_lock_confirm_mark_manager),
+
     path('due-schedule-subjects', views.due_schedule_subjects),
     path('due-schedules', views.due_schedules),
     path('due-schedule-upsert', views.due_schedule_upsert),
@@ -52,6 +59,14 @@ urlpatterns = [
     path('publish-request', views.publish_request_create),
     path('publish-requests/pending', views.publish_requests_pending),
     path('publish-requests/pending-count', views.publish_requests_pending_count),
+    path('publish-requests/history', views.publish_requests_history),
     path('publish-requests/<int:req_id>/approve', views.publish_request_approve),
     path('publish-requests/<int:req_id>/reject', views.publish_request_reject),
+
+    path('edit-request', views.edit_request_create),
+    path('edit-requests/pending', views.edit_requests_pending),
+    path('edit-requests/pending-count', views.edit_requests_pending_count),
+    path('edit-requests/history', views.edit_requests_history),
+    path('edit-requests/<int:req_id>/approve', views.edit_request_approve),
+    path('edit-requests/<int:req_id>/reject', views.edit_request_reject),
 ]

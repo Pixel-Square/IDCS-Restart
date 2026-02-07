@@ -10,6 +10,7 @@ export type TeachingAssignmentItem = {
 
 // Safe fetch for teaching assignments: use axios apiClient so automatic refresh runs
 import { apiClient } from './auth';
+import axios from 'axios';
 
 export async function fetchMyTeachingAssignments(): Promise<TeachingAssignmentItem[]> {
   const url = `${apiBase()}/api/academics/my-teaching-assignments/`;
@@ -32,6 +33,8 @@ export type Cia1MarksResponse = {
 type DraftResponse<T> = {
   subject: { code: string; name: string };
   draft: T | null;
+  updated_at?: string | null;
+  updated_by?: { id?: number | null; username?: string | null; name?: string | null } | null;
 };
 
 export type DraftAssessmentKey = 'ssa1' | 'ssa2' | 'cia1' | 'cia2' | 'formative1' | 'formative2' | 'model';
@@ -45,6 +48,44 @@ function apiBase() {
 function authHeader(): Record<string, string> {
   const token = window.localStorage.getItem('access');
   return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+async function tryRefreshAccess(): Promise<string | null> {
+  try {
+    const base = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+    const refresh = localStorage.getItem('refresh');
+    if (!refresh) return null;
+    const res = await axios.post(`${base}/api/accounts/token/refresh/`, { refresh });
+    const { access, refresh: newRefresh } = res.data || {};
+    if (access) localStorage.setItem('access', access);
+    if (newRefresh) localStorage.setItem('refresh', newRefresh);
+    return access || null;
+  } catch (e) {
+    try {
+      const auth = await import('./auth');
+      auth.logout();
+    } catch (er) {
+      // ignore
+    }
+    return null;
+  }
+}
+
+async function fetchWithAuth(input: RequestInfo, init?: RequestInit): Promise<Response> {
+  const headers = { 'Content-Type': 'application/json', ...(init?.headers as Record<string, string> || {}), ...authHeader() };
+  const opts: RequestInit = { ...(init || {}), headers };
+
+  let res = await fetch(input, opts);
+  if (res.status !== 401) return res;
+
+  // try refresh once
+  const newAccess = await tryRefreshAccess();
+  if (!newAccess) return res;
+
+  const retryHeaders = { ...(opts.headers as Record<string, string>), Authorization: `Bearer ${newAccess}` };
+  const retryOpts: RequestInit = { ...opts, headers: retryHeaders };
+  res = await fetch(input, retryOpts);
+  return res;
 }
 
 export type PublishWindowResponse = {
@@ -63,6 +104,81 @@ export type PublishWindowResponse = {
   academic_year: { id: number; name: string } | null;
   teaching_assignment_id: number | null;
 };
+
+export type EditScope = 'MARK_ENTRY' | 'MARK_MANAGER';
+
+export type EditWindowResponse = {
+  assessment: DueAssessmentKey;
+  subject_code: string;
+  scope: EditScope;
+  allowed_by_approval: boolean;
+  approval_until: string | null;
+  now: string | null;
+  academic_year: { id: number; name: string } | null;
+  teaching_assignment_id: number | null;
+};
+
+export type MarkTableLockStatusResponse = {
+  assessment: DueAssessmentKey;
+  subject_code: string;
+  teaching_assignment_id: number | null;
+  academic_year: { id: number; name: string } | null;
+  section_name: string | null;
+  exists: boolean;
+  is_published: boolean;
+  published_blocked: boolean;
+  mark_entry_blocked: boolean;
+  mark_manager_locked: boolean;
+  mark_entry_unblocked_until: string | null;
+  mark_manager_unlocked_until: string | null;
+  entry_open: boolean;
+  mark_manager_editable: boolean;
+  updated_at?: string | null;
+};
+
+export async function fetchMarkTableLockStatus(
+  assessment: DueAssessmentKey,
+  subjectId: string,
+  teachingAssignmentId?: number,
+): Promise<MarkTableLockStatusResponse> {
+  const qp = teachingAssignmentId ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
+  const url = `${apiBase()}/api/obe/mark-table-lock/${encodeURIComponent(assessment)}/${encodeURIComponent(subjectId)}${qp}`;
+  const res = await fetchWithAuth(url, { method: 'GET' });
+  if (res.status === 401) {
+    return {
+      assessment,
+      subject_code: String(subjectId),
+      teaching_assignment_id: typeof teachingAssignmentId === 'number' ? teachingAssignmentId : null,
+      academic_year: null,
+      section_name: null,
+      exists: false,
+      is_published: false,
+      published_blocked: false,
+      mark_entry_blocked: false,
+      mark_manager_locked: false,
+      mark_entry_unblocked_until: null,
+      mark_manager_unlocked_until: null,
+      entry_open: true,
+      mark_manager_editable: true,
+      updated_at: null,
+    };
+  }
+  if (!res.ok) await parseError(res, 'Mark table lock fetch failed');
+  return res.json();
+}
+
+export async function confirmMarkManagerLock(
+  assessment: DueAssessmentKey,
+  subjectId: string,
+  teachingAssignmentId?: number,
+): Promise<{ status: string } & Partial<MarkTableLockStatusResponse>> {
+  const qp = teachingAssignmentId ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
+  const url = `${apiBase()}/api/obe/mark-table-lock/${encodeURIComponent(assessment)}/${encodeURIComponent(subjectId)}/confirm-mark-manager${qp}`;
+  const res = await fetchWithAuth(url, { method: 'POST', body: JSON.stringify({}) });
+  if (res.status === 401) throw new Error('Authentication required');
+  if (!res.ok) await parseError(res, 'Mark Manager confirm failed');
+  return res.json();
+}
 
 export async function fetchPublishWindow(assessment: DueAssessmentKey, subjectId: string, teachingAssignmentId?: number): Promise<PublishWindowResponse> {
   const qp = teachingAssignmentId ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
@@ -89,6 +205,33 @@ export async function fetchPublishWindow(assessment: DueAssessmentKey, subjectId
     };
   }
   if (!res.ok) await parseError(res, 'Publish window fetch failed');
+  return res.json();
+}
+
+export async function fetchEditWindow(
+  assessment: DueAssessmentKey,
+  subjectId: string,
+  scope: EditScope,
+  teachingAssignmentId?: number,
+): Promise<EditWindowResponse> {
+  const qpParts: string[] = [`scope=${encodeURIComponent(String(scope))}`];
+  if (teachingAssignmentId) qpParts.push(`teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}`);
+  const qp = qpParts.length ? `?${qpParts.join('&')}` : '';
+  const url = `${apiBase()}/api/obe/edit-window/${encodeURIComponent(assessment)}/${encodeURIComponent(subjectId)}${qp}`;
+  const res = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', ...authHeader() } });
+  if (res.status === 401) {
+    return {
+      assessment,
+      subject_code: String(subjectId),
+      scope,
+      allowed_by_approval: false,
+      approval_until: null,
+      now: null,
+      academic_year: null,
+      teaching_assignment_id: typeof teachingAssignmentId === 'number' ? teachingAssignmentId : null,
+    };
+  }
+  if (!res.ok) await parseError(res, 'Edit window fetch failed');
   return res.json();
 }
 
@@ -174,14 +317,96 @@ export async function bulkUpsertDueSchedule(payload: { academic_year_id: number;
   return res.json();
 }
 
-export async function createPublishRequest(payload: { assessment: DueAssessmentKey; subject_code: string; reason?: string; teaching_assignment_id?: number }): Promise<any> {
+export async function createPublishRequest(payload: { assessment: DueAssessmentKey; subject_code: string; reason?: string; teaching_assignment_id?: number; force?: boolean }): Promise<any> {
   const url = `${apiBase()}/api/obe/publish-request`;
+  const res = await fetchWithAuth(url, { method: 'POST', body: JSON.stringify(payload) });
+  if (res.status === 401) throw new Error('Authentication required');
+  if (!res.ok) await parseError(res, 'Publish request failed');
+  return res.json();
+}
+
+export async function createEditRequest(payload: {
+  assessment: DueAssessmentKey;
+  subject_code: string;
+  scope: EditScope;
+  reason?: string;
+  teaching_assignment_id?: number;
+}): Promise<any> {
+  const url = `${apiBase()}/api/obe/edit-request`;
+  const res = await fetchWithAuth(url, { method: 'POST', body: JSON.stringify(payload) });
+  if (res.status === 401) throw new Error('Authentication required');
+  if (!res.ok) await parseError(res, 'Edit request failed');
+  return res.json();
+}
+
+export type PendingEditRequestItem = {
+  id: number;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  assessment: DueAssessmentKey;
+  scope: EditScope;
+  subject_code: string;
+  subject_name: string | null;
+  reason: string | null;
+  requested_at: string | null;
+  academic_year: { id: number; name: string } | null;
+  staff: { id: number; username: string; name: string | null; department?: string | null };
+};
+
+export type EditRequestHistoryItem = PendingEditRequestItem & {
+  status: 'APPROVED' | 'REJECTED';
+  reviewed_by: { id: number; username: string; name: string | null } | null;
+  reviewed_at: string | null;
+  approved_until: string | null;
+};
+
+export async function fetchPendingEditRequests(scope?: EditScope): Promise<{ results: PendingEditRequestItem[] }> {
+  const qp = scope ? `?scope=${encodeURIComponent(scope)}` : '';
+  const url = `${apiBase()}/api/obe/edit-requests/pending${qp}`;
+  const res = await fetchWithAuth(url, { method: 'GET' });
+  if (res.status === 401) return { results: [] };
+  if (!res.ok) await parseError(res, 'Pending edit requests fetch failed');
+  return res.json();
+}
+
+export async function fetchEditRequestsHistory(payload?: { statuses?: Array<'APPROVED' | 'REJECTED'>; limit?: number; scope?: EditScope }): Promise<{ results: EditRequestHistoryItem[] }> {
+  const statuses = payload?.statuses?.length ? payload.statuses.join(',') : '';
+  const limit = typeof payload?.limit === 'number' ? payload.limit : 200;
+  const qpParts: string[] = [];
+  if (statuses) qpParts.push(`statuses=${encodeURIComponent(statuses)}`);
+  if (Number.isFinite(limit)) qpParts.push(`limit=${encodeURIComponent(String(limit))}`);
+  if (payload?.scope) qpParts.push(`scope=${encodeURIComponent(payload.scope)}`);
+  const qp = qpParts.length ? `?${qpParts.join('&')}` : '';
+  const url = `${apiBase()}/api/obe/edit-requests/history${qp}`;
+  const res = await fetchWithAuth(url, { method: 'GET' });
+  if (res.status === 401) return { results: [] };
+  if (!res.ok) await parseError(res, 'Edit requests history fetch failed');
+  return res.json();
+}
+
+export async function fetchPendingEditRequestCount(scope?: EditScope): Promise<{ pending: number }> {
+  const qp = scope ? `?scope=${encodeURIComponent(scope)}` : '';
+  const url = `${apiBase()}/api/obe/edit-requests/pending-count${qp}`;
+  const res = await fetchWithAuth(url, { method: 'GET' });
+  if (res.status === 401) return { pending: 0 };
+  if (!res.ok) await parseError(res, 'Pending edit requests count fetch failed');
+  return res.json();
+}
+
+export async function approveEditRequest(reqId: number, windowMinutes = 120): Promise<any> {
+  const url = `${apiBase()}/api/obe/edit-requests/${encodeURIComponent(String(reqId))}/approve`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeader() },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ window_minutes: windowMinutes }),
   });
-  if (!res.ok) await parseError(res, 'Publish request failed');
+  if (!res.ok) await parseError(res, 'Approve edit request failed');
+  return res.json();
+}
+
+export async function rejectEditRequest(reqId: number): Promise<any> {
+  const url = `${apiBase()}/api/obe/edit-requests/${encodeURIComponent(String(reqId))}/reject`;
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeader() } });
+  if (!res.ok) await parseError(res, 'Reject edit request failed');
   return res.json();
 }
 
@@ -194,19 +419,42 @@ export type PendingPublishRequestItem = {
   reason: string | null;
   requested_at: string | null;
   academic_year: { id: number; name: string } | null;
-  staff: { id: number; username: string; name: string | null };
+  staff: { id: number; username: string; name: string | null; department?: string | null };
+};
+
+export type PublishRequestHistoryItem = PendingPublishRequestItem & {
+  status: 'APPROVED' | 'REJECTED';
+  reviewed_by: { id: number; username: string; name: string | null } | null;
+  reviewed_at: string | null;
+  approved_until: string | null;
 };
 
 export async function fetchPendingPublishRequests(): Promise<{ results: PendingPublishRequestItem[] }> {
   const url = `${apiBase()}/api/obe/publish-requests/pending`;
-  const res = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', ...authHeader() } });
+  const res = await fetchWithAuth(url, { method: 'GET' });
+  if (res.status === 401) return { results: [] };
   if (!res.ok) await parseError(res, 'Pending requests fetch failed');
+  return res.json();
+}
+
+export async function fetchPublishRequestsHistory(payload?: { statuses?: Array<'APPROVED' | 'REJECTED'>; limit?: number }): Promise<{ results: PublishRequestHistoryItem[] }> {
+  const statuses = payload?.statuses?.length ? payload.statuses.join(',') : '';
+  const limit = typeof payload?.limit === 'number' ? payload.limit : 200;
+  const qpParts: string[] = [];
+  if (statuses) qpParts.push(`statuses=${encodeURIComponent(statuses)}`);
+  if (Number.isFinite(limit)) qpParts.push(`limit=${encodeURIComponent(String(limit))}`);
+  const qp = qpParts.length ? `?${qpParts.join('&')}` : '';
+  const url = `${apiBase()}/api/obe/publish-requests/history${qp}`;
+  const res = await fetchWithAuth(url, { method: 'GET' });
+  if (res.status === 401) return { results: [] };
+  if (!res.ok) await parseError(res, 'History requests fetch failed');
   return res.json();
 }
 
 export async function fetchPendingPublishRequestCount(): Promise<{ pending: number }> {
   const url = `${apiBase()}/api/obe/publish-requests/pending-count`;
-  const res = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', ...authHeader() } });
+  const res = await fetchWithAuth(url, { method: 'GET' });
+  if (res.status === 401) return { pending: 0 };
   if (!res.ok) await parseError(res, 'Pending requests count fetch failed');
   return res.json();
 }
@@ -247,27 +495,18 @@ async function parseError(res: Response, fallback: string) {
 
 export async function fetchDraft<T>(assessment: DraftAssessmentKey, subjectId: string): Promise<DraftResponse<T>> {
   const url = `${apiBase()}/api/obe/draft/${encodeURIComponent(assessment)}/${encodeURIComponent(subjectId)}`;
-  const res = await fetch(url, {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeader(),
-    },
-  });
+  const res = await fetchWithAuth(url, { method: 'GET' });
+  if (res.status === 401) {
+    return { subject: { code: String(subjectId), name: '' }, draft: null, updated_at: null, updated_by: null } as DraftResponse<T>;
+  }
   if (!res.ok) await parseError(res, 'Draft fetch failed');
   return res.json();
 }
 
 export async function saveDraft<T>(assessment: DraftAssessmentKey, subjectId: string, data: T): Promise<{ status: string }> {
   const url = `${apiBase()}/api/obe/draft/${encodeURIComponent(assessment)}/${encodeURIComponent(subjectId)}`;
-  const res = await fetch(url, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeader(),
-    },
-    body: JSON.stringify({ data }),
-  });
+  const res = await fetchWithAuth(url, { method: 'PUT', body: JSON.stringify({ data }) });
+  if (res.status === 401) throw new Error('Authentication required');
   if (!res.ok) await parseError(res, 'Draft save failed');
   return res.json();
 }
@@ -284,8 +523,9 @@ export async function fetchPublishedSsa1(subjectId: string): Promise<PublishedSs
   return res.json();
 }
 
-export async function publishSsa1(subjectId: string, data: any): Promise<{ status: string }> {
-  const url = `${apiBase()}/api/obe/ssa1-publish/${encodeURIComponent(subjectId)}`;
+export async function publishSsa1(subjectId: string, data: any, teachingAssignmentId?: number): Promise<{ status: string }> {
+  const qp = teachingAssignmentId ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
+  const url = `${apiBase()}/api/obe/ssa1-publish/${encodeURIComponent(subjectId)}${qp}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeader() },
@@ -307,8 +547,9 @@ export async function fetchPublishedSsa2(subjectId: string): Promise<PublishedSs
   return res.json();
 }
 
-export async function publishSsa2(subjectId: string, data: any): Promise<{ status: string }> {
-  const url = `${apiBase()}/api/obe/ssa2-publish/${encodeURIComponent(subjectId)}`;
+export async function publishSsa2(subjectId: string, data: any, teachingAssignmentId?: number): Promise<{ status: string }> {
+  const qp = teachingAssignmentId ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
+  const url = `${apiBase()}/api/obe/ssa2-publish/${encodeURIComponent(subjectId)}${qp}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeader() },
@@ -330,8 +571,9 @@ export async function fetchPublishedFormative1(subjectId: string): Promise<Publi
   return res.json();
 }
 
-export async function publishFormative1(subjectId: string, data: any): Promise<{ status: string }> {
-  const url = `${apiBase()}/api/obe/formative1-publish/${encodeURIComponent(subjectId)}`;
+export async function publishFormative1(subjectId: string, data: any, teachingAssignmentId?: number): Promise<{ status: string }> {
+  const qp = teachingAssignmentId ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
+  const url = `${apiBase()}/api/obe/formative1-publish/${encodeURIComponent(subjectId)}${qp}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeader() },
@@ -348,8 +590,9 @@ export async function fetchPublishedFormative(assessment: 'formative1' | 'format
   return res.json();
 }
 
-export async function publishFormative(assessment: 'formative1' | 'formative2', subjectId: string, data: any): Promise<{ status: string }> {
-  const url = `${apiBase()}/api/obe/${encodeURIComponent(assessment)}-publish/${encodeURIComponent(subjectId)}`;
+export async function publishFormative(assessment: 'formative1' | 'formative2', subjectId: string, data: any, teachingAssignmentId?: number): Promise<{ status: string }> {
+  const qp = teachingAssignmentId ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
+  const url = `${apiBase()}/api/obe/${encodeURIComponent(assessment)}-publish/${encodeURIComponent(subjectId)}${qp}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeader() },
@@ -372,8 +615,14 @@ export async function fetchPublishedLabSheet(assessment: 'cia1' | 'cia2' | 'mode
   return res.json();
 }
 
-export async function publishLabSheet(assessment: 'cia1' | 'cia2' | 'model' | 'formative1' | 'formative2', subjectId: string, data: any): Promise<{ status: string }> {
-  const url = `${apiBase()}/api/obe/lab-publish-sheet/${encodeURIComponent(assessment)}/${encodeURIComponent(subjectId)}`;
+export async function publishLabSheet(
+  assessment: 'cia1' | 'cia2' | 'model' | 'formative1' | 'formative2',
+  subjectId: string,
+  data: any,
+  teachingAssignmentId?: number,
+): Promise<{ status: string }> {
+  const qp = teachingAssignmentId ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
+  const url = `${apiBase()}/api/obe/lab-publish-sheet/${encodeURIComponent(assessment)}/${encodeURIComponent(subjectId)}${qp}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeader() },
@@ -395,8 +644,9 @@ export async function fetchPublishedCia1Sheet(subjectId: string): Promise<Publis
   return res.json();
 }
 
-export async function publishCia1Sheet(subjectId: string, data: any): Promise<{ status: string }> {
-  const url = `${apiBase()}/api/obe/cia1-publish-sheet/${encodeURIComponent(subjectId)}`;
+export async function publishCia1Sheet(subjectId: string, data: any, teachingAssignmentId?: number): Promise<{ status: string }> {
+  const qp = teachingAssignmentId ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
+  const url = `${apiBase()}/api/obe/cia1-publish-sheet/${encodeURIComponent(subjectId)}${qp}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeader() },
@@ -418,8 +668,9 @@ export async function fetchPublishedCiaSheet(assessment: 'cia1' | 'cia2', subjec
   return res.json();
 }
 
-export async function publishCiaSheet(assessment: 'cia1' | 'cia2', subjectId: string, data: any): Promise<{ status: string }> {
-  const url = `${apiBase()}/api/obe/${encodeURIComponent(assessment)}-publish-sheet/${encodeURIComponent(subjectId)}`;
+export async function publishCiaSheet(assessment: 'cia1' | 'cia2', subjectId: string, data: any, teachingAssignmentId?: number): Promise<{ status: string }> {
+  const qp = teachingAssignmentId ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
+  const url = `${apiBase()}/api/obe/${encodeURIComponent(assessment)}-publish-sheet/${encodeURIComponent(subjectId)}${qp}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeader() },

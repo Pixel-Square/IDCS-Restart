@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 
 type NumberInputProps = {
   value: number | '';
@@ -23,413 +24,733 @@ function NumberInput({ value, onChange, min, max }: NumberInputProps): JSX.Eleme
       min={min}
       max={max}
       style={{
-        width: 80,
-        padding: '4px 6px',
-        borderRadius: 4,
-        border: '1px solid #d1d5db',
+        width: 76,
+        padding: '6px 8px',
+        borderRadius: 8,
+        border: '1px solid #e6eef8',
+        outline: 'none',
+        fontSize: 13,
       }}
     />
   );
 }
 
-type BandCounts = {
-  low: number | '';
-  medium: number | '';
-  high: number | '';
+type TriBandCounts = {
+  band1: number | '';
+  band2: number | '';
+  band3: number | '';
 };
 
 type PrerequisiteRow = {
   name: string;
-  level: number | '';
+  band1: number | '';
+  band2: number | '';
+  band3: number | '';
 };
 
-function classifyLevelFromBand(counts: BandCounts): 'Low' | 'Medium' | 'High' | '-' {
-  const low = typeof counts.low === 'number' ? counts.low : 0;
-  const medium = typeof counts.medium === 'number' ? counts.medium : 0;
-  const high = typeof counts.high === 'number' ? counts.high : 0;
-  const total = low + medium + high;
+function levelFromBands1to3(counts: TriBandCounts): 1 | 2 | 3 | '-' {
+  const v1 = typeof counts.band1 === 'number' ? counts.band1 : 0;
+  const v2 = typeof counts.band2 === 'number' ? counts.band2 : 0;
+  const v3 = typeof counts.band3 === 'number' ? counts.band3 : 0;
+  const total = v1 + v2 + v3;
   if (!total) return '-';
-  const max = Math.max(low, medium, high);
-  if (max === low) return 'Low';
-  if (max === medium) return 'Medium';
-  return 'High';
+  const max = Math.max(v1, v2, v3);
+  if (max === v1) return 1;
+  if (max === v2) return 2;
+  return 3;
 }
 
-function mapLevelToCode(level: 'Low' | 'Medium' | 'High' | '-'): 'LL' | 'ML' | 'HL' | '-' {
-  if (level === 'Low') return 'LL';
-  if (level === 'Medium') return 'ML';
-  if (level === 'High') return 'HL';
+function mapNumericLevelToLearnerBand(level: 1 | 2 | 3 | '-'): { label: string; code: 'LL' | 'ML' | 'HL' | '-' } {
+  if (level === 1) return { label: 'LOW LEVEL', code: 'LL' };
+  if (level === 2) return { label: 'MEDIUM LEVEL', code: 'ML' };
+  if (level === 3) return { label: 'HIGH LEVEL', code: 'HL' };
+  return { label: '—', code: '-' };
+}
+
+const styles: { [k: string]: React.CSSProperties } = {
+  page: {
+    padding: 28,
+    maxWidth: 1100,
+    margin: '18px auto',
+    fontFamily: "Inter, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial",
+    color: '#1f3947',
+  },
+  card: {
+    background: '#fff',
+    borderRadius: 12,
+    padding: 18,
+    border: '1px solid #e6eef8',
+    boxShadow: '0 6px 20px rgba(13,60,100,0.04)',
+  },
+  title: { margin: 0, color: '#0b4a6f', fontSize: 22, fontWeight: 700 },
+  subtitle: { marginTop: 6, color: '#3d5566', fontSize: 13 },
+  sectionTitle: { margin: '0 0 10px 0', color: '#0b3b57', fontSize: 16 },
+  table: { width: '100%', borderCollapse: 'collapse', marginTop: 8 },
+  th: {
+    background: '#f3f8ff',
+    color: '#0b4a6f',
+    fontWeight: 700,
+    padding: '8px 10px',
+    border: '1px solid #e6eef8',
+    textAlign: 'center',
+    fontSize: 13,
+    whiteSpace: 'nowrap',
+  },
+  thLeft: {
+    background: '#f3f8ff',
+    color: '#0b4a6f',
+    fontWeight: 700,
+    padding: '8px 10px',
+    border: '1px solid #e6eef8',
+    textAlign: 'left',
+    fontSize: 13,
+    whiteSpace: 'nowrap',
+  },
+  td: {
+    padding: '8px 10px',
+    border: '1px solid #eef6fb',
+    color: '#234451',
+    fontSize: 13,
+    textAlign: 'center',
+  },
+  tdLeft: {
+    padding: '8px 10px',
+    border: '1px solid #eef6fb',
+    color: '#234451',
+    fontSize: 13,
+    textAlign: 'left',
+  },
+  cellYellow: { background: '#fef9c3' },
+  cellGreen: { background: '#ecfdf3' },
+  link: { color: '#0b4a6f', textDecoration: 'underline', fontWeight: 700 },
+  btn: {
+    border: '1px solid #e6eef8',
+    background: '#fbfdff',
+    padding: '8px 10px',
+    borderRadius: 10,
+    cursor: 'pointer',
+    fontWeight: 700,
+    color: '#0b4a6f',
+  },
+  pill: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '8px 10px',
+    borderRadius: 10,
+    background: '#fbfdff',
+    border: '1px solid #e6eef8',
+    fontSize: 13,
+    color: '#234451',
+  },
+};
+
+type CourseLevelCode = 'HC' | 'MC' | 'EC' | '-';
+type LearnerCentricCode = 'L1' | 'L2' | 'L3' | '-';
+
+type PbrSummary = {
+  fileName: string;
+  studentsCount: number;
+  meanGpa: number;
+  courseLevel: Exclude<CourseLevelCode, '-'>;
+};
+
+function normalizeHeaderKey(s: string): string {
+  return String(s || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function parseNumericCell(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string') {
+    const n = parseFloat(v.replace(/[^0-9.\-]/g, ''));
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+function courseLevelFromMeanGpa(meanGpa: number): Exclude<CourseLevelCode, '-'> {
+  // Mirrors the sheet: 0-6 => HARD (HC), 6-8 => MEDIUM (MC), >8 => EASY (EC)
+  // Resolve boundary by including 6 in HC and 8 in MC.
+  if (meanGpa <= 6) return 'HC';
+  if (meanGpa <= 8) return 'MC';
+  return 'EC';
+}
+
+function learnerCentricFromCourseLevel(level: CourseLevelCode): LearnerCentricCode {
+  // As requested:
+  // EC => L1, MC => L2, HC => L3
+  if (level === 'EC') return 'L1';
+  if (level === 'MC') return 'L2';
+  if (level === 'HC') return 'L3';
   return '-';
 }
 
-export default function LCAPage({ courseId }: { courseId?: string }): JSX.Element {
-  const [currentGpaCounts, setCurrentGpaCounts] = useState<BandCounts>({ low: '', medium: '', high: '' });
+// Note: dynamically import 'xlsx' inside parsePbrExcel to avoid build-time resolution errors
+// (helps show a clear error if the dependency is missing).
+ 
+ async function parsePbrExcel(file: File): Promise<PbrSummary> {
+  // Dynamic import so Vite doesn't fail the build when 'xlsx' is not installed.
+  // Use a variable module name with @vite-ignore to bypass Vite's static import analysis.
+  let XLSX: any;
+  try {
+    const moduleName = 'xlsx';
+    // @vite-ignore
+    XLSX = await import(/* @vite-ignore */ moduleName);
+  } catch (e) {
+    throw new Error(
+      'Missing dependency "xlsx". Install it with: npm install xlsx  (or yarn add xlsx / pnpm add xlsx)'
+    );
+  }
+ 
+   const buf = await file.arrayBuffer();
+   const wb = XLSX.read(buf, { type: 'array' });
+   const sheetName = wb.SheetNames?.[0];
+   if (!sheetName) throw new Error('No sheet found in the Excel file.');
+   const ws = wb.Sheets[sheetName];
+   const rows = (XLSX.utils.sheet_to_json(ws, { defval: '' }) || []) as Array<Record<string, unknown>>;
+   if (!rows.length) throw new Error('Excel sheet is empty.');
+ 
+   const headers = Object.keys(rows[0] || {});
+   const byNorm = new Map<string, string>();
+   headers.forEach((h) => byNorm.set(normalizeHeaderKey(h), h));
+ 
+   const gradeKey =
+     byNorm.get('grade') ||
+     headers.find((h) => normalizeHeaderKey(h).includes('grade')) ||
+     null;
+ 
+   const gpaKey =
+     byNorm.get('gpaconversion') ||
+     byNorm.get('gpaconvert') ||
+     headers.find((h) => {
+       const n = normalizeHeaderKey(h);
+       return n.includes('gpaconversion') || n.includes('gpaconvert') || n === 'gpa';
+     }) ||
+     null;
+ 
+   if (!gradeKey || !gpaKey) {
+     throw new Error('Excel must contain columns for "Grade" and "GPA conversion".');
+   }
+ 
+   const gpas: number[] = [];
+   for (const r of rows) {
+     const grade = String((r as any)[gradeKey] ?? '').trim();
+     if (!grade) continue;
+     const gpa = parseNumericCell((r as any)[gpaKey]);
+     if (gpa === null) continue;
+     gpas.push(gpa);
+   }
+ 
+   if (!gpas.length) throw new Error('No numeric "GPA conversion" values found.');
+   const mean = gpas.reduce((a, b) => a + b, 0) / gpas.length;
+   const meanRounded = Number(mean.toFixed(2));
+ 
+   return {
+     fileName: file.name,
+     studentsCount: gpas.length,
+     meanGpa: meanRounded,
+     courseLevel: courseLevelFromMeanGpa(meanRounded),
+   };
+}
+
+export default function LCAPage({ courseId, courseCode: courseCodeProp, courseName: courseNameProp }: { courseId?: string; courseCode?: string | null; courseName?: string | null }): JSX.Element {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const isPbrRoute = (location.pathname || '').toLowerCase().includes('/lca/pbr');
+
+  const [courseMeta, setCourseMeta] = useState({
+    courseCode: courseCodeProp ?? courseId ?? '',
+    courseName: courseNameProp ?? '',
+    credit: '',
+    courseModule: '',
+  });
+
+  useEffect(() => {
+    setCourseMeta((prev) => ({
+      ...prev,
+      courseCode: courseCodeProp ?? courseId ?? prev.courseCode,
+      courseName: courseNameProp ?? prev.courseName,
+    }));
+  }, [courseId, courseCodeProp, courseNameProp]);
+
+  const [currentGpaCounts, setCurrentGpaCounts] = useState<TriBandCounts>({ band1: '', band2: '', band3: '' });
+  const cgpLevel = useMemo(() => levelFromBands1to3(currentGpaCounts), [currentGpaCounts]);
+
   const [prerequisites, setPrerequisites] = useState<PrerequisiteRow[]>([
-    { name: 'Prerequisite 1', level: '' },
-    { name: 'Prerequisite 2', level: '' },
-    { name: 'Prerequisite 3', level: '' },
-    { name: 'Prerequisite 4', level: '' },
+    { name: 'Prerequisite 1', band1: '', band2: '', band3: '' },
   ]);
-  const [previousBatchResult, setPreviousBatchResult] = useState<number | ''>('');
 
-  const gpaLevel = useMemo(() => classifyLevelFromBand(currentGpaCounts), [currentGpaCounts]);
-  const gpaLevelCode = useMemo(() => mapLevelToCode(gpaLevel), [gpaLevel]);
-
-  const prereqAverage = useMemo(() => {
-    const numeric = prerequisites.map((p) => (typeof p.level === 'number' ? p.level : null)).filter((v) => v !== null) as number[];
-    if (!numeric.length) return '';
-    const sum = numeric.reduce((acc, v) => acc + v, 0);
-    return Number((sum / numeric.length).toFixed(2));
+  const prereqLevels = useMemo(() => {
+    return prerequisites.map((p) => levelFromBands1to3({ band1: p.band1, band2: p.band2, band3: p.band3 }));
   }, [prerequisites]);
 
-  const prereqLevel: 'Low' | 'Medium' | 'High' | '-' = useMemo(() => {
-    if (prereqAverage === '') return '-';
-    if (prereqAverage < 2) return 'Low';
-    if (prereqAverage < 3) return 'Medium';
-    return 'High';
+  const prereqAverage = useMemo(() => {
+    const numeric = prereqLevels.filter((v): v is 1 | 2 | 3 => v !== '-');
+    if (!numeric.length) return '' as const;
+    const sum = numeric.reduce((acc, v) => acc + v, 0);
+    return Number((sum / numeric.length).toFixed(2));
+  }, [prereqLevels]);
+
+  const standardizedLearnerLevel = useMemo(() => {
+    if (prereqAverage === '') return '' as const;
+    // As requested: neglect digits after decimal point
+    return Math.floor(prereqAverage) as 1 | 2 | 3 | 0;
   }, [prereqAverage]);
 
-  const [instructionLevel, setInstructionLevel] = useState<number | ''>('');
-  const [activityLevel, setActivityLevel] = useState<number | ''>('');
+  const standardizedLearnerLevelSafe: 1 | 2 | 3 | '-' = useMemo(() => {
+    if (standardizedLearnerLevel === '' || standardizedLearnerLevel === 0) return '-';
+    if (standardizedLearnerLevel === 1 || standardizedLearnerLevel === 2 || standardizedLearnerLevel === 3) return standardizedLearnerLevel;
+    return '-';
+  }, [standardizedLearnerLevel]);
 
-  const learnerCentricLevel = useMemo(() => {
-    if (typeof instructionLevel !== 'number' || typeof activityLevel !== 'number') return '';
-    return Number((instructionLevel + activityLevel).toFixed(1));
-  }, [instructionLevel, activityLevel]);
+  const learnersAt = useMemo(() => mapNumericLevelToLearnerBand(standardizedLearnerLevelSafe), [standardizedLearnerLevelSafe]);
+  const baseLearnerCentricLevelCode = useMemo(
+    () => (standardizedLearnerLevelSafe === '-' ? '-' : (`L${standardizedLearnerLevelSafe}` as LearnerCentricCode)),
+    [standardizedLearnerLevelSafe],
+  );
 
-  const [ilMetrics, setIlMetrics] = useState({
-    category1: '' as number | '',
-    category2: '' as number | '',
-    category3: '' as number | '',
-  });
+  const [pbrCay1, setPbrCay1] = useState<PbrSummary | null>(null);
+  const [pbrCay2, setPbrCay2] = useState<PbrSummary | null>(null);
+  const [pbrError, setPbrError] = useState<string | null>(null);
+  const [pbrBusy, setPbrBusy] = useState<'cay1' | 'cay2' | null>(null);
 
-  const ilTotal = useMemo(() => {
-    const v1 = typeof ilMetrics.category1 === 'number' ? ilMetrics.category1 : 0;
-    const v2 = typeof ilMetrics.category2 === 'number' ? ilMetrics.category2 : 0;
-    const v3 = typeof ilMetrics.category3 === 'number' ? ilMetrics.category3 : 0;
-    const total = v1 + v2 + v3;
-    return total ? total : '';
-  }, [ilMetrics]);
+  const pbrCourseLevel: CourseLevelCode = useMemo(() => {
+    if (pbrCay2) return pbrCay2.courseLevel;
+    if (pbrCay1) return pbrCay1.courseLevel;
+    return '-';
+  }, [pbrCay1, pbrCay2]);
 
-  const [teacherEffort, setTeacherEffort] = useState({
-    category1: '' as number | '',
-    category2: '' as number | '',
-    category3: '' as number | '',
-  });
+  const pbrLearnerCentricLevelCode: LearnerCentricCode = useMemo(
+    () => learnerCentricFromCourseLevel(pbrCourseLevel),
+    [pbrCourseLevel],
+  );
 
-  const teacherTotalHours = useMemo(() => {
-    const v1 = typeof teacherEffort.category1 === 'number' ? teacherEffort.category1 : 0;
-    const v2 = typeof teacherEffort.category2 === 'number' ? teacherEffort.category2 : 0;
-    const v3 = typeof teacherEffort.category3 === 'number' ? teacherEffort.category3 : 0;
-    const total = v1 + v2 + v3;
-    return total ? total : '';
-  }, [teacherEffort]);
+  const learnerCentricLevelCode: LearnerCentricCode = useMemo(() => {
+    if (pbrLearnerCentricLevelCode !== '-') return pbrLearnerCentricLevelCode;
+    return baseLearnerCentricLevelCode;
+  }, [baseLearnerCentricLevelCode, pbrLearnerCentricLevelCode]);
 
-  const learnerLevelSummary = useMemo(() => {
-    if (gpaLevel === '-' && prereqLevel === '-') return '-';
-    if (gpaLevel === 'Low' || prereqLevel === 'Low') return 'Low';
-    if (gpaLevel === 'High' && prereqLevel === 'High') return 'High';
-    return 'Medium';
-  }, [gpaLevel, prereqLevel]);
+  const courseBasePath = courseId ? `/obe/course/${encodeURIComponent(courseId)}` : '/obe/course';
 
-  return (
-    <div style={{ padding: 16 }}>
-      <h2 style={{ marginTop: 0 }}>Learner Centric Approach (LCA)</h2>
-      <div style={{ color: '#444', marginBottom: 16 }}>
-        Structured LCA worksheet for {courseId || 'this course'}. Enter values in the yellow cells; computed fields will update
-        automatically.
-      </div>
+  const handleExcelUpload = async (which: 'cay1' | 'cay2', file: File | null) => {
+    setPbrError(null);
+    if (!file) {
+      if (which === 'cay1') setPbrCay1(null);
+      else setPbrCay2(null);
+      return;
+    }
+    try {
+      setPbrBusy(which);
+      const parsed = await parsePbrExcel(file);
+      if (which === 'cay1') setPbrCay1(parsed);
+      else setPbrCay2(parsed);
+    } catch (e: any) {
+      setPbrError(String(e?.message || e || 'Failed to parse Excel'));
+      if (which === 'cay1') setPbrCay1(null);
+      else setPbrCay2(null);
+    } finally {
+      setPbrBusy(null);
+    }
+  };
 
-      <section style={{ marginBottom: 24 }}>
-        <h3 style={{ margin: '8px 0' }}>Step 1: Identifying Learner Profile</h3>
-        <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 8 }}>Enter class profile; bands and levels are calculated.</div>
+  if (isPbrRoute) {
+    return (
+      <div style={styles.page}>
+        <div style={styles.card}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+            <div>
+              <h2 style={styles.title}>Previous Batch Result (PBR)</h2>
+              <div style={styles.subtitle}>Upload 1 Excel (required) and optionally a second Excel (max 2).</div>
+            </div>
+            <button type="button" onClick={() => navigate(`${courseBasePath}/lca`)} style={styles.btn}>
+              Back
+            </button>
+          </div>
 
-        <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden', background: '#fff' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <div style={{ height: 14 }} />
+
+          <table style={styles.table}>
+            <tbody>
+              <tr>
+                <td style={{ ...styles.tdLeft, fontWeight: 800, width: 220 }}>CAY-1 Excel</td>
+                <td style={{ ...styles.tdLeft, ...styles.cellGreen }}>
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls"
+                    onChange={(e) => handleExcelUpload('cay1', e.target.files?.[0] || null)}
+                  />
+                </td>
+              </tr>
+              <tr>
+                <td style={{ ...styles.tdLeft, fontWeight: 800 }}>CAY-2 Excel (optional)</td>
+                <td style={{ ...styles.tdLeft, ...styles.cellGreen }}>
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls"
+                    onChange={(e) => handleExcelUpload('cay2', e.target.files?.[0] || null)}
+                  />
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          {pbrBusy && (
+            <div style={{ marginTop: 10, fontSize: 13, color: '#3d5566' }}>
+              Parsing {pbrBusy.toUpperCase()} Excel…
+            </div>
+          )}
+          {pbrError && (
+            <div style={{ marginTop: 10, fontSize: 13, color: '#b42318', fontWeight: 700 }}>
+              {pbrError}
+            </div>
+          )}
+
+          <div style={{ height: 14 }} />
+
+          <table style={styles.table}>
             <thead>
-              <tr style={{ background: '#f3f4f6' }}>
-                <th style={{ padding: 8, borderBottom: '1px solid #e5e7eb', textAlign: 'left' }}>1.1 Current GPA Profile (CGP)</th>
-                <th style={{ padding: 8, borderBottom: '1px solid #e5e7eb' }}>Low band</th>
-                <th style={{ padding: 8, borderBottom: '1px solid #e5e7eb' }}>Medium band</th>
-                <th style={{ padding: 8, borderBottom: '1px solid #e5e7eb' }}>High band</th>
-                <th style={{ padding: 8, borderBottom: '1px solid #e5e7eb' }}>Level</th>
-                <th style={{ padding: 8, borderBottom: '1px solid #e5e7eb' }}>Code</th>
+              <tr>
+                <th style={styles.thLeft}>DATASET</th>
+                <th style={styles.th}>FILE</th>
+                <th style={styles.th}>STUDENTS</th>
+                <th style={styles.th}>MEAN GPA</th>
+                <th style={styles.th}>COURSE LEVEL</th>
               </tr>
             </thead>
             <tbody>
               <tr>
-                <td style={{ padding: 8, borderBottom: '1px solid #f3f4f6' }}>Number of students in GPA band</td>
-                <td style={{ padding: 8, background: '#fef9c3' }}>
-                  <NumberInput
-                    value={currentGpaCounts.low}
-                    onChange={(v) => setCurrentGpaCounts((prev) => ({ ...prev, low: v }))}
-                  />
+                <td style={{ ...styles.tdLeft, fontWeight: 900 }}>CAY-1</td>
+                <td style={styles.tdLeft}>{pbrCay1?.fileName || '—'}</td>
+                <td style={styles.td}>{pbrCay1?.studentsCount ?? '—'}</td>
+                <td style={styles.td}>{pbrCay1 ? pbrCay1.meanGpa : '—'}</td>
+                <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{pbrCay1?.courseLevel || '—'}</td>
+              </tr>
+              <tr>
+                <td style={{ ...styles.tdLeft, fontWeight: 900 }}>CAY-2</td>
+                <td style={styles.tdLeft}>{pbrCay2?.fileName || '—'}</td>
+                <td style={styles.td}>{pbrCay2?.studentsCount ?? '—'}</td>
+                <td style={styles.td}>{pbrCay2 ? pbrCay2.meanGpa : '—'}</td>
+                <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{pbrCay2?.courseLevel || '—'}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div style={{ height: 14 }} />
+
+          <table style={styles.table}>
+            <tbody>
+              <tr>
+                <td style={{ ...styles.tdLeft, fontWeight: 900, width: 220 }}>PREVIOUS BATCH RESULT (PBR)</td>
+                <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{pbrCourseLevel === '-' ? '—' : pbrCourseLevel}</td>
+                <td style={{ ...styles.tdLeft, fontWeight: 900 }}>Learner Centric Level</td>
+                <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{pbrLearnerCentricLevelCode === '-' ? '—' : pbrLearnerCentricLevelCode}</td>
+              </tr>
+              <tr>
+                <td style={{ ...styles.tdLeft, color: '#557085' }} colSpan={4}>
+                  Course level rule: mean GPA 0–6 = HC, 6–8 = MC, &gt;8 = EC. PBR uses CAY-2 when provided; otherwise CAY-1.
                 </td>
-                <td style={{ padding: 8, background: '#fef9c3' }}>
-                  <NumberInput
-                    value={currentGpaCounts.medium}
-                    onChange={(v) => setCurrentGpaCounts((prev) => ({ ...prev, medium: v }))}
-                  />
-                </td>
-                <td style={{ padding: 8, background: '#fef9c3' }}>
-                  <NumberInput
-                    value={currentGpaCounts.high}
-                    onChange={(v) => setCurrentGpaCounts((prev) => ({ ...prev, high: v }))}
-                  />
-                </td>
-                <td style={{ padding: 8, textAlign: 'center', color: '#111827' }}>{gpaLevel}</td>
-                <td style={{ padding: 8, textAlign: 'center', color: '#111827' }}>{gpaLevelCode}</td>
               </tr>
             </tbody>
           </table>
         </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={styles.page}>
+      <div style={styles.card}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 18 }}>
+          <div>
+            <h2 style={styles.title}>Learner Centric Approach</h2>
+            <div style={styles.subtitle}>Enter values in the highlighted cells; levels are computed automatically.</div>
+          </div>
+          <div style={{ ...styles.pill, fontWeight: 800 }}>INDEX</div>
+        </div>
+
+        {/* Course meta (kept simple; layout matches the sheet) */}
+        <table style={styles.table}>
+          <tbody>
+            <tr>
+              <td style={{ ...styles.tdLeft, width: 220, fontWeight: 700 }}>COURSE CODE</td>
+              <td style={{ ...styles.tdLeft, ...styles.cellGreen }}>
+                <input
+                  value={courseMeta.courseCode}
+                  readOnly
+                  title="Course code is locked"
+                  style={{ width: '100%', border: 'none', background: 'transparent', fontSize: 13, outline: 'none', cursor: 'not-allowed' }}
+                />
+              </td>
+            </tr>
+            <tr>
+              <td style={{ ...styles.tdLeft, fontWeight: 700 }}>COURSE NAME</td>
+              <td style={{ ...styles.tdLeft, ...styles.cellGreen }}>
+                <input
+                  value={courseMeta.courseName}
+                  readOnly
+                  title="Course name is locked"
+                  style={{ width: '100%', border: 'none', background: 'transparent', fontSize: 13, outline: 'none', cursor: 'not-allowed' }}
+                />
+              </td>
+            </tr>
+            <tr>
+              <td style={{ ...styles.tdLeft, fontWeight: 700 }}>CREDIT OF THE COURSE</td>
+              <td style={{ ...styles.tdLeft, ...styles.cellGreen }}>
+                <input
+                  value={courseMeta.credit}
+                  onChange={(e) => setCourseMeta((p) => ({ ...p, credit: e.target.value }))
+                  }
+                  style={{ width: '100%', border: 'none', background: 'transparent', fontSize: 13, outline: 'none' }}
+                />
+              </td>
+            </tr>
+            <tr>
+              <td style={{ ...styles.tdLeft, fontWeight: 700 }}>COURSE MODULE</td>
+              <td style={{ ...styles.tdLeft, ...styles.cellGreen }}>
+                <input
+                  value={courseMeta.courseModule}
+                  onChange={(e) => setCourseMeta((p) => ({ ...p, courseModule: e.target.value }))
+                  }
+                  style={{ width: '100%', border: 'none', background: 'transparent', fontSize: 13, outline: 'none' }}
+                />
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div style={{ height: 16 }} />
+
+        <div style={styles.sectionTitle}>STEP 1: Identifying Learner profile</div>
+
+        {/* 1.1 CURRENT GPA PROFILE */}
+        <table style={styles.table}>
+          <thead>
+            <tr>
+              <th style={styles.thLeft} colSpan={5}>1.1 CURRENT GPA PROFILE (CGP)</th>
+              <th style={styles.th}>LEVEL</th>
+            </tr>
+            <tr>
+              <th style={styles.thLeft}>Current batch mean GPA</th>
+              <th style={styles.th}>1</th>
+              <th style={styles.th}>2</th>
+              <th style={styles.th}>3</th>
+              <th style={styles.th}> </th>
+              <th style={styles.th}> </th>
+            </tr>
+            <tr>
+              <th style={styles.thLeft}>GPA</th>
+              <th style={styles.th}>0 - 5</th>
+              <th style={styles.th}>5 - 7.5</th>
+              <th style={styles.th}>&gt; 7.5</th>
+              <th style={styles.th}> </th>
+              <th style={styles.th}> </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style={{ ...styles.tdLeft, fontWeight: 700 }}>NUMBER OF STUDENTS (CAY-1)</td>
+              <td style={{ ...styles.td, ...styles.cellYellow }}>
+                <NumberInput value={currentGpaCounts.band1} onChange={(v) => setCurrentGpaCounts((p) => ({ ...p, band1: v }))} />
+              </td>
+              <td style={{ ...styles.td, ...styles.cellYellow }}>
+                <NumberInput value={currentGpaCounts.band2} onChange={(v) => setCurrentGpaCounts((p) => ({ ...p, band2: v }))} />
+              </td>
+              <td style={{ ...styles.td, ...styles.cellYellow }}>
+                <NumberInput value={currentGpaCounts.band3} onChange={(v) => setCurrentGpaCounts((p) => ({ ...p, band3: v }))} />
+              </td>
+              <td style={styles.td}> </td>
+              <td style={{ ...styles.td, fontWeight: 800, color: '#0b4a6f' }}>{cgpLevel}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div style={{ height: 14 }} />
+
+        {/* 1.2 PREREQUISITE PROFILE */}
+        <table style={styles.table}>
+          <thead>
+            <tr>
+              <th style={styles.thLeft} colSpan={4}>1.2 PRE REQUISITE PROFILE (PRP)</th>
+              <th style={styles.th}>LEVEL</th>
+              <th style={styles.th}> </th>
+            </tr>
+            <tr>
+              <th style={styles.thLeft}> </th>
+              <th style={styles.th}>1</th>
+              <th style={styles.th}>2</th>
+              <th style={styles.th}>3</th>
+              <th style={styles.th}> </th>
+              <th style={styles.th}> </th>
+            </tr>
+            <tr>
+              <th style={styles.thLeft}> </th>
+              <th style={styles.th}>0 - 5</th>
+              <th style={styles.th}>5 - 7.5</th>
+              <th style={styles.th}>&gt; 7.5</th>
+              <th style={styles.th}> </th>
+              <th style={styles.th}> </th> 
+            </tr>
+          </thead>
+          <tbody>
+            {prerequisites.map((p, idx) => (
+              <tr key={p.name}>
+                <td style={{ ...styles.tdLeft, fontWeight: 700 }}>{p.name}</td>
+                <td style={{ ...styles.td, ...styles.cellYellow }}>
+                  <NumberInput
+                    value={p.band1}
+                    onChange={(v) =>
+                      setPrerequisites((prev) => {
+                        const next = [...prev];
+                        next[idx] = { ...next[idx], band1: v };
+                        return next;
+                      })
+                    }
+                  />
+                </td>
+                <td style={{ ...styles.td, ...styles.cellYellow }}>
+                  <NumberInput
+                    value={p.band2}
+                    onChange={(v) =>
+                      setPrerequisites((prev) => {
+                        const next = [...prev];
+                        next[idx] = { ...next[idx], band2: v };
+                        return next;
+                      })
+                    }
+                  />
+                </td>
+                <td style={{ ...styles.td, ...styles.cellYellow }}>
+                  <NumberInput
+                    value={p.band3}
+                    onChange={(v) =>
+                      setPrerequisites((prev) => {
+                        const next = [...prev];
+                        next[idx] = { ...next[idx], band3: v };
+                        return next;
+                      })
+                    }
+                  />
+                </td>
+                <td style={{ ...styles.td, fontWeight: 800, color: '#0b4a6f' }}>{prereqLevels[idx]}</td>
+                <td style={{ ...styles.td }}>
+                  <button
+                    type="button"
+                    title="Delete prerequisite"
+                    aria-label={`Delete ${p.name}`}
+                    onClick={() => setPrerequisites((prev) => prev.filter((_, i) => i !== idx))}
+                    style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 16 }}
+                  >
+                    🗑
+                  </button>
+                </td>
+              </tr>
+            ))}
+            <tr>
+              <td style={{ ...styles.tdLeft }} colSpan={6}>
+                <button
+                  type="button"
+                  style={{ ...styles.btn, padding: '6px 10px' }}
+                  onClick={() =>
+                    setPrerequisites((prev) => [...prev, { name: `Prerequisite ${prev.length + 1}`, band1: '', band2: '', band3: '' }])
+                  }
+                  aria-label="Add prerequisite"
+                >
+                  +
+                </button>
+                <span style={{ marginLeft: 10, fontSize: 13, color: '#557085' }}>
+                  Add next prerequisite (no limit)
+                </span>
+              </td>
+            </tr>
+            <tr>
+              <td style={{ ...styles.tdLeft, fontWeight: 700 }} colSpan={5}>AVERAGE</td>
+              <td style={{ ...styles.td, fontWeight: 800 }}>{prereqAverage === '' ? '-' : prereqAverage}</td>
+            </tr>
+            <tr>
+              <td style={{ ...styles.tdLeft, fontWeight: 700 }} colSpan={5}>
+                Standardized level of Learner profile as per the above norms
+              </td>
+              <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900, color: '#0b4a6f' }}>
+                {standardizedLearnerLevelSafe === '-' ? '-' : standardizedLearnerLevelSafe}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div style={{ height: 14 }} />
+
+        {/* LL / ML / HL mapping */}
+        <table style={styles.table}>
+          <tbody>
+            <tr>
+              <td style={{ ...styles.tdLeft, ...styles.cellGreen, fontWeight: 900 }}>LOW LEVEL</td>
+              <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>LL</td>
+              <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>1</td>
+            </tr>
+            <tr>
+              <td style={{ ...styles.tdLeft, ...styles.cellGreen, fontWeight: 900 }}>MEDIUM LEVEL</td>
+              <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>ML</td>
+              <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>2</td>
+            </tr>
+            <tr>
+              <td style={{ ...styles.tdLeft, ...styles.cellGreen, fontWeight: 900 }}>HIGH LEVEL</td>
+              <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>HL</td>
+              <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>3</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div style={{ height: 14 }} />
+
+        {/* Learners are at */}
+        <table style={styles.table}>
+          <tbody>
+            <tr>
+              <td style={{ ...styles.tdLeft, fontWeight: 800, width: 220 }}>The Learners are at</td>
+              <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{learnersAt.label}</td>
+              <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{learnersAt.code}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div style={{ height: 14 }} />
+
+        {/* 1.3 PBR */}
+        <table style={styles.table}>
+          <tbody>
+            <tr>
+              <td style={{ ...styles.tdLeft, fontWeight: 900, width: 260 }}>
+                <Link style={styles.link} to={`${courseBasePath}/lca/pbr`}>
+                  PREVIOUS BATCH RESULT (PBR)
+                </Link>
+              </td>
+              <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{pbrCourseLevel === '-' ? '—' : pbrCourseLevel}</td>
+              <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{pbrCay2 ? 'COURSE LEVEL (CAY-2)' : 'COURSE LEVEL (CAY-1)'}</td>
+            </tr>
+            <tr>
+              <td style={{ ...styles.tdLeft, fontWeight: 700 }}> </td>
+              <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{pbrCay1 ? `Mean GPA: ${pbrCay1.meanGpa}` : '—'}</td>
+              <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{pbrCay2 ? `Mean GPA: ${pbrCay2.meanGpa}` : '—'}</td>
+            </tr>
+          </tbody>
+        </table>
 
         <div style={{ height: 12 }} />
 
-        <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden', background: '#fff', marginTop: 8 }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-            <thead>
-              <tr style={{ background: '#f3f4f6' }}>
-                <th style={{ padding: 8, borderBottom: '1px solid #e5e7eb', textAlign: 'left' }}>1.2 Prerequisite Profile (PRP)</th>
-                <th style={{ padding: 8, borderBottom: '1px solid #e5e7eb' }}>Level (1-4)</th>
-              </tr>
-            </thead>
-            <tbody>
-              {prerequisites.map((row, idx) => (
-                <tr key={row.name}>
-                  <td style={{ padding: 8, borderBottom: '1px solid #f3f4f6' }}>{row.name}</td>
-                  <td style={{ padding: 8, borderBottom: '1px solid #f3f4f6', background: '#fef9c3', textAlign: 'center' }}>
-                    <NumberInput
-                      value={row.level}
-                      onChange={(v) => {
-                        setPrerequisites((prev) => {
-                          const next = [...prev];
-                          next[idx] = { ...next[idx], level: v };
-                          return next;
-                        });
-                      }}
-                      min={1}
-                      max={4}
-                    />
-                  </td>
-                </tr>
-              ))}
-              <tr style={{ background: '#f9fafb' }}>
-                <td style={{ padding: 8 }}>Average level</td>
-                <td style={{ padding: 8, textAlign: 'center' }}>{prereqAverage === '' ? '-' : prereqAverage}</td>
-              </tr>
-              <tr style={{ background: '#f9fafb' }}>
-                <td style={{ padding: 8 }}>Standardized learner profile level</td>
-                <td style={{ padding: 8, textAlign: 'center' }}>{prereqLevel}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div style={{ marginTop: 12, display: 'flex', gap: 16, alignItems: 'center' }}>
-          <div
-            style={{
-              padding: 10,
-              borderRadius: 6,
-              background: '#ecfdf3',
-              border: '1px solid #bbf7d0',
-              fontSize: 13,
-              flex: 1,
-            }}
-          >
-            <div style={{ fontWeight: 500, marginBottom: 4 }}>Learner profile summary</div>
-            <div style={{ color: '#166534' }}>Overall learner level: {learnerLevelSummary}</div>
-          </div>
-          <div
-            style={{
-              padding: 10,
-              borderRadius: 6,
-              background: '#eff6ff',
-              border: '1px solid #bfdbfe',
-              fontSize: 13,
-              flex: 1,
-            }}
-          >
-            <div style={{ fontWeight: 500, marginBottom: 4 }}>1.3 Previous Batch Result (PBR)</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span>Pass percentage</span>
-              <NumberInput
-                value={previousBatchResult}
-                onChange={setPreviousBatchResult}
-                min={0}
-                max={100}
-              />
-              <span>%</span>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section style={{ marginBottom: 24 }}>
-        <h3 style={{ margin: '8px 0' }}>Step 2: Instruction Level (IL) and Activity Level (AL)</h3>
-        <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 8 }}>Define instruction and activity intensities; LCL = IL + AL.</div>
-
-        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-          <div style={{ flex: 1, minWidth: 260, border: '1px solid #e5e7eb', borderRadius: 8, padding: 12, background: '#fff' }}>
-            <div style={{ fontWeight: 500, marginBottom: 8 }}>Instruction Level (IL)</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <span style={{ fontSize: 13 }}>Planned instruction level</span>
-              <NumberInput
-                value={instructionLevel}
-                onChange={setInstructionLevel}
-                min={0}
-                max={4}
-              />
-            </div>
-            <div style={{ fontSize: 12, color: '#6b7280' }}>0-1: basic, 2-3: moderate, 4+: advanced/innovative.</div>
-          </div>
-          <div style={{ flex: 1, minWidth: 260, border: '1px solid #e5e7eb', borderRadius: 8, padding: 12, background: '#fff' }}>
-            <div style={{ fontWeight: 500, marginBottom: 8 }}>Activity Level (AL)</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <span style={{ fontSize: 13 }}>Planned learner activity level</span>
-              <NumberInput
-                value={activityLevel}
-                onChange={setActivityLevel}
-                min={0}
-                max={4}
-              />
-            </div>
-            <div style={{ fontSize: 12, color: '#6b7280' }}>Higher values indicate more learner-centred activities.</div>
-          </div>
-          <div style={{ flexBasis: '100%' }} />
-          <div style={{ flex: 1, minWidth: 260, border: '1px solid #e5e7eb', borderRadius: 8, padding: 12, background: '#f9fafb' }}>
-            <div style={{ fontWeight: 500, marginBottom: 4 }}>Learner Centric Level (LCL)</div>
-            <div style={{ fontSize: 13 }}>LCL = IL + AL</div>
-            <div style={{ marginTop: 8, fontSize: 28, fontWeight: 600, color: '#2563eb' }}>
-              {learnerCentricLevel === '' ? '-' : learnerCentricLevel}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section style={{ marginBottom: 24 }}>
-        <h3 style={{ margin: '8px 0' }}>Step 3: IL Metrics</h3>
-        <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 8 }}>Distribute IL across metrics such as coverage, depth and assessment.</div>
-
-        <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden', background: '#fff' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-            <thead>
-              <tr style={{ background: '#f3f4f6' }}>
-                <th style={{ padding: 8, borderBottom: '1px solid #e5e7eb', textAlign: 'left' }}>Category</th>
-                <th style={{ padding: 8, borderBottom: '1px solid #e5e7eb' }}>Planned IL weight</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td style={{ padding: 8, borderBottom: '1px solid #f3f4f6' }}>Coverage of syllabus</td>
-                <td style={{ padding: 8, borderBottom: '1px solid #f3f4f6', background: '#fef9c3', textAlign: 'center' }}>
-                  <NumberInput
-                    value={ilMetrics.category1}
-                    onChange={(v) => setIlMetrics((prev) => ({ ...prev, category1: v }))}
-                  />
-                </td>
-              </tr>
-              <tr>
-                <td style={{ padding: 8, borderBottom: '1px solid #f3f4f6' }}>Depth / higher-order learning</td>
-                <td style={{ padding: 8, borderBottom: '1px solid #f3f4f6', background: '#fef9c3', textAlign: 'center' }}>
-                  <NumberInput
-                    value={ilMetrics.category2}
-                    onChange={(v) => setIlMetrics((prev) => ({ ...prev, category2: v }))}
-                  />
-                </td>
-              </tr>
-              <tr>
-                <td style={{ padding: 8, borderBottom: '1px solid #f3f4f6' }}>Assessment and feedback</td>
-                <td style={{ padding: 8, borderBottom: '1px solid #f3f4f6', background: '#fef9c3', textAlign: 'center' }}>
-                  <NumberInput
-                    value={ilMetrics.category3}
-                    onChange={(v) => setIlMetrics((prev) => ({ ...prev, category3: v }))}
-                  />
-                </td>
-              </tr>
-              <tr style={{ background: '#f9fafb' }}>
-                <td style={{ padding: 8 }}>Total planned IL</td>
-                <td style={{ padding: 8, textAlign: 'center' }}>{ilTotal === '' ? '-' : ilTotal}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section style={{ marginBottom: 24 }}>
-        <h3 style={{ margin: '8px 0' }}>Step 4: Instruction and Learning Methodology</h3>
-        <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 8 }}>
-          Plan teacher effort and assessment components for lectures (L), tutorials (T), projects (PR) and assignments (AS).
-        </div>
-
-        <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden', background: '#fff' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-            <thead>
-              <tr style={{ background: '#f3f4f6' }}>
-                <th style={{ padding: 8, borderBottom: '1px solid #e5e7eb', textAlign: 'left' }}>Category</th>
-                <th style={{ padding: 8, borderBottom: '1px solid #e5e7eb' }}>Planned no. of hours</th>
-                <th style={{ padding: 8, borderBottom: '1px solid #e5e7eb' }}>PT1</th>
-                <th style={{ padding: 8, borderBottom: '1px solid #e5e7eb' }}>CIA1</th>
-                <th style={{ padding: 8, borderBottom: '1px solid #e5e7eb' }}>PT2</th>
-                <th style={{ padding: 8, borderBottom: '1px solid #e5e7eb' }}>CIA2</th>
-                <th style={{ padding: 8, borderBottom: '1px solid #e5e7eb' }}>PT3</th>
-                <th style={{ padding: 8, borderBottom: '1px solid #e5e7eb' }}>CIA3</th>
-                <th style={{ padding: 8, borderBottom: '1px solid #e5e7eb' }}>Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td style={{ padding: 8, borderBottom: '1px solid #f3f4f6' }}>Category 1 (L/T)</td>
-                <td style={{ padding: 8, borderBottom: '1px solid #f3f4f6', background: '#fef9c3' }}>
-                  <NumberInput
-                    value={teacherEffort.category1}
-                    onChange={(v) => setTeacherEffort((prev) => ({ ...prev, category1: v }))}
-                  />
-                </td>
-                <td style={{ padding: 8, borderBottom: '1px solid #f3f4f6' }} colSpan={6}>
-                  <span style={{ color: '#6b7280' }}>Distribute across tests and CIAs as per assessment plan.</span>
-                </td>
-                <td style={{ padding: 8, borderBottom: '1px solid #f3f4f6' }} />
-              </tr>
-              <tr>
-                <td style={{ padding: 8, borderBottom: '1px solid #f3f4f6' }}>Category 2 (PR/AS)</td>
-                <td style={{ padding: 8, borderBottom: '1px solid #f3f4f6', background: '#fef9c3' }}>
-                  <NumberInput
-                    value={teacherEffort.category2}
-                    onChange={(v) => setTeacherEffort((prev) => ({ ...prev, category2: v }))}
-                  />
-                </td>
-                <td style={{ padding: 8, borderBottom: '1px solid #f3f4f6' }} colSpan={6}>
-                  <span style={{ color: '#6b7280' }}>Project / assignment related activities with question bank support.</span>
-                </td>
-                <td style={{ padding: 8, borderBottom: '1px solid #f3f4f6' }} />
-              </tr>
-              <tr>
-                <td style={{ padding: 8, borderBottom: '1px solid #f3f4f6' }}>Category 3 (Other IL)</td>
-                <td style={{ padding: 8, borderBottom: '1px solid #f3f4f6', background: '#fef9c3' }}>
-                  <NumberInput
-                    value={teacherEffort.category3}
-                    onChange={(v) => setTeacherEffort((prev) => ({ ...prev, category3: v }))}
-                  />
-                </td>
-                <td style={{ padding: 8, borderBottom: '1px solid #f3f4f6' }} colSpan={6}>
-                  <span style={{ color: '#6b7280' }}>Seminars, flipped classroom, peer learning, etc.</span>
-                </td>
-                <td style={{ padding: 8, borderBottom: '1px solid #f3f4f6' }} />
-              </tr>
-              <tr style={{ background: '#f9fafb' }}>
-                <td style={{ padding: 8 }}>Total teacher effort hours</td>
-                <td style={{ padding: 8, textAlign: 'center' }}>{teacherTotalHours === '' ? '-' : teacherTotalHours}</td>
-                <td style={{ padding: 8 }} colSpan={7}>
-                  <span style={{ fontSize: 12, color: '#6b7280' }}>
-                    Use this section to align IL/AL with continuous assessment and question bank planning.
-                  </span>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
+        {/* Learner Centric Level */}
+        <table style={styles.table}>
+          <tbody>
+            <tr>
+              <td style={{ ...styles.tdLeft, fontWeight: 900, width: 260 }}>Learner Centric Level</td>
+              <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{learnerCentricLevelCode}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

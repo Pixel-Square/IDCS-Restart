@@ -171,6 +171,7 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
   const [publishing, setPublishing] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [savedBy, setSavedBy] = useState<string | null>(null);
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
 
   const {
@@ -259,6 +260,19 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
             batchLabel: subjectId,
             rows: (draftSheet as any).rows,
           });
+          // set saved metadata if backend provided it
+          const updatedAt = (res as any)?.updated_at ?? null;
+          const updatedBy = (res as any)?.updated_by ?? null;
+          if (updatedAt) {
+            try {
+              setSavedAt(new Date(String(updatedAt)).toLocaleString());
+            } catch {
+              setSavedAt(String(updatedAt));
+            }
+          }
+          if (updatedBy) {
+            setSavedBy(String(updatedBy.name || updatedBy.username || updatedBy.id || ''));
+          }
           // Persist server draft into localStorage so roster merge will pick it up
           try {
             if (key) lsSet(key, { termLabel: String((draftSheet as any).termLabel || masterTermLabel || 'KRCT AY25-26'), batchLabel: subjectId, rows: (draftSheet as any).rows });
@@ -283,6 +297,7 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
       mounted = false;
     };
   }, [subjectId, masterTermLabel]);
+
 
   const mergeRosterIntoRows = (students: TeachingAssignmentRosterStudent[]) => {
     setSheet((prev) => {
@@ -358,7 +373,7 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
     setPublishing(true);
     setSaveError(null);
     try {
-      await publishSsa1(subjectId, sheet);
+      await publishSsa1(subjectId, sheet, teachingAssignmentId);
       setPublishedAt(new Date().toLocaleString());
       refreshPublishWindow();
       try {
@@ -598,6 +613,7 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
         <div style={cardStyle}>
           <div style={{ fontSize: 12, color: '#6b7280' }}>Saved</div>
           <div style={{ fontWeight: 700 }}>{savedAt || '—'}</div>
+          {savedBy ? <div style={{ fontSize: 12, color: '#6b7280' }}>by <span style={{ color: '#0369a1', fontWeight: 700 }}>{savedBy}</span></div> : null}
         </div>
         <div style={cardStyle}>
           <div style={{ fontSize: 12, color: '#6b7280' }}>Published</div>
