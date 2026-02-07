@@ -88,7 +88,58 @@ class SectionTimetableView(APIView):
                 except Exception:
                     sb = None
 
-            lst.append({
+            # prefer elective subject display when applicable
+            subj_text = a.subject_text
+            elective_id = None
+            try:
+                # If this assignment references a curriculum_row that is an elective parent,
+                # prefer the student's chosen ElectiveChoice when viewing as a student.
+                if a.curriculum_row:
+                    if student_profile:
+                        from curriculum.models import ElectiveChoice
+                        ec = ElectiveChoice.objects.filter(student=student_profile, elective_subject__parent=a.curriculum_row, is_active=True, academic_year__is_active=True).select_related('elective_subject').first()
+                        if ec and getattr(ec, 'elective_subject', None):
+                            es = ec.elective_subject
+                            subj_text = f"{getattr(es, 'course_code', '')} - {getattr(es, 'course_name', '')}".strip(' -')
+                            elective_id = getattr(es, 'id', None)
+                    else:
+                        # For non-student views, prefer any TeachingAssignment elective mapping.
+                        # Prefer section-scoped mapping first, then department-wide mappings
+                        from academics.models import TeachingAssignment
+                        try:
+                            ta = TeachingAssignment.objects.filter(section=a.section, is_active=True).filter(
+                                Q(curriculum_row=a.curriculum_row) | Q(elective_subject__parent=a.curriculum_row)
+                            ).select_related('elective_subject').first()
+                            if not ta:
+                                ta = TeachingAssignment.objects.filter(is_active=True).filter(
+                                    Q(curriculum_row=a.curriculum_row) | Q(elective_subject__parent=a.curriculum_row)
+                                ).select_related('elective_subject').first()
+                            if ta and getattr(ta, 'elective_subject', None):
+                                es = ta.elective_subject
+                                subj_text = f"{getattr(es, 'course_code', '')} - {getattr(es, 'course_name', '')}".strip(' -')
+                                elective_id = getattr(es, 'id', None)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+            # If student has an elective choice for this parent curriculum_row,
+            # expose the elective subject details and omit the parent curriculum_row
+            # so the UI shows the chosen sub-elective directly.
+            curriculum_obj = None
+            elective_obj = None
+            if elective_id and a.curriculum_row is not None and student_profile:
+                try:
+                    from curriculum.models import ElectiveSubject
+                    es = ElectiveSubject.objects.filter(pk=elective_id).first()
+                    if es:
+                        elective_obj = {'id': es.pk, 'course_code': getattr(es, 'course_code', None), 'course_name': getattr(es, 'course_name', None)}
+                except Exception:
+                    elective_obj = None
+            else:
+                curriculum_obj = {'id': a.curriculum_row.pk, 'course_code': a.curriculum_row.course_code, 'course_name': a.curriculum_row.course_name} if a.curriculum_row else None
+
+            new_entry = {
                 'id': getattr(a, 'id', None),
                 'period_index': getattr(a.period, 'index', None),
                 'period_id': getattr(a.period, 'id', None),
@@ -96,11 +147,38 @@ class SectionTimetableView(APIView):
                 'end_time': getattr(a.period, 'end_time', None),
                 'is_break': getattr(a.period, 'is_break', False),
                 'label': getattr(a.period, 'label', None),
-                'curriculum_row': {'id': a.curriculum_row.pk, 'course_code': a.curriculum_row.course_code, 'course_name': a.curriculum_row.course_name} if a.curriculum_row else None,
-                'subject_text': a.subject_text,
+                'curriculum_row': curriculum_obj,
+                'elective_subject': elective_obj,
+                'subject_text': subj_text,
+                'elective_subject_id': elective_id,
                 'subject_batch': {'id': sb.pk, 'name': getattr(sb, 'name', None)} if sb else None,
                 'staff': {'id': staff_obj.pk, 'staff_id': getattr(staff_obj, 'staff_id', None), 'username': getattr(getattr(staff_obj, 'user', None), 'username', None)} if staff_obj else None,
-            })
+            }
+
+            # Avoid duplicate entries for the same period: prefer student-specific batch
+            # or resolved elective entry over a generic unbatched assignment.
+            replaced = False
+            for i, exist in enumerate(lst):
+                try:
+                    if exist.get('period_id') == new_entry.get('period_id'):
+                        # If existing has no subject_batch but new has one -> replace
+                        if (exist.get('subject_batch') is None) and (new_entry.get('subject_batch') is not None):
+                            lst[i] = new_entry
+                            replaced = True
+                            break
+                        # If existing has elective_subject is None and new has elective -> replace
+                        if (exist.get('elective_subject') is None) and (new_entry.get('elective_subject') is not None):
+                            lst[i] = new_entry
+                            replaced = True
+                            break
+                        # Otherwise keep the existing (prefer first found)
+                        replaced = True
+                        break
+                except Exception:
+                    continue
+
+            if not replaced:
+                lst.append(new_entry)
 
         # convert keys to sorted list of days
         results = []
@@ -374,10 +452,11 @@ class StaffTimetableView(APIView):
 
             # Subquery to detect assignments that map to this staff via TeachingAssignment
             ta_qs = TeachingAssignment.objects.filter(
-                section=OuterRef('section'),
-                curriculum_row=OuterRef('curriculum_row'),
                 staff=staff_profile,
                 is_active=True,
+            ).filter(
+                (Q(section=OuterRef('section')) | Q(section__isnull=True)) &
+                (Q(curriculum_row=OuterRef('curriculum_row')) | Q(elective_subject__parent=OuterRef('curriculum_row')))
             )
 
             qs = TimetableAssignment.objects.select_related('period', 'staff', 'curriculum_row', 'section')
@@ -397,6 +476,48 @@ class StaffTimetableView(APIView):
             else:
                 staff_obj = staff_profile
 
+            # prefer elective subject display when applicable for staff view
+            subj_text = a.subject_text
+            elective_id = None
+            try:
+                if a.curriculum_row:
+                    from academics.models import TeachingAssignment
+                    # Prefer mappings specific to this staff. Try section-scoped first,
+                    # then department-wide mappings (where section may be null).
+                    ta = TeachingAssignment.objects.filter(
+                        staff=staff_profile, section=a.section, is_active=True
+                    ).filter(
+                        Q(curriculum_row=a.curriculum_row) | Q(elective_subject__parent=a.curriculum_row)
+                    ).select_related('elective_subject').first()
+                    if not ta:
+                        ta = TeachingAssignment.objects.filter(
+                            staff=staff_profile, is_active=True
+                        ).filter(
+                            Q(curriculum_row=a.curriculum_row) | Q(elective_subject__parent=a.curriculum_row)
+                        ).select_related('elective_subject').first()
+                    if ta and getattr(ta, 'elective_subject', None):
+                        es = ta.elective_subject
+                        subj_text = f"{getattr(es, 'course_code', '')} - {getattr(es, 'course_name', '')}".strip(' -')
+                        elective_id = getattr(es, 'id', None)
+            except Exception:
+                pass
+
+            # If we resolved an elective sub-option for this staff, do not expose
+            # the parent curriculum_row name to the staff view — instead include
+            # the elective_subject details so the UI can show the specific option.
+            curriculum_obj = None
+            elective_obj = None
+            if elective_id and a.curriculum_row is not None:
+                try:
+                    from curriculum.models import ElectiveSubject
+                    es = ElectiveSubject.objects.filter(pk=elective_id).first()
+                    if es:
+                        elective_obj = {'id': es.pk, 'course_code': getattr(es, 'course_code', None), 'course_name': getattr(es, 'course_name', None)}
+                except Exception:
+                    elective_obj = None
+            else:
+                curriculum_obj = {'id': a.curriculum_row.pk, 'course_code': a.curriculum_row.course_code, 'course_name': a.curriculum_row.course_name} if a.curriculum_row else None
+
             lst.append({
                 'id': getattr(a, 'id', None),
                 'period_index': getattr(a.period, 'index', None),
@@ -405,8 +526,10 @@ class StaffTimetableView(APIView):
                 'end_time': getattr(a.period, 'end_time', None),
                 'is_break': getattr(a.period, 'is_break', False),
                 'label': getattr(a.period, 'label', None),
-                'curriculum_row': {'id': a.curriculum_row.pk, 'course_code': a.curriculum_row.course_code, 'course_name': a.curriculum_row.course_name} if a.curriculum_row else None,
-                'subject_text': a.subject_text,
+                'curriculum_row': curriculum_obj,
+                'elective_subject': elective_obj,
+                'subject_text': subj_text,
+                'elective_subject_id': elective_id,
                 'subject_batch': {'id': a.subject_batch.pk, 'name': getattr(a.subject_batch, 'name', None)} if getattr(a, 'subject_batch', None) else None,
                 'staff': {'id': staff_obj.pk, 'staff_id': getattr(staff_obj, 'staff_id', None), 'username': getattr(getattr(staff_obj, 'user', None), 'username', None)} if staff_obj else None,
                 'section': {'id': getattr(a.section, 'pk', None), 'name': getattr(a.section, 'name', None)} if getattr(a, 'section', None) else None,

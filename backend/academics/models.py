@@ -526,10 +526,19 @@ class TeachingAssignment(models.Model):
         null=True,
         blank=True,
     )
+    elective_subject = models.ForeignKey(
+        'curriculum.ElectiveSubject',
+        on_delete=models.CASCADE,
+        related_name='teaching_assignments_elective',
+        null=True,
+        blank=True,
+    )
     section = models.ForeignKey(
         Section,
         on_delete=models.CASCADE,
-        related_name='teaching_assignments'
+        related_name='teaching_assignments',
+        null=True,
+        blank=True,
     )
     academic_year = models.ForeignKey(
         AcademicYear,
@@ -542,30 +551,40 @@ class TeachingAssignment(models.Model):
         verbose_name = 'Teaching Assignment'
         verbose_name_plural = 'Teaching Assignments'
         constraints = [
-            # Use curriculum_row uniqueness going forward. Keep subject nullable
-            # for backward compatibility.
+            # Use curriculum_row uniqueness only when curriculum_row is provided
             models.UniqueConstraint(
                 fields=['staff', 'curriculum_row', 'section', 'academic_year'],
+                condition=Q(curriculum_row__isnull=False),
                 name='unique_staff_curriculum_section_year'
-            )
+            ),
+            # Elective uniqueness does not require a section; allow department-wide electives
+            models.UniqueConstraint(
+                fields=['staff', 'elective_subject', 'academic_year'],
+                condition=Q(elective_subject__isnull=False),
+                name='unique_staff_elective_year'
+            ),
         ]
 
     def __str__(self):
         # Prefer displaying curriculum row info when available; fall back to Subject
         subj_part = None
         try:
-            if getattr(self, 'curriculum_row', None):
+            # Prefer elective_subject first for elective assignments
+            if getattr(self, 'elective_subject', None):
+                es = self.elective_subject
+                subj_part = f"{getattr(es, 'course_code', None) or ''} - {getattr(es, 'course_name', None) or ''}".strip(' -')
+            elif getattr(self, 'curriculum_row', None):
                 cr = self.curriculum_row
                 subj_part = f"{cr.course_code or ''} - {cr.course_name or ''}".strip(' -')
             elif getattr(self, 'subject', None):
-                # subject may be nullable; guard against None
                 subj_part = getattr(self.subject, 'code', None) or str(self.subject)
             else:
                 subj_part = 'No subject'
         except Exception:
             subj_part = getattr(self.subject, 'code', str(self.subject)) if getattr(self, 'subject', None) else 'No subject'
 
-        return f"{self.staff.staff_id} -> {subj_part} ({self.section} | {self.academic_year})"
+        section_text = str(self.section) if getattr(self, 'section', None) else 'Department-wide'
+        return f"{self.staff.staff_id} -> {subj_part} ({section_text} | {self.academic_year})"
 
 
 class StudentSubjectBatch(models.Model):

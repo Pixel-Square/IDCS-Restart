@@ -6,6 +6,7 @@ export type Master = {
   course_name?: string | null;
   class_type?: string;
   category?: string;
+  is_elective?: boolean;
   l?: number; t?: number; p?: number; s?: number; c?: number;
   internal_mark?: number | null;
   external_mark?: number | null;
@@ -31,6 +32,7 @@ export type DeptRow = {
   question_paper_type?: string | null;
   editable?: boolean;
   overridden?: boolean;
+  is_elective?: boolean;
 };
 
 // Default to backend dev server if VITE_API_BASE isn't provided
@@ -81,6 +83,25 @@ export async function fetchDeptRows(): Promise<DeptRow[]> {
   return res.json();
 }
 
+export async function fetchElectives(params?: { department_id?: number; regulation?: string; semester?: number }) {
+  const qs = new URLSearchParams();
+  if (params?.department_id) qs.set('department_id', String(params.department_id));
+  if (params?.regulation) qs.set('regulation', params.regulation);
+  if (params?.semester) qs.set('semester', String(params.semester));
+  const url = `${API_BASE}/api/curriculum/elective/?${qs.toString()}`;
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error('Failed to fetch electives');
+  return res.json();
+}
+
+export async function createElective(payload: Partial<DeptRow> & { parent: number; semester_id?: number; department_id?: number }) {
+  const res = await fetchWithAuth(`${API_BASE}/api/curriculum/elective/`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
 export async function updateDeptRow(id: number, payload: Partial<DeptRow>) {
   const res = await fetchWithAuth(`${API_BASE}/api/curriculum/department/${id}/`, {
     method: 'PATCH',

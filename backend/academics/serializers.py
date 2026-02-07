@@ -25,6 +25,8 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
     subject_name = serializers.SerializerMethodField(read_only=True)
     section_name = serializers.CharField(source='section.name', read_only=True)
     section_id = serializers.IntegerField(source='section.id', read_only=True)
+    elective_subject_id = serializers.SerializerMethodField(read_only=True)
+    elective_subject_name = serializers.SerializerMethodField(read_only=True)
     curriculum_row_id = serializers.SerializerMethodField(read_only=True)
     batch = serializers.SerializerMethodField(read_only=True)
     semester = serializers.SerializerMethodField(read_only=True)
@@ -32,7 +34,7 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
     class Meta:
         model = TeachingAssignment
         # removed curriculum_row and academic_year as requested; include batch & semester
-        fields = ('id', 'subject_code', 'subject_name', 'section_name', 'section_id', 'curriculum_row_id', 'batch', 'semester')
+        fields = ('id', 'subject_code', 'subject_name', 'section_name', 'section_id', 'elective_subject_id', 'elective_subject_name', 'curriculum_row_id', 'batch', 'semester')
 
     def _curriculum_row_for_obj(self, obj):
         # helper: try to find a matching CurriculumDepartment row for the assignment
@@ -70,6 +72,10 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
                 return getattr(row, 'course_code', None)
             if getattr(obj, 'subject', None):
                 return getattr(obj.subject, 'code', None)
+            # If this is an elective assignment without curriculum_row/subject, prefer elective_subject
+            if getattr(obj, 'elective_subject', None):
+                es = obj.elective_subject
+                return getattr(es, 'course_code', None)
             # As a last resort, try to match a curriculum row explicitly
             row = self._curriculum_row_for_obj(obj)
             if row:
@@ -85,6 +91,9 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
                 return getattr(row, 'course_name', None)
             if getattr(obj, 'subject', None):
                 return getattr(obj.subject, 'name', None)
+            if getattr(obj, 'elective_subject', None):
+                es = obj.elective_subject
+                return getattr(es, 'course_name', None)
             row = self._curriculum_row_for_obj(obj)
             if row:
                 return getattr(row, 'course_name', None)
@@ -115,12 +124,29 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
         except Exception:
             return None
 
+    def get_elective_subject_id(self, obj):
+        try:
+            es = getattr(obj, 'elective_subject', None)
+            return getattr(es, 'id', None)
+        except Exception:
+            return None
+
+    def get_elective_subject_name(self, obj):
+        try:
+            es = getattr(obj, 'elective_subject', None)
+            if not es:
+                return None
+            return f"{getattr(es, 'course_code', '')} - {getattr(es, 'course_name', '')}".strip(' -')
+        except Exception:
+            return None
+
 
 class TeachingAssignmentSerializer(serializers.ModelSerializer):
     # Accept curriculum_department row id to link directly
     curriculum_row_id = serializers.IntegerField(write_only=True, required=False)
+    elective_subject_id = serializers.IntegerField(write_only=True, required=False)
     staff_id = serializers.PrimaryKeyRelatedField(queryset=StaffProfile.objects.all(), source='staff', write_only=True)
-    section_id = serializers.PrimaryKeyRelatedField(queryset=Section.objects.all(), source='section', write_only=True)
+    section_id = serializers.PrimaryKeyRelatedField(queryset=Section.objects.all(), source='section', write_only=True, required=False, allow_null=True)
     academic_year = serializers.PrimaryKeyRelatedField(queryset=AcademicYear.objects.all(), required=False)
     subject = serializers.SerializerMethodField(read_only=True)
     # Readable fields for API consumers
@@ -129,11 +155,15 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = TeachingAssignment
-        fields = ('id', 'staff_id', 'section_id', 'academic_year', 'subject', 'curriculum_row_id', 'is_active', 'staff_details', 'section_name')
+        fields = ('id', 'staff_id', 'section_id', 'academic_year', 'subject', 'curriculum_row_id', 'elective_subject_id', 'is_active', 'staff_details', 'section_name')
 
     def get_subject(self, obj):
         # prefer curriculum row display
         try:
+            # Prefer elective subject first
+            if getattr(obj, 'elective_subject', None):
+                es = obj.elective_subject
+                return f"{getattr(es, 'course_code', '')} - {getattr(es, 'course_name', '')}".strip(' -')
             if getattr(obj, 'curriculum_row', None):
                 row = obj.curriculum_row
                 return f"{row.course_code or ''} - {row.course_name or ''}".strip(' -')
@@ -165,6 +195,36 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
         # NOTE: department membership is no longer required; allow assigning
         # staff across departments. Any department-level permission checks
         # should be enforced via HOD/Role checks elsewhere.
+        # If client provided an elective_subject_id, enforce HOD or explicit permission
+        try:
+            elect_id = self.initial_data.get('elective_subject_id')
+            if elect_id:
+                from curriculum.models import ElectiveSubject
+                es = ElectiveSubject.objects.filter(pk=int(elect_id)).select_related('parent__department').first()
+                if es:
+                    # check if user has direct permission
+                    perms = []
+                    try:
+                        perms = get_user_permissions(user)
+                    except Exception:
+                        perms = []
+                    if ('academics.assign_elective_teaching' in perms) or user.has_perm('academics.assign_elective_teaching'):
+                        return attrs
+                    # check HOD membership for the elective's parent department
+                    from .models import DepartmentRole
+                    staff_profile = getattr(user, 'staff_profile', None)
+                    if staff_profile:
+                        hod_depts = list(DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True).values_list('department_id', flat=True))
+                        parent_dept_id = getattr(getattr(es, 'parent', None), 'department_id', None)
+                        if parent_dept_id and parent_dept_id in hod_depts:
+                            return attrs
+                    raise ValidationError('You do not have permission to assign this elective subject')
+        except ValidationError:
+            raise
+        except Exception:
+            # If elective lookup fails, let view-level permission checks handle it
+            pass
+
         return attrs
 
     def create(self, validated_data):
@@ -176,6 +236,17 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
                 row = CurriculumDepartment.objects.filter(pk=int(curriculum_row_id)).first()
                 if row:
                     validated_data['curriculum_row'] = row
+            except Exception:
+                pass
+
+        # If elective_subject_id provided, attach that instead
+        elective_id = self.initial_data.get('elective_subject_id')
+        if elective_id:
+            try:
+                from curriculum.models import ElectiveSubject
+                es = ElectiveSubject.objects.filter(pk=int(elective_id)).first()
+                if es:
+                    validated_data['elective_subject'] = es
             except Exception:
                 pass
 
@@ -196,27 +267,50 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
         ay = validated_data.get('academic_year')
         staff = validated_data.get('staff')
 
+        # If there's an existing active curriculum_row mapping for the same
+        # section + academic_year, update it to point to the new staff.
         if row and section and ay and staff:
             try:
                 with transaction.atomic():
                     existing = TeachingAssignment.objects.filter(curriculum_row=row, section=section, academic_year=ay, is_active=True).first()
                     if existing:
-                        # update staff and is_active flag (if provided)
+                        existing.staff = staff
+                        if 'is_active' in validated_data:
+                            existing.is_active = validated_data.get('is_active')
+                        existing.save()
+                        return existing
+                    # Also handle elective mappings that are section-scoped
+                    es_row = validated_data.get('elective_subject')
+                    if es_row:
+                        existing = TeachingAssignment.objects.filter(elective_subject=es_row, section=section, academic_year=ay, is_active=True).first()
+                        if existing:
+                            existing.staff = staff
+                            if 'is_active' in validated_data:
+                                existing.is_active = validated_data.get('is_active')
+                            existing.save()
+                            return existing
+            except Exception:
+                # fall back to normal create on error
+                pass
+
+        # If elective provided without section, try to find an existing elective mapping
+        # for the same elective + academic_year and update staff instead of creating
+        # a duplicate.
+        es_row = validated_data.get('elective_subject')
+        if es_row and ay and staff:
+            try:
+                with transaction.atomic():
+                    existing = TeachingAssignment.objects.filter(elective_subject=es_row, academic_year=ay, is_active=True).first()
+                    if existing:
                         existing.staff = staff
                         if 'is_active' in validated_data:
                             existing.is_active = validated_data.get('is_active')
                         existing.save()
                         return existing
             except Exception:
-                # fall back to normal create on error
                 pass
 
         return super().create(validated_data)
-
-
-
-
-
 def _user_can_manage_assignment(user, teaching_assignment: TeachingAssignment) -> bool:
     """Return True if `user` is allowed to manage the given teaching_assignment.
 

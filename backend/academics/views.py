@@ -65,6 +65,10 @@ class SectionAdvisorViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
+        perms = get_user_permissions(user)
+        # users with explicit permission may view elective teaching assignments
+        if 'academics.view_elective_teaching' in perms:
+            return self.queryset.filter(elective_subject__isnull=False)
         staff_profile = getattr(user, 'staff_profile', None)
         if not staff_profile:
             return SectionAdvisor.objects.none()
@@ -179,7 +183,9 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
         if not staff_profile:
             return TeachingAssignment.objects.none()
         # Only include assignments for sections the user advises (active mapping)
-        # or assignments belonging to the staff themselves.
+        # or assignments belonging to the staff themselves. Additionally allow
+        # HODs / users with view_elective_teaching permission to see elective
+        # assignments for their departments.
         advisor_section_ids = list(SectionAdvisor.objects.filter(advisor=staff_profile, is_active=True, academic_year__is_active=True).values_list('section_id', flat=True))
         from django.db.models import Q
         final_q = Q()
@@ -197,7 +203,24 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
         user = self.request.user
         perms = get_user_permissions(user)
         # If user has explicit assign permission or model add perm, allow
-        if ('academics.assign_teaching' in perms) or user.has_perm('academics.add_teachingassignment'):
+        # For elective-specific assignment require separate permission
+        is_elective_payload = False
+        try:
+            if 'elective_subject_id' in getattr(serializer, 'initial_data', {}) or 'elective_subject' in getattr(serializer, 'validated_data', {}):
+                is_elective_payload = True
+        except Exception:
+            is_elective_payload = False
+
+        # If this is an elective payload, serializer.validate() already
+        # enforces HOD membership or explicit elective permission. Allow
+        # creation when validated (no section required for electives).
+        if is_elective_payload:
+            serializer.save()
+            return
+        else:
+            if ('academics.assign_teaching' in perms) or user.has_perm('academics.add_teachingassignment'):
+                serializer.save()
+                return
             serializer.save()
             return
 
@@ -266,14 +289,45 @@ class AcademicYearViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         user = self.request.user
         perms = get_user_permissions(user)
-        # Allow if explicit change permission
-        if ('academics.change_teaching' in perms) or user.has_perm('academics.change_teachingassignment'):
-            serializer.save()
-            return
-
-        # Otherwise restrict to advisors for the assignment's section
-        staff_profile = getattr(user, 'staff_profile', None)
+        # Determine whether this is for an elective or regular subject
+        is_elective = False
         ta = getattr(serializer, 'instance', None)
+        try:
+            if 'elective_subject_id' in getattr(serializer, 'initial_data', {}) or 'elective_subject' in getattr(serializer, 'validated_data', {}):
+                is_elective = True
+            elif ta and getattr(ta, 'elective_subject', None):
+                is_elective = True
+        except Exception:
+            is_elective = False
+
+        # Elective: require elective change permission or HOD of parent dept
+        if is_elective:
+            if ('academics.change_elective_teaching' in perms) or user.has_perm('academics.change_elective_teaching'):
+                serializer.save(); return
+            # check HOD of elective parent department
+            try:
+                es = None
+                if 'elective_subject_id' in getattr(serializer, 'initial_data', {}):
+                    from curriculum.models import ElectiveSubject
+                    es = ElectiveSubject.objects.filter(pk=int(serializer.initial_data.get('elective_subject_id'))).select_related('parent__department').first()
+                elif ta:
+                    es = getattr(ta, 'elective_subject', None)
+                parent_dept_id = getattr(getattr(es, 'parent', None), 'department_id', None)
+                staff_profile = getattr(user, 'staff_profile', None)
+                from .models import DepartmentRole
+                if staff_profile and parent_dept_id:
+                    hod_depts = list(DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True).values_list('department_id', flat=True))
+                    if parent_dept_id in hod_depts:
+                        serializer.save(); return
+            except Exception:
+                pass
+            raise PermissionDenied('You do not have permission to change this elective teaching assignment.')
+
+        # Regular subject: existing behavior (change_teaching or advisor for section)
+        if ('academics.change_teaching' in perms) or user.has_perm('academics.change_teachingassignment'):
+            serializer.save(); return
+
+        staff_profile = getattr(user, 'staff_profile', None)
         # If changing section in payload, use that; else use instance
         section_obj = None
         try:
@@ -288,7 +342,6 @@ class AcademicYearViewSet(viewsets.ModelViewSet):
             raise PermissionDenied('You do not have permission to change this teaching assignment.')
 
         is_advisor = SectionAdvisor.objects.filter(section=section_obj, advisor=staff_profile, is_active=True, academic_year__is_active=True).exists() if staff_profile else False
-
         if not is_advisor:
             raise PermissionDenied('You do not have permission to change this teaching assignment.')
 
@@ -297,24 +350,24 @@ class AcademicYearViewSet(viewsets.ModelViewSet):
 
 class HODSectionsView(APIView):
     permission_classes = (IsAuthenticated, IsHODOfDepartment)
-
     def get(self, request):
         user = request.user
         staff_profile = getattr(user, 'staff_profile', None)
         if not staff_profile:
             return Response({'results': []})
-        dept_ids = get_user_effective_departments(user)
-        qs = Section.objects.filter(batch__course__department_id__in=dept_ids).select_related('batch', 'batch__course', 'batch__course__department', 'semester')
+
+        dept_ids = get_user_effective_departments(user) or []
+        if not dept_ids:
+            return Response({'results': []})
+
+        sections = Section.objects.filter(batch__course__department_id__in=dept_ids).select_related('batch__course')
         results = []
-        for s in qs:
-            dept = getattr(s.batch.course, 'department', None)
+        for s in sections:
             results.append({
                 'id': s.id,
-                'name': s.name,
-                'batch': getattr(s.batch, 'name', None),
-                'department_id': getattr(s.batch.course, 'department_id', None),
-                'department_code': getattr(dept, 'code', None) if dept else None,
-                'semester': getattr(s.semester, 'number', None),
+                'name': str(s),
+                'batch_id': getattr(getattr(s, 'batch', None), 'id', None),
+                'course_id': getattr(getattr(getattr(s, 'batch', None), 'course', None), 'id', None),
             })
         return Response({'results': results})
 
@@ -473,7 +526,7 @@ class StaffAssignedSubjectsView(APIView):
             staff=target,
             is_active=True,
             academic_year__is_active=True
-        ).filter(Q(curriculum_row__isnull=False) | Q(subject__isnull=False)).select_related('curriculum_row', 'section', 'academic_year', 'subject')
+        ).filter(Q(curriculum_row__isnull=False) | Q(subject__isnull=False) | Q(elective_subject__isnull=False)).select_related('curriculum_row', 'section', 'academic_year', 'subject', 'elective_subject')
         ser = TeachingAssignmentInfoSerializer(qs, many=True)
         return Response({'results': ser.data})
 
@@ -548,6 +601,15 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
             from timetable.models import TimetableAssignment
             if section and period and day:
                 ta = TimetableAssignment.objects.filter(section=section, period=period, day=day, staff=staff_profile).first()
+                # If no explicit timetable assignment with staff, try resolving via TeachingAssignment
+                if ta is None:
+                    assign = TimetableAssignment.objects.filter(section=section, period=period, day=day).first()
+                    if assign and not getattr(assign, 'staff', None):
+                        from .models import TeachingAssignment as _TA
+                        ta_match_qs = _TA.objects.filter(is_active=True, staff=staff_profile)
+                        ta_match_qs = ta_match_qs.filter((Q(curriculum_row=assign.curriculum_row) | Q(elective_subject__parent=assign.curriculum_row))).filter(Q(section=section) | Q(section__isnull=True))
+                        if ta_match_qs.exists():
+                            ta = assign
         except Exception:
             ta = None
 
@@ -587,6 +649,14 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
             period = TimetableSlot.objects.filter(pk=int(period_id)).first() if period_id is not None else None
             if section and period and day and staff_profile:
                 ta = TimetableAssignment.objects.filter(section=section, period=period, day=day, staff=staff_profile).first()
+                if ta is None:
+                    assign = TimetableAssignment.objects.filter(section=section, period=period, day=day).first()
+                    if assign and not getattr(assign, 'staff', None):
+                        from .models import TeachingAssignment as _TA
+                        ta_match_qs = _TA.objects.filter(is_active=True, staff=staff_profile)
+                        ta_match_qs = ta_match_qs.filter((Q(curriculum_row=assign.curriculum_row) | Q(elective_subject__parent=assign.curriculum_row))).filter(Q(section=section) | Q(section__isnull=True))
+                        if ta_match_qs.exists():
+                            ta = assign
         except Exception:
             ta = None
 
@@ -609,6 +679,23 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
             if ta and getattr(ta, 'subject_batch', None):
                 try:
                     students_source = list(ta.subject_batch.students.all())
+                except Exception:
+                    students_source = None
+            # If there's no subject_batch but staff is assigned to an elective sub-option,
+            # use ElectiveChoice mappings to determine students for this elective.
+            if students_source is None:
+                try:
+                    if ta and not getattr(ta, 'subject_batch', None):
+                        from .models import TeachingAssignment as _TA
+                        # find teaching assignment with elective_subject for this staff matching the curriculum_row parent
+                        ta_match = _TA.objects.filter(is_active=True, staff=staff_profile, elective_subject__isnull=False).filter(
+                            Q(elective_subject__parent=getattr(ta, 'curriculum_row', None))
+                        ).filter(Q(section=section) | Q(section__isnull=True)).first()
+                        if ta_match and getattr(ta_match, 'elective_subject', None):
+                            from curriculum.models import ElectiveChoice
+                            es = ta_match.elective_subject
+                            choices = ElectiveChoice.objects.filter(elective_subject=es, is_active=True).select_related('student')
+                            students_source = [getattr(c, 'student') for c in choices if getattr(c, 'student', None) is not None]
                 except Exception:
                     students_source = None
 
@@ -636,6 +723,202 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
 
             resp_ser = PeriodAttendanceSessionSerializer(session, context={'request': request})
             return Response(resp_ser.data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['post'], url_path='bulk-mark-range')
+    def bulk_mark_range(self, request):
+        """Bulk mark attendance for a date range (inclusive).
+
+        Expected payload: {
+            section_id, period_id, start_date, end_date, status, student_ids: [int,...]
+        }
+        """
+        data = request.data or {}
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning('bulk_mark_range called by user=%s payload=%s', getattr(request.user, 'username', request.user), data)
+        section_id = data.get('section_id')
+        period_id = data.get('period_id')
+        start_date = data.get('start_date')
+        end_date = data.get('end_date')
+        status_val = data.get('status')
+        student_ids = data.get('student_ids') or []
+
+        user = request.user
+        staff_profile = getattr(user, 'staff_profile', None)
+        if not staff_profile:
+            raise PermissionDenied('Only staff may perform bulk range marking')
+
+        # basic validation
+        import datetime
+        dates_list = None
+        if data.get('dates'):
+            # explicit list of ISO dates provided
+            try:
+                dates_list = [datetime.date.fromisoformat(d) for d in (data.get('dates') or [])]
+            except Exception:
+                return Response({'detail': 'Invalid dates list'}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            try:
+                sd = datetime.date.fromisoformat(start_date)
+                ed = datetime.date.fromisoformat(end_date)
+            except Exception:
+                return Response({'detail': 'Invalid dates'}, status=status.HTTP_400_BAD_REQUEST)
+            if ed < sd:
+                return Response({'detail': 'end_date must be >= start_date'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # resolve section & period
+        from .models import Section as _Section
+        from timetable.models import TimetableSlot
+        # support multiple assignments: [{section_id, period_id}, ...] or single section_id/period_id
+        assignments_payload = data.get('assignments')
+        assignments_list = []
+        if assignments_payload and isinstance(assignments_payload, (list, tuple)):
+            for item in assignments_payload:
+                try:
+                    sid = int(item.get('section_id'))
+                    pid = int(item.get('period_id'))
+                    s = _Section.objects.filter(pk=sid).first()
+                    p = TimetableSlot.objects.filter(pk=pid).first()
+                    if s and p:
+                        assignments_list.append((s, p))
+                except Exception:
+                    continue
+        else:
+            section = _Section.objects.filter(pk=int(section_id)).first() if section_id is not None else None
+            period = TimetableSlot.objects.filter(pk=int(period_id)).first() if period_id is not None else None
+            if section and period:
+                assignments_list.append((section, period))
+        logger.warning('Resolved assignments_list count=%d', len(assignments_list))
+
+        # permission: ensure user may mark these periods (reuse logic from bulk_mark)
+        perms = get_user_permissions(user)
+
+        # prepare students
+        from .models import StudentProfile as _StudentProfile
+        students = []
+        for sid in student_ids:
+            try:
+                s = _StudentProfile.objects.filter(pk=int(sid)).first()
+                if s:
+                    students.append(s)
+            except Exception:
+                continue
+
+        out_sessions = []
+        if dates_list is None:
+            day = sd
+            delta = datetime.timedelta(days=1)
+            dates_iter = []
+            while day <= ed:
+                dates_iter.append(day)
+                day = day + delta
+        else:
+            dates_iter = sorted(dates_list)
+        from timetable.models import TimetableAssignment
+        from .models import PeriodAttendanceSession, PeriodAttendanceRecord
+        logger.warning('Dates to process: %s', dates_iter)
+        for day in dates_iter:
+            dow = day.isoweekday()
+            for (section_obj, period_obj) in assignments_list:
+                logger.debug('Processing date=%s section=%s period=%s dow=%s', day, getattr(section_obj,'id',None), getattr(period_obj,'id',None), dow)
+                # check timetable assignment exists for this section/period/day and that staff can mark it
+                ta = TimetableAssignment.objects.filter(section=section_obj, period=period_obj, day=dow, staff=staff_profile).first()
+                allow = False
+                if ta is not None:
+                    allow = True
+                else:
+                    # try resolve via teaching assignment (electives etc.) — allow if TeachingAssignment matches
+                    assign = TimetableAssignment.objects.filter(section=section_obj, period=period_obj, day=dow).first()
+                    if assign:
+                        from academics.models import TeachingAssignment as _TA
+                        ta_match_qs = _TA.objects.filter(is_active=True, staff=staff_profile).filter((Q(curriculum_row=assign.curriculum_row) | Q(elective_subject__parent=assign.curriculum_row))).filter(Q(section=section_obj) | Q(section__isnull=True))
+                        try:
+                            match_exists = ta_match_qs.exists()
+                        except Exception:
+                            match_exists = False
+                        if match_exists:
+                            allow = True
+                        logger.warning('assign exists id=%s ta_match_exists=%s', getattr(assign, 'id', None), match_exists)
+                    else:
+                        # No timetable assignment for this specific day; try any day for this section+period
+                        assign_any = TimetableAssignment.objects.filter(section=section_obj, period=period_obj).first()
+                        if assign_any:
+                            from academics.models import TeachingAssignment as _TA
+                            ta_match_qs = _TA.objects.filter(is_active=True, staff=staff_profile).filter((Q(curriculum_row=assign_any.curriculum_row) | Q(elective_subject__parent=assign_any.curriculum_row))).filter(Q(section=section_obj) | Q(section__isnull=True))
+                            try:
+                                match_exists = ta_match_qs.exists()
+                            except Exception:
+                                match_exists = False
+                            if match_exists:
+                                allow = True
+                                # use assign_any as assign so later elective resolution can use curriculum_row
+                                assign = assign_any
+                            logger.warning('assign_any exists id=%s ta_match_exists=%s', getattr(assign_any, 'id', None), match_exists)
+                        else:
+                            logger.warning('no timetable assign for section=%s period=%s day=%s', getattr(section_obj,'id',None), getattr(period_obj,'id',None), dow)
+                logger.warning('ta id=%s allow=%s', getattr(ta, 'id', None), allow)
+                if not allow:
+                    logger.debug('Not allowed to mark for section=%s period=%s on dow=%s', getattr(section_obj,'id',None), getattr(period_obj,'id',None), dow)
+                    continue
+
+                # create/get session and mark records
+                session, created = PeriodAttendanceSession.objects.get_or_create(
+                    section=section_obj, period=period_obj, date=day,
+                    defaults={'timetable_assignment': ta, 'created_by': staff_profile}
+                )
+                logger.warning('get_or_create session returned id=%s created=%s timetable_assignment_on_session=%s', getattr(session, 'id', None), created, getattr(session, 'timetable_assignment_id', None))
+                if ta and session.timetable_assignment is None:
+                    session.timetable_assignment = ta
+                    session.save()
+
+                # determine students for this assignment if student_ids not provided
+                if students:
+                    target_students = students
+                else:
+                    target_students = []
+                    # prefer subject_batch students if timetable assignment exists
+                    if ta and getattr(ta, 'subject_batch', None):
+                        try:
+                            target_students = list(ta.subject_batch.students.all())
+                        except Exception:
+                            target_students = []
+                    # else if teaching assignment maps to elective, use ElectiveChoice
+                    if not target_students:
+                        try:
+                            from academics.models import TeachingAssignment as _TA
+                            ta_match = _TA.objects.filter(is_active=True, staff=staff_profile, elective_subject__isnull=False).filter(Q(elective_subject__parent=getattr(assign, 'curriculum_row', None)) | Q(curriculum_row=getattr(assign, 'curriculum_row', None))).filter(Q(section=section_obj) | Q(section__isnull=True)).select_related('elective_subject').first()
+                            if ta_match and getattr(ta_match, 'elective_subject', None):
+                                from curriculum.models import ElectiveChoice
+                                es = ta_match.elective_subject
+                                choices = ElectiveChoice.objects.filter(elective_subject=es, is_active=True).select_related('student')
+                                target_students = [getattr(c, 'student') for c in choices if getattr(c, 'student', None) is not None]
+                        except Exception:
+                            target_students = []
+                    # final fallback: section students
+                    if not target_students:
+                        try:
+                            from .models import StudentSectionAssignment, StudentProfile as _StudentProfile
+                            assign_qs = StudentSectionAssignment.objects.filter(section=section_obj, end_date__isnull=True).select_related('student__user')
+                            sts = [a.student for a in assign_qs]
+                            legacy = _StudentProfile.objects.filter(section=section_obj).select_related('user')
+                            for s in legacy:
+                                if not any(x.pk == s.pk for x in sts):
+                                    sts.append(s)
+                            target_students = sts
+                        except Exception:
+                            target_students = []
+
+                created_records = []
+                for stu in target_students:
+                    obj, created = PeriodAttendanceRecord.objects.update_or_create(
+                        session=session, student=stu,
+                        defaults={'status': status_val or 'P', 'marked_by': staff_profile}
+                    )
+                    created_records.append({'id': obj.id, 'student_id': getattr(obj.student, 'id', None), 'status': obj.status})
+                out_sessions.append({'date': day.isoformat(), 'section_id': section_obj.id, 'period_id': period_obj.id, 'session_id': session.id, 'records': created_records})
+                logger.warning('Created/updated %d records for date=%s section=%s period=%s', len(created_records), day.isoformat(), section_obj.id, period_obj.id)
+
+        return Response({'results': out_sessions})
 
 
 class StaffPeriodsView(APIView):
@@ -675,7 +958,21 @@ class StaffPeriodsView(APIView):
                     # fallback: if timetable assignment has no explicit staff, resolve via TeachingAssignment
                     if not getattr(a, 'staff', None) and getattr(a, 'curriculum_row', None):
                         from .models import TeachingAssignment as _TA
-                        if _TA.objects.filter(section=a.section, curriculum_row=a.curriculum_row, is_active=True, staff=staff_profile).exists():
+                        # Match teaching assignments where staff is assigned to the same curriculum_row
+                        # or to an elective sub-option whose parent is the curriculum_row.
+                        ta_qs = _TA.objects.filter(is_active=True, staff=staff_profile)
+                        ta_qs = ta_qs.filter(
+                            (
+                                Q(curriculum_row=a.curriculum_row)
+                            )
+                            |
+                            (
+                                Q(elective_subject__parent=a.curriculum_row)
+                            )
+                        )
+                        # Section-scoped or department-wide (section is null) assignments are allowed
+                        ta_qs = ta_qs.filter(Q(section=a.section) | Q(section__isnull=True))
+                        if ta_qs.exists():
                             include = True
             except Exception:
                 include = False
@@ -685,6 +982,25 @@ class StaffPeriodsView(APIView):
 
             # find existing session for this section/period/date (if any)
             session = PeriodAttendanceSession.objects.filter(section=a.section, period=a.period, date=date).first()
+            # attempt to resolve if staff is assigned to an elective sub-option for this curriculum_row
+            resolved_subject_display = None
+            try:
+                if not getattr(a, 'staff', None) and getattr(a, 'curriculum_row', None):
+                    from .models import TeachingAssignment as _TA
+                    ta_qs = _TA.objects.filter(is_active=True, staff=staff_profile).filter(
+                        (Q(curriculum_row=a.curriculum_row) | Q(elective_subject__parent=a.curriculum_row))
+                    ).filter(Q(section=a.section) | Q(section__isnull=True))
+                    ta_obj = ta_qs.first()
+                    if ta_obj and getattr(ta_obj, 'elective_subject', None):
+                        es = ta_obj.elective_subject
+                        resolved_subject_display = (getattr(es, 'course_code', None) or getattr(es, 'course_name', None))
+                        resolved_elective_id = getattr(es, 'id', None)
+                    else:
+                        resolved_elective_id = None
+            except Exception:
+                resolved_subject_display = None
+                resolved_elective_id = None
+
             results.append({
                 'id': a.id,
                 'section_id': a.section_id,
@@ -692,7 +1008,8 @@ class StaffPeriodsView(APIView):
                 'period': {'id': a.period.id, 'index': a.period.index, 'label': a.period.label, 'start_time': getattr(a.period, 'start_time', None), 'end_time': getattr(a.period, 'end_time', None)},
                 # provide a reliable subject display: prefer curriculum_row code/name, then subject_text
                 'subject_id': getattr(getattr(a, 'curriculum_row', None), 'id', None),
-                'subject_display': (getattr(getattr(a, 'curriculum_row', None), 'course_code', None) or getattr(getattr(a, 'curriculum_row', None), 'course_name', None) or getattr(a, 'subject_text', None) or None),
+                'subject_display': resolved_subject_display or (getattr(getattr(a, 'curriculum_row', None), 'course_code', None) or getattr(getattr(a, 'curriculum_row', None), 'course_name', None) or getattr(a, 'subject_text', None) or None),
+                'elective_subject_id': resolved_elective_id if 'resolved_elective_id' in locals() else None,
                 'subject_batch_id': getattr(a, 'subject_batch_id', None),
                 'attendance_session_id': getattr(session, 'id', None),
                 'attendance_session_locked': getattr(session, 'is_locked', False) if session else False,

@@ -280,6 +280,11 @@ class TeachingAssignmentAdmin(admin.ModelAdmin):
 
     def subject_display(self, obj):
         try:
+            # Prefer elective_subject when present
+            if getattr(obj, 'elective_subject', None):
+                es = obj.elective_subject
+                return f"{getattr(es, 'course_code', '')} - {getattr(es, 'course_name', '')}".strip(' -')
+
             from curriculum.models import CurriculumDepartment
             # prefer explicit curriculum_row if set
             if getattr(obj, 'curriculum_row', None):
@@ -296,7 +301,11 @@ class TeachingAssignmentAdmin(admin.ModelAdmin):
             # fallback: return first curriculum row for section's department
             dept = None
             try:
-                dept = obj.section.batch.course.department
+                if getattr(obj, 'section', None):
+                    dept = obj.section.batch.course.department
+                # If no section (department-wide elective), try elective parent dept
+                elif getattr(obj, 'elective_subject', None):
+                    dept = getattr(getattr(obj.elective_subject, 'parent', None), 'department', None)
             except Exception:
                 dept = None
             if dept is not None:

@@ -119,6 +119,7 @@ export default function MasterList() {
               <th>Course</th>
               <th>CAT</th>
               <th>Class</th>
+              <th>Elective</th>
               <th>L</th>
               <th>T</th>
               <th>P</th>
@@ -141,6 +142,7 @@ export default function MasterList() {
                 <td>{m.course_name || '-'}</td>
                 <td>{m.category || '-'}</td>
                 <td>{m.class_type || '-'}</td>
+                <td style={{ textAlign: 'center' }}>{m.is_elective ? <span style={{ color: '#059669', fontWeight: 600 }}>Yes</span> : <span style={{ color: '#9ca3af' }}>No</span>}</td>
                 <td>{m.l ?? 0}</td>
                 <td>{m.t ?? 0}</td>
                 <td>{m.p ?? 0}</td>

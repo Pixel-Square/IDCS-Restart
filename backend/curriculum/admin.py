@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import CurriculumMaster, CurriculumDepartment
+from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject, ElectiveChoice
 from django.urls import path
 from django.template.response import TemplateResponse
 from django.http import HttpResponse, HttpResponseRedirect
@@ -13,7 +13,7 @@ from academics.models import Department
 @admin.register(CurriculumMaster)
 class CurriculumMasterAdmin(admin.ModelAdmin):
     change_list_template = 'admin/curriculum/master_change_list.html'
-    list_display = ('regulation', 'semester', 'course_code', 'course_name', 'category', 'class_type', 'for_all_departments', 'editable')
+    list_display = ('regulation', 'semester', 'course_code', 'course_name', 'category', 'class_type', 'is_elective', 'for_all_departments', 'editable')
     list_filter = ('regulation', 'semester', 'for_all_departments', 'editable')
     search_fields = ('course_code', 'course_name')
     filter_horizontal = ('departments',)
@@ -172,8 +172,8 @@ class CurriculumMasterAdmin(admin.ModelAdmin):
 
 @admin.register(CurriculumDepartment)
 class CurriculumDepartmentAdmin(admin.ModelAdmin):
-    list_display = ('department', 'regulation', 'semester', 'course_code', 'course_name', 'editable', 'overridden')
-    list_filter = ('department', 'regulation', 'semester', 'editable', 'overridden')
+    list_display = ('department', 'regulation', 'semester', 'course_code', 'course_name', 'is_elective', 'editable', 'overridden')
+    list_filter = ('department', 'regulation', 'semester', 'is_elective', 'editable', 'overridden')
     search_fields = ('course_code', 'course_name')
 
     def get_readonly_fields(self, request, obj=None):
@@ -182,7 +182,7 @@ class CurriculumDepartmentAdmin(admin.ModelAdmin):
         ro = list(super().get_readonly_fields(request, obj))
         if obj and obj.master and not getattr(obj.master, 'editable', False):
             ro += [
-                'regulation', 'semester', 'course_code', 'course_name', 'class_type', 'category',
+                'regulation', 'semester', 'course_code', 'course_name', 'class_type', 'category', 'is_elective',
                 'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark',
                 'total_hours', 'question_paper_type',
             ]
@@ -195,3 +195,24 @@ class CurriculumDepartmentAdmin(admin.ModelAdmin):
             if request.method != 'GET':
                 return False
         return super().has_change_permission(request, obj=obj)
+
+
+class ElectiveSubjectInline(admin.TabularInline):
+    model = ElectiveSubject
+    extra = 0
+    fields = ('course_code', 'course_name', 'is_elective', 'class_type', 'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark', 'total_hours', 'question_paper_type', 'editable', 'approval_status')
+    readonly_fields = ('approval_status',)
+
+
+@admin.register(ElectiveSubject)
+class ElectiveSubjectAdmin(admin.ModelAdmin):
+    list_display = ('course_code', 'course_name', 'department', 'parent', 'regulation', 'semester', 'is_elective', 'editable', 'approval_status')
+    list_filter = ('department', 'regulation', 'semester', 'is_elective', 'approval_status')
+    search_fields = ('course_code', 'course_name')
+
+
+@admin.register(ElectiveChoice)
+class ElectiveChoiceAdmin(admin.ModelAdmin):
+    list_display = ('student', 'elective_subject', 'academic_year', 'is_active')
+    list_filter = ('academic_year', 'is_active')
+    search_fields = ('student__user__username', 'student__reg_no', 'elective_subject__course_code', 'elective_subject__course_name')

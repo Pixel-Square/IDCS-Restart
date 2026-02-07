@@ -2,13 +2,13 @@ from rest_framework import viewsets, status, serializers
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
-from .models import CurriculumMaster, CurriculumDepartment
-from .serializers import CurriculumMasterSerializer, CurriculumDepartmentSerializer
+from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject
+from .serializers import CurriculumMasterSerializer, CurriculumDepartmentSerializer, ElectiveSubjectSerializer
 from .permissions import IsIQACOrReadOnly
 from accounts.utils import get_user_permissions
 from academics.utils import get_user_effective_departments
 import logging
-from rest_framework.views import exception_handler
+from rest_framework.views import exception_handler, APIView
 
 logger = logging.getLogger(__name__)
 
@@ -154,3 +154,71 @@ class CurriculumDepartmentViewSet(viewsets.ModelViewSet):
             return Response({'status': 'rejected'})
         else:
             return Response({'detail': 'action must be "approve" or "reject"'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ElectiveSubjectViewSet(viewsets.ModelViewSet):
+    queryset = ElectiveSubject.objects.all().select_related('department', 'parent', 'semester')
+    serializer_class = ElectiveSubjectSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        qs = ElectiveSubject.objects.all().select_related('department', 'parent', 'semester')
+        req = self.request
+        dept_id = req.query_params.get('department_id')
+        regulation = req.query_params.get('regulation')
+        semester = req.query_params.get('semester')
+        if dept_id:
+            try:
+                qs = qs.filter(department_id=int(dept_id))
+            except Exception:
+                pass
+        if regulation:
+            qs = qs.filter(regulation=regulation)
+        if semester:
+            try:
+                qs = qs.filter(semester__number=int(semester))
+            except Exception:
+                pass
+        return qs.order_by('semester', 'course_code')
+
+
+class ElectiveChoicesView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        # Accept either elective_subject_id or parent_id (CurriculumDepartment id)
+        es_id = request.query_params.get('elective_subject_id') or request.query_params.get('elective')
+        parent_id = request.query_params.get('parent_id') or request.query_params.get('parent')
+        results = []
+        try:
+            from .models import ElectiveChoice
+            qs = ElectiveChoice.objects.filter(is_active=True).select_related('student__user', 'elective_subject', 'academic_year')
+            if es_id:
+                try:
+                    qs = qs.filter(elective_subject_id=int(es_id))
+                except Exception:
+                    return Response({'results': []})
+            elif parent_id:
+                try:
+                    qs = qs.filter(elective_subject__parent_id=int(parent_id))
+                except Exception:
+                    return Response({'results': []})
+            else:
+                return Response({'results': []})
+
+            for c in qs:
+                st = getattr(c, 'student', None)
+                if not st:
+                    continue
+                results.append({
+                    'id': st.pk,
+                    'reg_no': getattr(st, 'reg_no', None),
+                    'username': getattr(getattr(st, 'user', None), 'username', None),
+                    'section_id': getattr(st, 'section_id', None),
+                    'section_name': str(getattr(st, 'section', '')),
+                    'academic_year': getattr(getattr(c, 'academic_year', None), 'name', None),
+                })
+        except Exception:
+            return Response({'results': []})
+
+        return Response({'results': results})

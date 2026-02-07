@@ -148,6 +148,36 @@ export default function AssignedSubjectsPage() {
     }
   }
 
+  // Open a read-only list of students for an assignment (section or elective)
+  async function openListStudents(item: any){
+    setError(null)
+    setPickerItem(item)
+    setPickerStudents([])
+    setPickerSelectedIds([])
+    try{
+      let sdata
+      if (item.section_id) {
+        const sres = await fetchWithAuth(`/api/academics/sections/${item.section_id}/students/`)
+        if (!sres.ok) throw new Error(await sres.text())
+        sdata = await sres.json()
+      } else if (item.elective_subject_id) {
+        const sres = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${item.elective_subject_id}`)
+        if (!sres.ok) throw new Error(await sres.text())
+        sdata = await sres.json()
+      } else {
+        throw new Error('No student mapping available for this assignment')
+      }
+      const studs = (sdata.results || sdata)
+      setPickerStudents(studs)
+      setPickerSelectedIds(studs.map((s:any)=>s.id))
+      setPickerOpen(true)
+    }catch(e:any){
+      console.error('openListStudents error', e)
+      setError(e?.message || String(e))
+      alert('Failed to load students: ' + (e?.message || e))
+    }
+  }
+
   function togglePickerSelect(id: number){
     setPickerSelectedIds(prev => prev.includes(id) ? prev.filter(x=>x!==id) : [...prev, id])
   }
@@ -302,7 +332,17 @@ export default function AssignedSubjectsPage() {
                       )}
                     </div>
                     <div style={{marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
-                      <button type="button" onClick={() => openPickerForAssignment(item)} style={{ padding: '6px 10px' }}>Create Batch</button>
+                      {item.section_id ? (
+                        <>
+                          <button type="button" onClick={() => openPickerForAssignment(item)} style={{ padding: '6px 10px' }}>Create Batch</button>
+                          <button type="button" onClick={() => openListStudents(item)} style={{ padding: '6px 10px' }}>List Students</button>
+                        </>
+                      ) : (
+                        <>
+                          <button type="button" onClick={() => openListStudents(item)} style={{ padding: '6px 10px' }}>List Students</button>
+                          <span className="no-data" style={{ fontSize: 13, color: '#666' }}>Department-wide elective</span>
+                        </>
+                      )}
                     </div>
                   </td>
                   <td className="section-cell" data-label="Section">

@@ -20,10 +20,17 @@ export default function TeachingAssignmentsPage(){
   const [staff, setStaff] = useState<Staff[]>([])
   const [curriculum, setCurriculum] = useState<CurriculumRow[]>([])
   const [assignments, setAssignments] = useState<TeachingAssignment[]>([])
+  const [electiveOptions, setElectiveOptions] = useState<any[]>([])
+  const [electiveParents, setElectiveParents] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
   const uniqueSems = sections.length ? Array.from(new Set(sections.map(s => s.semester))).sort((a, b) => (a || 0) - (b || 0)) : []
   const [selectedSem, setSelectedSem] = useState<number | null>(uniqueSems.length === 1 ? uniqueSems[0] ?? null : null)
+
+  // permissions (used to decide which staff endpoint to call)
+  const perms = (() => { try { return JSON.parse(localStorage.getItem('permissions') || '[]') as string[] } catch { return [] } })()
+  const canViewElectives = perms.includes('academics.view_elective_teaching')
+  const canAssignElectives = perms.includes('academics.assign_elective_teaching')
 
   useEffect(() => { fetchData() }, [])
 
@@ -31,8 +38,10 @@ export default function TeachingAssignmentsPage(){
     try{
       setLoading(true)
       const sres = await fetchWithAuth('/api/academics/my-students/?page_size=0')
-      const staffRes = await fetchWithAuth('/api/academics/advisor-staff/?page_size=0')
+      const staffEndpoint = (canViewElectives || canAssignElectives) ? '/api/academics/hod-staff/?page_size=0' : '/api/academics/advisor-staff/?page_size=0'
+      const staffRes = await fetchWithAuth(staffEndpoint)
       const curRes = await fetchWithAuth('/api/curriculum/department/?page_size=0')
+      const electRes = await fetchWithAuth('/api/curriculum/elective/?page_size=0')
       const taRes = await fetchWithAuth('/api/academics/teaching-assignments/?page_size=0')
 
       const safeJson = async (r: Response) => {
@@ -43,7 +52,8 @@ export default function TeachingAssignmentsPage(){
 
       if (sres.ok){ const d = await safeJson(sres); setSections((d.results || d).map((r:any) => ({ id: r.section_id, name: r.section_name, batch: r.batch, department_id: r.department_id, semester: r.semester, department: r.department }))) }
       if (staffRes.ok){ const d = await safeJson(staffRes); setStaff(d.results || d) }
-      if (curRes.ok){ const d = await safeJson(curRes); setCurriculum(d.results || d) }
+      if (curRes.ok){ const d = await safeJson(curRes); const rows = (d.results || d); setCurriculum(rows); setElectiveParents(rows.filter((r:any)=> r.is_elective)) }
+      if (electRes.ok){ const d = await safeJson(electRes); setElectiveOptions(d.results || d) }
       if (taRes.ok){ const d = await safeJson(taRes); setAssignments(d.results || d) }
     }catch(e){ console.error(e); alert('Failed to load teaching assignment data') }
     finally{ setLoading(false) }
@@ -54,6 +64,15 @@ export default function TeachingAssignmentsPage(){
     const staffSel = document.getElementById(`staff-${sectionId}`) as HTMLSelectElement
     if (!subjSel?.value || !staffSel?.value) return alert('Select subject and staff')
     const payload = { section_id: sectionId, staff_id: Number(staffSel.value), curriculum_row_id: Number(subjSel.value), is_active: true }
+    const res = await fetchWithAuth('/api/academics/teaching-assignments/', { method: 'POST', body: JSON.stringify(payload) })
+    if (res.ok){ alert('Assigned successfully'); fetchData() } else { const txt = await res.text(); alert('Error: ' + txt) }
+  }
+
+  // permissions are computed above
+
+  async function assignElective(electiveId:number, staffId:number){
+    if (!staffId) return alert('Select staff')
+    const payload = { elective_subject_id: electiveId, staff_id: Number(staffId), is_active: true }
     const res = await fetchWithAuth('/api/academics/teaching-assignments/', { method: 'POST', body: JSON.stringify(payload) })
     if (res.ok){ alert('Assigned successfully'); fetchData() } else { const txt = await res.text(); alert('Error: ' + txt) }
   }
@@ -196,6 +215,34 @@ export default function TeachingAssignmentsPage(){
           )}
         </div>
       </div>
+      {/* Elective subject assignments */}
+      {canViewElectives ? (
+        <div style={{ marginTop: 28 }}>
+          <h3 style={{ fontSize: '18px', color: '#111827', fontWeight: 700, marginBottom: '12px' }}>Elective Subject Assignments</h3>
+          <div style={{ display: 'grid', gap: 12 }}>
+            {electiveParents.length === 0 && (<div style={{ color: '#64748b' }}>No elective parents found.</div>)}
+            {electiveParents.map(parent => (
+              <div key={parent.id} style={{ background: '#fff', padding: 12, borderRadius: 8, boxShadow: '0 1px 4px rgba(15,23,42,0.05)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <div style={{ fontWeight: 700 }}>{parent.course_name || parent.course_code || 'Elective'}</div>
+                </div>
+                <div style={{ display: 'grid', gap: 8 }}>
+                  { (electiveOptions && electiveOptions.filter((e:any)=> e.parent === parent.id)).map((opt:any) => (
+                    <div key={opt.id} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <div style={{ flex: 1 }}>{opt.course_code || '-'} — {opt.course_name || '-'}</div>
+                      <select id={`elective-staff-${opt.id}`} style={{ padding: '6px 10px', borderRadius: '6px', border: '1px solid #d1d5db', minWidth: 160 }}>
+                        <option value="">-- select staff --</option>
+                        {staff.map(st => (<option key={st.id} value={st.id}>{st.staff_id} - {st.user}</option>))}
+                      </select>
+                      <button disabled={!canAssignElectives} onClick={() => assignElective(opt.id, Number((document.getElementById(`elective-staff-${opt.id}`) as HTMLSelectElement)?.value))} style={{ padding: '6px 12px', borderRadius: 6, background: canAssignElectives ? 'linear-gradient(90deg,#4f46e5,#06b6d4)' : '#f3f4f6', color: canAssignElectives ? '#fff' : '#9ca3af', border: 'none', cursor: canAssignElectives ? 'pointer' : 'not-allowed' }}>{canAssignElectives ? 'Assign' : 'No permission'}</button>
+                    </div>
+                  )) }
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

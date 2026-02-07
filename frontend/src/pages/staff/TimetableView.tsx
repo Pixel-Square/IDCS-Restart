@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import fetchWithAuth from '../../services/fetchAuth'
 
-const DAYS = ['Mon','Tue','Wed','Thu','Fri']
+const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat']
 
 function shortLabel(item:any){
   if(!item) return ''

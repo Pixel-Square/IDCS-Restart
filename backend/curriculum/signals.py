@@ -29,6 +29,7 @@ def propagate_master_to_departments(sender, instance: CurriculumMaster, created,
                 'course_name': instance.course_name,
                 'class_type': instance.class_type,
                 'category': instance.category,
+                'is_elective': instance.is_elective,
                 'l': instance.l,
                 't': instance.t,
                 'p': instance.p,
@@ -54,7 +55,7 @@ def propagate_master_to_departments(sender, instance: CurriculumMaster, created,
                     # update allowed fields
                     update_fields = [
                         'regulation', 'semester', 'course_code', 'course_name', 'class_type', 'category',
-                        'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark', 'editable'
+                            'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark', 'editable', 'is_elective'
                     ]
                     for f in update_fields:
                         if f in defaults:

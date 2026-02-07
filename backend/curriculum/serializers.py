@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import CurriculumMaster, CurriculumDepartment
+from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject
 from academics.models import Department, Semester
 
 
@@ -20,7 +20,7 @@ class CurriculumMasterSerializer(serializers.ModelSerializer):
         model = CurriculumMaster
         fields = [
             'id', 'regulation', 'semester', 'semester_id', 'course_code', 'course_name', 'class_type', 'category',
-            'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark',
+            'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark', 'is_elective',
             'for_all_departments', 'departments', 'departments_display', 'editable', 'created_by', 'created_at', 'updated_at'
         ]
         read_only_fields = ('created_by', 'created_at', 'updated_at')
@@ -47,7 +47,7 @@ class CurriculumDepartmentSerializer(serializers.ModelSerializer):
         model = CurriculumDepartment
         fields = [
             'id', 'master', 'department', 'department_id', 'regulation', 'semester', 'semester_id', 'course_code', 'course_name',
-            'class_type', 'category', 'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark',
+            'class_type', 'category', 'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark', 'is_elective',
             'total_hours', 'question_paper_type', 'editable', 'overridden',
             'approval_status', 'approved_by', 'approved_at',
             'created_by', 'created_at', 'updated_at'
@@ -69,3 +69,26 @@ class CurriculumDepartmentSerializer(serializers.ModelSerializer):
             validated_data['approved_at'] = None
             validated_data['overridden'] = True
         return super().update(instance, validated_data)
+
+
+class ElectiveSubjectSerializer(serializers.ModelSerializer):
+    department = DepartmentSmallSerializer(read_only=True)
+    department_id = serializers.PrimaryKeyRelatedField(queryset=Department.objects.all(), source='department', write_only=True)
+    semester = serializers.IntegerField(source='semester.number', read_only=True)
+    semester_id = serializers.PrimaryKeyRelatedField(queryset=Semester.objects.all(), source='semester', write_only=True, required=False)
+
+    class Meta:
+        model = ElectiveSubject
+        fields = [
+            'id', 'parent', 'department', 'department_id', 'regulation', 'semester', 'semester_id', 'course_code', 'course_name',
+            'class_type', 'category', 'is_elective', 'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark',
+            'total_hours', 'question_paper_type', 'editable', 'overridden',
+            'approval_status', 'approved_by', 'approved_at',
+            'created_by', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ('created_by', 'created_at', 'updated_at')
+
+    def create(self, validated_data):
+        user = self.context['request'].user
+        validated_data['created_by'] = user
+        return super().create(validated_data)

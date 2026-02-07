@@ -91,7 +91,7 @@ export default function StudentTimetable(){
         const pset = [] as any[]
         for(const d of (tt||[])){
           for(const a of (d.assignments||[])){
-            if(!pset.find(x=> x.period_id === a.period_id)) pset.push({ id: a.period_id, index: a.period_index, is_break: a.is_break, label: a.label })
+            if(!pset.find(x=> x.id === a.period_id)) pset.push({ id: a.period_id, index: a.period_index, is_break: a.is_break, label: a.label })
           }
         }
         pset.sort((a,b)=> (a.index||0)-(b.index||0))
@@ -113,7 +113,7 @@ export default function StudentTimetable(){
                 <tr>
                 <th style={{border:'1px solid #ddd', padding:8}}>Day / Period</th>
                 {periods.map(p=> (
-                  <th key={p.id} style={{border:'1px solid #ddd', padding:8}}>
+                  <th key={`period-${p.id}`} style={{border:'1px solid #ddd', padding:8}}>
                     {p.is_break || p.is_lunch ? (p.label || (p.is_break ? 'Break' : 'Lunch')) : (p.label || `${p.start_time || ''}${p.start_time && p.end_time ? ' - ' : ''}${p.end_time || ''}`)}
                   </th>
                 ))}
@@ -121,19 +121,19 @@ export default function StudentTimetable(){
             </thead>
             <tbody>
               {DAYS.map((d,di)=> (
-                <tr key={d}>
+                <tr key={`day-${di}`}> 
                   <td style={{border:'1px solid #ddd', padding:8}}>{d}</td>
                   {periods.map(p=> {
                     // find assignment for day+period
                     const dayObj = timetable.find(x=> x.day === di+1) || { assignments: [] }
                       const assignments = (dayObj.assignments||[]).filter((x:any)=> x.period_id === p.id)
                     return (
-                      <td key={p.id} style={{border:'1px solid #ddd', padding:8}}>
+                      <td key={`cell-${di}-${p.id}`} style={{border:'1px solid #ddd', padding:8}}>
                         {p.is_break ? <em style={{color:'#666'}}>{p.label||'Break'}</em> : (
                             assignments && assignments.length ? (
                             <div>
                                 {assignments.map((a:any, i:number)=> (
-                                  <div key={i} style={{marginBottom:8}}>
+                                  <div key={`${a.id || a.curriculum_row?.id || i}`} style={{marginBottom:8}}>
                                     <div style={{fontWeight:600}}>{shortLabel(a.curriculum_row || a.subject_text)}</div>
                                     <div style={{fontSize:12, color:'#333'}}>Staff: {a.staff?.username || '—'}</div>
                                     {a.subject_batch && <div style={{fontSize:12, color:'#333'}}>Batch: {a.subject_batch.name}</div>}

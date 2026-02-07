@@ -8,7 +8,7 @@ export default function MasterEditor() {
   const { id } = useParams();
   const effectiveId = id ?? (window.location.pathname.endsWith('/new') ? 'new' : undefined);
   const navigate = useNavigate();
-  const [form, setForm] = useState<any>({ regulation: '', semester: 1, for_all_departments: true, editable: false });
+  const [form, setForm] = useState<any>({ regulation: '', semester: 1, for_all_departments: true, editable: false, is_elective: false });
   const [loading, setLoading] = useState(false);
   const [departments, setDepartments] = useState<Array<{id:number; code:string; name:string}>>([]);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
@@ -217,6 +217,10 @@ export default function MasterEditor() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
           <input type="checkbox" checked={!!form.editable} onChange={e => setForm({...form, editable: e.target.checked})} id="editable" />
           <label htmlFor="editable" style={{ fontWeight: 600, color: '#3730a3', marginBottom: 0 }}>Editable</label>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
+          <input type="checkbox" checked={!!form.is_elective} onChange={e => setForm({...form, is_elective: e.target.checked})} id="is_elective" />
+          <label htmlFor="is_elective" style={{ fontWeight: 600, color: '#3730a3', marginBottom: 0 }}>Is Elective</label>
         </div>
         {savedMessage && (
           <div style={{ background: '#ecfccb', color: '#365314', padding: '8px 12px', borderRadius: 8, fontWeight: 600, display: 'inline-block' }}>{savedMessage}</div>
