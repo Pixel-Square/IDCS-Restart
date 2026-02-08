@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ClipboardList } from 'lucide-react';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster } from '../services/roster';
@@ -69,6 +69,18 @@ type Props = {
   label: string;
   coA: number;
   coB?: number | null;
+
+  // Customization options for other practical-style entries.
+  itemLabel?: string; // singular
+  itemLabelPlural?: string;
+  itemAbbrev?: string; // column short label e.g. E1
+  ciaExamAvailable?: boolean; // hide CIA Exam column + Mark Manager toggle
+  absentEnabled?: boolean; // show AB checkbox column
+  autoSaveDraft?: boolean;
+  autoSaveDelayMs?: number;
+
+  // IQAC viewer: view-only, ignore lock overlays / hidden rows.
+  viewerMode?: boolean;
 };
 
 const DEFAULT_EXPERIMENTS = 5;
@@ -150,6 +162,15 @@ export default function LabCourseMarksEntry({
   label,
   coA,
   coB,
+
+  itemLabel,
+  itemLabelPlural,
+  itemAbbrev,
+  ciaExamAvailable,
+  absentEnabled,
+  autoSaveDraft,
+  autoSaveDelayMs,
+  viewerMode,
 }: Props) {
   const [students, setStudents] = useState<Student[]>([]);
   const [loadingRoster, setLoadingRoster] = useState(false);
@@ -172,6 +193,19 @@ export default function LabCourseMarksEntry({
   const [markManagerBusy, setMarkManagerBusy] = useState(false);
   const [markManagerError, setMarkManagerError] = useState<string | null>(null);
   const [markManagerAnimating, setMarkManagerAnimating] = useState(false);
+  const [pendingCoDiff, setPendingCoDiff] = useState<null | { visible: boolean; diff: { added: number[]; removed: number[]; changed: number[] }; affected: number; mode: 'confirm' | 'request' }>(null);
+  const [pendingMarkManagerReset, setPendingMarkManagerReset] = useState<null | { visible: boolean; removed: number[]; affected: number }>(null);
+
+  const itemLabel1 = String(itemLabel || 'Experiment');
+  const itemLabelN = String(itemLabelPlural || 'Experiments');
+  const itemColAbbrev = String(itemAbbrev || 'E');
+  const ciaAvailable = ciaExamAvailable !== false;
+  const absentUiEnabled = Boolean(absentEnabled ?? assessmentKey === 'model');
+  const autoSaveEnabled = Boolean(autoSaveDraft);
+  const autoSaveMs = clampInt(Number(autoSaveDelayMs ?? 900), 250, 5000);
+
+  const lastAutoSavedSigRef = useRef<string | null>(null);
+  const autoSaveTimerRef = useRef<number | null>(null);
 
   const key = useMemo(() => (subjectId ? storageKey(assessmentKey, String(subjectId)) : ''), [assessmentKey, subjectId]);
 
@@ -197,8 +231,12 @@ export default function LabCourseMarksEntry({
     options: { poll: false },
   });
 
-  const isPublished = Boolean(publishedViewSnapshot) || Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published);
-  const entryOpen = !isPublished ? true : Boolean(markLock?.entry_open);
+  // "Published" should be driven by the lock row, not by whether a snapshot object exists.
+  // Otherwise a fresh page can be treated as published if the API returns a non-null payload.
+  const isPublished = Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published);
+  // Deterministic rule: the marks table is OPEN only when the backend says so.
+  // This keeps pre-publish behavior consistent too: table stays locked while Mark Manager is editable.
+  const entryOpen = Boolean(markLock?.entry_open);
   const publishedEditLocked = Boolean(isPublished && !entryOpen);
 
   const globalLocked = Boolean(publishWindow?.global_override_active && publishWindow?.global_is_open === false);
@@ -211,7 +249,7 @@ export default function LabCourseMarksEntry({
       coBNum: coB == null ? null : clampInt(Number(coB), 1, 5),
       coAEnabled: true,
       coBEnabled: Boolean(coB),
-      ciaExamEnabled: true,
+      ciaExamEnabled: ciaAvailable ? true : false,
       expCountA: DEFAULT_EXPERIMENTS,
       expCountB: Boolean(coB) ? DEFAULT_EXPERIMENTS : 0,
       expMaxA: DEFAULT_EXPERIMENT_MAX,
@@ -266,6 +304,8 @@ export default function LabCourseMarksEntry({
     };
   }, [subjectId]);
 
+
+
   // Load draft from backend
   useEffect(() => {
     let mounted = true;
@@ -286,7 +326,7 @@ export default function LabCourseMarksEntry({
 
           const coAEnabledRaw = Boolean((d.sheet as any).coAEnabled ?? true);
           const coBEnabledRaw = Boolean((d.sheet as any).coBEnabled ?? Boolean(coBNum));
-          const ciaExamEnabled = Boolean((d.sheet as any).ciaExamEnabled ?? true);
+          const ciaExamEnabled = ciaAvailable ? Boolean((d.sheet as any).ciaExamEnabled ?? true) : false;
           const expCountA = clampInt(Number((d.sheet as any).expCountA ?? DEFAULT_EXPERIMENTS), 0, 12);
           const expCountB = clampInt(Number((d.sheet as any).expCountB ?? (coBEnabledRaw ? DEFAULT_EXPERIMENTS : 0)), 0, 12);
           const expMaxA = Number.isFinite(Number((d.sheet as any).expMaxA)) ? Number((d.sheet as any).expMaxA) : DEFAULT_EXPERIMENT_MAX;
@@ -410,12 +450,45 @@ export default function LabCourseMarksEntry({
             // ignore
           }
         } else {
+          // No server draft — initialize a fresh sheet for this assessmentKey/subject using the page's CO props.
           const stored = key ? (lsGet<any>(key) as any) : null;
           const rowsByStudentId = stored?.rowsByStudentId && typeof stored.rowsByStudentId === 'object' ? stored.rowsByStudentId : {};
-          setDraft((p) => ({
-            ...p,
-            sheet: { ...p.sheet, batchLabel: String(subjectId), rowsByStudentId },
-          }));
+          const aNum = clampInt(Number(coA ?? 1), 1, 5);
+          const bNum = coB == null ? null : clampInt(Number(coB), 1, 5);
+          const expCountA = DEFAULT_EXPERIMENTS;
+          const expCountB = bNum != null ? DEFAULT_EXPERIMENTS : 0;
+          const expMaxA = DEFAULT_EXPERIMENT_MAX;
+          const expMaxB = bNum != null ? DEFAULT_EXPERIMENT_MAX : 0;
+          const btlA = Array.from({ length: expCountA }, () => 1 as const);
+          const btlB = bNum != null ? Array.from({ length: expCountB }, () => 1 as const) : [];
+          const defaultCoConfigs: Record<string, any> = {
+            [String(aNum)]: { enabled: true, expCount: expCountA, expMax: expMaxA, btl: btlA },
+            ...(bNum == null
+              ? {}
+              : { [String(bNum)]: { enabled: true, expCount: expCountB, expMax: expMaxB, btl: btlB } }),
+          };
+
+          setDraft({
+            sheet: {
+              termLabel: String('KRCT AY25-26'),
+              batchLabel: String(subjectId || ''),
+              coANum: aNum,
+              coBNum: bNum,
+              coAEnabled: true,
+              coBEnabled: Boolean(bNum),
+              ciaExamEnabled: ciaAvailable ? true : false,
+              expCountA,
+              expCountB,
+              expMaxA,
+              expMaxB,
+              btlA,
+              btlB,
+              coConfigs: defaultCoConfigs,
+              rowsByStudentId,
+              markManagerLocked: false,
+              markManagerSnapshot: null,
+            },
+          });
         }
       } catch {
         // ignore
@@ -569,10 +642,13 @@ export default function LabCourseMarksEntry({
 
   const coConfigs = useMemo(() => ensureCoConfigs(draft.sheet), [draft.sheet]);
   const markManagerLocked = Boolean(draft.sheet.markManagerLocked);
-  const ciaExamEnabled = draft.sheet.ciaExamEnabled !== false;
+  const ciaExamEnabled = ciaAvailable ? draft.sheet.ciaExamEnabled !== false : false;
   const markManagerCurrentSnapshot = useMemo(() => markManagerSnapshotOf(coConfigs, ciaExamEnabled), [coConfigs, ciaExamEnabled]);
 
-  const tableBlocked = isPublished ? !entryOpen : !markManagerLocked; // DB controls post-publish; local confirmation controls pre-publish
+  // DB controls post-publish; local confirmation controls pre-publish.
+  // Deterministic: block whenever backend says entry is not open.
+  // (Pre-publish: entry_open stays false until Mark Manager is confirmed/locked.)
+  const tableBlocked = !entryOpen;
   const enabledCoMetas = useMemo(() => {
     return Object.entries(coConfigs || {})
       .filter(([coNumber, cfg]) => allowedCoSet.has(String(coNumber)) && Boolean(cfg && cfg.enabled))
@@ -591,19 +667,56 @@ export default function LabCourseMarksEntry({
   const maxExpMax = useMemo(() => enabledCoMetas.reduce((m, c) => Math.max(m, c.expMax), 0), [enabledCoMetas]);
 
   const hasAbsentees = useMemo(() => {
-    if (assessmentKey !== 'model') return false;
+    if (!absentUiEnabled) return false;
     const rows = draft.sheet.rowsByStudentId || {};
     return Object.values(rows).some((r) => Boolean((r as any)?.absent));
-  }, [assessmentKey, draft.sheet.rowsByStudentId]);
+  }, [absentUiEnabled, draft.sheet.rowsByStudentId]);
 
   const renderStudents = useMemo(() => {
     // After publish-lock: keep the table visually empty (per UX) until IQAC approves MARK_ENTRY edits.
     // Once approved, show the existing marks from the last saved draft/published snapshot.
-    if (isPublished && !entryOpen) return [];
-    if (assessmentKey !== 'model') return students;
+    if (!viewerMode && isPublished && !entryOpen) return [];
+    if (!absentUiEnabled) return students;
     if (!showAbsenteesOnly) return students;
     return students.filter((s) => Boolean(draft.sheet.rowsByStudentId?.[String(s.id)]?.absent));
-  }, [isPublished, entryOpen, assessmentKey, students, showAbsenteesOnly, draft.sheet.rowsByStudentId]);
+  }, [viewerMode, isPublished, entryOpen, absentUiEnabled, students, showAbsenteesOnly, draft.sheet.rowsByStudentId]);
+
+  // Autosave (debounced) - enabled only when requested (e.g., ReviewEntry).
+  useEffect(() => {
+    if (!autoSaveEnabled) return;
+    if (!subjectId) return;
+    if (tableBlocked) return;
+    if (publishedEditLocked) return;
+
+    if (autoSaveTimerRef.current != null) {
+      window.clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
+
+    const sig = JSON.stringify(draft);
+    if (sig === lastAutoSavedSigRef.current) return;
+
+    autoSaveTimerRef.current = window.setTimeout(async () => {
+      if (!subjectId) return;
+      try {
+        setSavingDraft(true);
+        await saveDraft(assessmentKey, String(subjectId), draft);
+        lastAutoSavedSigRef.current = sig;
+        setSavedAt(new Date().toLocaleString());
+      } catch {
+        // silent autosave failures
+      } finally {
+        setSavingDraft(false);
+      }
+    }, autoSaveMs);
+
+    return () => {
+      if (autoSaveTimerRef.current != null) {
+        window.clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+      }
+    };
+  }, [autoSaveEnabled, autoSaveMs, assessmentKey, draft, publishedEditLocked, subjectId, tableBlocked]);
 
   function ensureCoConfigs(sheet: LabSheet): NonNullable<LabSheet['coConfigs']> {
     const existing = (sheet.coConfigs && typeof sheet.coConfigs === 'object' ? sheet.coConfigs : {}) as NonNullable<LabSheet['coConfigs']>;
@@ -643,8 +756,129 @@ export default function LabCourseMarksEntry({
     return JSON.stringify({ enabled, ciaExamEnabled: Boolean(ciaEnabled) });
   }
 
+  function coConfigsFromSnapshot(snapshot: string | null): NonNullable<LabSheet['coConfigs']> | null {
+    if (!snapshot) return null;
+    try {
+      const parsed = JSON.parse(String(snapshot));
+      const enabledList = Array.isArray(parsed?.enabled) ? parsed.enabled : [];
+      const out: any = {};
+      for (const n of [1, 2, 3, 4, 5]) {
+        out[String(n)] = {
+          enabled: false,
+          expCount: DEFAULT_EXPERIMENTS,
+          expMax: DEFAULT_EXPERIMENT_MAX,
+          btl: Array.from({ length: DEFAULT_EXPERIMENTS }, () => 1 as const),
+        };
+      }
+      for (const item of enabledList) {
+        const co = clampInt(Number(item?.co), 1, 5);
+        out[String(co)] = {
+          ...out[String(co)],
+          enabled: true,
+          expCount: clampInt(Number(item?.expCount ?? DEFAULT_EXPERIMENTS), 0, 12),
+          expMax: clampInt(Number(item?.expMax ?? DEFAULT_EXPERIMENT_MAX), 0, 100),
+        };
+      }
+      return out as NonNullable<LabSheet['coConfigs']>;
+    } catch {
+      return null;
+    }
+  }
+
+  function countNonEmptyDraftMarksForCos(rowsByStudentId: Record<string, any>, coNums: number[], fixedCoA: number, fixedCoB: number | null) {
+    if (!rowsByStudentId) return 0;
+    const checkSet = new Set(coNums.map((n) => String(n)));
+    let affected = 0;
+    for (const row of Object.values(rowsByStudentId)) {
+      if (!row || typeof row !== 'object') continue;
+      const mbc = row.marksByCo && typeof row.marksByCo === 'object' ? row.marksByCo : {};
+      let any = false;
+      for (const n of coNums) {
+        const k = String(n);
+        if (!checkSet.has(k)) continue;
+        const arr = (mbc as any)[k];
+        if (Array.isArray(arr) && arr.some((v: any) => v !== '' && v != null)) {
+          any = true;
+          break;
+        }
+        // legacy A/B marks are only relevant for the fixed pair
+        if (!any && n === fixedCoA && Array.isArray(row.marksA) && row.marksA.some((v: any) => v !== '' && v != null)) any = true;
+        if (!any && fixedCoB != null && n === fixedCoB && Array.isArray(row.marksB) && row.marksB.some((v: any) => v !== '' && v != null)) any = true;
+        if (any) break;
+      }
+      if (any) affected++;
+    }
+    return affected;
+  }
+
+  function enabledCosFromCfg(cfg: NonNullable<LabSheet['coConfigs']>) {
+    return Object.entries(cfg)
+      .filter(([k, v]) => allowedCoSet.has(String(k)) && Boolean((v as any)?.enabled))
+      .map(([k]) => clampInt(Number(k), 1, 5))
+      .sort((a, b) => a - b);
+  }
+
+  // Compute diff between two coConfigs objects for COs 1..5
+  function computeCoConfigDiff(oldCfg: NonNullable<LabSheet['coConfigs']>, newCfg: NonNullable<LabSheet['coConfigs']>) {
+    const added: number[] = [];
+    const removed: number[] = [];
+    const changed: number[] = [];
+    for (const n of [1, 2, 3, 4, 5]) {
+      const k = String(n);
+      const o = oldCfg[k];
+      const ni = newCfg[k];
+      const oEnabled = Boolean(o?.enabled);
+      const nEnabled = Boolean(ni?.enabled);
+      if (!o && ni) {
+        if (nEnabled) added.push(n);
+        continue;
+      }
+      if (o && !ni) {
+        if (oEnabled) removed.push(n);
+        continue;
+      }
+      if (o && ni) {
+        // compare expCount and expMax and enabled
+        const oExp = clampInt(Number((o as any).expCount ?? 0), 0, 12);
+        const nExp = clampInt(Number((ni as any).expCount ?? 0), 0, 12);
+        const oMax = clampInt(Number((o as any).expMax ?? 0), 0, 100);
+        const nMax = clampInt(Number((ni as any).expMax ?? 0), 0, 100);
+        if (oEnabled !== nEnabled || oExp !== nExp || oMax !== nMax) {
+          changed.push(n);
+        }
+      }
+    }
+    return { added, removed, changed };
+  }
+
+  function countNonEmptyPublishedMarks(rowsByStudentId: Record<string, any>, coNums: number[]) {
+    if (!rowsByStudentId) return 0;
+    let affected = 0;
+    for (const row of Object.values(rowsByStudentId)) {
+      if (!row || typeof row !== 'object') continue;
+      // check legacy arrays
+      const anyLegacy = Array.isArray(row.marksA) && row.marksA.some((v: any) => v !== '' && v != null) || Array.isArray(row.marksB) && row.marksB.some((v: any) => v !== '' && v != null) || (row.ciaExam !== '' && row.ciaExam != null);
+      if (anyLegacy) {
+        affected++;
+        continue;
+      }
+      const mbc = row.marksByCo && typeof row.marksByCo === 'object' ? row.marksByCo : {};
+      let any = false;
+      for (const n of coNums) {
+        const arr = mbc[String(n)];
+        if (Array.isArray(arr) && arr.some((v: any) => v !== '' && v != null)) {
+          any = true;
+          break;
+        }
+      }
+      if (any) affected++;
+    }
+    return affected;
+  }
+
   function setCiaExamEnabled(enabled: boolean) {
     setDraft((p) => {
+      if (!ciaAvailable) return p;
       if (Boolean(p.sheet.markManagerLocked)) return p;
       return { ...p, sheet: { ...p.sheet, ciaExamEnabled: Boolean(enabled) } };
     });
@@ -757,6 +991,135 @@ export default function LabCourseMarksEntry({
       alert(e?.message || 'Request failed');
     } finally {
       setMarkManagerBusy(false);
+    }
+  }
+
+  async function confirmMarkManagerWithReset(resetMode: 'none' | 'partial' | 'full', resetCos: number[] = []) {
+    if (!subjectId) return;
+    setMarkManagerBusy(true);
+    setMarkManagerError(null);
+    try {
+      const fixedCoA = clampInt(Number(coA ?? 1), 1, 5);
+      const fixedCoB = coB == null ? null : clampInt(Number(coB), 1, 5);
+
+      // Snapshot the full coConfigs (allow CO1..CO5 to be used and saved).
+      const snapshot = markManagerSnapshotOf(coConfigs, ciaExamEnabled);
+      const approvalUntil = markManagerEditWindow?.approval_until
+        ? String(markManagerEditWindow.approval_until)
+        : draft.sheet.markManagerApprovalUntil || null;
+
+      // Ensure the fixed CO pair for this lab assessment stays consistent.
+      const cfgA = coConfigs[String(fixedCoA)];
+      const cfgB = fixedCoB == null ? null : coConfigs[String(fixedCoB)];
+
+      const nextCoAEnabled = Boolean(cfgA?.enabled);
+      const nextCoBEnabled = Boolean(fixedCoB != null && cfgB?.enabled);
+
+      const nextExpCountA = clampInt(Number(cfgA?.expCount ?? draft.sheet.expCountA ?? DEFAULT_EXPERIMENTS), 0, 12);
+      const nextExpMaxA = clampInt(Number(cfgA?.expMax ?? draft.sheet.expMaxA ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
+      const nextBtlA = normalizeBtlArray((cfgA as any)?.btl ?? (draft.sheet as any).btlA, nextExpCountA, 1);
+
+      const nextExpCountB = fixedCoB == null ? 0 : clampInt(Number(cfgB?.expCount ?? draft.sheet.expCountB ?? DEFAULT_EXPERIMENTS), 0, 12);
+      const nextExpMaxB = fixedCoB == null ? 0 : clampInt(Number(cfgB?.expMax ?? draft.sheet.expMaxB ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
+      const nextBtlB = fixedCoB == null ? [] : normalizeBtlArray((cfgB as any)?.btl ?? (draft.sheet as any).btlB, nextExpCountB, 1);
+
+      const resetSet = new Set(
+        resetMode === 'full' ? [1, 2, 3, 4, 5].map(String) : resetMode === 'partial' ? resetCos.map((n) => String(clampInt(Number(n), 1, 5))) : [],
+      );
+
+      const normalizeMarksByCo = (row: any, coKey: string, len: number) => {
+        const marksByCo = row?.marksByCo && typeof row.marksByCo === 'object' ? row.marksByCo : {};
+        return normalizeMarksArray((marksByCo as any)[coKey], len);
+      };
+      const hasAny = (arr: Array<number | ''>) => arr.some((v) => v !== '' && v != null);
+
+      const nextDraft: LabDraftPayload = {
+        ...draft,
+        sheet: {
+          ...draft.sheet,
+          coANum: fixedCoA,
+          coBNum: fixedCoB,
+          coAEnabled: nextCoAEnabled,
+          coBEnabled: nextCoBEnabled,
+          expCountA: nextExpCountA,
+          expCountB: nextExpCountB,
+          expMaxA: nextExpMaxA,
+          expMaxB: nextExpMaxB,
+          btlA: nextBtlA,
+          btlB: nextBtlB,
+          coConfigs: coConfigs,
+          markManagerLocked: true,
+          markManagerSnapshot: snapshot,
+          markManagerApprovalUntil: approvalUntil,
+          rowsByStudentId: Object.fromEntries(
+            Object.entries(draft.sheet.rowsByStudentId || {}).map(([sid, row0]) => {
+              const row: any = row0 && typeof row0 === 'object' ? row0 : {};
+
+              // Apply requested resets BEFORE syncing/migrating marks.
+              let marksByCo = row?.marksByCo && typeof row.marksByCo === 'object' ? { ...row.marksByCo } : {};
+
+              if (resetMode === 'full') {
+                marksByCo = {};
+                row.marksA = Array.from({ length: nextExpCountA }, () => '');
+                row.marksB = Array.from({ length: nextExpCountB }, () => '');
+                row.ciaExam = '';
+              } else if (resetMode === 'partial' && resetSet.size) {
+                for (const k of Array.from(resetSet)) {
+                  const cfg = coConfigs[String(k)];
+                  const len = clampInt(Number(cfg?.expCount ?? 0), 0, 12);
+                  // Clear the removed/changed column's marks.
+                  if (len > 0) marksByCo[String(k)] = Array.from({ length: len }, () => '');
+                  else delete (marksByCo as any)[String(k)];
+
+                  // If the fixed pair uses this CO, clear legacy arrays too.
+                  if (Number(k) === fixedCoA) row.marksA = Array.from({ length: nextExpCountA }, () => '');
+                  if (fixedCoB != null && Number(k) === fixedCoB) row.marksB = Array.from({ length: nextExpCountB }, () => '');
+                }
+              }
+
+              const legacyA = normalizeMarksArray(row?.marksA, nextExpCountA);
+              const legacyB = normalizeMarksArray(row?.marksB, nextExpCountB);
+              const byA = normalizeMarksArray(marksByCo[String(fixedCoA)] ?? normalizeMarksByCo(row, String(fixedCoA), nextExpCountA), nextExpCountA);
+              const byB = fixedCoB == null ? [] : normalizeMarksArray(marksByCo[String(fixedCoB)] ?? normalizeMarksByCo(row, String(fixedCoB), nextExpCountB), nextExpCountB);
+
+              const nextA = hasAny(legacyA) ? legacyA : hasAny(byA) ? byA : legacyA;
+              const nextB = nextExpCountB
+                ? hasAny(legacyB)
+                  ? legacyB
+                  : hasAny(byB)
+                    ? byB
+                    : legacyB
+                : legacyB;
+
+              // Always keep per-CO entries for the fixed pair in sync.
+              marksByCo[String(fixedCoA)] = byA;
+              if (fixedCoB != null) marksByCo[String(fixedCoB)] = byB;
+
+              return [sid, { ...row, marksA: nextA, marksB: nextB, marksByCo }];
+            }),
+          ) as any,
+        },
+      };
+
+      setDraft(nextDraft);
+      setMarkManagerModal(null);
+      setPendingMarkManagerReset(null);
+      setMarkManagerAnimating(true);
+
+      await saveDraft(assessmentKey, String(subjectId), nextDraft);
+      setSavedAt(new Date().toLocaleString());
+
+      try {
+        await confirmMarkManagerLock(assessmentKey as any, String(subjectId), teachingAssignmentId);
+        refreshMarkLock({ silent: true });
+      } catch (err) {
+        console.warn('confirmMarkManagerLock failed', err);
+      }
+    } catch (e: any) {
+      setMarkManagerError(e?.message || 'Save failed');
+    } finally {
+      setMarkManagerBusy(false);
+      setTimeout(() => setMarkManagerAnimating(false), 2000);
     }
   }
 
@@ -995,6 +1358,8 @@ export default function LabCourseMarksEntry({
       const existing = p.sheet.rowsByStudentId?.[k];
       if (!existing) return p;
 
+      if (absentUiEnabled && assessmentKey !== 'model' && Boolean((existing as any).absent)) return p;
+
       if (assessmentKey === 'model') {
         const absent = Boolean((existing as any).absent);
         const kind = absent ? String((existing as any).absentKind || 'AL').toUpperCase() : '';
@@ -1087,6 +1452,9 @@ export default function LabCourseMarksEntry({
       const existing = p.sheet.rowsByStudentId?.[k];
       if (!existing) return p;
 
+      if (!ciaAvailable) return p;
+      if (absentUiEnabled && assessmentKey !== 'model' && Boolean((existing as any).absent)) return p;
+
       if (assessmentKey === 'model') {
         const absent = Boolean((existing as any).absent);
         const kind = absent ? String((existing as any).absentKind || 'AL').toUpperCase() : '';
@@ -1133,6 +1501,8 @@ export default function LabCourseMarksEntry({
     for (const s of students) {
       clearedRowsByStudentId[String(s.id)] = {
         studentId: s.id,
+        absent: false,
+        absentKind: undefined,
         marksA: Array.from({ length: expCountA2 }, () => ''),
         marksB: Array.from({ length: expCountB2 }, () => ''),
         marksByCo: {},
@@ -1179,17 +1549,21 @@ export default function LabCourseMarksEntry({
     }
 
     // After publish, keep the table locked (no edits) until IQAC approval.
-    if (publishedAt) return;
+    // If already published and entry edits are not open, do nothing.
+    if (publishedAt && !entryOpen) return;
 
     setPublishing(true);
     try {
+      console.debug('publish called', { assessment: assessmentKey, subjectId, entryOpen, publishAllowed, globalLocked });
       await publishLabSheet(assessmentKey, String(subjectId), draft, teachingAssignmentId);
       setPublishedAt(new Date().toLocaleString());
+      console.debug('publish succeeded', { assessment: assessmentKey, subjectId });
       await refreshPublishedSnapshot(false);
       refreshPublishWindow();
       refreshMarkLock({ silent: true });
       try {
-        window.dispatchEvent(new CustomEvent('obe:published', { detail: { subjectId } }));
+        console.debug('obe:published dispatch', { assessment: assessmentKey, subjectId });
+        window.dispatchEvent(new CustomEvent('obe:published', { detail: { subjectId, assessment: assessmentKey } }));
       } catch {
         // ignore
       }
@@ -1219,8 +1593,12 @@ export default function LabCourseMarksEntry({
 
   useEffect(() => {
     if (!subjectId) return;
+    if (!markLock?.exists || !markLock?.is_published) {
+      setPublishedViewSnapshot(null);
+      return;
+    }
     refreshPublishedSnapshot(false);
-  }, [subjectId, assessmentKey]);
+  }, [subjectId, assessmentKey, markLock?.exists, markLock?.is_published]);
 
   const prevEntryOpenRef = React.useRef<boolean>(Boolean(entryOpen));
   useEffect(() => {
@@ -1290,7 +1668,7 @@ export default function LabCourseMarksEntry({
     return [1, 2, 3, 4, 5, 6].filter((n) => set.has(n));
   }, [enabledCoMetas, totalExpCols]);
 
-  const headerCols = 3 + experimentsCols + 1 + (ciaExamEnabled ? 1 : 0) + coAttainmentCols + visibleBtlIndices.length * 2;
+  const headerCols = 3 + (absentUiEnabled ? 1 : 0) + experimentsCols + 1 + (ciaExamEnabled ? 1 : 0) + coAttainmentCols + visibleBtlIndices.length * 2;
 
   const cellTh: React.CSSProperties = {
     border: '1px solid #111',
@@ -1326,7 +1704,10 @@ export default function LabCourseMarksEntry({
     padding: 12,
   };
 
-  const minTableWidth = Math.max(900, 360 + (experimentsCols + visibleBtlIndices.length * 2 + (ciaExamEnabled ? 1 : 0)) * 80);
+  const minTableWidth = Math.max(
+    900,
+    360 + ((absentUiEnabled ? 1 : 0) + experimentsCols + visibleBtlIndices.length * 2 + (ciaExamEnabled ? 1 : 0)) * 80,
+  );
 
   const coEnableStyle: React.CSSProperties = {
     display: 'flex',
@@ -1442,7 +1823,30 @@ export default function LabCourseMarksEntry({
 
             <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
               <button
-                onClick={() => setMarkManagerModal({ mode: markManagerLocked ? 'request' : 'confirm' })}
+                onClick={() => {
+                  if (markManagerLocked) {
+                    setMarkManagerModal({ mode: 'request' });
+                    return;
+                  }
+
+                  // Mark Manager SAVE clicked (pre-confirm): if COs differ from the previous
+                  // confirmed snapshot and old COs are removed, warn + allow reset.
+                  const prevCfg = coConfigsFromSnapshot(draft.sheet.markManagerSnapshot ?? null);
+                  if (prevCfg) {
+                    const prevEnabled = enabledCosFromCfg(prevCfg);
+                    const nextEnabled = enabledCosFromCfg(coConfigs);
+                    const removed = prevEnabled.filter((n) => !nextEnabled.includes(n));
+                    if (removed.length) {
+                      const fixedCoA = clampInt(Number(coA ?? 1), 1, 5);
+                      const fixedCoB = coB == null ? null : clampInt(Number(coB), 1, 5);
+                      const affected = countNonEmptyDraftMarksForCos(draft.sheet.rowsByStudentId as any, removed, fixedCoA, fixedCoB);
+                      setPendingMarkManagerReset({ visible: true, removed, affected });
+                      return;
+                    }
+                  }
+
+                  setMarkManagerModal({ mode: 'confirm' });
+                }}
                 className="obe-btn obe-btn-success"
                 disabled={!subjectId || markManagerBusy}
                 style={markManagerBusy ? { opacity: 0.6, cursor: 'not-allowed' } : undefined}
@@ -1465,8 +1869,12 @@ export default function LabCourseMarksEntry({
             })}
 
             <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontWeight: 800, fontSize: 12, color: '#111827' }}>
-              <input type="checkbox" checked={ciaExamEnabled} disabled={markManagerLocked} onChange={(e) => setCiaExamEnabled(e.target.checked)} style={bigCheckboxStyle} />
-              CIA Exam
+              {ciaAvailable ? (
+                <>
+                  <input type="checkbox" checked={ciaExamEnabled} disabled={markManagerLocked} onChange={(e) => setCiaExamEnabled(e.target.checked)} style={bigCheckboxStyle} />
+                  CIA Exam
+                </>
+              ) : null}
             </label>
           </div>
 
@@ -1480,7 +1888,7 @@ export default function LabCourseMarksEntry({
               return (
                 <div key={`cfg_${n}`} style={{ width: 160, display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 10px', border: '1px solid #e5e7eb', borderRadius: 12, background: '#fff' }}>
                   <div style={{ fontSize: 12, fontWeight: 950 }}>CO-{n}</div>
-                  <div style={{ fontSize: 11, color: '#6b7280' }}>No. of experiments</div>
+                  <div style={{ fontSize: 11, color: '#6b7280' }}>No. of {itemLabelN.toLowerCase()}</div>
                   <input type="number" className="obe-input" value={expCount} onChange={(e) => setCoExpCount(n, Number(e.target.value))} min={0} max={12} disabled={markManagerLocked} />
                   <div style={{ fontSize: 11, color: '#6b7280' }}>Max marks</div>
                   <input type="number" className="obe-input" value={expMax} onChange={(e) => setCoExpMax(n, Number(e.target.value))} min={0} max={100} disabled={markManagerLocked} />
@@ -1595,8 +2003,14 @@ export default function LabCourseMarksEntry({
                     Name of the Students
                   </th>
 
+                  {absentUiEnabled ? (
+                    <th style={cellTh} rowSpan={5}>
+                      AB
+                    </th>
+                  ) : null}
+
                   <th style={cellTh} colSpan={experimentsCols}>
-                    Experiments
+                    {itemLabelN}
                   </th>
                   <th style={cellTh} rowSpan={5}>
                     AVG
@@ -1690,13 +2104,13 @@ export default function LabCourseMarksEntry({
 
                 <tr>
                   {totalExpCols === 0 ? (
-                    <th style={cellTh}>No experiments</th>
+                    <th style={cellTh}>No {itemLabelN.toLowerCase()}</th>
                   ) : (
                     <>
                       {enabledCoMetas.map((m) =>
                         Array.from({ length: m.expCount }, (_, i) => (
                           <th key={`e_${m.coNumber}_${i}`} style={cellTh}>
-                            E{i + 1}
+                            {itemColAbbrev}{i + 1}
                           </th>
                         )),
                       )}
@@ -1737,7 +2151,7 @@ export default function LabCourseMarksEntry({
               </thead>
 
               <tbody>
-                {(markManagerLocked && !publishedEditLocked ? students : []).map((s, idx) => {
+                {(!tableBlocked && !publishedEditLocked ? students : []).map((s, idx) => {
                   const row = draft.sheet.rowsByStudentId?.[String(s.id)];
                   const ciaExamRaw = (row as any)?.ciaExam;
                   const ciaExamNum = ciaExamEnabled && typeof ciaExamRaw === 'number' && Number.isFinite(ciaExamRaw) ? ciaExamRaw : null;
@@ -1780,10 +2194,38 @@ export default function LabCourseMarksEntry({
                   }
 
                   return (
-                    <tr key={s.id} style={!markManagerLocked && idx < 3 ? { position: 'relative', zIndex: 35, background: '#fff' } : undefined}>
+                    <tr key={s.id} style={tableBlocked && idx < 3 ? { position: 'relative', zIndex: 35, background: '#fff' } : undefined}>
                       <td style={{ ...cellTd, textAlign: 'center', width: 42, minWidth: 42 }}>{idx + 1}</td>
                       <td style={cellTd}>{s.reg_no}</td>
                       <td style={cellTd}>{s.name}</td>
+
+                      {absentUiEnabled ? (
+                        <td style={{ ...cellTd, textAlign: 'center', width: 70, minWidth: 70 }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+                            <input
+                              type="checkbox"
+                              checked={Boolean((row as any)?.absent)}
+                              onChange={(e) => setAbsent(s.id, e.target.checked)}
+                              disabled={tableBlocked}
+                            />
+                            {Boolean((row as any)?.absent) ? (
+                              <div className="obe-ios-select" title="Absent type">
+                                <span className="obe-ios-select-value">{String((row as any).absentKind || 'AL')}</span>
+                                <select
+                                  aria-label="Absent type"
+                                  value={((row as any).absentKind || 'AL') as any}
+                                  onChange={(e) => setAbsentKind(s.id, e.target.value as any)}
+                                  disabled={tableBlocked}
+                                >
+                                  <option value="AL">AL</option>
+                                  <option value="ML">ML</option>
+                                  <option value="SKL">SKL</option>
+                                </select>
+                              </div>
+                            ) : null}
+                          </div>
+                        </td>
+                      ) : null}
 
                       {totalExpCols === 0 ? (
                         <td style={{ ...cellTd, textAlign: 'center', color: '#6b7280' }}>—</td>
@@ -1799,7 +2241,7 @@ export default function LabCourseMarksEntry({
                                 style={inputStyle}
                                 min={0}
                                 max={m.expMax}
-                                disabled={!markManagerLocked}
+                                disabled={tableBlocked}
                               />
                             </td>
                           ));
@@ -1816,7 +2258,7 @@ export default function LabCourseMarksEntry({
                             style={inputStyle}
                             min={0}
                             max={DEFAULT_CIA_EXAM_MAX}
-                            disabled={!markManagerLocked}
+                            disabled={tableBlocked}
                           />
                         </td>
                       ) : null}
@@ -1859,7 +2301,7 @@ export default function LabCourseMarksEntry({
               </tbody>
             </table>
             {/* Blue overlay when blocked by Mark Manager (pre-confirm) */}
-            {!markManagerLocked ? (
+            {tableBlocked && !publishedEditLocked && !viewerMode ? (
               <div
                 style={{
                   position: 'absolute',
@@ -1872,7 +2314,7 @@ export default function LabCourseMarksEntry({
             ) : null}
 
             {/* Green overlay when blocked after a second Publish click (published edit-lock) */}
-            {publishedEditLocked ? (
+            {publishedEditLocked && !viewerMode ? (
               <div
                 style={{
                   position: 'absolute',
@@ -1884,7 +2326,7 @@ export default function LabCourseMarksEntry({
               />
             ) : null}
             {/* Floating panel (image above, text below) when blocked by Mark Manager */}
-            {!markManagerLocked ? (
+            {tableBlocked && !publishedEditLocked && !viewerMode ? (
               <div style={floatingPanelStyle}>
                 <div style={{ width: 100, height: 72, display: 'grid', placeItems: 'center', background: '#fff', borderRadius: 8 }}>
                   <img
@@ -1915,7 +2357,7 @@ export default function LabCourseMarksEntry({
             ) : null}
 
             {/* Floating panel when blocked after Publish */}
-            {publishedEditLocked ? (
+            {publishedEditLocked && !viewerMode ? (
               <div style={floatingPanelStyle}>
                 <div style={{ textAlign: 'center' }}>
                   <div style={{ fontWeight: 900, color: '#065f46' }}>Published</div>
@@ -2019,7 +2461,7 @@ export default function LabCourseMarksEntry({
                     <thead>
                       <tr style={{ background: '#f9fafb' }}>
                         <th style={{ textAlign: 'left', padding: 10, fontSize: 12, borderBottom: '1px solid #e5e7eb' }}>CO</th>
-                        <th style={{ textAlign: 'right', padding: 10, fontSize: 12, borderBottom: '1px solid #e5e7eb' }}>Experiments</th>
+                        <th style={{ textAlign: 'right', padding: 10, fontSize: 12, borderBottom: '1px solid #e5e7eb' }}>{itemLabelN}</th>
                         <th style={{ textAlign: 'right', padding: 10, fontSize: 12, borderBottom: '1px solid #e5e7eb' }}>Max marks</th>
                       </tr>
                     </thead>
@@ -2047,12 +2489,14 @@ export default function LabCourseMarksEntry({
                         </tr>
                       ) : null}
 
-                      <tr>
-                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>CIA Exam</td>
-                        <td colSpan={2} style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>
-                          {ciaExamEnabled ? 'Enabled' : 'Disabled'}
-                        </td>
-                      </tr>
+                      {ciaAvailable ? (
+                        <tr>
+                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>CIA Exam</td>
+                          <td colSpan={2} style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>
+                            {ciaExamEnabled ? 'Enabled' : 'Disabled'}
+                          </td>
+                        </tr>
+                      ) : null}
                     </tbody>
                   </table>
                 </div>
@@ -2073,110 +2517,188 @@ export default function LabCourseMarksEntry({
                 onClick={async () => {
                   if (!subjectId) return;
                   if (markManagerModal.mode === 'request') {
-                    setMarkManagerModal(null);
-                    await requestEdit();
+                    // Before sending an edit request to IQAC, check if the published sheet
+                    // differs from the current Mark Manager settings and whether marks exist.
+                    setMarkManagerBusy(true);
+                    setMarkManagerError(null);
+                    try {
+                      const pub = publishedViewSnapshot;
+                      const curCfg = coConfigs;
+                      if (pub && pub.sheet && pub.sheet.coConfigs) {
+                        const diff = computeCoConfigDiff(ensureCoConfigs(pub.sheet), curCfg);
+                        const affected = countNonEmptyPublishedMarks(pub.sheet.rowsByStudentId as any, [...diff.removed, ...diff.changed]);
+                        if ((diff.removed.length || diff.changed.length || diff.added.length) && affected > 0) {
+                          // show confirmation modal to user
+                          setPendingCoDiff({ visible: true, diff, affected, mode: 'request' });
+                          setMarkManagerBusy(false);
+                          return;
+                        }
+                      }
+                      setMarkManagerModal(null);
+                      await requestEdit();
+                    } finally {
+                      setMarkManagerBusy(false);
+                    }
                     return;
                   }
-                  setMarkManagerBusy(true);
-                  setMarkManagerError(null);
-                  try {
-                    const fixedCoA = clampInt(Number(coA ?? 1), 1, 5);
-                    const fixedCoB = coB == null ? null : clampInt(Number(coB), 1, 5);
-
-                    // Snapshot the full coConfigs (allow CO1..CO5 to be used and saved).
-                    const snapshot = markManagerSnapshotOf(coConfigs, ciaExamEnabled);
-                    const approvalUntil = markManagerEditWindow?.approval_until
-                      ? String(markManagerEditWindow.approval_until)
-                      : draft.sheet.markManagerApprovalUntil || null;
-
-                    // Ensure the fixed CO pair for this lab assessment stays consistent.
-                    const cfgA = coConfigs[String(fixedCoA)];
-                    const cfgB = fixedCoB == null ? null : coConfigs[String(fixedCoB)];
-
-                    const nextCoAEnabled = Boolean(cfgA?.enabled);
-                    const nextCoBEnabled = Boolean(fixedCoB != null && cfgB?.enabled);
-
-                    const nextExpCountA = clampInt(Number(cfgA?.expCount ?? draft.sheet.expCountA ?? DEFAULT_EXPERIMENTS), 0, 12);
-                    const nextExpMaxA = clampInt(Number(cfgA?.expMax ?? draft.sheet.expMaxA ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
-                    const nextBtlA = normalizeBtlArray((cfgA as any)?.btl ?? (draft.sheet as any).btlA, nextExpCountA, 1);
-
-                    const nextExpCountB = fixedCoB == null ? 0 : clampInt(Number(cfgB?.expCount ?? draft.sheet.expCountB ?? DEFAULT_EXPERIMENTS), 0, 12);
-                    const nextExpMaxB = fixedCoB == null ? 0 : clampInt(Number(cfgB?.expMax ?? draft.sheet.expMaxB ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
-                    const nextBtlB = fixedCoB == null ? [] : normalizeBtlArray((cfgB as any)?.btl ?? (draft.sheet as any).btlB, nextExpCountB, 1);
-
-                    // Sync legacy marksA/marksB for the fixed pair from marksByCo (if present)
-                    const normalizeMarksByCo = (row: any, coKey: string, len: number) => {
-                      const marksByCo = row?.marksByCo && typeof row.marksByCo === 'object' ? row.marksByCo : {};
-                      return normalizeMarksArray((marksByCo as any)[coKey], len);
-                    };
-                    const hasAny = (arr: Array<number | ''>) => arr.some((v) => v !== '' && v != null);
-
-                    const nextDraft: LabDraftPayload = {
-                      ...draft,
-                      sheet: {
-                        ...draft.sheet,
-                        coANum: fixedCoA,
-                        coBNum: fixedCoB,
-                        coAEnabled: nextCoAEnabled,
-                        coBEnabled: nextCoBEnabled,
-                        expCountA: nextExpCountA,
-                        expCountB: nextExpCountB,
-                        expMaxA: nextExpMaxA,
-                        expMaxB: nextExpMaxB,
-                        btlA: nextBtlA,
-                        btlB: nextBtlB,
-                        coConfigs: coConfigs,
-                        markManagerLocked: true,
-                        markManagerSnapshot: snapshot,
-                        markManagerApprovalUntil: approvalUntil,
-                        rowsByStudentId: Object.fromEntries(
-                          Object.entries(draft.sheet.rowsByStudentId || {}).map(([sid, row0]) => {
-                            const row: any = row0 && typeof row0 === 'object' ? row0 : {};
-                            const legacyA = normalizeMarksArray(row?.marksA, nextExpCountA);
-                            const legacyB = normalizeMarksArray(row?.marksB, nextExpCountB);
-                            const byA = normalizeMarksByCo(row, String(fixedCoA), nextExpCountA);
-                            const byB = fixedCoB == null ? [] : normalizeMarksByCo(row, String(fixedCoB), nextExpCountB);
-
-                            const nextA = hasAny(legacyA) ? legacyA : hasAny(byA) ? byA : legacyA;
-                            const nextB = nextExpCountB
-                              ? hasAny(legacyB)
-                                ? legacyB
-                                : hasAny(byB)
-                                  ? byB
-                                  : legacyB
-                              : legacyB;
-
-                            const marksByCo = row?.marksByCo && typeof row.marksByCo === 'object' ? { ...row.marksByCo } : {};
-                            marksByCo[String(fixedCoA)] = byA;
-                            if (fixedCoB != null) marksByCo[String(fixedCoB)] = byB;
-
-                            return [sid, { ...row, marksA: nextA, marksB: nextB, marksByCo }];
-                          }),
-                        ) as any,
-                      },
-                    };
-
-                    // Lock immediately so the box becomes non-editable right away.
-                    setDraft(nextDraft);
-                    setMarkManagerModal(null);
-                    setMarkManagerAnimating(true);
-
-                    await saveDraft(assessmentKey, String(subjectId), nextDraft);
-                    setSavedAt(new Date().toLocaleString());
-
-                    if (isPublished) {
-                      await confirmMarkManagerLock(assessmentKey as any, String(subjectId), teachingAssignmentId);
-                      refreshMarkLock({ silent: true });
+                  // CONFIRM mode: warn + allow resetting removed/changed CO columns BEFORE saving.
+                  const prevCfg = coConfigsFromSnapshot(draft.sheet.markManagerSnapshot ?? null);
+                  if (prevCfg) {
+                    const prevEnabled = enabledCosFromCfg(prevCfg);
+                    const nextEnabled = enabledCosFromCfg(coConfigs);
+                    const removed = prevEnabled.filter((n) => !nextEnabled.includes(n));
+                    if (removed.length) {
+                      const fixedCoA = clampInt(Number(coA ?? 1), 1, 5);
+                      const fixedCoB = coB == null ? null : clampInt(Number(coB), 1, 5);
+                      const affected = countNonEmptyDraftMarksForCos(draft.sheet.rowsByStudentId as any, removed, fixedCoA, fixedCoB);
+                      setPendingMarkManagerReset({ visible: true, removed, affected });
+                      return;
                     }
-                  } catch (e: any) {
-                    setMarkManagerError(e?.message || 'Save failed');
-                  } finally {
-                    setMarkManagerBusy(false);
-                    setTimeout(() => setMarkManagerAnimating(false), 2000);
                   }
+                  await confirmMarkManagerWithReset('none');
                 }}
               >
                 {markManagerModal.mode === 'confirm' ? 'Confirm' : 'Send Request'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {pendingCoDiff && pendingCoDiff.visible ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 90 }}
+          onClick={() => {
+            if (markManagerBusy) return;
+            setPendingCoDiff(null);
+          }}
+        >
+          <div style={{ width: 'min(640px, 96vw)', background: '#fff', borderRadius: 12, padding: 14, border: '1px solid #e5e7eb' }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ fontWeight: 900, marginBottom: 8 }}>Mark Manager conflict with published marks</div>
+            <div style={{ color: '#374151', marginBottom: 12 }}>
+              The selected CO settings differ from the published mark sheet. {pendingCoDiff.affected} student rows contain marks that may be lost.
+            </div>
+            <div style={{ fontSize: 13, color: '#374151', marginBottom: 12 }}>
+              <div><strong>Added COs:</strong> {pendingCoDiff.diff.added.join(', ') || '—'}</div>
+              <div><strong>Removed COs:</strong> {pendingCoDiff.diff.removed.join(', ') || '—'}</div>
+              <div><strong>Changed COs:</strong> {pendingCoDiff.diff.changed.join(', ') || '—'}</div>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button className="obe-btn" onClick={() => setPendingCoDiff(null)} disabled={markManagerBusy}>Cancel</button>
+              <button
+                className="obe-btn obe-btn-danger"
+                disabled={markManagerBusy}
+                onClick={async () => {
+                  if (!subjectId) return;
+                  setMarkManagerBusy(true);
+                  try {
+                    const cur = draft;
+                    const rows = Object.fromEntries(
+                      Object.entries(cur.sheet.rowsByStudentId || {}).map(([sid, row0]) => {
+                        const row: any = row0 && typeof row0 === 'object' ? row0 : {};
+                        const expCountA2 = clampInt(Number(cur.sheet.expCountA ?? DEFAULT_EXPERIMENTS), 0, 12);
+                        const expCountB2 = clampInt(Number(cur.sheet.expCountB ?? 0), 0, 12);
+                        const nextRow: any = { ...row };
+                        nextRow.marksA = Array.from({ length: expCountA2 }, () => '');
+                        nextRow.marksB = Array.from({ length: expCountB2 }, () => '');
+                        nextRow.ciaExam = '';
+                        const mbc = nextRow.marksByCo && typeof nextRow.marksByCo === 'object' ? { ...nextRow.marksByCo } : {};
+                        for (const k of [...pendingCoDiff.diff.removed.map(String), ...pendingCoDiff.diff.changed.map(String)]) {
+                          if (mbc[k]) {
+                            mbc[k] = Array.from({ length: (coConfigs[k]?.expCount ?? 0) }, () => '');
+                          }
+                        }
+                        nextRow.marksByCo = mbc;
+                        return [sid, nextRow];
+                      }),
+                    );
+
+                    const resetDraft: LabDraftPayload = { sheet: { ...cur.sheet, rowsByStudentId: rows } } as any;
+                    setDraft(resetDraft);
+                    await saveDraft(assessmentKey, String(subjectId), resetDraft);
+                    setSavedAt(new Date().toLocaleString());
+
+                    if (pendingCoDiff.mode === 'request') {
+                      setPendingCoDiff(null);
+                      setMarkManagerModal(null);
+                      await requestEdit();
+                    } else {
+                      try {
+                        await confirmMarkManagerLock(assessmentKey as any, String(subjectId), teachingAssignmentId);
+                        refreshMarkLock({ silent: true });
+                      } catch (err) {
+                        console.warn('confirmMarkManagerLock failed after reset', err);
+                      }
+                      setPendingCoDiff(null);
+                    }
+                  } catch (e: any) {
+                    alert(e?.message || 'Failed to reset marks');
+                  } finally {
+                    setMarkManagerBusy(false);
+                  }
+                }}
+              >
+                Reset & Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {pendingMarkManagerReset && pendingMarkManagerReset.visible ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 95 }}
+          onClick={() => {
+            if (markManagerBusy) return;
+            setPendingMarkManagerReset(null);
+          }}
+        >
+          <div
+            style={{ width: 'min(660px, 96vw)', background: '#fff', borderRadius: 12, padding: 14, border: '1px solid #e5e7eb' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontWeight: 900, marginBottom: 8 }}>
+              {pendingMarkManagerReset.removed.length === 1
+                ? `Shall I reset the CO${pendingMarkManagerReset.removed[0]} column?`
+                : `Shall I reset the removed CO columns?`}
+            </div>
+            <div style={{ color: '#374151', marginBottom: 10 }}>
+              The new Mark Manager selection removed old COs.
+              {pendingMarkManagerReset.affected > 0
+                ? ` ${pendingMarkManagerReset.affected} student rows contain marks in these columns.`
+                : ' No marks were found in these columns.'}
+            </div>
+            <div style={{ fontSize: 13, color: '#374151', marginBottom: 12 }}>
+              <div><strong>Removed COs:</strong> {pendingMarkManagerReset.removed.join(', ') || '—'}</div>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button className="obe-btn" onClick={() => setPendingMarkManagerReset(null)} disabled={markManagerBusy}>Cancel</button>
+              <button
+                className="obe-btn obe-btn-primary"
+                disabled={markManagerBusy}
+                onClick={async () => {
+                  const partial = pendingMarkManagerReset.removed;
+                  setPendingMarkManagerReset(null);
+                  await confirmMarkManagerWithReset('partial', partial);
+                }}
+              >
+                {pendingMarkManagerReset.removed.length === 1
+                  ? `Reset CO${pendingMarkManagerReset.removed[0]} column`
+                  : `Reset removed CO columns`}
+              </button>
+              <button
+                className="obe-btn obe-btn-danger"
+                disabled={markManagerBusy}
+                onClick={async () => {
+                  setPendingMarkManagerReset(null);
+                  await confirmMarkManagerWithReset('full');
+                }}
+              >
+                Reset full data
               </button>
             </div>
           </div>
@@ -2571,4 +3093,59 @@ export default function LabCourseMarksEntry({
       ) : null}
     </div>
   );
+}
+
+// Compare two coConfigs objects and return added/removed/changed CO numbers
+function computeCoConfigDiff(oldCfg: NonNullable<LabSheet['coConfigs']>, newCfg: NonNullable<LabSheet['coConfigs']>) {
+  const added: number[] = [];
+  const removed: number[] = [];
+  const changed: number[] = [];
+  for (const n of [1, 2, 3, 4, 5]) {
+    const k = String(n);
+    const o = oldCfg[k];
+    const nn = newCfg[k];
+    const oEnabled = Boolean(o?.enabled);
+    const nEnabled = Boolean(nn?.enabled);
+    if (oEnabled && !nEnabled) removed.push(n);
+    if (!oEnabled && nEnabled) added.push(n);
+    if (oEnabled && nEnabled) {
+      const oExp = clampInt(Number(o?.expCount ?? DEFAULT_EXPERIMENTS), 0, 12);
+      const nExp = clampInt(Number(nn?.expCount ?? DEFAULT_EXPERIMENTS), 0, 12);
+      const oMax = clampInt(Number(o?.expMax ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
+      const nMax = clampInt(Number(nn?.expMax ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
+      if (oExp !== nExp || oMax !== nMax) changed.push(n);
+    }
+  }
+  return { added, removed, changed };
+}
+
+function countNonEmptyPublishedMarks(rowsByStudentId: Record<string, LabRowState> | undefined, coNums: number[]) {
+  if (!rowsByStudentId) return 0;
+  let cnt = 0;
+  for (const r of Object.values(rowsByStudentId)) {
+    // check marksByCo for given coNums
+    const marksByCo = r?.marksByCo && typeof r.marksByCo === 'object' ? r.marksByCo : {};
+    for (const c of coNums) {
+      const arr = Array.isArray(marksByCo[String(c)]) ? (marksByCo[String(c)] as Array<any>) : [];
+      if (arr.some((v) => v !== '' && v != null)) {
+        cnt++;
+        break;
+      }
+    }
+    // also check legacy marksA/marksB if present
+    if (cnt > 0) continue;
+    if (r.marksA && r.marksA.some((v) => v !== '' && v != null)) {
+      cnt++;
+      continue;
+    }
+    if (r.marksB && r.marksB.some((v) => v !== '' && v != null)) {
+      cnt++;
+      continue;
+    }
+    if (typeof r.ciaExam === 'number' && Number.isFinite(r.ciaExam)) {
+      cnt++;
+      continue;
+    }
+  }
+  return cnt;
 }

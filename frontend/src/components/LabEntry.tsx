@@ -584,7 +584,9 @@ export default function LabEntry({
 
   function setBtl(which: 'A' | 'B', expIndex: number, value: 1 | 2 | 3 | 4 | 5 | 6) {
     setDraft((p) => {
-      if (Boolean(p.sheet.markManagerLocked)) return p;
+      // Allow BTL mapping edits (LAB needs BTL selection to stay usable).
+      // Still respect publish/global locks.
+      if (publishedEditLocked || globalLocked) return p;
       const expCountA = clampInt(Number(p.sheet.expCountA ?? DEFAULT_EXPERIMENTS), 0, 12);
       const expCountB = clampInt(Number(p.sheet.expCountB ?? DEFAULT_EXPERIMENTS), 0, 12);
       const btlsA = normalizeBtlArray((p.sheet as any).btlsA, expCountA);
@@ -658,8 +660,12 @@ export default function LabEntry({
       const maxA = clampInt(Number(p.sheet.expMaxA ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
       const maxB = clampInt(Number(p.sheet.expMaxB ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
       const existing = p.sheet.rowsByStudentId?.[k];
-      const baseMarksA = existing ? normalizeMarksArray((existing as any).marksA, expCountA2) : Array.from({ length: expCountA2 }, () => '');
-      const baseMarksB = existing ? normalizeMarksArray((existing as any).marksB, expCountB2) : Array.from({ length: expCountB2 }, () => '');
+      const baseMarksA = existing
+        ? normalizeMarksArray((existing as any).marksA, expCountA2)
+        : (Array.from({ length: expCountA2 }, () => '' as const) as Array<number | ''>);
+      const baseMarksB = existing
+        ? normalizeMarksArray((existing as any).marksB, expCountB2)
+        : (Array.from({ length: expCountB2 }, () => '' as const) as Array<number | ''>);
 
       const marksA = [...baseMarksA];
       const marksB = [...baseMarksB];
@@ -683,7 +689,15 @@ export default function LabEntry({
           ...p.sheet,
           rowsByStudentId: {
             ...p.sheet.rowsByStudentId,
-            [k]: { ...(existing || { studentId }), marksA, marksB, ciaExam: existing ? (existing as any).ciaExam : '' },
+            [k]: {
+              ...(existing || { studentId }),
+              marksA,
+              marksB,
+              ciaExam:
+                existing && (typeof (existing as any).ciaExam === 'number' || (existing as any).ciaExam === '')
+                  ? ((existing as any).ciaExam as number | '')
+                  : ('' as const),
+            },
           },
         },
       };
@@ -698,8 +712,12 @@ export default function LabEntry({
       const maxA = clampInt(Number(p.sheet.expMaxA ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
       const maxB = clampInt(Number(p.sheet.expMaxB ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
       const existing = p.sheet.rowsByStudentId?.[k];
-      const marksA = existing ? normalizeMarksArray((existing as any).marksA, expCountA2) : Array.from({ length: expCountA2 }, () => '');
-      const marksB = existing ? normalizeMarksArray((existing as any).marksB, expCountB2) : Array.from({ length: expCountB2 }, () => '');
+      const marksA = existing
+        ? normalizeMarksArray((existing as any).marksA, expCountA2)
+        : (Array.from({ length: expCountA2 }, () => '' as const) as Array<number | ''>);
+      const marksB = existing
+        ? normalizeMarksArray((existing as any).marksB, expCountB2)
+        : (Array.from({ length: expCountB2 }, () => '' as const) as Array<number | ''>);
 
       let ciaVal: number | '' = '';
       if (value === '' || value == null) ciaVal = '';
@@ -798,11 +816,12 @@ export default function LabEntry({
       await refreshPublishedSnapshot(false);
       refreshPublishWindow();
       refreshMarkLock({ silent: true });
-      try {
-        window.dispatchEvent(new CustomEvent('obe:published', { detail: { subjectId } }));
-      } catch {
-        // ignore
-      }
+        try {
+          console.debug('obe:published dispatch', { assessment: assessmentKey, subjectId });
+          window.dispatchEvent(new CustomEvent('obe:published', { detail: { subjectId, assessment: assessmentKey } }));
+        } catch {
+          // ignore
+        }
     } catch (e: any) {
       alert(e?.message || 'Publish failed');
     } finally {
@@ -1241,7 +1260,7 @@ export default function LabEntry({
                               aria-label={`BTL for CO${coA} E${i + 1}`}
                               value={v}
                               onChange={(e) => setBtl('A', i, Number(e.target.value) as 1 | 2 | 3 | 4 | 5 | 6)}
-                              disabled={markManagerLocked}
+                              disabled={publishedEditLocked || globalLocked}
                               style={{
                                 position: 'absolute',
                                 inset: 0,
@@ -1285,7 +1304,7 @@ export default function LabEntry({
                               aria-label={`BTL for CO${coB} E${i + 1}`}
                               value={v}
                               onChange={(e) => setBtl('B', i, Number(e.target.value) as 1 | 2 | 3 | 4 | 5 | 6)}
-                              disabled={markManagerLocked}
+                              disabled={publishedEditLocked || globalLocked}
                               style={{
                                 position: 'absolute',
                                 inset: 0,
@@ -1454,8 +1473,9 @@ export default function LabEntry({
                     position: 'absolute',
                     inset: 0,
                     zIndex: 30,
-                    pointerEvents: 'auto',
-                    background: 'linear-gradient(180deg, rgba(72, 113, 195, 0.92) 0%, rgba(51, 55, 64, 0.96) 100%)',
+                    // Do not block interaction with header controls like BTL selection.
+                    pointerEvents: 'none',
+                    background: 'linear-gradient(180deg, rgba(72, 113, 195, 0.18) 0%, rgba(51, 55, 64, 0.22) 100%)',
                   }}
                 />
               ) : null}
@@ -1753,9 +1773,13 @@ export default function LabEntry({
                     await saveDraft(assessmentKey, String(subjectId), nextDraft);
                     setSavedAt(new Date().toLocaleString());
 
-                    if (isPublished) {
+                    // Persist Mark Manager confirmation to server lock row so the
+                    // Mark Manager snapshot is updated and visible across tabs.
+                    try {
                       await confirmMarkManagerLock(assessmentKey as any, String(subjectId), teachingAssignmentId);
                       refreshMarkLock({ silent: true });
+                    } catch (err) {
+                      console.warn('confirmMarkManagerLock failed', err);
                     }
                   } catch (e: any) {
                     setMarkManagerError(e?.message || 'Save failed');

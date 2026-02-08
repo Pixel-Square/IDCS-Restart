@@ -668,11 +668,12 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       await publishCiaSheet(assessmentKey, subjectId, data, teachingAssignmentId);
       setPublishedAt(new Date().toLocaleString());
       refreshPublishWindow();
-      try {
-        window.dispatchEvent(new CustomEvent('obe:published', { detail: { subjectId } }));
-      } catch {
-        // ignore
-      }
+        try {
+          console.debug('obe:published dispatch', { assessment: assessmentKey, subjectId });
+          window.dispatchEvent(new CustomEvent('obe:published', { detail: { subjectId, assessment: assessmentKey } }));
+        } catch {
+          // ignore
+        }
     } catch (e: any) {
       setError(e?.message || `Failed to publish ${assessmentLabel}`);
     } finally {

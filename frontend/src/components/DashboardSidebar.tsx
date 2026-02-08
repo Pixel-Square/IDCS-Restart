@@ -20,6 +20,7 @@ const ICON_MAP: Record<string, any> = {
   obe_master: BookOpen,
   obe_due_dates: CalendarClock,
   obe_requests: Bell,
+  academic_controller: Layout,
 };
 
 export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string }) {
@@ -74,6 +75,13 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     }
   }, [loc.pathname]);
 
+  // auto-expand Academic Controller when on /iqac/academic-controller routes
+  useEffect(() => {
+    if (loc.pathname.startsWith('/iqac/academic-controller')) {
+      setExpanded((p) => ({ ...p, academic_controller: true }));
+    }
+  }, [loc.pathname]);
+
   if (loading) return <aside className="dsb">Loading</aside>;
   if (error) return <aside className="dsb">Error loading sidebar</aside>;
   if (!data) return <aside className="dsb">Nodata</aside>;
@@ -84,6 +92,9 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   const permsLower = (data.permissions || []).map(p => (p || '').toString().toLowerCase());
   const rolesUpper = (data.roles || []).map(r => (r || '').toString().toUpperCase());
   const flags = data.flags || {};
+  const isIqac = rolesUpper.includes('IQAC');
+
+  
 
   // Curriculum master/department: require explicit curriculum permissions if present, otherwise rely on entry point
   if (entry.curriculum_master && (permsLower.some(p => p.includes('curriculum')) || entry.curriculum_master)) items.push({ key: 'curriculum_master', label: 'Curriculum Master', to: '/curriculum/master' });
@@ -137,7 +148,10 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   if (flags.is_staff && !items.some(item => item.key === 'academic')) {
     items.push({ key: 'academic', label: 'Academic', to: '/academic' });
   }
-  if (canObeMaster && !items.some(item => item.key === 'obe_due_dates')) {
+  if (isIqac && !items.some((item) => item.key === 'academic_controller')) {
+    items.push({ key: 'academic_controller', label: 'Academic Controller', to: '/iqac/academic-controller' });
+  }
+  if (canObeMaster && !isIqac && !items.some(item => item.key === 'obe_due_dates')) {
     items.push({ key: 'obe_due_dates', label: 'OBE: Due Dates', to: '/obe/master/due-dates' });
   }
   if (canObeMaster && !items.some(item => item.key === 'obe_requests')) {
@@ -164,6 +178,9 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                     // toggle submenu open/close but allow navigation
                     setExpanded((p) => ({ ...p, academic: !p.academic }));
                   }
+                  if (i.key === 'academic_controller') {
+                    setExpanded((p) => ({ ...p, academic_controller: !p.academic_controller }));
+                  }
                 }}>
                   <span className="dsb-icon"><Icon /></span>
                   <span className="dsb-label">
@@ -183,10 +200,36 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                         <span className="dsb-label">OBE Master</span>
                       </Link>
                     </li>
-                    <li className={`dsb-item ${loc.pathname.startsWith('/academic') && new URLSearchParams(loc.search).get('tab') === 'due_dates' ? 'active' : ''}`}>
-                      <Link to={'/academic?tab=due_dates'} className="dsb-link dsb-sub-link">
+                    {!isIqac ? (
+                      <li className={`dsb-item ${loc.pathname.startsWith('/academic') && new URLSearchParams(loc.search).get('tab') === 'due_dates' ? 'active' : ''}`}>
+                        <Link to={'/academic?tab=due_dates'} className="dsb-link dsb-sub-link">
+                          <span className="dsb-icon"><CalendarClock /></span>
+                          <span className="dsb-label">OBE: Due Dates</span>
+                        </Link>
+                      </li>
+                    ) : null}
+                  </ul>
+                ) : null}
+
+                {/* Submenu for Academic Controller (IQAC) */}
+                {i.key === 'academic_controller' && expanded.academic_controller ? (
+                  <ul className="dsb-sublist">
+                    <li className={`dsb-item ${loc.pathname.startsWith('/iqac/academic-controller') && new URLSearchParams(loc.search).get('tab') === 'dashboard' ? 'active' : ''}`}>
+                      <Link to={'/iqac/academic-controller?tab=dashboard'} className="dsb-link dsb-sub-link">
+                        <span className="dsb-icon"><Home /></span>
+                        <span className="dsb-label">Dashboard</span>
+                      </Link>
+                    </li>
+                    <li className={`dsb-item ${loc.pathname.startsWith('/iqac/academic-controller') && new URLSearchParams(loc.search).get('tab') === 'due_dates' ? 'active' : ''}`}>
+                      <Link to={'/iqac/academic-controller?tab=due_dates'} className="dsb-link dsb-sub-link">
                         <span className="dsb-icon"><CalendarClock /></span>
-                        <span className="dsb-label">OBE: Due Dates</span>
+                        <span className="dsb-label">OBE Due Dates</span>
+                      </Link>
+                    </li>
+                    <li className={`dsb-item ${loc.pathname.startsWith('/iqac/academic-controller') && new URLSearchParams(loc.search).get('tab') === 'courses' ? 'active' : ''}`}>
+                      <Link to={'/iqac/academic-controller?tab=courses'} className="dsb-link dsb-sub-link">
+                        <span className="dsb-icon"><Grid /></span>
+                        <span className="dsb-label">Courses</span>
                       </Link>
                     </li>
                   </ul>

@@ -376,11 +376,12 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId }: Props) {
       await publishSsa1(subjectId, sheet, teachingAssignmentId);
       setPublishedAt(new Date().toLocaleString());
       refreshPublishWindow();
-      try {
-        window.dispatchEvent(new CustomEvent('obe:published', { detail: { subjectId } }));
-      } catch {
-        // ignore
-      }
+        try {
+          console.debug('obe:published dispatch', { assessment: assessmentKey, subjectId });
+          window.dispatchEvent(new CustomEvent('obe:published', { detail: { subjectId, assessment: assessmentKey } }));
+        } catch {
+          // ignore
+        }
     } catch (e: any) {
       setSaveError(e?.message || 'Failed to publish SSA1');
     } finally {

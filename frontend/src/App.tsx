@@ -6,6 +6,10 @@ import DashboardSidebar from './components/DashboardSidebar';
 import TimetableEditor from './pages/advisor/TimetableEditor';
 import HodTimetableEditor from './pages/iqac/TimetableEditor';
 import ObeRequestsPage from './pages/iqac/ObeRequestsPage';
+import AcademicControllerPage from './pages/iqac/AcademicControllerPage';
+import AcademicControllerCoursePage from './pages/iqac/AcademicControllerCoursePage';
+import AcademicControllerCourseMarksPage from './pages/iqac/AcademicControllerCourseMarksPage';
+import AcademicControllerCourseOBEPage from './pages/iqac/AcademicControllerCourseOBEPage';
 import OBERequestsPage from './pages/OBERequestsPage';
 import OBEDueDatesPage from './pages/OBEDueDatesPage';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -119,6 +123,22 @@ export default function App() {
               <Route path="/iqac/timetable" element={
                 <ProtectedRoute user={user} requiredPermissions={["timetable.manage_templates"]} element={<HodTimetableEditor />} />
               } />
+              <Route
+                path="/iqac/academic-controller"
+                element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} element={<AcademicControllerPage />} />}
+              />
+              <Route
+                path="/iqac/academic-controller/course/:courseCode"
+                element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} element={<AcademicControllerCoursePage />} />}
+              />
+              <Route
+                path="/iqac/academic-controller/course/:courseCode/marks/:taId"
+                element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} element={<AcademicControllerCourseMarksPage />} />}
+              />
+              <Route
+                path="/iqac/academic-controller/course/:courseCode/obe/:taId/*"
+                element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} element={<AcademicControllerCourseOBEPage />} />}
+              />
               <Route
                 path="/iqac/obe-requests"
                 element={<ProtectedRoute user={user} requiredPermissions={["obe.master.manage"]} element={<ObeRequestsPage />} />}

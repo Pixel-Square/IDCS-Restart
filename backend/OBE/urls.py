@@ -69,4 +69,7 @@ urlpatterns = [
     path('edit-requests/history', views.edit_requests_history),
     path('edit-requests/<int:req_id>/approve', views.edit_request_approve),
     path('edit-requests/<int:req_id>/reject', views.edit_request_reject),
+
+    # IQAC tools
+    path('iqac/reset/<str:assessment>/<str:subject_id>', views.iqac_reset_assessment),
 ]

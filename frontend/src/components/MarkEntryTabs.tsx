@@ -7,9 +7,10 @@ import Formative2List from './Formative2List';
 import LabEntry from './LabEntry';
 import LabCourseMarksEntry from './LabCourseMarksEntry';
 import ModelEntry from './ModelEntry';
+import ReviewEntry from './ReviewEntry';
 import Ssa1Entry from './Ssa1Entry';
 import Ssa2Entry from './Ssa2Entry';
-import { fetchMyTeachingAssignments, TeachingAssignmentItem } from '../services/obe';
+import { DraftAssessmentKey, fetchMyTeachingAssignments, iqacResetAssessment, TeachingAssignmentItem } from '../services/obe';
 
 type TabKey = 'dashboard' | 'ssa1' | 'ssa2' | 'formative1' | 'formative2' | 'cia1' | 'cia2' | 'model';
 
@@ -19,6 +20,10 @@ type Props = {
   subjectId: string;
   classType?: string | null;
   questionPaperType?: string | null;
+  teachingAssignmentsOverride?: TeachingAssignmentItem[];
+  fixedTeachingAssignmentId?: number;
+  iqacResetEnabled?: boolean;
+  viewerMode?: boolean;
 };
 
 const BASE_TABS: { key: TabKey; label: string }[] = [
@@ -39,6 +44,15 @@ function normalizeClassType(classType: string | null | undefined) {
 function getVisibleTabs(classType: string | null | undefined): Array<{ key: TabKey; label: string }> {
   const ct = normalizeClassType(classType);
 
+  // PRACTICAL: show only dashboard + Review variants for CIAs and MODEL
+  if (ct === 'PRACTICAL') {
+    return BASE_TABS.filter((t) => ['dashboard', 'cia1', 'cia2', 'model'].includes(t.key)).map((t) => {
+      if (t.key === 'cia1') return { ...t, label: 'CIA 1 Review' };
+      if (t.key === 'cia2') return { ...t, label: 'CIA 2 Review' };
+      if (t.key === 'model') return { ...t, label: 'MODEL Review' };
+      return t;
+    });
+  }
   // Requirement:
   // - THEORY / TCPR: show SSA1, SSA2, Formatives, CIA1, CIA2, MODEL
   // - TCPL: hide Formatives and show LAB1/LAB2 instead (reusing formative keys)
@@ -205,11 +219,21 @@ function MarkEntryTable({
   );
 }
 
-export default function MarkEntryTabs({ subjectId, classType, questionPaperType }: Props) {
+export default function MarkEntryTabs({
+  subjectId,
+  classType,
+  questionPaperType,
+  teachingAssignmentsOverride,
+  fixedTeachingAssignmentId,
+  iqacResetEnabled,
+  viewerMode,
+}: Props) {
   const [active, setActive] = useState<TabKey>('dashboard');
   const [tas, setTas] = useState<TeachingAssignmentItem[]>([]);
   const [taError, setTaError] = useState<string | null>(null);
   const [selectedTaId, setSelectedTaId] = useState<number | null>(null);
+  const [resetting, setResetting] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const visibleTabs = useMemo(() => getVisibleTabs(classType), [classType]);
 
@@ -226,7 +250,21 @@ export default function MarkEntryTabs({ subjectId, classType, questionPaperType 
   }, [visibleTabs, active]);
 
   useEffect(() => {
+    if (!subjectId) return;
+    if (!teachingAssignmentsOverride) return;
+    const filtered = (teachingAssignmentsOverride || []).filter((a) => String(a.subject_code) === String(subjectId));
+    setTas(filtered);
+    setTaError(null);
+    const initial =
+      (typeof fixedTeachingAssignmentId === 'number' && filtered.some((f) => f.id === fixedTeachingAssignmentId) && fixedTeachingAssignmentId) ||
+      (filtered[0]?.id ?? null);
+    setSelectedTaId(initial);
+  }, [subjectId, teachingAssignmentsOverride, fixedTeachingAssignmentId]);
+
+  useEffect(() => {
     let mounted = true;
+    if (teachingAssignmentsOverride && Array.isArray(teachingAssignmentsOverride)) return;
+
     (async () => {
       try {
         const all = await fetchMyTeachingAssignments();
@@ -237,6 +275,7 @@ export default function MarkEntryTabs({ subjectId, classType, questionPaperType 
 
         const stored = lsGet<number>(`markEntry_selectedTa_${subjectId}`);
         const initial =
+          (typeof fixedTeachingAssignmentId === 'number' && filtered.some((f) => f.id === fixedTeachingAssignmentId) && fixedTeachingAssignmentId) ||
           (typeof stored === 'number' && filtered.some((f) => f.id === stored) && stored) ||
           (filtered[0]?.id ?? null);
         setSelectedTaId(initial);
@@ -250,13 +289,15 @@ export default function MarkEntryTabs({ subjectId, classType, questionPaperType 
     return () => {
       mounted = false;
     };
-  }, [subjectId]);
+  }, [subjectId, teachingAssignmentsOverride, fixedTeachingAssignmentId]);
 
   useEffect(() => {
     if (!subjectId) return;
     if (selectedTaId == null) return;
+    // Avoid persisting pinned TA selections (IQAC viewer flows)
+    if (typeof fixedTeachingAssignmentId === 'number') return;
     lsSet(`markEntry_selectedTa_${subjectId}`, selectedTaId);
-  }, [subjectId, selectedTaId]);
+  }, [subjectId, selectedTaId, fixedTeachingAssignmentId]);
 
   useEffect(() => {
     if (!subjectId) return;
@@ -325,7 +366,7 @@ export default function MarkEntryTabs({ subjectId, classType, questionPaperType 
             value={selectedTaId ?? ''}
             onChange={(e) => setSelectedTaId(e.target.value ? Number(e.target.value) : null)}
             className="obe-input"
-            disabled={tas.length === 0}
+            disabled={tas.length === 0 || typeof fixedTeachingAssignmentId === 'number'}
           >
             {tas.length === 0 ? (
               <option value="">No teaching assignments</option>
@@ -343,6 +384,33 @@ export default function MarkEntryTabs({ subjectId, classType, questionPaperType 
           Student rows load from the selected section roster.
         </div>
       </div>
+
+      {/* IQAC reset (per assessment) */}
+      {Boolean(iqacResetEnabled) && active !== 'dashboard' && selectedTaId != null ? (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
+          <button
+            className="obe-btn obe-btn-danger"
+            disabled={resetting}
+            onClick={async () => {
+              const assessment = active as Exclude<TabKey, 'dashboard'>;
+              const ok = window.confirm(`Reset ${assessment.toUpperCase()} for this section? This clears draft + published data for that exam.`);
+              if (!ok) return;
+              try {
+                setResetting(true);
+                await iqacResetAssessment(assessment as DraftAssessmentKey, String(subjectId), Number(selectedTaId));
+                setRefreshKey((k) => k + 1);
+                alert('Reset completed.');
+              } catch (e: any) {
+                alert(e?.message || 'Reset failed');
+              } finally {
+                setResetting(false);
+              }
+            }}
+          >
+            {resetting ? 'Resetting…' : 'Reset This Exam'}
+          </button>
+        </div>
+      ) : null}
 
       <div className="obe-sidebar-nav" aria-label="Mark Entry sub-tabs">
         {visibleTabs.map((t) => (
@@ -386,7 +454,7 @@ export default function MarkEntryTabs({ subjectId, classType, questionPaperType 
       )}
 
       {active !== 'dashboard' && (
-        <div>
+        <div key={`${active}_${refreshKey}`}>
           <h3 style={{ margin: '0 0 6px 0' }}>{visibleTabs.find((t) => t.key === active)?.label}</h3>
           <div style={{ color: '#6b7280', marginBottom: 12, fontSize: 14 }}>
             {active === 'formative1' 
@@ -398,92 +466,105 @@ export default function MarkEntryTabs({ subjectId, classType, questionPaperType 
               : active === 'ssa2'
                 ? 'SSA2 sheet-style entry (CO + BTL attainment) matching the Excel layout.'
               : active === 'cia1'
-                ? (normalizeClassType(classType) === 'LAB' ? 'CIA 1 LAB entry (CO-1/CO-2 experiments + CIA exam).' : 'CIA 1 sheet-style entry (Q-wise + CO + BTL) matching the Excel layout.')
+                ? (normalizeClassType(classType) === 'LAB'
+                    ? 'CIA 1 LAB entry (CO-1/CO-2 experiments + CIA exam)'
+                    : normalizeClassType(classType) === 'PRACTICAL'
+                      ? 'CIA 1 Review (Practical) - enter review marks for practical content.'
+                      : 'CIA 1 sheet-style entry (Q-wise + CO + BTL) matching the Excel layout.')
               : active === 'cia2'
                 ? (normalizeClassType(classType) === 'LAB' ? 'CIA 2 LAB entry (CO-3/CO-4 experiments + CIA exam).' : 'CIA 2 sheet-style entry (Q-wise + CO + BTL) matching the Excel layout.')
               : active === 'model'
                 ? (normalizeClassType(classType) === 'LAB' ? 'MODEL LAB entry (CO-5 experiments + CIA exam).' : 'MODEL blank table template (same layout style as CIA sheets).')
                 : 'Enter and save marks locally for this assessment.'}
           </div>
-          {active === 'formative1' ? (
-            normalizeClassType(classType) === 'TCPL' ? (
-              <LabEntry
-                subjectId={subjectId}
-                teachingAssignmentId={selectedTaId ?? undefined}
-                assessmentKey="formative1"
-                label="LAB 1"
-                coA={1}
-                coB={2}
-                showCia1Embed
-                cia1Embed={<Cia1Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />}
-              />
+          <fieldset disabled={Boolean(viewerMode)} style={{ border: 0, padding: 0, margin: 0 }}>
+            {active === 'formative1' ? (
+              normalizeClassType(classType) === 'TCPL' ? (
+                <LabEntry
+                  subjectId={subjectId}
+                  teachingAssignmentId={selectedTaId ?? undefined}
+                  assessmentKey="formative1"
+                  label="LAB 1"
+                  coA={1}
+                  coB={2}
+                />
+              ) : (
+                <Formative1List subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
+              )
+            ) : active === 'formative2' ? (
+              normalizeClassType(classType) === 'TCPL' ? (
+                <LabEntry
+                  subjectId={subjectId}
+                  teachingAssignmentId={selectedTaId ?? undefined}
+                  assessmentKey="formative2"
+                  label="LAB 2"
+                  coA={3}
+                  coB={4}
+                />
+              ) : (
+                <Formative2List subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
+              )
+            ) : active === 'ssa1' ? (
+              <Ssa1Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
+            ) : active === 'ssa2' ? (
+              <Ssa2Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
+            ) : active === 'cia1' ? (
+              normalizeClassType(classType) === 'LAB' ? (
+                <LabCourseMarksEntry
+                  subjectId={subjectId}
+                  teachingAssignmentId={selectedTaId ?? undefined}
+                  assessmentKey="cia1"
+                  label="CIA 1 LAB"
+                  coA={1}
+                  coB={2}
+                  viewerMode={Boolean(viewerMode)}
+                />
+              ) : normalizeClassType(classType) === 'PRACTICAL' ? (
+                <ReviewEntry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} assessmentKey="cia1" viewerMode={Boolean(viewerMode)} />
+              ) : (
+                <Cia1Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
+              )
+            ) : active === 'cia2' ? (
+              normalizeClassType(classType) === 'LAB' ? (
+                <LabCourseMarksEntry
+                  subjectId={subjectId}
+                  teachingAssignmentId={selectedTaId ?? undefined}
+                  assessmentKey="cia2"
+                  label="CIA 2 LAB"
+                  coA={3}
+                  coB={4}
+                  viewerMode={Boolean(viewerMode)}
+                />
+              ) : normalizeClassType(classType) === 'PRACTICAL' ? (
+                <ReviewEntry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} assessmentKey="cia2" viewerMode={Boolean(viewerMode)} />
+              ) : (
+                <Cia2Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
+              )
+            ) : active === 'model' ? (
+              normalizeClassType(classType) === 'LAB' ? (
+                <LabCourseMarksEntry
+                  subjectId={subjectId}
+                  teachingAssignmentId={selectedTaId ?? undefined}
+                  assessmentKey="model"
+                  label="MODEL LAB"
+                  coA={5}
+                  coB={null}
+                  viewerMode={Boolean(viewerMode)}
+                />
+              ) : normalizeClassType(classType) === 'PRACTICAL' ? (
+                <ReviewEntry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} assessmentKey="model" viewerMode={Boolean(viewerMode)} />
+              ) : (
+                <ModelEntry
+                  subjectId={subjectId}
+                  teachingAssignmentId={selectedTaId ?? undefined}
+                  classType={classType ?? null}
+                  questionPaperType={questionPaperType ?? null}
+                />
+              )
             ) : (
-              <Formative1List subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
-            )
-          ) : active === 'formative2' ? (
-            normalizeClassType(classType) === 'TCPL' ? (
-              <LabEntry
-                subjectId={subjectId}
-                teachingAssignmentId={selectedTaId ?? undefined}
-                assessmentKey="formative2"
-                label="LAB 2"
-                coA={3}
-                coB={4}
-              />
-            ) : (
-              <Formative2List subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
-            )
-          ) : active === 'ssa1' ? (
-            <Ssa1Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
-          ) : active === 'ssa2' ? (
-            <Ssa2Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
-          ) : active === 'cia1' ? (
-            normalizeClassType(classType) === 'LAB' ? (
-              <LabCourseMarksEntry
-                subjectId={subjectId}
-                teachingAssignmentId={selectedTaId ?? undefined}
-                assessmentKey="cia1"
-                label="CIA 1 LAB"
-                coA={1}
-                coB={2}
-              />
-            ) : (
-              <Cia1Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
-            )
-          ) : active === 'cia2' ? (
-            normalizeClassType(classType) === 'LAB' ? (
-              <LabCourseMarksEntry
-                subjectId={subjectId}
-                teachingAssignmentId={selectedTaId ?? undefined}
-                assessmentKey="cia2"
-                label="CIA 2 LAB"
-                coA={3}
-                coB={4}
-              />
-            ) : (
-              <Cia2Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
-            )
-          ) : active === 'model' ? (
-            normalizeClassType(classType) === 'LAB' ? (
-              <LabCourseMarksEntry
-                subjectId={subjectId}
-                teachingAssignmentId={selectedTaId ?? undefined}
-                assessmentKey="model"
-                label="MODEL LAB"
-                coA={5}
-                coB={null}
-              />
-            ) : (
-              <ModelEntry
-                subjectId={subjectId}
-                teachingAssignmentId={selectedTaId ?? undefined}
-                classType={classType ?? null}
-                questionPaperType={questionPaperType ?? null}
-              />
-            )
-          ) : (
-            <MarkEntryTable subjectId={subjectId} tab={active as Exclude<TabKey, 'dashboard'>} />
-          )}
+              <MarkEntryTable subjectId={subjectId} tab={active as Exclude<TabKey, 'dashboard'>} />
+            )}
+          </fieldset>
         </div>
       )}
     </div>

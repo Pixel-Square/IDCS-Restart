@@ -36,17 +36,17 @@ class Command(BaseCommand):
             if not course_qs.exists():
                 self.stdout.write(self.style.ERROR(f'No course found matching "{course_contains}"'))
                 return
-            semester_qs = Semester.objects.filter(course__in=course_qs, number=semester_number)
+            semester_qs = Semester.objects.filter(number=semester_number)
             if not semester_qs.exists():
-                self.stdout.write(self.style.ERROR(f'No semester {semester_number} found for course matching "{course_contains}"'))
+                self.stdout.write(self.style.ERROR(f'No semester {semester_number} found'))
                 return
-            # prefer sections under those semesters with given section name
-            section_qs = Section.objects.filter(semester__in=semester_qs, name__iexact=section_name)
+            # prefer sections under those semesters with given section name and course
+            section_qs = Section.objects.filter(semester__in=semester_qs, name__iexact=section_name, batch__course__in=course_qs)
             if section_qs.exists():
                 section = section_qs.first()
             else:
-                # fallback: any section under the semester
-                section = Section.objects.filter(semester__in=semester_qs).first()
+                # fallback: any section under the semester and course
+                section = Section.objects.filter(semester__in=semester_qs, batch__course__in=course_qs).first()
             if not section:
                 self.stdout.write(self.style.ERROR('No section found to assign students'))
                 return

@@ -3,7 +3,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import SectionAdvisorViewSet, HODStaffListView, HODSectionsView, TeachingAssignmentViewSet, AdvisorMyStudentsView, AdvisorStaffListView, MyTeachingAssignmentsView, TeachingAssignmentStudentsView
 from .views import AcademicYearViewSet
-from .views import StaffAssignedSubjectsView, SectionStudentsView
+from .views import StaffAssignedSubjectsView, SectionStudentsView, IQACCourseTeachingMapView
 from .views import SubjectBatchViewSet, PeriodAttendanceSessionViewSet, StaffPeriodsView, StudentAttendanceView
 
 router = DefaultRouter()
@@ -30,6 +30,9 @@ urlpatterns = [
     path('sections/<int:section_id>/students/', SectionStudentsView.as_view()),
     path('staff/assigned-subjects/', StaffAssignedSubjectsView.as_view()),
     path('staff/<int:staff_id>/assigned-subjects/', StaffAssignedSubjectsView.as_view()),
+
+    # IQAC / OBE Master helpers
+    path('iqac/course-teaching/<str:course_code>/', IQACCourseTeachingMapView.as_view()),
 
     # Advisor / attendance endpoints
     path('my-students/', AdvisorMyStudentsView.as_view()),

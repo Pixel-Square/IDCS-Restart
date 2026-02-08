@@ -112,7 +112,7 @@ class TeachingAssignmentStudentsView(APIView):
         except TeachingAssignment.DoesNotExist:
             raise Http404('Teaching assignment not found')
 
-        # basic permission: allow if user is staff owner, HOD/ADVISOR of the dept, or staff/admin
+        # basic permission: allow if user is staff owner, HOD/ADVISOR of the dept, OBE master/IQAC, or staff/admin
         user = request.user
         staff_profile = getattr(user, 'staff_profile', None)
         allowed = False
@@ -120,8 +120,17 @@ class TeachingAssignmentStudentsView(APIView):
             allowed = True
         else:
             role_names = {r.name.upper() for r in user.roles.all()} if getattr(user, 'roles', None) is not None else set()
-            if 'HOD' in role_names or 'ADVISOR' in role_names or user.is_staff:
+            if user.is_staff:
                 allowed = True
+            elif 'HOD' in role_names or 'ADVISOR' in role_names:
+                allowed = True
+            else:
+                try:
+                    perms = {str(p or '').lower() for p in (get_user_permissions(user) or [])}
+                except Exception:
+                    perms = set()
+                if ('obe.master.manage' in perms) or ('IQAC' in role_names) or getattr(user, 'is_superuser', False):
+                    allowed = True
 
         if not allowed:
             return Response({'detail': 'You do not have permission to view this roster.'}, status=403)
@@ -616,6 +625,103 @@ class StaffAssignedSubjectsView(APIView):
         ).filter(Q(curriculum_row__isnull=False) | Q(subject__isnull=False)).select_related('curriculum_row', 'section', 'academic_year', 'subject')
         ser = TeachingAssignmentInfoSerializer(qs, many=True)
         return Response({'results': ser.data})
+
+
+class IQACCourseTeachingMapView(APIView):
+    """IQAC/OBE Master: list teaching assignments for a course across sections.
+
+    Returns section + staff mapping as card-friendly rows.
+    """
+
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request, course_code: str):
+        user = request.user
+        perms = {str(p or '').lower() for p in (get_user_permissions(user) or [])}
+        roles = set()
+        try:
+            roles = {str(r.name or '').upper() for r in user.roles.all()}
+        except Exception:
+            roles = set()
+
+        # Gate to IQAC/OBE master users only.
+        if not (user.is_superuser or user.is_staff or ('obe.master.manage' in perms) or ('IQAC' in roles)):
+            raise PermissionDenied('IQAC/OBE Master access only.')
+
+        code = str(course_code or '').strip()
+        if not code:
+            return Response({'results': []})
+
+        qs = TeachingAssignment.objects.select_related(
+            'staff',
+            'staff__user',
+            'section',
+            'academic_year',
+            'subject',
+            'curriculum_row',
+            'curriculum_row__master',
+            'section__batch__course__department',
+        ).filter(is_active=True)
+
+        # Filter to the requested course first.
+        qs = qs.filter(
+            Q(curriculum_row__course_code__iexact=code)
+            | Q(curriculum_row__master__course_code__iexact=code)
+            | Q(subject__code__iexact=code)
+        )
+
+        # Prefer active academic year only within this course (avoid hiding results when
+        # the course assignments exist but the academic_year.is_active flag isn't set).
+        try:
+            if qs.filter(academic_year__is_active=True).exists():
+                qs_active = qs.filter(academic_year__is_active=True)
+                if qs_active.exists():
+                    qs = qs_active
+        except Exception:
+            pass
+
+        results = []
+        for ta in qs.order_by('section__name', 'id'):
+            sec = getattr(ta, 'section', None)
+            ay = getattr(ta, 'academic_year', None)
+            staff = getattr(ta, 'staff', None)
+            staff_user = getattr(staff, 'user', None) if staff else None
+
+            # Best-effort subject metadata
+            subject_code = None
+            subject_name = None
+            try:
+                if getattr(ta, 'curriculum_row', None):
+                    cr = ta.curriculum_row
+                    subject_code = getattr(cr, 'course_code', None) or getattr(getattr(cr, 'master', None), 'course_code', None)
+                    subject_name = getattr(cr, 'course_name', None) or getattr(getattr(cr, 'master', None), 'course_name', None)
+                if (not subject_code or not subject_name) and getattr(ta, 'subject', None):
+                    subject_code = subject_code or getattr(ta.subject, 'code', None)
+                    subject_name = subject_name or getattr(ta.subject, 'name', None)
+            except Exception:
+                pass
+
+            results.append(
+                {
+                    'teaching_assignment_id': getattr(ta, 'id', None),
+                    'course_code': subject_code or code,
+                    'course_name': subject_name,
+                    'section_id': getattr(sec, 'id', None),
+                    'section_name': getattr(sec, 'name', None),
+                    'academic_year': getattr(ay, 'name', None) if ay else None,
+                    'staff': {
+                        'id': getattr(staff, 'id', None),
+                        'staff_id': getattr(staff, 'staff_id', None),
+                        'username': getattr(staff_user, 'username', None),
+                        'name': ' '.join(filter(None, [getattr(staff_user, 'first_name', ''), getattr(staff_user, 'last_name', '')])).strip()
+                        or getattr(staff_user, 'username', None),
+                    }
+                    if staff
+                    else None,
+                }
+            )
+
+        return Response({'results': results})
 
 
 class SubjectBatchViewSet(viewsets.ModelViewSet):

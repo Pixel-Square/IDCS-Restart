@@ -253,6 +253,113 @@ def _require_obe_master(request):
     return None
 
 
+def _has_obe_master_permission(user) -> bool:
+    if user is None:
+        return False
+    if getattr(user, 'is_superuser', False):
+        return True
+    try:
+        perms = get_user_permissions(user)
+    except Exception:
+        perms = set()
+    return 'obe.master.manage' in {str(p).lower() for p in (perms or set())}
+
+
+def _require_obe_master_permission(request):
+    if not _has_obe_master_permission(getattr(request, 'user', None)):
+        return Response({'detail': 'OBE Master permission required.'}, status=status.HTTP_403_FORBIDDEN)
+    return None
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def iqac_reset_assessment(request, assessment: str, subject_id: str):
+    """IQAC/OBE Master: reset a single assessment for a course.
+
+    Clears:
+    - Draft JSON (AssessmentDraft)
+    - Published data for that assessment (marks tables / published snapshots)
+    - Mark table lock row for the teaching assignment + assessment
+
+    Does NOT affect other assessments.
+
+    Query/body:
+    - teaching_assignment_id (required for deterministic lock reset)
+    """
+    auth = _require_obe_master_permission(request)
+    if auth:
+        return auth
+
+    assessment_key = str(assessment or '').strip().lower()
+    if assessment_key not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
+        return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    subject = _get_subject(subject_id, request)
+    ta_id = _get_teaching_assignment_id_from_request(request, request.data if isinstance(request.data, dict) else None)
+    if ta_id is None:
+        return Response({'detail': 'teaching_assignment_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        ta = TeachingAssignment.objects.select_related('section', 'academic_year').filter(id=int(ta_id), is_active=True).first()
+    except Exception:
+        ta = None
+
+    if ta is None:
+        return Response({'detail': 'Invalid teaching_assignment_id.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    from .models import AssessmentDraft
+    from .models import LabPublishedSheet, Cia1PublishedSheet, Cia2PublishedSheet
+    from .models import Ssa1Mark, Ssa2Mark, Formative1Mark, Formative2Mark, Cia1Mark, Cia2Mark
+    from .models import ObeMarkTableLock
+
+    deleted = {
+        'draft': 0,
+        'published': 0,
+        'lock': 0,
+    }
+
+    with transaction.atomic():
+        # Draft
+        try:
+            deleted['draft'] = int(AssessmentDraft.objects.filter(subject=subject, assessment=assessment_key).delete()[0] or 0)
+        except Exception:
+            deleted['draft'] = 0
+
+        # Published
+        try:
+            if assessment_key == 'ssa1':
+                deleted['published'] += int(Ssa1Mark.objects.filter(subject=subject).delete()[0] or 0)
+            elif assessment_key == 'ssa2':
+                deleted['published'] += int(Ssa2Mark.objects.filter(subject=subject).delete()[0] or 0)
+            elif assessment_key == 'formative1':
+                deleted['published'] += int(Formative1Mark.objects.filter(subject=subject).delete()[0] or 0)
+                deleted['published'] += int(LabPublishedSheet.objects.filter(subject=subject, assessment='formative1').delete()[0] or 0)
+            elif assessment_key == 'formative2':
+                deleted['published'] += int(Formative2Mark.objects.filter(subject=subject).delete()[0] or 0)
+                deleted['published'] += int(LabPublishedSheet.objects.filter(subject=subject, assessment='formative2').delete()[0] or 0)
+            elif assessment_key == 'cia1':
+                deleted['published'] += int(Cia1PublishedSheet.objects.filter(subject=subject).delete()[0] or 0)
+                deleted['published'] += int(Cia1Mark.objects.filter(subject=subject).delete()[0] or 0)
+                deleted['published'] += int(LabPublishedSheet.objects.filter(subject=subject, assessment='cia1').delete()[0] or 0)
+            elif assessment_key == 'cia2':
+                deleted['published'] += int(Cia2PublishedSheet.objects.filter(subject=subject).delete()[0] or 0)
+                deleted['published'] += int(Cia2Mark.objects.filter(subject=subject).delete()[0] or 0)
+                deleted['published'] += int(LabPublishedSheet.objects.filter(subject=subject, assessment='cia2').delete()[0] or 0)
+            elif assessment_key == 'model':
+                deleted['published'] += int(LabPublishedSheet.objects.filter(subject=subject, assessment='model').delete()[0] or 0)
+        except Exception:
+            pass
+
+        # Lock row (per teaching assignment)
+        try:
+            deleted['lock'] = int(ObeMarkTableLock.objects.filter(teaching_assignment=ta, assessment=assessment_key).delete()[0] or 0)
+        except Exception:
+            deleted['lock'] = 0
+
+    return Response({'status': 'reset', 'assessment': assessment_key, 'subject_code': subject.code, 'deleted': deleted})
+
+
 def _parse_due_at(value):
     if value is None:
         return None
@@ -272,14 +379,20 @@ def _parse_due_at(value):
 def _resolve_staff_teaching_assignment(request, subject_code: str, teaching_assignment_id: int | None = None):
     user = getattr(request, 'user', None)
     staff_profile = getattr(user, 'staff_profile', None)
+
+    qs = TeachingAssignment.objects.select_related('academic_year', 'subject', 'curriculum_row', 'section').filter(is_active=True)
+    if teaching_assignment_id is not None:
+        if staff_profile is not None:
+            ta = qs.filter(id=teaching_assignment_id, staff=staff_profile).first()
+        elif _has_obe_master_access(user):
+            ta = qs.filter(id=teaching_assignment_id).first()
+        else:
+            ta = None
+        if ta is not None:
+            return ta
+
     if not staff_profile:
         return None
-
-    qs = TeachingAssignment.objects.select_related('academic_year', 'subject', 'curriculum_row').filter(is_active=True)
-    if teaching_assignment_id is not None:
-        ta = qs.filter(id=teaching_assignment_id, staff=staff_profile).first()
-        if ta:
-            return ta
 
     # fallback: match by subject code
     qs = qs.filter(staff=staff_profile).filter(
@@ -436,6 +549,12 @@ def _faculty_only(request):
     user = request.user
     staff_profile = getattr(user, 'staff_profile', None)
     if not staff_profile:
+        # Allow OBE Master / IQAC users to act as faculty for OBE flows (they may pass
+        # a `teaching_assignment_id` to identify the section). This permits IQAC users
+        # with the `obe.master.manage` permission (or superusers) to access and edit
+        # mark-entry endpoints without requiring a staff_profile.
+        if _has_obe_master_permission(user):
+            return None, None
         return None, Response({'detail': 'Faculty access only.'}, status=status.HTTP_403_FORBIDDEN)
     return staff_profile, None
 
@@ -2124,8 +2243,37 @@ def mark_table_lock_status(request, assessment: str, subject_id: str):
     except OperationalError:
         lock = None
 
-    # Default for pre-publish or legacy flows: open + editable.
+    # Default for pre-publish flows: Mark Manager is editable, but the marks table is NOT open
+    # until Mark Manager is confirmed/locked.
     if lock is None:
+        # For OBE Master / IQAC users we want to avoid showing the "Table Locked" overlay;
+        # treat the table as open and mark-manager editable so IQAC can view/edit without
+        # restrictions. Non-master users keep the conservative default of entry_closed.
+        if _has_obe_master_permission(getattr(request, 'user', None)):
+            return Response(
+                {
+                    'assessment': assessment_key,
+                    'subject_code': subject_code,
+                    'teaching_assignment_id': getattr(ta, 'id', None) if ta else None,
+                    'academic_year': {
+                        'id': getattr(academic_year, 'id', None),
+                        'name': getattr(academic_year, 'name', None),
+                    }
+                    if academic_year
+                    else None,
+                    'section_name': section_name or None,
+                    'exists': False,
+                    'is_published': False,
+                    'published_blocked': False,
+                    'mark_entry_blocked': False,
+                    'mark_manager_locked': False,
+                    'mark_entry_unblocked_until': None,
+                    'mark_manager_unlocked_until': None,
+                    'entry_open': True,
+                    'mark_manager_editable': True,
+                }
+            )
+
         return Response(
             {
                 'assessment': assessment_key,
@@ -2145,7 +2293,7 @@ def mark_table_lock_status(request, assessment: str, subject_id: str):
                 'mark_manager_locked': False,
                 'mark_entry_unblocked_until': None,
                 'mark_manager_unlocked_until': None,
-                'entry_open': True,
+                'entry_open': False,
                 'mark_manager_editable': True,
             }
         )
@@ -2157,8 +2305,18 @@ def mark_table_lock_status(request, assessment: str, subject_id: str):
         pass
 
     is_published = bool(getattr(lock, 'is_published', False))
-    entry_open = (not bool(getattr(lock, 'mark_entry_blocked', False))) and bool(getattr(lock, 'mark_manager_locked', False))
+    # During an approved MARK_MANAGER window, Mark Manager is unlocked and editable.
+    # In that window, we also allow the marks table to open if mark-entry is unblocked
+    # (so both can be edited without the published overlay blocking the page).
+    now = timezone.now()
+    manager_unlocked_active = bool(getattr(lock, 'mark_manager_unlocked_until', None) and getattr(lock, 'mark_manager_unlocked_until', None) > now)
+    entry_open = (not bool(getattr(lock, 'mark_entry_blocked', False))) and (bool(getattr(lock, 'mark_manager_locked', False)) or manager_unlocked_active)
     mark_manager_editable = not bool(getattr(lock, 'mark_manager_locked', False))
+
+    # IQAC / OBE master users should not be blocked by lock rows; present the table as open.
+    if _has_obe_master_permission(getattr(request, 'user', None)):
+        entry_open = True
+        mark_manager_editable = True
 
     return Response(
         {
@@ -3192,9 +3350,11 @@ def edit_request_approve(request, req_id: int):
         if str(getattr(row, 'scope', '')).upper() == 'MARK_ENTRY':
             lock.mark_entry_unblocked_until = getattr(row, 'approved_until', None)
         elif str(getattr(row, 'scope', '')).upper() == 'MARK_MANAGER':
-            lock.mark_manager_unlocked_until = getattr(row, 'approved_until', None)
-            # While Mark Manager is editable, the mark-entry table must be blocked.
-            lock.mark_entry_unblocked_until = None
+            approved_until = getattr(row, 'approved_until', None)
+            lock.mark_manager_unlocked_until = approved_until
+            # New logic: when MARK_MANAGER is approved for edit, also unlock the marks table
+            # from the published lock for the same window.
+            lock.mark_entry_unblocked_until = approved_until
             lock.mark_manager_locked = False
 
         lock.recompute_blocks()

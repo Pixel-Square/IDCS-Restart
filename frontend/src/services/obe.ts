@@ -50,6 +50,12 @@ function authHeader(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+export async function iqacResetAssessment(assessment: DraftAssessmentKey, subjectId: string, teachingAssignmentId: number): Promise<any> {
+  const url = `${apiBase()}/api/obe/iqac/reset/${encodeURIComponent(String(assessment))}/${encodeURIComponent(String(subjectId))}`;
+  const res = await apiClient.post(url, { teaching_assignment_id: teachingAssignmentId });
+  return res.data;
+}
+
 async function tryRefreshAccess(): Promise<string | null> {
   try {
     const base = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
@@ -158,7 +164,7 @@ export async function fetchMarkTableLockStatus(
       mark_manager_locked: false,
       mark_entry_unblocked_until: null,
       mark_manager_unlocked_until: null,
-      entry_open: true,
+      entry_open: false,
       mark_manager_editable: true,
       updated_at: null,
     };
