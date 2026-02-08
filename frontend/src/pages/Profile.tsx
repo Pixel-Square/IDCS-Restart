@@ -76,7 +76,6 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
               <div className="entry-status">ID: {user.id}</div>
             </div>
           </div>
-
           <div className="entry-card">
             <div className="entry-icon"><Mail /></div>
             <div>
@@ -94,10 +93,26 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
           </div>
 
           <div className="entry-card">
-            <div className="entry-icon"><File /></div>
+            <div className="entry-icon"><User /></div>
             <div>
-              <div className="entry-key">Permissions</div>
-              <div className="entry-status">{(user.permissions || []).slice(0,5).join(', ') || '—'}</div>
+              <div className="entry-key">Department</div>
+              <div className="entry-status">{(user.profile && user.profile.department && (user.profile.department.short_name || user.profile.department.code)) || '—'}</div>
+            </div>
+          </div>
+
+          <div className="entry-card">
+            <div className="entry-icon"><User /></div>
+            <div>
+              <div className="entry-key">Designation</div>
+              <div className="entry-status">{(user.profile && user.profile.designation) || '—'}</div>
+            </div>
+          </div>
+
+          <div className="entry-card">
+            <div className="entry-icon"><User /></div>
+            <div>
+              <div className="entry-key">College</div>
+              <div className="entry-status">{(user.college && (user.college.short_name || user.college.name)) || '—'}</div>
             </div>
           </div>
         </div>

@@ -56,6 +56,12 @@
   vertical-align: top;
 }
 
+.timetable-cell.selected {
+  background: linear-gradient(90deg, rgba(99,102,241,0.06) 0%, rgba(139,92,246,0.04) 100%);
+  border: 1px solid rgba(99,102,241,0.16);
+  box-shadow: 0 6px 18px rgba(99,102,241,0.04);
+}
+
 .subjects-staff-card {
   margin-top: 16px;
 }

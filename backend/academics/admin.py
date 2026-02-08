@@ -446,8 +446,8 @@ class AcademicYearAdmin(admin.ModelAdmin):
 
 @admin.register(Department)
 class DepartmentAdmin(admin.ModelAdmin):
-    list_display = ('code', 'name')
-    search_fields = ('code', 'name')
+    list_display = ('code', 'short_name', 'name')
+    search_fields = ('code', 'short_name', 'name')
 
 
 @admin.register(Program)

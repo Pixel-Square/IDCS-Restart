@@ -104,6 +104,19 @@ export default function TimetableEditor(){
     return s.split(' ').map(p=>p[0]).slice(0,3).join('') || s.slice(0,12)
   }
 
+  // Compute ISO date (YYYY-MM-DD) for the current week's weekday (1=Mon .. 7=Sun)
+  function dateForDayIndex(dayIndex:number){
+    const today = new Date()
+    const jsDay = today.getDay() // 0 Sun .. 6 Sat
+    // find Monday of current week
+    const monday = new Date(today)
+    const diffToMonday = jsDay === 0 ? -6 : (1 - jsDay)
+    monday.setDate(today.getDate() + diffToMonday)
+    const target = new Date(monday)
+    target.setDate(monday.getDate() + (dayIndex - 1))
+    return target.toISOString().slice(0,10)
+  }
+
   async function handleAssign(day:number, periodId:number, curriculumId:number){
     if(!curriculumId || !sectionId) return alert('Select a curriculum row and section first')
     const payload: any = { period_id: periodId, day, section_id: sectionId, curriculum_row: curriculumId }
@@ -188,8 +201,8 @@ export default function TimetableEditor(){
       <div>
         {assigned && assigned.length ? (
           <div style={{marginBottom:6}}>
-            {assigned.map((asg:any, idx:number)=> (
-              <div key={idx} style={{marginBottom:6, cursor:'pointer', background: asg.is_special ? '#fff7ed' : 'transparent', padding: asg.is_special ? 6 : 0, borderRadius: asg.is_special ? 6 : 0}} onClick={()=> { setEditingCell({ day: dayIndex, periodId: p.id }); setShowCellPopup(true) }}>
+              {assigned.map((asg:any, idx:number)=> (
+              <div key={idx} style={{marginBottom:6, cursor:'pointer', background: asg.is_special ? '#fff7ed' : 'transparent', padding: asg.is_special ? 6 : 0, borderRadius: asg.is_special ? 6 : 0}} onClick={()=> { setEditingCell({ day: dayIndex, periodId: p.id }); setSpecialDate(dateForDayIndex(dayIndex)); setShowCellPopup(true) }}>
                 <strong>{shortLabel(asg.curriculum_row || asg.subject_text)}{asg.is_special ? ' • Special' : ''}</strong>
                 <div style={{fontSize:12, color:'#333'}}>
                   Staff: {asg.staff?.username || '—'}{asg.subject_batch ? ` • Batch: ${asg.subject_batch.name}` : ''}
@@ -198,7 +211,7 @@ export default function TimetableEditor(){
             ))}
           </div>
         ) : (
-          <div style={{marginBottom:6, color:'#999', cursor:'pointer'}} onClick={()=> { setEditingCell({ day: dayIndex, periodId: p.id }); setShowCellPopup(true) }}>Click to assign…</div>
+          <div style={{marginBottom:6, color:'#999', cursor:'pointer'}} onClick={()=> { setEditingCell({ day: dayIndex, periodId: p.id }); setSpecialDate(dateForDayIndex(dayIndex)); setShowCellPopup(true) }}>Click to assign…</div>
         )}
       </div>
     )
@@ -479,11 +492,14 @@ export default function TimetableEditor(){
                 {DAYS.map((d,di)=> (
                   <tr key={d}>
                     <td style={{borderTop: '1px solid #f2f2f2', padding:10, fontWeight:700}}>{d}</td>
-                    {periods.map(p=> (
-                      <td key={p.id} style={{borderTop: '1px solid #f2f2f2', padding:10, verticalAlign: 'top'}}>
-                        {renderCell(di+1, p)}
-                      </td>
-                    ))}
+                    {periods.map(p=> {
+                      const isSelected = editingCell && editingCell.day === (di+1) && editingCell.periodId === p.id
+                      return (
+                        <td key={p.id} className={isSelected ? 'timetable-cell selected' : 'timetable-cell'} style={{borderTop: '1px solid #f2f2f2', padding:10, verticalAlign: 'top'}}>
+                          {renderCell(di+1, p)}
+                        </td>
+                      )
+                    })}
                   </tr>
                 ))}
               </tbody>

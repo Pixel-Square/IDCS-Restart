@@ -91,6 +91,14 @@ class CurriculumMaster(models.Model):
         return obj
 
     def save(self, *args, **kwargs):
+        # Ensure a Regulation record exists for this regulation string
+        try:
+            code = (self.regulation or '').strip()
+            if code:
+                Regulation.objects.get_or_create(code=code)
+        except Exception:
+            # defensive: don't fail saving the curriculum row if regulation creation fails
+            pass
         # Auto-calculate total_mark when internal/external provided
         if (self.internal_mark is not None or self.external_mark is not None) and not self.total_mark:
             im = self.internal_mark or 0
@@ -162,6 +170,13 @@ class CurriculumDepartment(models.Model):
         return obj
 
     def save(self, *args, **kwargs):
+        # Ensure a Regulation record exists for this regulation string
+        try:
+            code = (self.regulation or '').strip()
+            if code:
+                Regulation.objects.get_or_create(code=code)
+        except Exception:
+            pass
         # Auto-calculate total_mark when internal/external provided
         if (self.internal_mark is not None or self.external_mark is not None) and not self.total_mark:
             im = self.internal_mark or 0
@@ -257,6 +272,13 @@ class ElectiveSubject(models.Model):
         return obj
 
     def save(self, *args, **kwargs):
+        # Ensure a Regulation record exists for this regulation string
+        try:
+            code = (self.regulation or '').strip()
+            if code:
+                Regulation.objects.get_or_create(code=code)
+        except Exception:
+            pass
         if (self.internal_mark is not None or self.external_mark is not None) and not self.total_mark:
             im = self.internal_mark or 0
             em = self.external_mark or 0

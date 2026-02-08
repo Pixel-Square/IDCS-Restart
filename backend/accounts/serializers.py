@@ -62,6 +62,7 @@ class MeSerializer(serializers.Serializer):
     permissions = serializers.SerializerMethodField()
     profile_type = serializers.SerializerMethodField()
     profile = serializers.SerializerMethodField()
+    college = serializers.SerializerMethodField()
 
     def get_roles(self, obj):
         return [r.name for r in obj.roles.all()]
@@ -96,11 +97,30 @@ class MeSerializer(serializers.Serializer):
             st = obj.staff_profile
             return {
                 'staff_id': st.staff_id,
-                'department': getattr(st.department, 'code', None),
+                'department': {
+                    'code': getattr(st.department, 'code', None),
+                    'name': getattr(st.department, 'name', None),
+                    'short_name': getattr(st.department, 'short_name', None),
+                },
                 'designation': st.designation,
                 'status': st.status,
             }
         return None
+
+    def get_college(self, obj):
+        # Return the primary college record if available
+        try:
+            from college.models import College
+            c = College.objects.filter(is_active=True).order_by('id').first()
+            if not c:
+                return None
+            return {
+                'code': c.code,
+                'name': c.name,
+                'short_name': c.short_name,
+            }
+        except Exception:
+            return None
 
 
 class IdentifierTokenObtainPairSerializer(serializers.Serializer):

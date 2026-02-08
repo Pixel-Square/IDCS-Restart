@@ -25,6 +25,7 @@ INSTALLED_APPS = [
     'accounts',
     'academics',
     'curriculum',
+    'college',
     'applications',
     'timetable',
 ]

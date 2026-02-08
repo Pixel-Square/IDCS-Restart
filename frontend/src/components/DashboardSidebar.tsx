@@ -2,8 +2,8 @@ import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import useDashboard from '../hooks/useDashboard';
 import { User, BookOpen, Layout, Grid, Home } from 'lucide-react';
-import './DashboardSidebar.css';
 import { useSidebar } from './SidebarContext';
+import './DashboardSidebar.css';
 
 const ICON_MAP: Record<string, any> = {
   profile: User,
@@ -77,7 +77,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   items.unshift({ key: 'profile', label: 'Profile', to: '/profile' });
 
   return (
-    <aside className={`dsb modern-dsb ${collapsed ? 'collapsed' : ''}`}>
+    <aside className={`dsb ${collapsed ? 'collapsed' : ''}`}>
       <div className="dsb-header">Menu</div>
       <ul className="dsb-list">
         <li className="dsb-item">

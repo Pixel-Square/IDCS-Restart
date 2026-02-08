@@ -356,12 +356,12 @@ export default function AssignedSubjectsPage() {
                     <div style={{marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
                       {item.section_id ? (
                         <>
-                          <button type="button" onClick={() => openPickerForAssignment(item)} style={{ padding: '6px 10px' }}>Create Batch</button>
-                          <button type="button" onClick={() => openListStudents(item)} style={{ padding: '6px 10px' }}>List Students</button>
+                          <button type="button" className="as-btn primary" onClick={() => openPickerForAssignment(item)}>Create Batch</button>
+                          <button type="button" className="as-btn secondary" onClick={() => openListStudents(item)}>List Students</button>
                         </>
                       ) : (
                         <>
-                          <button type="button" onClick={() => openListStudents(item)} style={{ padding: '6px 10px' }}>List Students</button>
+                          <button type="button" className="as-btn secondary" onClick={() => openListStudents(item)}>List Students</button>
                           <span className="no-data" style={{ fontSize: 13, color: '#666' }}>Department-wide elective</span>
                         </>
                       )}
@@ -429,13 +429,13 @@ export default function AssignedSubjectsPage() {
                     <div style={{ marginLeft: 12, display: 'flex', gap: 8 }}>
                       {editingBatchId === b.id ? (
                         <>
-                          <button onClick={saveBatchEdit} style={{ padding: '6px 8px' }}>Save</button>
-                          <button onClick={()=>{ setEditingBatchId(null); setEditingBatchName('') }} style={{ padding: '6px 8px' }}>Cancel</button>
+                          <button className="as-btn primary" onClick={saveBatchEdit}>Save</button>
+                          <button className="as-btn secondary" onClick={()=>{ setEditingBatchId(null); setEditingBatchName('') }}>Cancel</button>
                         </>
                       ) : (
                         <>
-                          <button onClick={()=>startEditBatch(b)} style={{ padding: '6px 8px' }}>Edit</button>
-                          <button onClick={()=>deleteBatch(b.id)} style={{ padding: '6px 8px' }}>Delete</button>
+                          <button className="as-btn secondary" onClick={()=>startEditBatch(b)}>Edit</button>
+                          <button className="as-btn ghost" onClick={()=>deleteBatch(b.id)}>Delete</button>
                         </>
                       )}
                     </div>
@@ -468,13 +468,13 @@ export default function AssignedSubjectsPage() {
                     <div style={{ marginLeft: 12, display: 'flex', gap: 8 }}>
                       {editingBatchId === b.id ? (
                         <>
-                          <button onClick={saveBatchEdit} style={{ padding: '6px 8px' }}>Save</button>
-                          <button onClick={()=>{ setEditingBatchId(null); setEditingBatchName('') }} style={{ padding: '6px 8px' }}>Cancel</button>
+                          <button className="as-btn primary" onClick={saveBatchEdit}>Save</button>
+                          <button className="as-btn secondary" onClick={()=>{ setEditingBatchId(null); setEditingBatchName('') }}>Cancel</button>
                         </>
                       ) : (
                         <>
-                          <button onClick={()=>startEditBatch(b)} style={{ padding: '6px 8px' }}>Edit</button>
-                          <button onClick={()=>deleteBatch(b.id)} style={{ padding: '6px 8px' }}>Delete</button>
+                          <button className="as-btn secondary" onClick={()=>startEditBatch(b)}>Edit</button>
+                          <button className="as-btn ghost" onClick={()=>deleteBatch(b.id)}>Delete</button>
                         </>
                       )}
                     </div>
@@ -496,8 +496,8 @@ export default function AssignedSubjectsPage() {
                 <div style={{ fontSize: 13, color: '#666' }}>{pickerItem?.subject_name || pickerItem?.subject_code}</div>
               </div>
               <div>
-                <button type="button" onClick={() => { setPickerOpen(false); setPickerStudents([]); setPickerItem(null); }} style={{ marginRight: 8 }}>Cancel</button>
-                <button type="button" onClick={submitPicker}>Create Batch</button>
+                <button type="button" className="as-btn secondary" onClick={() => { setPickerOpen(false); setPickerStudents([]); setPickerItem(null); }} style={{ marginRight: 8 }}>Cancel</button>
+                <button type="button" className="as-btn primary" onClick={submitPicker}>Create Batch</button>
               </div>
             </div>
 

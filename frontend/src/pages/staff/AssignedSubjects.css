@@ -373,6 +373,33 @@
   box-shadow: 0 6px 20px rgba(99, 102, 241, 0.3);
 }
 
+/* Action Button Helpers (project-standard small action buttons) */
+.as-btn {
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.as-btn:hover { transform: translateY(-1px); }
+.as-btn.primary {
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  color: #fff;
+}
+.as-btn.secondary {
+  background: #fff;
+  color: #475569;
+  border-color: #e2e8f0;
+}
+.as-btn.ghost {
+  background: transparent;
+  color: #475569;
+  border-color: transparent;
+}
+.as-btn.small { padding: 4px 6px; font-size: 12px; border-radius: 6px; }
+
 /* Empty State */
 .empty-container {
   display: flex;

@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject, ElectiveChoice
+from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject, ElectiveChoice, Regulation
 from django.urls import path
 from django.template.response import TemplateResponse
 from django.http import HttpResponse, HttpResponseRedirect
@@ -8,13 +8,33 @@ from django.contrib import messages
 from django.db import transaction
 import csv, io
 from academics.models import Department
+from django.contrib.admin import SimpleListFilter
+
+
+# Simple list filter that shows available Regulation codes (from Regulation model)
+class RegulationFilter(SimpleListFilter):
+    title = 'regulation'
+    parameter_name = 'regulation'
+
+    def lookups(self, request, model_admin):
+        regs = Regulation.objects.order_by('code')
+        return [(r.code, (r.name and f"{r.code} - {r.name}" or r.code)) for r in regs]
+
+    def queryset(self, request, queryset):
+        v = self.value()
+        if v:
+            return queryset.filter(regulation__iexact=v)
+        return queryset
+
+
+
 
 
 @admin.register(CurriculumMaster)
 class CurriculumMasterAdmin(admin.ModelAdmin):
     change_list_template = 'admin/curriculum/master_change_list.html'
     list_display = ('regulation', 'semester', 'course_code', 'course_name', 'category', 'class_type', 'is_elective', 'for_all_departments', 'editable')
-    list_filter = ('regulation', 'semester', 'for_all_departments', 'editable')
+    list_filter = (RegulationFilter, 'semester', 'for_all_departments', 'editable')
     search_fields = ('course_code', 'course_name')
     filter_horizontal = ('departments',)
     actions = ['propagate_to_departments']
@@ -170,10 +190,26 @@ class CurriculumMasterAdmin(admin.ModelAdmin):
     propagate_to_departments.short_description = 'Propagate selected masters to departments'
 
 
+
+class RegulationFilter(SimpleListFilter):
+    title = 'regulation'
+    parameter_name = 'regulation'
+
+    def lookups(self, request, model_admin):
+        regs = Regulation.objects.order_by('code')
+        return [(r.code, (r.name and f"{r.code} - {r.name}" or r.code)) for r in regs]
+
+    def queryset(self, request, queryset):
+        v = self.value()
+        if v:
+            return queryset.filter(regulation__iexact=v)
+        return queryset
+
+
 @admin.register(CurriculumDepartment)
 class CurriculumDepartmentAdmin(admin.ModelAdmin):
     list_display = ('department', 'regulation', 'semester', 'course_code', 'course_name', 'is_elective', 'editable', 'overridden')
-    list_filter = ('department', 'regulation', 'semester', 'is_elective', 'editable', 'overridden')
+    list_filter = ('department', RegulationFilter, 'semester', 'is_elective', 'editable', 'overridden')
     search_fields = ('course_code', 'course_name')
 
     def get_readonly_fields(self, request, obj=None):
@@ -207,7 +243,7 @@ class ElectiveSubjectInline(admin.TabularInline):
 @admin.register(ElectiveSubject)
 class ElectiveSubjectAdmin(admin.ModelAdmin):
     list_display = ('course_code', 'course_name', 'department', 'parent', 'regulation', 'semester', 'is_elective', 'editable', 'approval_status')
-    list_filter = ('department', 'regulation', 'semester', 'is_elective', 'approval_status')
+    list_filter = ('department', RegulationFilter, 'semester', 'is_elective', 'approval_status')
     search_fields = ('course_code', 'course_name')
 
 
@@ -216,3 +252,10 @@ class ElectiveChoiceAdmin(admin.ModelAdmin):
     list_display = ('student', 'elective_subject', 'academic_year', 'is_active')
     list_filter = ('academic_year', 'is_active')
     search_fields = ('student__user__username', 'student__reg_no', 'elective_subject__course_code', 'elective_subject__course_name')
+
+
+@admin.register(Regulation)
+class RegulationAdmin(admin.ModelAdmin):
+    list_display = ('code', 'name', 'is_active')
+    list_filter = ('is_active',)
+    search_fields = ('code', 'name')

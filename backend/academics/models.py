@@ -74,12 +74,16 @@ def ensure_timetable_template_matches_academic_year(sender, instance: AcademicYe
 class Department(models.Model):
     code = models.CharField(max_length=16, unique=True)
     name = models.CharField(max_length=128)
+    # Short form for display (abbreviation) e.g. 'CSE', 'EEE'
+    short_name = models.CharField(max_length=32, blank=True)
 
     class Meta:
         ordering = ('code',)
 
     def __str__(self):
-        return f"{self.code} - {self.name}"
+        # Prefer short_name for compact displays when provided
+        display = self.short_name or self.name
+        return f"{self.code} - {display}"
 
 
 class Program(models.Model):
