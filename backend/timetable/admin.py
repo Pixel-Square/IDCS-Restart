@@ -1,5 +1,6 @@
 from django.contrib import admin
 from .models import TimetableTemplate, TimetableSlot, TimetableAssignment
+from .models import SpecialTimetable, SpecialTimetableEntry
 
 
 @admin.register(TimetableTemplate)
@@ -20,3 +21,15 @@ class TimetableAssignmentAdmin(admin.ModelAdmin):
     list_display = ('period', 'day', 'section', 'staff', 'curriculum_row', 'subject_text')
     list_filter = ('period__template', 'day')
     search_fields = ('subject_text',)
+
+
+@admin.register(SpecialTimetable)
+class SpecialTimetableAdmin(admin.ModelAdmin):
+    list_display = ('name', 'section', 'created_by', 'is_active', 'created_at')
+    list_filter = ('is_active',)
+
+
+@admin.register(SpecialTimetableEntry)
+class SpecialTimetableEntryAdmin(admin.ModelAdmin):
+    list_display = ('timetable', 'date', 'period', 'staff', 'curriculum_row', 'subject_text', 'is_active')
+    list_filter = ('timetable', 'date', 'period')

@@ -127,18 +127,25 @@ export default function StudentTimetable(){
                     // find assignment for day+period
                     const dayObj = timetable.find(x=> x.day === di+1) || { assignments: [] }
                       const assignments = (dayObj.assignments||[]).filter((x:any)=> x.period_id === p.id)
+                      const hasSpecial = assignments.some((x:any)=> x.is_special)
                     return (
-                      <td key={`cell-${di}-${p.id}`} style={{border:'1px solid #ddd', padding:8}}>
+                      <td key={`cell-${di}-${p.id}`} style={{border:'1px solid #ddd', padding:8, background: hasSpecial && assignments.some(x=> !x.is_special) ? '#fff1f2' : undefined}}>
                         {p.is_break ? <em style={{color:'#666'}}>{p.label||'Break'}</em> : (
                             assignments && assignments.length ? (
                             <div>
-                                {assignments.map((a:any, i:number)=> (
-                                  <div key={`${a.id || a.curriculum_row?.id || i}`} style={{marginBottom:8}}>
-                                    <div style={{fontWeight:600}}>{shortLabel(a.curriculum_row || a.subject_text)}</div>
-                                    <div style={{fontSize:12, color:'#333'}}>Staff: {a.staff?.username || '—'}</div>
-                                    {a.subject_batch && <div style={{fontSize:12, color:'#333'}}>Batch: {a.subject_batch.name}</div>}
-                                  </div>
-                                ))}
+                                    {assignments.map((a:any, i:number)=> {
+                                      const overridden = hasSpecial && !a.is_special
+                                      return (
+                                      <div key={`${a.id || a.curriculum_row?.id || i}`} style={{marginBottom:8, background: a.is_special ? '#fff7ed' : (overridden ? '#fee2e2' : 'transparent'), padding: a.is_special || overridden ? 6 : 0, borderRadius: a.is_special || overridden ? 6 : 0}}>
+                                        <div style={{fontWeight:600}}>{shortLabel(a.curriculum_row || a.subject_text)}{a.is_special ? ' • Special' : ''}</div>
+                                        <div style={{fontSize:12, color:'#333'}}>Staff: {a.staff?.username || '—'}</div>
+                                        {overridden && <div style={{fontSize:12, color:'#b91c1c', marginTop:6}}>Normal period (overridden by special)</div>}
+                                        {a.is_special && <div style={{fontSize:12, color:'#92400e', marginTop:6}}>Date: {a.date || ''} • {p.label || ''}</div>}
+                                        {a.subject_batch && <div style={{fontSize:12, color:'#333'}}>Batch: {a.subject_batch.name}</div>}
+                                        {overridden && a.elective_subject && <div style={{fontSize:12, color:'#b91c1c', marginTop:4}}>Elective: {a.elective_subject.course_code || a.elective_subject.course_name}</div>}
+                                      </div>
+                                      )
+                                    })}
                             </div>
                           ) : <div style={{color:'#999'}}>—</div>
                         )}

@@ -108,7 +108,18 @@ export default function AssignedSubjectsPage() {
         throw new Error(txt || 'Failed to load students')
       }
       const sdata = await sres.json()
-      const studIds = (sdata.results || sdata).map((s:any)=>s.id)
+      const studsAll = (sdata.results || sdata)
+      // exclude students already present in existing batches for this curriculum_row
+      const crId = item.curriculum_row_id || item.curriculum_row?.id
+      let excluded = new Set<number>()
+      if (crId) {
+        for (const b of batches) {
+          if (b.curriculum_row && b.curriculum_row.id === crId) {
+            for (const s of (b.students || [])) excluded.add(s.id)
+          }
+        }
+      }
+      const studIds = studsAll.map((s:any)=>s.id).filter((id:number)=> !excluded.has(id))
       const payload: any = { name, student_ids: studIds }
       if (item.curriculum_row_id) payload.curriculum_row_id = item.curriculum_row_id
       await createSubjectBatch(payload)
@@ -137,7 +148,18 @@ export default function AssignedSubjectsPage() {
         throw new Error(txt || 'Failed to load students')
       }
       const sdata = await sres.json()
-      const studs = (sdata.results || sdata)
+      let studs = (sdata.results || sdata)
+      // exclude students already assigned to batches for this curriculum_row
+      const crId = item.curriculum_row_id || item.curriculum_row?.id
+      if (crId) {
+        const excluded = new Set<number>()
+        for (const b of batches) {
+          if (b.curriculum_row && b.curriculum_row.id === crId) {
+            for (const s of (b.students || [])) excluded.add(s.id)
+          }
+        }
+        studs = studs.filter((s:any) => !excluded.has(s.id))
+      }
       setPickerStudents(studs)
       setPickerSelectedIds(studs.map((s:any)=>s.id))
       setPickerOpen(true)

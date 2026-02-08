@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import CurriculumLayout from './CurriculumLayout';
 import { fetchDeptRows, updateDeptRow, approveDeptRow, createElective, fetchElectives } from '../../services/curriculum';
+import fetchWithAuth from '../../services/fetchAuth';
 import { useAppSelector } from '../../hooks';
 
 export default function DeptList() {
@@ -133,6 +134,35 @@ export default function DeptList() {
       setElectiveSubjects(es);
       setAddModalOpen(false);
       alert('Elective subject added');
+    } catch (e: any) {
+      alert(String(e));
+    }
+  }
+
+  // Edit elective UI state
+  const [editElectiveOpen, setEditElectiveOpen] = useState(false);
+  const [editElectiveForm, setEditElectiveForm] = useState<any>(null);
+
+  function openEditElective(o: any) {
+    setEditElectiveForm({ ...o });
+    setEditElectiveOpen(true);
+  }
+
+  async function saveEditElective() {
+    if (!editElectiveForm || !editElectiveForm.id) return;
+    try {
+      const res = await fetchWithAuth(`/api/curriculum/elective/${editElectiveForm.id}/`, {
+        method: 'PATCH',
+        body: JSON.stringify(editElectiveForm),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      // refresh data
+      const fresh = await fetchDeptRows();
+      setRows(fresh);
+      const es = await fetchElectives({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined });
+      setElectiveSubjects(es);
+      setEditElectiveOpen(false);
+      alert('Elective updated');
     } catch (e: any) {
       alert(String(e));
     }
@@ -461,7 +491,17 @@ export default function DeptList() {
                               <td style={{ padding: '8px' }}>{o.total_mark ?? '-'}</td>
                               <td style={{ padding: '8px' }}>{o.total_hours ?? '-'}</td>
                               <td style={{ padding: '8px' }}>{o.question_paper_type || '-'}</td>
-                              <td style={{ padding: '8px' }}>{o.editable ? <span style={{ color: '#059669', fontWeight: 600 }}>Yes</span> : <span style={{ color: '#9ca3af' }}>No</span>}</td>
+                              <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>
+                                <span style={{ marginRight: 8 }}>{o.editable ? <span style={{ color: '#059669', fontWeight: 600 }}>Yes</span> : <span style={{ color: '#9ca3af' }}>No</span>}</span>
+                                <button
+                                  onClick={() => openEditElective(o)}
+                                  style={{ padding: '6px 10px', borderRadius: 6, border: 'none', background: '#f3f4f6', cursor: 'pointer' }}
+                                >
+                                  Edit
+                                </button>
+                              </td>
+                              
+                              
                             </tr>
                           ))
                         )}
@@ -551,6 +591,86 @@ export default function DeptList() {
             <div style={{ marginTop: 14, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <button onClick={() => setAddModalOpen(false)} style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff' }}>Cancel</button>
               <button onClick={saveAddForm} style={{ padding: '8px 14px', borderRadius: 8, background: 'linear-gradient(90deg,#4f46e5,#06b6d4)', color: '#fff', border: 'none' }}>Save</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {editElectiveOpen && editElectiveForm ? (
+        <div style={{ position: 'fixed', left: 0, top: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 70 }}>
+          <div style={{ width: 760, maxWidth: '95%', background: '#fff', borderRadius: 8, padding: 18, boxShadow: '0 8px 24px rgba(2,6,23,0.2)' }}>
+            <h3 style={{ marginTop: 0 }}>Edit Elective Subject</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div>
+                <label style={{ display: 'block', fontWeight: 600 }}>Course Name</label>
+                <input value={editElectiveForm.course_name || ''} onChange={e => setEditElectiveForm((f:any) => ({ ...f, course_name: e.target.value }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontWeight: 600 }}>Course Code</label>
+                <input value={editElectiveForm.course_code || ''} onChange={e => setEditElectiveForm((f:any) => ({ ...f, course_code: e.target.value }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontWeight: 600 }}>Class Type</label>
+                <select value={editElectiveForm.class_type || 'THEORY'} onChange={e => setEditElectiveForm((f:any) => ({ ...f, class_type: e.target.value }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }}>
+                  <option value="THEORY">THEORY</option>
+                  <option value="LAB">LAB</option>
+                  <option value="TCPL">TCPL</option>
+                  <option value="TCPR">TCPR</option>
+                  <option value="PRACTICAL">PRACTICAL</option>
+                  <option value="AUDIT">AUDIT</option>
+                </select>
+              </div>
+              <div>
+                <label style={{ display: 'block', fontWeight: 600 }}>Category</label>
+                <input value={editElectiveForm.category || ''} onChange={e => setEditElectiveForm((f:any) => ({ ...f, category: e.target.value }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontWeight: 600 }}>L</label>
+                <input type="number" value={editElectiveForm.l ?? 0} onChange={e => setEditElectiveForm((f:any) => ({ ...f, l: Number(e.target.value) }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontWeight: 600 }}>T</label>
+                <input type="number" value={editElectiveForm.t ?? 0} onChange={e => setEditElectiveForm((f:any) => ({ ...f, t: Number(e.target.value) }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontWeight: 600 }}>P</label>
+                <input type="number" value={editElectiveForm.p ?? 0} onChange={e => setEditElectiveForm((f:any) => ({ ...f, p: Number(e.target.value) }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontWeight: 600 }}>S</label>
+                <input type="number" value={editElectiveForm.s ?? 0} onChange={e => setEditElectiveForm((f:any) => ({ ...f, s: Number(e.target.value) }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontWeight: 600 }}>C</label>
+                <input type="number" value={editElectiveForm.c ?? 0} onChange={e => setEditElectiveForm((f:any) => ({ ...f, c: Number(e.target.value) }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontWeight: 600 }}>Internal Mark</label>
+                <input type="number" value={editElectiveForm.internal_mark ?? ''} onChange={e => setEditElectiveForm((f:any) => ({ ...f, internal_mark: e.target.value ? Number(e.target.value) : null }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontWeight: 600 }}>External Mark</label>
+                <input type="number" value={editElectiveForm.external_mark ?? ''} onChange={e => setEditElectiveForm((f:any) => ({ ...f, external_mark: e.target.value ? Number(e.target.value) : null }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontWeight: 600 }}>Total Mark</label>
+                <input type="number" value={editElectiveForm.total_mark ?? ''} onChange={e => setEditElectiveForm((f:any) => ({ ...f, total_mark: e.target.value ? Number(e.target.value) : null }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontWeight: 600 }}>Total Hours</label>
+                <input type="number" value={editElectiveForm.total_hours ?? ''} onChange={e => setEditElectiveForm((f:any) => ({ ...f, total_hours: e.target.value ? Number(e.target.value) : null }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+              </div>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <label style={{ display: 'block', fontWeight: 600 }}>Question Paper Type</label>
+                <input value={editElectiveForm.question_paper_type || ''} onChange={e => setEditElectiveForm((f:any) => ({ ...f, question_paper_type: e.target.value }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input id="edit-editable" type="checkbox" checked={!!editElectiveForm.editable} onChange={e => setEditElectiveForm((f:any) => ({ ...f, editable: e.target.checked }))} />
+                <label htmlFor="edit-editable">Editable</label>
+              </div>
+            </div>
+            <div style={{ marginTop: 14, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button onClick={() => setEditElectiveOpen(false)} style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff' }}>Cancel</button>
+              <button onClick={saveEditElective} style={{ padding: '8px 14px', borderRadius: 8, background: 'linear-gradient(90deg,#4f46e5,#06b6d4)', color: '#fff', border: 'none' }}>Save</button>
             </div>
           </div>
         </div>

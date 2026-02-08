@@ -1,8 +1,8 @@
 from rest_framework import viewsets, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from .models import TimetableTemplate, TimetableSlot, TimetableAssignment
-from .serializers import TimetableTemplateSerializer, PeriodDefinitionSerializer, TimetableAssignmentSerializer
+from .models import TimetableTemplate, TimetableSlot, TimetableAssignment, SpecialTimetable, SpecialTimetableEntry
+from .serializers import TimetableTemplateSerializer, PeriodDefinitionSerializer, TimetableAssignmentSerializer, SpecialTimetableSerializer, SpecialTimetableEntrySerializer
 from accounts.utils import get_user_permissions
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
@@ -182,6 +182,77 @@ class SectionTimetableView(APIView):
 
         # convert keys to sorted list of days
         results = []
+        # include special timetable entries for this section (date-specific overrides)
+        try:
+            from timetable.models import SpecialTimetableEntry
+            special_qs = SpecialTimetableEntry.objects.filter(is_active=True, timetable__section=sec).select_related('timetable', 'period', 'staff', 'curriculum_row', 'subject_batch')
+            for e in special_qs:
+                try:
+                    daynum = e.date.isoweekday()
+                    lst = out.setdefault(daynum, [])
+                    # For student views, prefer the student's chosen elective sub-option
+                    # if this special entry references a parent curriculum_row.
+                    subj_text = getattr(e, 'subject_text', None)
+                    curr_obj = None
+                    elective_obj = None
+                    elective_id = None
+                    if e.curriculum_row:
+                        try:
+                            if student_profile:
+                                from curriculum.models import ElectiveChoice
+                                ec = ElectiveChoice.objects.filter(student=student_profile, elective_subject__parent=e.curriculum_row, is_active=True, academic_year__is_active=True).select_related('elective_subject').first()
+                                if ec and getattr(ec, 'elective_subject', None):
+                                    es = ec.elective_subject
+                                    subj_text = f"{getattr(es, 'course_code', '')} - {getattr(es, 'course_name', '')}".strip(' -')
+                                    elective_obj = {'id': es.pk, 'course_code': getattr(es, 'course_code', None), 'course_name': getattr(es, 'course_name', None)}
+                                    elective_id = es.pk
+                                else:
+                                    curr_obj = {'id': e.curriculum_row.id, 'course_code': getattr(e.curriculum_row, 'course_code', None), 'course_name': getattr(e.curriculum_row, 'course_name', None)}
+                            else:
+                                curr_obj = {'id': e.curriculum_row.id, 'course_code': getattr(e.curriculum_row, 'course_code', None), 'course_name': getattr(e.curriculum_row, 'course_name', None)}
+                        except Exception:
+                            curr_obj = {'id': e.curriculum_row.id, 'course_code': getattr(e.curriculum_row, 'course_code', None), 'course_name': getattr(e.curriculum_row, 'course_name', None)}
+
+                    lst.append({
+                        'id': f"special-{getattr(e, 'id', None)}",
+                        'period_index': getattr(e.period, 'index', None),
+                        'period_id': getattr(e.period, 'id', None),
+                        'start_time': getattr(e.period, 'start_time', None),
+                        'end_time': getattr(e.period, 'end_time', None),
+                        'is_break': getattr(e.period, 'is_break', False),
+                        'label': getattr(e.period, 'label', None),
+                        'curriculum_row': curr_obj,
+                        'elective_subject': elective_obj,
+                        'subject_text': subj_text,
+                        'elective_subject_id': elective_id,
+                        'subject_batch': {'id': getattr(e.subject_batch, 'pk', None), 'name': getattr(e.subject_batch, 'name', None)} if getattr(e, 'subject_batch', None) else None,
+                        'staff': {'id': getattr(e.staff, 'pk', None), 'staff_id': getattr(getattr(e.staff, 'user', None), 'username', None)} if getattr(e, 'staff', None) else None,
+                        'section': {'id': getattr(sec, 'pk', None), 'name': getattr(sec, 'name', None)} if sec else None,
+                        'is_special': True,
+                        'date': getattr(e, 'date', None),
+                    })
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        # Cleanup: for any day where a special entry exists for a given period,
+        # remove the normal (non-special) assignment for that period so the
+        # timetable shows only the special period on that date.
+        try:
+            for daynum, assignments in out.items():
+                # find period_ids that have a special entry
+                special_period_ids = {a.get('period_id') for a in assignments if a.get('is_special')}
+                if not special_period_ids:
+                    continue
+                filtered = []
+                for a in assignments:
+                    if (a.get('period_id') in special_period_ids) and (not a.get('is_special')):
+                        # skip normal assignment when a special for same period exists
+                        continue
+                    filtered.append(a)
+                out[daynum] = filtered
+        except Exception:
+            pass
         for day in sorted(out.keys()):
             results.append({'day': day, 'assignments': sorted(out[day], key=lambda x: (x.get('period_index') or 0))})
         return Response({'results': results})
@@ -263,6 +334,7 @@ class TimetableAssignmentViewSet(viewsets.ModelViewSet):
     queryset = TimetableAssignment.objects.select_related('period', 'section', 'staff', 'curriculum_row', 'subject_batch')
     serializer_class = TimetableAssignmentSerializer
     permission_classes = (IsAuthenticated,)
+
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -447,6 +519,14 @@ class StaffTimetableView(APIView):
         if not staff_profile:
             return Response({'results': []})
 
+        # optional date param to determine date-specific overrides
+        date_param = request.query_params.get('date')
+        import datetime
+        try:
+            date_for_override = datetime.date.fromisoformat(date_param) if date_param else None
+        except Exception:
+            date_for_override = None
+
         try:
             from academics.models import TeachingAssignment
 
@@ -534,8 +614,286 @@ class StaffTimetableView(APIView):
                 'staff': {'id': staff_obj.pk, 'staff_id': getattr(staff_obj, 'staff_id', None), 'username': getattr(getattr(staff_obj, 'user', None), 'username', None)} if staff_obj else None,
                 'section': {'id': getattr(a.section, 'pk', None), 'name': getattr(a.section, 'name', None)} if getattr(a, 'section', None) else None,
             })
+            # If a date was provided and a special entry exists for this section/period/date,
+            # skip including the normal timetable assignment so the staff sees only the
+            # special period for that date.
+            try:
+                if date_for_override:
+                    from timetable.models import SpecialTimetableEntry
+                    if SpecialTimetableEntry.objects.filter(timetable__section=a.section, period=a.period, date=date_for_override, is_active=True).exists():
+                        # remove the last appended item
+                        lst.pop()
+                        continue
+            except Exception:
+                pass
+
+        # include special timetable entries where applicable
+        try:
+            from timetable.models import SpecialTimetableEntry
+            specials_added = []
+            special_qs = SpecialTimetableEntry.objects.filter(is_active=True).select_related('timetable', 'period', 'staff', 'curriculum_row')
+            for e in special_qs:
+                try:
+                    # include if entry explicitly assigned to this staff or if a TeachingAssignment maps this staff to the curriculum_row
+                    include_special = False
+                    if getattr(e, 'staff', None) and getattr(e.staff, 'id', None) == getattr(staff_profile, 'id', None):
+                        include_special = True
+                    else:
+                        try:
+                            ta_q = TeachingAssignment.objects.filter(is_active=True, staff=staff_profile).filter(Q(curriculum_row=e.curriculum_row) | Q(elective_subject__parent=e.curriculum_row)).filter(Q(section=e.timetable.section) | Q(section__isnull=True))
+                            if ta_q.exists():
+                                include_special = True
+                        except Exception:
+                            include_special = False
+                    if not include_special:
+                        continue
+                    daynum = e.date.isoweekday()
+                    lst = out.setdefault(daynum, [])
+                    subj_text = e.subject_text
+                    elective_id = None
+                    try:
+                        if e.curriculum_row:
+                            # resolve elective if TeachingAssignment maps to elective for this staff
+                            ta = TeachingAssignment.objects.filter(staff=staff_profile, is_active=True).filter(Q(curriculum_row=e.curriculum_row) | Q(elective_subject__parent=e.curriculum_row)).select_related('elective_subject').first()
+                            if ta and getattr(ta, 'elective_subject', None):
+                                es = ta.elective_subject
+                                subj_text = f"{getattr(es, 'course_code', '')} - {getattr(es, 'course_name', '')}".strip(' -')
+                                elective_id = getattr(es, 'id', None)
+                    except Exception:
+                        pass
+
+                    # If an elective mapping was resolved for this staff, expose the
+                    # elective_subject instead of the parent curriculum_row
+                    curr_obj = None
+                    elective_obj = None
+                    if elective_id and e.curriculum_row:
+                        try:
+                            from curriculum.models import ElectiveSubject
+                            es = ElectiveSubject.objects.filter(pk=elective_id).first()
+                            if es:
+                                elective_obj = {'id': es.pk, 'course_code': getattr(es, 'course_code', None), 'course_name': getattr(es, 'course_name', None)}
+                        except Exception:
+                            elective_obj = None
+                    else:
+                        curr_obj = {'id': e.curriculum_row.id, 'course_code': getattr(e.curriculum_row, 'course_code', None), 'course_name': getattr(e.curriculum_row, 'course_name', None)} if e.curriculum_row else None
+
+                    lst.append({
+                        'id': f"special-{getattr(e, 'id', None)}",
+                        'period_index': getattr(e.period, 'index', None),
+                        'period_id': getattr(e.period, 'id', None),
+                        'start_time': getattr(e.period, 'start_time', None),
+                        'end_time': getattr(e.period, 'end_time', None),
+                        'is_break': getattr(e.period, 'is_break', False),
+                        'label': getattr(e.period, 'label', None),
+                        'curriculum_row': curr_obj,
+                        'elective_subject': elective_obj,
+                        'subject_text': subj_text,
+                        'elective_subject_id': elective_id,
+                        'subject_batch': {'id': getattr(e.subject_batch, 'pk', None), 'name': getattr(e.subject_batch, 'name', None)} if getattr(e, 'subject_batch', None) else None,
+                        'staff': {'id': getattr(e.staff, 'pk', None), 'staff_id': getattr(getattr(e.staff, 'user', None), 'username', None)} if getattr(e, 'staff', None) else None,
+                        'section': {'id': getattr(e.timetable.section, 'pk', None), 'name': getattr(e.timetable.section, 'name', None)} if getattr(e.timetable, 'section', None) else None,
+                        'is_special': True,
+                        'date': getattr(e, 'date', None),
+                    })
+                    specials_added.append(e.id)
+                except Exception:
+                    continue
+        except Exception:
+            pass
 
         results = []
         for day in sorted(out.keys()):
             results.append({'day': day, 'assignments': sorted(out[day], key=lambda x: (x.get('period_index') or 0))})
         return Response({'results': results})
+
+
+class SpecialTimetableViewSet(viewsets.ModelViewSet):
+    queryset = SpecialTimetable.objects.select_related('section', 'created_by').prefetch_related('entries')
+    serializer_class = SpecialTimetableSerializer
+    permission_classes = (IsAuthenticated,)
+
+    def get_queryset(self):
+        user = self.request.user
+        perms = get_user_permissions(user)
+        # allow users with manage_special_timetable permission or staff users
+        if 'timetable.manage_special_timetable' in perms or 'academics.manage_special_timetable' in perms or user.is_staff:
+            return self.queryset
+        # otherwise restrict to timetables for sections the user advises or owns
+        staff_profile = getattr(user, 'staff_profile', None)
+        if staff_profile:
+            return self.queryset.filter(section__in=Section.objects.filter(advisor_mappings__advisor=staff_profile))
+        return SpecialTimetable.objects.none()
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        perms = get_user_permissions(user)
+        role_names = {r.name.upper() for r in user.roles.all()}
+        allowed = False
+        if 'timetable.manage_special_timetable' in perms or 'academics.manage_special_timetable' in perms or user.is_staff:
+            allowed = True
+        # allow users who can assign timetables globally
+        if 'timetable.assign' in perms:
+            allowed = True
+        # advisors may create special timetables for sections they advise
+        if 'ADVISOR' in role_names:
+            sec_id = serializer.initial_data.get('section_id') or serializer.initial_data.get('section') or self.request.data.get('section_id') or self.request.data.get('section')
+            try:
+                if sec_id is not None:
+                    sec_id = int(sec_id)
+            except Exception:
+                sec_id = None
+            if sec_id:
+                try:
+                    from academics.models import SectionAdvisor
+                    staff_profile = getattr(user, 'staff_profile', None)
+                    if staff_profile and SectionAdvisor.objects.filter(section_id=sec_id, advisor=staff_profile, is_active=True, academic_year__is_active=True).exists():
+                        allowed = True
+                except Exception:
+                    pass
+
+        if not allowed:
+            raise PermissionDenied('You do not have permission to manage special timetables')
+        staff_profile = getattr(user, 'staff_profile', None)
+        serializer.save(created_by=staff_profile)
+
+
+class SpecialTimetableEntryViewSet(viewsets.ModelViewSet):
+    queryset = SpecialTimetableEntry.objects.select_related('timetable', 'period', 'staff', 'curriculum_row', 'subject_batch')
+    serializer_class = SpecialTimetableEntrySerializer
+    permission_classes = (IsAuthenticated,)
+
+    def get_queryset(self):
+        user = self.request.user
+        perms = get_user_permissions(user)
+        # full access for managers or staff
+        if 'timetable.manage_special_timetable' in perms or 'academics.manage_special_timetable' in perms or user.is_staff:
+            return self.queryset.filter(is_active=True)
+
+        staff_profile = getattr(user, 'staff_profile', None)
+        student_profile = getattr(user, 'student_profile', None)
+
+        qs = SpecialTimetableEntry.objects.filter(is_active=True).select_related('timetable', 'period', 'staff', 'curriculum_row', 'subject_batch')
+
+        # Advisors should see entries for sections they advise
+        try:
+            role_names = {r.name.upper() for r in user.roles.all()}
+        except Exception:
+            role_names = set()
+
+        if 'ADVISOR' in role_names and staff_profile:
+            try:
+                return qs.filter(timetable__section__in=Section.objects.filter(advisor_mappings__advisor=staff_profile))
+            except Exception:
+                pass
+
+        if staff_profile:
+            try:
+                from academics.models import TeachingAssignment
+                # entries explicitly assigned to this staff
+                staff_q = qs.filter(staff=staff_profile)
+                # entries where a TeachingAssignment maps this staff to the curriculum_row for the same section
+                ta_q = TeachingAssignment.objects.filter(staff=staff_profile, is_active=True)
+                mapped_q = qs.filter(curriculum_row__in=ta_q.values_list('curriculum_row', flat=True), timetable__section__in=ta_q.values_list('section', flat=True))
+                return (staff_q | mapped_q).distinct()
+            except Exception:
+                return qs.filter(staff=staff_profile)
+
+        if student_profile:
+            # show entries for the student's section and either unbatched or matching student's batch
+            try:
+                from academics.models import StudentSubjectBatch
+                sec = getattr(student_profile, 'section', None)
+                if not sec:
+                    return SpecialTimetableEntry.objects.none()
+                # entries for the section
+                sec_q = qs.filter(timetable__section=sec)
+                # include only if subject_batch is null or includes this student
+                return sec_q.filter(Q(subject_batch__isnull=True) | Q(subject_batch__students=student_profile)).distinct()
+            except Exception:
+                return qs.filter(timetable__section=getattr(student_profile, 'section', None))
+
+        # default: no access
+        return SpecialTimetableEntry.objects.none()
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        perms = get_user_permissions(user)
+        role_names = {r.name.upper() for r in user.roles.all()}
+        allowed = False
+        if 'timetable.manage_special_timetable' in perms or 'academics.manage_special_timetable' in perms or user.is_staff:
+            allowed = True
+        if 'timetable.assign' in perms:
+            allowed = True
+
+        # advisors may create entries for timetables belonging to their sections
+        if 'ADVISOR' in role_names:
+            tt_id = serializer.initial_data.get('timetable_id') or serializer.initial_data.get('timetable') or self.request.data.get('timetable_id') or self.request.data.get('timetable')
+            try:
+                if tt_id is not None:
+                    tt_id = int(tt_id)
+            except Exception:
+                tt_id = None
+            if tt_id:
+                try:
+                    st = SpecialTimetable.objects.filter(pk=tt_id).select_related('section').first()
+                    staff_profile = getattr(user, 'staff_profile', None)
+                    if st and staff_profile:
+                        from academics.models import SectionAdvisor
+                        if SectionAdvisor.objects.filter(section=st.section, advisor=staff_profile, is_active=True, academic_year__is_active=True).exists():
+                            allowed = True
+                except Exception:
+                    pass
+
+        if not allowed:
+            raise PermissionDenied('You do not have permission to create special timetable entries')
+
+        # Attempt to auto-resolve a staff for this special entry if not provided.
+        try:
+            data = serializer.validated_data
+            staff_provided = data.get('staff', None)
+            curriculum_row = data.get('curriculum_row', None)
+            timetable_obj = data.get('timetable', None)
+            period_obj = data.get('period', None)
+            if not staff_provided and curriculum_row and timetable_obj:
+                try:
+                    from academics.models import TeachingAssignment
+                    # Prefer section-scoped mapping
+                    ta = TeachingAssignment.objects.filter(section=timetable_obj.section, curriculum_row=curriculum_row, is_active=True).select_related('staff').first()
+                    if not ta:
+                        ta = TeachingAssignment.objects.filter(curriculum_row=curriculum_row, is_active=True).select_related('staff').first()
+                    if ta and getattr(ta, 'staff', None):
+                        serializer.save(staff=ta.staff)
+                        return
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        entry = serializer.save()
+
+        # Ensure a PeriodAttendanceSession exists for this special entry so
+        # staff can mark attendance for the special period on the date.
+        try:
+            from academics.models import PeriodAttendanceSession
+            from academics.models import Section as _Section
+            from academics.models import StaffProfile as _StaffProfile
+            from academics.models import PeriodAttendanceSession as _PAS
+        except Exception:
+            _PAS = None
+
+        try:
+            if entry and getattr(entry, 'timetable', None):
+                section_obj = entry.timetable.section
+                period_obj = entry.period
+                date_val = entry.date
+                # create session if not exists
+                from academics.models import PeriodAttendanceSession as PAS
+                PAS.objects.get_or_create(
+                    section=section_obj,
+                    period=period_obj,
+                    date=date_val,
+                    defaults={'timetable_assignment': None, 'created_by': getattr(entry, 'staff', None)}
+                )
+        except Exception:
+            # non-fatal; do not block entry creation
+            pass

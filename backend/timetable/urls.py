@@ -1,11 +1,14 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import TimetableTemplateViewSet, TimetableSlotViewSet, TimetableAssignmentViewSet, CurriculumBySectionView, SectionTimetableView, StaffTimetableView, SectionSubjectsStaffView
+from .views import SpecialTimetableViewSet, SpecialTimetableEntryViewSet
 
 router = DefaultRouter()
 router.register('templates', TimetableTemplateViewSet, basename='timetable-template')
 router.register('slots', TimetableSlotViewSet, basename='timetable-slot')
 router.register('assignments', TimetableAssignmentViewSet, basename='timetable-assignment')
+router.register('special-timetables', SpecialTimetableViewSet, basename='special-timetable')
+router.register('special-entries', SpecialTimetableEntryViewSet, basename='special-timetable-entry')
 
 urlpatterns = [
     path('', include(router.urls)),

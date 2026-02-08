@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from .models import TimetableTemplate, TimetableSlot, TimetableAssignment
+from .models import SpecialTimetable, SpecialTimetableEntry
 
 
 class PeriodDefinitionSerializer(serializers.ModelSerializer):
@@ -85,3 +86,36 @@ class TimetableAssignmentSerializer(serializers.ModelSerializer):
         except Exception:
             pass
         return super().create(validated_data)
+
+
+class SpecialTimetableEntrySerializer(serializers.ModelSerializer):
+    timetable_id = serializers.PrimaryKeyRelatedField(queryset=SpecialTimetable.objects.all(), source='timetable', write_only=True)
+    period_id = serializers.PrimaryKeyRelatedField(queryset=TimetableSlot.objects.all(), source='period', write_only=True)
+    # accept numeric subject_batch id from payload
+    subject_batch_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
+
+    class Meta:
+        model = SpecialTimetableEntry
+        # expose only id-based writable fields to avoid duplicate source mapping
+        fields = ('id', 'timetable_id', 'date', 'period_id', 'staff', 'curriculum_row', 'subject_batch', 'subject_batch_id', 'subject_text', 'is_active')
+
+    def validate(self, attrs):
+        # resolve subject_batch if provided as id in initial_data
+        if 'subject_batch_id' in self.initial_data and 'subject_batch' not in attrs:
+            try:
+                from academics.models import StudentSubjectBatch
+                sb_id = int(self.initial_data.get('subject_batch_id'))
+                sb = StudentSubjectBatch.objects.filter(pk=sb_id).first()
+                if sb:
+                    attrs['subject_batch'] = sb
+            except Exception:
+                pass
+        return attrs
+
+
+class SpecialTimetableSerializer(serializers.ModelSerializer):
+    entries = SpecialTimetableEntrySerializer(many=True, read_only=True)
+
+    class Meta:
+        model = SpecialTimetable
+        fields = ('id', 'name', 'section', 'created_by', 'is_active', 'created_at', 'entries')

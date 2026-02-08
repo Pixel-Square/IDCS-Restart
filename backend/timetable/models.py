@@ -98,3 +98,54 @@ class TimetableAssignment(models.Model):
     def __str__(self):
         subj = self.curriculum_row.course_code if self.curriculum_row else (self.subject_text or 'Unassigned')
         return f"{self.section} | {self.period} @ {self.get_day_display()} → {subj} ({getattr(self.staff, 'staff_id', 'no-staff')})"
+
+
+class SpecialTimetable(models.Model):
+    """A named special timetable grouping — contains multiple date-specific entries for a section.
+
+    Created by users with the special timetable permission. Intended to override the
+    regular timetable for specific dates.
+    """
+    name = models.CharField(max_length=128)
+    section = models.ForeignKey('academics.Section', on_delete=models.CASCADE, related_name='special_timetables')
+    created_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Special Timetable'
+        verbose_name_plural = 'Special Timetables'
+        permissions = (
+            ('manage_special_timetable', 'Can manage special timetable'),
+        )
+
+    def __str__(self):
+        return f"Special: {self.name} ({self.section})"
+
+
+class SpecialTimetableEntry(models.Model):
+    """A single date+period entry within a SpecialTimetable.
+
+    date: exact calendar date when this entry applies.
+    period: reference to TimetableSlot defining the slot.
+    staff/curriculum_row/subject_batch/subject_text work similarly to TimetableAssignment.
+    """
+    timetable = models.ForeignKey(SpecialTimetable, on_delete=models.CASCADE, related_name='entries')
+    date = models.DateField()
+    period = models.ForeignKey('TimetableSlot', on_delete=models.CASCADE, related_name='special_entries')
+    staff = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True)
+    curriculum_row = models.ForeignKey('curriculum.CurriculumDepartment', on_delete=models.SET_NULL, null=True, blank=True)
+    subject_batch = models.ForeignKey('academics.StudentSubjectBatch', on_delete=models.SET_NULL, null=True, blank=True)
+    subject_text = models.CharField(max_length=256, blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Special Timetable Entry'
+        verbose_name_plural = 'Special Timetable Entries'
+        constraints = [
+            models.UniqueConstraint(fields=['timetable', 'date', 'period'], name='unique_special_entry_per_timetable_date_period'),
+        ]
+
+    def __str__(self):
+        return f"{self.timetable.name} | {self.date} | {self.period} ({self.subject_text or (self.curriculum_row and self.curriculum_row.course_code)})"

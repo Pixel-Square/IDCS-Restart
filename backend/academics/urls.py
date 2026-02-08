@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import SectionAdvisorViewSet, HODStaffListView, HODSectionsView, TeachingAssignmentViewSet, AdvisorMyStudentsView, AdvisorStaffListView
+from .views import SectionAdvisorViewSet, HODStaffListView, HODSectionsView, TeachingAssignmentViewSet, AdvisorMyStudentsView, AdvisorStaffListView, DepartmentsListView
 from .views import AcademicYearViewSet
 from .views import StaffAssignedSubjectsView, SectionStudentsView
 from .views import SubjectBatchViewSet, PeriodAttendanceSessionViewSet, StaffPeriodsView, StudentAttendanceView
@@ -18,6 +18,7 @@ urlpatterns = [
     path('', include(router.urls)),
     path('hod-staff/', HODStaffListView.as_view()),
     path('advisor-staff/', AdvisorStaffListView.as_view()),
+    path('departments/', DepartmentsListView.as_view()),
     path('sections/', HODSectionsView.as_view()),
     path('sections/<int:section_id>/students/', SectionStudentsView.as_view()),
     path('staff/assigned-subjects/', StaffAssignedSubjectsView.as_view()),

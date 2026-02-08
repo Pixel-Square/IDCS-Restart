@@ -341,8 +341,8 @@ def _user_can_manage_assignment(user, teaching_assignment: TeachingAssignment) -
 
 
 class SectionAdvisorSerializer(serializers.ModelSerializer):
-    section_id = serializers.PrimaryKeyRelatedField(queryset=Section.objects.all(), source='section', write_only=True)
-    advisor_id = serializers.PrimaryKeyRelatedField(queryset=StaffProfile.objects.all(), source='advisor', write_only=True)
+    section_id = serializers.PrimaryKeyRelatedField(queryset=Section.objects.all(), source='section')
+    advisor_id = serializers.PrimaryKeyRelatedField(queryset=StaffProfile.objects.all(), source='advisor')
     section = serializers.StringRelatedField(read_only=True)
     advisor = serializers.StringRelatedField(read_only=True)
     academic_year = serializers.PrimaryKeyRelatedField(queryset=AcademicYear.objects.all(), required=False, allow_null=True)

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import fetchWithAuth from '../../services/fetchAuth'
 
 type Section = { id: number; name: string; batch: string; department_id?: number; semester?: number; department?: { id: number; code?: string } }
-type Staff = { id: number; user: string; staff_id: string }
+type Staff = { id: number; user: string; staff_id: string; department?: { id?: number; code?: string; name?: string } }
 type CurriculumRow = { id: number; course_code?: string; course_name?: string; department?: { id: number; code?: string }; semester?: number }
 type TeachingAssignment = { 
   id: number
@@ -18,6 +18,8 @@ type TeachingAssignment = {
 export default function TeachingAssignmentsPage(){
   const [sections, setSections] = useState<Section[]>([])
   const [staff, setStaff] = useState<Staff[]>([])
+  const [departments, setDepartments] = useState<{ id: number; name?: string; code?: string }[]>([])
+  const [selectedDept, setSelectedDept] = useState<number | null>(null)
   const [curriculum, setCurriculum] = useState<CurriculumRow[]>([])
   const [assignments, setAssignments] = useState<TeachingAssignment[]>([])
   const [electiveOptions, setElectiveOptions] = useState<any[]>([])
@@ -39,7 +41,8 @@ export default function TeachingAssignmentsPage(){
       setLoading(true)
       const sres = await fetchWithAuth('/api/academics/my-students/?page_size=0')
       const staffEndpoint = (canViewElectives || canAssignElectives) ? '/api/academics/hod-staff/?page_size=0' : '/api/academics/advisor-staff/?page_size=0'
-      const staffRes = await fetchWithAuth(staffEndpoint)
+      // fetch staff list optionally filtered by selected department
+      const staffRes = await fetchWithAuth(selectedDept && staffEndpoint.includes('hod-staff') ? `${staffEndpoint}&department=${selectedDept}` : staffEndpoint)
       const curRes = await fetchWithAuth('/api/curriculum/department/?page_size=0')
       const electRes = await fetchWithAuth('/api/curriculum/elective/?page_size=0')
       const taRes = await fetchWithAuth('/api/academics/teaching-assignments/?page_size=0')
@@ -50,14 +53,42 @@ export default function TeachingAssignmentsPage(){
         return r.json()
       }
 
-      if (sres.ok){ const d = await safeJson(sres); setSections((d.results || d).map((r:any) => ({ id: r.section_id, name: r.section_name, batch: r.batch, department_id: r.department_id, semester: r.semester, department: r.department }))) }
-      if (staffRes.ok){ const d = await safeJson(staffRes); setStaff(d.results || d) }
+      if (sres.ok){ const d = await safeJson(sres); const secs = (d.results || d).map((r:any) => ({ id: r.section_id, name: r.section_name, batch: r.batch, department_id: r.department_id, semester: r.semester, department: r.department })); setSections(secs); }
+      // fetch canonical departments list from academics endpoint
+      try{
+        const dres = await fetchWithAuth('/api/academics/departments/')
+        if(dres.ok){ const dd = await safeJson(dres); setDepartments((dd.results || dd) as any[]) }
+      }catch(e){ /* fallback: ignore */ }
+      if (staffRes.ok){ const d = await safeJson(staffRes); let staffList = (d.results || d) as Staff[]; // if backend didn't filter, apply client-side filter
+        if (selectedDept){ staffList = staffList.filter(s => (s.department && s.department.id === selectedDept) || (s as any).department === selectedDept) }
+        setStaff(staffList)
+      }
       if (curRes.ok){ const d = await safeJson(curRes); const rows = (d.results || d); setCurriculum(rows); setElectiveParents(rows.filter((r:any)=> r.is_elective)) }
       if (electRes.ok){ const d = await safeJson(electRes); setElectiveOptions(d.results || d) }
       if (taRes.ok){ const d = await safeJson(taRes); setAssignments(d.results || d) }
     }catch(e){ console.error(e); alert('Failed to load teaching assignment data') }
     finally{ setLoading(false) }
   }
+
+  // reload staff list when selected department changes
+  useEffect(()=>{
+    async function loadStaff(){
+      try{
+        const staffEndpoint = (canViewElectives || canAssignElectives) ? '/api/academics/hod-staff/?page_size=0' : '/api/academics/advisor-staff/?page_size=0'
+        const url = selectedDept && staffEndpoint.includes('hod-staff') ? `${staffEndpoint}&department=${selectedDept}` : staffEndpoint
+        const res = await fetchWithAuth(url)
+        if(!res.ok) return
+        const data = await res.json()
+        let staffList = data.results || data
+        // if backend didn't filter and we're on advisor endpoint, filter client-side
+        if(!staffEndpoint.includes('hod-staff') && selectedDept){
+          staffList = staffList.filter((s:any) => (s.department && s.department.id === selectedDept) || (s.department === selectedDept) )
+        }
+        setStaff(staffList)
+      }catch(e){ console.error('loadStaff failed', e) }
+    }
+    loadStaff()
+  }, [selectedDept])
 
   async function assign(sectionId:number){
     const subjSel = document.getElementById(`subject-${sectionId}`) as HTMLSelectElement
@@ -117,6 +148,19 @@ export default function TeachingAssignmentsPage(){
           </select>
         </div>
       )}
+
+        {/* Department Filter */}
+        <div style={{ marginBottom: '18px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <span style={{ color: '#374151', fontWeight: 500 }}>Department:</span>
+          <select
+            value={selectedDept ?? ''}
+            onChange={e => setSelectedDept(e.target.value ? Number(e.target.value) : null)}
+            style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #d1d5db', background: '#fff', color: '#1e293b', fontWeight: 500 }}
+          >
+            <option value="">All Departments</option>
+            {departments.map(d => <option key={d.id} value={d.id}>{d.name || d.code || `Dept ${d.id}`}</option>)}
+          </select>
+        </div>
 
       {/* Department filter removed — advisors see only their assigned sections */}
 

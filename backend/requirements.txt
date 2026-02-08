@@ -4,3 +4,4 @@ djangorestframework-simplejwt>=5.2
 psycopg2-binary>=2.9
 django-cors-headers>=3.13
 python-dotenv>=1.0
+openpyxl>=3.0

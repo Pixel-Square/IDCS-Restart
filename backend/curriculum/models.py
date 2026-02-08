@@ -13,6 +13,30 @@ CLASS_TYPE_CHOICES = (
 )
 
 
+class Regulation(models.Model):
+    """Canonical Regulation model to centralise regulation metadata.
+
+    Existing code previously used free-text `regulation` fields on curriculum
+    rows. This model provides a single place to store regulation codes and
+    optional descriptive names. Use the `regulation_obj` property on rows to
+    access the related `Regulation` instance (created on demand).
+    """
+
+    code = models.CharField(max_length=32, unique=True)
+    name = models.CharField(max_length=255, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Regulation'
+        verbose_name_plural = 'Regulations'
+
+    def __str__(self):
+        return self.code
+
+
+
 class CurriculumMaster(models.Model):
     regulation = models.CharField(max_length=32)
     # Use Semester FK so curriculum entries relate to the canonical Semester model
@@ -52,6 +76,19 @@ class CurriculumMaster(models.Model):
 
     def __str__(self):
         return f"{self.regulation} - Sem{self.semester} - {self.course_code or self.course_name or self.pk}"
+
+    @property
+    def regulation_obj(self):
+        """Return the `Regulation` instance for this row's regulation code.
+
+        This will create the `Regulation` record on demand if it does not
+        already exist. Returns `None` when the regulation string is empty.
+        """
+        code = (self.regulation or '').strip()
+        if not code:
+            return None
+        obj, _ = Regulation.objects.get_or_create(code=code)
+        return obj
 
     def save(self, *args, **kwargs):
         # Auto-calculate total_mark when internal/external provided
@@ -115,6 +152,14 @@ class CurriculumDepartment(models.Model):
 
     def __str__(self):
         return f"{self.department.code} - {self.regulation} - Sem{self.semester} - {self.course_code or self.course_name or self.pk}"
+
+    @property
+    def regulation_obj(self):
+        code = (self.regulation or '').strip()
+        if not code:
+            return None
+        obj, _ = Regulation.objects.get_or_create(code=code)
+        return obj
 
     def save(self, *args, **kwargs):
         # Auto-calculate total_mark when internal/external provided
@@ -202,6 +247,14 @@ class ElectiveSubject(models.Model):
 
     def __str__(self):
         return f"Elective {self.course_code or self.course_name or self.pk} (parent={self.parent_id})"
+
+    @property
+    def regulation_obj(self):
+        code = (self.regulation or '').strip()
+        if not code:
+            return None
+        obj, _ = Regulation.objects.get_or_create(code=code)
+        return obj
 
     def save(self, *args, **kwargs):
         if (self.internal_mark is not None or self.external_mark is not None) and not self.total_mark:

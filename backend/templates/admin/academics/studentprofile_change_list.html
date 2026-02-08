@@ -1,0 +1,14 @@
+{% extends "admin/change_list.html" %}
+{% load i18n %}
+
+{% block object-tools %}
+  <div class="object-tools">
+    {% url 'admin:academics_student_import' as import_url %}
+    <ul class="object-tools">
+      <li>
+        <a href="{{ import_url }}" class="addlink">Import students</a>
+      </li>
+    </ul>
+  </div>
+  {{ block.super }}
+{% endblock %}

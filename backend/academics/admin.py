@@ -21,6 +21,18 @@ from .models import PeriodAttendanceSession, PeriodAttendanceRecord
 from django import forms
 from django.db import models
 from django.core.exceptions import ValidationError
+from django.urls import path
+from django.shortcuts import render, redirect
+from django.contrib import messages
+from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
+from accounts.models import Role
+from django.contrib.auth.models import Group
+from django.db import transaction
+from django.http import HttpResponse
+from django.utils import timezone
+
+import openpyxl
 
 
 class StudentProfileForm(forms.ModelForm):
@@ -74,6 +86,7 @@ class StaffProfileForm(forms.ModelForm):
 @admin.register(StudentProfile)
 class StudentProfileAdmin(admin.ModelAdmin):
     form = StudentProfileForm
+    change_list_template = 'admin/academics/studentprofile_change_list.html'
     list_display = ('user', 'reg_no', 'get_department', 'batch', 'current_section_display', 'status')
     search_fields = ('reg_no', 'user__username', 'user__email')
     # filter by the department through the section->semester->course relation
@@ -115,6 +128,216 @@ class StudentProfileAdmin(admin.ModelAdmin):
             return None
         return getattr(sec, 'name', str(sec))
     current_section_display.short_description = 'Current Section'
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom = [
+            path('import-students/', self.admin_site.admin_view(self.import_students), name='academics_student_import'),
+            path('download-template/', self.admin_site.admin_view(self.download_template), name='academics_student_template'),
+        ]
+        return custom + urls
+
+    def import_students(self, request):
+        """Admin view to import students from an Excel (.xlsx) file.
+
+        Expected columns (first row header):
+          reg_no, username, email, first_name, last_name, batch, section, password
+
+        'section' should match existing Section.name and batch name should match Batch.name
+        """
+        if request.method == 'POST':
+            uploaded = request.FILES.get('xlsx_file')
+            if not uploaded:
+                messages.error(request, 'No file uploaded')
+                return redirect(request.path)
+
+            User = get_user_model()
+            wb = None
+            try:
+                wb = openpyxl.load_workbook(uploaded)
+            except Exception as e:
+                messages.error(request, f'Failed to read Excel file: {e}')
+                return redirect(request.path)
+
+            sheet = wb.active
+            rows = list(sheet.iter_rows(values_only=True))
+            if not rows or len(rows) < 2:
+                messages.error(request, 'Excel file contains no data')
+                return redirect(request.path)
+
+            headers = [str(h).strip().lower() if h is not None else '' for h in rows[0]]
+            col_index = {name: idx for idx, name in enumerate(headers)}
+            required = ['reg_no']
+            missing = [r for r in required if r not in col_index]
+            if missing:
+                messages.error(request, f'Missing required columns: {missing}')
+                return redirect(request.path)
+
+            created = 0
+            skipped = 0
+            errors = []
+            for i, row in enumerate(rows[1:], start=2):
+                try:
+                    reg_no = row[col_index.get('reg_no')] if 'reg_no' in col_index else None
+                    if not reg_no:
+                        skipped += 1
+                        continue
+                    reg_no = str(reg_no).strip()
+                    username = None
+                    if 'username' in col_index:
+                        username = row[col_index.get('username')]
+                    email = None
+                    if 'email' in col_index:
+                        email = row[col_index.get('email')]
+                    first_name = row[col_index.get('first_name')] if 'first_name' in col_index else ''
+                    last_name = row[col_index.get('last_name')] if 'last_name' in col_index else ''
+                    batch_name = row[col_index.get('batch')] if 'batch' in col_index else None
+                    section_name = row[col_index.get('section')] if 'section' in col_index else None
+                    password = row[col_index.get('password')] if 'password' in col_index else None
+
+                    username = str(username).strip() if username else reg_no
+                    email = str(email).strip() if email else ''
+                    first_name = str(first_name).strip() if first_name else ''
+                    last_name = str(last_name).strip() if last_name else ''
+                    batch_name = str(batch_name).strip() if batch_name else None
+                    section_name = str(section_name).strip() if section_name else None
+                    password = str(password) if password else reg_no
+
+                    with transaction.atomic():
+                        user, created_user = User.objects.get_or_create(username=username, defaults={'email': email, 'first_name': first_name, 'last_name': last_name})
+                        if not created_user:
+                            updated = False
+                            if email and (not user.email):
+                                user.email = email; updated = True
+                            if first_name and (not user.first_name):
+                                user.first_name = first_name; updated = True
+                            if last_name and (not user.last_name):
+                                user.last_name = last_name; updated = True
+                            if updated:
+                                user.save()
+                        if created_user or (not user.has_usable_password()):
+                            user.set_password(password)
+                            user.save()
+
+                        sp, sp_created = StudentProfile.objects.get_or_create(user=user, defaults={'reg_no': reg_no, 'batch': batch_name or ''})
+                        if not sp_created:
+                            if sp.reg_no != reg_no:
+                                errors.append(f'Row {i}: existing user {username} has different reg_no ({sp.reg_no})')
+                                skipped += 1
+                                continue
+
+                        # section may be provided as 'BatchName :: SectionName' (exact match)
+                        sec = None
+                        if section_name:
+                            if '::' in section_name:
+                                parts = [p.strip() for p in section_name.split('::', 1)]
+                                if len(parts) == 2:
+                                    bpart, spart = parts
+                                    sec = Section.objects.filter(name=spart, batch__name=bpart).select_related('batch').first()
+                            else:
+                                # fallback: if batch provided, try match by both
+                                if batch_name:
+                                    sec = Section.objects.filter(name=section_name, batch__name=batch_name).select_related('batch').first()
+                                else:
+                                    sec = Section.objects.filter(name=section_name).select_related('batch').first()
+                        if sec:
+                            sp.section = sec
+                            sp.save(update_fields=['section'])
+                            # create or update a StudentSectionAssignment for this student
+                            try:
+                                today = timezone.now().date()
+                                existing = StudentSectionAssignment.objects.filter(student=sp, end_date__isnull=True).first()
+                                if not existing:
+                                    StudentSectionAssignment.objects.create(student=sp, section=sec, start_date=today)
+                            except Exception:
+                                pass
+
+                        # ensure user is in 'students' group
+                        try:
+                            grp, _ = Group.objects.get_or_create(name='students')
+                            if grp not in user.groups.all():
+                                user.groups.add(grp)
+                        except Exception:
+                            pass
+
+                        # ensure user has logical Role 'STUDENT'
+                        try:
+                            role_obj, _ = Role.objects.get_or_create(name='STUDENT')
+                            # add via m2m so validation hooks run
+                            if role_obj not in user.roles.all():
+                                user.roles.add(role_obj)
+                        except ValidationError as e:
+                            # validation may fail if profile not yet attached; ignore and continue
+                            pass
+                        except Exception:
+                            pass
+
+                        created += 1
+                except Exception as e:
+                    errors.append(f'Row {i}: {e}')
+
+            msg = f'Import completed: created_or_updated={created} skipped={skipped} errors={len(errors)}'
+            if errors:
+                for err in errors[:10]:
+                    messages.error(request, err)
+            messages.success(request, msg)
+            return redirect(request.path)
+
+        context = dict(self.admin_site.each_context(request))
+        context.update({
+            'title': 'Import Students from Excel',
+        })
+        return render(request, 'admin/academics/import_students.html', context)
+
+    def download_template(self, request):
+        # generate a simple Excel template with headers and a sample row
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = 'import'
+        headers = ['reg_no', 'username', 'email', 'first_name', 'last_name', 'batch', 'section', 'password']
+        ws.append(headers)
+        # sample row uses composite section format 'Batch :: Section'
+        ws.append(['REG2026001', 'reg2026001', 'student@example.edu', 'First', 'Last', '2026', '2026 :: A', 'changeme'])
+
+        # prepare lookup lists for batches and composite sections
+        batches = list(Batch.objects.values_list('name', flat=True).distinct())
+        # build composite 'Batch :: Section' entries
+        sections_qs = Section.objects.select_related('batch').all()
+        sections = [f"{s.batch.name} :: {s.name}" for s in sections_qs]
+
+        # create hidden sheet with lists
+        lists = wb.create_sheet(title='lists')
+        for i, b in enumerate(batches, start=1):
+            lists.cell(row=i, column=1, value=b)
+        for i, s in enumerate(sections, start=1):
+            lists.cell(row=i, column=2, value=s)
+        lists.sheet_state = 'hidden'
+
+        # add data validation for batch (column F) and section (column G)
+        try:
+            from openpyxl.worksheet.datavalidation import DataValidation
+            wb_refs = len(batches) or 1
+            ws_batch_range = f"=lists!$A$1:$A${wb_refs}"
+            dv_batch = DataValidation(type="list", formula1=ws_batch_range, allow_blank=True)
+            ws.add_data_validation(dv_batch)
+            dv_batch.add("F2:F500")
+
+            ws_secs = len(sections) or 1
+            ws_section_range = f"=lists!$B$1:$B${ws_secs}"
+            dv_section = DataValidation(type="list", formula1=ws_section_range, allow_blank=True)
+            ws.add_data_validation(dv_section)
+            dv_section.add("G2:G500")
+        except Exception:
+            # if validation can't be added, continue — template still useful
+            pass
+
+        from io import BytesIO
+        bio = BytesIO()
+        wb.save(bio)
+        bio.seek(0)
+        resp = HttpResponse(bio.read(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        resp['Content-Disposition'] = 'attachment; filename="student_import_template.xlsx"'
+        return resp
 
 
 @admin.register(StaffProfile)

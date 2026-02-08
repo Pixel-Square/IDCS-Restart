@@ -181,6 +181,45 @@ class ElectiveSubjectViewSet(viewsets.ModelViewSet):
                 pass
         return qs.order_by('semester', 'course_code')
 
+    def perform_create(self, serializer):
+        user = self.request.user
+        perms = get_user_permissions(user)
+        # allow if superuser or IQAC/HAA groups or explicit permission
+        if user.is_superuser or user.groups.filter(name__in=['IQAC', 'HAA']).exists() or 'academics.change_elective_teaching' in perms or 'academics.manage_curriculum' in perms:
+            serializer.save(created_by=user)
+            return
+        # allow HOD of the department
+        try:
+            staff_profile = getattr(user, 'staff_profile', None)
+            if staff_profile:
+                hod_depts = DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True).values_list('department_id', flat=True)
+                dept = serializer.validated_data.get('department') or None
+                dept_id = getattr(dept, 'id', None) if dept else None
+                if dept_id and dept_id in list(hod_depts):
+                    serializer.save(created_by=user)
+                    return
+        except Exception:
+            pass
+        raise PermissionDenied('You do not have permission to create elective subjects')
+
+    def perform_update(self, serializer):
+        user = self.request.user
+        perms = get_user_permissions(user)
+        if user.is_superuser or user.groups.filter(name__in=['IQAC', 'HAA']).exists() or 'academics.change_elective_teaching' in perms or 'academics.manage_curriculum' in perms:
+            return serializer.save()
+        # allow HOD of the department
+        try:
+            staff_profile = getattr(user, 'staff_profile', None)
+            if staff_profile:
+                hod_depts = DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True).values_list('department_id', flat=True)
+                inst = getattr(serializer, 'instance', None)
+                dept_id = getattr(getattr(inst, 'department', None), 'id', None)
+                if dept_id and dept_id in list(hod_depts):
+                    return serializer.save()
+        except Exception:
+            pass
+        raise PermissionDenied('You do not have permission to change this elective subject')
+
 
 class ElectiveChoicesView(APIView):
     permission_classes = (IsAuthenticated,)

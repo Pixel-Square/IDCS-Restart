@@ -18,6 +18,11 @@ export default function TimetableEditor(){
   const [editingAvailableBatches, setEditingAvailableBatches] = useState<any[]>([])
   const [editingBatchId, setEditingBatchId] = useState<number | null>(null)
   const [showCellPopup, setShowCellPopup] = useState(false)
+  const [specialDate, setSpecialDate] = useState<string | null>((new Date()).toISOString().slice(0,10))
+  const [specialTimetables, setSpecialTimetables] = useState<any[]>([])
+  const [selectedSpecialId, setSelectedSpecialId] = useState<number | null>(null)
+  const [specialName, setSpecialName] = useState<string>('')
+  const [customSubjectText, setCustomSubjectText] = useState<string>('')
 
   useEffect(()=>{
     // Advisors don't have access to the HOD sections endpoint; use my-students
@@ -55,6 +60,11 @@ export default function TimetableEditor(){
         if(!r.ok) return []
         return r.json()
       }).then(d=> setSubjectStaffList(d.results || []))
+      // fetch existing special timetables for this section
+      fetchWithAuth(`/api/timetable/special-timetables/?section_id=${sectionId}`).then(r=>{
+        if(!r.ok) return []
+        return r.json()
+      }).then(d=> setSpecialTimetables(d.results || []))
     }
   },[sectionId])
 
@@ -179,8 +189,8 @@ export default function TimetableEditor(){
         {assigned && assigned.length ? (
           <div style={{marginBottom:6}}>
             {assigned.map((asg:any, idx:number)=> (
-              <div key={idx} style={{marginBottom:6, cursor:'pointer'}} onClick={()=> { setEditingCell({ day: dayIndex, periodId: p.id }); setShowCellPopup(true) }}>
-                <strong>{shortLabel(asg.curriculum_row || asg.subject_text)}</strong>
+              <div key={idx} style={{marginBottom:6, cursor:'pointer', background: asg.is_special ? '#fff7ed' : 'transparent', padding: asg.is_special ? 6 : 0, borderRadius: asg.is_special ? 6 : 0}} onClick={()=> { setEditingCell({ day: dayIndex, periodId: p.id }); setShowCellPopup(true) }}>
+                <strong>{shortLabel(asg.curriculum_row || asg.subject_text)}{asg.is_special ? ' • Special' : ''}</strong>
                 <div style={{fontSize:12, color:'#333'}}>
                   Staff: {asg.staff?.username || '—'}{asg.subject_batch ? ` • Batch: ${asg.subject_batch.name}` : ''}
                 </div>
@@ -202,6 +212,21 @@ export default function TimetableEditor(){
       const res = await fetchWithAuth(`/api/timetable/assignments/${assignId}/`, { method: 'DELETE' })
       if(!res.ok) { const txt = await res.text(); return alert('Failed: '+txt) }
       // reload to reflect current assignments
+      await loadTimetable()
+    }catch(e){ console.error(e); alert('Delete failed') }
+  }
+
+  async function handleDeleteSpecialEntry(rawId:string){
+    if(!rawId) return
+    if(!confirm('Delete this special period?')) return
+    // rawId expected in form 'special-<id>' or numeric string
+    let idStr = String(rawId)
+    if(idStr.startsWith('special-')) idStr = idStr.replace('special-', '')
+    const id = Number(idStr)
+    if(!id) return alert('Invalid special entry id')
+    try{
+      const res = await fetchWithAuth(`/api/timetable/special-entries/${id}/`, { method: 'DELETE' })
+      if(!res.ok){ const txt = await res.text(); return alert('Failed: '+txt) }
       await loadTimetable()
     }catch(e){ console.error(e); alert('Delete failed') }
   }
@@ -239,10 +264,13 @@ export default function TimetableEditor(){
             <div style={{flex:1}}>
               <h4>Existing</h4>
               {assigned.length === 0 && <div style={{color:'#666'}}>No assignment</div>}
-              {assigned.map((a:any)=> (
-                <div key={a.id} style={{padding:8, border:'1px solid #eee', marginBottom:8}}>
-                  <div style={{fontWeight:700}}>{shortLabel(a.curriculum_row || a.subject_text)}</div>
+                  {assigned.map((a:any)=> (
+                <div key={a.id} style={{padding:8, border:'1px solid #eee', marginBottom:8, background: a.is_special ? '#fffaf0' : 'transparent'}}>
+                  <div style={{fontWeight:700}}>{shortLabel(a.curriculum_row || a.subject_text)}{a.is_special ? ' • Special' : ''}</div>
                   <div style={{fontSize:13, color:'#666'}}>{a.staff?.username || '—'}{a.subject_batch ? ` • Batch: ${a.subject_batch.name}` : ''}</div>
+                  {a.is_special && (
+                    <div style={{fontSize:12, color:'#92400e', marginTop:6}}>Date: {a.date || ''} • {periodObj.label || `${periodObj.start_time || ''}${periodObj.start_time && periodObj.end_time ? ' - ' : ''}${periodObj.end_time || ''}`}</div>
+                  )}
                   <div style={{marginTop:8, display:'flex', gap:8}}>
                     <button onClick={async ()=>{
                       const crid = a.curriculum_row?.id || null
@@ -276,7 +304,7 @@ export default function TimetableEditor(){
                         }catch(e){ console.error('failed to load existing batch', e) }
                       }
                     }}>Edit</button>
-                    <button onClick={()=> handleDeleteAssignment(a.id)}>Delete</button>
+                    <button onClick={()=> { if(a.is_special) { handleDeleteSpecialEntry(a.id) } else { handleDeleteAssignment(a.id) } }}>Delete</button>
                     <button onClick={async ()=>{
                       if(!editingCurriculumId) return alert('Select new subject from right panel then click Update')
                       const payload:any = {}
@@ -329,6 +357,90 @@ export default function TimetableEditor(){
                   setShowCellPopup(false)
                   setEditingCell(null)
                 }}>Assign (batch-wise)</button>
+              </div>
+              <hr />
+              <div style={{marginTop:12}}>
+                <h4>Mark Special Period</h4>
+                <div style={{fontSize:13, marginBottom:8}}>Create a date-specific override for this period.</div>
+                <div style={{display:'flex', flexDirection:'column', gap:8}}>
+                  <div style={{display:'flex', gap:8, alignItems:'center'}}>
+                    <label style={{fontSize:13}}>Special timetable:</label>
+                    <select value={selectedSpecialId ?? ''} onChange={e=> setSelectedSpecialId(e.target.value ? Number(e.target.value) : null)}>
+                      <option value="">Create new…</option>
+                      {specialTimetables.map(t=> (
+                        <option key={t.id} value={t.id}>{t.name} {t.is_active? '': '(inactive)'}</option>
+                      ))}
+                    </select>
+                    {selectedSpecialId ? null : (
+                      <input placeholder="Name for new special timetable" value={specialName} onChange={e=> setSpecialName(e.target.value)} />
+                    )}
+                  </div>
+
+                  <div style={{display:'flex', gap:8, alignItems:'center'}}>
+                    <label style={{fontSize:13}}>Date:</label>
+                    <input type="date" value={specialDate||''} onChange={e=> setSpecialDate(e.target.value || null)} />
+                  </div>
+
+                  <div style={{display:'flex', gap:8, alignItems:'center'}}>
+                    <label style={{fontSize:13}}>Subject:</label>
+                    <select value={editingCurriculumId ?? ''} onChange={async e=>{
+                      const val = Number(e.target.value) || null
+                      setEditingCurriculumId(val)
+                      setCustomSubjectText('')
+                      setEditingBatchId(null)
+                      if(val) await loadBatchesForCurriculum(val)
+                    }}>
+                      <option value="">-- choose from section subjects --</option>
+                      {curriculum.map(c=> (
+                        <option key={c.id} value={c.id}>{c.course_code} — {c.course_name}</option>
+                      ))}
+                      <option value="-1">Custom text…</option>
+                    </select>
+                    {editingCurriculumId === -1 && (
+                      <input placeholder="Custom subject text" value={customSubjectText} onChange={e=> setCustomSubjectText(e.target.value)} />
+                    )}
+                  </div>
+
+                  {editingAvailableBatches && editingAvailableBatches.length > 0 && editingCurriculumId && editingCurriculumId !== -1 && (
+                    <div style={{display:'flex', gap:8, alignItems:'center'}}>
+                      <label style={{fontSize:13}}>Batch (optional):</label>
+                      <select value={editingBatchId || ''} onChange={e=> setEditingBatchId(Number(e.target.value) || null)}>
+                        <option value="">None</option>
+                        {editingAvailableBatches.map(b=> (
+                          <option key={b.id} value={b.id}>{b.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  <div style={{display:'flex', gap:8}}>
+                    <button onClick={async ()=>{
+                      if(!specialDate) return alert('Select a date')
+                      try{
+                        let timetableId = selectedSpecialId
+                        if(!timetableId){
+                          const name = specialName || `Special - ${specialDate}`
+                          const tRes = await fetchWithAuth('/api/timetable/special-timetables/', { method: 'POST', body: JSON.stringify({ name, section: sectionId, is_active: true }) })
+                          if(!tRes.ok){ const txt = await tRes.text(); return alert('Failed to create special timetable: '+txt) }
+                          const tData = await tRes.json()
+                          timetableId = tData.id
+                        }
+
+                        const entryPayload: any = { timetable_id: timetableId, timetable: timetableId, date: specialDate, period_id: periodId, period: periodId }
+                        if(editingCurriculumId && editingCurriculumId !== -1) entryPayload.curriculum_row = editingCurriculumId
+                        if(editingCurriculumId === -1 && customSubjectText) entryPayload.subject_text = customSubjectText
+                        if(editingBatchId) entryPayload.subject_batch_id = editingBatchId
+
+                        const eRes = await fetchWithAuth('/api/timetable/special-entries/', { method: 'POST', body: JSON.stringify(entryPayload) })
+                        if(!eRes.ok){ const txt = await eRes.text(); return alert('Failed to create special entry: '+txt) }
+                        alert('Special period created')
+                        await loadTimetable()
+                        setShowCellPopup(false)
+                        setEditingCell(null)
+                      }catch(err){ console.error(err); alert('Failed to create special entry') }
+                    }}>Mark Special</button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>

@@ -27,8 +27,10 @@ export default function StaffTimetable(){
   async function load(){
     setLoading(true)
     try{
-      // Fetch staff timetable
-      const res = await fetchWithAuth('/api/timetable/staff/')
+      // Fetch staff timetable, include today's date so date-specific special entries
+      // can hide normal assignments for that day.
+      const today = new Date().toISOString().slice(0,10)
+      const res = await fetchWithAuth(`/api/timetable/staff/?date=${today}`)
       if(!res.ok) throw new Error(await res.text())
       const data = await res.json()
       setTimetable(data.results || [])
@@ -88,19 +90,25 @@ export default function StaffTimetable(){
                   {periods.map(p=> {
                     const dayObj = timetable.find(x=> x.day === di+1) || { assignments: [] }
                       const assignments = (dayObj.assignments||[]).filter((x:any)=> x.period_id === p.id)
+                      const hasSpecial = assignments.some((x:any)=> x.is_special)
                     return (
-                      <td key={p.id} style={{padding:'10px 8px', borderBottom:'1px solid #f3f4f6', fontWeight:500}}>
+                      <td key={p.id} style={{padding:'10px 8px', borderBottom:'1px solid #f3f4f6', fontWeight:500, background: hasSpecial && assignments.some(x=> !x.is_special) ? '#fff1f2' : undefined}}>
                         {p.is_break || p.is_lunch ? (
                           <em style={{color:'#6b7280'}}>{p.label || (p.is_break ? 'Break' : 'Lunch')}</em>
                         ) : assignments && assignments.length ? (
                           <div>
-                            {assignments.map((a:any, i:number)=> (
-                              <div key={i} style={{marginBottom:8}}>
-                                <div style={{fontWeight:600, color:'#1e293b'}}>{shortLabel(a.curriculum_row || a.subject_text)}</div>
+                            {assignments.map((a:any, i:number)=> {
+                              const overridden = hasSpecial && !a.is_special
+                              return (
+                              <div key={i} style={{marginBottom:8, background: a.is_special ? '#fff7ed' : (overridden ? '#fee2e2' : 'transparent'), padding: a.is_special || overridden ? 6 : 0, borderRadius: a.is_special || overridden ? 6 : 0}}>
+                                <div style={{fontWeight:600, color:'#1e293b'}}>{shortLabel(a.curriculum_row || a.subject_text)}{a.is_special ? ' • Special' : ''}</div>
                                 <div style={{fontSize:13, color:'#6b7280', marginTop:2}}>Section: {a.section?.name || a.section?.id || '—'}</div>
+                                {overridden && <div style={{fontSize:12, color:'#b91c1c', marginTop:6}}>Normal period (overridden)</div>}
+                                {a.is_special && <div style={{fontSize:12, color:'#92400e', marginTop:6}}>Date: {a.date || ''} • {p.label || `${p.start_time || ''}${p.start_time && p.end_time ? ' - ' : ''}${p.end_time || ''}`}</div>}
                                 {a.subject_batch && <div style={{fontSize:13, color:'#6b7280'}}>Batch: {a.subject_batch.name}</div>}
                               </div>
-                            ))}
+                              )
+                            })}
                           </div>
                         ) : (
                           <div style={{color:'#d1d5db'}}>—</div>
