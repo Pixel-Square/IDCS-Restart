@@ -1,0 +1,17 @@
+{% extends "admin/base_site.html" %}
+{% load static %}
+
+{% block content %}
+  <h1>{{ title }}</h1>
+  <p>Upload an Excel (.xlsx) file with headers on the first row. Expected columns: staff_id, username, email, first_name, last_name, department, designation, password</p>
+  <p>
+    <a href="{% url 'admin:academics_staff_template' %}" class="button">Download Excel template</a>
+  </p>
+  <form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    <label for="id_xlsx_file">Excel file:</label>
+    <input type="file" name="xlsx_file" id="id_xlsx_file" accept=".xlsx" required />
+    <br/><br/>
+    <input type="submit" value="Import" class="default" />
+  </form>
+{% endblock %}

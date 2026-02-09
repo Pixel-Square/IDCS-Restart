@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import fetchWithAuth from '../../services/fetchAuth'
+// DEBUG: verify that the imported helper is a function at module load time
+try{ console.log('DEBUG PeriodAttendance: fetchWithAuth typeof', typeof fetchWithAuth, fetchWithAuth) }catch(e){ console.log('DEBUG PeriodAttendance: fetchWithAuth log failed', e) }
 import './PeriodAttendance.css'
 
 type PeriodItem = {
@@ -54,6 +56,7 @@ export default function PeriodAttendance(){
     setMarks({})
     setLoading(true)
     try{
+      try{ console.log('DEBUG openPeriod: p', p, 'fetchWithAuth typeof', typeof fetchWithAuth) }catch(e){ console.log('DEBUG openPeriod: log failed', e) }
       let studs: any[] = []
       if (p.elective_subject_id) {
         const esres = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${p.elective_subject_id}`)
@@ -90,7 +93,7 @@ export default function PeriodAttendance(){
     if (!selected) return
     setSaving(true)
     try{
-      const payload = { section_id: selected.section_id, period_id: selected.period.id, date, records: students.map(s=> ({ student_id: s.id, status: marks[s.id] || 'A' })) }
+      const payload = { section_id: selected.section_id, period_id: selected.period.id, date, records: students.map(s=> ({ student_id: s.id, status: marks[s.id] || 'P' })) }
       const res = await fetchWithAuth('/api/academics/period-attendance/bulk-mark/', { method: 'POST', body: JSON.stringify(payload) })
       if(!res.ok){ let txt = 'Save failed'; try{ const j = await res.json(); txt = JSON.stringify(j) }catch(_){ try{ txt = await res.text() }catch(_){}}; alert('Failed to save: '+txt); return }
       await fetchPeriods()
@@ -159,7 +162,7 @@ export default function PeriodAttendance(){
                 <div className="period-title">{p.period.label || `Period ${p.period.index}`}</div>
                 <div className="period-time">{p.period.start_time || ''}{p.period.start_time && p.period.end_time ? ` — ${p.period.end_time}` : ''}</div>
                 <div className="period-meta">{p.section_name}</div>
-                <div className="period-meta" style={{ fontStyle: 'italic' }}>{p.subject || p.subject || 'No subject'}</div>
+                <div className="period-meta" style={{ fontStyle: 'italic' }}>{p.subject_display || p.subject || 'No subject'}</div>
                 <div style={{ marginTop: 8 }}>
                   {p.attendance_session_locked ? <button className="btn secondary" disabled>Attendance Locked</button> : <button className="btn" onClick={()=> openPeriod(p)}>{p.attendance_session_id ? 'Open Session' : 'Take Attendance'}</button>}
                 </div>

@@ -21,6 +21,14 @@ class IsHODOfDepartment(permissions.BasePermission):
             staff_profile = getattr(user, 'staff_profile', None)
             if not staff_profile:
                 return False
+            # allow list/retrieve for users who are HODs or who have explicit assign permission
+            try:
+                from accounts.utils import get_user_permissions
+                perms = get_user_permissions(user)
+                if 'academics.assign_advisor' in perms:
+                    return True
+            except Exception:
+                pass
             hod_depts = DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True)
             return hod_depts.exists()
         # For unsafe methods, require authentication here; detailed checks in has_object_permission

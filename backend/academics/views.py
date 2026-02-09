@@ -32,6 +32,12 @@ from .utils import get_user_effective_departments
 from .serializers import TeachingAssignmentInfoSerializer
 from rest_framework import routers
 from django.db.models import Q
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.views import APIView
+from rest_framework import status
+from rest_framework.response import Response
+from .models import StudentMentorMap
+from django.db import transaction
 
 
 # Attendance endpoints removed.
@@ -66,13 +72,25 @@ class SectionAdvisorViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         perms = get_user_permissions(user)
-        # users with explicit permission may view elective teaching assignments
-        if 'academics.view_elective_teaching' in perms:
+        # users with explicit permission may view advisor assignments
+        # but visibility should be limited to departments the user is effective for
+        if user.is_superuser:
             return self.queryset
+
         staff_profile = getattr(user, 'staff_profile', None)
         if not staff_profile:
             return SectionAdvisor.objects.none()
-        # HODs: show mappings for their departments
+
+        # compute departments the user effectively represents (own dept + HOD/AHOD mappings)
+        allowed_depts = get_user_effective_departments(user)
+
+        # If user has assign permission, allow viewing assignments for their departments
+        if 'academics.assign_advisor' in perms:
+            if allowed_depts:
+                return self.queryset.filter(section__batch__course__department_id__in=allowed_depts)
+            return SectionAdvisor.objects.none()
+
+        # fallback: HODs (role-based) can view for their HOD departments
         hod_depts = DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True).values_list('department_id', flat=True)
         return self.queryset.filter(section__batch__course__department_id__in=hod_depts)
 
@@ -156,6 +174,180 @@ class SectionAdvisorViewSet(viewsets.ModelViewSet):
 
         return super().create(request, *args, **kwargs)
 
+
+class MentorStaffListView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        user = request.user
+        # only allow users with assign_mentor permission or superuser
+        perms = get_user_permissions(user)
+        if not (user.is_superuser or 'academics.assign_mentor' in perms):
+            return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+        allowed_depts = get_user_effective_departments(user)
+        if not allowed_depts:
+            return Response({'results': []})
+
+        staffs = StaffProfile.objects.filter(department__id__in=allowed_depts).select_related('user')
+        data = []
+        for s in staffs:
+            data.append({'id': s.id, 'user_id': getattr(getattr(s, 'user', None), 'id', None), 'username': getattr(getattr(s, 'user', None), 'username', None), 'staff_id': s.staff_id})
+        return Response({'results': data})
+
+
+class MentorStudentsForStaffView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request, staff_id: int):
+        user = request.user
+        perms = get_user_permissions(user)
+        has_global = user.is_superuser or ('academics.assign_mentor' in perms)
+
+        # ensure staff exists
+        staff = StaffProfile.objects.filter(pk=int(staff_id)).first()
+        if not staff:
+            return Response({'results': []})
+
+        # Fetch students currently mapped to this mentor (active mappings)
+        from .models import StudentMentorMap, StudentSectionAssignment, StudentProfile
+
+        # base mentor mappings
+        mentor_maps = StudentMentorMap.objects.filter(mentor=staff, is_active=True).select_related('student__user')
+
+        # Determine target department for the staff (if available)
+        target_dept = getattr(getattr(staff, 'current_department', None), 'id', None) or getattr(getattr(staff, 'department', None), 'id', None)
+
+        # If the requester is a plain advisor (has section advisor entries) and
+        # is NOT a superuser or HOD for the target department, restrict the
+        # mentor mappings to students who are in the requester's advised sections
+        requester_staff = getattr(user, 'staff_profile', None)
+        if requester_staff and not user.is_superuser:
+            # check if requester is HOD of the target department — HODs can view all
+            is_requester_hod = False
+            try:
+                is_requester_hod = DepartmentRole.objects.filter(staff=requester_staff, role='HOD', is_active=True, department_id=target_dept).exists()
+            except Exception:
+                is_requester_hod = False
+
+            if not is_requester_hod:
+                requester_section_ids = list(SectionAdvisor.objects.filter(advisor=requester_staff, is_active=True, academic_year__is_active=True).values_list('section_id', flat=True))
+                if requester_section_ids:
+                    assigned_student_ids = set(StudentSectionAssignment.objects.filter(section_id__in=requester_section_ids, end_date__isnull=True).values_list('student_id', flat=True))
+                    legacy_student_ids = set(StudentProfile.objects.filter(section_id__in=requester_section_ids).values_list('id', flat=True))
+                    allowed_student_ids = assigned_student_ids | legacy_student_ids
+                    mentor_maps = mentor_maps.filter(student__id__in=allowed_student_ids)
+
+        students = [m.student for m in mentor_maps]
+
+        ser = StudentSimpleSerializer([
+            {'id': st.pk, 'reg_no': st.reg_no, 'user': getattr(st, 'user', None), 'section_id': getattr(st, 'section_id', None), 'section_name': str(getattr(st, 'section', ''))}
+            for st in students
+        ], many=True)
+        return Response({'results': ser.data})
+
+
+class MentorMapCreateView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request):
+        user = request.user
+        perms = get_user_permissions(user)
+        if not (user.is_superuser or 'academics.assign_mentor' in perms):
+            return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+        mentor_id = request.data.get('mentor_id')
+        student_ids = request.data.get('student_ids') or request.data.get('student_id')
+        if not mentor_id or not student_ids:
+            return Response({'detail': 'mentor_id and student_ids required'}, status=status.HTTP_400_BAD_REQUEST)
+        if isinstance(student_ids, int):
+            student_ids = [student_ids]
+
+        mentor = StaffProfile.objects.filter(pk=int(mentor_id)).first()
+        if not mentor:
+            return Response({'detail': 'Mentor not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        allowed_depts = get_user_effective_departments(user)
+        target_dept = getattr(getattr(mentor, 'current_department', None), 'id', None) or getattr(getattr(mentor, 'department', None), 'id', None)
+        if not user.is_superuser and target_dept not in allowed_depts:
+            return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+        results = {'created': 0, 'skipped': 0, 'errors': []}
+        try:
+            with transaction.atomic():
+                for sid in student_ids:
+                    try:
+                        sp = StudentProfile.objects.filter(pk=int(sid)).first()
+                        if not sp:
+                            results['skipped'] += 1
+                            continue
+                        # deactivate existing active mentor mapping for this student
+                        StudentMentorMap.objects.filter(student=sp, is_active=True).update(is_active=False)
+                        StudentMentorMap.objects.create(student=sp, mentor=mentor, is_active=True)
+                        results['created'] += 1
+                    except Exception as e:
+                        results['errors'].append(str(e))
+        except Exception as e:
+            return Response({'detail': 'Failed to create mappings', 'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(results)
+
+
+class MentorUnmapView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request):
+        user = request.user
+        perms = get_user_permissions(user)
+        if not (user.is_superuser or 'academics.assign_mentor' in perms):
+            return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+        student_ids = request.data.get('student_ids') or request.data.get('student_id')
+        mentor_id = request.data.get('mentor_id')
+        if not student_ids:
+            return Response({'detail': 'student_ids required'}, status=status.HTTP_400_BAD_REQUEST)
+        if isinstance(student_ids, int):
+            student_ids = [student_ids]
+
+        try:
+            with transaction.atomic():
+                q = StudentMentorMap.objects.filter(student_id__in=[int(s) for s in student_ids], is_active=True)
+                if mentor_id:
+                    q = q.filter(mentor_id=int(mentor_id))
+                updated = q.update(is_active=False)
+        except Exception as e:
+            return Response({'detail': 'Failed to unmap', 'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({'unmapped': updated})
+
+
+class MentorMyMenteesView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        user = request.user
+        staff_profile = getattr(user, 'staff_profile', None)
+        if not staff_profile:
+            return Response({'results': []})
+
+        # return active mentees mapped to the current staff
+        from .models import StudentMentorMap
+        maps = StudentMentorMap.objects.filter(mentor=staff_profile, is_active=True).select_related('student__user', 'student__section', 'student__section__batch__course')
+        results = []
+        for m in maps:
+            st = m.student
+            results.append({
+                'id': getattr(st, 'id', None),
+                'reg_no': getattr(st, 'reg_no', None),
+                'username': getattr(getattr(st, 'user', None), 'username', None),
+                'section_id': getattr(st, 'section_id', None),
+                'section_name': str(getattr(st, 'section', '')),
+                'mentor_id': getattr(getattr(m, 'mentor', None), 'id', None),
+                'mentor_name': getattr(getattr(m, 'mentor', None), 'user', None) and getattr(m.mentor.user, 'username', None),
+            })
+
+        return Response({'results': results})
+
     def perform_update(self, serializer):
         user = self.request.user
         perms = get_user_permissions(user)
@@ -192,12 +384,32 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
         from django.db.models import Q
 
         # If caller has global view permission, expose elective assignments
-        # (and still include advisor sections and the user's own assignments).
+        # but restrict visibility to assignments whose subject/row department
+        # matches the user's effective departments (unless superuser).
         if 'academics.view_assigned_subjects' in perms or user.is_superuser:
+            # base: elective assignments
             q = Q(elective_subject__isnull=False)
+            # include advisor sections and own assignments always
             if advisor_section_ids:
                 q |= Q(section_id__in=advisor_section_ids)
             q |= Q(staff__user=getattr(user, 'id', None))
+
+            # if not superuser, further restrict elective assignments to
+            # those belonging to departments the user is effective for
+            if not user.is_superuser:
+                allowed_depts = get_user_effective_departments(user)
+                if allowed_depts:
+                    dept_q = (
+                        Q(section__batch__course__department_id__in=allowed_depts)
+                        | Q(curriculum_row__department_id__in=allowed_depts)
+                        | Q(elective_subject__parent__department_id__in=allowed_depts)
+                    )
+                    # apply department filter only to elective assignments part
+                    q = (Q(elective_subject__isnull=False) & dept_q) | Q(section_id__in=advisor_section_ids) | Q(staff__user=getattr(user, 'id', None))
+                else:
+                    # no effective departments -> fall back to advisor sections and own assignments
+                    q = Q(section_id__in=advisor_section_ids) | Q(staff__user=getattr(user, 'id', None))
+
             return self.queryset.filter(q)
 
         # Default: restrict to advisor sections and own assignments only
@@ -1254,11 +1466,37 @@ class AdvisorMyStudentsView(APIView):
                 if not any(x.pk == s.pk for x in present):
                     present.append(s)
 
+            # annotate mentor info for students (active mappings)
+            try:
+                student_ids = []
+                for v in students_by_section.values():
+                    for st in v:
+                        student_ids.append(st.pk)
+                mentor_map = {}
+                if student_ids:
+                    mm_qs = StudentMentorMap.objects.filter(student_id__in=student_ids, is_active=True).select_related('mentor')
+                    for mm in mm_qs:
+                        try:
+                            mentor_map[mm.student_id] = {'mentor_id': getattr(mm.mentor, 'id', None), 'mentor_name': getattr(getattr(mm.mentor, 'user', None), 'username', None)}
+                        except Exception:
+                            pass
+            except Exception:
+                mentor_map = {}
+
             results = []
             for sec in sections:
                 studs = students_by_section.get(sec.id, [])
                 ser = StudentSimpleSerializer([
-                    {'id': st.pk, 'reg_no': st.reg_no, 'user': getattr(st, 'user', None), 'section_id': getattr(st, 'section_id', None), 'section_name': str(getattr(st, 'section', ''))}
+                    {
+                        'id': st.pk,
+                        'reg_no': st.reg_no,
+                        'user': getattr(st, 'user', None),
+                        'section_id': getattr(st, 'section_id', None),
+                        'section_name': str(getattr(st, 'section', '')),
+                        'has_mentor': (st.pk in mentor_map),
+                        'mentor_id': mentor_map.get(st.pk, {}).get('mentor_id'),
+                        'mentor_name': mentor_map.get(st.pk, {}).get('mentor_name'),
+                    }
                     for st in studs
                 ], many=True)
                 batch = getattr(sec, 'batch', None)

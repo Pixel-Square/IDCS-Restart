@@ -86,11 +86,29 @@ class MeSerializer(serializers.Serializer):
         # Minimal profile payload to avoid touching academic serializers
         if hasattr(obj, 'student_profile') and obj.student_profile is not None:
             sp = obj.student_profile
+            # prefer the active assignment (current_section) over legacy `section` field
+            cur_sec = None
+            try:
+                cur_sec = sp.current_section
+            except Exception:
+                cur_sec = getattr(sp, 'section', None)
+
+            sec_obj = cur_sec
+            batch = getattr(sec_obj, 'batch', None)
+            course = getattr(batch, 'course', None) if batch else None
+            department = getattr(course, 'department', None) if course else None
+
             return {
                 'reg_no': sp.reg_no,
-                'section_id': getattr(sp.section, 'id', None),
-                'section': getattr(sp.section, 'name', None),
-                'batch': sp.batch,
+                'section_id': getattr(sec_obj, 'id', None),
+                'section': getattr(sec_obj, 'name', None),
+                'batch': getattr(batch, 'name', sp.batch),
+                'department': {
+                    'id': getattr(department, 'id', None),
+                    'code': getattr(department, 'code', None),
+                    'short_name': getattr(department, 'short_name', None),
+                    'name': getattr(department, 'name', None),
+                } if department else None,
                 'status': sp.status,
             }
         if hasattr(obj, 'staff_profile') and obj.staff_profile is not None:

@@ -440,6 +440,9 @@ class StudentSimpleSerializer(serializers.Serializer):
     username = serializers.CharField(source='user.username')
     section_id = serializers.IntegerField(allow_null=True)
     section_name = serializers.CharField(allow_null=True)
+    has_mentor = serializers.BooleanField(default=False)
+    mentor_id = serializers.IntegerField(allow_null=True, required=False)
+    mentor_name = serializers.CharField(allow_null=True, required=False)
 
 
 # DayAttendance serializers removed (attendance API being removed).

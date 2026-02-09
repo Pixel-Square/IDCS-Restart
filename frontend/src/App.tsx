@@ -20,6 +20,8 @@ import StaffTimetable from './pages/staff/TimetableView';
 import AssignedSubjectsPage from './pages/staff/AssignedSubjects';
 import PeriodAttendance from './pages/staff/PeriodAttendance';
 import StudentAttendancePage from './pages/student/Attendance';
+import MentorAssign from './pages/advisor/MentorAssign';
+import MyMentees from './pages/staff/MyMentees';
 
 type RoleObj = { name: string };
 type Me = {
@@ -100,6 +102,9 @@ export default function App() {
               <Route path="/advisor/students" element={
                 <ProtectedRoute user={user} requiredRoles={["ADVISOR"]} requiredPermissions={["academics.view_my_students"]} element={<MyStudentsPage />} />
               } />
+              <Route path="/advisor/mentor" element={
+                <ProtectedRoute user={user} requiredRoles={["ADVISOR"]} requiredPermissions={["academics.assign_mentor"]} element={<MentorAssign />} />
+              } />
               <Route path="/student/timetable" element={
                 <ProtectedRoute user={user} requiredProfile={'STUDENT'} requiredPermissions={["timetable.view"]} element={<StudentTimetable />} />
               } />
@@ -115,6 +120,9 @@ export default function App() {
               } />
               <Route path="/staff/period-attendance" element={
                 <ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={['academics.mark_attendance']} element={<PeriodAttendance />} />
+              } />
+              <Route path="/staff/mentees" element={
+                <ProtectedRoute user={user} requiredProfile={'STAFF'} element={<MyMentees />} />
               } />
               <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
             </Routes>

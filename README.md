@@ -44,3 +44,19 @@ app = Application.objects.get(pk=1)
 user = User.objects.get(pk=5)   # example approver
 process_approval(app, user, 'REJECT', remarks='not ok')
 print(app.status, app.current_step_id)
+
+
+from django.contrib.auth import get_user_model
+from academics.models import DepartmentRole
+from academics.utils import get_user_effective_departments
+from accounts.utils import get_user_permissions
+User = get_user_model()
+
+for uname in ('SYED AKBAR S','Avudaiappan T'):   # ← REPLACE with real usernames
+    u = User.objects.filter(username=uname).first()
+    print('---', uname, 'found=', bool(u))
+    print('staff_profile:', getattr(u, 'staff_profile', None))
+    print('roles:', [r.name for r in u.roles.all()])
+    print('dept roles:', list(DepartmentRole.objects.filter(staff__user=u).values('department__code','department__short_name','role','is_active','academic_year__name')))
+    print('effective_depts:', get_user_effective_departments(u))
+    print('permissions:', get_user_permissions(u))

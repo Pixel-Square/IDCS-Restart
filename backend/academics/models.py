@@ -2,11 +2,12 @@ from django.db import models
 from django.db.models import Q
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db.models.signals import post_delete
+from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 from django.utils import timezone
 from datetime import date
 from django.utils.translation import gettext_lazy as _
+from accounts.models import Role
 
 
 class AcademicYear(models.Model):
@@ -471,6 +472,53 @@ class SectionAdvisor(models.Model):
         # Department membership is not enforced at the model level; allow
         # advisors to be assigned across departments. Permission checks
         # remain the responsibility of higher-level logic (views/permissions).
+        pass
+
+
+# Ensure logical `ADVISOR` role is synchronized with SectionAdvisor records.
+@receiver(post_save, sender=SectionAdvisor)
+def _sync_advisor_role_on_save(sender, instance: SectionAdvisor, created, **kwargs):
+    try:
+        sp = instance.advisor
+        user = getattr(sp, 'user', None)
+        if not user:
+            return
+        role_obj, _ = Role.objects.get_or_create(name='ADVISOR')
+        if instance.is_active:
+            if role_obj not in user.roles.all():
+                user.roles.add(role_obj)
+        else:
+            # If deactivated, remove ADVISOR only if no other active SectionAdvisor exists
+            other_active = SectionAdvisor.objects.filter(advisor=sp, is_active=True).exclude(pk=instance.pk).exists()
+            if not other_active:
+                try:
+                    if role_obj in user.roles.all():
+                        user.roles.remove(role_obj)
+                except ValidationError:
+                    # don't crash on validation; leave role in place
+                    pass
+    except Exception:
+        pass
+
+
+@receiver(post_delete, sender=SectionAdvisor)
+def _sync_advisor_role_on_delete(sender, instance: SectionAdvisor, **kwargs):
+    try:
+        sp = instance.advisor
+        user = getattr(sp, 'user', None)
+        if not user:
+            return
+        role_obj = Role.objects.filter(name='ADVISOR').first()
+        if not role_obj:
+            return
+        other_active = SectionAdvisor.objects.filter(advisor=sp, is_active=True).exists()
+        if not other_active:
+            try:
+                if role_obj in user.roles.all():
+                    user.roles.remove(role_obj)
+            except ValidationError:
+                pass
+    except Exception:
         pass
 
 

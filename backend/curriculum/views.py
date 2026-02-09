@@ -9,6 +9,9 @@ from accounts.utils import get_user_permissions
 from academics.utils import get_user_effective_departments
 import logging
 from rest_framework.views import exception_handler, APIView
+from rest_framework.parsers import MultiPartParser, FormParser
+from django.db import transaction
+import csv, io, re
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +40,110 @@ class CurriculumMasterViewSet(viewsets.ModelViewSet):
         obj.save()  # triggers post_save propagation
         return Response({'status': 'propagation triggered'})
 
+class MasterImportView(APIView):
+    """API endpoint to import CurriculumMaster CSV using token/JWT auth.
+
+    Expects multipart/form-data with field `csv_file` containing the CSV.
+    Only users with IQAC/HAA group membership or superusers are allowed.
+    """
+    parser_classes = (MultiPartParser, FormParser)
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request):
+        user = request.user
+        # permission: superuser or IQAC/HAA groups
+        if not (user.is_superuser or user.groups.filter(name__in=['IQAC', 'HAA']).exists()):
+            return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+        uploaded = request.FILES.get('csv_file')
+        if not uploaded:
+            return Response({'detail': 'No file uploaded'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            data = uploaded.read().decode('utf-8')
+            reader = csv.DictReader(io.StringIO(data))
+        except Exception as e:
+            return Response({'detail': f'Failed to read CSV: {e}'}, status=status.HTTP_400_BAD_REQUEST)
+
+        created = 0
+        updated = 0
+        errors = []
+        from academics.models import Semester
+        from academics.models import Department
+
+        with transaction.atomic():
+            for idx, row in enumerate(reader, start=1):
+                try:
+                    reg = row.get('regulation') or ''
+                    sem_raw = (row.get('semester') or '').strip()
+                    m = re.search(r"(\d+)", sem_raw)
+                    sem_num = int(m.group(1)) if m else 0
+                    if not reg or sem_num <= 0:
+                        raise ValueError('regulation and semester required')
+
+                    semester_obj, _ = Semester.objects.get_or_create(number=sem_num)
+
+                    cc = row.get('course_code') or None
+                    cname = (row.get('course_name') or '').strip() or None
+                    instance = None
+                    if cc:
+                        instance = CurriculumMaster.objects.filter(regulation=reg, semester__number=sem_num, course_code=cc).first()
+                    else:
+                        if cname:
+                            instance = CurriculumMaster.objects.filter(regulation=reg, semester__number=sem_num, course_code__isnull=True, course_name__iexact=cname).first()
+
+                    vals = {
+                        'regulation': reg,
+                        'semester': semester_obj,
+                        'course_code': cc,
+                        'course_name': row.get('course_name') or None,
+                        'category': row.get('category') or '',
+                        'class_type': row.get('class_type') or 'THEORY',
+                        'l': int(row.get('l') or 0),
+                        't': int(row.get('t') or 0),
+                        'p': int(row.get('p') or 0),
+                        's': int(row.get('s') or 0),
+                        'c': int(row.get('c') or 0),
+                        'internal_mark': int(row.get('internal_mark') or 0),
+                        'external_mark': int(row.get('external_mark') or 0),
+                        'for_all_departments': (str(row.get('for_all_departments') or '').strip().lower() in ('1','true','yes')),
+                        'editable': (str(row.get('editable') or '').strip().lower() in ('1','true','yes')),
+                    }
+
+                    if instance:
+                        for k, v in vals.items():
+                            setattr(instance, k, v)
+                        instance.save()
+                        updated += 1
+                    else:
+                        instance = CurriculumMaster.objects.create(**vals)
+                        created += 1
+
+                    deps = (row.get('departments') or '')
+                    if deps:
+                        raw = deps.strip().strip('"').strip("'")
+                        dep_list = [d.strip() for d in re.split(r'[;,]\s*', raw) if d.strip()]
+                        dep_objs = []
+                        unmatched = []
+                        for d in dep_list:
+                            dep = Department.objects.filter(code__iexact=d).first()
+                            if not dep and d.isdigit():
+                                dep = Department.objects.filter(id=int(d)).first()
+                            if dep:
+                                dep_objs.append(dep)
+                            else:
+                                unmatched.append(d)
+                        if dep_objs:
+                            instance.departments.set(dep_objs)
+                            instance.for_all_departments = False
+                            instance.save()
+                        if unmatched:
+                            errors.append(f'Row {idx}: unmatched departments: {",".join(unmatched)}')
+                except Exception as e:
+                    errors.append(f'Row {idx}: {e}')
+
+        resp = {'created': created, 'updated': updated, 'errors': errors}
+        return Response(resp)
 
 class CurriculumDepartmentViewSet(viewsets.ModelViewSet):
     queryset = CurriculumDepartment.objects.all().select_related('department', 'master')

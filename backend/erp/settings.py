@@ -111,4 +111,12 @@ SIMPLE_JWT = {
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
 
-CORS_ALLOW_ALL_ORIGINS = True
+# Restrict CORS to explicit origins when credentials (cookies/auth) are used.
+# Wildcard '*' is invalid with `Access-Control-Allow-Credentials: true`.
+CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOWED_ORIGINS = [
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+]
+# Allow browser to include credentials (cookies or HTTP auth) in cross-origin requests
+CORS_ALLOW_CREDENTIALS = True

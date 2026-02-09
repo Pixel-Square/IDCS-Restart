@@ -37,6 +37,71 @@ export default function MasterList() {
       .finally(() => setLoading(false));
   }, []);
 
+  // helpers for download / import
+  const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+
+  function csvEscape(v: any) {
+    if (v === null || v === undefined) return '';
+    const s = String(v);
+    // wrap in quotes if contains comma or quote or newline
+    if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+      return '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
+  }
+
+  function handleDownloadVisible() {
+    const rows = data.filter(m => (!selectedReg || m.regulation === selectedReg) && (!selectedSem || m.semester === selectedSem) && m.editable === true);
+    if (!rows.length) { alert('No editable subjects in current view'); return }
+    const headers = ['regulation','semester','course_code','course_name','category','class_type','l','t','p','s','c','internal_mark','external_mark','for_all_departments','editable','departments'];
+    const lines = [headers.join(',')];
+    for (const m of rows) {
+      const deps = (m.for_all_departments ? '' : (m.departments_display || []).map((d:any)=>d.code).join(','));
+      const vals = [m.regulation, m.semester, m.course_code || '', m.course_name || '', m.category || '', m.class_type || '', m.l ?? 0, m.t ?? 0, m.p ?? 0, m.s ?? 0, m.c ?? 0, m.internal_mark ?? '', m.external_mark ?? '', m.for_all_departments ? 'True' : 'False', m.editable ? 'True' : 'False', deps];
+      lines.push(vals.map(csvEscape).join(','));
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `department_curriculum_editable_${selectedReg || 'all'}_${selectedSem || 'all'}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleImportFile(e: React.ChangeEvent<HTMLInputElement>){
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    if (!confirm(`Upload ${file.name} to import masters?`)) { e.currentTarget.value = ''; return }
+    try{
+      const fd = new FormData();
+      fd.append('csv_file', file, file.name);
+      // Use native fetch so browser sets Content-Type boundary; include Authorization header manually
+      const token = window.localStorage.getItem('access');
+      const headers: any = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const res = await fetch(`${API_BASE}/api/curriculum/master/import/`, { method: 'POST', body: fd, headers });
+      if (!res.ok) {
+        // network-level failures and CORS preflight errors often throw before here
+        let txt = '';
+        try{ txt = await res.text() }catch(_){ txt = res.statusText }
+        alert('Import failed: ' + (txt || res.statusText));
+      } else {
+        alert('Import request submitted; refresh to see changes.');
+        // re-fetch masters
+        setLoading(true);
+        fetchMasters().then(r=> setData(r)).catch(()=>{}).finally(()=> setLoading(false));
+      }
+    }catch(err:any){ console.error(err); alert('Import failed: '+ (err.message || err)); }
+    // Safely clear the file input value (element may be null if React re-rendered)
+    try{
+      const inp = document.getElementById('master-import-file') as HTMLInputElement | null;
+      if (inp) inp.value = '';
+    }catch(_){ }
+  }
+
   // show saved message when navigated from editor after create/update
   useEffect(() => {
     const state: any = loc.state as any;
@@ -65,17 +130,25 @@ export default function MasterList() {
           <h2 className="curriculum-header-title">Department Curriculum</h2>
           <div className="curriculum-header-sub">View and manage all department curriculum entries.</div>
         </div>
-        <div style={{ marginLeft: 'auto' }}>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
           {(() => {
             try {
               const roles = JSON.parse(localStorage.getItem('roles') || '[]');
               const isIQAC = Array.isArray(roles) && roles.some((r: string) => String(r).toLowerCase() === 'iqac');
               if (isIQAC) return (
-                <Link to="/curriculum/master/new" className="btn-primary" style={{ textDecoration: 'none', padding: '8px 16px', borderRadius: 8 }}>New Master</Link>
+                <>
+                  <Link to="/curriculum/master/new" className="btn-primary" style={{ textDecoration: 'none', padding: '8px 16px', borderRadius: 8 }}>New Master</Link>
+                </>
               );
             } catch (e) {}
             return null;
           })()}
+          {/* Download editable subjects and import CSV */}
+          <button className="btn" onClick={() => handleDownloadVisible()} style={{ marginLeft: 8 }}>Download Editable</button>
+          <label className="btn" style={{ marginLeft: 8, cursor: 'pointer' }}>
+            Import CSV
+            <input id="master-import-file" type="file" accept=".csv" style={{ display: 'none' }} onChange={e => handleImportFile(e)} />
+          </label>
         </div>
       </div>
       {uniqueRegs.length > 0 && (

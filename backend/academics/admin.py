@@ -226,14 +226,27 @@ class StudentProfileAdmin(admin.ModelAdmin):
                                 skipped += 1
                                 continue
 
-                        # section may be provided as 'BatchName :: SectionName' (exact match)
+                        # section may be provided as one of:
+                        #  - 'Batch :: Section'
+                        #  - 'DEPT_SHORT :: Batch :: Section'  (new template format)
                         sec = None
                         if section_name:
                             if '::' in section_name:
-                                parts = [p.strip() for p in section_name.split('::', 1)]
-                                if len(parts) == 2:
+                                parts = [p.strip() for p in section_name.split('::')]
+                                if len(parts) == 3:
+                                    # Dept short, Batch, Section
+                                    dept_short, bpart, spart = parts
+                                    sec = Section.objects.filter(
+                                        name=spart,
+                                        batch__name=bpart,
+                                        batch__course__department__short_name__iexact=dept_short,
+                                    ).select_related('batch').first()
+                                elif len(parts) == 2:
                                     bpart, spart = parts
                                     sec = Section.objects.filter(name=spart, batch__name=bpart).select_related('batch').first()
+                                else:
+                                    # unexpected format; try best-effort match by section name
+                                    sec = Section.objects.filter(name=parts[-1]).select_related('batch').first()
                             else:
                                 # fallback: if batch provided, try match by both
                                 if batch_name:
@@ -301,9 +314,15 @@ class StudentProfileAdmin(admin.ModelAdmin):
 
         # prepare lookup lists for batches and composite sections
         batches = list(Batch.objects.values_list('name', flat=True).distinct())
-        # build composite 'Batch :: Section' entries
-        sections_qs = Section.objects.select_related('batch').all()
-        sections = [f"{s.batch.name} :: {s.name}" for s in sections_qs]
+        # build composite 'DEPT :: Batch :: Section' entries (department short_name)
+        sections_qs = Section.objects.select_related('batch__course__department').all()
+        sections = []
+        for s in sections_qs:
+            dept = getattr(getattr(s, 'batch', None), 'course', None)
+            dept_obj = getattr(dept, 'department', None) if dept else None
+            dept_short = getattr(dept_obj, 'short_name', None) or getattr(dept_obj, 'code', '') if dept_obj else ''
+            # format: "DEPT_SHORT :: BATCH :: SECTION"
+            sections.append(f"{dept_short} :: {s.batch.name} :: {s.name}")
 
         # create hidden sheet with lists
         lists = wb.create_sheet(title='lists')
@@ -343,6 +362,7 @@ class StudentProfileAdmin(admin.ModelAdmin):
 @admin.register(StaffProfile)
 class StaffProfileAdmin(admin.ModelAdmin):
     form = StaffProfileForm
+    change_list_template = 'admin/academics/staffprofile_change_list.html'
     list_display = ('user', 'staff_id', 'current_department_display', 'designation', 'status')
     search_fields = ('staff_id', 'user__username', 'user__email')
     list_filter = ('department', 'designation')
@@ -382,6 +402,208 @@ class StaffProfileAdmin(admin.ModelAdmin):
             return None
         return getattr(dept, 'code', str(dept))
     current_department_display.short_description = 'Current Department'
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom = [
+            path('import-staff/', self.admin_site.admin_view(self.import_staff), name='academics_staff_import'),
+            path('download-template-staff/', self.admin_site.admin_view(self.download_template_staff), name='academics_staff_template'),
+        ]
+        return custom + urls
+
+    def import_staff(self, request):
+        """Admin view to import staff profiles from an Excel (.xlsx) file.
+
+        Expected columns (first row header):
+          staff_id, username, email, first_name, last_name, department, designation, password
+        """
+        if request.method == 'POST':
+            uploaded = request.FILES.get('xlsx_file')
+            if not uploaded:
+                messages.error(request, 'No file uploaded')
+                return redirect(request.path)
+
+            User = get_user_model()
+            wb = None
+            try:
+                wb = openpyxl.load_workbook(uploaded)
+            except Exception as e:
+                messages.error(request, f'Failed to read Excel file: {e}')
+                return redirect(request.path)
+
+            sheet = wb.active
+            rows = list(sheet.iter_rows(values_only=True))
+            if not rows or len(rows) < 2:
+                messages.error(request, 'Excel file contains no data')
+                return redirect(request.path)
+
+            headers = [str(h).strip().lower() if h is not None else '' for h in rows[0]]
+            col_index = {name: idx for idx, name in enumerate(headers)}
+            required = ['staff_id']
+            missing = [r for r in required if r not in col_index]
+            if missing:
+                messages.error(request, f'Missing required columns: {missing}')
+                return redirect(request.path)
+
+            created = 0
+            skipped = 0
+            errors = []
+            for i, row in enumerate(rows[1:], start=2):
+                try:
+                    staff_id = row[col_index.get('staff_id')] if 'staff_id' in col_index else None
+                    if not staff_id:
+                        skipped += 1
+                        continue
+                    staff_id = str(staff_id).strip()
+                    username = None
+                    if 'username' in col_index:
+                        username = row[col_index.get('username')]
+                    email = None
+                    if 'email' in col_index:
+                        email = row[col_index.get('email')]
+                    first_name = row[col_index.get('first_name')] if 'first_name' in col_index else ''
+                    last_name = row[col_index.get('last_name')] if 'last_name' in col_index else ''
+                    department_name = row[col_index.get('department')] if 'department' in col_index else None
+                    designation = row[col_index.get('designation')] if 'designation' in col_index else ''
+                    password = row[col_index.get('password')] if 'password' in col_index else None
+                    role_value = row[col_index.get('role')] if 'role' in col_index else None
+
+                    username = str(username).strip() if username else staff_id
+                    email = str(email).strip() if email else ''
+                    first_name = str(first_name).strip() if first_name else ''
+                    last_name = str(last_name).strip() if last_name else ''
+                    department_name = str(department_name).strip() if department_name else None
+                    designation = str(designation).strip() if designation else ''
+                    password = str(password) if password else staff_id
+
+                    with transaction.atomic():
+                        user, created_user = User.objects.get_or_create(username=username, defaults={'email': email, 'first_name': first_name, 'last_name': last_name})
+                        if not created_user:
+                            updated = False
+                            if email and (not user.email):
+                                user.email = email; updated = True
+                            if first_name and (not user.first_name):
+                                user.first_name = first_name; updated = True
+                            if last_name and (not user.last_name):
+                                user.last_name = last_name; updated = True
+                            if updated:
+                                user.save()
+                        if created_user or (not user.has_usable_password()):
+                            user.set_password(password)
+                            user.save()
+
+                        sp, sp_created = StaffProfile.objects.get_or_create(user=user, defaults={'staff_id': staff_id, 'designation': designation})
+                        if not sp_created:
+                            if sp.staff_id != staff_id:
+                                errors.append(f'Row {i}: existing user {username} has different staff_id ({sp.staff_id})')
+                                skipped += 1
+                                continue
+
+                        # resolve department by code or name
+                        if department_name:
+                            dept = Department.objects.filter(models.Q(code__iexact=department_name) | models.Q(name__iexact=department_name) | models.Q(short_name__iexact=department_name)).first()
+                            if dept:
+                                sp.department = dept
+                                sp.save(update_fields=['department'])
+
+                        # If a logical department role (HOD/AHOD) was provided, update DepartmentRole
+                        try:
+                            rv = str(role_value).strip().upper() if role_value is not None else ''
+                        except Exception:
+                            rv = ''
+                        if rv in ('HOD', 'AHOD'):
+                            try:
+                                # re-resolve department if not set
+                                if not getattr(sp, 'department', None) and department_name:
+                                    dept = Department.objects.filter(models.Q(code__iexact=department_name) | models.Q(name__iexact=department_name) | models.Q(short_name__iexact=department_name)).first()
+                                if dept:
+                                    # choose active academic year if available
+                                    ay = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.order_by('-id').first()
+                                    if ay:
+                                        # deactivate existing HOD for the department/year when assigning a new HOD
+                                        if rv == 'HOD':
+                                            DepartmentRole.objects.filter(department=dept, academic_year=ay, role='HOD', is_active=True).update(is_active=False)
+                                        # create the new department role record
+                                        DepartmentRole.objects.create(department=dept, staff=sp, role=rv, academic_year=ay, is_active=True)
+                                        # also ensure the logical Role (HOD/AHOD) is assigned to the user
+                                        try:
+                                            logical_role, _ = Role.objects.get_or_create(name=rv)
+                                            if logical_role not in user.roles.all():
+                                                user.roles.add(logical_role)
+                                        except ValidationError as ve:
+                                            errors.append(f'Row {i}: failed to assign logical role {rv}: {ve}')
+                                        except Exception as e:
+                                            errors.append(f'Row {i}: error assigning logical role {rv}: {e}')
+                            except Exception as e:
+                                errors.append(f'Row {i}: failed to set department role {rv}: {e}')
+
+                        if designation and (not sp.designation):
+                            sp.designation = designation
+                            sp.save(update_fields=['designation'])
+
+                        # ensure user is in 'staff' group
+                        try:
+                            grp, _ = Group.objects.get_or_create(name='staff')
+                            if grp not in user.groups.all():
+                                user.groups.add(grp)
+                        except Exception:
+                            pass
+
+                        # ensure logical Role 'STAFF'
+                        try:
+                            role_obj, _ = Role.objects.get_or_create(name='STAFF')
+                            if role_obj not in user.roles.all():
+                                user.roles.add(role_obj)
+                        except ValidationError as ve:
+                            errors.append(f'Row {i}: failed to assign role STAFF: {ve}')
+                        except Exception as e:
+                            errors.append(f'Row {i}: error assigning role STAFF: {e}')
+
+                        created += 1
+                except Exception as e:
+                    errors.append(f'Row {i}: {e}')
+
+            msg = f'Staff import completed: created_or_updated={created} skipped={skipped} errors={len(errors)}'
+            if errors:
+                for err in errors[:10]:
+                    messages.error(request, err)
+            messages.success(request, msg)
+            return redirect(request.path)
+
+        context = dict(self.admin_site.each_context(request))
+        context.update({'title': 'Import Staff from Excel'})
+        return render(request, 'admin/academics/import_staff.html', context)
+
+    def download_template_staff(self, request):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = 'import'
+        headers = ['staff_id', 'username', 'email', 'first_name', 'last_name', 'department', 'designation', 'password']
+        ws.append(headers)
+        ws.append(['STAFF001', 'jsmith', 'jsmith@example.edu', 'John', 'Smith', 'CSE', 'Lecturer', 'changeme'])
+
+        # departments list (use short_name for dropdown values)
+        depts = list(Department.objects.values_list('short_name', flat=True))
+        lists = wb.create_sheet(title='lists')
+        for i, d in enumerate(depts, start=1):
+            lists.cell(row=i, column=1, value=d)
+        lists.sheet_state = 'hidden'
+
+        try:
+            from openpyxl.worksheet.datavalidation import DataValidation
+            dv = DataValidation(type='list', formula1=f"=lists!$A$1:$A${len(depts) or 1}", allow_blank=True)
+            ws.add_data_validation(dv)
+            dv.add('F2:F500')
+        except Exception:
+            pass
+
+        from io import BytesIO
+        bio = BytesIO()
+        wb.save(bio)
+        bio.seek(0)
+        resp = HttpResponse(bio.read(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        resp['Content-Disposition'] = 'attachment; filename="staff_import_template.xlsx"'
+        return resp
 
 
 @admin.register(StudentSectionAssignment)
