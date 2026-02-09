@@ -8,10 +8,12 @@ import {
   fetchPublishedLabSheet,
   fetchPublishedSsa1,
   TeachingAssignmentItem,
+  fetchClassTypeWeights,
 } from '../services/obe';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
 import { fetchDeptRow } from '../services/curriculum';
 import { lsGet, lsSet } from '../utils/localStorage';
+import { isLabClassType, normalizeClassType } from '../constants/classTypes';
 
 type Props = {
   courseId: string;
@@ -147,8 +149,8 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
   const [masterCfg, setMasterCfg] = useState<any>(null);
 
   const [classType, setClassType] = useState<string | null>(null);
-  const normalizedClassType = useMemo(() => String(classType ?? '').trim().toUpperCase(), [classType]);
-  const isLabCourse = normalizedClassType === 'LAB';
+  const normalizedClassType = useMemo(() => normalizeClassType(classType), [classType]);
+  const isLabCourse = useMemo(() => isLabClassType(classType), [classType]);
 
   const [tas, setTas] = useState<TeachingAssignmentItem[]>([]);
   const [taError, setTaError] = useState<string | null>(null);
@@ -169,15 +171,17 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
   const [search, setSearch] = useState('');
 
   const configKey = useMemo(() => `co_attainment_cfg_${courseId}`, [courseId]);
-  const weights = useMemo(() => {
-    const stored = lsGet<any>(configKey);
+  const [weights, setWeights] = useState(() => {
+    const stored = lsGet<any>(`co_attainment_cfg_${courseId}`);
     const w = stored?.weights;
     return {
       ssa1: Number.isFinite(Number(w?.ssa1)) ? Number(w.ssa1) : DEFAULT_WEIGHTS.ssa1,
       cia1: Number.isFinite(Number(w?.cia1)) ? Number(w.cia1) : DEFAULT_WEIGHTS.cia1,
       formative1: Number.isFinite(Number(w?.formative1)) ? Number(w.formative1) : DEFAULT_WEIGHTS.formative1,
     };
-  }, [configKey]);
+  });
+  const [weightsSource, setWeightsSource] = useState<'default' | 'local' | 'server'>('default');
+  const [lastWeightsDebug, setLastWeightsDebug] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -250,6 +254,64 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
       mounted = false;
     };
   }, [selectedTaId, tas]);
+
+  // When classType changes, attempt to load IQAC weights from server, else local
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      if (!classType) return;
+      setLastWeightsDebug('Loading IQAC weights…');
+      try {
+        const remote = await fetchClassTypeWeights();
+        if (!mounted) return;
+        if (remote && typeof remote === 'object') {
+          const k = normalizeClassType(classType);
+          const gw = remote[k];
+          if (gw && typeof gw === 'object') {
+            const newW = {
+              ssa1: Number.isFinite(Number(gw.ssa1)) ? Number(gw.ssa1) : DEFAULT_WEIGHTS.ssa1,
+              cia1: Number.isFinite(Number(gw.cia1)) ? Number(gw.cia1) : DEFAULT_WEIGHTS.cia1,
+              formative1: Number.isFinite(Number(gw.formative1)) ? Number(gw.formative1) : DEFAULT_WEIGHTS.formative1,
+            };
+            setWeights(newW);
+            setWeightsSource('server');
+            setLastWeightsDebug(`Applied server weights for ${k}`);
+            try { lsSet(configKey, { weights: newW }); } catch {}
+            return;
+          }
+          setLastWeightsDebug(`Server weights loaded but no entry for ${normalizeClassType(classType)}`);
+        }
+      } catch (e: any) {
+        setLastWeightsDebug(`Server fetch failed: ${String(e?.message || e)}`);
+      }
+
+      // fallback local
+      try {
+        const global = lsGet<any>('iqac_class_type_weights');
+        if (global && typeof global === 'object') {
+          const k = normalizeClassType(classType);
+          const gw = global[k];
+          if (gw && typeof gw === 'object') {
+            const newW = {
+              ssa1: Number.isFinite(Number(gw.ssa1)) ? Number(gw.ssa1) : DEFAULT_WEIGHTS.ssa1,
+              cia1: Number.isFinite(Number(gw.cia1)) ? Number(gw.cia1) : DEFAULT_WEIGHTS.cia1,
+              formative1: Number.isFinite(Number(gw.formative1)) ? Number(gw.formative1) : DEFAULT_WEIGHTS.formative1,
+            };
+            setWeights(newW);
+            setWeightsSource('local');
+            setLastWeightsDebug(`Applied local weights for ${k}`);
+            try { lsSet(configKey, { weights: newW }); } catch {}
+            return;
+          }
+        }
+      } catch (e: any) {
+        setLastWeightsDebug(`Local read failed: ${String(e?.message || e)}`);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [classType, configKey]);
 
   const questions = useMemo<QuestionDef[]>(() => {
     const qs = masterCfg?.assessments?.cia1?.questions;

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { lsGet, lsSet } from '../utils/localStorage';
+import { normalizeClassType } from '../constants/classTypes';
 import Cia1Entry from './Cia1Entry';
 import Cia2Entry from './Cia2Entry';
 import Formative1List from './Formative1List';
@@ -11,8 +12,10 @@ import ReviewEntry from './ReviewEntry';
 import Ssa1Entry from './Ssa1Entry';
 import Ssa2Entry from './Ssa2Entry';
 import { DraftAssessmentKey, fetchMyTeachingAssignments, iqacResetAssessment, TeachingAssignmentItem } from '../services/obe';
+import * as OBE from '../services/obe';
+import FacultyAssessmentPanel from './FacultyAssessmentPanel';
 
-type TabKey = 'dashboard' | 'ssa1' | 'ssa2' | 'formative1' | 'formative2' | 'cia1' | 'cia2' | 'model';
+type TabKey = 'dashboard' | 'ssa1' | 'review1' | 'ssa2' | 'review2' | 'formative1' | 'formative2' | 'cia1' | 'cia2' | 'model';
 
 type MarkRow = { studentId: string; mark: number };
 
@@ -20,6 +23,7 @@ type Props = {
   subjectId: string;
   classType?: string | null;
   questionPaperType?: string | null;
+  enabledAssessments?: string[] | null;
   teachingAssignmentsOverride?: TeachingAssignmentItem[];
   fixedTeachingAssignmentId?: number;
   iqacResetEnabled?: boolean;
@@ -37,12 +41,24 @@ const BASE_TABS: { key: TabKey; label: string }[] = [
   { key: 'model', label: 'MODEL' },
 ];
 
-function normalizeClassType(classType: string | null | undefined) {
-  return String(classType ?? '').trim().toUpperCase();
+function normalizeEnabledAssessments(enabledAssessments: string[] | null | undefined): Set<string> {
+  const arr = Array.isArray(enabledAssessments) ? enabledAssessments : [];
+  return new Set(arr.map((x) => String(x || '').trim().toLowerCase()).filter(Boolean));
 }
 
-function getVisibleTabs(classType: string | null | undefined): Array<{ key: TabKey; label: string }> {
+function getVisibleTabs(classType: string | null | undefined, enabledAssessments?: string[] | null): Array<{ key: TabKey; label: string }> {
   const ct = normalizeClassType(classType);
+  const enabled = normalizeEnabledAssessments(enabledAssessments);
+
+  // SPECIAL: show only explicitly enabled assessments (+ dashboard)
+  if (ct === 'SPECIAL') {
+    const allowedKeys = new Set<TabKey>(['dashboard']);
+    // Only these six are supported for SPECIAL, per requirement
+    (['ssa1', 'ssa2', 'formative1', 'formative2', 'cia1', 'cia2'] as const).forEach((k) => {
+      if (enabled.has(k)) allowedKeys.add(k);
+    });
+    return BASE_TABS.filter((t) => allowedKeys.has(t.key));
+  }
 
   // PRACTICAL: show only dashboard + Review variants for CIAs and MODEL
   if (ct === 'PRACTICAL') {
@@ -52,6 +68,20 @@ function getVisibleTabs(classType: string | null | undefined): Array<{ key: TabK
       if (t.key === 'model') return { ...t, label: 'MODEL Review' };
       return t;
     });
+  }
+
+  // TCPR: show SSA1/SSA2 AND separate Review 1/Review 2 pages; hide Formatives.
+  if (ct === 'TCPR') {
+    return [
+      { key: 'dashboard', label: 'Dashboard' },
+      { key: 'ssa1', label: 'SSA1' },
+      { key: 'review1', label: 'Review 1' },
+      { key: 'cia1', label: 'CIA 1' },
+      { key: 'ssa2', label: 'SSA2' },
+      { key: 'review2', label: 'Review 2' },
+      { key: 'cia2', label: 'CIA 2' },
+      { key: 'model', label: 'MODEL' },
+    ];
   }
   // Requirement:
   // - THEORY / TCPR: show SSA1, SSA2, Formatives, CIA1, CIA2, MODEL
@@ -223,6 +253,7 @@ export default function MarkEntryTabs({
   subjectId,
   classType,
   questionPaperType,
+  enabledAssessments,
   teachingAssignmentsOverride,
   fixedTeachingAssignmentId,
   iqacResetEnabled,
@@ -232,10 +263,16 @@ export default function MarkEntryTabs({
   const [tas, setTas] = useState<TeachingAssignmentItem[]>([]);
   const [taError, setTaError] = useState<string | null>(null);
   const [selectedTaId, setSelectedTaId] = useState<number | null>(null);
+  const [facultyEnabledAssessments, setFacultyEnabledAssessments] = useState<string[] | null | undefined>(undefined);
+  const [showFacultyPanel, setShowFacultyPanel] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
 
-  const visibleTabs = useMemo(() => getVisibleTabs(classType), [classType]);
+  const isSpecial = useMemo(() => normalizeClassType(classType) === 'SPECIAL', [classType]);
+
+  // If faculty has set enabled assessments for the selected TA, prefer that.
+  const effectiveEnabled = facultyEnabledAssessments === undefined ? enabledAssessments : facultyEnabledAssessments;
+  const visibleTabs = useMemo(() => getVisibleTabs(classType, effectiveEnabled), [classType, enabledAssessments, facultyEnabledAssessments]);
 
   useEffect(() => {
     if (!subjectId) return;
@@ -298,6 +335,34 @@ export default function MarkEntryTabs({
     if (typeof fixedTeachingAssignmentId === 'number') return;
     lsSet(`markEntry_selectedTa_${subjectId}`, selectedTaId);
   }, [subjectId, selectedTaId, fixedTeachingAssignmentId]);
+
+  useEffect(() => {
+    let mounted = true;
+    if (!subjectId) return;
+    if (selectedTaId == null) {
+      setFacultyEnabledAssessments(undefined);
+      return;
+    }
+    if (!isSpecial) {
+      // Exam selection applies only to SPECIAL courses
+      setFacultyEnabledAssessments(undefined);
+      return;
+    }
+    // Load faculty-specific enabled assessments for the selected TA
+    (async () => {
+      try {
+        const info = await OBE.fetchTeachingAssignmentEnabledAssessmentsInfo(Number(selectedTaId));
+        const arr = info?.enabled_assessments;
+        if (!mounted) return;
+        setFacultyEnabledAssessments(Array.isArray(arr) && arr.length ? arr : null);
+      } catch (e: any) {
+        if (!mounted) return;
+        setFacultyEnabledAssessments(undefined);
+        setTaError(e?.message || 'Failed to load faculty enabled assessments');
+      }
+    })();
+    return () => { mounted = false; };
+  }, [subjectId, selectedTaId, isSpecial]);
 
   useEffect(() => {
     if (!subjectId) return;
@@ -383,7 +448,27 @@ export default function MarkEntryTabs({
         <div style={{ fontSize: 12, color: '#6b7280', alignSelf: 'center' }}>
           Student rows load from the selected section roster.
         </div>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+          {Boolean(isSpecial && selectedTaId) ? (
+            <button className="obe-btn" onClick={() => setShowFacultyPanel((s) => !s)}>
+              Show exams
+            </button>
+          ) : null}
+        </div>
       </div>
+
+      {isSpecial && showFacultyPanel && selectedTaId ? (
+        <div style={{ marginBottom: 12 }}>
+          <FacultyAssessmentPanel
+            teachingAssignmentId={selectedTaId ?? undefined}
+            onSaved={(arr) => {
+              setFacultyEnabledAssessments(Array.isArray(arr) && arr.length ? arr : null);
+              setShowFacultyPanel(false);
+            }}
+            onClose={() => setShowFacultyPanel(false)}
+          />
+        </div>
+      ) : null}
 
       {/* IQAC reset (per assessment) */}
       {Boolean(iqacResetEnabled) && active !== 'dashboard' && selectedTaId != null ? (
@@ -463,8 +548,12 @@ export default function MarkEntryTabs({
                 ? (normalizeClassType(classType) === 'TCPL' ? 'Enter and manage LAB-2 marks (experiments + totals).' : 'Enter and manage Formative-2 assessment marks with BTL mapping.')
               : active === 'ssa1'
                 ? 'SSA1 sheet-style entry (CO + BTL attainment) matching the Excel layout.'
+              : active === 'review1'
+                ? 'Review 1 sheet-style entry (CO + BTL attainment) matching the Excel layout.'
               : active === 'ssa2'
                 ? 'SSA2 sheet-style entry (CO + BTL attainment) matching the Excel layout.'
+              : active === 'review2'
+                ? 'Review 2 sheet-style entry (CO + BTL attainment) matching the Excel layout.'
               : active === 'cia1'
                 ? (normalizeClassType(classType) === 'LAB'
                     ? 'CIA 1 LAB entry (CO-1/CO-2 experiments + CIA exam)'
@@ -505,9 +594,29 @@ export default function MarkEntryTabs({
                 <Formative2List subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
               )
             ) : active === 'ssa1' ? (
-              <Ssa1Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
+              <Ssa1Entry
+                subjectId={subjectId}
+                teachingAssignmentId={selectedTaId ?? undefined}
+              />
+            ) : active === 'review1' ? (
+              <Ssa1Entry
+                subjectId={subjectId}
+                teachingAssignmentId={selectedTaId ?? undefined}
+                assessmentKey="review1"
+                label="Review 1"
+              />
             ) : active === 'ssa2' ? (
-              <Ssa2Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
+              <Ssa2Entry
+                subjectId={subjectId}
+                teachingAssignmentId={selectedTaId ?? undefined}
+              />
+            ) : active === 'review2' ? (
+              <Ssa2Entry
+                subjectId={subjectId}
+                teachingAssignmentId={selectedTaId ?? undefined}
+                assessmentKey="review2"
+                label="Review 2"
+              />
             ) : active === 'cia1' ? (
               normalizeClassType(classType) === 'LAB' ? (
                 <LabCourseMarksEntry

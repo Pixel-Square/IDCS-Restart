@@ -7,10 +7,13 @@ import LCAInstructionsPage from './LCAInstructionsPage';
 import COAttainmentPage from './COAttainmentPage';
 import CQIPage from './CQIPage';
 import LCAPage from './LCAPage';
+import InternalMarkCoursePage from './InternalMarkCoursePage';
 import { fetchMyTeachingAssignments } from '../services/obe';
 import { fetchDeptRows } from '../services/curriculum';
+import { fetchSpecialCourseEnabledAssessments } from '../services/obe';
+import { normalizeClassType } from '../constants/classTypes';
 
-type TabKey = 'cdap' | 'articulation' | 'marks' | 'lca_instructions' | 'lca' | 'co_attainment' | 'cqi';
+type TabKey = 'cdap' | 'articulation' | 'marks' | 'lca_instructions' | 'lca' | 'co_attainment' | 'internal_mark' | 'cqi';
 
 export default function CourseOBEPage(): JSX.Element {
   const { code } = useParams<{ code: string }>();
@@ -33,6 +36,7 @@ export default function CourseOBEPage(): JSX.Element {
     else if (path.includes('/articulation')) setActiveTab('articulation');
     else if (path.includes('/marks')) setActiveTab('marks');
     else if (path.includes('/co_attainment')) setActiveTab('co_attainment');
+    else if (path.includes('/internal_mark') || path.includes('/internal-mark')) setActiveTab('internal_mark');
     else if (path.includes('/cqi')) setActiveTab('cqi');
     else setActiveTab('marks');
   }, [location]);
@@ -50,6 +54,7 @@ export default function CourseOBEPage(): JSX.Element {
   const [courseName, setCourseName] = React.useState<string | null>(null);
   const [courseClassType, setCourseClassType] = React.useState<string | null>(null);
   const [courseQpType, setCourseQpType] = React.useState<string | null>(null);
+  const [courseEnabledAssessments, setCourseEnabledAssessments] = React.useState<string[] | null>(null);
 
   React.useEffect(() => {
     let mounted = true;
@@ -96,6 +101,20 @@ export default function CourseOBEPage(): JSX.Element {
         }
         const qp = String((pick as any)?.question_paper_type || '').trim();
         setCourseQpType(qp || null);
+
+        if (normalizeClassType((pick as any)?.class_type) === 'SPECIAL') {
+          // Signal SPECIAL immediately to avoid intermediate non-SPECIAL fetches.
+          setCourseEnabledAssessments([]);
+          try {
+            const ea = await fetchSpecialCourseEnabledAssessments(code);
+            setCourseEnabledAssessments(Array.isArray(ea) ? ea : []);
+          } catch {
+            const ea = (pick as any)?.enabled_assessments;
+            setCourseEnabledAssessments(Array.isArray(ea) ? ea.map((x: any) => String(x).trim().toLowerCase()).filter(Boolean) : []);
+          }
+        } else {
+          setCourseEnabledAssessments(null);
+        }
       } catch (e) {
         // ignore
       }
@@ -135,6 +154,7 @@ export default function CourseOBEPage(): JSX.Element {
               { key: 'lca_instructions', label: 'LCA Instructions' },
               { key: 'lca', label: 'LCA' },
               { key: 'co_attainment', label: 'CO ATTAINMENT' },
+              { key: 'internal_mark', label: 'INTERNAL MARK' },
               { key: 'cqi', label: 'CQI' },
             ].map((t) => {
               const isActive = activeTab === (t.key as TabKey);
@@ -164,10 +184,11 @@ export default function CourseOBEPage(): JSX.Element {
               <CDAPPage courseId={courseId} showHeader={false} showCourseInput={false} />
             )}
             {activeTab === 'articulation' && <ArticulationMatrixPage courseId={courseId} />}
-            {activeTab === 'marks' && <MarkEntryPage courseId={courseId} classType={courseClassType} questionPaperType={courseQpType} />}
+            {activeTab === 'marks' && <MarkEntryPage courseId={courseId} classType={courseClassType} questionPaperType={courseQpType} enabledAssessments={courseEnabledAssessments} />}
             {activeTab === 'lca_instructions' && <LCAInstructionsPage courseCode={courseId} courseName={courseName} />}
             {activeTab === 'lca' && <LCAPage courseId={courseId} />}
-            {activeTab === 'co_attainment' && <COAttainmentPage courseId={courseId} />}
+            {activeTab === 'co_attainment' && <COAttainmentPage courseId={courseId} enabledAssessments={courseEnabledAssessments} />}
+            {activeTab === 'internal_mark' && <InternalMarkCoursePage courseId={courseId} enabledAssessments={courseEnabledAssessments} />}
             {activeTab === 'cqi' && <CQIPage courseId={courseId} />}
           </div>
       </div>

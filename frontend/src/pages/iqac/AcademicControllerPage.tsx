@@ -2,8 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import OBEDueDatesPage from '../OBEDueDatesPage';
 import AcademicControllerCoursesPage from './AcademicControllerCoursesPage';
+import AcademicControllerWeightsPage from './AcademicControllerWeightsPage';
 
-type TabKey = 'dashboard' | 'due_dates' | 'courses';
+type TabKey = 'dashboard' | 'due_dates' | 'courses' | 'weights';
 
 export default function AcademicControllerPage(): JSX.Element {
   const location = useLocation();
@@ -21,6 +22,7 @@ export default function AcademicControllerPage(): JSX.Element {
 
   const tabs: Array<{ key: TabKey; label: string }> = [
     { key: 'dashboard', label: 'Dashboard' },
+    { key: 'weights', label: 'Weights' },
     { key: 'due_dates', label: 'OBE Due Dates' },
     { key: 'courses', label: 'Courses' },
   ];
@@ -58,6 +60,7 @@ export default function AcademicControllerPage(): JSX.Element {
         {tab === 'dashboard' && (
           <div style={{ color: '#6b7280' }}>Dashboard coming soon.</div>
         )}
+        {tab === 'weights' && <AcademicControllerWeightsPage />}
         {tab === 'due_dates' && <OBEDueDatesPage />}
         {tab === 'courses' && <AcademicControllerCoursesPage />}
       </div>

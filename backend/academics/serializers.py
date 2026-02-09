@@ -3,6 +3,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from .models import TeachingAssignment
+from .models import SpecialCourseAssessmentEditRequest
 from academics.models import Subject, Section
 from accounts.utils import get_user_permissions
 from academics.models import SectionAdvisor, StaffProfile
@@ -134,7 +135,9 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = TeachingAssignment
-        fields = ('id', 'staff_id', 'section_id', 'academic_year', 'subject', 'curriculum_row_id', 'is_active', 'staff_details', 'section_name')
+        fields = ('id', 'staff_id', 'section_id', 'academic_year', 'subject', 'curriculum_row_id', 'is_active', 'staff_details', 'section_name', 'enabled_assessments')
+
+    enabled_assessments = serializers.ListField(child=serializers.CharField(), required=False, allow_empty=True)
 
     def get_subject(self, obj):
         # prefer curriculum_row display, then explicit Subject
@@ -216,6 +219,46 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
                 pass
 
         return super().create(validated_data)
+
+
+class SpecialCourseAssessmentEditRequestSerializer(serializers.ModelSerializer):
+    selection_id = serializers.IntegerField(source='selection.id', read_only=True)
+    curriculum_row_id = serializers.IntegerField(source='selection.curriculum_row_id', read_only=True)
+    academic_year_id = serializers.IntegerField(source='selection.academic_year_id', read_only=True)
+    requested_by_id = serializers.IntegerField(source='requested_by.id', read_only=True)
+    requested_by_user = serializers.SerializerMethodField(read_only=True)
+    reviewed_by_username = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = SpecialCourseAssessmentEditRequest
+        fields = (
+            'id',
+            'selection_id',
+            'curriculum_row_id',
+            'academic_year_id',
+            'requested_by_id',
+            'requested_by_user',
+            'status',
+            'requested_at',
+            'reviewed_by_username',
+            'reviewed_at',
+            'can_edit_until',
+            'used_at',
+        )
+
+    def get_requested_by_user(self, obj):
+        try:
+            u = getattr(getattr(obj, 'requested_by', None), 'user', None)
+            return getattr(u, 'username', None)
+        except Exception:
+            return None
+
+    def get_reviewed_by_username(self, obj):
+        try:
+            u = getattr(obj, 'reviewed_by', None)
+            return getattr(u, 'username', None)
+        except Exception:
+            return None
 
 
 

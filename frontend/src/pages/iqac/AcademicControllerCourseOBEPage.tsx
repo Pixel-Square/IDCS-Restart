@@ -11,7 +11,9 @@ import CQIPage from '../CQIPage';
 import MarkEntryTabs from '../../components/MarkEntryTabs';
 import { fetchIQACCourseTeachingMap, IQACTeachingMapRow } from '../../services/academics';
 import { fetchDeptRows, fetchMasters } from '../../services/curriculum';
+import { fetchSpecialCourseEnabledAssessments } from '../../services/obe';
 import type { TeachingAssignmentItem } from '../../services/obe';
+import { normalizeClassType } from '../../constants/classTypes';
 
 type TabKey = 'cdap' | 'articulation' | 'marks' | 'lca_instructions' | 'lca' | 'co_attainment' | 'cqi';
 
@@ -31,6 +33,7 @@ export default function AcademicControllerCourseOBEPage(): JSX.Element {
   const [mapping, setMapping] = useState<IQACTeachingMapRow | null>(null);
   const [classType, setClassType] = useState<string | null>(null);
   const [qpType, setQpType] = useState<string | null>(null);
+  const [enabledAssessments, setEnabledAssessments] = useState<string[] | null>(null);
 
   useEffect(() => {
     if (!location?.pathname) return;
@@ -88,12 +91,27 @@ export default function AcademicControllerCourseOBEPage(): JSX.Element {
         if (pick) {
           setClassType(pick?.class_type ? normalize(pick.class_type) : null);
           setQpType(pick?.question_paper_type ? normalize(pick.question_paper_type) : null);
+
+          if (normalizeClassType(pick?.class_type) === 'SPECIAL') {
+            // Signal SPECIAL immediately to avoid intermediate non-SPECIAL fetches.
+            setEnabledAssessments([]);
+            try {
+              const ea = await fetchSpecialCourseEnabledAssessments(code);
+              setEnabledAssessments(Array.isArray(ea) ? ea : []);
+            } catch {
+              const ea = (pick as any)?.enabled_assessments;
+              setEnabledAssessments(Array.isArray(ea) ? ea.map((x: any) => String(x).trim().toLowerCase()).filter(Boolean) : []);
+            }
+          } else {
+            setEnabledAssessments(null);
+          }
           return;
         }
 
         const m = (masters || []).find((mm: any) => normalize(mm?.course_code).toUpperCase() === codeU) as any;
         setClassType(m?.class_type ? normalize(m.class_type) : null);
         setQpType(null);
+        setEnabledAssessments(null);
       } catch {
         // ignore
       }
@@ -204,7 +222,7 @@ export default function AcademicControllerCourseOBEPage(): JSX.Element {
             {activeTab === 'articulation' && <ArticulationMatrixPage courseId={code} />}
             {activeTab === 'lca_instructions' && <LCAInstructionsPage courseCode={code} courseName={mapping?.course_name || null} />}
             {activeTab === 'lca' && <LCAPage courseId={code} />}
-            {activeTab === 'co_attainment' && <COAttainmentPage courseId={code} />}
+            {activeTab === 'co_attainment' && <COAttainmentPage courseId={code} enabledAssessments={enabledAssessments} />}
             {activeTab === 'cqi' && <CQIPage courseId={code} />}
           </fieldset>
 
@@ -214,6 +232,7 @@ export default function AcademicControllerCourseOBEPage(): JSX.Element {
                 subjectId={code}
                 classType={classType}
                 questionPaperType={qpType}
+                enabledAssessments={enabledAssessments}
                 teachingAssignmentsOverride={taOverride}
                 fixedTeachingAssignmentId={teachingAssignmentId}
                 iqacResetEnabled={true}

@@ -28,6 +28,7 @@ def propagate_master_to_departments(sender, instance: CurriculumMaster, created,
                 'course_code': instance.course_code,
                 'course_name': instance.course_name,
                 'class_type': instance.class_type,
+                'enabled_assessments': getattr(instance, 'enabled_assessments', []) or [],
                 'category': instance.category,
                 'l': instance.l,
                 't': instance.t,
@@ -54,6 +55,7 @@ def propagate_master_to_departments(sender, instance: CurriculumMaster, created,
                     # update allowed fields
                     update_fields = [
                         'regulation', 'semester', 'course_code', 'course_name', 'class_type', 'category',
+                        'enabled_assessments',
                         'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark', 'editable'
                     ]
                     for f in update_fields:

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import CLASS_TYPES, { normalizeClassType } from '../../constants/classTypes';
 import CurriculumLayout from './CurriculumLayout';
 import { fetchDeptRows, updateDeptRow, approveDeptRow } from '../../services/curriculum';
 import { useAppSelector } from '../../hooks';
@@ -213,12 +214,10 @@ export default function DeptList() {
                     <td><input value={r.category || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, category: e.target.value } : row))} className="edit-cell-input" /></td>
                     <td>
                       <select value={r.class_type || 'THEORY'} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, class_type: e.target.value } : row))} className="edit-cell-input" style={{ minWidth: 90 }}>
-                        <option value="THEORY">THEORY</option>
-                        <option value="LAB">LAB</option>
-                        <option value="TCPL">TCPL</option>
-                        <option value="TCPR">TCPR</option>
-                        <option value="PRACTICAL">PRACTICAL</option>
-                        <option value="AUDIT">AUDIT</option>
+                        {CLASS_TYPES.map((ct) => {
+                          const key = normalizeClassType(String(ct));
+                          return <option key={key} value={key}>{String(ct).charAt(0).toUpperCase() + String(ct).slice(1)}</option>;
+                        })}
                       </select>
                     </td>
                     <td><input value={r.l || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, l: Number(e.target.value) } : row))} className="edit-cell-input" /></td>

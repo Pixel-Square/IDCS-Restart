@@ -1,8 +1,22 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { createPublishRequest, fetchCiaMarks, fetchDraft, publishCiaSheet, saveDraft } from '../services/obe';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  confirmMarkManagerLock,
+  createEditRequest,
+  createPublishRequest,
+  fetchCiaMarks,
+  fetchDraft,
+  fetchPublishedCia1Sheet,
+  fetchPublishedCiaSheet,
+  publishCiaSheet,
+  saveDraft,
+} from '../services/obe';
 import { lsGet, lsSet } from '../utils/localStorage';
+import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
+import { fetchMyTeachingAssignments } from '../services/obe';
 import { formatRemaining, usePublishWindow } from '../hooks/usePublishWindow';
+import { useEditWindow } from '../hooks/useEditWindow';
+import { useMarkTableLock } from '../hooks/useMarkTableLock';
 import PublishLockOverlay from './PublishLockOverlay';
 
 type Student = {
@@ -125,6 +139,10 @@ type Cia1Sheet = {
   // question key -> selected BTL (1..6) or '' (unset)
   questionBtl: Record<string, 1 | 2 | 3 | 4 | 5 | 6 | ''>;
   rowsByStudentId: Record<string, Cia1RowState>;
+  // Mark Manager lock state
+  markManagerLocked?: boolean;
+  markManagerSnapshot?: string | null;
+  markManagerApprovalUntil?: string | null;
 };
 
 type Cia1DraftPayload = {
@@ -132,6 +150,9 @@ type Cia1DraftPayload = {
   batchLabel: string;
   questionBtl: Record<string, 1 | 2 | 3 | 4 | 5 | 6 | ''>;
   rowsByStudentId: Record<string, Cia1RowState>;
+  markManagerLocked?: boolean;
+  markManagerSnapshot?: string | null;
+  markManagerApprovalUntil?: string | null;
 };
 
 function defaultQuestionBtl(questions: QuestionDef[]): Record<string, 1 | 2 | 3 | 4 | 5 | 6 | ''> {
@@ -210,6 +231,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   const [serverTotals, setServerTotals] = useState<Record<number, number | null>>({});
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
+  const [publishedEditModalOpen, setPublishedEditModalOpen] = useState(false);
   const [showAbsenteesOnly, setShowAbsenteesOnly] = useState(false);
   const [absenteesSnapshot, setAbsenteesSnapshot] = useState<number[] | null>(null);
   const [limitDialog, setLimitDialog] = useState<{ title: string; message: string } | null>(null);
@@ -225,6 +247,10 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
 
   const globalLocked = Boolean(publishWindow?.global_override_active && publishWindow?.global_is_open === false);
 
+  const { data: markLock, refresh: refreshMarkLock } = useMarkTableLock({ assessment: assessmentKey as any, subjectCode: String(subjectId || ''), teachingAssignmentId, options: { poll: false } });
+  const { data: markManagerEditWindow } = useEditWindow({ assessment: assessmentKey as any, subjectCode: String(subjectId || ''), scope: 'MARK_MANAGER', teachingAssignmentId, options: { poll: false } });
+  const { data: markEntryEditWindow } = useEditWindow({ assessment: assessmentKey as any, subjectCode: String(subjectId || ''), scope: 'MARK_ENTRY', teachingAssignmentId, options: { poll: false } });
+
   const [requestReason, setRequestReason] = useState('');
   const [requesting, setRequesting] = useState(false);
   const [requestMessage, setRequestMessage] = useState<string | null>(null);
@@ -233,7 +259,124 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
     batchLabel: subjectId,
     questionBtl: defaultQuestionBtl(DEFAULT_QUESTIONS),
     rowsByStudentId: {},
+    markManagerLocked: false,
+    markManagerSnapshot: null,
+    markManagerApprovalUntil: null,
   });
+
+  const [markManagerModal, setMarkManagerModal] = useState<null | { mode: 'confirm' | 'request' }>(null);
+  const [markManagerBusy, setMarkManagerBusy] = useState(false);
+  const [markManagerError, setMarkManagerError] = useState<string | null>(null);
+  const [publishConsumedApprovals, setPublishConsumedApprovals] = useState<null | {
+    markEntryApprovalUntil: string | null;
+    markManagerApprovalUntil: string | null;
+  }>(null);
+
+  useEffect(() => {
+    setPublishConsumedApprovals(null);
+  }, [subjectId]);
+
+  const isPublished = Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published);
+  const markManagerLocked = Boolean(sheet.markManagerLocked);
+  const showNameList = Boolean(sheet.markManagerSnapshot != null);
+
+  const markEntryApprovalUntil = markEntryEditWindow?.approval_until ? String(markEntryEditWindow.approval_until) : null;
+  const markManagerApprovalUntil = markManagerEditWindow?.approval_until ? String(markManagerEditWindow.approval_until) : null;
+  const markEntryApprovedFresh =
+    Boolean(markEntryEditWindow?.allowed_by_approval) &&
+    Boolean(markEntryApprovalUntil) &&
+    markEntryApprovalUntil !== (publishConsumedApprovals?.markEntryApprovalUntil ?? null);
+  const markManagerApprovedFresh =
+    Boolean(markManagerEditWindow?.allowed_by_approval) &&
+    Boolean(markManagerApprovalUntil) &&
+    markManagerApprovalUntil !== (publishConsumedApprovals?.markManagerApprovalUntil ?? null);
+
+  const entryOpen = !isPublished ? true : Boolean(markLock?.entry_open) || markEntryApprovedFresh || markManagerApprovedFresh;
+  const publishedEditLocked = Boolean(isPublished && !entryOpen);
+  const tableBlocked = Boolean(globalLocked || (isPublished ? !entryOpen : !markManagerLocked));
+
+  function markManagerSnapshotOf(nextQuestionBtl: Record<string, 1 | 2 | 3 | 4 | 5 | 6 | ''>) {
+    return JSON.stringify({
+      assessmentKey,
+      totalsMax,
+      questions: (questions || []).map((q) => ({ key: q.key, label: q.label, max: q.max })),
+      questionBtl: nextQuestionBtl,
+    });
+  }
+
+  async function requestMarkManagerEdit() {
+    if (!subjectId) return;
+    setMarkManagerBusy(true);
+    setMarkManagerError(null);
+    try {
+      await createEditRequest({
+        assessment: assessmentKey,
+        subject_code: String(subjectId),
+        scope: 'MARK_MANAGER',
+        reason: `Edit request: Mark Manager changes for ${assessmentLabel} ${subjectId}`,
+        teaching_assignment_id: teachingAssignmentId,
+      });
+      alert('Edit request sent to IQAC.');
+    } catch (e: any) {
+      setMarkManagerError(e?.message || 'Request failed');
+      alert(e?.message || 'Request failed');
+    } finally {
+      setMarkManagerBusy(false);
+    }
+  }
+
+  async function requestMarkEntryEdit() {
+    if (!subjectId) return;
+    try {
+      await createEditRequest({
+        assessment: assessmentKey,
+        subject_code: String(subjectId),
+        scope: 'MARK_ENTRY',
+        reason: `Edit request: ${assessmentLabel} marks entry for ${subjectId}`,
+        teaching_assignment_id: teachingAssignmentId,
+      });
+      alert('Edit request sent to IQAC.');
+      refreshMarkLock({ silent: true });
+    } catch (e: any) {
+      alert(e?.message || 'Request failed');
+    }
+  }
+
+  async function confirmMarkManager() {
+    if (!subjectId) return;
+    setMarkManagerBusy(true);
+    setMarkManagerError(null);
+    try {
+      const snapshot = markManagerSnapshotOf(sheet.questionBtl);
+      const approvalUntil = markManagerEditWindow?.approval_until ? String(markManagerEditWindow.approval_until) : sheet.markManagerApprovalUntil || null;
+      const nextSheet: Cia1Sheet = { ...sheet, markManagerLocked: true, markManagerSnapshot: snapshot, markManagerApprovalUntil: approvalUntil };
+      const draft: Cia1DraftPayload = {
+        termLabel: nextSheet.termLabel,
+        batchLabel: subjectId,
+        questionBtl: nextSheet.questionBtl,
+        rowsByStudentId: nextSheet.rowsByStudentId,
+        markManagerLocked: nextSheet.markManagerLocked,
+        markManagerSnapshot: nextSheet.markManagerSnapshot,
+        markManagerApprovalUntil: nextSheet.markManagerApprovalUntil,
+      };
+
+      setSheet(nextSheet);
+      setMarkManagerModal(null);
+      await saveDraft(assessmentKey, subjectId, draft);
+      setSavedAt(new Date().toLocaleString());
+
+      try {
+        await confirmMarkManagerLock(assessmentKey as any, String(subjectId), teachingAssignmentId);
+        refreshMarkLock({ silent: true });
+      } catch (err) {
+        console.warn('confirmMarkManagerLock failed', err);
+      }
+    } catch (e: any) {
+      setMarkManagerError(e?.message || 'Save failed');
+    } finally {
+      setMarkManagerBusy(false);
+    }
+  }
 
   useEffect(() => {
     let mounted = true;
@@ -268,7 +411,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       try {
         const data = await fetchCiaMarks(assessmentKey, subjectId, teachingAssignmentId);
         if (!mounted) return;
-        const roster = (data.students || []).slice().sort((a, b) => {
+        let roster = (data.students || []).slice().sort((a, b) => {
           const an = String(a?.name || '').trim().toLowerCase();
           const bn = String(b?.name || '').trim().toLowerCase();
           if (an && bn) {
@@ -279,6 +422,30 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
           }
           return String(a?.reg_no || '').localeCompare(String(b?.reg_no || ''), undefined, { numeric: true, sensitivity: 'base' });
         });
+        // If student list empty, try fallback via user's teaching assignments
+        if (!roster.length) {
+          try {
+            const myTAs = await fetchMyTeachingAssignments();
+            const match = (myTAs || []).find((t: any) => String(t.subject_code || '').trim().toUpperCase() === String(subjectId || '').trim().toUpperCase());
+            if (match && match.id) {
+              const taResp = await fetchTeachingAssignmentRoster(match.id);
+              roster = (taResp.students || []).slice().sort((a, b) => {
+                const an = String(a?.name || '').trim().toLowerCase();
+                const bn = String(b?.name || '').trim().toLowerCase();
+                if (an && bn) {
+                  const byName = an.localeCompare(bn);
+                  if (byName) return byName;
+                } else if (an || bn) {
+                  return an ? -1 : 1;
+                }
+                return String(a?.reg_no || '').localeCompare(String(b?.reg_no || ''), undefined, { numeric: true, sensitivity: 'base' });
+              });
+            }
+          } catch {
+            // ignore fallback
+          }
+        }
+
         setStudents(roster);
         const apiMarks = data.marks || {};
         const totals: Record<number, number | null> = {};
@@ -293,6 +460,60 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
           totals[sid] = Number.isFinite(n) ? n : null;
         }
         setServerTotals(totals);
+
+        // Try to load published CIA sheet (preferred over draft/local)
+        try {
+          let pub: any = null;
+          if (assessmentKey === 'cia1') {
+            pub = await fetchPublishedCia1Sheet(subjectId);
+          } else {
+            pub = await fetchPublishedCiaSheet('cia2', subjectId);
+          }
+          if (pub && pub.data && typeof pub.data === 'object') {
+            const pd = pub.data as any;
+            const pubRows = pd.rowsByStudentId || pd.rows || (pd.sheet && pd.sheet.rowsByStudentId) || {};
+            const rowsByStudentId: Record<string, Cia1RowState> = {};
+            for (const [k, v] of Object.entries(pubRows || {})) {
+              const sid = String(k);
+              const rowObj = v as any;
+              const qMap: Record<string, number | ''> = {};
+              const qSource = rowObj.q || rowObj.answers || rowObj.questions || rowObj;
+              if (qSource && typeof qSource === 'object') {
+                for (const [qk, qv] of Object.entries(qSource)) {
+                  const n = Number(qv);
+                  qMap[qk] = Number.isFinite(n) ? n : '';
+                }
+              }
+              rowsByStudentId[sid] = {
+                studentId: Number(sid) || 0,
+                absent: Boolean(rowObj.absent),
+                absentKind: rowObj.absentKind || undefined,
+                reg_no: String(rowObj.reg_no || rowObj.reg_no_text || ''),
+                q: qMap,
+              };
+            }
+
+            const questionBtlRaw = Array.isArray(pd.questions)
+              ? Object.fromEntries((pd.questions as any[]).map((qq: any) => [String(qq.key || qq.label || ''), Number(qq.btl || qq.btl_level || 1)]))
+              : defaultQuestionBtl(questions as any);
+            const questionBtl: Record<string, 1 | 2 | 3 | 4 | 5 | 6 | ''> = Object.fromEntries(
+              Object.entries(questionBtlRaw).map(([k, v]) => {
+                const n = Number(v);
+                if (Number.isFinite(n) && n >= 1 && n <= 6) return [k, n as 1 | 2 | 3 | 4 | 5 | 6];
+                return [k, ''];
+              }),
+            );
+
+            setSheet({ termLabel: String(pd.termLabel || masterCfg?.termLabel || 'KRCT AY25-26'), batchLabel: subjectId, questionBtl, rowsByStudentId });
+            setPublishedAt(new Date().toLocaleString());
+            try {
+              lsSet(sheetKey(assessmentKey, subjectId), { termLabel: String(pd.termLabel || masterCfg?.termLabel || 'KRCT AY25-26'), batchLabel: subjectId, questionBtl, rowsByStudentId });
+            } catch {}
+            // we've applied published sheet; continue to merge draft/local in subsequent effect if needed
+          }
+        } catch {
+          // ignore published fetch errors; will merge draft/local below
+        }
 
         // Load local sheet and merge with roster.
         const stored = lsGet<Cia1Sheet>(sheetKey(assessmentKey, subjectId));
@@ -471,6 +692,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   }, [masterCfg, questionBtlMax, assessmentKey]);
 
   const setAbsent = (studentId: number, absent: boolean) => {
+    if (tableBlocked) return;
     setSheet((prev) => {
       const key = String(studentId);
       const existing = prev.rowsByStudentId[key] || {
@@ -495,6 +717,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   };
 
   const setAbsentKind = (studentId: number, absentKind: AbsenceKind) => {
+    if (tableBlocked) return;
     setSheet((prev) => {
       const key = String(studentId);
       const existing = prev.rowsByStudentId[key] || {
@@ -518,6 +741,10 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   };
 
   const setQuestionBtl = (qKey: string, value: 1 | 2 | 3 | 4 | 5 | 6 | '') => {
+    if (globalLocked) return;
+    const confirmed = sheet.markManagerSnapshot != null;
+    if (markManagerLocked && confirmed) return;
+    if (publishedEditLocked) return;
     setSheet((prev) => ({
       ...prev,
       questionBtl: {
@@ -561,6 +788,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   }, [sheet.questionBtl, subjectId, sheet.rowsByStudentId, assessmentKey]);
 
   const setQuestionMark = (studentId: number, qKey: string, value: number | '') => {
+    if (tableBlocked) return;
     setSheet((prev) => {
       const key = String(studentId);
       const existing = prev.rowsByStudentId[key] || {

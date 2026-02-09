@@ -1,4 +1,5 @@
 from decimal import Decimal, InvalidOperation
+import re
 
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
@@ -80,7 +81,7 @@ def mark_entry_tabs(request, subject_id):
     }
     return render(request, 'OBE/mark_entry_tabs.html', context)
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework_simplejwt.authentication import JWTAuthentication
@@ -271,6 +272,171 @@ def _require_obe_master_permission(request):
     return None
 
 
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([AllowAny])
+def class_type_weights_list(request):
+    """Return current class-type weights as a mapping keyed by normalized class type."""
+    from .models import ClassTypeWeights
+
+    try:
+        objs = ClassTypeWeights.objects.all()
+    except Exception:
+        objs = []
+
+    out = {}
+    for o in objs:
+        out[str(o.class_type).upper()] = {
+            'ssa1': float(o.ssa1) if o.ssa1 is not None else None,
+            'cia1': float(o.cia1) if o.cia1 is not None else None,
+            'formative1': float(o.formative1) if o.formative1 is not None else None,
+            'internal_mark_weights': (o.internal_mark_weights if isinstance(getattr(o, 'internal_mark_weights', None), list) else None),
+            'updated_at': (o.updated_at.isoformat() if getattr(o, 'updated_at', None) else None),
+            'updated_by': o.updated_by,
+        }
+    return Response({'results': out})
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def class_type_weights_upsert(request):
+    """Upsert multiple class-type weights. Requires OBE master permission (IQAC).
+
+    Body: { CLASS_TYPE: { ssa1: number, cia1: number, formative1: number, internal_mark_weights?: number[] }, ... }
+    """
+    auth = _require_obe_master_permission(request)
+    if auth:
+        return auth
+
+    data = request.data if isinstance(request.data, dict) else {}
+    if not isinstance(data, dict):
+        return Response({'detail': 'Invalid payload'}, status=status.HTTP_400_BAD_REQUEST)
+
+    from .models import ClassTypeWeights
+
+    user_id = getattr(getattr(request, 'user', None), 'id', None)
+    out = {}
+    with transaction.atomic():
+        for k, v in data.items():
+            try:
+                ct = str(k or '').strip().upper()
+                ssa = float(v.get('ssa1')) if v and v.get('ssa1') is not None else None
+                cia = float(v.get('cia1')) if v and v.get('cia1') is not None else None
+                f1 = float(v.get('formative1')) if v and v.get('formative1') is not None else None
+            except Exception:
+                continue
+
+            im = None
+            try:
+                im_raw = v.get('internal_mark_weights') if isinstance(v, dict) else None
+                if isinstance(im_raw, list):
+                    im = []
+                    for x in im_raw:
+                        try:
+                            im.append(float(x))
+                        except Exception:
+                            im.append(0)
+            except Exception:
+                im = None
+
+            if not ct:
+                continue
+
+            existing = None
+            try:
+                existing = ClassTypeWeights.objects.filter(class_type=ct).first()
+            except Exception:
+                existing = None
+            existing_im = getattr(existing, 'internal_mark_weights', None) if existing is not None else None
+            if not isinstance(existing_im, list):
+                existing_im = []
+
+            obj, created = ClassTypeWeights.objects.update_or_create(
+                class_type=ct,
+                defaults={
+                    'ssa1': ssa if ssa is not None else 0,
+                    'cia1': cia if cia is not None else 0,
+                    'formative1': f1 if f1 is not None else 0,
+                    'internal_mark_weights': im if im is not None else existing_im,
+                    'updated_by': user_id,
+                },
+            )
+            out[ct] = {
+                'ssa1': float(obj.ssa1),
+                'cia1': float(obj.cia1),
+                'formative1': float(obj.formative1),
+                'internal_mark_weights': (obj.internal_mark_weights if isinstance(getattr(obj, 'internal_mark_weights', None), list) else []),
+            }
+
+    return Response({'results': out})
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def internal_mark_mapping_get(request, subject_id: str):
+    """Get IQAC-managed internal mark mapping for a subject.
+
+    Returns:
+      { subject: { code, name }, mapping: object|null, updated_at, updated_by }
+    """
+    from .models import InternalMarkMapping
+
+    subject = _get_subject(subject_id, request)
+    obj = None
+    try:
+        obj = InternalMarkMapping.objects.select_related('subject').filter(subject=subject).first()
+    except Exception:
+        obj = None
+
+    return Response({
+        'subject': {'code': getattr(subject, 'code', str(subject_id)), 'name': getattr(subject, 'name', '')},
+        'mapping': (obj.mapping if obj else None),
+        'updated_at': (obj.updated_at.isoformat() if obj and getattr(obj, 'updated_at', None) else None),
+        'updated_by': (obj.updated_by if obj else None),
+    })
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def internal_mark_mapping_upsert(request, subject_id: str):
+    """Upsert internal mark mapping for a subject. Requires OBE master permission (IQAC).
+
+    Body: { mapping: object }
+    """
+    auth = _require_obe_master_permission(request)
+    if auth:
+        return auth
+
+    payload = request.data if isinstance(request.data, dict) else {}
+    mapping = payload.get('mapping') if isinstance(payload, dict) else None
+    if mapping is None:
+        return Response({'detail': 'mapping is required'}, status=status.HTTP_400_BAD_REQUEST)
+    if not isinstance(mapping, dict):
+        return Response({'detail': 'mapping must be an object'}, status=status.HTTP_400_BAD_REQUEST)
+
+    from .models import InternalMarkMapping
+
+    subject = _get_subject(subject_id, request)
+    user_id = getattr(getattr(request, 'user', None), 'id', None)
+
+    with transaction.atomic():
+        obj, _created = InternalMarkMapping.objects.update_or_create(
+            subject=subject,
+            defaults={'mapping': mapping, 'updated_by': user_id},
+        )
+
+    return Response({
+        'status': 'ok',
+        'subject': {'code': getattr(subject, 'code', str(subject_id)), 'name': getattr(subject, 'name', '')},
+        'mapping': obj.mapping,
+        'updated_at': (obj.updated_at.isoformat() if getattr(obj, 'updated_at', None) else None),
+        'updated_by': obj.updated_by,
+    })
+
+
 @api_view(['POST'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
@@ -292,7 +458,7 @@ def iqac_reset_assessment(request, assessment: str, subject_id: str):
         return auth
 
     assessment_key = str(assessment or '').strip().lower()
-    if assessment_key not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
+    if assessment_key not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
     subject = _get_subject(subject_id, request)
@@ -310,7 +476,7 @@ def iqac_reset_assessment(request, assessment: str, subject_id: str):
 
     from .models import AssessmentDraft
     from .models import LabPublishedSheet, Cia1PublishedSheet, Cia2PublishedSheet
-    from .models import Ssa1Mark, Ssa2Mark, Formative1Mark, Formative2Mark, Cia1Mark, Cia2Mark
+    from .models import Ssa1Mark, Ssa2Mark, Review1Mark, Review2Mark, Formative1Mark, Formative2Mark, Cia1Mark, Cia2Mark
     from .models import ObeMarkTableLock
 
     deleted = {
@@ -330,8 +496,12 @@ def iqac_reset_assessment(request, assessment: str, subject_id: str):
         try:
             if assessment_key == 'ssa1':
                 deleted['published'] += int(Ssa1Mark.objects.filter(subject=subject).delete()[0] or 0)
+            elif assessment_key == 'review1':
+                deleted['published'] += int(Review1Mark.objects.filter(subject=subject).delete()[0] or 0)
             elif assessment_key == 'ssa2':
                 deleted['published'] += int(Ssa2Mark.objects.filter(subject=subject).delete()[0] or 0)
+            elif assessment_key == 'review2':
+                deleted['published'] += int(Review2Mark.objects.filter(subject=subject).delete()[0] or 0)
             elif assessment_key == 'formative1':
                 deleted['published'] += int(Formative1Mark.objects.filter(subject=subject).delete()[0] or 0)
                 deleted['published'] += int(LabPublishedSheet.objects.filter(subject=subject, assessment='formative1').delete()[0] or 0)
@@ -402,6 +572,81 @@ def _resolve_staff_teaching_assignment(request, subject_code: str, teaching_assi
     if qs.filter(academic_year__is_active=True).exists():
         qs = qs.filter(academic_year__is_active=True)
     return qs.order_by('-id').first()
+
+
+def _resolve_curriculum_row_for_subject(request, subject_code: str, teaching_assignment_id: int | None = None):
+    """Best-effort curriculum row lookup for a subject code.
+
+    Preference:
+    1) TeachingAssignment.curriculum_row (most accurate)
+    2) CurriculumDepartment match for staff user's department
+    3) Any CurriculumDepartment match
+    """
+    try:
+        ta = _resolve_staff_teaching_assignment(request, subject_code=subject_code, teaching_assignment_id=teaching_assignment_id)
+        row = getattr(ta, 'curriculum_row', None)
+        if row is not None:
+            return row
+    except Exception:
+        row = None
+
+    try:
+        from curriculum.models import CurriculumDepartment
+
+        staff_profile = getattr(getattr(request, 'user', None), 'staff_profile', None)
+        dept = getattr(staff_profile, 'current_department', None) if staff_profile else None
+        qs = CurriculumDepartment.objects.all().select_related('master', 'department')
+        if dept is not None:
+            qs = qs.filter(department=dept)
+        code = str(subject_code or '').strip()
+        if code:
+            qs = qs.filter(course_code__iexact=code)
+        return qs.order_by('-updated_at').first()
+    except Exception:
+        return None
+
+
+def _enforce_assessment_enabled_for_course(request, *, subject_code: str, assessment: str, teaching_assignment_id: int | None = None):
+    """Reject requests for disabled assessments on SPECIAL courses."""
+    assessment_key = str(assessment or '').strip().lower()
+    if not assessment_key:
+        return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    row = _resolve_curriculum_row_for_subject(request, subject_code=subject_code, teaching_assignment_id=teaching_assignment_id)
+    class_type = str(getattr(row, 'class_type', '') or '').strip().upper() if row else ''
+    if class_type != 'SPECIAL':
+        return None
+
+    enabled = None
+    # Prefer the globally locked SPECIAL selection (if present), otherwise fall
+    # back to curriculum-row configuration.
+    try:
+        from academics.models import SpecialCourseAssessmentSelection
+
+        ta = _resolve_staff_teaching_assignment(request, subject_code=subject_code, teaching_assignment_id=teaching_assignment_id)
+        academic_year = getattr(ta, 'academic_year', None) if ta else None
+        if row is not None and academic_year is not None and getattr(row, 'master_id', None) is not None:
+            sel = SpecialCourseAssessmentSelection.objects.filter(curriculum_row__master_id=row.master_id, academic_year=academic_year).order_by('id').first()
+            if sel is not None:
+                enabled = getattr(sel, 'enabled_assessments', None)
+    except Exception:
+        enabled = None
+
+    if enabled is None:
+        enabled = getattr(row, 'enabled_assessments', None) or []
+    enabled_set = {str(x).strip().lower() for x in enabled if str(x).strip()}
+    if assessment_key not in enabled_set:
+        return Response(
+            {
+                'detail': 'Assessment not enabled for this Special course.',
+                'how_to_fix': [
+                    'Edit Curriculum Master → set Class type = Special and enable this assessment.',
+                    'Propagate the master to departments if needed.',
+                ],
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    return None
 
 
 def _get_due_schedule_for_request(request, subject_code: str, assessment: str, teaching_assignment_id: int | None = None):
@@ -505,6 +750,10 @@ def _enforce_publish_window(request, subject_code: str, assessment: str):
             ta_id = int(str(ta_id_raw))
     except Exception:
         ta_id = None
+
+    gate = _enforce_assessment_enabled_for_course(request, subject_code=subject_code, assessment=assessment, teaching_assignment_id=ta_id)
+    if gate is not None:
+        return gate
 
     info = _get_due_schedule_for_request(request, subject_code=subject_code, assessment=assessment, teaching_assignment_id=ta_id)
     if info.get('publish_allowed'):
@@ -640,10 +889,15 @@ def assessment_draft(request, assessment: str, subject_id: str):
     if err:
         return err
 
-    if assessment not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
+    if assessment not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
     subject = _get_subject(subject_id, request)
+
+    ta_id = _get_teaching_assignment_id_from_request(request, request.data if request.method == 'PUT' else None)
+    gate = _enforce_assessment_enabled_for_course(request, subject_code=subject.code, assessment=assessment, teaching_assignment_id=ta_id)
+    if gate is not None:
+        return gate
 
     from .models import AssessmentDraft
 
@@ -687,6 +941,11 @@ def ssa1_published(request, subject_id: str):
         return err
 
     subject = _get_subject(subject_id, request)
+
+    ta_id = _get_teaching_assignment_id_from_request(request)
+    gate = _enforce_assessment_enabled_for_course(request, subject_code=subject.code, assessment='ssa1', teaching_assignment_id=ta_id)
+    if gate is not None:
+        return gate
     from .models import Ssa1Mark
     try:
         rows = Ssa1Mark.objects.filter(subject=subject)
@@ -762,12 +1021,103 @@ def ssa1_publish(request, subject_id: str):
 @api_view(['GET'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
+def review1_published(request, subject_id: str):
+    staff_profile, err = _faculty_only(request)
+    if err:
+        return err
+
+    subject = _get_subject(subject_id, request)
+
+    ta_id = _get_teaching_assignment_id_from_request(request)
+    gate = _enforce_assessment_enabled_for_course(request, subject_code=subject.code, assessment='review1', teaching_assignment_id=ta_id)
+    if gate is not None:
+        return gate
+    from .models import Review1Mark
+    try:
+        rows = Review1Mark.objects.filter(subject=subject)
+        marks = {str(r.student_id): (str(r.mark) if r.mark is not None else None) for r in rows}
+    except OperationalError:
+        marks = {}
+    return Response({'subject': {'code': subject.code, 'name': subject.name}, 'marks': marks})
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def review1_publish(request, subject_id: str):
+    staff_profile, err = _faculty_only(request)
+    if err:
+        return err
+    subject = _get_subject(subject_id, request)
+
+    gate = _enforce_publish_window(request, subject.code, 'review1')
+    if gate is not None:
+        return gate
+
+    body = request.data or {}
+    data = body.get('data', None)
+    if data is None or not isinstance(data, dict):
+        return Response({'detail': 'Invalid payload.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    rows = data.get('rows', [])
+    if not isinstance(rows, list):
+        return Response({'detail': 'Invalid rows.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    from .models import Review1Mark
+
+    errors: list[str] = []
+    with transaction.atomic():
+        for item in rows:
+            try:
+                sid = int(item.get('studentId'))
+            except Exception:
+                continue
+            student = StudentProfile.objects.filter(id=sid).first()
+            if not student:
+                continue
+
+            mark = _coerce_decimal_or_none(item.get('total'))
+            if item.get('total') not in (None, '',) and mark is None:
+                errors.append(f'Invalid mark for student {sid}: {item.get("total")}')
+                continue
+
+            if mark is None:
+                Review1Mark.objects.filter(subject=subject, student=student).delete()
+            else:
+                Review1Mark.objects.update_or_create(subject=subject, student=student, defaults={'mark': mark})
+
+    if errors:
+        return Response({'detail': 'Validation error.', 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        ta_id = _get_teaching_assignment_id_from_request(request)
+        _touch_lock_after_publish(
+            request,
+            subject_code=subject.code,
+            subject_name=subject.name,
+            assessment='review1',
+            teaching_assignment_id=ta_id,
+        )
+    except OperationalError:
+        pass
+
+    return Response({'status': 'published'})
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
 def ssa2_published(request, subject_id: str):
     staff_profile, err = _faculty_only(request)
     if err:
         return err
 
     subject = _get_subject(subject_id, request)
+
+    ta_id = _get_teaching_assignment_id_from_request(request)
+    gate = _enforce_assessment_enabled_for_course(request, subject_code=subject.code, assessment='ssa2', teaching_assignment_id=ta_id)
+    if gate is not None:
+        return gate
     from .models import Ssa2Mark
     try:
         rows = Ssa2Mark.objects.filter(subject=subject)
@@ -843,12 +1193,103 @@ def ssa2_publish(request, subject_id: str):
 @api_view(['GET'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
+def review2_published(request, subject_id: str):
+    staff_profile, err = _faculty_only(request)
+    if err:
+        return err
+
+    subject = _get_subject(subject_id, request)
+
+    ta_id = _get_teaching_assignment_id_from_request(request)
+    gate = _enforce_assessment_enabled_for_course(request, subject_code=subject.code, assessment='review2', teaching_assignment_id=ta_id)
+    if gate is not None:
+        return gate
+    from .models import Review2Mark
+    try:
+        rows = Review2Mark.objects.filter(subject=subject)
+        marks = {str(r.student_id): (str(r.mark) if r.mark is not None else None) for r in rows}
+    except OperationalError:
+        marks = {}
+    return Response({'subject': {'code': subject.code, 'name': subject.name}, 'marks': marks})
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def review2_publish(request, subject_id: str):
+    staff_profile, err = _faculty_only(request)
+    if err:
+        return err
+    subject = _get_subject(subject_id, request)
+
+    gate = _enforce_publish_window(request, subject.code, 'review2')
+    if gate is not None:
+        return gate
+
+    body = request.data or {}
+    data = body.get('data', None)
+    if data is None or not isinstance(data, dict):
+        return Response({'detail': 'Invalid payload.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    rows = data.get('rows', [])
+    if not isinstance(rows, list):
+        return Response({'detail': 'Invalid rows.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    from .models import Review2Mark
+
+    errors: list[str] = []
+    with transaction.atomic():
+        for item in rows:
+            try:
+                sid = int(item.get('studentId'))
+            except Exception:
+                continue
+            student = StudentProfile.objects.filter(id=sid).first()
+            if not student:
+                continue
+
+            mark = _coerce_decimal_or_none(item.get('total'))
+            if item.get('total') not in (None, '',) and mark is None:
+                errors.append(f'Invalid mark for student {sid}: {item.get("total")}')
+                continue
+
+            if mark is None:
+                Review2Mark.objects.filter(subject=subject, student=student).delete()
+            else:
+                Review2Mark.objects.update_or_create(subject=subject, student=student, defaults={'mark': mark})
+
+    if errors:
+        return Response({'detail': 'Validation error.', 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        ta_id = _get_teaching_assignment_id_from_request(request)
+        _touch_lock_after_publish(
+            request,
+            subject_code=subject.code,
+            subject_name=subject.name,
+            assessment='review2',
+            teaching_assignment_id=ta_id,
+        )
+    except OperationalError:
+        pass
+
+    return Response({'status': 'published'})
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
 def formative1_published(request, subject_id: str):
     staff_profile, err = _faculty_only(request)
     if err:
         return err
 
     subject = _get_subject(subject_id, request)
+
+    ta_id = _get_teaching_assignment_id_from_request(request)
+    gate = _enforce_assessment_enabled_for_course(request, subject_code=subject.code, assessment='formative1', teaching_assignment_id=ta_id)
+    if gate is not None:
+        return gate
     from .models import Formative1Mark
     try:
         rows = Formative1Mark.objects.filter(subject=subject)
@@ -946,6 +1387,11 @@ def formative2_published(request, subject_id: str):
         return err
 
     subject = _get_subject(subject_id, request)
+
+    ta_id = _get_teaching_assignment_id_from_request(request)
+    gate = _enforce_assessment_enabled_for_course(request, subject_code=subject.code, assessment='formative2', teaching_assignment_id=ta_id)
+    if gate is not None:
+        return gate
     from .models import Formative2Mark
     try:
         rows = Formative2Mark.objects.filter(subject=subject)
@@ -1043,6 +1489,11 @@ def cia1_published_sheet(request, subject_id: str):
         return err
 
     subject = _get_subject(subject_id, request)
+
+    ta_id = _get_teaching_assignment_id_from_request(request)
+    gate = _enforce_assessment_enabled_for_course(request, subject_code=subject.code, assessment='cia1', teaching_assignment_id=ta_id)
+    if gate is not None:
+        return gate
     from .models import Cia1PublishedSheet
     row = Cia1PublishedSheet.objects.filter(subject=subject).first()
     return Response({'subject': {'code': subject.code, 'name': subject.name}, 'data': row.data if row else None})
@@ -1140,6 +1591,11 @@ def cia2_published_sheet(request, subject_id: str):
         return err
 
     subject = _get_subject(subject_id, request)
+
+    ta_id = _get_teaching_assignment_id_from_request(request)
+    gate = _enforce_assessment_enabled_for_course(request, subject_code=subject.code, assessment='cia2', teaching_assignment_id=ta_id)
+    if gate is not None:
+        return gate
     from .models import Cia2PublishedSheet
     try:
         row = Cia2PublishedSheet.objects.filter(subject=subject).first()
@@ -2077,7 +2533,7 @@ def publish_window(request, assessment: str, subject_id: str):
         return err
 
     assessment_key = str(assessment or '').strip().lower()
-    if assessment_key not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
+    if assessment_key not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
     subject_code = str(subject_id or '').strip()
@@ -2088,6 +2544,10 @@ def publish_window(request, assessment: str, subject_id: str):
             ta_id = int(str(ta_id_raw))
     except Exception:
         ta_id = None
+
+    gate = _enforce_assessment_enabled_for_course(request, subject_code=subject_code, assessment=assessment_key, teaching_assignment_id=ta_id)
+    if gate is not None:
+        return gate
 
     info = _get_due_schedule_for_request(request, subject_code=subject_code, assessment=assessment_key, teaching_assignment_id=ta_id)
 
@@ -2136,7 +2596,7 @@ def edit_window(request, assessment: str, subject_id: str):
         return err
 
     assessment_key = str(assessment or '').strip().lower()
-    if assessment_key not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
+    if assessment_key not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
     qp = getattr(request, 'query_params', {}) if hasattr(request, 'query_params') else request.GET
@@ -2156,6 +2616,10 @@ def edit_window(request, assessment: str, subject_id: str):
             ta_id = int(str(ta_id_raw))
     except Exception:
         ta_id = None
+
+    gate = _enforce_assessment_enabled_for_course(request, subject_code=subject_code, assessment=assessment_key, teaching_assignment_id=ta_id)
+    if gate is not None:
+        return gate
 
     # Reuse schedule resolver to determine academic year for this staff+subject.
     info = _get_due_schedule_for_request(request, subject_code=subject_code, assessment=assessment_key, teaching_assignment_id=ta_id)
@@ -2220,12 +2684,16 @@ def mark_table_lock_status(request, assessment: str, subject_id: str):
         return err
 
     assessment_key = str(assessment or '').strip().lower()
-    if assessment_key not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
+    if assessment_key not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
     subject_code = str(subject_id or '').strip()
     qp = _get_query_params(request)
     ta_id = _parse_int(qp.get('teaching_assignment_id'))
+
+    gate = _enforce_assessment_enabled_for_course(request, subject_code=subject_code, assessment=assessment_key, teaching_assignment_id=ta_id)
+    if gate is not None:
+        return gate
 
     ta = _resolve_staff_teaching_assignment(request, subject_code=subject_code, teaching_assignment_id=ta_id)
     academic_year = getattr(ta, 'academic_year', None) if ta else None
@@ -2359,11 +2827,15 @@ def mark_table_lock_confirm_mark_manager(request, assessment: str, subject_id: s
         return err
 
     assessment_key = str(assessment or '').strip().lower()
-    if assessment_key not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
+    if assessment_key not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
     subject_code = str(subject_id or '').strip()
     ta_id = _get_teaching_assignment_id_from_request(request, request.data if isinstance(request.data, dict) else None)
+
+    gate = _enforce_assessment_enabled_for_course(request, subject_code=subject_code, assessment=assessment_key, teaching_assignment_id=ta_id)
+    if gate is not None:
+        return gate
 
     ta = _resolve_staff_teaching_assignment(request, subject_code=subject_code, teaching_assignment_id=ta_id)
     academic_year = getattr(ta, 'academic_year', None) if ta else None
@@ -2562,7 +3034,7 @@ def due_schedule_upsert(request):
     if not ay_id or not subject_code or not assessment or due_at is None:
         return Response({'detail': 'academic_year_id, subject_code, assessment, due_at are required.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    if assessment not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
+    if assessment not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
     from academics.models import AcademicYear, Subject
@@ -2628,7 +3100,7 @@ def due_schedule_bulk_upsert(request):
         return Response({'detail': 'subject_codes must be a non-empty list.'}, status=status.HTTP_400_BAD_REQUEST)
 
     norm_assessments = [str(a).strip().lower() for a in assessments]
-    bad = [a for a in norm_assessments if a not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}]
+    bad = [a for a in norm_assessments if a not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}]
     if bad:
         return Response({'detail': f'Invalid assessments: {bad}'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -2808,7 +3280,7 @@ def publish_request_create(request):
     except Exception:
         ta_id = None
 
-    if assessment not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
+    if assessment not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
     if not subject_code:
         return Response({'detail': 'subject_code is required.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -3084,7 +3556,7 @@ def edit_request_create(request):
     except Exception:
         ta_id = None
 
-    if assessment not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
+    if assessment not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
     if not subject_code:
         return Response({'detail': 'subject_code is required.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -3328,6 +3800,57 @@ def edit_request_approve(request, req_id: int):
     row.mark_approved(request.user, window_minutes=minutes_int)
     row.save(update_fields=['status', 'approved_until', 'reviewed_by', 'reviewed_at', 'updated_at'])
 
+    # SPECIAL course enabled-assessment selection edit requests are surfaced in the central OBE queue
+    # as assessment='model' + scope='MARK_MANAGER' with a distinct reason. When IQAC approves here,
+    # also approve the underlying SPECIAL selection edit request so faculty can edit the "Select Exams" panel.
+    try:
+        assessment_key = str(getattr(row, 'assessment', '') or '').strip().lower()
+        scope_key = str(getattr(row, 'scope', '') or '').strip().upper()
+        reason_txt = str(getattr(row, 'reason', '') or '')
+        is_special_selection_req = (
+            assessment_key == 'model'
+            and scope_key == 'MARK_MANAGER'
+            and 'enabled assessments (special course global selection)' in reason_txt.lower()
+        )
+    except Exception:
+        is_special_selection_req = False
+
+    if is_special_selection_req:
+        try:
+            from academics.models import SpecialCourseAssessmentEditRequest
+            from django.db.models import Q
+
+            staff_profile = getattr(getattr(row, 'staff_user', None), 'staff_profile', None)
+            academic_year = getattr(row, 'academic_year', None)
+            subject_code = str(getattr(row, 'subject_code', '') or '').strip()
+
+            if staff_profile is not None and academic_year is not None and subject_code:
+                latest = (
+                    SpecialCourseAssessmentEditRequest.objects.filter(
+                        requested_by=staff_profile,
+                        selection__academic_year=academic_year,
+                    )
+                    .filter(
+                        Q(selection__curriculum_row__course_code__iexact=subject_code)
+                        | Q(selection__curriculum_row__master__course_code__iexact=subject_code)
+                    )
+                    .order_by('-requested_at')
+                    .first()
+                )
+                if latest is not None:
+                    latest.status = SpecialCourseAssessmentEditRequest.STATUS_APPROVED
+                    latest.reviewed_by = request.user
+                    latest.reviewed_at = timezone.now()
+                    latest.used_at = None
+                    latest.can_edit_until = getattr(row, 'approved_until', None)
+                    latest.save(update_fields=['status', 'reviewed_by', 'reviewed_at', 'used_at', 'can_edit_until'])
+        except Exception:
+            # best-effort only
+            pass
+
+        # Do NOT update OBE mark-table locks for special-selection edit requests.
+        return Response({'status': 'approved', 'scope': row.scope, 'approved_until': row.approved_until.isoformat() if row.approved_until else None})
+
     # Sync to authoritative lock row so the UI can use one source of truth.
     try:
         ta = getattr(row, 'teaching_assignment', None)
@@ -3391,4 +3914,51 @@ def edit_request_reject(request, req_id: int):
 
     row.mark_rejected(request.user)
     row.save(update_fields=['status', 'approved_until', 'reviewed_by', 'reviewed_at', 'updated_at'])
+
+    # Mirror rejection into SPECIAL-course enabled-assessment selection edit requests when they were
+    # routed through the OBE edit-request queue.
+    try:
+        assessment_key = str(getattr(row, 'assessment', '') or '').strip().lower()
+        scope_key = str(getattr(row, 'scope', '') or '').strip().upper()
+        reason_txt = str(getattr(row, 'reason', '') or '')
+        is_special_selection_req = (
+            assessment_key == 'model'
+            and scope_key == 'MARK_MANAGER'
+            and 'enabled assessments (special course global selection)' in reason_txt.lower()
+        )
+    except Exception:
+        is_special_selection_req = False
+
+    if is_special_selection_req:
+        try:
+            from academics.models import SpecialCourseAssessmentEditRequest
+            from django.db.models import Q
+
+            staff_profile = getattr(getattr(row, 'staff_user', None), 'staff_profile', None)
+            academic_year = getattr(row, 'academic_year', None)
+            subject_code = str(getattr(row, 'subject_code', '') or '').strip()
+
+            if staff_profile is not None and academic_year is not None and subject_code:
+                latest = (
+                    SpecialCourseAssessmentEditRequest.objects.filter(
+                        requested_by=staff_profile,
+                        selection__academic_year=academic_year,
+                    )
+                    .filter(
+                        Q(selection__curriculum_row__course_code__iexact=subject_code)
+                        | Q(selection__curriculum_row__master__course_code__iexact=subject_code)
+                    )
+                    .order_by('-requested_at')
+                    .first()
+                )
+                if latest is not None:
+                    latest.status = SpecialCourseAssessmentEditRequest.STATUS_REJECTED
+                    latest.reviewed_by = request.user
+                    latest.reviewed_at = timezone.now()
+                    latest.used_at = None
+                    latest.can_edit_until = None
+                    latest.save(update_fields=['status', 'reviewed_by', 'reviewed_at', 'used_at', 'can_edit_until'])
+        except Exception:
+            pass
+
     return Response({'status': 'rejected', 'scope': row.scope})

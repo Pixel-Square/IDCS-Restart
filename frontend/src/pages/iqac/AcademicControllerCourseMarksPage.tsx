@@ -1,13 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import MarkEntryTabs from '../../components/MarkEntryTabs';
+import { normalizeClassType } from '../../constants/classTypes';
 import { fetchIQACCourseTeachingMap, IQACTeachingMapRow } from '../../services/academics';
 import { fetchDeptRows, fetchMasters } from '../../services/curriculum';
+import { fetchSpecialCourseEnabledAssessments } from '../../services/obe';
 import type { TeachingAssignmentItem } from '../../services/obe';
-
-function normalizeClassType(classType: string | null | undefined) {
-  return String(classType ?? '').trim().toUpperCase();
-}
 
 export default function AcademicControllerCourseMarksPage(): JSX.Element {
   const { courseCode, taId } = useParams<{ courseCode: string; taId: string }>();
@@ -18,6 +16,7 @@ export default function AcademicControllerCourseMarksPage(): JSX.Element {
   const [mapping, setMapping] = useState<IQACTeachingMapRow | null>(null);
   const [classType, setClassType] = useState<string | null>(null);
   const [qpType, setQpType] = useState<string | null>(null);
+  const [enabledAssessments, setEnabledAssessments] = useState<string[] | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -31,10 +30,25 @@ export default function AcademicControllerCourseMarksPage(): JSX.Element {
         if (pick) {
           setClassType(pick?.class_type ? String(pick.class_type) : null);
           setQpType(pick?.question_paper_type ? String(pick.question_paper_type) : null);
+          const ct = String(pick?.class_type || '').trim().toUpperCase();
+          if (ct === 'SPECIAL') {
+            // Signal SPECIAL immediately to avoid intermediate non-SPECIAL fetches.
+            setEnabledAssessments([]);
+            try {
+              const ea = await fetchSpecialCourseEnabledAssessments(code);
+              setEnabledAssessments(Array.isArray(ea) ? ea : []);
+            } catch {
+              const ea = (pick as any)?.enabled_assessments;
+              setEnabledAssessments(Array.isArray(ea) ? ea.map((x: any) => String(x).trim().toLowerCase()).filter(Boolean) : []);
+            }
+          } else {
+            setEnabledAssessments(null);
+          }
         } else {
           const m = (masters || []).find((mm: any) => String(mm?.course_code || '').trim().toUpperCase() === code.toUpperCase());
           setClassType(m?.class_type ? String(m.class_type) : null);
           setQpType(null);
+          setEnabledAssessments(null);
         }
       } catch {
         // ignore
@@ -118,6 +132,7 @@ export default function AcademicControllerCourseMarksPage(): JSX.Element {
           subjectId={code}
           classType={classType}
           questionPaperType={qpType}
+          enabledAssessments={enabledAssessments}
           teachingAssignmentsOverride={taOverride}
           fixedTeachingAssignmentId={teachingAssignmentId}
           iqacResetEnabled={true}

@@ -3,9 +3,9 @@ import React, { useEffect, useState } from 'react';
 import MarkEntryTabs from '../components/MarkEntryTabs';
 
 // Props: courseId is the selected course code (string) or undefined
-type Props = { courseId?: string; classType?: string | null; questionPaperType?: string | null };
+type Props = { courseId?: string; classType?: string | null; questionPaperType?: string | null; enabledAssessments?: string[] | null };
 
-export default function MarkEntryPage({ courseId, classType, questionPaperType }: Props) {
+export default function MarkEntryPage({ courseId, classType, questionPaperType, enabledAssessments }: Props) {
   // subject is the current course code (string)
   const [subject, setSubject] = useState<string>(courseId || '');
   const [focus, setFocus] = useState(false);
@@ -65,7 +65,7 @@ export default function MarkEntryPage({ courseId, classType, questionPaperType }
               Select a course to start mark entry.
             </div>
           ) : (
-            <MarkEntryTabs subjectId={subject} classType={classType} questionPaperType={questionPaperType} />
+            <MarkEntryTabs subjectId={subject} classType={classType} questionPaperType={questionPaperType} enabledAssessments={enabledAssessments} />
           )}
         </div>
       </div>

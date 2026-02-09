@@ -1,5 +1,6 @@
 from django.contrib import admin
-from .models import CurriculumMaster, CurriculumDepartment
+from django import forms
+from .models import CurriculumMaster, CurriculumDepartment, SPECIAL_ASSESSMENT_CHOICES
 from django.urls import path
 from django.template.response import TemplateResponse
 from django.http import HttpResponse, HttpResponseRedirect
@@ -10,14 +11,66 @@ import csv, io
 from academics.models import Department
 
 
+class CurriculumMasterAdminForm(forms.ModelForm):
+    enabled_assessments = forms.MultipleChoiceField(
+        choices=SPECIAL_ASSESSMENT_CHOICES,
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+        help_text='Only used when Class type is Special.',
+    )
+
+    class Meta:
+        model = CurriculumMaster
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        inst = getattr(self, 'instance', None)
+        if inst and getattr(inst, 'enabled_assessments', None):
+            self.fields['enabled_assessments'].initial = list(inst.enabled_assessments or [])
+
+    def clean_enabled_assessments(self):
+        vals = self.cleaned_data.get('enabled_assessments') or []
+        return [str(v).strip().lower() for v in vals if str(v).strip()]
+
+    def clean(self):
+        cleaned = super().clean()
+        ct = str(cleaned.get('class_type') or '').strip().upper()
+        ea = cleaned.get('enabled_assessments') or []
+        if ct == 'SPECIAL' and not ea:
+            self.add_error('enabled_assessments', 'Select at least one assessment for Special courses.')
+        if ct != 'SPECIAL':
+            # keep DB tidy; non-special courses do not need this config
+            cleaned['enabled_assessments'] = []
+        return cleaned
+
+
 @admin.register(CurriculumMaster)
 class CurriculumMasterAdmin(admin.ModelAdmin):
     change_list_template = 'admin/curriculum/master_change_list.html'
-    list_display = ('regulation', 'semester', 'course_code', 'course_name', 'category', 'class_type', 'for_all_departments', 'editable')
+    form = CurriculumMasterAdminForm
+    list_display = ('regulation', 'semester', 'course_code', 'course_name', 'category', 'class_type', 'enabled_assessments_display', 'for_all_departments', 'editable')
     list_filter = ('regulation', 'semester', 'for_all_departments', 'editable')
     search_fields = ('course_code', 'course_name')
     filter_horizontal = ('departments',)
     actions = ['propagate_to_departments']
+
+    def enabled_assessments_display(self, obj):
+        if str(getattr(obj, 'class_type', '')).upper() != 'SPECIAL':
+            return ''
+        vals = getattr(obj, 'enabled_assessments', None) or []
+        if not vals:
+            return '(none)'
+        # show friendly labels in stable order
+        order = [k for k, _ in SPECIAL_ASSESSMENT_CHOICES]
+        label_map = {k: v for k, v in SPECIAL_ASSESSMENT_CHOICES}
+        display = [label_map.get(k, k) for k in order if k in set([str(x).lower() for x in vals])]
+        return ', '.join(display)
+
+    enabled_assessments_display.short_description = 'Assessments'
+
+    class Media:
+        js = ('curriculum/curriculum_master_admin.js',)
 
     def get_urls(self):
         urls = super().get_urls()
@@ -29,13 +82,14 @@ class CurriculumMasterAdmin(admin.ModelAdmin):
 
     def download_template(self, request):
         """Return a CSV template for bulk import."""
-        headers = ['regulation','semester','course_code','course_name','category','class_type','l','t','p','s','c','internal_mark','external_mark','for_all_departments','editable','departments']
+        headers = ['regulation','semester','course_code','course_name','category','class_type','enabled_assessments','l','t','p','s','c','internal_mark','external_mark','for_all_departments','editable','departments']
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow(headers)
         # example row: applies to selected departments (three codes) and NOT to all
         # writer will quote fields that contain commas automatically; list the codes plainly
-        writer.writerow(['2024','1','CS101','Introduction to CS','CORE','THEORY','3','0','0','0','3','30','70','False','False','042,205,148'])
+        writer.writerow(['2024','1','CS101','Introduction to CS','CORE','THEORY','','3','0','0','0','3','30','70','False','False','042,205,148'])
+        writer.writerow(['2024','1','CS102','Special Topics','ELECTIVE','SPECIAL','ssa1,cia1','3','0','0','0','3','30','70','False','False','042'])
         resp = HttpResponse(output.getvalue(), content_type='text/csv')
         resp['Content-Disposition'] = 'attachment; filename=curriculum_master_template.csv'
         return resp
@@ -99,6 +153,7 @@ class CurriculumMasterAdmin(admin.ModelAdmin):
                             'course_name': row.get('course_name') or None,
                             'category': row.get('category') or '',
                             'class_type': row.get('class_type') or 'THEORY',
+                            'enabled_assessments': [x.strip().lower() for x in str(row.get('enabled_assessments') or '').split(',') if x.strip()],
                             'l': int(row.get('l') or 0),
                             't': int(row.get('t') or 0),
                             'p': int(row.get('p') or 0),
@@ -109,6 +164,10 @@ class CurriculumMasterAdmin(admin.ModelAdmin):
                             'for_all_departments': (str(row.get('for_all_departments') or '').strip().lower() in ('1','true','yes')),
                             'editable': (str(row.get('editable') or '').strip().lower() in ('1','true','yes')),
                         }
+
+                        # For non-special rows, ignore enabled_assessments
+                        if str(vals.get('class_type') or '').strip().upper() != 'SPECIAL':
+                            vals['enabled_assessments'] = []
 
                         if instance:
                             for k, v in vals.items():

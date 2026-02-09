@@ -10,6 +10,7 @@ import AcademicControllerPage from './pages/iqac/AcademicControllerPage';
 import AcademicControllerCoursePage from './pages/iqac/AcademicControllerCoursePage';
 import AcademicControllerCourseMarksPage from './pages/iqac/AcademicControllerCourseMarksPage';
 import AcademicControllerCourseOBEPage from './pages/iqac/AcademicControllerCourseOBEPage';
+import InternalMarkPage from './pages/iqac/InternalMarkPage';
 import OBERequestsPage from './pages/OBERequestsPage';
 import OBEDueDatesPage from './pages/OBEDueDatesPage';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -134,6 +135,10 @@ export default function App() {
               <Route
                 path="/iqac/academic-controller/course/:courseCode/marks/:taId"
                 element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} element={<AcademicControllerCourseMarksPage />} />}
+              />
+              <Route
+                path="/iqac/academic-controller/course/:courseCode/internal-mark/:taId"
+                element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} element={<InternalMarkPage />} />}
               />
               <Route
                 path="/iqac/academic-controller/course/:courseCode/obe/:taId/*"

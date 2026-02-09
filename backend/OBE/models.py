@@ -1,3 +1,50 @@
+from django.db import models
+
+class ClassTypeWeights(models.Model):
+    CLASS_TYPE_CHOICES = [
+        ('THEORY', 'Theory'),
+        ('TCPR', 'Theory + Practical'),
+        ('TCPL', 'Theory + Practical + Lab'),
+        ('LAB', 'Lab'),
+        # Add more as needed
+    ]
+
+    class_type = models.CharField(max_length=16, choices=CLASS_TYPE_CHOICES, unique=True)
+    ssa1 = models.DecimalField(max_digits=5, decimal_places=2, default=1.5)
+    cia1 = models.DecimalField(max_digits=5, decimal_places=2, default=3)
+    formative1 = models.DecimalField(max_digits=5, decimal_places=2, default=2.5)
+    # INTERNAL MARK weightage row (13 numbers) configured by IQAC per class type.
+    # Stored as JSON so the frontend mapping schema can evolve.
+    internal_mark_weights = models.JSONField(default=list, blank=True)
+    updated_by = models.IntegerField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Class Type Weights'
+        verbose_name_plural = 'Class Type Weights'
+        db_table = 'obe_class_type_weights'
+
+    def __str__(self):
+        return f"{self.class_type} Weights"
+
+
+class InternalMarkMapping(models.Model):
+    """IQAC-controlled internal mark mapping per subject.
+
+    Stored as JSON so the frontend can evolve the mapping schema
+    (cycle weightages, ME split, etc.) without frequent migrations.
+    """
+
+    subject = models.OneToOneField('academics.Subject', on_delete=models.CASCADE, related_name='internal_mark_mapping')
+    mapping = models.JSONField(default=dict)
+    updated_by = models.IntegerField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'obe_internal_mark_mapping'
+
+    def __str__(self):
+        return f"Internal Mark Mapping - {getattr(self.subject, 'code', '')}"
 import uuid
 from django.db import models
 from django.db.models import UniqueConstraint, Q
@@ -61,7 +108,9 @@ class AssessmentDraft(models.Model):
 
     ASSESSMENT_CHOICES = (
         ('ssa1', 'SSA1'),
+        ('review1', 'Review1'),
         ('ssa2', 'SSA2'),
+        ('review2', 'Review2'),
         ('cia1', 'CIA1'),
         ('cia2', 'CIA2'),
         ('formative1', 'Formative1'),
@@ -104,6 +153,32 @@ class Ssa2Mark(models.Model):
     class Meta:
         constraints = [
             UniqueConstraint(fields=['subject', 'student'], name='unique_ssa2_mark_per_subject_student'),
+        ]
+
+
+class Review1Mark(models.Model):
+    subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='review1_marks')
+    student = models.ForeignKey('academics.StudentProfile', on_delete=models.CASCADE, related_name='review1_marks')
+    mark = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            UniqueConstraint(fields=['subject', 'student'], name='unique_review1_mark_per_subject_student'),
+        ]
+
+
+class Review2Mark(models.Model):
+    subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='review2_marks')
+    student = models.ForeignKey('academics.StudentProfile', on_delete=models.CASCADE, related_name='review2_marks')
+    mark = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            UniqueConstraint(fields=['subject', 'student'], name='unique_review2_mark_per_subject_student'),
         ]
 
 

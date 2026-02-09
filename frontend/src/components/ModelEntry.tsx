@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { lsGet, lsSet } from '../utils/localStorage';
+import { normalizeClassType } from '../constants/classTypes';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
 
 type Props = {
@@ -81,11 +82,27 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   const [tcplSheet, setTcplSheet] = useState<TcplSheetState>({});
   const [theorySheet, setTheorySheet] = useState<TcplSheetState>({});
 
-  const normalizedClassType = String(classType ?? '').trim().toUpperCase();
+  const normalizedClassType = useMemo(() => normalizeClassType(classType), [classType]);
   const isTheory = normalizedClassType === 'THEORY';
   const isTcplLike = normalizedClassType === 'TCPL' || normalizedClassType === 'TCPR';
   const tcplLikeKind = normalizedClassType === 'TCPR' ? 'TCPR' : 'TCPL';
-  const normalizedQpType = String(questionPaperType ?? '').trim().toUpperCase();
+
+  const qpTypeStorageKey = useMemo(
+    () => `model_qp_type_${subjectId}_${String(teachingAssignmentId ?? 'none')}`,
+    [subjectId, teachingAssignmentId],
+  );
+  const [qpType, setQpType] = useState<string>('');
+
+  useEffect(() => {
+    const stored = lsGet<string>(qpTypeStorageKey);
+    if (typeof stored === 'string') {
+      setQpType(stored);
+      return;
+    }
+    setQpType(String(questionPaperType ?? ''));
+  }, [qpTypeStorageKey, questionPaperType]);
+
+  const normalizedQpType = String(qpType ?? '').trim().toUpperCase();
 
   const activeSheet: TcplSheetState = isTcplLike ? (tcplSheet || {}) : (theorySheet || {});
 
@@ -495,9 +512,34 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
             {' '}| Class: <b>{normalizedClassType}</b>
           </>
         ) : null}
+        {' '}| QP:
+        <input
+          value={qpType}
+          onChange={(e) => {
+            const next = String(e.target.value ?? '');
+            setQpType(next);
+            try {
+              lsSet(qpTypeStorageKey, next);
+            } catch {
+              // ignore
+            }
+          }}
+          placeholder="QP1"
+          style={{
+            marginLeft: 6,
+            padding: '2px 6px',
+            borderRadius: 8,
+            border: '1px solid #e5e7eb',
+            fontSize: 12,
+            color: '#111827',
+            width: 110,
+          }}
+        />
         {normalizedQpType ? (
           <>
-            {' '}| QP: <b>{normalizedQpType}</b>
+            {' '}<span style={{ color: '#6b7280' }}>(</span>
+            <b>{normalizedQpType}</b>
+            <span style={{ color: '#6b7280' }}>)</span>
           </>
         ) : null}
       </div>
@@ -661,10 +703,10 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
 
                       {Array.from({ length: theoryCoCount + theoryVisibleBtls.length }).flatMap((_, i) => (
                         <React.Fragment key={`theory-mkpct-${i}`}>
-                          <th style={cellTh}>
+                          <th style={{ ...cellTh, minWidth: 52 }}>
                             <div style={{ whiteSpace: 'pre-line', lineHeight: '0.9', fontSize: '0.7em' }}>{'M\nA\nR\nK'}</div>
                           </th>
-                          <th style={cellTh}>%</th>
+                          <th style={{ ...cellTh, minWidth: 34 }}>%</th>
                         </React.Fragment>
                       ))}
                     </tr>
@@ -1027,10 +1069,10 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                       ))}
                       {Array.from({ length: 2 + visibleBtls.length }).flatMap((_, i) => (
                         <React.Fragment key={i}>
-                          <th style={cellTh}>
+                          <th style={{ ...cellTh, minWidth: 52 }}>
                             <div style={{ whiteSpace: 'pre-line', lineHeight: '0.9', fontSize: '0.7em' }}>{'M\nA\nR\nK'}</div>
                           </th>
-                          <th style={cellTh}>%</th>
+                          <th style={{ ...cellTh, minWidth: 34 }}>%</th>
                         </React.Fragment>
                       ))}
                     </tr>
@@ -1298,10 +1340,10 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                   {/* CO mark/% + BTL mark/% labels */}
                   {Array.from({ length: tcplCoCount + tcplVisibleBtls.length }).flatMap((_, i) => (
                     <React.Fragment key={`mkpct-${i}`}>
-                      <th style={cellTh}>
+                      <th style={{ ...cellTh, minWidth: 52 }}>
                         <div style={{ whiteSpace: 'pre-line', lineHeight: '0.9', fontSize: '0.7em' }}>{'M\nA\nR\nK'}</div>
                       </th>
-                      <th style={cellTh}>%</th>
+                      <th style={{ ...cellTh, minWidth: 34 }}>%</th>
                     </React.Fragment>
                   ))}
                 </tr>

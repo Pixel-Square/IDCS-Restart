@@ -1,12 +1,25 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
-import { createPublishRequest, fetchDraft, publishSsa2, saveDraft } from '../services/obe';
+import {
+  confirmMarkManagerLock,
+  createEditRequest,
+  createPublishRequest,
+  fetchDraft,
+  fetchPublishedReview2,
+  fetchPublishedSsa2,
+  publishReview2,
+  publishSsa2,
+  PublishedSsa2Response,
+  saveDraft,
+} from '../services/obe';
 import { formatRemaining, usePublishWindow } from '../hooks/usePublishWindow';
+import { useEditWindow } from '../hooks/useEditWindow';
+import { useMarkTableLock } from '../hooks/useMarkTableLock';
 import PublishLockOverlay from './PublishLockOverlay';
 
-type Props = { subjectId: string; teachingAssignmentId?: number };
+type Props = { subjectId: string; teachingAssignmentId?: number; label?: string; assessmentKey?: 'ssa2' | 'review2' };
 
 type Ssa2Row = {
   studentId: number;
@@ -20,6 +33,10 @@ type Ssa2Sheet = {
   termLabel: string;
   batchLabel: string;
   rows: Ssa2Row[];
+  // Mark Manager lock state
+  markManagerLocked?: boolean;
+  markManagerSnapshot?: string | null;
+  markManagerApprovalUntil?: string | null;
 };
 
 type Ssa2DraftPayload = {
@@ -61,8 +78,16 @@ function getBtlMaxFromCfg(cfg: any, n: 1 | 2 | 3 | 4 | 5 | 6, fallback: number):
   return parsed == null ? fallback : parsed;
 }
 
-function storageKey(subjectId: string) {
-  return `ssa2_sheet_${subjectId}`;
+function storageKey(subjectId: string, assessmentKey: 'ssa2' | 'review2') {
+  return `${assessmentKey}_sheet_${subjectId}`;
+}
+
+function safeFilePart(raw: string) {
+  return String(raw || '')
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9_-]/g, '')
+    .slice(0, 48);
 }
 
 function downloadCsv(filename: string, rows: Array<Record<string, string | number>>) {
@@ -112,19 +137,29 @@ function shortenRegisterNo(registerNo: string): string {
   return registerNo.slice(-8);
 }
 
-export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
-  const key = useMemo(() => storageKey(subjectId), [subjectId]);
+export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, assessmentKey = 'ssa2' }: Props) {
+  const displayLabel = String(label || 'SSA2');
+  const isReview = assessmentKey === 'review2';
+  const showTotalColumn = false;
+  const key = useMemo(() => storageKey(subjectId, assessmentKey), [subjectId, assessmentKey]);
+  const fetchPublished = assessmentKey === 'review2' ? fetchPublishedReview2 : fetchPublishedSsa2;
+  const publishNow = assessmentKey === 'review2' ? publishReview2 : publishSsa2;
   const [masterCfg, setMasterCfg] = useState<any>(null);
   const [sheet, setSheet] = useState<Ssa2Sheet>({
     termLabel: 'KRCT AY25-26',
     batchLabel: subjectId,
     rows: [],
+    // Default: locked until Mark Manager is confirmed (saved)
+    markManagerLocked: false,
+    markManagerSnapshot: null,
+    markManagerApprovalUntil: null,
   });
 
   const masterTermLabel = String(masterCfg?.termLabel || 'KRCT AY25-26');
   const ssa2Cfg = masterCfg?.assessments?.ssa2 || {};
-  const MAX_ASMT2 = Number.isFinite(Number(ssa2Cfg?.maxTotal)) ? Number(ssa2Cfg.maxTotal) : DEFAULT_MAX_ASMT2;
-  const CO_MAX = {
+  const MAX_ASMT2_BASE = Number.isFinite(Number(ssa2Cfg?.maxTotal)) ? Number(ssa2Cfg.maxTotal) : DEFAULT_MAX_ASMT2;
+  const MAX_ASMT2 = isReview ? 30 : MAX_ASMT2_BASE;
+  const CO_MAX_BASE = {
     // Prefer explicit CO3/CO4 config; fall back to legacy CO1/CO2 keys.
     co3: Number.isFinite(Number(ssa2Cfg?.coMax?.co3))
       ? Number(ssa2Cfg.coMax.co3)
@@ -137,6 +172,7 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
         ? Number(ssa2Cfg.coMax.co2)
         : DEFAULT_CO_MAX.co4,
   };
+  const CO_MAX = isReview ? { co3: 15, co4: 15 } : CO_MAX_BASE;
   const BTL_MAX = {
     btl1: getBtlMaxFromCfg(ssa2Cfg, 1, DEFAULT_BTL_MAX.btl1),
     btl2: getBtlMaxFromCfg(ssa2Cfg, 2, DEFAULT_BTL_MAX.btl2),
@@ -145,6 +181,8 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
     btl5: getBtlMaxFromCfg(ssa2Cfg, 5, DEFAULT_BTL_MAX.btl5),
     btl6: getBtlMaxFromCfg(ssa2Cfg, 6, DEFAULT_BTL_MAX.btl6),
   };
+
+  const BTL_MAX_WHEN_VISIBLE = isReview ? 30 : DEFAULT_BTL_MAX_WHEN_VISIBLE;
 
   useEffect(() => {
     let mounted = true;
@@ -170,14 +208,20 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
   const [rosterLoading, setRosterLoading] = useState(false);
   const [rosterError, setRosterError] = useState<string | null>(null);
 
-  const [btlPickerOpen, setBtlPickerOpen] = useState(true);
   const [selectedBtls, setSelectedBtls] = useState<number[]>([]);
 
   const [savingDraft, setSavingDraft] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [savedBy, setSavedBy] = useState<string | null>(null);
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
+
+  const [publishedEditModalOpen, setPublishedEditModalOpen] = useState(false);
+  const [viewMarksModalOpen, setViewMarksModalOpen] = useState(false);
+  const [publishedViewSnapshot, setPublishedViewSnapshot] = useState<PublishedSsa2Response | null>(null);
+  const [publishedViewLoading, setPublishedViewLoading] = useState(false);
+  const [publishedViewError, setPublishedViewError] = useState<string | null>(null);
 
   const {
     data: publishWindow,
@@ -186,7 +230,11 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
     remainingSeconds,
     publishAllowed,
     refresh: refreshPublishWindow,
-  } = usePublishWindow({ assessment: 'ssa2', subjectCode: subjectId, teachingAssignmentId });
+  } = usePublishWindow({ assessment: assessmentKey, subjectCode: subjectId, teachingAssignmentId });
+
+  const { data: markLock, refresh: refreshMarkLock } = useMarkTableLock({ assessment: assessmentKey as any, subjectCode: String(subjectId || ''), teachingAssignmentId, options: { poll: false } });
+  const { data: markManagerEditWindow } = useEditWindow({ assessment: assessmentKey as any, subjectCode: String(subjectId || ''), scope: 'MARK_MANAGER', teachingAssignmentId, options: { poll: false } });
+  const { data: markEntryEditWindow } = useEditWindow({ assessment: assessmentKey as any, subjectCode: String(subjectId || ''), scope: 'MARK_ENTRY', teachingAssignmentId, options: { poll: false } });
 
   const globalLocked = Boolean(publishWindow?.global_override_active && publishWindow?.global_is_open === false);
 
@@ -194,23 +242,56 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
   const [requesting, setRequesting] = useState(false);
   const [requestMessage, setRequestMessage] = useState<string | null>(null);
 
+  const [markManagerModal, setMarkManagerModal] = useState<null | { mode: 'confirm' | 'request' }>(null);
+  const [markManagerBusy, setMarkManagerBusy] = useState(false);
+  const [markManagerError, setMarkManagerError] = useState<string | null>(null);
+
+  const [publishConsumedApprovals, setPublishConsumedApprovals] = useState<null | {
+    markEntryApprovalUntil: string | null;
+    markManagerApprovalUntil: string | null;
+  }>(null);
+
+  useEffect(() => {
+    setPublishConsumedApprovals(null);
+  }, [subjectId]);
+
+  const isPublished = Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published) || Boolean(publishedViewSnapshot);
+  const markManagerLocked = Boolean(sheet.markManagerLocked);
+
+  const markEntryApprovalUntil = markEntryEditWindow?.approval_until ? String(markEntryEditWindow.approval_until) : null;
+  const markManagerApprovalUntil = markManagerEditWindow?.approval_until ? String(markManagerEditWindow.approval_until) : null;
+  const markEntryApprovedFresh =
+    Boolean(markEntryEditWindow?.allowed_by_approval) &&
+    Boolean(markEntryApprovalUntil) &&
+    markEntryApprovalUntil !== (publishConsumedApprovals?.markEntryApprovalUntil ?? null);
+  const markManagerApprovedFresh =
+    Boolean(markManagerEditWindow?.allowed_by_approval) &&
+    Boolean(markManagerApprovalUntil) &&
+    markManagerApprovalUntil !== (publishConsumedApprovals?.markManagerApprovalUntil ?? null);
+
+  const entryOpen = !isPublished ? true : Boolean(markLock?.entry_open) || markEntryApprovedFresh || markManagerApprovedFresh;
+  const publishedEditLocked = Boolean(isPublished && !entryOpen);
+  const tableBlocked = Boolean(globalLocked || (isPublished ? !entryOpen : !markManagerLocked));
+  const showNameList = Boolean(sheet.markManagerSnapshot != null);
+
   const visibleBtlIndices = useMemo(() => {
     const set = new Set(selectedBtls);
     return [1, 2, 3, 4, 5, 6].filter((n) => set.has(n));
   }, [selectedBtls]);
 
   const totalTableCols = useMemo(() => {
-    // Fixed layout matching the Excel header template:
-    // S.No, RegNo, Name, SSA2, Total = 5
+    // Layout matching the Excel header template, but BTL columns are dynamic.
+    // S.No, RegNo, Name, SSA2 = 4 (and optional Total = +1)
     // CO Attainment (CO-3 Mark/% + CO-4 Mark/%) = 4
-    // BTL Attainment (BTL-1..6 each Mark/%) = 12
-    return 21;
-  }, []);
+    // BTL Attainment = selected count * 2 (Mark/% per BTL)
+    const base = showTotalColumn ? 9 : 8;
+    return base + visibleBtlIndices.length * 2;
+  }, [showTotalColumn, visibleBtlIndices.length]);
 
   useEffect(() => {
     if (!subjectId) return;
     try {
-      const sk = `ssa2_selected_btls_${subjectId}`;
+      const sk = `${assessmentKey}_selected_btls_${subjectId}`;
       lsSet(sk, selectedBtls);
     } catch {}
 
@@ -218,7 +299,7 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
     const tid = setTimeout(async () => {
       try {
         const payload: Ssa2DraftPayload = { sheet, selectedBtls };
-        await saveDraft('ssa2', subjectId, payload);
+        await saveDraft(assessmentKey, subjectId, payload);
         try {
           if (key) lsSet(key, { termLabel: sheet.termLabel, batchLabel: sheet.batchLabel, rows: sheet.rows });
         } catch {}
@@ -231,7 +312,7 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
       cancelled = true;
       clearTimeout(tid);
     };
-  }, [selectedBtls, subjectId, sheet, key]);
+  }, [selectedBtls, subjectId, sheet, key, assessmentKey]);
 
   useEffect(() => {
     if (!subjectId) return;
@@ -241,9 +322,19 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
         termLabel: masterCfg?.termLabel ? String(masterCfg.termLabel) : String((stored as any).termLabel || 'KRCT AY25-26'),
         batchLabel: subjectId,
         rows: (stored as any).rows,
+        markManagerSnapshot: (stored as any)?.markManagerSnapshot ?? null,
+        markManagerApprovalUntil: (stored as any)?.markManagerApprovalUntil ?? null,
+        markManagerLocked: typeof (stored as any)?.markManagerLocked === 'boolean' ? (stored as any).markManagerLocked : Boolean((stored as any)?.markManagerSnapshot),
       });
     } else {
-      setSheet({ termLabel: masterTermLabel || 'KRCT AY25-26', batchLabel: subjectId, rows: [] });
+      setSheet({
+        termLabel: masterTermLabel || 'KRCT AY25-26',
+        batchLabel: subjectId,
+        rows: [],
+        markManagerLocked: false,
+        markManagerSnapshot: null,
+        markManagerApprovalUntil: null,
+      });
     }
   }, [key, subjectId, masterCfg, masterTermLabel]);
 
@@ -252,17 +343,37 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
     (async () => {
       if (!subjectId) return;
       try {
-        const res = await fetchDraft<Ssa2DraftPayload>('ssa2', subjectId);
+        const res = await fetchDraft<Ssa2DraftPayload>(assessmentKey, subjectId);
         if (!mounted) return;
         const d = res?.draft;
         const draftSheet = (d as any)?.sheet;
         const draftBtls = (d as any)?.selectedBtls;
         if (draftSheet && typeof draftSheet === 'object' && Array.isArray((draftSheet as any).rows)) {
-          setSheet({
+          setSheet((prevSheet) => ({
+            ...prevSheet,
             termLabel: String((draftSheet as any).termLabel || masterTermLabel || 'KRCT AY25-26'),
             batchLabel: subjectId,
             rows: (draftSheet as any).rows,
-          });
+            markManagerSnapshot: (draftSheet as any)?.markManagerSnapshot ?? prevSheet.markManagerSnapshot ?? null,
+            markManagerApprovalUntil: (draftSheet as any)?.markManagerApprovalUntil ?? prevSheet.markManagerApprovalUntil ?? null,
+            markManagerLocked:
+              typeof (draftSheet as any)?.markManagerLocked === 'boolean'
+                ? (draftSheet as any).markManagerLocked
+                : Boolean((draftSheet as any)?.markManagerSnapshot ?? prevSheet.markManagerSnapshot),
+          }));
+
+          const updatedAt = (res as any)?.updated_at ?? null;
+          const updatedBy = (res as any)?.updated_by ?? null;
+          if (updatedAt) {
+            try {
+              setSavedAt(new Date(String(updatedAt)).toLocaleString());
+            } catch {
+              setSavedAt(String(updatedAt));
+            }
+          }
+          if (updatedBy) {
+            setSavedBy(String(updatedBy.name || updatedBy.username || updatedBy.id || ''));
+          }
           try {
             if (key)
               lsSet(key, {
@@ -278,7 +389,7 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
           const next = draftBtls.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n));
           setSelectedBtls(next);
           try {
-            const sk = `ssa2_selected_btls_${subjectId}`;
+            const sk = `${assessmentKey}_selected_btls_${subjectId}`;
             lsSet(sk, next);
           } catch {
             // ignore
@@ -291,7 +402,43 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
     return () => {
       mounted = false;
     };
-  }, [subjectId, masterTermLabel, key]);
+  }, [subjectId, masterTermLabel, key, assessmentKey]);
+
+  // Mark Manager workflow sync: keep local sheet lock state in sync with server lock/approval
+  useEffect(() => {
+    if (!subjectId) return;
+
+    const published = Boolean(markLock?.exists && markLock?.is_published) || Boolean(publishedAt);
+    if (published && markLock?.exists) {
+      const nextLocked = Boolean(markLock?.mark_manager_locked);
+      if (Boolean(sheet.markManagerLocked) !== nextLocked) {
+        setSheet((p) => ({ ...p, markManagerLocked: nextLocked }));
+      }
+      return;
+    }
+
+    const allowedByApproval = Boolean(markManagerEditWindow?.allowed_by_approval);
+    const approvalUntil = markManagerEditWindow?.approval_until ? String(markManagerEditWindow.approval_until) : null;
+    if (allowedByApproval && approvalUntil) {
+      if (approvalUntil === (publishConsumedApprovals?.markManagerApprovalUntil ?? null)) return;
+      const lastApprovalUntil = sheet.markManagerApprovalUntil ? String(sheet.markManagerApprovalUntil) : null;
+      if (Boolean(sheet.markManagerLocked) && lastApprovalUntil !== approvalUntil) {
+        setSheet((p) => ({ ...p, markManagerLocked: false, markManagerApprovalUntil: approvalUntil }));
+      }
+      return;
+    }
+  }, [
+    subjectId,
+    markLock?.exists,
+    markLock?.is_published,
+    markLock?.mark_manager_locked,
+    markManagerEditWindow?.allowed_by_approval,
+    markManagerEditWindow?.approval_until,
+    sheet.markManagerLocked,
+    sheet.markManagerApprovalUntil,
+    publishedAt,
+    publishConsumedApprovals?.markManagerApprovalUntil,
+  ]);
 
   const mergeRosterIntoRows = (students: TeachingAssignmentRosterStudent[]) => {
     setSheet((prev) => {
@@ -348,27 +495,138 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teachingAssignmentId]);
 
+  async function refreshPublishedSnapshot(showLoading: boolean) {
+    if (!subjectId) return;
+    if (showLoading) setPublishedViewLoading(true);
+    setPublishedViewError(null);
+    try {
+      const resp = await fetchPublished(String(subjectId));
+      setPublishedViewSnapshot(resp || null);
+    } catch (e: any) {
+      if (showLoading) setPublishedViewError(e?.message || `Failed to load published ${displayLabel} marks`);
+    } finally {
+      if (showLoading) setPublishedViewLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!subjectId) return;
+    refreshPublishedSnapshot(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subjectId]);
+
+  const prevEntryOpenRef = useRef<boolean>(Boolean(entryOpen));
+  useEffect(() => {
+    if (!subjectId) return;
+    if (!isPublished) return;
+
+    const prev = prevEntryOpenRef.current;
+    if (prev || !entryOpen) {
+      prevEntryOpenRef.current = Boolean(entryOpen);
+      return;
+    }
+
+    let mounted = true;
+    (async () => {
+      try {
+        const res = await fetchDraft<Ssa2DraftPayload>(assessmentKey, String(subjectId));
+        if (!mounted) return;
+        const d = res?.draft;
+        const draftSheet = (d as any)?.sheet;
+        const draftBtls = (d as any)?.selectedBtls;
+        if (draftSheet && typeof draftSheet === 'object' && Array.isArray((draftSheet as any).rows)) {
+          setSheet((prevSheet) => ({
+            ...prevSheet,
+            termLabel: String((draftSheet as any).termLabel || masterTermLabel || 'KRCT AY25-26'),
+            batchLabel: subjectId,
+            rows: (draftSheet as any).rows,
+            markManagerSnapshot: (draftSheet as any)?.markManagerSnapshot ?? prevSheet.markManagerSnapshot ?? null,
+            markManagerApprovalUntil: (draftSheet as any)?.markManagerApprovalUntil ?? prevSheet.markManagerApprovalUntil ?? null,
+            markManagerLocked:
+              typeof (draftSheet as any)?.markManagerLocked === 'boolean'
+                ? (draftSheet as any).markManagerLocked
+                : Boolean((draftSheet as any)?.markManagerSnapshot ?? prevSheet.markManagerSnapshot),
+          }));
+        }
+        if (Array.isArray(draftBtls)) {
+          setSelectedBtls(draftBtls.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n)));
+        }
+        return;
+      } catch {
+        // ignore
+      }
+
+      if (!mounted) return;
+      refreshPublishedSnapshot(false);
+    })();
+
+    prevEntryOpenRef.current = Boolean(entryOpen);
+    return () => {
+      mounted = false;
+    };
+  }, [entryOpen, isPublished, subjectId, assessmentKey, masterTermLabel]);
+
+  useEffect(() => {
+    if (!subjectId) return;
+    if (!isPublished) return;
+    if (entryOpen) return;
+    const tid = window.setInterval(() => {
+      refreshMarkLock({ silent: true });
+    }, 30000);
+    return () => window.clearInterval(tid);
+  }, [entryOpen, isPublished, subjectId, refreshMarkLock]);
+
+  useEffect(() => {
+    if (!viewMarksModalOpen) return;
+    if (!subjectId) return;
+    setPublishedViewSnapshot(null);
+    refreshPublishedSnapshot(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMarksModalOpen, subjectId]);
+
   const saveDraftToDb = async () => {
     setSavingDraft(true);
     setSaveError(null);
     try {
       const payload: Ssa2DraftPayload = { sheet, selectedBtls };
-      await saveDraft('ssa2', subjectId, payload);
+      await saveDraft(assessmentKey, subjectId, payload);
       setSavedAt(new Date().toLocaleString());
     } catch (e: any) {
-      setSaveError(e?.message || 'Failed to save SSA2 draft');
+      setSaveError(e?.message || `Failed to save ${displayLabel} draft`);
     } finally {
       setSavingDraft(false);
     }
   };
 
   const publish = async () => {
+    if (!subjectId) return;
+    if (globalLocked) {
+      setSaveError('Publishing is locked by IQAC.');
+      return;
+    }
+    if (!publishAllowed) {
+      setSaveError('Publish window is closed. Please request IQAC approval.');
+      return;
+    }
+
+    if (isPublished && publishedEditLocked) {
+      setPublishedEditModalOpen(true);
+      return;
+    }
+
     setPublishing(true);
     setSaveError(null);
     try {
-      await publishSsa2(subjectId, sheet, teachingAssignmentId);
+      await publishNow(subjectId, sheet, teachingAssignmentId);
       setPublishedAt(new Date().toLocaleString());
+      setPublishConsumedApprovals({
+        markEntryApprovalUntil,
+        markManagerApprovalUntil,
+      });
+      setSheet((p) => ({ ...p, markManagerLocked: true }));
       refreshPublishWindow();
+      refreshMarkLock({ silent: true });
+      refreshPublishedSnapshot(false);
         try {
           console.debug('obe:published dispatch', { assessment: assessmentKey, subjectId });
           window.dispatchEvent(new CustomEvent('obe:published', { detail: { subjectId, assessment: assessmentKey } }));
@@ -376,7 +634,7 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
           // ignore
         }
     } catch (e: any) {
-      setSaveError(e?.message || 'Failed to publish SSA2');
+      setSaveError(e?.message || `Failed to publish ${displayLabel}`);
     } finally {
       setPublishing(false);
     }
@@ -387,7 +645,7 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
     setRequestMessage(null);
     setSaveError(null);
     try {
-      await createPublishRequest({ assessment: 'ssa2', subject_code: subjectId, reason: requestReason, teaching_assignment_id: teachingAssignmentId });
+      await createPublishRequest({ assessment: assessmentKey, subject_code: subjectId, reason: requestReason, teaching_assignment_id: teachingAssignmentId });
       setRequestMessage('Request sent to IQAC for approval.');
     } catch (e: any) {
       setSaveError(e?.message || 'Failed to request approval');
@@ -398,12 +656,88 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
   };
 
   const resetAllMarks = () => {
-    if (!confirm('Reset SSA2 marks for all students in this section?')) return;
+    if (!confirm(`Reset ${displayLabel} marks for all students in this section?`)) return;
+    if (tableBlocked) return;
     setSheet((prev) => ({
       ...prev,
       rows: (prev.rows || []).map((r) => ({ ...r, total: '' })),
     }));
   };
+
+  function markManagerSnapshotOf(s: Ssa2Sheet): string {
+    return JSON.stringify({
+      maxTotal: MAX_ASMT2,
+      coMax: CO_MAX,
+      selectedBtls: selectedBtls.slice(),
+      btlMax: BTL_MAX,
+    });
+  }
+
+  async function requestMarkManagerEdit() {
+    if (!subjectId) return;
+    setMarkManagerBusy(true);
+    setMarkManagerError(null);
+    try {
+      await createEditRequest({
+        assessment: assessmentKey,
+        subject_code: String(subjectId),
+        scope: 'MARK_MANAGER',
+        reason: `Edit request: Mark Manager changes for ${displayLabel} ${subjectId}`,
+        teaching_assignment_id: teachingAssignmentId,
+      });
+      alert('Edit request sent to IQAC.');
+    } catch (e: any) {
+      setMarkManagerError(e?.message || 'Request failed');
+      alert(e?.message || 'Request failed');
+    } finally {
+      setMarkManagerBusy(false);
+    }
+  }
+
+  async function requestMarkEntryEdit() {
+    if (!subjectId) return;
+    try {
+      await createEditRequest({
+        assessment: assessmentKey,
+        subject_code: String(subjectId),
+        scope: 'MARK_ENTRY',
+        reason: `Edit request: ${displayLabel} marks entry for ${subjectId}`,
+        teaching_assignment_id: teachingAssignmentId,
+      });
+      alert('Edit request sent to IQAC.');
+      refreshMarkLock({ silent: true });
+    } catch (e: any) {
+      alert(e?.message || 'Request failed');
+    }
+  }
+
+  async function confirmMarkManager() {
+    if (!subjectId) return;
+    setMarkManagerBusy(true);
+    setMarkManagerError(null);
+    try {
+      const snapshot = markManagerSnapshotOf(sheet);
+      const approvalUntil = markManagerEditWindow?.approval_until ? String(markManagerEditWindow.approval_until) : sheet.markManagerApprovalUntil || null;
+      const nextSheet: Ssa2Sheet = { ...sheet, markManagerLocked: true, markManagerSnapshot: snapshot, markManagerApprovalUntil: approvalUntil };
+      const payload: Ssa2DraftPayload = { sheet: nextSheet, selectedBtls };
+      setSheet(nextSheet);
+      setMarkManagerModal(null);
+
+      await saveDraft(assessmentKey, String(subjectId), payload);
+      setSavedAt(new Date().toLocaleString());
+
+      try {
+        await confirmMarkManagerLock(assessmentKey as any, String(subjectId), teachingAssignmentId);
+        refreshMarkLock({ silent: true });
+      } catch (err) {
+        console.warn('confirmMarkManagerLock failed', err);
+      }
+    } catch (e: any) {
+      setMarkManagerError(e?.message || 'Save failed');
+    } finally {
+      setMarkManagerBusy(false);
+    }
+  }
 
   const updateRow = (idx: number, patch: Partial<Ssa2Row>) => {
     setSheet((prev) => {
@@ -428,7 +762,7 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
       const rawBtlMaxByIndex = [BTL_MAX.btl1, BTL_MAX.btl2, BTL_MAX.btl3, BTL_MAX.btl4, BTL_MAX.btl5, BTL_MAX.btl6];
       const btlMaxByIndex = rawBtlMaxByIndex.map((rawMax, idx) => {
         if (!visibleIndicesZeroBased.includes(idx)) return rawMax;
-        return rawMax > 0 ? rawMax : DEFAULT_BTL_MAX_WHEN_VISIBLE;
+        return isReview ? BTL_MAX_WHEN_VISIBLE : rawMax > 0 ? rawMax : DEFAULT_BTL_MAX_WHEN_VISIBLE;
       });
       const btlShare = totalRaw == null ? null : visibleIndicesZeroBased.length ? round1(totalRaw / visibleIndicesZeroBased.length) : 0;
       const btlMarksByIndex = btlMaxByIndex.map((max, idx) => {
@@ -438,11 +772,10 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
         return round1(btlShare as number);
       });
 
-      return {
+      const row: Record<string, string | number> = {
         sno: i + 1,
         registerNo: shortenRegisterNo(r.registerNo),
         name: r.name,
-        total,
         co3_mark: co3 ?? '',
         co3_pct: pct(co3, CO_MAX.co3),
         co4_mark: co4 ?? '',
@@ -460,9 +793,13 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
         btl6_mark: btlMarksByIndex[5] ?? '',
         btl6_pct: pct(btlMarksByIndex[5], btlMaxByIndex[5]),
       };
+
+      row[displayLabel] = total;
+      if (showTotalColumn) row.total = total;
+      return row;
     });
 
-    downloadCsv(`${subjectId}_SSA2_sheet.csv`, out);
+    downloadCsv(`${subjectId}_${safeFilePart(displayLabel) || 'SSA2'}_sheet.csv`, out);
   };
 
   const cellTh: React.CSSProperties = {
@@ -600,6 +937,11 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
         <div style={cardStyle}>
           <div style={{ fontSize: 12, color: '#6b7280' }}>Saved</div>
           <div style={{ fontWeight: 700 }}>{savedAt || '—'}</div>
+          {savedBy ? (
+            <div style={{ fontSize: 12, color: '#6b7280' }}>
+              by <span style={{ color: '#0369a1', fontWeight: 700 }}>{savedBy}</span>
+            </div>
+          ) : null}
         </div>
         <div style={cardStyle}>
           <div style={{ fontSize: 12, color: '#6b7280' }}>Published</div>
@@ -607,49 +949,79 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
         </div>
       </div>
 
-      <div style={{ marginTop: 14, ...cardStyle }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <div style={{ fontWeight: 800 }}>BTL Selection</div>
-          <button className="obe-btn obe-btn-secondary" onClick={() => setBtlPickerOpen((p) => !p)}>
-            {btlPickerOpen ? 'Hide' : 'Show'}
-          </button>
-        </div>
-        {btlPickerOpen && (
-          <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {[1, 2, 3, 4, 5, 6].map((n) => {
-              const active = selectedBtls.includes(n);
-              return (
-                <div
-                  key={n}
-                  style={{
-                    ...btlBoxStyle,
-                    borderColor: active ? '#16a34a' : '#cbd5e1',
-                    background: active ? '#ecfdf5' : '#fff',
-                  }}
-                  onClick={() =>
-                    setSelectedBtls((prev) =>
-                      prev.includes(n) ? prev.filter((x) => x !== n) : [...prev, n].sort((a, b) => a - b),
-                    )
-                  }
-                >
-                  <input type="checkbox" checked={active} readOnly />
-                  <span style={{ fontWeight: 800 }}>BTL{n}</span>
-                  <span style={{ color: '#6b7280' }}>(max {String((BTL_MAX as any)[`btl${n}`] ?? 0)})</span>
-                </div>
-              );
-            })}
+      <div style={{ marginTop: 12, ...cardStyle }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ fontWeight: 800 }}>Mark Manager</div>
+          <div>
+            <button
+              className="obe-btn obe-btn-success"
+              onClick={() => {
+                const confirmed = sheet.markManagerSnapshot != null;
+                setMarkManagerModal({ mode: confirmed ? 'request' : 'confirm' });
+              }}
+              disabled={!subjectId || markManagerBusy}
+            >
+              {sheet.markManagerSnapshot ? 'Edit' : 'Save'}
+            </button>
           </div>
-        )}
+        </div>
+        <div style={{ marginTop: 8, fontSize: 13, color: '#6b7280' }}>
+          <div>
+            Max {displayLabel}: <strong style={{ color: '#111' }}>{MAX_ASMT2}</strong>
+          </div>
+          <div>
+            CO-3 max: <strong style={{ color: '#111' }}>{CO_MAX.co3}</strong> • CO-4 max: <strong style={{ color: '#111' }}>{CO_MAX.co4}</strong>
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 13, color: '#6b7280' }}>Selected BTLs:</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {[1, 2, 3, 4, 5, 6].map((n) => {
+                const active = selectedBtls.includes(n);
+                const disabled = Boolean(markManagerLocked && sheet.markManagerSnapshot != null);
+                return (
+                  <div
+                    key={`card_btl_${n}`}
+                    onClick={() => {
+                      if (globalLocked) return;
+                      if (markManagerBusy) return;
+                      const markManagerConfirmed = sheet.markManagerSnapshot != null;
+                      if (markManagerLocked && markManagerConfirmed) return;
+                      setSelectedBtls((prev) => (prev.includes(n) ? prev.filter((x) => x !== n) : prev.concat(n).sort((a, b) => a - b)));
+                    }}
+                    style={{
+                      ...btlBoxStyle,
+                      borderColor: active ? '#16a34a' : '#cbd5e1',
+                      background: active ? '#ecfdf5' : '#fff',
+                      cursor: disabled || markManagerBusy ? 'not-allowed' : 'pointer',
+                      opacity: disabled ? 0.6 : 1,
+                      padding: '6px 8px',
+                    }}
+                    aria-disabled={disabled || markManagerBusy}
+                  >
+                    <input type="checkbox" checked={active} readOnly style={{ marginRight: 6 }} />
+                    <span style={{ fontWeight: 800 }}>BTL{n}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+        {markManagerError ? <div style={{ marginTop: 8, color: '#991b1b' }}>{markManagerError}</div> : null}
       </div>
 
       <div style={{ marginTop: 14 }}>
-        <PublishLockOverlay locked={globalLocked}>
+        {showNameList ? (
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ borderCollapse: 'collapse', minWidth: 920 }}>
+            <PublishLockOverlay
+              locked={Boolean(globalLocked || publishedEditLocked)}
+              title={globalLocked ? 'Locked by IQAC' : 'Published — Locked'}
+              subtitle={globalLocked ? 'Publishing is turned OFF globally for this assessment.' : 'Marks are published. Request IQAC approval to edit.'}
+            >
+              <table style={{ borderCollapse: 'collapse', minWidth: 920 }}>
           <thead>
             <tr>
               <th style={cellTh} colSpan={totalTableCols}>
-                {sheet.termLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {sheet.batchLabel} &nbsp;&nbsp;|&nbsp;&nbsp; SSA2
+                {sheet.termLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {sheet.batchLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {displayLabel}
               </th>
             </tr>
             <tr>
@@ -657,23 +1029,23 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
               <th style={cellTh} rowSpan={4}>Register No.</th>
               <th style={cellTh} rowSpan={3}>Name of the Students</th>
 
-              <th style={cellTh}>SSA2</th>
-              <th style={cellTh}>Total</th>
+              <th style={cellTh}>{displayLabel}</th>
+              {showTotalColumn ? <th style={cellTh}>Total</th> : null}
 
               <th style={cellTh} colSpan={4}>CO ATTAINMENT</th>
-              <th style={cellTh} colSpan={12}>BTL ATTAINMENT</th>
+              {visibleBtlIndices.length ? <th style={cellTh} colSpan={visibleBtlIndices.length * 2}>BTL ATTAINMENT</th> : null}
             </tr>
             <tr>
               <th style={cellTh}>
                 <div style={{ fontWeight: 800 }}>COs</div>
                 <div style={{ fontSize: 12 }}>3,4</div>
               </th>
-              <th style={cellTh} />
+              {showTotalColumn ? <th style={cellTh} /> : null}
 
               <th style={cellTh} colSpan={2}>CO-3</th>
               <th style={cellTh} colSpan={2}>CO-4</th>
 
-              {[1, 2, 3, 4, 5, 6].map((n) => (
+              {visibleBtlIndices.map((n) => (
                 <th key={`btl-head-${n}`} style={cellTh} colSpan={2}>
                   BTL-{n}
                 </th>
@@ -684,9 +1056,9 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
                 <div style={{ fontWeight: 800 }}>BTL</div>
                 <div style={{ fontSize: 12 }}>{visibleBtlIndices.length ? visibleBtlIndices.join(',') : '-'}</div>
               </th>
-              <th style={cellTh} />
+              {showTotalColumn ? <th style={cellTh} /> : null}
 
-              {Array.from({ length: 2 + 6 }).flatMap((_, i) => (
+              {Array.from({ length: 2 + visibleBtlIndices.length }).flatMap((_, i) => (
                 <React.Fragment key={i}>
                   <th style={cellTh}>Mark</th>
                   <th style={cellTh}>%</th>
@@ -696,14 +1068,16 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
             <tr>
               <th style={cellTh}>Name / Max Marks</th>
               <th style={cellTh}>{MAX_ASMT2}</th>
-              <th style={cellTh}>{MAX_ASMT2}</th>
+              {showTotalColumn ? <th style={cellTh}>{MAX_ASMT2}</th> : null}
               <th style={cellTh}>{CO_MAX.co3}</th>
               <th style={cellTh}>%</th>
               <th style={cellTh}>{CO_MAX.co4}</th>
               <th style={cellTh}>%</th>
-              {[1, 2, 3, 4, 5, 6].flatMap((n) => [
+              {visibleBtlIndices.flatMap((n) => [
                 <th key={`btl-max-${n}`} style={cellTh}>
-                  {String(Math.max(Number((BTL_MAX as any)[`btl${n}`] ?? 0) || 0, DEFAULT_BTL_MAX_WHEN_VISIBLE))}
+                  {isReview
+                    ? String(BTL_MAX_WHEN_VISIBLE)
+                    : String(Math.max(Number((BTL_MAX as any)[`btl${n}`] ?? 0) || 0, DEFAULT_BTL_MAX_WHEN_VISIBLE))}
                 </th>,
                 <th key={`btl-pct-${n}`} style={cellTh}>%</th>,
               ])}
@@ -714,6 +1088,12 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
               <tr>
                 <td colSpan={totalTableCols} style={{ padding: 14, color: '#6b7280', fontSize: 13 }}>
                   No students loaded yet. Choose a Teaching Assignment above, then click “Load/Refresh Roster”.
+                </td>
+              </tr>
+            ) : tableBlocked && !publishedEditLocked ? (
+              <tr>
+                <td colSpan={totalTableCols} style={{ padding: 20, textAlign: 'center', color: '#065f46', fontWeight: 900 }}>
+                  Table locked — confirm the Mark Manager to enable student marks
                 </td>
               </tr>
             ) : (
@@ -728,7 +1108,7 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
                 const rawBtlMaxByIndex = [BTL_MAX.btl1, BTL_MAX.btl2, BTL_MAX.btl3, BTL_MAX.btl4, BTL_MAX.btl5, BTL_MAX.btl6];
                 const btlMaxByIndex = rawBtlMaxByIndex.map((rawMax, idx) => {
                   if (!visibleIndicesZeroBased.includes(idx)) return rawMax;
-                  return rawMax > 0 ? rawMax : DEFAULT_BTL_MAX_WHEN_VISIBLE;
+                  return isReview ? BTL_MAX_WHEN_VISIBLE : rawMax > 0 ? rawMax : DEFAULT_BTL_MAX_WHEN_VISIBLE;
                 });
                 const btlShare = totalRaw == null ? null : visibleIndicesZeroBased.length ? round1(totalRaw / visibleIndicesZeroBased.length) : 0;
                 const btlMarksByIndex = btlMaxByIndex.map((max, i) => {
@@ -744,27 +1124,31 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
                     <td style={cellTd}>{shortenRegisterNo(r.registerNo)}</td>
                     <td style={cellTd}>{r.name}</td>
                     <td style={{ ...cellTd, width: 90, background: '#fff7ed' }}>
-                      <input
-                        style={inputStyle}
-                        type="number"
-                        value={r.total}
-                        min={0}
-                        max={MAX_ASMT2}
-                        onChange={(e) => {
-                          const raw = e.target.value;
-                          if (raw === '') return updateRow(idx, { total: '' });
-                          const n = clamp(Number(raw), 0, MAX_ASMT2);
-                          updateRow(idx, { total: Number.isFinite(n) ? n : '' });
-                        }}
-                      />
+                      {publishedEditLocked || globalLocked ? (
+                        <div style={{ ...inputStyle, textAlign: 'right', paddingRight: 4 }}>{typeof r.total === 'number' ? round1(r.total) : ''}</div>
+                      ) : (
+                        <input
+                          style={inputStyle}
+                          type="number"
+                          value={r.total}
+                          min={0}
+                          max={MAX_ASMT2}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            if (raw === '') return updateRow(idx, { total: '' });
+                            const n = clamp(Number(raw), 0, MAX_ASMT2);
+                            updateRow(idx, { total: Number.isFinite(n) ? n : '' });
+                          }}
+                        />
+                      )}
                     </td>
-                    <td style={{ ...cellTd, textAlign: 'right' }}>{totalRaw ?? ''}</td>
+                    {showTotalColumn ? <td style={{ ...cellTd, textAlign: 'right' }}>{totalRaw ?? ''}</td> : null}
                     <td style={{ ...cellTd, textAlign: 'right' }}>{co3 ?? ''}</td>
                     <td style={{ ...cellTd, textAlign: 'right' }}>{pct(co3, CO_MAX.co3)}</td>
                     <td style={{ ...cellTd, textAlign: 'right' }}>{co4 ?? ''}</td>
                     <td style={{ ...cellTd, textAlign: 'right' }}>{pct(co4, CO_MAX.co4)}</td>
 
-                    {[1, 2, 3, 4, 5, 6].map((btl) => {
+                    {visibleBtlIndices.map((btl) => {
                       const idx0 = btl - 1;
                       const mark = btlMarksByIndex[idx0];
                       const max = btlMaxByIndex[idx0];
@@ -780,10 +1164,279 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId }: Props) {
               })
             )}
           </tbody>
-            </table>
+              </table>
+            </PublishLockOverlay>
           </div>
-        </PublishLockOverlay>
+        ) : (
+          <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 20, background: '#fff' }}>
+            <div style={{ display: 'grid', placeItems: 'center', padding: 40 }}>
+              <div style={{ fontWeight: 800, fontSize: 16, marginTop: 8 }}>{isPublished ? 'Published — Locked' : 'Table Locked'}</div>
+              <div style={{ color: '#6b7280', marginTop: 6 }}>
+                {isPublished
+                  ? 'Marks published. Use View to inspect or Request Edit to ask IQAC for edit access.'
+                  : 'Confirm the Mark Manager to unlock the student list.'}
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                {isPublished ? (
+                  <>
+                    <button className="obe-btn" onClick={() => setViewMarksModalOpen(true)}>
+                      View
+                    </button>
+                    <button className="obe-btn obe-btn-success" onClick={() => setPublishedEditModalOpen(true)}>
+                      Request Edit
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button className="obe-btn obe-btn-success" onClick={() => setMarkManagerModal({ mode: 'confirm' })} disabled={!subjectId || markManagerBusy}>
+                      Save Mark Manager
+                    </button>
+                    <button className="obe-btn" onClick={() => requestMarkManagerEdit()} disabled={markManagerBusy}>
+                      Request Access
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
+
+      {viewMarksModalOpen ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 70 }}
+          onClick={() => setViewMarksModalOpen(false)}
+        >
+          <div
+            style={{ width: 'min(1100px, 96vw)', maxHeight: 'min(80vh, 900px)', overflow: 'auto', background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: 14 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+              <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>View Published {displayLabel}</div>
+              <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>{displayLabel}</div>
+            </div>
+
+            {publishedViewLoading ? <div style={{ color: '#6b7280', marginBottom: 8 }}>Loading published marks…</div> : null}
+            {publishedViewError ? <div style={{ color: '#b91c1c', marginBottom: 8 }}>{publishedViewError}</div> : null}
+
+            <div style={{ overflowX: 'auto', border: '1px solid #e5e7eb', borderRadius: 12 }}>
+              <table style={{ width: '100%', minWidth: 720, borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr>
+                    <th style={cellTh}>S.No</th>
+                    <th style={cellTh}>Register No.</th>
+                    <th style={cellTh}>Name</th>
+                    <th style={cellTh}>{showTotalColumn ? 'Total' : displayLabel}</th>
+                    <th style={cellTh}>CO-3%</th>
+                    <th style={cellTh}>CO-4%</th>
+                    {visibleBtlIndices.map((n) => (
+                      <React.Fragment key={`v_btl_${n}`}>
+                        <th style={cellTh}>BTL{n}</th>
+                        <th style={cellTh}>BTL{n}%</th>
+                      </React.Fragment>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {sheet.rows.map((r, i) => {
+                    const raw = publishedViewSnapshot?.marks?.[String(r.studentId)] ?? null;
+                    const numericTotal = raw == null || raw === '' ? null : clamp(Number(raw), 0, MAX_ASMT2);
+
+                    const coSplitCount = 2;
+                    const coShare = numericTotal == null ? null : round1(numericTotal / coSplitCount);
+                    const co3 = coShare == null ? null : clamp(coShare, 0, CO_MAX.co3);
+                    const co4 = coShare == null ? null : clamp(coShare, 0, CO_MAX.co4);
+
+                    const visibleIndicesZeroBased = visibleBtlIndices.map((n) => n - 1);
+                    const rawBtlMaxByIndex = [BTL_MAX.btl1, BTL_MAX.btl2, BTL_MAX.btl3, BTL_MAX.btl4, BTL_MAX.btl5, BTL_MAX.btl6];
+                    const btlMaxByIndex = rawBtlMaxByIndex.map((rawMax, idx) => {
+                      if (!visibleIndicesZeroBased.includes(idx)) return rawMax;
+                      return isReview ? BTL_MAX_WHEN_VISIBLE : rawMax > 0 ? rawMax : DEFAULT_BTL_MAX_WHEN_VISIBLE;
+                    });
+                    const btlShare = numericTotal == null ? null : visibleIndicesZeroBased.length ? round1(numericTotal / visibleIndicesZeroBased.length) : 0;
+                    const btlMarksByIndex = btlMaxByIndex.map((max, idx) => {
+                      if (numericTotal == null) return null;
+                      if (!visibleIndicesZeroBased.includes(idx)) return null;
+                      if (max > 0) return clamp(btlShare as number, 0, max);
+                      return round1(btlShare as number);
+                    });
+
+                    return (
+                      <tr key={r.studentId}>
+                        <td style={cellTd}>{i + 1}</td>
+                        <td style={cellTd}>{shortenRegisterNo(r.registerNo)}</td>
+                        <td style={cellTd}>{r.name}</td>
+                        <td style={{ ...cellTd, textAlign: 'right' }}>{numericTotal == null ? '' : round1(numericTotal)}</td>
+                        <td style={{ ...cellTd, textAlign: 'right' }}>{co3 == null ? '' : round1(co3)}</td>
+                        <td style={{ ...cellTd, textAlign: 'right' }}>{co4 == null ? '' : round1(co4)}</td>
+                        {visibleBtlIndices.map((n) => (
+                          <React.Fragment key={`pv_${r.studentId}_${n}`}>
+                            <td style={{ ...cellTd, textAlign: 'right' }}>{btlMarksByIndex[n - 1] == null ? '' : round1(btlMarksByIndex[n - 1] as number)}</td>
+                            <td style={{ ...cellTd, textAlign: 'right' }}>{pct(btlMarksByIndex[n - 1], btlMaxByIndex[n - 1])}</td>
+                          </React.Fragment>
+                        ))}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
+              <button className="obe-btn" onClick={() => setViewMarksModalOpen(false)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {markManagerModal ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 9999 }}
+          onClick={() => {
+            if (markManagerBusy) return;
+            setMarkManagerModal(null);
+          }}
+        >
+          <div style={{ width: 'min(640px,96vw)', background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: 14 }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+              <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>{markManagerModal.mode === 'confirm' ? `Confirmation - ${displayLabel}` : `Request Edit - ${displayLabel}`}</div>
+              <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>{displayLabel}</div>
+            </div>
+
+            {markManagerModal.mode === 'confirm' ? (
+              <>
+                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10 }}>Confirm the selected settings. After confirming, Mark Manager will be applied and table will be editable.</div>
+                <div style={{ overflowX: 'auto', border: '1px solid #e5e7eb', borderRadius: 12 }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ background: '#f9fafb' }}>
+                        <th style={{ textAlign: 'left', padding: 10, fontSize: 12, borderBottom: '1px solid #e5e7eb' }}>Item</th>
+                        <th style={{ textAlign: 'right', padding: 10, fontSize: 12, borderBottom: '1px solid #e5e7eb' }}>Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>Max {displayLabel}</td>
+                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{MAX_ASMT2}</td>
+                      </tr>
+                      <tr>
+                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>CO-3 max</td>
+                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{CO_MAX.co3}</td>
+                      </tr>
+                      <tr>
+                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>CO-4 max</td>
+                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{CO_MAX.co4}</td>
+                      </tr>
+                      <tr>
+                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>Selected BTLs</td>
+                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>
+                          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                            {[1, 2, 3, 4, 5, 6].map((n) => {
+                              const active = selectedBtls.includes(n);
+                              return (
+                                <div
+                                  key={`modal_btl_${n}`}
+                                  onClick={() => {
+                                    if (markManagerBusy) return;
+                                    setSelectedBtls((prev) => (prev.includes(n) ? prev.filter((x) => x !== n) : [...prev, n].sort((a, b) => a - b)));
+                                  }}
+                                  style={{
+                                    ...btlBoxStyle,
+                                    borderColor: active ? '#16a34a' : '#cbd5e1',
+                                    background: active ? '#ecfdf5' : '#fff',
+                                    cursor: markManagerBusy ? 'not-allowed' : 'pointer',
+                                    padding: '6px 8px',
+                                  }}
+                                >
+                                  <input type="checkbox" checked={active} readOnly style={{ marginRight: 6 }} />
+                                  <span style={{ fontWeight: 800 }}>BTL{n}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            ) : (
+              <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10 }}>This will send an edit request to IQAC. Mark Manager will remain locked until IQAC approves.</div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+              <button className="obe-btn" disabled={markManagerBusy} onClick={() => setMarkManagerModal(null)}>
+                Cancel
+              </button>
+              <button
+                className="obe-btn obe-btn-success"
+                disabled={markManagerBusy || !subjectId}
+                onClick={async () => {
+                  if (!subjectId) return;
+                  if (markManagerModal.mode === 'request') {
+                    setMarkManagerModal(null);
+                    await requestMarkManagerEdit();
+                    return;
+                  }
+                  await confirmMarkManager();
+                }}
+              >
+                {markManagerModal.mode === 'confirm' ? 'Confirm' : 'Send Request'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {publishedEditModalOpen ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 60 }}
+          onClick={() => setPublishedEditModalOpen(false)}
+        >
+          <div style={{ width: 'min(560px, 96vw)', background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: 14 }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+              <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>Edit Request</div>
+              <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>{displayLabel}</div>
+            </div>
+
+            <div style={{ fontSize: 13, color: '#374151', marginBottom: 10, lineHeight: 1.35 }}>
+              <div>
+                <strong>Subject:</strong> {String(subjectId || '—')}
+              </div>
+              <div>
+                <strong>Published:</strong> {publishedAt || '—'}
+              </div>
+              <div>
+                <strong>Saved:</strong> {savedAt || '—'}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button type="button" className="obe-btn" onClick={() => setPublishedEditModalOpen(false)}>
+                Close
+              </button>
+              <button
+                type="button"
+                className="obe-btn obe-btn-primary"
+                onClick={async () => {
+                  await requestMarkEntryEdit();
+                  setPublishedEditModalOpen(false);
+                }}
+              >
+                Request Edit
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

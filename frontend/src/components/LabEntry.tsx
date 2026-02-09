@@ -834,7 +834,7 @@ export default function LabEntry({
     if (showLoading) setPublishedViewLoading(true);
     setPublishedViewError(null);
     try {
-      const resp = await fetchPublishedLabSheet(assessmentKey as any, String(subjectId));
+      const resp = await fetchPublishedLabSheet(assessmentKey as any, String(subjectId), teachingAssignmentId);
       const data = (resp as any)?.data ?? null;
       if (data && typeof data === 'object') {
         setPublishedViewSnapshot(data as LabDraftPayload);
@@ -867,7 +867,7 @@ export default function LabEntry({
     let mounted = true;
     (async () => {
       try {
-        const resp = await fetchDraft(assessmentKey as any, String(subjectId));
+        const resp = await fetchDraft(assessmentKey as any, String(subjectId), teachingAssignmentId);
         const data = (resp as any)?.data ?? null;
         if (!mounted) return;
         if (data && typeof data === 'object' && (data as any).sheet) {

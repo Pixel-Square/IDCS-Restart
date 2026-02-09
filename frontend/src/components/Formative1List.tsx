@@ -1,8 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
+import { fetchMyTeachingAssignments } from '../services/obe';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
-import { createPublishRequest, fetchDraft, publishFormative, saveDraft } from '../services/obe';
+import { fetchMasters } from '../services/curriculum';
+import { createPublishRequest, fetchDraft, publishFormative, saveDraft, fetchPublishedFormative, createEditRequest, confirmMarkManagerLock } from '../services/obe';
+import { useEditWindow } from '../hooks/useEditWindow';
+import { useMarkTableLock } from '../hooks/useMarkTableLock';
 import { formatRemaining, usePublishWindow } from '../hooks/usePublishWindow';
 import PublishLockOverlay from './PublishLockOverlay';
 
@@ -32,11 +36,17 @@ type F1Sheet = {
   termLabel: string;
   batchLabel: string;
   rowsByStudentId: Record<string, F1RowState>;
+  markManagerLocked?: boolean;
+  markManagerSnapshot?: string | null;
+  markManagerApprovalUntil?: string | null;
 };
 
 type F1DraftPayload = {
   sheet: F1Sheet;
   partBtl: Record<string, 1 | 2 | 3 | 4 | 5 | 6 | ''>;
+  markManagerLocked?: boolean;
+  markManagerSnapshot?: string | null;
+  markManagerApprovalUntil?: string | null;
 };
 
 // Component Props
@@ -57,6 +67,12 @@ function clamp(n: number, min: number, max: number) {
 
 function round1(n: number) {
   return Math.round(n * 10) / 10;
+}
+
+function toNumOrEmpty(v: any): number | '' {
+  if (v === '' || v == null) return '';
+  const n = Number(v);
+  return Number.isFinite(n) ? n : '';
 }
 
 function pct(mark: number, max: number) {
@@ -189,7 +205,28 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
     termLabel: 'KRCT AY25-26',
     batchLabel: subjectId || '',
     rowsByStudentId: {},
+    markManagerLocked: false,
+    markManagerSnapshot: null,
+    markManagerApprovalUntil: null,
   });
+
+  const { data: markLock, refresh: refreshMarkLock } = useMarkTableLock({ assessment: assessmentKey as any, subjectCode: String(subjectId || ''), teachingAssignmentId, options: { poll: false } });
+  const { data: markManagerEditWindow } = useEditWindow({ assessment: assessmentKey as any, subjectCode: String(subjectId || ''), scope: 'MARK_MANAGER', teachingAssignmentId, options: { poll: false } });
+  const { data: markEntryEditWindow } = useEditWindow({ assessment: assessmentKey as any, subjectCode: String(subjectId || ''), scope: 'MARK_ENTRY', teachingAssignmentId, options: { poll: false } });
+
+  const isPublished = Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published);
+  const markManagerLocked = Boolean(sheet.markManagerLocked);
+  const markEntryApprovalUntil = markEntryEditWindow?.approval_until ? String(markEntryEditWindow.approval_until) : null;
+  const markManagerApprovalUntil = markManagerEditWindow?.approval_until ? String(markManagerEditWindow.approval_until) : null;
+  const markEntryApprovedFresh = Boolean(markEntryEditWindow?.allowed_by_approval) && Boolean(markEntryApprovalUntil);
+  const markManagerApprovedFresh = Boolean(markManagerEditWindow?.allowed_by_approval) && Boolean(markManagerApprovalUntil);
+  const entryOpen = !isPublished ? true : Boolean(markLock?.entry_open) || markEntryApprovedFresh || markManagerApprovedFresh;
+  const publishedEditLocked = Boolean(isPublished && !entryOpen);
+  const tableBlocked = Boolean(globalLocked || (isPublished ? !entryOpen : !markManagerLocked));
+  const showNameList = Boolean(sheet.markManagerSnapshot != null);
+
+  const [markManagerModal, setMarkManagerModal] = useState<null | { mode: 'confirm' | 'request' }>(null);
+  const [markManagerBusy, setMarkManagerBusy] = useState(false);
 
   const masterTermLabel = String(masterCfg?.termLabel || 'KRCT AY25-26');
   const f1Cfg = (masterCfg as any)?.assessments?.[assessmentKey] ?? (masterCfg as any)?.assessments?.formative1 ?? {};
@@ -273,6 +310,47 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
     } catch {}
   }, [partBtl, subjectId, assessmentKey]);
 
+  const markManagerSnapshotOf = (nextPartBtl: Record<string, 1 | 2 | 3 | 4 | 5 | 6 | ''>) =>
+    JSON.stringify({ assessmentKey, partBtl: nextPartBtl, maxPart: MAX_PART, maxTotal: MAX_TOTAL });
+
+  async function confirmMarkManager() {
+    if (!subjectId) return;
+    setMarkManagerBusy(true);
+    try {
+      const snapshot = markManagerSnapshotOf(partBtl);
+      const approvalUntil = markManagerEditWindow?.approval_until ? String(markManagerEditWindow.approval_until) : sheet.markManagerApprovalUntil || null;
+      const nextSheet: F1Sheet = { ...sheet, markManagerLocked: true, markManagerSnapshot: snapshot, markManagerApprovalUntil: approvalUntil };
+      const draft: F1DraftPayload = { sheet: nextSheet, partBtl, markManagerLocked: nextSheet.markManagerLocked, markManagerSnapshot: nextSheet.markManagerSnapshot, markManagerApprovalUntil: nextSheet.markManagerApprovalUntil } as any;
+      setSheet(nextSheet);
+      setMarkManagerModal(null);
+      await saveDraft(assessmentKey, String(subjectId), draft);
+      setSavedAt(new Date().toLocaleString());
+      try {
+        await confirmMarkManagerLock(assessmentKey as any, String(subjectId), teachingAssignmentId);
+        refreshMarkLock({ silent: true });
+      } catch {
+        // ignore
+      }
+    } catch (e) {
+      // ignore
+    } finally {
+      setMarkManagerBusy(false);
+    }
+  }
+
+  async function requestMarkManagerEdit() {
+    if (!subjectId) return;
+    setMarkManagerBusy(true);
+    try {
+      await createEditRequest({ assessment: assessmentKey, subject_code: String(subjectId), scope: 'MARK_MANAGER', reason: `Request mark-manager edit for ${subjectId}`, teaching_assignment_id: teachingAssignmentId });
+      alert('Edit request sent to IQAC.');
+    } catch (e: any) {
+      alert(e?.message || 'Request failed');
+    } finally {
+      setMarkManagerBusy(false);
+    }
+  }
+
   // Auto-save selected BTLs to server (debounced)
   useEffect(() => {
     if (!subjectId) return;
@@ -311,7 +389,10 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
           setSheet({
             termLabel: String(draftSheet.termLabel || masterTermLabel || 'KRCT AY25-26'),
             batchLabel: String(subjectId),
-            rowsByStudentId: draftSheet.rowsByStudentId || {},
+              rowsByStudentId: draftSheet.rowsByStudentId || {},
+              markManagerLocked: typeof draftSheet.markManagerLocked === 'boolean' ? draftSheet.markManagerLocked : Boolean(draftSheet.markManagerSnapshot),
+              markManagerSnapshot: draftSheet.markManagerSnapshot ?? null,
+              markManagerApprovalUntil: draftSheet.markManagerApprovalUntil ?? null,
           });
           // Persist server draft into localStorage so later roster merges use it
           try {
@@ -385,27 +466,21 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
           roster.sort(compareStudentName);
           setStudents(roster);
         } else {
-          const subjectRes = await fetch(`${API_BASE}/api/academics/subjects/?code=${encodeURIComponent(subjectId)}`, {
-            headers: authHeaders(),
-          });
+          // Find subject using curriculum master records (fallback when TA not provided)
+          const masters = await fetchMasters();
+          const subjectList = Array.isArray(masters)
+            ? masters.filter((m: any) => String(m.course_code || '').trim().toUpperCase() === String(subjectId || '').trim().toUpperCase())
+            : [];
 
-          if (!subjectRes.ok) {
-            const text = await subjectRes.text();
-            throw new Error(`Failed to fetch subject: ${subjectRes.status} ${text}`);
-          }
-
-          const subjectList = await subjectRes.json();
-          if (!Array.isArray(subjectList) || subjectList.length === 0) {
-            throw new Error(`Subject with code ${subjectId} not found`);
-          }
-
+          if (!subjectList.length) throw new Error(`Subject with code ${subjectId} not found`);
           const subj = subjectList[0];
           if (!mounted) return;
-          setSubjectData(subj);
+          setSubjectData({ course_code: subj.course_code, course_name: subj.course_name, department: subj.department, year: subj.semester, section: null });
 
+          // Attempt to fetch students by department/year/section if available
           const params = new URLSearchParams({
             department: String(subj.department ?? ''),
-            year: String(subj.year ?? ''),
+            year: String(subj.semester ?? ''),
             section: String(subj.section ?? ''),
           });
 
@@ -428,6 +503,22 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
             }))
             .filter((s) => Number.isFinite(s.id));
 
+          // If no students found, try to locate a teaching assignment for this subject
+          // and use its roster as a fallback.
+          if (!roster.length) {
+            try {
+              const myTAs = await fetchMyTeachingAssignments();
+              const match = (myTAs || []).find((t: any) => String(t.subject_code || '').trim().toUpperCase() === String(subjectId || '').trim().toUpperCase());
+              if (match && match.id) {
+                const taResp = await fetchTeachingAssignmentRoster(match.id);
+                roster = (taResp.students || []).map((s: TeachingAssignmentRosterStudent) => ({ id: Number(s.id), reg_no: String(s.reg_no ?? ''), name: String(s.name ?? ''), section: s.section ?? null })).filter((s) => Number.isFinite(s.id));
+                if (mounted) setSubjectData({ subject_name: match.subject_name, section: match.section_name });
+              }
+            } catch {
+              // ignore fallback errors
+            }
+          }
+
           // Requested: SSA1/CIA1/Formative1 student list in ascending name order
           roster.sort(compareStudentName);
 
@@ -435,19 +526,38 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
           setStudents(roster);
         }
 
-        // Load local sheet and merge with roster.
+        // Try published formative first (published should take precedence over draft/local)
+        let publishedMarks: Record<string, any> | null = null;
+        try {
+          const pub = await fetchPublishedFormative(assessmentKey, subjectId as string);
+          if (pub && pub.marks && typeof pub.marks === 'object' && Object.keys(pub.marks || {}).length) {
+            publishedMarks = pub.marks as Record<string, any>;
+            setPublishedAt(new Date().toLocaleString());
+          }
+        } catch (e: any) {
+          // ignore published fetch errors — we'll fall back to draft/local
+        }
+
+        // Load local sheet and merge with roster (or use published marks if present)
         const stored = key ? lsGet<F1Sheet>(key) : null;
-        const base: F1Sheet =
-          stored && typeof stored === 'object'
-            ? {
-                termLabel: masterCfg?.termLabel ? String(masterCfg.termLabel) : String((stored as any).termLabel || 'KRCT AY25-26'),
-                batchLabel: String(subjectId || (stored as any).batchLabel || ''),
-                rowsByStudentId:
-                  (stored as any).rowsByStudentId && typeof (stored as any).rowsByStudentId === 'object'
-                    ? (stored as any).rowsByStudentId
-                    : {},
-              }
-            : { termLabel: masterTermLabel || 'KRCT AY25-26', batchLabel: String(subjectId || ''), rowsByStudentId: {} };
+        const base: F1Sheet = publishedMarks
+          ? {
+              termLabel: masterCfg?.termLabel ? String(masterCfg.termLabel) : masterTermLabel || 'KRCT AY25-26',
+              batchLabel: String(subjectId || ''),
+              rowsByStudentId: Object.fromEntries(
+                Object.entries(publishedMarks).map(([k, v]) => [k, { studentId: Number(k), skill1: toNumOrEmpty((v as any)?.skill1), skill2: toNumOrEmpty((v as any)?.skill2), att1: toNumOrEmpty((v as any)?.att1), att2: toNumOrEmpty((v as any)?.att2) }]),
+              ) as any,
+            }
+          : stored && typeof stored === 'object'
+          ? {
+              termLabel: masterCfg?.termLabel ? String(masterCfg.termLabel) : String((stored as any).termLabel || 'KRCT AY25-26'),
+              batchLabel: String(subjectId || (stored as any).batchLabel || ''),
+              rowsByStudentId:
+                (stored as any).rowsByStudentId && typeof (stored as any).rowsByStudentId === 'object'
+                  ? (stored as any).rowsByStudentId
+                  : {},
+            }
+          : { termLabel: masterTermLabel || 'KRCT AY25-26', batchLabel: String(subjectId || ''), rowsByStudentId: {} };
 
         const merged: Record<string, F1RowState> = { ...base.rowsByStudentId };
         for (const s of roster) {
@@ -479,6 +589,8 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
   }, [subjectId, key, masterCfg, masterTermLabel, MAX_PART, assessmentLabel]);
 
   const updateMark = (studentId: number, patch: Partial<F1RowState>) => {
+    if (tableBlocked) return;
+    if (publishedEditLocked) return;
     setSheet((prev) => {
       const sid = String(studentId);
       const existing = prev.rowsByStudentId[sid] || ({ studentId, skill1: '', skill2: '', att1: '', att2: '' } as F1RowState);
@@ -793,8 +905,36 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
         <div style={{ color: '#6b7280', fontSize: 14, padding: '12px 0' }}>No students found for this subject.</div>
       ) : (
         <PublishLockOverlay locked={globalLocked}>
-          <div className="obe-table-wrapper" style={{ position: 'relative' }}>
-            <table className="obe-table" style={{ minWidth: 1200 }}>
+          {showNameList ? (
+            <div className="obe-table-wrapper" style={{ position: 'relative' }}>
+              <table className="obe-table" style={{ minWidth: 1200 }}>
+          ) : (
+            <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 20, background: '#fff' }}>
+              <div style={{ fontWeight: 900, fontSize: 16 }}>{isPublished ? 'Published — Locked' : 'Table Locked'}</div>
+              <div style={{ color: '#6b7280', marginTop: 8 }}>{isPublished ? 'Marks published. Use View or Request Edit to ask IQAC for access.' : 'Confirm the Mark Manager to unlock the student list.'}</div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'flex-end' }}>
+                {!isPublished ? (
+                  <>
+                    <button className="obe-btn obe-btn-success" onClick={() => setMarkManagerModal({ mode: 'confirm' })} disabled={!subjectId || markManagerBusy}>
+                      Save Mark Manager
+                    </button>
+                    <button className="obe-btn" onClick={() => requestMarkManagerEdit()} disabled={markManagerBusy}>
+                      Request Access
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button className="obe-btn" onClick={() => {}}>
+                      View
+                    </button>
+                    <button className="obe-btn obe-btn-success" onClick={() => {}}>
+                      Request Edit
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
             <thead>
               <tr>
                 <th style={cellTh} colSpan={totalTableCols}>
@@ -899,12 +1039,16 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                           <select
                             aria-label={`BTL for ${p.label}`}
                             value={v}
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              if (globalLocked) return;
+                              const confirmed = sheet.markManagerSnapshot != null;
+                              if (markManagerLocked && confirmed) return;
+                              if (publishedEditLocked) return;
                               setPartBtl((prev) => ({
                                 ...(prev || {}),
                                 [p.key]: e.target.value === '' ? '' : (Number(e.target.value) as 1 | 2 | 3 | 4 | 5 | 6),
-                              }))
-                            }
+                              }));
+                            }}
                             style={{
                               position: 'absolute',
                               inset: 0,
@@ -1085,7 +1229,16 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
               <div style={{ fontSize: 16, fontWeight: 700 }}>BTL values not selected</div>
               <div style={{ color: '#6b7280' }}>Assign BTL values in the BTL row below Skill/Attitude to enable entry.</div>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button onClick={() => setPartBtl({ skill1: 3, skill2: 4, att1: 3, att2: 4 })} style={{ padding: '6px 10px' }}>
+                <button
+                  onClick={() => {
+                    if (globalLocked) return;
+                    const confirmed = sheet.markManagerSnapshot != null;
+                    if (markManagerLocked && confirmed) return;
+                    if (publishedEditLocked) return;
+                    setPartBtl({ skill1: 3, skill2: 4, att1: 3, att2: 4 });
+                  }}
+                  style={{ padding: '6px 10px' }}
+                >
                   Quick: BTL-3/4
                 </button>
               </div>

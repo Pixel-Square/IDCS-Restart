@@ -10,6 +10,10 @@ import { usePublishWindow } from '../hooks/usePublishWindow';
 import PublishLockOverlay from './PublishLockOverlay';
 // Vite-friendly asset URL for lock GIF used in the floating panel
 const lockPanelGif = new URL('https://static.vecteezy.com/system/resources/thumbnails/014/585/778/small/gold-locked-padlock-png.png', import.meta.url).href;
+import { fetchDeptRows, fetchMasters } from '../services/curriculum';
+import { isLabClassType, normalizeClassType } from '../constants/classTypes';
+
+const LAB_CO_MAX_OVERRIDE = { co1: 42, co2: 42, co3: 58, co4: 42, co5: 42 };
 
 type Student = {
   id: number;
@@ -151,6 +155,13 @@ function pct(mark: number | null, max: number): string {
   return `${Number.isFinite(p) ? p.toFixed(0) : 0}`;
 }
 
+function shortenRollNo(raw: unknown, keepLast: number = 7): string {
+  const s = String(raw ?? '').trim();
+  if (!s) return '';
+  if (s.length <= keepLast) return s;
+  return s.slice(-keepLast);
+}
+
 function storageKey(assessmentKey: LabAssessmentKey, subjectId: string) {
   return `${assessmentKey}_sheet_${subjectId}`;
 }
@@ -280,6 +291,10 @@ export default function LabCourseMarksEntry({
     },
   }));
 
+  const [classType, setClassType] = useState<string | null>(null);
+  const normalizedClassType = useMemo(() => normalizeClassType(classType), [classType]);
+  const isLabCourse = useMemo(() => isLabClassType(classType), [classType]);
+
   // Load master config for term label
   useEffect(() => {
     let mounted = true;
@@ -297,6 +312,33 @@ export default function LabCourseMarksEntry({
         }));
       } catch {
         // ignore
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+    // determine class_type for this subject to apply lab CO max override
+  }, [subjectId]);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      if (!subjectId) return;
+      try {
+        const code = String(subjectId).trim().toUpperCase();
+        const rows = await fetchDeptRows();
+        if (!mounted) return;
+        const matchDept = (rows || []).find((r: any) => String(r.course_code || '').trim().toUpperCase() === code);
+        if (matchDept && (matchDept as any)?.class_type) {
+          setClassType((matchDept as any)?.class_type ?? null);
+          return;
+        }
+        const masters = await fetchMasters();
+        if (!mounted) return;
+        const matchMaster = (masters || []).find((m: any) => String(m.course_code || '').trim().toUpperCase() === code);
+        setClassType((matchMaster as any)?.class_type ?? null);
+      } catch {
+        if (mounted) setClassType(null);
       }
     })();
     return () => {
@@ -1579,7 +1621,7 @@ export default function LabCourseMarksEntry({
     if (showLoading) setPublishedViewLoading(true);
     setPublishedViewError(null);
     try {
-      const resp = await fetchPublishedLabSheet(assessmentKey, String(subjectId));
+      const resp = await fetchPublishedLabSheet(assessmentKey, String(subjectId), teachingAssignmentId);
       const data = (resp as any)?.data ?? null;
       if (data && typeof data === 'object') {
         setPublishedViewSnapshot(data as LabDraftPayload);
@@ -1616,7 +1658,7 @@ export default function LabCourseMarksEntry({
     let mounted = true;
     (async () => {
       try {
-        const resp = await fetchDraft(assessmentKey as any, String(subjectId));
+        const resp = await fetchDraft(assessmentKey as any, String(subjectId), teachingAssignmentId);
         const data = (resp as any)?.data ?? null;
         if (!mounted) return;
         if (data && typeof data === 'object' && (data as any).sheet) {
@@ -1672,20 +1714,24 @@ export default function LabCourseMarksEntry({
 
   const cellTh: React.CSSProperties = {
     border: '1px solid #111',
-    padding: '6px 6px',
+    padding: '4px 4px',
     background: '#ecfdf5',
     color: '#065f46',
     textAlign: 'center',
     fontWeight: 700,
-    fontSize: 12,
+    fontSize: 11,
     whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
   };
 
   const cellTd: React.CSSProperties = {
     border: '1px solid #111',
-    padding: '6px 6px',
-    fontSize: 12,
+    padding: '4px 4px',
+    fontSize: 11,
     whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
   };
 
   const inputStyle: React.CSSProperties = {
@@ -1693,8 +1739,8 @@ export default function LabCourseMarksEntry({
     border: 'none',
     outline: 'none',
     background: 'transparent',
-    fontSize: 12,
-    textAlign: 'right',
+    fontSize: 11,
+    textAlign: 'center',
   };
 
   const cardStyle: React.CSSProperties = {
@@ -1704,10 +1750,69 @@ export default function LabCourseMarksEntry({
     padding: 12,
   };
 
-  const minTableWidth = Math.max(
-    900,
-    360 + ((absentUiEnabled ? 1 : 0) + experimentsCols + visibleBtlIndices.length * 2 + (ciaExamEnabled ? 1 : 0)) * 80,
+  const COL_SNO_W = 40;
+  const COL_RNO_W = 90;
+  const COL_NAME_W = 180;
+  const COL_AB_W = 56;
+  const COL_AVG_W = 52;
+  const COL_CIA_W = 72;
+
+  const DEFAULT_DATA_COL_W = 80;
+
+  const restColWidths = useMemo<number[]>(
+    () => [
+      ...Array.from({ length: experimentsCols }, () => DEFAULT_DATA_COL_W),
+      COL_AVG_W,
+      ...(ciaExamEnabled ? [COL_CIA_W] : []),
+      ...Array.from({ length: coAttainmentCols + visibleBtlIndices.length * 2 }, () => DEFAULT_DATA_COL_W),
+    ],
+    [experimentsCols, ciaExamEnabled, coAttainmentCols, visibleBtlIndices.length],
   );
+
+  const minTableWidth = useMemo(() => {
+    const stickyW = COL_SNO_W + COL_RNO_W + COL_NAME_W + (absentUiEnabled ? COL_AB_W : 0);
+    const restW = restColWidths.reduce((a, b) => a + b, 0);
+    return Math.max(900, stickyW + restW);
+  }, [absentUiEnabled, restColWidths]);
+
+  const minViewTableWidth = useMemo(() => {
+    const stickyW = COL_SNO_W + COL_RNO_W + COL_NAME_W;
+    const restW = restColWidths.reduce((a, b) => a + b, 0);
+    return Math.max(900, stickyW + restW);
+  }, [restColWidths]);
+
+  const stickyTh = (left: number, width?: number): React.CSSProperties => ({
+    position: 'sticky',
+    left,
+    zIndex: 40,
+    ...(width != null ? { width, minWidth: width, maxWidth: width } : null),
+    background: cellTh.background,
+  });
+
+  const stickyTd = (left: number, width?: number): React.CSSProperties => ({
+    position: 'sticky',
+    left,
+    zIndex: 25,
+    ...(width != null ? { width, minWidth: width, maxWidth: width } : null),
+    background: '#fff',
+  });
+
+  function renderColGroup(totalCols: number, includeAb: boolean, widths?: number[]) {
+    const stickyCols = 3 + (includeAb ? 1 : 0);
+    const rest = Math.max(0, totalCols - stickyCols);
+    return (
+      <colgroup>
+        <col style={{ width: COL_SNO_W }} />
+        <col style={{ width: COL_RNO_W }} />
+        <col style={{ width: COL_NAME_W }} />
+        {includeAb ? <col style={{ width: COL_AB_W }} /> : null}
+        {Array.from({ length: rest }).map((_, i) => {
+          const w = widths?.[i] ?? DEFAULT_DATA_COL_W;
+          return <col key={`rest_${i}`} style={{ width: w, minWidth: w, maxWidth: w }} />;
+        })}
+      </colgroup>
+    );
+  }
 
   const coEnableStyle: React.CSSProperties = {
     display: 'flex',
@@ -1976,7 +2081,7 @@ export default function LabCourseMarksEntry({
           <div
             className="obe-table-wrapper"
             style={{
-              overflowX: 'auto',
+              overflowX: 'hidden',
               position: 'relative',
               filter: tableBlocked ? 'grayscale(5%)' : undefined,
               opacity: tableBlocked ? 0.78 : 1,
@@ -1985,7 +2090,8 @@ export default function LabCourseMarksEntry({
             {/* When the mark manager is not confirmed (editable), block the table view and show only a preview */}
             {/** tableBlocked: true when mark manager is editable and needs confirmation to unlock full table **/}
             {/* compute below */}
-            <table className="obe-table" style={{ width: 'max-content', minWidth: minTableWidth, tableLayout: 'auto' }}>
+            <table className="obe-table" style={{ width: '100%', minWidth: 0, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+              {renderColGroup(headerCols, absentUiEnabled)}
               <thead>
                 <tr>
                   <th style={cellTh} colSpan={headerCols}>
@@ -1993,18 +2099,18 @@ export default function LabCourseMarksEntry({
                   </th>
                 </tr>
                 <tr>
-                  <th style={cellTh} rowSpan={5}>
+                  <th style={{ ...cellTh, ...stickyTh(0, COL_SNO_W) }} rowSpan={5}>
                     S.No
                   </th>
-                  <th style={cellTh} rowSpan={5}>
+                  <th style={{ ...cellTh, ...stickyTh(COL_SNO_W, COL_RNO_W) }} rowSpan={5}>
                     R.No
                   </th>
-                  <th style={cellTh} rowSpan={5}>
+                  <th style={{ ...cellTh, ...stickyTh(COL_SNO_W + COL_RNO_W, COL_NAME_W), textAlign: 'left' }} rowSpan={5}>
                     Name of the Students
                   </th>
 
                   {absentUiEnabled ? (
-                    <th style={cellTh} rowSpan={5}>
+                    <th style={{ ...cellTh, ...stickyTh(COL_SNO_W + COL_RNO_W + COL_NAME_W, COL_AB_W) }} rowSpan={5}>
                       AB
                     </th>
                   ) : null}
@@ -2012,12 +2118,25 @@ export default function LabCourseMarksEntry({
                   <th style={cellTh} colSpan={experimentsCols}>
                     {itemLabelN}
                   </th>
-                  <th style={cellTh} rowSpan={5}>
+                  <th style={{ ...cellTh, width: COL_AVG_W, minWidth: COL_AVG_W, maxWidth: COL_AVG_W }} rowSpan={5}>
                     AVG
                   </th>
                   {ciaExamEnabled ? (
-                    <th style={cellTh} rowSpan={5}>
-                      CIA Exam
+                    <th
+                      style={{
+                        ...cellTh,
+                        width: COL_CIA_W,
+                        minWidth: COL_CIA_W,
+                        maxWidth: COL_CIA_W,
+                        whiteSpace: 'pre-line',
+                        overflow: 'visible',
+                        textOverflow: 'clip',
+                        lineHeight: 1.05,
+                      }}
+                      rowSpan={5}
+                      title="CIA Exam"
+                    >
+                      {'CIA\nEXAM'}
                     </th>
                   ) : null}
                   <th style={cellTh} colSpan={coAttainmentCols}>
@@ -2080,7 +2199,12 @@ export default function LabCourseMarksEntry({
 
                   {hasEnabledCos ? (
                     enabledCoMetas.map((m) => {
-                      const coMax = m.expMax + (ciaExamEnabled ? DEFAULT_CIA_EXAM_MAX / 2 : 0);
+                      const labOverrideVal = (LAB_CO_MAX_OVERRIDE as any)[`co${m.coNumber}`];
+                      // build per-experiment max list for this CO and compute its average (matches AVERAGEIF behaviour)
+                      const perExpMaxes = Array.from({ length: clampInt(Number(m.expCount ?? 0), 0, 12) }).map(() => clampInt(Number(m.expMax ?? DEFAULT_EXPERIMENT_MAX), 0, 100));
+                      const avgExpMax = perExpMaxes.length ? perExpMaxes.reduce((a, b) => a + b, 0) / perExpMaxes.length : 0;
+                      const coBase = isLabCourse && Number.isFinite(Number(labOverrideVal)) ? Number(labOverrideVal) : avgExpMax;
+                      const coMax = Math.round((coBase + (ciaExamEnabled ? DEFAULT_CIA_EXAM_MAX / 2 : 0)) || 0);
                       return (
                         <React.Fragment key={`comax_${m.coNumber}`}>
                           <th style={cellTh}>{coMax}</th>
@@ -2127,7 +2251,12 @@ export default function LabCourseMarksEntry({
                       {enabledCoMetas.map((m) =>
                         Array.from({ length: m.expCount }, (_, i) => (
                           <th key={`btl_${m.coNumber}_${i}`} style={cellTh}>
-                            <div style={{ position: 'relative', display: 'grid', placeItems: 'center' }} title={`BTL: ${m.btl[i] || 1}`}>
+                            {(() => {
+                              const v = (m.btl?.[i] ?? 1) as BtlLevel;
+                              const display = v === '' ? '-' : String(v);
+                              const editable = !viewerMode && !tableBlocked && !publishedEditLocked && !globalLocked;
+                              return (
+                                <div style={{ position: 'relative', display: 'grid', placeItems: 'center', minWidth: 44 }} title={`BTL: ${display}`}>
                               <div
                                 style={{
                                   width: '100%',
@@ -2136,11 +2265,43 @@ export default function LabCourseMarksEntry({
                                   textAlign: 'center',
                                   userSelect: 'none',
                                   fontWeight: 800,
+                                  cursor: editable ? 'pointer' : 'default',
                                 }}
                               >
-                                {m.btl[i] || 1}
+                                {display}
                               </div>
+                              {editable ? (
+                                <select
+                                  aria-label={`BTL for ${itemLabel1} ${i + 1} (CO-${m.coNumber})`}
+                                  value={v}
+                                  onChange={(e) => {
+                                    const raw = e.target.value;
+                                    const next: BtlLevel = raw === '' ? '' : (Number(raw) as 1 | 2 | 3 | 4 | 5 | 6);
+                                    setCoBtl(m.coNumber, i, next);
+                                  }}
+                                  style={{
+                                    position: 'absolute',
+                                    inset: 0,
+                                    width: '100%',
+                                    height: '100%',
+                                    opacity: 0,
+                                    cursor: 'pointer',
+                                    appearance: 'none',
+                                    WebkitAppearance: 'none',
+                                    MozAppearance: 'none',
+                                  }}
+                                >
+                                  <option value="">-</option>
+                                  {[1, 2, 3, 4, 5, 6].map((n) => (
+                                    <option key={n} value={n}>
+                                      {n}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : null}
                             </div>
+                              );
+                            })()}
                           </th>
                         )),
                       )}
@@ -2173,8 +2334,12 @@ export default function LabCourseMarksEntry({
                         const marks = marksForEnabledCos.find((x) => x.coNumber === m.coNumber)?.marks ?? [];
                         const avg = avgMarks(marks);
                         const mark = !hasAny ? null : (avg ?? 0) + (ciaExamEnabled ? (ciaExamNum ?? 0) / 2 : 0);
-                        const coMax = m.expMax + (ciaExamEnabled ? DEFAULT_CIA_EXAM_MAX / 2 : 0);
-                        return { coNumber: m.coNumber, mark, coMax };
+                          const labOverrideVal = (LAB_CO_MAX_OVERRIDE as any)[`co${m.coNumber}`];
+                          const perExpMaxes = Array.from({ length: clampInt(Number(m.expCount ?? 0), 0, 12) }).map(() => clampInt(Number(m.expMax ?? DEFAULT_EXPERIMENT_MAX), 0, 100));
+                          const avgExpMax = perExpMaxes.length ? perExpMaxes.reduce((a, b) => a + b, 0) / perExpMaxes.length : 0;
+                          const coBase = isLabCourse && Number.isFinite(Number(labOverrideVal)) ? Number(labOverrideVal) : avgExpMax;
+                          const coMax = Math.round((coBase + (ciaExamEnabled ? DEFAULT_CIA_EXAM_MAX / 2 : 0)) || 0);
+                          return { coNumber: m.coNumber, mark, coMax };
                       })
                     : [];
 
@@ -2195,12 +2360,18 @@ export default function LabCourseMarksEntry({
 
                   return (
                     <tr key={s.id} style={tableBlocked && idx < 3 ? { position: 'relative', zIndex: 35, background: '#fff' } : undefined}>
-                      <td style={{ ...cellTd, textAlign: 'center', width: 42, minWidth: 42 }}>{idx + 1}</td>
-                      <td style={cellTd}>{s.reg_no}</td>
-                      <td style={cellTd}>{s.name}</td>
+                      <td style={{ ...cellTd, ...stickyTd(0, COL_SNO_W), textAlign: 'center' }}>{idx + 1}</td>
+                      <td style={{ ...cellTd, ...stickyTd(COL_SNO_W, COL_RNO_W), textAlign: 'center' }} title={String(s.reg_no || '')}>
+                        {shortenRollNo(s.reg_no, 7)}
+                      </td>
+                      <td style={{ ...cellTd, ...stickyTd(COL_SNO_W + COL_RNO_W, COL_NAME_W) }} title={String(s.name || '')}>
+                        <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {String(s.name || '')}
+                        </span>
+                      </td>
 
                       {absentUiEnabled ? (
-                        <td style={{ ...cellTd, textAlign: 'center', width: 70, minWidth: 70 }}>
+                        <td style={{ ...cellTd, ...stickyTd(COL_SNO_W + COL_RNO_W + COL_NAME_W, COL_AB_W), textAlign: 'center' }}>
                           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
                             <input
                               type="checkbox"
@@ -2233,7 +2404,7 @@ export default function LabCourseMarksEntry({
                         enabledCoMetas.map((m) => {
                           const marks = marksForEnabledCos.find((x) => x.coNumber === m.coNumber)?.marks ?? [];
                           return Array.from({ length: m.expCount }, (_, i) => (
-                            <td key={`m_${s.id}_${m.coNumber}_${i}`} style={{ ...cellTd, width: 78, minWidth: 78, background: '#fff7ed' }}>
+                            <td key={`m_${s.id}_${m.coNumber}_${i}`} style={{ ...cellTd, width: 38, minWidth: 0, padding: '2px 2px', background: '#fff7ed' }}>
                               <input
                                 type="number"
                                 value={marks[i] ?? ''}
@@ -2248,9 +2419,9 @@ export default function LabCourseMarksEntry({
                         })
                       )}
 
-                      <td style={{ ...cellTd, textAlign: 'right', fontWeight: 800 }}>{avgTotal == null ? '' : avgTotal.toFixed(1)}</td>
+                      <td style={{ ...cellTd, width: COL_AVG_W, minWidth: 0, textAlign: 'right', fontWeight: 800 }}>{avgTotal == null ? '' : avgTotal.toFixed(1)}</td>
                       {ciaExamEnabled ? (
-                        <td style={{ ...cellTd, width: 90, minWidth: 90, background: '#fff7ed' }}>
+                        <td style={{ ...cellTd, width: COL_CIA_W, minWidth: 0, padding: '2px 2px', background: '#fff7ed' }}>
                           <input
                             type="number"
                             value={(row as any)?.ciaExam ?? ''}
@@ -2826,33 +2997,51 @@ export default function LabCourseMarksEntry({
               </div>
             ) : null}
 
-            <div style={{ overflowX: 'auto', border: '1px solid #e5e7eb', borderRadius: 12 }}>
-              <table className="obe-table" style={{ width: 'max-content', minWidth: minTableWidth, tableLayout: 'auto' }}>
+            <div style={{ overflowX: 'hidden', border: '1px solid #e5e7eb', borderRadius: 12, position: 'relative' }}>
+              {(() => {
+                // View table never shows AB column, so compute the exact column count.
+                const viewHeaderCols = 3 + experimentsCols + 1 + (ciaExamEnabled ? 1 : 0) + coAttainmentCols + visibleBtlIndices.length * 2;
+                return (
+                  <table className="obe-table" style={{ width: '100%', minWidth: 0, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+                    {renderColGroup(viewHeaderCols, false)}
                 <thead>
                   <tr>
-                    <th style={cellTh} colSpan={headerCols}>
+                    <th style={cellTh} colSpan={viewHeaderCols}>
                       {label}
                     </th>
                   </tr>
                   <tr>
-                    <th style={cellTh} rowSpan={5}>
+                    <th style={{ ...cellTh, ...stickyTh(0, COL_SNO_W) }} rowSpan={5}>
                       S.No
                     </th>
-                    <th style={cellTh} rowSpan={5}>
+                    <th style={{ ...cellTh, ...stickyTh(COL_SNO_W, COL_RNO_W) }} rowSpan={5}>
                       R.No
                     </th>
-                    <th style={cellTh} rowSpan={5}>
+                    <th style={{ ...cellTh, ...stickyTh(COL_SNO_W + COL_RNO_W, COL_NAME_W), textAlign: 'left' }} rowSpan={5}>
                       Name of the Students
                     </th>
                     <th style={cellTh} colSpan={experimentsCols}>
                       Experiments
                     </th>
-                    <th style={cellTh} rowSpan={5}>
+                    <th style={{ ...cellTh, width: COL_AVG_W, minWidth: COL_AVG_W, maxWidth: COL_AVG_W }} rowSpan={5}>
                       AVG
                     </th>
                     {ciaExamEnabled ? (
-                      <th style={cellTh} rowSpan={5}>
-                        CIA Exam
+                      <th
+                        style={{
+                          ...cellTh,
+                          width: COL_CIA_W,
+                          minWidth: COL_CIA_W,
+                          maxWidth: COL_CIA_W,
+                          whiteSpace: 'pre-line',
+                          overflow: 'visible',
+                          textOverflow: 'clip',
+                          lineHeight: 1.05,
+                        }}
+                        rowSpan={5}
+                        title="CIA Exam"
+                      >
+                        {'CIA\nEXAM'}
                       </th>
                     ) : null}
                     <th style={cellTh} colSpan={coAttainmentCols}>
@@ -2996,7 +3185,9 @@ export default function LabCourseMarksEntry({
                           const marks = marksForEnabledCos.find((x) => x.coNumber === m.coNumber)?.marks ?? [];
                           const avg = avgMarks(marks);
                           const mark = !hasAny ? null : (avg ?? 0) + (ciaExamEnabled ? (ciaExamNum ?? 0) / 2 : 0);
-                          const coMax = m.expMax + (ciaExamEnabled ? DEFAULT_CIA_EXAM_MAX / 2 : 0);
+                          const labOverrideVal = (LAB_CO_MAX_OVERRIDE as any)[`co${m.coNumber}`];
+                          const coBase = isLabCourse && Number.isFinite(Number(labOverrideVal)) ? Number(labOverrideVal) : m.expMax;
+                          const coMax = coBase + (ciaExamEnabled ? DEFAULT_CIA_EXAM_MAX / 2 : 0);
                           return { coNumber: m.coNumber, mark, coMax };
                         })
                       : [];
@@ -3018,9 +3209,15 @@ export default function LabCourseMarksEntry({
 
                     return (
                       <tr key={`view_${s.id}`}>
-                        <td style={{ ...cellTd, textAlign: 'center', width: 42, minWidth: 42 }}>{idx + 1}</td>
-                        <td style={cellTd}>{s.reg_no}</td>
-                        <td style={cellTd}>{s.name}</td>
+                        <td style={{ ...cellTd, ...stickyTd(0, COL_SNO_W), textAlign: 'center' }}>{idx + 1}</td>
+                        <td style={{ ...cellTd, ...stickyTd(COL_SNO_W, COL_RNO_W) }} title={String(s.reg_no || '')}>
+                          {shortenRollNo(s.reg_no, 7)}
+                        </td>
+                        <td style={{ ...cellTd, ...stickyTd(COL_SNO_W + COL_RNO_W, COL_NAME_W) }} title={String(s.name || '')}>
+                          <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {String(s.name || '')}
+                          </span>
+                        </td>
 
                         {totalExpCols === 0 ? (
                           <td style={{ ...cellTd, textAlign: 'center', color: '#6b7280' }}>—</td>
@@ -3030,7 +3227,7 @@ export default function LabCourseMarksEntry({
                             return Array.from({ length: m.expCount }, (_, i) => (
                               <td
                                 key={`view_m_${s.id}_${m.coNumber}_${i}`}
-                                style={{ ...cellTd, width: 78, minWidth: 78, background: '#fff7ed', textAlign: 'center', fontWeight: 800 }}
+                                style={{ ...cellTd, width: 38, minWidth: 0, padding: '2px 2px', background: '#fff7ed', textAlign: 'center', fontWeight: 800 }}
                               >
                                 {marks[i] ?? ''}
                               </td>
@@ -3038,9 +3235,9 @@ export default function LabCourseMarksEntry({
                           })
                         )}
 
-                        <td style={{ ...cellTd, textAlign: 'right', fontWeight: 800 }}>{avgTotal == null ? '' : avgTotal.toFixed(1)}</td>
+                        <td style={{ ...cellTd, width: COL_AVG_W, minWidth: 0, textAlign: 'right', fontWeight: 800 }}>{avgTotal == null ? '' : avgTotal.toFixed(1)}</td>
                         {ciaExamEnabled ? (
-                          <td style={{ ...cellTd, width: 90, minWidth: 90, background: '#fff7ed', textAlign: 'center', fontWeight: 800 }}>
+                          <td style={{ ...cellTd, width: COL_CIA_W, minWidth: 0, padding: '2px 2px', background: '#fff7ed', textAlign: 'center', fontWeight: 800 }}>
                             {(row as any)?.ciaExam ?? ''}
                           </td>
                         ) : null}
@@ -3080,7 +3277,9 @@ export default function LabCourseMarksEntry({
                     </tr>
                   ) : null}
                 </tbody>
-              </table>
+                  </table>
+                );
+              })()}
             </div>
 
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>

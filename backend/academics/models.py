@@ -433,6 +433,7 @@ class StudentMentorMap(models.Model):
     student = models.ForeignKey(StudentProfile, on_delete=models.CASCADE, related_name='mentor_mappings')
     mentor = models.ForeignKey(StaffProfile, on_delete=models.CASCADE, related_name='mentee_mappings')
     is_active = models.BooleanField(default=True)
+    enabled_assessments = models.JSONField(default=list, blank=True)
 
     class Meta:
         verbose_name = 'Student Mentor Mapping'
@@ -536,6 +537,8 @@ class TeachingAssignment(models.Model):
         on_delete=models.PROTECT,
         related_name='teaching_assignments'
     )
+    # Per-assignment enabled assessments (faculty override of course-level settings)
+    enabled_assessments = models.JSONField(default=list, blank=True)
     is_active = models.BooleanField(default=True)
 
     class Meta:
@@ -566,6 +569,104 @@ class TeachingAssignment(models.Model):
             subj_part = getattr(self.subject, 'code', str(self.subject)) if getattr(self, 'subject', None) else 'No subject'
 
         return f"{self.staff.staff_id} -> {subj_part} ({self.section} | {self.academic_year})"
+
+
+class SpecialCourseAssessmentSelection(models.Model):
+    """Global enabled assessments for SPECIAL courses.
+
+    One row per curriculum_row + academic_year. Once created, the selection is
+    treated as locked for all faculties teaching that special course.
+    """
+
+    curriculum_row = models.ForeignKey(
+        'curriculum.CurriculumDepartment',
+        on_delete=models.CASCADE,
+        related_name='special_assessment_selections',
+    )
+    academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.CASCADE,
+        related_name='special_assessment_selections',
+    )
+    enabled_assessments = models.JSONField(default=list, blank=True)
+    locked = models.BooleanField(default=True)
+
+    created_by = models.ForeignKey(
+        StaffProfile,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='created_special_assessment_selections',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Special Course Assessment Selection'
+        verbose_name_plural = 'Special Course Assessment Selections'
+        unique_together = (('curriculum_row', 'academic_year'),)
+
+    def __str__(self):
+        return f"SpecialAssessments {self.curriculum_row_id} / {self.academic_year_id}"
+
+
+class SpecialCourseAssessmentEditRequest(models.Model):
+    """Faculty request to edit a locked special-course assessment selection.
+
+    IQAC/Admin approves a request; the requester can then edit until expiry.
+    """
+
+    STATUS_PENDING = 'PENDING'
+    STATUS_APPROVED = 'APPROVED'
+    STATUS_REJECTED = 'REJECTED'
+    STATUS_CHOICES = (
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_APPROVED, 'Approved'),
+        (STATUS_REJECTED, 'Rejected'),
+    )
+
+    selection = models.ForeignKey(
+        SpecialCourseAssessmentSelection,
+        on_delete=models.CASCADE,
+        related_name='edit_requests',
+    )
+    requested_by = models.ForeignKey(
+        StaffProfile,
+        on_delete=models.CASCADE,
+        related_name='special_assessment_edit_requests',
+    )
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    requested_at = models.DateTimeField(auto_now_add=True)
+
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='reviewed_special_assessment_edit_requests',
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    can_edit_until = models.DateTimeField(null=True, blank=True)
+    used_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = 'Special Course Assessment Edit Request'
+        verbose_name_plural = 'Special Course Assessment Edit Requests'
+        indexes = [
+            models.Index(fields=['status', 'requested_at']),
+        ]
+
+    def __str__(self):
+        return f"EditRequest {self.selection_id} by {self.requested_by_id} ({self.status})"
+
+    def is_edit_granted(self) -> bool:
+        if self.status != self.STATUS_APPROVED:
+            return False
+        if self.used_at is not None:
+            return False
+        if self.can_edit_until is None:
+            return False
+        return timezone.now() < self.can_edit_until
 
 
 class StudentSubjectBatch(models.Model):

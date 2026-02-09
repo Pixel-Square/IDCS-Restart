@@ -19,8 +19,14 @@ urlpatterns = [
     path('ssa1-published/<str:subject_id>', views.ssa1_published),
     path('ssa1-publish/<str:subject_id>', views.ssa1_publish),
 
+    path('review1-published/<str:subject_id>', views.review1_published),
+    path('review1-publish/<str:subject_id>', views.review1_publish),
+
     path('ssa2-published/<str:subject_id>', views.ssa2_published),
     path('ssa2-publish/<str:subject_id>', views.ssa2_publish),
+
+    path('review2-published/<str:subject_id>', views.review2_published),
+    path('review2-publish/<str:subject_id>', views.review2_publish),
 
     path('formative1-published/<str:subject_id>', views.formative1_published),
     path('formative1-publish/<str:subject_id>', views.formative1_publish),
@@ -72,4 +78,8 @@ urlpatterns = [
 
     # IQAC tools
     path('iqac/reset/<str:assessment>/<str:subject_id>', views.iqac_reset_assessment),
+    path('iqac/class-type-weights', views.class_type_weights_list),
+    path('iqac/class-type-weights/save', views.class_type_weights_upsert),
+    path('iqac/internal-mark-mapping/<str:subject_id>', views.internal_mark_mapping_get),
+    path('iqac/internal-mark-mapping/<str:subject_id>/save', views.internal_mark_mapping_upsert),
 ]

@@ -5,6 +5,7 @@ export type Master = {
   course_code?: string | null;
   course_name?: string | null;
   class_type?: string;
+  enabled_assessments?: string[];
   category?: string;
   l?: number; t?: number; p?: number; s?: number; c?: number;
   internal_mark?: number | null;
@@ -24,6 +25,7 @@ export type DeptRow = {
   course_code?: string | null;
   course_name?: string | null;
   class_type?: string | null;
+  enabled_assessments?: string[];
   l?: number; t?: number; p?: number; s?: number; c?: number;
   internal_mark?: number | null;
   external_mark?: number | null;

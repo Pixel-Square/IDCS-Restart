@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import PillButton from '../../components/PillButton';
 import { useParams, useNavigate } from 'react-router-dom';
 import CurriculumLayout from './CurriculumLayout';
+import CLASS_TYPES, { normalizeClassType } from '../../constants/classTypes';
 import { createMaster, updateMaster, fetchMasters, fetchDeptRows } from '../../services/curriculum';
 
 export default function MasterEditor() {
@@ -130,7 +131,14 @@ export default function MasterEditor() {
           </div>
           <div>
             <label style={{ fontWeight: 600, color: '#3730a3' }}>Class</label>
-            <input className="input" value={form.class_type || ''} onChange={e => setForm({...form, class_type: e.target.value})} placeholder="e.g. Theory" style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
+            <select className="input" value={form.class_type || ''} onChange={e => setForm({...form, class_type: e.target.value})} style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }}>
+              <option value="">Select class type</option>
+              {CLASS_TYPES.map((ct) => {
+                const key = normalizeClassType(String(ct));
+                const label = String(ct).charAt(0).toUpperCase() + String(ct).slice(1);
+                return <option key={key} value={key}>{label}</option>;
+              })}
+            </select>
           </div>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 18 }}>
