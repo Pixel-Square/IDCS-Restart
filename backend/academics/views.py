@@ -595,6 +595,7 @@ class HODSectionsView(APIView):
                 'course_id': getattr(course, 'id', None),
                 'department_id': getattr(dept, 'id', None),
                 'department_code': getattr(dept, 'code', None),
+                'department_short_name': getattr(dept, 'short_name', None),
             })
         return Response({'results': results})
 
@@ -654,7 +655,7 @@ class DepartmentsListView(APIView):
 
         results = []
         for d in qs:
-            results.append({'id': d.id, 'code': getattr(d, 'code', None), 'name': getattr(d, 'name', None)})
+            results.append({'id': d.id, 'code': getattr(d, 'code', None), 'name': getattr(d, 'name', None), 'short_name': getattr(d, 'short_name', None)})
         return Response({'results': results})
 
 
@@ -857,6 +858,30 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
     queryset = PeriodAttendanceSession.objects.select_related('section', 'period', 'timetable_assignment').prefetch_related('records')
     serializer_class = PeriodAttendanceSessionSerializer
     permission_classes = (IsAuthenticated,)
+
+    def get_queryset(self):
+        """Filter queryset by date range if provided."""
+        queryset = super().get_queryset()
+        
+        # Support date filtering for bulk attendance checking
+        date_after = self.request.query_params.get('date_after')
+        date_before = self.request.query_params.get('date_before')
+        
+        if date_after:
+            try:
+                import datetime
+                queryset = queryset.filter(date__gte=datetime.date.fromisoformat(date_after))
+            except Exception:
+                pass
+        
+        if date_before:
+            try:
+                import datetime
+                queryset = queryset.filter(date__lte=datetime.date.fromisoformat(date_before))
+            except Exception:
+                pass
+        
+        return queryset
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -1245,6 +1270,48 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                 logger.warning('Created/updated %d records for date=%s section=%s period=%s', len(created_records), day.isoformat(), section_obj.id, period_obj.id)
 
         return Response({'results': out_sessions})
+
+    @action(detail=True, methods=['post'], url_path='lock')
+    def lock_session(self, request, pk=None):
+        """Lock an attendance session to prevent further edits."""
+        session = self.get_object()
+        user = request.user
+        staff_profile = getattr(user, 'staff_profile', None)
+        
+        # Check permissions
+        perms = get_user_permissions(user)
+        is_creator = session.created_by == staff_profile if staff_profile else False
+        is_assigned = False
+        
+        if session.timetable_assignment and staff_profile:
+            is_assigned = session.timetable_assignment.staff == staff_profile
+        
+        if not (is_creator or is_assigned or 'academics.mark_attendance' in perms or user.is_superuser):
+            raise PermissionDenied('You do not have permission to lock this attendance session')
+        
+        session.is_locked = True
+        session.save(update_fields=['is_locked'])
+        
+        serializer = self.get_serializer(session)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['post'], url_path='unlock')
+    def unlock_session(self, request, pk=None):
+        """Unlock an attendance session to allow edits."""
+        session = self.get_object()
+        user = request.user
+        staff_profile = getattr(user, 'staff_profile', None)
+        
+        # Check permissions - stricter for unlocking
+        perms = get_user_permissions(user)
+        if not ('academics.mark_attendance' in perms or user.is_superuser):
+            raise PermissionDenied('You do not have permission to unlock this attendance session')
+        
+        session.is_locked = False
+        session.save(update_fields=['is_locked'])
+        
+        serializer = self.get_serializer(session)
+        return Response(serializer.data)
 
 
 class StaffPeriodsView(APIView):

@@ -4,7 +4,7 @@ import DashboardLayout from '../../components/DashboardLayout';
 export default function CurriculumLayout({ children }: { children?: React.ReactNode }) {
   return (
     <DashboardLayout>
-      <div style={{ minHeight: '100vh', width: '100%', display: 'flex', flexDirection: 'column', background: 'none' }}>
+      <div className="flex flex-col w-full max-w-full overflow-x-hidden">
         {children}
       </div>
     </DashboardLayout>

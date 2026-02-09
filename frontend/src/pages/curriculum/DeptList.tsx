@@ -3,6 +3,7 @@ import CurriculumLayout from './CurriculumLayout';
 import { fetchDeptRows, updateDeptRow, approveDeptRow, createElective, fetchElectives } from '../../services/curriculum';
 import fetchWithAuth from '../../services/fetchAuth';
 import { useAppSelector } from '../../hooks';
+import { Edit, Check, X, Save } from 'lucide-react';
 
 export default function DeptList() {
   const [rows, setRows] = useState<any[]>([]);
@@ -170,136 +171,114 @@ export default function DeptList() {
 
   if (loading) return (
     <CurriculumLayout>
-      <div className="db-loading">Loading department curriculum…</div>
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading department curriculum…</p>
+        </div>
+      </div>
     </CurriculumLayout>
   );
 
   return (
     <CurriculumLayout>
-      <div className="welcome" style={{ marginBottom: 24 }}>
-        <div className="welcome-left">
-          <svg className="welcome-icon" fill="none" viewBox="0 0 48 48"><rect width="48" height="48" rx="12" fill="#e0e7ff"/><path d="M16 32V16h16v16H16zm2-2h12V18H18v12zm2-2v-8h8v8h-8z" fill="#6366f1"/></svg>
+      <div className="px-4 pb-6">
+        {/* Header */}
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center flex-shrink-0">
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 48 48"><rect width="48" height="48" rx="12" fill="#e0e7ff"/><path d="M16 32V16h16v16H16zm2-2h12V18H18v12zm2-2v-8h8v8h-8z" fill="#6366f1"/></svg>
+          </div>
           <div>
-            <h2 className="welcome-title" style={{ fontSize: 22, marginBottom: 2 }}>Department Curriculum</h2>
-            <div className="welcome-sub">View and manage department-specific curriculum entries.</div>
+            <h2 className="text-2xl font-bold text-gray-900">Department Curriculum</h2>
+            <p className="text-sm text-gray-600 mt-1">View and manage department-specific curriculum entries.</p>
           </div>
         </div>
-      </div>
-      {uniqueRegs.length > 0 && (
-        <div style={{ marginBottom: 18, display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ color: '#374151', fontWeight: 500 }}>Regulation:</span>
-          <select
-            value={selectedReg ?? ''}
-            onChange={e => setSelectedReg(e.target.value || null)}
-            style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid #d1d5db', background: '#fff', color: '#1e293b', fontWeight: 500 }}
-          >
-            {uniqueRegs.map(r => <option key={r} value={r}>{r}</option>)}
-          </select>
-          <div style={{ width: 12 }} />
-          <span style={{ color: '#374151', fontWeight: 500 }}>Semester:</span>
-          <select
-            value={selectedSem ?? ''}
-            onChange={e => setSelectedSem(e.target.value ? Number(e.target.value) : null)}
-            style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid #d1d5db', background: '#fff', color: '#1e293b', fontWeight: 500 }}
-          >
-            {uniqueSems.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
+        {/* Filters */}
+        {uniqueRegs.length > 0 && (
+          <div className="flex flex-wrap items-center gap-4 mb-6 bg-white rounded-lg shadow-sm p-4">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-gray-700">Regulation:</span>
+              <select
+                value={selectedReg ?? ''}
+                onChange={e => setSelectedReg(e.target.value || null)}
+                className="px-4 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                {uniqueRegs.map(r => <option key={r} value={r}>{r}</option>)}
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-gray-700">Semester:</span>
+              <select
+                value={selectedSem ?? ''}
+                onChange={e => setSelectedSem(e.target.value ? Number(e.target.value) : null)}
+                className="px-4 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                {uniqueSems.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+          </div>
+        )}
+        
+        {/* Department Filters */}
+        <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+          <h3 className="text-lg font-medium text-gray-900 mb-4">Filter by Department</h3>
+          <div className="flex flex-wrap gap-2">
+            {uniqueDepts.map(deptId => {
+              const isActive = currentDept === deptId;
+              const dept = rows.find(r => r.department.id === deptId)?.department;
+              const displayName = dept?.short_name || dept?.shortname || dept?.code || dept?.name || `Dept ${deptId}`;
+              return (
+                <button
+                  key={deptId}
+                  onClick={() => setCurrentDept(deptId)}
+                  className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
+                    isActive
+                      ? 'bg-blue-100 text-blue-700'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  {displayName}
+                </button>
+              );
+            })}
+          </div>
         </div>
-      )}
-      <div style={{ marginBottom: 18, display: 'flex', flexWrap: 'wrap', gap: 14 }}>
-        {uniqueDepts.map(deptId => {
-          const isActive = currentDept === deptId;
-          return (
-            <button
-              key={deptId}
-              onClick={() => setCurrentDept(deptId)}
-              className={isActive ? 'dept-pill-active' : 'dept-pill'}
-              style={{
-                minWidth: 64,
-                height: 36,
-                borderRadius: 20,
-                fontWeight: isActive ? 600 : 500,
-                fontSize: 16,
-                border: 'none',
-                outline: 'none',
-                boxShadow: isActive ? '0 2px 8px #e0e7ff' : 'none',
-                background: isActive ? 'linear-gradient(90deg,#4f46e5,#06b6d4)' : '#f3f4f6',
-                color: isActive ? '#fff' : '#1e293b',
-                transition: 'background 0.18s, color 0.18s, box-shadow 0.18s',
-                padding: '0 22px',
-                margin: 0,
-                cursor: 'pointer',
-                letterSpacing: 1,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                boxSizing: 'border-box',
-              }}
-            >
-              {rows.find(r => r.department.id === deptId)?.department.code || `Dept ${deptId}`}
-            </button>
-          );
-        })}
-      </div>
-      <div style={{ overflowX: 'auto', marginTop: 8 }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff', borderRadius: 10, boxShadow: '0 2px 8px #e5e7eb' }}>
-          <thead>
-            <tr style={{ background: 'linear-gradient(90deg,#f3f4f6,#e0e7ff)', textAlign: 'left', borderBottom: '2px solid #d1d5db' }}>
-              <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>Sem</th>
-              <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>Code</th>
-              <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>Course</th>
-              <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>CAT</th>
-              <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>Class</th>
-              <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>Elective</th>
-              <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>L</th>
-              <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>T</th>
-              <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>P</th>
-              <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>S</th>
-              <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>C</th>
-              <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>INT</th>
-              <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>EXT</th>
-              <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>TTL</th>
-              <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>Hours</th>
-              <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>QP Type</th>
-              <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>Editable</th>
-              <th style={{ padding: '12px 8px' }} />
+      <div className="w-full overflow-x-auto bg-white rounded-lg shadow-md">
+        <table className="w-full divide-y divide-gray-200">
+          <thead className="bg-gradient-to-r from-gray-50 to-indigo-50">
+            <tr>
+              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Code</th>
+              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap min-w-[200px]">Course</th>
+              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">CAT</th>
+              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Class</th>
+              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Elective</th>
+              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">L</th>
+              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">T</th>
+              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">P</th>
+              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">S</th>
+              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">C</th>
+              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">INT</th>
+              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">EXT</th>
+              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">TTL</th>
+              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Hours</th>
+              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">QP Type</th>
+              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Editable</th>
+              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Actions</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="bg-white divide-y divide-gray-200">
             {rows.filter(r => (!currentDept || r.department.id === currentDept) && (!selectedReg || r.regulation === selectedReg) && (!selectedSem || r.semester === selectedSem)).map(r => (
-              <tr key={r.id} style={{ borderBottom: '1px solid #f3f4f6', transition: 'background 0.2s', background: r.editable ? '#f8fafc' : '#fff' }}>
+              <tr key={r.id} className={`hover:bg-gray-50 transition-colors ${r.editable ? 'bg-slate-50' : ''}`}>
                 {editingRow === r.id ? (
                   <>
-                    <td><input value={r.semester} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, semester: e.target.value } : row))} className="edit-cell-input" /></td>
-                    <td><input value={r.course_code || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, course_code: e.target.value } : row))} className="edit-cell-input" /></td>
-                    <td style={{ padding: '10px 8px', verticalAlign: 'middle', overflow: 'visible', whiteSpace: 'normal' }}>
+                    <td className="px-3 py-2 whitespace-nowrap"><input value={r.course_code || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, course_code: e.target.value } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2">
                       <textarea
                         value={r.course_name || ''}
                         onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, course_name: e.target.value } : row))}
-                        className="edit-cell-input course-textarea"
-                        style={{
-                          minWidth: 90,
-                          width: '100%',
-                          fontSize: 15,
-                          color: '#1e293b',
-                          fontWeight: 500,
-                          background: '#f8fafc',
-                          border: '1px solid #d1d5db',
-                          borderRadius: 6,
-                          minHeight: 32,
-                          maxHeight: 120,
-                          boxSizing: 'border-box',
-                          margin: 0,
-                          padding: '5px 8px',
-                          resize: 'none',
-                          overflow: 'hidden',
-                          lineHeight: 1.4,
-                          whiteSpace: 'pre-wrap',
-                          wordBreak: 'break-word',
-                          display: 'block',
-                        }}
+                        className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
+                        style={{ minHeight: '32px' }}
                         placeholder="Course Name"
-                        aria-label="Course Name"
                         rows={1}
                         onInput={e => {
                           const ta = e.target as HTMLTextAreaElement;
@@ -308,9 +287,9 @@ export default function DeptList() {
                         }}
                       />
                     </td>
-                    <td><input value={r.category || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, category: e.target.value } : row))} className="edit-cell-input" /></td>
-                    <td>
-                      <select value={r.class_type || 'THEORY'} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, class_type: e.target.value } : row))} className="edit-cell-input" style={{ minWidth: 90 }}>
+                    <td className="px-3 py-2 whitespace-nowrap"><input value={r.category || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, category: e.target.value } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      <select value={r.class_type || 'THEORY'} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, class_type: e.target.value } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
                         <option value="THEORY">THEORY</option>
                         <option value="LAB">LAB</option>
                         <option value="TCPL">TCPL</option>
@@ -319,112 +298,96 @@ export default function DeptList() {
                         <option value="AUDIT">AUDIT</option>
                       </select>
                     </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <input type="checkbox" checked={!!r.is_elective} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, is_elective: e.target.checked } : row))} />
+                    <td className="px-3 py-2 text-center whitespace-nowrap">
+                      <input type="checkbox" checked={!!r.is_elective} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, is_elective: e.target.checked } : row))} className="w-4 h-4" />
                     </td>
-                    <td><input value={r.l || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, l: Number(e.target.value) } : row))} className="edit-cell-input" /></td>
-                    <td><input value={r.t || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, t: Number(e.target.value) } : row))} className="edit-cell-input" /></td>
-                    <td><input value={r.p || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, p: Number(e.target.value) } : row))} className="edit-cell-input" /></td>
-                    <td><input value={r.s || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, s: Number(e.target.value) } : row))} className="edit-cell-input" /></td>
-                    <td><input value={r.c || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, c: Number(e.target.value) } : row))} className="edit-cell-input" /></td>
-                    <td><input value={r.internal_mark || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, internal_mark: Number(e.target.value) } : row))} className="edit-cell-input" /></td>
-                    <td><input value={r.external_mark || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, external_mark: Number(e.target.value) } : row))} className="edit-cell-input" /></td>
-                    <td><input value={r.total_mark || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, total_mark: Number(e.target.value) } : row))} className="edit-cell-input" /></td>
-                    <td><input value={r.total_hours || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, total_hours: Number(e.target.value) } : row))} className="edit-cell-input" /></td>
-                    <td><input value={r.question_paper_type || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, question_paper_type: e.target.value } : row))} className="edit-cell-input" style={{ minWidth: 60 }} /></td>
-                    <td>{r.editable ? <span style={{ color: '#059669', fontWeight: 600 }}>Yes</span> : <span style={{ color: '#9ca3af' }}>No</span>}</td>
-                    <td style={{ whiteSpace: 'nowrap' }}>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.l || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, l: Number(e.target.value) } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.t || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, t: Number(e.target.value) } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.p || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, p: Number(e.target.value) } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.s || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, s: Number(e.target.value) } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.c || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, c: Number(e.target.value) } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.internal_mark || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, internal_mark: Number(e.target.value) } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.external_mark || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, external_mark: Number(e.target.value) } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.total_mark || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, total_mark: Number(e.target.value) } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.total_hours || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, total_hours: Number(e.target.value) } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input value={r.question_paper_type || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, question_paper_type: e.target.value } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap">{r.editable ? <span className="text-emerald-600 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">
                       <button
-                        className="btn-primary"
-                        style={{ padding: '6px 18px', fontWeight: 600, borderRadius: 8, fontSize: 14, marginRight: 6, border: 'none', boxShadow: '0 1px 4px #e0e7ef1a', background: 'linear-gradient(90deg,#4f46e5,#06b6d4)' }}
+                        className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors mr-2"
                         onClick={() => onSaveRow(r)}
+                        title="Save"
                       >
-                        Save
+                        <Save className="w-4 h-4" />
                       </button>
                       <button
-                        className="btn-secondary"
-                        style={{ padding: '6px 18px', fontWeight: 600, borderRadius: 8, fontSize: 14, border: 'none', background: '#f3f4f6', color: '#374151' }}
+                        className="p-2 text-gray-600 hover:bg-gray-50 rounded-lg transition-colors"
                         onClick={() => setEditingRow(null)}
+                        title="Cancel"
                       >
-                        Cancel
+                        <X className="w-4 h-4" />
                       </button>
                     </td>
                   </>
                 ) : (
                   <>
-                    <td style={{ padding: '10px 8px', fontWeight: 500 }}>{r.semester}</td>
-                    <td style={{ padding: '10px 8px' }}>{r.course_code || '-'}</td>
-                    <td style={{ padding: '10px 8px', verticalAlign: 'middle', fontSize: 15, color: '#1e293b', fontWeight: 500 }}>
-                      {r.course_name || '-'}
-                    </td>
-                    <td style={{ padding: '10px 8px' }}>{r.category || '-'}</td>
-                    <td style={{ padding: '10px 8px' }}>{r.class_type || '-'}</td>
-                    <td style={{ padding: '10px 8px', textAlign: 'center' }}>{r.is_elective ? <span style={{ color: '#059669', fontWeight: 600 }}>Yes</span> : <span style={{ color: '#9ca3af' }}>No</span>}</td>
-                    <td style={{ padding: '10px 8px' }}>{r.l ?? 0}</td>
-                    <td style={{ padding: '10px 8px' }}>{r.t ?? 0}</td>
-                    <td style={{ padding: '10px 8px' }}>{r.p ?? 0}</td>
-                    <td style={{ padding: '10px 8px' }}>{r.s ?? 0}</td>
-                    <td style={{ padding: '10px 8px' }}>{r.c ?? 0}</td>
-                    <td style={{ padding: '10px 8px' }}>{r.internal_mark ?? '-'}</td>
-                    <td style={{ padding: '10px 8px' }}>{r.external_mark ?? '-'}</td>
-                    <td style={{ padding: '10px 8px' }}>{r.total_mark ?? '-'}</td>
-                    <td style={{ padding: '10px 8px' }}>{r.total_hours ?? '-'}</td>
-                    <td style={{ padding: '10px 8px' }}>{r.question_paper_type || '-'}</td>
-                    <td style={{ padding: '10px 8px' }}>{r.editable ? <span style={{ color: '#059669', fontWeight: 600 }}>Yes</span> : <span style={{ color: '#9ca3af' }}>No</span>}</td>
-                    <td style={{ padding: '10px 8px' }}>
-                      {r.editable ? (
-                        <button
-                          className="btn-secondary"
-                          style={{ padding: '6px 16px', fontWeight: 600, border: 'none', borderRadius: 8, cursor: 'pointer' }}
-                          onClick={() => setEditingRow(r.id)}
-                        >
-                          Edit
-                        </button>
-                      ) : 'View'}
-                      <div style={{marginTop:6}}>Status: <strong>{r.approval_status || 'APPROVED'}</strong></div>
-                      {canApprove && r.approval_status === 'PENDING' ? (
-                        <div style={{marginTop:6}}>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.course_code || '-'}</td>
+                    <td className="px-3 py-2.5 text-sm text-gray-900 font-medium">{r.course_name || '-'}</td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.category || '-'}</td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.class_type || '-'}</td>
+                    <td className="px-3 py-2.5 text-center whitespace-nowrap text-sm">{r.is_elective ? <span className="text-emerald-600 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}</td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.l ?? 0}</td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.t ?? 0}</td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.p ?? 0}</td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.s ?? 0}</td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.c ?? 0}</td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.internal_mark ?? '-'}</td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.external_mark ?? '-'}</td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.total_mark ?? '-'}</td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.total_hours ?? '-'}</td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.question_paper_type || '-'}</td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.editable ? <span className="text-emerald-600 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}</td>
+                    <td className="px-3 py-2.5 whitespace-nowrap">
+                      <div className="flex items-center gap-1">
+                        {r.editable ? (
                           <button
-                            onClick={() => onApprove(r.id, 'approve')}
-                            style={{
-                              marginRight: 6,
-                              padding: '6px 18px',
-                              borderRadius: 8,
-                              fontWeight: 600,
-                              fontSize: 15,
-                              minWidth: 100,
-                              background: 'linear-gradient(90deg, #22c55e, #16a34a)',
-                              color: '#fff',
-                              border: 'none',
-                              boxShadow: '0 2px 8px #bbf7d0',
-                              cursor: 'pointer',
-                              transition: 'background 0.18s, color 0.18s, box-shadow 0.18s',
-                              letterSpacing: '0.5px'
-                            }}
+                            className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                            onClick={() => setEditingRow(r.id)}
+                            title="Edit"
                           >
-                            Approve
+                            <Edit className="w-4 h-4" />
                           </button>
-                          <button
-                            onClick={() => onApprove(r.id, 'reject')}
-                            style={{
-                              padding: '6px 18px',
-                              borderRadius: 8,
-                              fontWeight: 600,
-                              fontSize: 15,
-                              minWidth: 100,
-                              background: 'linear-gradient(90deg, #ef4444, #b91c1c)',
-                              color: '#fff',
-                              border: 'none',
-                              boxShadow: '0 2px 8px #fecaca',
-                              cursor: 'pointer',
-                              transition: 'background 0.18s, color 0.18s, box-shadow 0.18s',
-                              letterSpacing: '0.5px'
-                            }}
-                          >
-                            Reject
-                          </button>
-                        </div>
-                      ): null}
+                        ) : (
+                          <div className="w-8 h-8"></div>
+                        )}
+                        
+                        {canApprove && r.approval_status === 'PENDING' ? (
+                          <>
+                            <button
+                              onClick={() => onApprove(r.id, 'approve')}
+                              className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                              title="Approve"
+                            >
+                              <Check className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => onApprove(r.id, 'reject')}
+                              className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                              title="Reject"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <div className="w-8 h-8"></div>
+                            <div className="w-8 h-8"></div>
+                          </>
+                        )}
+                      </div>
+                      <div className="text-xs mt-1 text-gray-600">
+                        Status: <strong className="text-gray-900">{r.approval_status || 'APPROVED'}</strong>
+                      </div>
                     </td>
                   </>
                 )}
@@ -434,74 +397,78 @@ export default function DeptList() {
         </table>
       </div>
       {/* Elective options section */}
-      <div style={{ marginTop: 18 }}>
-        <h3 style={{ marginBottom: 8 }}>Elective Options</h3>
+      <div className="mt-6">
+        <h3 className="text-xl font-bold text-gray-900 mb-4">Elective Options</h3>
         {electives.length === 0 ? (
-          <div style={{ color: '#9ca3af' }}>No elective options for selected department/semester.</div>
+          <div className="text-gray-400 py-4">No elective options for selected department/semester.</div>
         ) : (
-          <div style={{ marginTop: 8, display: 'grid', gap: 18 }}>
+          <div className="space-y-6">
             {electives.map(parent => {
               const options = electiveSubjects.filter(es => es.parent === parent.id);
               return (
-                <div key={parent.id} style={{ background: '#fff', borderRadius: 8, padding: 12, boxShadow: '0 1px 4px rgba(2,6,23,0.04)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                    <div style={{ fontSize: 16, fontWeight: 700 }}>{parent.course_name || parent.course_code || 'Elective'}</div>
-                    <button onClick={() => openAddModal(parent)} style={{ padding: '6px 12px', borderRadius: 8, background: 'linear-gradient(90deg,#4f46e5,#06b6d4)', color: '#fff', border: 'none', fontWeight: 600 }}>Add Subject</button>
+                <div key={parent.id} className="bg-white rounded-lg shadow-md p-4">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="text-lg font-bold text-gray-900">{parent.course_name || parent.course_code || 'Elective'}</div>
+                    <button 
+                      onClick={() => openAddModal(parent)} 
+                      className="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors"
+                    >
+                      Add Subject
+                    </button>
                   </div>
-                  <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                      <thead>
-                        <tr style={{ textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>
-                          <th style={{ padding: '8px' }}>Sem</th>
-                          <th style={{ padding: '8px' }}>Code</th>
-                          <th style={{ padding: '8px' }}>Course</th>
-                          <th style={{ padding: '8px' }}>CAT</th>
-                          <th style={{ padding: '8px' }}>Class</th>
-                          <th style={{ padding: '8px' }}>L</th>
-                          <th style={{ padding: '8px' }}>T</th>
-                          <th style={{ padding: '8px' }}>P</th>
-                          <th style={{ padding: '8px' }}>S</th>
-                          <th style={{ padding: '8px' }}>C</th>
-                          <th style={{ padding: '8px' }}>INT</th>
-                          <th style={{ padding: '8px' }}>EXT</th>
-                          <th style={{ padding: '8px' }}>TTL</th>
-                          <th style={{ padding: '8px' }}>Hours</th>
-                          <th style={{ padding: '8px' }}>QP Type</th>
-                          <th style={{ padding: '8px' }}>Editable</th>
+                  <div className="w-full overflow-x-auto">
+                    <table className="w-full divide-y divide-gray-200">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase whitespace-nowrap">Code</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase whitespace-nowrap">Course</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase whitespace-nowrap">CAT</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase whitespace-nowrap">Class</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase whitespace-nowrap">L</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase whitespace-nowrap">T</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase whitespace-nowrap">P</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase whitespace-nowrap">S</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase whitespace-nowrap">C</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase whitespace-nowrap">INT</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase whitespace-nowrap">EXT</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase whitespace-nowrap">TTL</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase whitespace-nowrap">Hours</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase whitespace-nowrap">QP Type</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase whitespace-nowrap">Actions</th>
                         </tr>
                       </thead>
-                      <tbody>
+                      <tbody className="bg-white divide-y divide-gray-100">
                         {options.length === 0 ? (
-                          <tr><td colSpan={16} style={{ padding: 12, color: '#9ca3af' }}>No subjects added yet.</td></tr>
+                          <tr><td colSpan={15} className="px-3 py-4 text-gray-400 text-center">No subjects added yet.</td></tr>
                         ) : (
                           options.map(o => (
-                            <tr key={o.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
-                              <td style={{ padding: '8px' }}>{o.semester ?? '-'}</td>
-                              <td style={{ padding: '8px' }}>{o.course_code || '-'}</td>
-                              <td style={{ padding: '8px' }}>{o.course_name || '-'}</td>
-                              <td style={{ padding: '8px' }}>{o.category || '-'}</td>
-                              <td style={{ padding: '8px' }}>{o.class_type || '-'}</td>
-                              <td style={{ padding: '8px' }}>{o.l ?? 0}</td>
-                              <td style={{ padding: '8px' }}>{o.t ?? 0}</td>
-                              <td style={{ padding: '8px' }}>{o.p ?? 0}</td>
-                              <td style={{ padding: '8px' }}>{o.s ?? 0}</td>
-                              <td style={{ padding: '8px' }}>{o.c ?? 0}</td>
-                              <td style={{ padding: '8px' }}>{o.internal_mark ?? '-'}</td>
-                              <td style={{ padding: '8px' }}>{o.external_mark ?? '-'}</td>
-                              <td style={{ padding: '8px' }}>{o.total_mark ?? '-'}</td>
-                              <td style={{ padding: '8px' }}>{o.total_hours ?? '-'}</td>
-                              <td style={{ padding: '8px' }}>{o.question_paper_type || '-'}</td>
-                              <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>
-                                <span style={{ marginRight: 8 }}>{o.editable ? <span style={{ color: '#059669', fontWeight: 600 }}>Yes</span> : <span style={{ color: '#9ca3af' }}>No</span>}</span>
-                                <button
-                                  onClick={() => openEditElective(o)}
-                                  style={{ padding: '6px 10px', borderRadius: 6, border: 'none', background: '#f3f4f6', cursor: 'pointer' }}
-                                >
-                                  Edit
-                                </button>
+                            <tr key={o.id} className="hover:bg-gray-50 transition-colors">
+                              <td className="px-3 py-2 whitespace-nowrap text-sm">{o.course_code || '-'}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-sm">{o.course_name || '-'}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-sm">{o.category || '-'}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-sm">{o.class_type || '-'}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-sm">{o.l ?? 0}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-sm">{o.t ?? 0}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-sm">{o.p ?? 0}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-sm">{o.s ?? 0}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-sm">{o.c ?? 0}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-sm">{o.internal_mark ?? '-'}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-sm">{o.external_mark ?? '-'}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-sm">{o.total_mark ?? '-'}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-sm">{o.total_hours ?? '-'}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-sm">{o.question_paper_type || '-'}</td>
+                              <td className="px-3 py-2 whitespace-nowrap">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm">{o.editable ? <span className="text-emerald-600 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}</span>
+                                  <button
+                                    onClick={() => openEditElective(o)}
+                                    className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                    title="Edit"
+                                  >
+                                    <Edit className="w-4 h-4" />
+                                  </button>
+                                </div>
                               </td>
-                              
-                              
                             </tr>
                           ))
                         )}
@@ -515,22 +482,34 @@ export default function DeptList() {
         )}
       </div>
 
-      {addModalOpen ? (
-        <div style={{ position: 'fixed', left: 0, top: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60 }}>
-          <div style={{ width: 760, maxWidth: '95%', background: '#fff', borderRadius: 8, padding: 18, boxShadow: '0 8px 24px rgba(2,6,23,0.2)' }}>
-            <h3 style={{ marginTop: 0 }}>Add Elective Subject</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+      {addModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+          <div className="w-full max-w-3xl mx-4 bg-white rounded-lg shadow-2xl p-6">
+            <h3 className="text-xl font-bold text-gray-900 mb-4">Add Elective Subject</h3>
+            <div className="grid grid-cols-2 gap-4">
               <div>
-                <label style={{ display: 'block', fontWeight: 600 }}>Course Name</label>
-                <input value={addForm.course_name || ''} onChange={e => setAddForm(f => ({ ...f, course_name: e.target.value }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Course Name</label>
+                <input 
+                  value={addForm.course_name || ''} 
+                  onChange={e => setAddForm(f => ({ ...f, course_name: e.target.value }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: 600 }}>Course Code</label>
-                <input value={addForm.course_code || ''} onChange={e => setAddForm(f => ({ ...f, course_code: e.target.value }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Course Code</label>
+                <input 
+                  value={addForm.course_code || ''} 
+                  onChange={e => setAddForm(f => ({ ...f, course_code: e.target.value }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: 600 }}>Class Type</label>
-                <select value={addForm.class_type} onChange={e => setAddForm(f => ({ ...f, class_type: e.target.value }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }}>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Class Type</label>
+                <select 
+                  value={addForm.class_type} 
+                  onChange={e => setAddForm(f => ({ ...f, class_type: e.target.value }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                >
                   <option value="THEORY">THEORY</option>
                   <option value="LAB">LAB</option>
                   <option value="TCPL">TCPL</option>
@@ -540,77 +519,158 @@ export default function DeptList() {
                 </select>
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: 600 }}>Category</label>
-                <input value={addForm.category || ''} onChange={e => setAddForm(f => ({ ...f, category: e.target.value }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Category</label>
+                <input 
+                  value={addForm.category || ''} 
+                  onChange={e => setAddForm(f => ({ ...f, category: e.target.value }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: 600 }}>L</label>
-                <input type="number" value={addForm.l ?? 0} onChange={e => setAddForm(f => ({ ...f, l: Number(e.target.value) }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+                <label className="block text-sm font-semibold text-gray-700 mb-1">L</label>
+                <input 
+                  type="number" 
+                  value={addForm.l ?? 0} 
+                  onChange={e => setAddForm(f => ({ ...f, l: Number(e.target.value) }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: 600 }}>T</label>
-                <input type="number" value={addForm.t ?? 0} onChange={e => setAddForm(f => ({ ...f, t: Number(e.target.value) }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+                <label className="block text-sm font-semibold text-gray-700 mb-1">T</label>
+                <input 
+                  type="number" 
+                  value={addForm.t ?? 0} 
+                  onChange={e => setAddForm(f => ({ ...f, t: Number(e.target.value) }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: 600 }}>P</label>
-                <input type="number" value={addForm.p ?? 0} onChange={e => setAddForm(f => ({ ...f, p: Number(e.target.value) }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+                <label className="block text-sm font-semibold text-gray-700 mb-1">P</label>
+                <input 
+                  type="number" 
+                  value={addForm.p ?? 0} 
+                  onChange={e => setAddForm(f => ({ ...f, p: Number(e.target.value) }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: 600 }}>S</label>
-                <input type="number" value={addForm.s ?? 0} onChange={e => setAddForm(f => ({ ...f, s: Number(e.target.value) }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+                <label className="block text-sm font-semibold text-gray-700 mb-1">S</label>
+                <input 
+                  type="number" 
+                  value={addForm.s ?? 0} 
+                  onChange={e => setAddForm(f => ({ ...f, s: Number(e.target.value) }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: 600 }}>C</label>
-                <input type="number" value={addForm.c ?? 0} onChange={e => setAddForm(f => ({ ...f, c: Number(e.target.value) }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+                <label className="block text-sm font-semibold text-gray-700 mb-1">C</label>
+                <input 
+                  type="number" 
+                  value={addForm.c ?? 0} 
+                  onChange={e => setAddForm(f => ({ ...f, c: Number(e.target.value) }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: 600 }}>Internal Mark</label>
-                <input type="number" value={addForm.internal_mark ?? ''} onChange={e => setAddForm(f => ({ ...f, internal_mark: e.target.value ? Number(e.target.value) : null }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Internal Mark</label>
+                <input 
+                  type="number" 
+                  value={addForm.internal_mark ?? ''} 
+                  onChange={e => setAddForm(f => ({ ...f, internal_mark: e.target.value ? Number(e.target.value) : null }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: 600 }}>External Mark</label>
-                <input type="number" value={addForm.external_mark ?? ''} onChange={e => setAddForm(f => ({ ...f, external_mark: e.target.value ? Number(e.target.value) : null }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+                <label className="block text-sm font-semibold text-gray-700 mb-1">External Mark</label>
+                <input 
+                  type="number" 
+                  value={addForm.external_mark ?? ''} 
+                  onChange={e => setAddForm(f => ({ ...f, external_mark: e.target.value ? Number(e.target.value) : null }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: 600 }}>Total Mark</label>
-                <input type="number" value={addForm.total_mark ?? ''} onChange={e => setAddForm(f => ({ ...f, total_mark: e.target.value ? Number(e.target.value) : null }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Total Mark</label>
+                <input 
+                  type="number" 
+                  value={addForm.total_mark ?? ''} 
+                  onChange={e => setAddForm(f => ({ ...f, total_mark: e.target.value ? Number(e.target.value) : null }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: 600 }}>Total Hours</label>
-                <input type="number" value={addForm.total_hours ?? ''} onChange={e => setAddForm(f => ({ ...f, total_hours: e.target.value ? Number(e.target.value) : null }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Total Hours</label>
+                <input 
+                  type="number" 
+                  value={addForm.total_hours ?? ''} 
+                  onChange={e => setAddForm(f => ({ ...f, total_hours: e.target.value ? Number(e.target.value) : null }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                />
               </div>
-              <div style={{ gridColumn: '1 / -1' }}>
-                <label style={{ display: 'block', fontWeight: 600 }}>Question Paper Type</label>
-                <input value={addForm.question_paper_type || ''} onChange={e => setAddForm(f => ({ ...f, question_paper_type: e.target.value }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+              <div className="col-span-2">
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Question Paper Type</label>
+                <input 
+                  value={addForm.question_paper_type || ''} 
+                  onChange={e => setAddForm(f => ({ ...f, question_paper_type: e.target.value }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                />
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <input id="add-editable" type="checkbox" checked={!!addForm.editable} onChange={e => setAddForm(f => ({ ...f, editable: e.target.checked }))} />
-                <label htmlFor="add-editable">Editable</label>
+              <div className="flex items-center gap-2">
+                <input 
+                  id="add-editable" 
+                  type="checkbox" 
+                  checked={!!addForm.editable} 
+                  onChange={e => setAddForm(f => ({ ...f, editable: e.target.checked }))} 
+                  className="w-4 h-4" 
+                />
+                <label htmlFor="add-editable" className="text-sm font-medium text-gray-700">Editable</label>
               </div>
             </div>
-            <div style={{ marginTop: 14, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <button onClick={() => setAddModalOpen(false)} style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff' }}>Cancel</button>
-              <button onClick={saveAddForm} style={{ padding: '8px 14px', borderRadius: 8, background: 'linear-gradient(90deg,#4f46e5,#06b6d4)', color: '#fff', border: 'none' }}>Save</button>
+            <div className="flex justify-end gap-3 mt-6">
+              <button 
+                onClick={() => setAddModalOpen(false)} 
+                className="px-4 py-2 border border-gray-300 rounded-lg bg-white text-gray-700 hover:bg-gray-50 font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={saveAddForm} 
+                className="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                Save
+              </button>
             </div>
           </div>
         </div>
-      ) : null}
-      {editElectiveOpen && editElectiveForm ? (
-        <div style={{ position: 'fixed', left: 0, top: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 70 }}>
-          <div style={{ width: 760, maxWidth: '95%', background: '#fff', borderRadius: 8, padding: 18, boxShadow: '0 8px 24px rgba(2,6,23,0.2)' }}>
-            <h3 style={{ marginTop: 0 }}>Edit Elective Subject</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+      )}
+      {editElectiveOpen && editElectiveForm && (
+        <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+          <div className="w-full max-w-3xl mx-4 bg-white rounded-lg shadow-2xl p-6">
+            <h3 className="text-xl font-bold text-gray-900 mb-4">Edit Elective Subject</h3>
+            <div className="grid grid-cols-2 gap-4">
               <div>
-                <label style={{ display: 'block', fontWeight: 600 }}>Course Name</label>
-                <input value={editElectiveForm.course_name || ''} onChange={e => setEditElectiveForm((f:any) => ({ ...f, course_name: e.target.value }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Course Name</label>
+                <input 
+                  value={editElectiveForm.course_name || ''} 
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, course_name: e.target.value }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: 600 }}>Course Code</label>
-                <input value={editElectiveForm.course_code || ''} onChange={e => setEditElectiveForm((f:any) => ({ ...f, course_code: e.target.value }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Course Code</label>
+                <input 
+                  value={editElectiveForm.course_code || ''} 
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, course_code: e.target.value }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: 600 }}>Class Type</label>
-                <select value={editElectiveForm.class_type || 'THEORY'} onChange={e => setEditElectiveForm((f:any) => ({ ...f, class_type: e.target.value }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }}>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Class Type</label>
+                <select 
+                  value={editElectiveForm.class_type || 'THEORY'} 
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, class_type: e.target.value }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                >
                   <option value="THEORY">THEORY</option>
                   <option value="LAB">LAB</option>
                   <option value="TCPL">TCPL</option>
@@ -620,61 +680,131 @@ export default function DeptList() {
                 </select>
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: 600 }}>Category</label>
-                <input value={editElectiveForm.category || ''} onChange={e => setEditElectiveForm((f:any) => ({ ...f, category: e.target.value }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Category</label>
+                <input 
+                  value={editElectiveForm.category || ''} 
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, category: e.target.value }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: 600 }}>L</label>
-                <input type="number" value={editElectiveForm.l ?? 0} onChange={e => setEditElectiveForm((f:any) => ({ ...f, l: Number(e.target.value) }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+                <label className="block text-sm font-semibold text-gray-700 mb-1">L</label>
+                <input 
+                  type="number" 
+                  value={editElectiveForm.l ?? 0} 
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, l: Number(e.target.value) }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: 600 }}>T</label>
-                <input type="number" value={editElectiveForm.t ?? 0} onChange={e => setEditElectiveForm((f:any) => ({ ...f, t: Number(e.target.value) }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+                <label className="block text-sm font-semibold text-gray-700 mb-1">T</label>
+                <input 
+                  type="number" 
+                  value={editElectiveForm.t ?? 0} 
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, t: Number(e.target.value) }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: 600 }}>P</label>
-                <input type="number" value={editElectiveForm.p ?? 0} onChange={e => setEditElectiveForm((f:any) => ({ ...f, p: Number(e.target.value) }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+                <label className="block text-sm font-semibold text-gray-700 mb-1">P</label>
+                <input 
+                  type="number" 
+                  value={editElectiveForm.p ?? 0} 
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, p: Number(e.target.value) }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: 600 }}>S</label>
-                <input type="number" value={editElectiveForm.s ?? 0} onChange={e => setEditElectiveForm((f:any) => ({ ...f, s: Number(e.target.value) }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+                <label className="block text-sm font-semibold text-gray-700 mb-1">S</label>
+                <input 
+                  type="number" 
+                  value={editElectiveForm.s ?? 0} 
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, s: Number(e.target.value) }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: 600 }}>C</label>
-                <input type="number" value={editElectiveForm.c ?? 0} onChange={e => setEditElectiveForm((f:any) => ({ ...f, c: Number(e.target.value) }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+                <label className="block text-sm font-semibold text-gray-700 mb-1">C</label>
+                <input 
+                  type="number" 
+                  value={editElectiveForm.c ?? 0} 
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, c: Number(e.target.value) }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: 600 }}>Internal Mark</label>
-                <input type="number" value={editElectiveForm.internal_mark ?? ''} onChange={e => setEditElectiveForm((f:any) => ({ ...f, internal_mark: e.target.value ? Number(e.target.value) : null }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Internal Mark</label>
+                <input 
+                  type="number" 
+                  value={editElectiveForm.internal_mark ?? ''} 
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, internal_mark: e.target.value ? Number(e.target.value) : null }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: 600 }}>External Mark</label>
-                <input type="number" value={editElectiveForm.external_mark ?? ''} onChange={e => setEditElectiveForm((f:any) => ({ ...f, external_mark: e.target.value ? Number(e.target.value) : null }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+                <label className="block text-sm font-semibold text-gray-700 mb-1">External Mark</label>
+                <input 
+                  type="number" 
+                  value={editElectiveForm.external_mark ?? ''} 
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, external_mark: e.target.value ? Number(e.target.value) : null }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: 600 }}>Total Mark</label>
-                <input type="number" value={editElectiveForm.total_mark ?? ''} onChange={e => setEditElectiveForm((f:any) => ({ ...f, total_mark: e.target.value ? Number(e.target.value) : null }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Total Mark</label>
+                <input 
+                  type="number" 
+                  value={editElectiveForm.total_mark ?? ''} 
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, total_mark: e.target.value ? Number(e.target.value) : null }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: 600 }}>Total Hours</label>
-                <input type="number" value={editElectiveForm.total_hours ?? ''} onChange={e => setEditElectiveForm((f:any) => ({ ...f, total_hours: e.target.value ? Number(e.target.value) : null }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Total Hours</label>
+                <input 
+                  type="number" 
+                  value={editElectiveForm.total_hours ?? ''} 
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, total_hours: e.target.value ? Number(e.target.value) : null }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                />
               </div>
-              <div style={{ gridColumn: '1 / -1' }}>
-                <label style={{ display: 'block', fontWeight: 600 }}>Question Paper Type</label>
-                <input value={editElectiveForm.question_paper_type || ''} onChange={e => setEditElectiveForm((f:any) => ({ ...f, question_paper_type: e.target.value }))} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #d1d5db' }} />
+              <div className="col-span-2">
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Question Paper Type</label>
+                <input 
+                  value={editElectiveForm.question_paper_type || ''} 
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, question_paper_type: e.target.value }))} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                />
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <input id="edit-editable" type="checkbox" checked={!!editElectiveForm.editable} onChange={e => setEditElectiveForm((f:any) => ({ ...f, editable: e.target.checked }))} />
-                <label htmlFor="edit-editable">Editable</label>
+              <div className="flex items-center gap-2">
+                <input 
+                  id="edit-editable" 
+                  type="checkbox" 
+                  checked={!!editElectiveForm.editable} 
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, editable: e.target.checked }))} 
+                  className="w-4 h-4" 
+                />
+                <label htmlFor="edit-editable" className="text-sm font-medium text-gray-700">Editable</label>
               </div>
             </div>
-            <div style={{ marginTop: 14, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <button onClick={() => setEditElectiveOpen(false)} style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff' }}>Cancel</button>
-              <button onClick={saveEditElective} style={{ padding: '8px 14px', borderRadius: 8, background: 'linear-gradient(90deg,#4f46e5,#06b6d4)', color: '#fff', border: 'none' }}>Save</button>
+            <div className="flex justify-end gap-3 mt-6">
+              <button 
+                onClick={() => setEditElectiveOpen(false)} 
+                className="px-4 py-2 border border-gray-300 rounded-lg bg-white text-gray-700 hover:bg-gray-50 font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={saveEditElective} 
+                className="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                Save
+              </button>
             </div>
           </div>
         </div>
-      ) : null}
+      )}
+      </div>
     </CurriculumLayout>
   );
 }

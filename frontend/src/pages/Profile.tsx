@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { getMe } from '../services/auth';
-import { User, Mail, Shield } from 'lucide-react';
-import './Dashboard.css';
+import { User, Mail, Shield, Building, Briefcase, School } from 'lucide-react';
 import DashboardLayout from '../components/DashboardLayout';
 
 type RoleObj = { name: string };
@@ -14,6 +13,8 @@ type Me = {
   profile_type?: string | null;
   profile_status?: string | null;
   capabilities?: Record<string, string[]>;
+  profile?: any;
+  college?: any;
 };
 
 export default function ProfilePage({ user: initialUser }: { user?: Me | null }) {
@@ -44,84 +45,149 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
     };
   }, [initialUser]);
 
-  if (loading) return <div className="db-loading">Loading profile…</div>;
-  if (error) return <div className="db-error">Error loading profile: {error}</div>;
-  if (!user) return <div className="db-empty">No profile available</div>;
+  if (loading) return (
+    <DashboardLayout>
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading profile…</p>
+        </div>
+      </div>
+    </DashboardLayout>
+  );
+  
+  if (error) return (
+    <DashboardLayout>
+      <div className="px-4 sm:px-6 lg:px-8 pb-6">
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-800">
+          Error loading profile: {error}
+        </div>
+      </div>
+    </DashboardLayout>
+  );
+  
+  if (!user) return (
+    <DashboardLayout>
+      <div className="px-4 sm:px-6 lg:px-8 pb-6">
+        <div className="text-center text-gray-500">No profile available</div>
+      </div>
+    </DashboardLayout>
+  );
 
   const initials = (user.username || 'U').slice(0, 2).toUpperCase();
 
   return (
     <DashboardLayout>
-      <div className="welcome" style={{ alignItems: 'flex-start' }}>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-          <div style={{ width: 72, height: 72, borderRadius: 14, background: '#eef2ff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, fontWeight: 700, color: '#4f46e5' }}>{initials}</div>
-          <div>
-            <h1 className="welcome-title">{user.username}</h1>
-            <p className="welcome-sub">{user.email || 'No email provided'}</p>
+      <div className="px-4 sm:px-6 lg:px-8 pb-6 space-y-6">
+        {/* Profile Header Card */}
+        <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-6 sm:p-8 shadow-md">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <div className="w-16 h-16 sm:w-20 sm:h-20 bg-blue-600 rounded-full flex items-center justify-center flex-shrink-0">
+                <span className="text-2xl sm:text-3xl font-bold text-white">{initials}</span>
+              </div>
+              <div>
+                <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">{user.username}</h1>
+                <p className="text-gray-600 mt-1">{user.email || 'No email provided'}</p>
+              </div>
+            </div>
+            <div className="bg-white rounded-lg px-4 py-2 shadow-sm">
+              <div className="text-xs text-gray-500 mb-1">Profile Type</div>
+              <div className="font-bold text-gray-900">{user.profile_type || '—'}</div>
+            </div>
           </div>
         </div>
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: 12, color: '#6b7280' }}>Profile type</div>
-          <div style={{ fontWeight: 700 }}>{user.profile_type || '—'}</div>
+
+        {/* Details Section */}
+        <div>
+          <h3 className="text-xl font-bold text-gray-900 mb-4">Details</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {/* Account Card */}
+            <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <User className="w-5 h-5 text-blue-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-gray-500 mb-1">Account</div>
+                  <div className="text-gray-900 font-medium truncate">ID: {user.id}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Email Card */}
+            <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 bg-emerald-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <Mail className="w-5 h-5 text-emerald-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-gray-500 mb-1">Email</div>
+                  <div className="text-gray-900 font-medium truncate">{user.email || '—'}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Roles Card */}
+            <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <Shield className="w-5 h-5 text-purple-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-gray-500 mb-1">Roles</div>
+                  <div className="text-gray-900 font-medium truncate">{(user.roles || []).join(', ') || '—'}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Department Card */}
+            <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 bg-orange-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <Building className="w-5 h-5 text-orange-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-gray-500 mb-1">Department</div>
+                  <div className="text-gray-900 font-medium truncate">
+                    {(user.profile && user.profile.department && (user.profile.department.short_name || user.profile.department.code)) || '—'}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Designation Card */}
+            <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <Briefcase className="w-5 h-5 text-indigo-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-gray-500 mb-1">Designation</div>
+                  <div className="text-gray-900 font-medium truncate">
+                    {(user.profile && user.profile.designation) || '—'}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* College Card */}
+            <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 bg-pink-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <School className="w-5 h-5 text-pink-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-gray-500 mb-1">College</div>
+                  <div className="text-gray-900 font-medium truncate">
+                    {(user.college && (user.college.short_name || user.college.name)) || '—'}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
-
-      <section style={{ marginTop: 18 }}>
-        <h3 className="section-title">Details</h3>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <div className="entry-card">
-            <div className="entry-icon"><User /></div>
-            <div>
-              <div className="entry-key">Account</div>
-              <div className="entry-status">ID: {user.id}</div>
-            </div>
-          </div>
-          <div className="entry-card">
-            <div className="entry-icon"><Mail /></div>
-            <div>
-              <div className="entry-key">Email</div>
-              <div className="entry-status">{user.email || '—'}</div>
-            </div>
-          </div>
-
-          <div className="entry-card">
-            <div className="entry-icon"><Shield /></div>
-            <div>
-              <div className="entry-key">Roles</div>
-              <div className="entry-status">{(user.roles || []).join(', ') || '—'}</div>
-            </div>
-          </div>
-
-          <div className="entry-card">
-            <div className="entry-icon"><User /></div>
-            <div>
-              <div className="entry-key">Department</div>
-              <div className="entry-status">{(user.profile && user.profile.department && (user.profile.department.short_name || user.profile.department.code)) || '—'}</div>
-            </div>
-          </div>
-
-          <div className="entry-card">
-            <div className="entry-icon"><User /></div>
-            <div>
-              <div className="entry-key">Designation</div>
-              <div className="entry-status">{(user.profile && user.profile.designation) || '—'}</div>
-            </div>
-          </div>
-
-          <div className="entry-card">
-            <div className="entry-icon"><User /></div>
-            <div>
-              <div className="entry-key">College</div>
-              <div className="entry-status">{(user.college && (user.college.short_name || user.college.name)) || '—'}</div>
-            </div>
-          </div>
-        </div>
-      </section>
     </DashboardLayout>
   );
-}
-
-// local icon to avoid import error if File isn't available from lucide-react in this runtime
-function File() {
-  return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>;
 }

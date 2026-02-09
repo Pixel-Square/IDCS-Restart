@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import { getMe } from "./services/auth";
 import Navbar from "./components/Navbar";
 import DashboardSidebar from './components/DashboardSidebar';
+import { useSidebar } from './components/SidebarContext';
 import TimetableEditor from './pages/advisor/TimetableEditor';
 import HodTimetableEditor from './pages/iqac/TimetableEditor';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -35,6 +36,7 @@ type Me = {
 export default function App() {
   const [user, setUser] = useState<Me | null>(null);
   const [loading, setLoading] = useState(true);
+  const { collapsed } = useSidebar();
 
   useEffect(() => {
     getMe()
@@ -59,26 +61,21 @@ export default function App() {
 
   if (loading) {
     return (
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "center",
-          alignItems: "center",
-          height: "100vh",
-        }}
-      >
-        <p style={{ color: "#6b7280" }}>Loading...</p>
+      <div className="flex justify-center items-center h-screen">
+        <p className="text-gray-600">Loading...</p>
       </div>
     );
   }
 
   return (
-    <div>
+    <div className="min-h-screen bg-gray-50 overflow-x-hidden">
       <Navbar user={user} />
       {user ? (
-        <div className="dashboard-root">
+        <div className="flex">
           <DashboardSidebar />
-          <main className="dashboard-main">
+          <main className={`flex-1 transition-all duration-300 pt-20 overflow-x-hidden ${
+            collapsed ? 'lg:ml-20' : 'lg:ml-64'
+          }`}>
             <Routes>
               <Route path="/" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
               <Route path="/dashboard" element={<DashboardPage />} />
@@ -129,10 +126,12 @@ export default function App() {
           </main>
         </div>
       ) : (
-        <Routes>
-          <Route path="/" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
-          <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
-        </Routes>
+        <div className="pt-16">
+          <Routes>
+            <Route path="/" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
+            <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
+          </Routes>
+        </div>
       )}
     </div>
   );

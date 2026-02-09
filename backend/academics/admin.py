@@ -143,7 +143,13 @@ class StudentProfileAdmin(admin.ModelAdmin):
         Expected columns (first row header):
           reg_no, username, email, first_name, last_name, batch, section, password
 
-        'section' should match existing Section.name and batch name should match Batch.name
+        'batch' can be:
+          - Just the batch name (e.g., '2023')
+          - Department and batch: 'DEPT_SHORT :: BATCH_NAME' (e.g., 'CSE :: 2023')
+
+        'section' should be in format:
+          - 'DEPT_SHORT :: BATCH_NAME :: SECTION_NAME' (e.g., 'CSE :: 2023 :: A')
+          - Fallback: 'BATCH_NAME :: SECTION_NAME' (e.g., '2023 :: A')
         """
         if request.method == 'POST':
             uploaded = request.FILES.get('xlsx_file')
@@ -203,9 +209,69 @@ class StudentProfileAdmin(admin.ModelAdmin):
                     section_name = str(section_name).strip() if section_name else None
                     password = str(password) if password else reg_no
 
+                    # Parse batch_name if it's in the format "DEPT :: BATCH_NAME" (extract just the batch name)
+                    batch_name_only = batch_name
+                    if batch_name and '::' in batch_name:
+                        parts = [p.strip() for p in batch_name.split('::')]
+                        if len(parts) == 2:
+                            # Format is "DEPT :: BATCH_NAME", use the batch name part
+                            batch_name_only = parts[1]
+                        else:
+                            # Unexpected format, use last part
+                            batch_name_only = parts[-1]
+
                     with transaction.atomic():
-                        user, created_user = User.objects.get_or_create(username=username, defaults={'email': email, 'first_name': first_name, 'last_name': last_name})
-                        if not created_user:
+                        # Prefer de-duplication by reg_no/email (not by name/spacing).
+                        email_norm = email.strip().lower() if email else ''
+                        existing_sp = StudentProfile.objects.select_related('user').filter(reg_no__iexact=reg_no).first()
+                        user = None
+                        created_user = False
+
+                        if existing_sp:
+                            user = existing_sp.user
+                            if email_norm and user.email and user.email.strip().lower() != email_norm:
+                                errors.append(f'Row {i}: reg_no {reg_no} has different email ({user.email})')
+                                skipped += 1
+                                continue
+                        else:
+                            if email_norm:
+                                user = User.objects.filter(email__iexact=email_norm).first()
+                            if user:
+                                # If user exists by email, ensure reg_no is not mapped to a different profile.
+                                sp_existing = StudentProfile.objects.filter(user=user).first()
+                                if sp_existing and sp_existing.reg_no.strip().lower() != reg_no.strip().lower():
+                                    errors.append(f'Row {i}: email {email} already linked to reg_no {sp_existing.reg_no}')
+                                    skipped += 1
+                                    continue
+                            else:
+                                # Check username collision - verify email to determine if truly different student
+                                if User.objects.filter(username=username).exists():
+                                    existing_user = User.objects.filter(username=username).first()
+                                    # Check if different person by comparing emails
+                                    if email_norm and existing_user.email and existing_user.email.strip().lower() != email_norm:
+                                        # Different email = different person, use fallback username
+                                        fallback_username = f"{username}-{reg_no}"
+                                        if User.objects.filter(username=fallback_username).exists():
+                                            errors.append(f'Row {i}: username collision - {username} and {fallback_username} both exist')
+                                            skipped += 1
+                                            continue
+                                        username = fallback_username
+                                    elif not email_norm or not existing_user.email:
+                                        # Cannot verify email, treat as different person for safety
+                                        fallback_username = f"{username}-{reg_no}"
+                                        if User.objects.filter(username=fallback_username).exists():
+                                            errors.append(f'Row {i}: username collision - cannot verify email match')
+                                            skipped += 1
+                                            continue
+                                        username = fallback_username
+                                    # If emails match, reuse existing user below
+
+                                user, created_user = User.objects.get_or_create(
+                                    username=username,
+                                    defaults={'email': email, 'first_name': first_name, 'last_name': last_name}
+                                )
+
+                        if user and not created_user:
                             updated = False
                             if email and (not user.email):
                                 user.email = email; updated = True
@@ -215,16 +281,22 @@ class StudentProfileAdmin(admin.ModelAdmin):
                                 user.last_name = last_name; updated = True
                             if updated:
                                 user.save()
-                        if created_user or (not user.has_usable_password()):
+                        if user and (created_user or (not user.has_usable_password())):
                             user.set_password(password)
                             user.save()
 
-                        sp, sp_created = StudentProfile.objects.get_or_create(user=user, defaults={'reg_no': reg_no, 'batch': batch_name or ''})
+                        sp, sp_created = StudentProfile.objects.get_or_create(
+                            reg_no=reg_no,
+                            defaults={'user': user, 'batch': batch_name_only or ''}
+                        )
                         if not sp_created:
-                            if sp.reg_no != reg_no:
-                                errors.append(f'Row {i}: existing user {username} has different reg_no ({sp.reg_no})')
+                            if sp.user != user:
+                                errors.append(f'Row {i}: reg_no {reg_no} already assigned to a different user')
                                 skipped += 1
                                 continue
+                            if batch_name_only and (not sp.batch):
+                                sp.batch = batch_name_only
+                                sp.save(update_fields=['batch'])
 
                         # section may be provided as one of:
                         #  - 'Batch :: Section'
@@ -249,8 +321,8 @@ class StudentProfileAdmin(admin.ModelAdmin):
                                     sec = Section.objects.filter(name=parts[-1]).select_related('batch').first()
                             else:
                                 # fallback: if batch provided, try match by both
-                                if batch_name:
-                                    sec = Section.objects.filter(name=section_name, batch__name=batch_name).select_related('batch').first()
+                                if batch_name_only:
+                                    sec = Section.objects.filter(name=section_name, batch__name=batch_name_only).select_related('batch').first()
                                 else:
                                     sec = Section.objects.filter(name=section_name).select_related('batch').first()
                         if sec:
@@ -309,19 +381,24 @@ class StudentProfileAdmin(admin.ModelAdmin):
         ws.title = 'import'
         headers = ['reg_no', 'username', 'email', 'first_name', 'last_name', 'batch', 'section', 'password']
         ws.append(headers)
-        # sample row uses composite section format 'Batch :: Section'
-        ws.append(['REG2026001', 'reg2026001', 'student@example.edu', 'First', 'Last', '2026', '2026 :: A', 'changeme'])
+        # sample row uses composite format: batch='DEPT :: BATCH_NAME', section='DEPT :: BATCH :: SECTION'
+        ws.append(['REG2026001', 'reg2026001', 'student@example.edu', 'First', 'Last', 'CSE :: 2026', 'CSE :: 2026 :: A', 'changeme'])
 
         # prepare lookup lists for batches and composite sections
-        batches = list(Batch.objects.values_list('name', flat=True).distinct())
+        # Fetch batches with their full course name
+        batches_qs = Batch.objects.select_related('course__department').order_by('course__department__short_name', 'name')
+        batches = []
+        for b in batches_qs:
+            dept_short = b.course.department.short_name if b.course and b.course.department else ''
+            # format: "DEPT_SHORT :: BATCH_NAME" (e.g., "CSE :: 2023")
+            batches.append(f"{dept_short} :: {b.name}")
+        
         # build composite 'DEPT :: Batch :: Section' entries (department short_name)
-        sections_qs = Section.objects.select_related('batch__course__department').all()
+        sections_qs = Section.objects.select_related('batch__course__department').order_by('batch__course__department__short_name', 'batch__name', 'name')
         sections = []
         for s in sections_qs:
-            dept = getattr(getattr(s, 'batch', None), 'course', None)
-            dept_obj = getattr(dept, 'department', None) if dept else None
-            dept_short = getattr(dept_obj, 'short_name', None) or getattr(dept_obj, 'code', '') if dept_obj else ''
-            # format: "DEPT_SHORT :: BATCH :: SECTION"
+            dept_short = s.batch.course.department.short_name if s.batch and s.batch.course and s.batch.course.department else ''
+            # format: "DEPT_SHORT :: BATCH :: SECTION" (e.g., "CSE :: 2023 :: A")
             sections.append(f"{dept_short} :: {s.batch.name} :: {s.name}")
 
         # create hidden sheet with lists

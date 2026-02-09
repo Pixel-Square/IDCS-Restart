@@ -9,8 +9,16 @@ type SidebarContextValue = {
 const SidebarContext = createContext<SidebarContextValue | undefined>(undefined);
 
 export function SidebarProvider({ children }: { children: React.ReactNode }) {
-  const [collapsed, setCollapsed] = useState(false);
+  // Start collapsed on mobile (< 1024px), open on desktop
+  const [collapsed, setCollapsed] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return window.innerWidth < 1024; // lg breakpoint
+    }
+    return true; // Default to collapsed for SSR
+  });
+
   const toggle = () => setCollapsed(c => !c);
+
   return (
     <SidebarContext.Provider value={{ collapsed, toggle, setCollapsed }}>
       {children}

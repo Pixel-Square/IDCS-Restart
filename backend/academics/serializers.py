@@ -151,11 +151,13 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
     subject = serializers.SerializerMethodField(read_only=True)
     # Readable fields for API consumers
     staff_details = serializers.SerializerMethodField(read_only=True)
+    section_details = serializers.SerializerMethodField(read_only=True)
+    curriculum_row_details = serializers.SerializerMethodField(read_only=True)
     section_name = serializers.CharField(source='section.name', read_only=True)
 
     class Meta:
         model = TeachingAssignment
-        fields = ('id', 'staff_id', 'section_id', 'academic_year', 'subject', 'curriculum_row_id', 'elective_subject_id', 'is_active', 'staff_details', 'section_name')
+        fields = ('id', 'staff_id', 'section_id', 'academic_year', 'subject', 'curriculum_row_id', 'elective_subject_id', 'is_active', 'staff_details', 'section_details', 'curriculum_row_details', 'section_name')
 
     def get_subject(self, obj):
         # prefer curriculum row display
@@ -183,6 +185,51 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
             if not st:
                 return None
             return {'id': st.id, 'user': getattr(getattr(st, 'user', None), 'username', None), 'staff_id': getattr(st, 'staff_id', None)}
+        except Exception:
+            return None
+
+    def get_section_details(self, obj):
+        try:
+            section = getattr(obj, 'section', None)
+            if not section:
+                return None
+            
+            batch = getattr(section, 'batch', None)
+            batch_info = None
+            if batch:
+                batch_info = getattr(batch, 'name', str(batch))
+
+            semester = getattr(section, 'semester', None)
+            semester_info = None
+            if semester:
+                semester_info = getattr(semester, 'number', getattr(semester, 'name', str(semester)))
+                
+            return {
+                'id': section.id, 
+                'name': getattr(section, 'name', None), 
+                'batch': batch_info,
+                'semester': semester_info
+            }
+        except Exception:
+            return None
+
+    def get_curriculum_row_details(self, obj):
+        try:
+            row = getattr(obj, 'curriculum_row', None)
+            if not row:
+                return None
+                
+            semester = getattr(row, 'semester', None)
+            semester_info = None
+            if semester:
+                semester_info = getattr(semester, 'number', getattr(semester, 'name', str(semester)))
+                
+            return {
+                'id': row.id,
+                'course_code': getattr(row, 'course_code', None),
+                'course_name': getattr(row, 'course_name', None),
+                'semester': semester_info
+            }
         except Exception:
             return None
 
@@ -572,7 +619,7 @@ class BulkPeriodAttendanceSerializer(serializers.Serializer):
 class PeriodAttendanceSessionSerializer(serializers.ModelSerializer):
     section_id = serializers.PrimaryKeyRelatedField(queryset=Section.objects.all(), source='section', write_only=True)
     period_id = serializers.PrimaryKeyRelatedField(queryset=TimetableSlot.objects.all(), source='period', write_only=True)
-    section = serializers.StringRelatedField(read_only=True)
+    section = serializers.SerializerMethodField(read_only=True)
     period = serializers.SerializerMethodField(read_only=True)
     records = PeriodAttendanceRecordSerializer(many=True, read_only=True)
 
@@ -582,6 +629,13 @@ class PeriodAttendanceSessionSerializer(serializers.ModelSerializer):
         read_only_fields = ('created_by', 'created_at')
 
     # no custom __init__ required; queryset for `period_id` is statically provided above
+
+    def get_section(self, obj):
+        try:
+            s = obj.section
+            return {'id': s.id, 'name': str(s)}
+        except Exception:
+            return None
 
     def get_period(self, obj):
         try:

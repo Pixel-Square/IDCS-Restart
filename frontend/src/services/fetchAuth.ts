@@ -51,6 +51,3 @@ export async function fetchWithAuth(input: RequestInfo | URL, init: RequestInit 
 }
 
 export default fetchWithAuth
-
-// DEBUG: log export value for runtime inspection
-try{ console.log('DEBUG fetchAuth: fetchWithAuth typeof', typeof fetchWithAuth, fetchWithAuth) }catch(e){ console.log('DEBUG fetchAuth: log failed', e) }

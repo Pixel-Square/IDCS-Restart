@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import fetchWithAuth from '../../services/fetchAuth'
-import '../Dashboard.css'
+import { Users, GraduationCap, Mail, Loader2, UserCircle2 } from 'lucide-react'
 
 type Student = { 
   id: number; 
@@ -52,91 +52,71 @@ export default function MyStudentsPage() {
 
   if (loading) {
     return (
-      <div className="dashboard-main">
-        <div className="db-loading">Loading student information…</div>
+      <div className="min-h-screen p-4 md:p-6 bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 flex items-center justify-center">
+        <div className="flex items-center gap-3">
+          <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
+          <span className="text-slate-600 text-lg">Loading student information...</span>
+        </div>
       </div>
     )
   }
 
   return (
-    <div style={{ padding: 28 }}>
-      {/* Header Section */}
-      <div className="welcome" style={{ marginBottom: 24 }}>
-        <div className="welcome-left">
-          <svg className="welcome-icon" fill="none" viewBox="0 0 48 48">
-            <rect width="48" height="48" rx="12" fill="#e0e7ff"/>
-            <path d="M24 12c-3.3 0-6 2.7-6 6s2.7 6 6 6 6-2.7 6-6-2.7-6-6-6zm0 4c1.1 0 2 .9 2 2s-.9 2-2 2-2-.9-2-2 .9-2 2-2zm0 14c-4 0-7.5 2-9.5 5h19c-2-3-5.5-5-9.5-5z" fill="#6366f1"/>
-          </svg>
-          <div>
-            <h2 className="welcome-title" style={{ fontSize: 22, marginBottom: 2 }}>My Students</h2>
-            <div className="welcome-sub">View and manage your assigned student profiles.</div>
+    <div className="min-h-screen p-4 md:p-6 bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
+      {/* Header */}
+      <div className="bg-white rounded-xl shadow-sm mb-6 p-6 border border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-4">
+          <div className="flex items-center gap-4">
+            <div className="bg-gradient-to-br from-indigo-500 to-purple-600 p-3 rounded-xl shadow-lg">
+              <GraduationCap className="w-8 h-8 text-white" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-slate-900 mb-1">My Students</h1>
+              <p className="text-slate-600 text-sm">View and manage your assigned student profiles</p>
+            </div>
           </div>
-        </div>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-          <div style={{ 
-            padding: '8px 16px', 
-            background: 'linear-gradient(90deg, #f3f4f6, #e0e7ff)', 
-            borderRadius: 10, 
-            fontWeight: 600, 
-            color: '#3730a3',
-            fontSize: 15
-          }}>
-            Total Students: {data.reduce((sum, s) => sum + s.students.length, 0)}
+          <div className="px-4 py-2 bg-gradient-to-r from-slate-100 to-indigo-100 rounded-lg">
+            <div className="flex items-center gap-2">
+              <Users className="w-5 h-5 text-indigo-700" />
+              <span className="text-sm font-semibold text-indigo-900">
+                Total: {data.reduce((sum, s) => sum + s.students.length, 0)}
+              </span>
+            </div>
           </div>
         </div>
       </div>
 
       {data.length === 0 && !loading && (
-        <div className="db-empty" style={{ textAlign: 'center', padding: 32 }}>
-          <svg style={{ width: 64, height: 64, margin: '0 auto 16px', opacity: 0.5 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
-          </svg>
-          <div style={{ fontSize: 18, fontWeight: 600, color: '#6b7280', marginBottom: 8 }}>No students assigned</div>
-          <div style={{ fontSize: 14, color: '#9ca3af' }}>You don't have any students assigned to your sections yet.</div>
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12">
+          <div className="flex flex-col items-center justify-center text-center">
+            <div className="bg-slate-100 p-4 rounded-full mb-4">
+              <Users className="w-16 h-16 text-slate-400" />
+            </div>
+            <h3 className="text-lg font-semibold text-slate-900 mb-2">No Students Assigned</h3>
+            <p className="text-slate-600 text-sm">You don't have any students assigned to your sections yet.</p>
+          </div>
         </div>
       )}
 
       {/* Section Pills */}
       {data.length > 0 && (
-        <div style={{ marginBottom: 18, display: 'flex', flexWrap: 'wrap', gap: 14 }}>
+        <div className="mb-6 flex flex-wrap gap-3">
           {data.map(section => {
             const isActive = selectedSection === section.section_id
             return (
               <button
                 key={section.section_id}
                 onClick={() => setSelectedSection(section.section_id)}
-                style={{
-                  minWidth: 120,
-                  height: 36,
-                  borderRadius: 20,
-                  fontWeight: isActive ? 600 : 500,
-                  fontSize: 16,
-                  border: 'none',
-                  outline: 'none',
-                  boxShadow: isActive ? '0 2px 8px #e0e7ff' : 'none',
-                  background: isActive ? 'linear-gradient(90deg,#4f46e5,#06b6d4)' : '#f3f4f6',
-                  color: isActive ? '#fff' : '#1e293b',
-                  transition: 'background 0.18s, color 0.18s, box-shadow 0.18s',
-                  padding: '0 22px',
-                  margin: 0,
-                  cursor: 'pointer',
-                  letterSpacing: 0.5,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 8,
-                  boxSizing: 'border-box',
-                }}
+                className={`px-5 py-2 rounded-full font-medium text-sm transition-all duration-200 flex items-center gap-2 ${
+                  isActive
+                    ? 'bg-gradient-to-r from-indigo-600 to-cyan-500 text-white shadow-lg shadow-indigo-200'
+                    : 'bg-white text-slate-700 border border-slate-200 hover:border-indigo-300 hover:bg-slate-50'
+                }`}
               >
                 {section.section_name}
-                <span style={{
-                  background: isActive ? 'rgba(255,255,255,0.25)' : '#e5e7eb',
-                  padding: '2px 8px',
-                  borderRadius: 12,
-                  fontSize: 13,
-                  fontWeight: 700,
-                  color: isActive ? '#fff' : '#374151'
-                }}>
+                <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+                  isActive ? 'bg-white/25 text-white' : 'bg-slate-100 text-slate-700'
+                }`}>
                   {section.students.length}
                 </span>
               </button>
@@ -147,57 +127,56 @@ export default function MyStudentsPage() {
 
       {/* Students Table */}
       {students.length > 0 && (
-        <div style={{ overflowX: 'auto', marginTop: 8 }}>
-          <table style={{ 
-            width: '100%', 
-            borderCollapse: 'collapse', 
-            background: '#fff', 
-            borderRadius: 10, 
-            boxShadow: '0 2px 8px #e5e7eb',
-            overflow: 'hidden'
-          }}>
-            <thead>
-              <tr style={{ 
-                background: 'linear-gradient(90deg,#f3f4f6,#e0e7ff)', 
-                textAlign: 'left', 
-                borderBottom: '2px solid #d1d5db' 
-              }}>
-                <th style={{ padding: '12px 16px', color: '#3730a3', fontWeight: 700, fontSize: 15 }}>S.No</th>
-                <th style={{ padding: '12px 16px', color: '#3730a3', fontWeight: 700, fontSize: 15 }}>Registration No</th>
-                <th style={{ padding: '12px 16px', color: '#3730a3', fontWeight: 700, fontSize: 15 }}>Student Name</th>
-                <th style={{ padding: '12px 16px', color: '#3730a3', fontWeight: 700, fontSize: 15 }}>Email</th>
-              </tr>
-            </thead>
-            <tbody>
-              {students.map((student, index) => (
-                <tr 
-                  key={student.id} 
-                  style={{ 
-                    borderBottom: '1px solid #f3f4f6', 
-                    transition: 'background 0.2s',
-                    background: index % 2 === 0 ? '#fff' : '#f9fafb'
-                  }}
-                  onMouseEnter={e => (e.currentTarget.style.background = '#f0f9ff')}
-                  onMouseLeave={e => (e.currentTarget.style.background = index % 2 === 0 ? '#fff' : '#f9fafb')}
-                >
-                  <td style={{ padding: '12px 16px', fontWeight: 500, color: '#6b7280' }}>
-                    {index + 1}
-                  </td>
-                  <td style={{ padding: '12px 16px', fontWeight: 600, color: '#1e293b', fontSize: 15 }}>
-                    {student.reg_no}
-                  </td>
-                  <td style={{ padding: '12px 16px', fontSize: 15, color: '#1e293b', fontWeight: 500 }}>
-                    {student.first_name && student.last_name 
-                      ? `${student.first_name} ${student.last_name}`.trim() 
-                      : student.username}
-                  </td>
-                  <td style={{ padding: '12px 16px', color: '#374151' }}>
-                    {student.email || '-'}
-                  </td>
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="bg-gradient-to-r from-slate-50 to-indigo-50 border-b-2 border-slate-200">
+                  <th className="text-left py-3 px-4 text-sm font-semibold text-indigo-900">S.No</th>
+                  <th className="text-left py-3 px-4 text-sm font-semibold text-indigo-900">Registration No</th>
+                  <th className="text-left py-3 px-4 text-sm font-semibold text-indigo-900">Student Name</th>
+                  <th className="text-left py-3 px-4 text-sm font-semibold text-indigo-900">Email</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-200">
+                {students.map((student, index) => (
+                  <tr 
+                    key={student.id} 
+                    className="hover:bg-blue-50 transition-colors"
+                  >
+                    <td className="py-3 px-4">
+                      <span className="text-sm font-medium text-slate-600">{index + 1}</span>
+                    </td>
+                    <td className="py-3 px-4">
+                      <span className="text-sm font-semibold text-slate-900">{student.reg_no}</span>
+                    </td>
+                    <td className="py-3 px-4">
+                      <div className="flex items-center gap-2">
+                        <UserCircle2 className="w-5 h-5 text-slate-400" />
+                        <span className="text-sm font-medium text-slate-900">
+                          {student.first_name && student.last_name 
+                            ? `${student.first_name} ${student.last_name}`.trim() 
+                            : student.username}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="py-3 px-4">
+                      <div className="flex items-center gap-2 text-slate-600">
+                        {student.email ? (
+                          <>
+                            <Mail className="w-4 h-4 text-slate-400" />
+                            <span className="text-sm">{student.email}</span>
+                          </>
+                        ) : (
+                          <span className="text-sm text-slate-400">-</span>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 

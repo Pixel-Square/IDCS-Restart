@@ -539,12 +539,12 @@ class StaffTimetableView(APIView):
                 (Q(curriculum_row=OuterRef('curriculum_row')) | Q(elective_subject__parent=OuterRef('curriculum_row')))
             )
 
-            qs = TimetableAssignment.objects.select_related('period', 'staff', 'curriculum_row', 'section')
+            qs = TimetableAssignment.objects.select_related('period', 'staff', 'curriculum_row', 'section', 'section__batch')
             qs = qs.annotate(has_ta=Exists(ta_qs)).filter(Q(staff=staff_profile) | Q(staff__isnull=True, has_ta=True))
 
         except Exception:
             # fallback: only show direct assignments
-            qs = TimetableAssignment.objects.select_related('period', 'staff', 'curriculum_row', 'section').filter(staff=staff_profile)
+            qs = TimetableAssignment.objects.select_related('period', 'staff', 'curriculum_row', 'section', 'section__batch').filter(staff=staff_profile)
 
         out = {}
         for a in qs:
@@ -598,6 +598,18 @@ class StaffTimetableView(APIView):
             else:
                 curriculum_obj = {'id': a.curriculum_row.pk, 'course_code': a.curriculum_row.course_code, 'course_name': a.curriculum_row.course_name} if a.curriculum_row else None
 
+            # Enhanced section info with batch details  
+            section_info = None
+            if getattr(a, 'section', None):
+                section_info = {
+                    'id': getattr(a.section, 'pk', None), 
+                    'name': getattr(a.section, 'name', None),
+                    'batch': {
+                        'id': getattr(a.section.batch, 'pk', None),
+                        'name': getattr(a.section.batch, 'name', None)
+                    } if getattr(a.section, 'batch', None) else None
+                }
+
             lst.append({
                 'id': getattr(a, 'id', None),
                 'period_index': getattr(a.period, 'index', None),
@@ -612,7 +624,7 @@ class StaffTimetableView(APIView):
                 'elective_subject_id': elective_id,
                 'subject_batch': {'id': a.subject_batch.pk, 'name': getattr(a.subject_batch, 'name', None)} if getattr(a, 'subject_batch', None) else None,
                 'staff': {'id': staff_obj.pk, 'staff_id': getattr(staff_obj, 'staff_id', None), 'username': getattr(getattr(staff_obj, 'user', None), 'username', None)} if staff_obj else None,
-                'section': {'id': getattr(a.section, 'pk', None), 'name': getattr(a.section, 'name', None)} if getattr(a, 'section', None) else None,
+                'section': section_info,
             })
             # If a date was provided and a special entry exists for this section/period/date,
             # skip including the normal timetable assignment so the staff sees only the
@@ -631,7 +643,7 @@ class StaffTimetableView(APIView):
         try:
             from timetable.models import SpecialTimetableEntry
             specials_added = []
-            special_qs = SpecialTimetableEntry.objects.filter(is_active=True).select_related('timetable', 'period', 'staff', 'curriculum_row')
+            special_qs = SpecialTimetableEntry.objects.filter(is_active=True).select_related('timetable', 'timetable__section', 'timetable__section__batch', 'period', 'staff', 'curriculum_row')
             for e in special_qs:
                 try:
                     # include if entry explicitly assigned to this staff or if a TeachingAssignment maps this staff to the curriculum_row
@@ -677,6 +689,18 @@ class StaffTimetableView(APIView):
                     else:
                         curr_obj = {'id': e.curriculum_row.id, 'course_code': getattr(e.curriculum_row, 'course_code', None), 'course_name': getattr(e.curriculum_row, 'course_name', None)} if e.curriculum_row else None
 
+                    # Enhanced section info with batch details
+                    section_info = None
+                    if getattr(e.timetable, 'section', None):
+                        section_info = {
+                            'id': getattr(e.timetable.section, 'pk', None), 
+                            'name': getattr(e.timetable.section, 'name', None),
+                            'batch': {
+                                'id': getattr(e.timetable.section.batch, 'pk', None),
+                                'name': getattr(e.timetable.section.batch, 'name', None)
+                            } if getattr(e.timetable.section, 'batch', None) else None
+                        }
+
                     lst.append({
                         'id': f"special-{getattr(e, 'id', None)}",
                         'period_index': getattr(e.period, 'index', None),
@@ -691,7 +715,7 @@ class StaffTimetableView(APIView):
                         'elective_subject_id': elective_id,
                         'subject_batch': {'id': getattr(e.subject_batch, 'pk', None), 'name': getattr(e.subject_batch, 'name', None)} if getattr(e, 'subject_batch', None) else None,
                         'staff': {'id': getattr(e.staff, 'pk', None), 'staff_id': getattr(getattr(e.staff, 'user', None), 'username', None)} if getattr(e, 'staff', None) else None,
-                        'section': {'id': getattr(e.timetable.section, 'pk', None), 'name': getattr(e.timetable.section, 'name', None)} if getattr(e.timetable, 'section', None) else None,
+                        'section': section_info,
                         'is_special': True,
                         'date': getattr(e, 'date', None),
                     })

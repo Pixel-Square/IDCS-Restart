@@ -1,27 +1,49 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import useDashboard from '../hooks/useDashboard';
-import { User, BookOpen, Layout, Grid, Home } from 'lucide-react';
+import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, FileText } from 'lucide-react';
 import { useSidebar } from './SidebarContext';
-import './DashboardSidebar.css';
 
 const ICON_MAP: Record<string, any> = {
   profile: User,
   curriculum_master: BookOpen,
-    assigned_subjects: BookOpen,
+  assigned_subjects: BookOpen,
   department_curriculum: Layout,
   student_curriculum_view: Grid,
   home: Home,
+  hod_advisors: Users,
+  hod_teaching: BookOpen,
+  advisor_students: GraduationCap,
+  mentor_assign: Users,
+  timetable_templates: Calendar,
+  timetable_assignments: Calendar,
+  student_timetable: Calendar,
+  staff_timetable: Calendar,
+  student_attendance: ClipboardList,
+  my_mentees: Users,
+  period_attendance: ClipboardList,
 };
 
 export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string }) {
   const { data, loading, error } = useDashboard(baseUrl);
   const loc = useLocation();
-  const { collapsed } = useSidebar();
+  const { collapsed, toggle } = useSidebar();
 
-  if (loading) return <aside className="dsb">Loading…</aside>;
-  if (error) return <aside className="dsb">Error loading sidebar</aside>;
-  if (!data) return <aside className="dsb">No data</aside>;
+  if (loading) return (
+    <aside className={`fixed top-16 left-0 h-[calc(100vh-4rem)] bg-white shadow-lg transition-all duration-300 z-30 ${collapsed ? '-translate-x-full lg:translate-x-0 lg:w-20' : 'w-full lg:w-64'}`}>
+      <div className="p-6 flex items-center justify-center h-full">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+      </div>
+    </aside>
+  );
+  
+  if (error) return (
+    <aside className={`fixed top-16 left-0 h-[calc(100vh-4rem)] bg-white shadow-lg transition-all duration-300 z-30 ${collapsed ? '-translate-x-full lg:translate-x-0 lg:w-20' : 'w-full lg:w-64'}`}>
+      <div className="p-6 text-red-600 text-sm">Error loading sidebar</div>
+    </aside>
+  );
+  
+  if (!data) return null;
 
   const entry = data.entry_points || {};
 
@@ -35,8 +57,8 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   if (entry.department_curriculum && (permsLower.some(p => p.includes('curriculum')) || entry.department_curriculum)) items.push({ key: 'department_curriculum', label: 'Department Curriculum', to: '/curriculum/department' });
 
   // HOD pages: require HOD role or explicit permission
-  if (entry.hod_advisors && (rolesUpper.includes('HOD') || permsLower.includes('academics.assign_advisor'))) items.push({ key: 'hod_advisors', label: 'Advisor Assignments', to: '/hod/advisors' });
-  if (entry.hod_teaching && (rolesUpper.includes('ADVISOR') || permsLower.includes('academics.assign_teaching'))) items.push({ key: 'hod_teaching', label: 'Teaching Assignments', to: '/advisor/teaching' });
+  if (entry.hod_advisors && (rolesUpper.includes('HOD') || permsLower.includes('academics.assign_advisor'))) items.push({ key: 'hod_advisors', label: 'Advisor Assign', to: '/hod/advisors' });
+  if (entry.hod_teaching && (rolesUpper.includes('ADVISOR') || permsLower.includes('academics.assign_teaching'))) items.push({ key: 'hod_teaching', label: 'Teaching Assign', to: '/advisor/teaching' });
 
   // Advisor pages: require ADVISOR role or explicit permission
   if (entry.advisor_students && (rolesUpper.includes('ADVISOR') || permsLower.includes('academics.view_my_students'))) items.push({ key: 'advisor_students', label: 'My Students', to: '/advisor/students' });
@@ -47,10 +69,6 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
 
   // Timetable-related entries: require explicit timetable permissions or flags/roles
   if ((flags.can_manage_timetable_templates || permsLower.includes('timetable.manage_templates')) && entry.timetable_templates) items.push({ key: 'timetable_templates', label: 'IQAC: Timetable Templates', to: '/iqac/timetable' });
-  // Only advisors or users with explicit permission/flag may assign timetables.
-  // HODs previously appeared here because they were included in the role check;
-  // remove HOD so the link doesn't show by default for HOD users unless they
-  // also have the 'timetable.assign' permission or a feature flag.
   const canAssignTimetable = Boolean(flags.can_assign_timetable) || permsLower.includes('timetable.assign') || rolesUpper.includes('ADVISOR')
   if (canAssignTimetable && entry.timetable_assignments) items.push({ key: 'timetable_assignments', label: 'Timetable Assignments', to: '/advisor/timetable' });
 
@@ -76,34 +94,69 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'period_attendance', label: 'Mark Attendance', to: '/staff/period-attendance' });
   }
 
-  // Attendance menu items removed
-
   // fallback: always show profile
   items.unshift({ key: 'profile', label: 'Profile', to: '/profile' });
 
   return (
-    <aside className={`dsb ${collapsed ? 'collapsed' : ''}`}>
-      <div className="dsb-header">Menu</div>
-      <ul className="dsb-list">
-        <li className="dsb-item">
-          <Link to="/dashboard" className="dsb-link">
-            <span className="dsb-icon"><Home /></span>
-            <span className="dsb-label">Dashboard</span>
-          </Link>
-        </li>
-        {items.map(i => {
-          const Icon = ICON_MAP[i.key] || ICON_MAP.home || User;
-          const active = loc.pathname.startsWith(i.to);
-          return (
-            <li key={i.key} className={`dsb-item ${active ? 'active' : ''}`}>
-              <Link to={i.to} className="dsb-link">
-                <span className="dsb-icon"><Icon /></span>
-                <span className="dsb-label">{i.label}</span>
+    <>
+      {/* Mobile overlay backdrop */}
+      {!collapsed && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-50 z-20 lg:hidden"
+          onClick={toggle}
+        />
+      )}
+
+      {/* Sidebar */}
+      <aside className={`fixed top-16 left-0 h-[calc(100vh-4rem)] bg-white shadow-lg transition-all duration-300 z-30 overflow-y-auto ${
+        collapsed ? '-translate-x-full lg:translate-x-0 lg:w-20' : 'w-full lg:w-64'
+      }`}>
+        {/* Header - Hidden */}
+        <div className="hidden"></div>
+
+        {/* Navigation Links */}
+        <nav className="py-6">
+          <ul className="space-y-2 px-3">
+            {/* Dashboard Link */}
+            <li>
+              <Link
+                to="/dashboard"
+                className={`flex items-center gap-3 px-3 py-3 rounded-lg transition-all duration-200 ${
+                  loc.pathname === '/dashboard'
+                    ? 'bg-blue-600 text-white shadow-md'
+                    : 'text-gray-700 hover:bg-blue-50 hover:text-blue-600'
+                } ${collapsed ? 'lg:justify-center lg:px-2' : ''}`}
+                onClick={() => { if (window.innerWidth < 1024) toggle(); }}
+              >
+                <Home className={`flex-shrink-0 ${collapsed ? 'lg:w-5 lg:h-5' : 'w-6 h-6'}`} />
+                <span className={`font-medium text-base ${collapsed ? 'lg:hidden' : ''}`}>Dashboard</span>
               </Link>
             </li>
-          );
-        })}
-      </ul>
-    </aside>
+
+            {/* Dynamic Menu Items */}
+            {items.map(i => {
+              const Icon = ICON_MAP[i.key] || User;
+              const active = loc.pathname.startsWith(i.to);
+              return (
+                <li key={i.key}>
+                  <Link
+                    to={i.to}
+                    className={`flex items-center gap-3 px-3 py-3 rounded-lg transition-all duration-200 ${
+                      active
+                        ? 'bg-blue-600 text-white shadow-md'
+                        : 'text-gray-700 hover:bg-blue-50 hover:text-blue-600'
+                    } ${collapsed ? 'lg:justify-center lg:px-2' : ''}`}
+                    onClick={() => { if (window.innerWidth < 1024) toggle(); }}
+                  >
+                    <Icon className={`flex-shrink-0 ${collapsed ? 'lg:w-5 lg:h-5' : 'w-6 h-6'}`} />
+                    <span className={`font-medium text-base ${collapsed ? 'lg:hidden' : ''}`}>{i.label}</span>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </nav>
+      </aside>
+    </>
   );
 }

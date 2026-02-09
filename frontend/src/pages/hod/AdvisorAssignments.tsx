@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react'
+import { User, Edit, BookOpen, Save, X } from 'lucide-react'
 import fetchWithAuth from '../../services/fetchAuth'
-import '../../pages/Dashboard.css'
 
-type Section = { id: number; name: string; batch: string; department_id?: number; department_code?: string }
+type Section = { id: number; name: string; batch: string; department_id?: number; department_code?: string; department_short_name?: string }
 type Staff = { id: number; user: string; staff_id: string; department?: number }
 type Advisor = { id: number; section: string; section_id: number; advisor: string; advisor_id: number; is_active: boolean; department_id?: number }
 
@@ -13,6 +13,7 @@ export default function AdvisorAssignments() {
   const [loading, setLoading] = useState(false)
   const [canAssign, setCanAssign] = useState(false)
   const [selectedDept, setSelectedDept] = useState<number | null>(null)
+  const [editingSections, setEditingSections] = useState<Set<number>>(new Set())
 
   useEffect(() => { fetchData() }, [])
 
@@ -62,6 +63,11 @@ export default function AdvisorAssignments() {
       const payload = { section_id: sectionId, advisor_id: advisorId, is_active: true }
       const res = await fetchWithAuth('/api/academics/section-advisors/', { method: 'POST', body: JSON.stringify(payload) })
       if (res.ok) {
+        setEditingSections(prev => {
+          const newSet = new Set(prev)
+          newSet.delete(sectionId)
+          return newSet
+        })
         await fetchData()
       } else {
         const err = await res.text(); alert('Error: ' + err)
@@ -69,223 +75,211 @@ export default function AdvisorAssignments() {
     } finally { setLoading(false) }
   }
 
+  function toggleEdit(sectionId: number) {
+    setEditingSections(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(sectionId)) {
+        newSet.delete(sectionId)
+      } else {
+        newSet.add(sectionId)
+      }
+      return newSet
+    })
+  }
+
+  function findAssignedAdvisor(sectionId: number) {
+    return assignments.find(a => a.section_id === sectionId && a.is_active)
+  }
+
   return (
-    <div style={{ minHeight: '100vh', width: '100%', display: 'flex', flexDirection: 'column', background: 'none' }}>
-      <div className="welcome" style={{ marginBottom: 24 }}>
-        <div className="welcome-left">
-          <svg className="welcome-icon" fill="none" viewBox="0 0 48 48"><rect width="48" height="48" rx="12" fill="#e0e7ff"/><path d="M14 24a3 3 0 116 0 3 3 0 01-6 0zm8 0a3 3 0 116 0 3 3 0 01-6 0zm8 0a3 3 0 116 0 3 3 0 01-6 0z" fill="#6366f1"/></svg>
-          <div>
-            <h2 className="welcome-title" style={{ fontSize: 22, marginBottom: 2 }}>Advisor Assignments (HOD)</h2>
-            <div className="welcome-sub">Manage section advisors for your department.</div>
+    <div className="min-h-screen bg-gray-50 p-6">
+      <div className="max-w-7xl mx-auto">
+        {/* Header */}
+        <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-blue-50 rounded-lg">
+              <User className="h-6 w-6 text-blue-600" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">Advisor Assign</h1>
+              <p className="text-gray-600">Assign advisors to sections and edit existing assignments</p>
+            </div>
           </div>
         </div>
-      </div>
 
-        {loading && <div className="db-loading">Loading advisor assignments…</div>}
+        {loading && (
+          <div className="bg-white rounded-lg shadow-sm p-12">
+            <div className="flex items-center justify-center">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+              <span className="ml-3 text-gray-600">Loading assignments...</span>
+            </div>
+          </div>
+        )}
 
         {!loading && sections.length > 0 && (
           <>
-            {/* Department selector pills */}
-            <div style={{ marginBottom: 18, display: 'flex', flexWrap: 'wrap', gap: 14 }}>
-              {Array.from(new Set(sections.map(s => s.department_id || 0))).map(deptId => {
+            {/* Department Filter Pills */}
+            <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+              <h3 className="text-lg font-medium text-gray-900 mb-4">Filter by Department</h3>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => setSelectedDept(null)}
+                  className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
+                    selectedDept === null
+                      ? 'bg-blue-100 text-blue-700'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  All Departments
+                </button>
+                {Array.from(new Set(sections.map(s => s.department_id || 0)))
+                  .filter(deptId => deptId > 0)
+                  .map(deptId => {
+                  const deptSections = sections.filter(s => (s.department_id || 0) === deptId);
+                  if (deptSections.length === 0) return null;
+                  const deptCode = deptSections[0]?.department_short_name || deptSections[0]?.department_code || `Dept ${deptId}`;
+                  const isActive = selectedDept === deptId;
+
+                  return (
+                    <button
+                      key={deptId}
+                      onClick={() => setSelectedDept(isActive ? null : deptId)}
+                      className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
+                        isActive
+                          ? 'bg-blue-100 text-blue-700'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      {deptCode}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Department Sections */}
+            <div className="space-y-6">
+              {Array.from(new Set(sections.map(s => s.department_id || 0)))
+                .filter(deptId => selectedDept === null || selectedDept === deptId)
+                .map(deptId => {
                 const deptSections = sections.filter(s => (s.department_id || 0) === deptId);
                 if (deptSections.length === 0) return null;
-                const deptCode = deptSections[0]?.department_code || `Dept ${deptId}`;
-                const isActive = selectedDept === deptId;
+
+                const deptCode = deptSections[0]?.department_short_name || deptSections[0]?.department_code || `Department ${deptId}`;
+                const deptStaff = staff.filter(st => (st.department || 0) === deptId);
 
                 return (
-                  <button
-                    key={deptId}
-                    onClick={() => setSelectedDept(deptId)}
-                    className={isActive ? 'dept-pill-active' : 'dept-pill'}
-                    style={{
-                      minWidth: 64,
-                      height: 36,
-                      borderRadius: 20,
-                      fontWeight: isActive ? 600 : 500,
-                      fontSize: 16,
-                      border: 'none',
-                      outline: 'none',
-                      boxShadow: isActive ? '0 2px 8px #e0e7ff' : 'none',
-                      background: isActive ? 'linear-gradient(90deg,#4f46e5,#06b6d4)' : '#f3f4f6',
-                      color: isActive ? '#fff' : '#1e293b',
-                      transition: 'background 0.18s, color 0.18s, box-shadow 0.18s',
-                      padding: '0 22px',
-                      margin: 0,
-                      cursor: 'pointer',
-                      letterSpacing: 1,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      boxSizing: 'border-box',
-                    }}
-                  >
-                    {deptCode}
-                  </button>
+                  <div key={deptId} className="bg-white rounded-lg shadow-sm p-6">
+                    <h2 className="text-lg font-semibold text-gray-900 mb-4">
+                      {deptCode} Department
+                    </h2>
+
+                    {/* Assignment Table */}
+                    <div className="overflow-x-auto mb-6">
+                      <table className="w-full">
+                        <thead>
+                          <tr className="bg-gradient-to-r from-gray-50 to-blue-50 border-b-2 border-gray-200">
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-blue-700">Section</th>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-blue-700">Select Advisor</th>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-blue-700">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {deptSections.map(sec => {
+                            const assignedAdvisor = findAssignedAdvisor(sec.id)
+                            const isEditing = editingSections.has(sec.id)
+                            const showDropdown = !assignedAdvisor || isEditing
+
+                            return (
+                              <tr key={sec.id} className="hover:bg-gray-50 transition-colors">
+                                <td className="px-4 py-3 text-gray-700">{sec.name}</td>
+                                <td className="px-4 py-3">
+                                  {showDropdown ? (
+                                    <select
+                                      id={`advisor-${sec.id}`}
+                                      className="w-full p-2 border border-gray-300 rounded-lg bg-white text-gray-700 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                      defaultValue={assignedAdvisor?.advisor_id || ""}
+                                    >
+                                      <option value="">-- Select Advisor --</option>
+                                      {deptStaff.map(st => (
+                                        <option key={st.id} value={st.id}>{st.staff_id} - {st.user}</option>
+                                      ))}
+                                    </select>
+                                  ) : (
+                                    <div className="text-gray-900 font-medium">
+                                      {assignedAdvisor?.advisor || "No advisor assigned"}
+                                    </div>
+                                  )}
+                                </td>
+                                <td className="px-4 py-3">
+                                  {assignedAdvisor && !isEditing ? (
+                                    <button
+                                      disabled={!canAssign}
+                                      className={`p-2 text-sm font-medium rounded-lg transition-colors ${
+                                        canAssign 
+                                          ? 'text-blue-600 hover:bg-blue-50 border border-blue-300'
+                                          : 'text-gray-400 bg-gray-100 cursor-not-allowed'
+                                      }`}
+                                      onClick={() => canAssign && toggleEdit(sec.id)}
+                                      title="Edit Assignment"
+                                    >
+                                      <Edit className="h-4 w-4" />
+                                    </button>
+                                  ) : (
+                                    <div className="flex gap-2">
+                                      <button
+                                        disabled={!canAssign}
+                                        className={`p-2 text-sm font-medium rounded-lg transition-colors ${
+                                          canAssign 
+                                            ? 'text-blue-600 hover:bg-blue-50 border border-blue-300'
+                                            : 'text-gray-400 bg-gray-100 cursor-not-allowed'
+                                        }`}
+                                        onClick={() => {
+                                          if (!canAssign) return
+                                          const sel = document.getElementById(`advisor-${sec.id}`) as HTMLSelectElement
+                                          const val = sel.value
+                                          if (!val) return alert('Select an advisor first')
+                                          saveAssignment(sec.id, Number(val))
+                                        }}
+                                        title="Save Assignment"
+                                      >
+                                        <Save className="h-4 w-4" />
+                                      </button>
+                                      {isEditing && (
+                                        <button
+                                          className="p-2 text-sm font-medium rounded-lg transition-colors text-red-600 hover:bg-red-50 border border-red-300"
+                                          onClick={() => toggleEdit(sec.id)}
+                                          title="Cancel"
+                                        >
+                                          <X className="h-4 w-4" />
+                                        </button>
+                                      )}
+                                    </div>
+                                  )}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
                 );
               })}
             </div>
-
-            {/* Display sections for selected department */}
-            {Array.from(new Set(sections.map(s => s.department_id || 0)))
-              .filter(deptId => selectedDept === null || selectedDept === deptId)
-              .map(deptId => {
-              const deptSections = sections.filter(s => (s.department_id || 0) === deptId);
-              if (deptSections.length === 0) return null;
-
-              const deptCode = deptSections[0]?.department_code || `Department ${deptId}`;
-              const deptStaff = staff.filter(st => (st.department || 0) === deptId);
-              const deptAssignments = assignments.filter(a => {
-                // Method 1: If assignment has direct department_id from API, use it (most reliable)
-                if (a.department_id !== undefined && a.department_id !== null) {
-                  return Number(a.department_id) === deptId;
-                }
-                // Method 2: If assignment has section_id, match against dept sections (reliable)
-                if (a.section_id !== undefined && a.section_id !== null) {
-                  return deptSections.some(s => s.id === Number(a.section_id));
-                }
-                // Method 3: Fallback to section text matching (last resort)
-                const sectionText = String(a.section || '');
-                const matchedSection = deptSections.find(s => {
-                  // Strict match: section must contain BOTH batch and section name
-                  const batchStr = String(s.batch || '');
-                  const nameStr = String(s.name || '');
-                  // Format: "BatchName / SectionName" or "Course - BatchYear / SectionName"
-                  return sectionText.includes(batchStr) && sectionText.includes(nameStr);
-                });
-                return !!matchedSection;
-              });
-
-              return (
-                <div key={deptId} style={{ marginBottom: 32 }}>
-                  {/* Table */}
-                  <div style={{ overflowX: 'auto', marginBottom: 24 }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff', borderRadius: 10, boxShadow: '0 2px 8px #e5e7eb' }}>
-                      <thead>
-                        <tr style={{ background: 'linear-gradient(90deg,#f3f4f6,#e0e7ff)', textAlign: 'left', borderBottom: '2px solid #d1d5db' }}>
-                          <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>Batch</th>
-                          <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>Section</th>
-                          <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>Select Advisor</th>
-                          <th style={{ padding: '12px 8px', color: '#3730a3', fontWeight: 700 }}>Action</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {deptSections.map(sec => (
-                          <tr key={sec.id} style={{ borderBottom: '1px solid #f3f4f6', transition: 'background 0.2s' }}>
-                            <td style={{ padding: '10px 8px', fontWeight: 600, color: '#1e293b' }}>{sec.batch}</td>
-                            <td style={{ padding: '10px 8px', color: '#1e293b' }}>{sec.name}</td>
-                            <td style={{ padding: '10px 8px' }}>
-                              <select
-                                id={`advisor-${sec.id}`}
-                                style={{
-                                  padding: '6px 12px',
-                                  borderRadius: 6,
-                                  border: '1px solid #d1d5db',
-                                  background: '#fff',
-                                  color: '#1e293b',
-                                  fontWeight: 500,
-                                  fontSize: 14,
-                                  cursor: 'pointer'
-                                }}
-                              >
-                                <option value="">-- Select Advisor --</option>
-                                {deptStaff.map(st => (
-                                  <option key={st.id} value={st.id}>{st.staff_id} - {st.user}</option>
-                                ))}
-                              </select>
-                            </td>
-                            <td style={{ padding: '10px 8px' }}>
-                              <button
-                                disabled={!canAssign}
-                                className="btn-primary"
-                                style={{
-                                  padding: '6px 18px',
-                                  fontWeight: 600,
-                                  borderRadius: 8,
-                                  fontSize: 14,
-                                  border: 'none',
-                                  boxShadow: canAssign ? '0 1px 4px #e0e7ef1a' : 'none',
-                                  background: canAssign ? 'linear-gradient(90deg,#4f46e5,#06b6d4)' : '#d1d5db',
-                                  color: canAssign ? '#fff' : '#9ca3af',
-                                  cursor: canAssign ? 'pointer' : 'not-allowed',
-                                  opacity: canAssign ? 1 : 0.6
-                                }}
-                                onClick={() => {
-                                  const sel = document.getElementById(`advisor-${sec.id}`) as HTMLSelectElement
-                                  const val = sel.value
-                                  if (!val) return alert('Select an advisor first')
-                                  saveAssignment(sec.id, Number(val))
-                                }}
-                              >
-                                {canAssign ? 'Assign' : 'No Permission'}
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  {/* Existing Assignments */}
-                  <div style={{ marginTop: 24 }}>
-                    <h4 style={{ fontSize: 14, fontWeight: 700, color: '#3730a3', marginTop: 0, marginBottom: 12 }}>
-                      Existing Assignments
-                    </h4>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
-                      {deptAssignments.map(a => {
-                        const sectionText = String(a.section || '');
-                        const parts = sectionText.split(' / ');
-                        const left = parts[0] || '';
-                        const right = parts[1] || '';
-                        const leftParts = left.split(' - ');
-                        const program = leftParts[0] || 'Program';
-                        const batch = leftParts[1] || left || 'Batch';
-                        const sectionName = right || (deptSections.find(s => s.id === Number(a.section_id))?.name || 'Section');
-
-                        return (
-                          <div
-                            key={a.id}
-                            style={{
-                              background: '#fff',
-                              padding: '12px 14px',
-                              borderRadius: 10,
-                              border: '1px solid #eef2f7',
-                              boxShadow: '0 1px 4px rgba(15,23,42,0.05)',
-                              color: '#1e293b'
-                            }}
-                          >
-                            <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', marginBottom: 6 }}>
-                              {program}
-                            </div>
-                            <div style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 13, color: '#475569', marginBottom: 8 }}>
-                              <span style={{ fontWeight: 600 }}>Batch:</span>
-                              <span>{batch}</span>
-                              <span style={{ color: '#cbd5e1' }}>•</span>
-                              <span style={{ fontWeight: 600 }}>Section:</span>
-                              <span>{sectionName}</span>
-                            </div>
-                            <div style={{ fontSize: 13, color: '#1e293b', fontWeight: 600 }}>
-                              {a.advisor}
-                            </div>
-                          </div>
-                        );
-                      })}
-                      {deptAssignments.length === 0 && (
-                        <div style={{ color: '#64748b', fontSize: 13, fontWeight: 500 }}>
-                          No assignments yet.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
           </>
         )}
 
         {!loading && sections.length === 0 && (
-          <div className="db-empty">No sections available for assignment.</div>
+          <div className="bg-white rounded-lg shadow-sm p-12">
+            <div className="text-center">
+              <BookOpen className="mx-auto h-12 w-12 text-gray-300 mb-4" />
+              <h3 className="text-lg font-medium text-gray-900 mb-2">No sections available</h3>
+              <p className="text-gray-600">There are no sections available for advisor assignment at this time.</p>
+            </div>
+          </div>
         )}
+      </div>
     </div>
   )
 }

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
-import { fetchMyMentees, unmapStudent } from '../../services/mentor'
-import '../../pages/Dashboard.css'
+import { fetchMyMentees } from '../../services/mentor'
+import { Users, Loader2, UserCheck } from 'lucide-react'
 
 export default function MyMentees() {
   const [mentees, setMentees] = useState<any[]>([])
@@ -19,61 +19,92 @@ export default function MyMentees() {
     }finally{ setLoading(false) }
   }
 
-  async function remove(id:number){
-    if(!confirm('Remove mentor mapping for this student?')) return
-    setLoading(true)
-    try{
-      const res = await unmapStudent(id)
-      if(res.ok){
-        await load()
-      } else {
-        const j = await res.json().catch(()=>null)
-        alert('Failed to remove: '+ (j && j.detail ? j.detail : res.statusText))
-      }
-    }catch(e){ console.error(e); alert('Error') }
-    setLoading(false)
-  }
-
   return (
-    <div style={{ minHeight: '100vh', padding: 16 }}>
-      <div className="welcome" style={{ marginBottom: 18 }}>
-        <div className="welcome-left">
-          <svg className="welcome-icon" fill="none" viewBox="0 0 48 48"><rect width="48" height="48" rx="12" fill="#e0e7ff"/><path d="M14 24a3 3 0 116 0 3 3 0 01-6 0zm8 0a3 3 0 116 0 3 3 0 01-6 0zm8 0a3 3 0 116 0 3 3 0 01-6 0z" fill="#6366f1"/></svg>
+    <div className="min-h-screen p-4 md:p-6 bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
+      {/* Header */}
+      <div className="bg-white rounded-xl shadow-sm mb-6 p-6 border border-slate-200">
+        <div className="flex items-center gap-4">
+          <div className="bg-gradient-to-br from-indigo-500 to-purple-600 p-3 rounded-xl shadow-lg">
+            <Users className="w-8 h-8 text-white" />
+          </div>
           <div>
-            <h2 className="welcome-title" style={{ fontSize: 20, marginBottom: 2 }}>My Mentees</h2>
-            <div className="welcome-sub">Students assigned to you as mentor.</div>
+            <h1 className="text-2xl font-bold text-slate-900 mb-1">My Mentees</h1>
+            <p className="text-slate-600 text-sm">Students assigned to you as mentor</p>
           </div>
         </div>
       </div>
 
-      <div style={{ background: '#fff', padding: 14, borderRadius: 8, boxShadow: '0 1px 6px rgba(15,23,42,0.06)' }}>
-        <h3 style={{ fontSize: 16, fontWeight: 700, color: '#0f172a', marginBottom: 12 }}>Mentees</h3>
-        {loading && <div>Loading…</div>}
-        {!loading && mentees.length===0 && <div style={{ color: '#64748b' }}>No mentees assigned.</div>}
-        {!loading && mentees.length>0 && (
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ textAlign: 'left', borderBottom: '1px solid #e6edf3' }}>
-                <th style={{ padding: 10 }}>Reg No</th>
-                <th style={{ padding: 10 }}>Name</th>
-                <th style={{ padding: 10 }}>Section</th>
-                <th style={{ padding: 10 }}>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {mentees.map(m => (
-                <tr key={m.id} style={{ borderBottom: '1px solid #f3f6f9' }}>
-                  <td style={{ padding: 10 }}>{m.reg_no}</td>
-                  <td style={{ padding: 10 }}>{m.username}</td>
-                  <td style={{ padding: 10 }}>{m.section_name}</td>
-                  <td style={{ padding: 10 }}>
-                    <button className="px-2 py-1" style={{ background: '#ef4444', color: '#fff', borderRadius: 6 }} onClick={()=>remove(m.id)} disabled={loading}>Remove</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+      {/* Main Content */}
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200">
+        <div className="px-6 py-4 border-b border-slate-200 bg-slate-50">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
+              <UserCheck className="w-5 h-5 text-indigo-600" />
+              Mentees List
+              {!loading && mentees.length > 0 && (
+                <span className="ml-2 px-2.5 py-0.5 bg-indigo-100 text-indigo-700 text-xs font-medium rounded-full">
+                  {mentees.length}
+                </span>
+              )}
+            </h2>
+          </div>
+        </div>
+
+        <div className="p-6">
+          {loading && (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
+              <span className="ml-3 text-slate-600">Loading mentees...</span>
+            </div>
+          )}
+
+          {!loading && mentees.length === 0 && (
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <div className="bg-slate-100 p-4 rounded-full mb-4">
+                <Users className="w-12 h-12 text-slate-400" />
+              </div>
+              <h3 className="text-lg font-medium text-slate-900 mb-1">No Mentees Assigned</h3>
+              <p className="text-slate-600 text-sm">You don't have any students assigned as mentees yet.</p>
+            </div>
+          )}
+
+          {!loading && mentees.length > 0 && (
+            <div>
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-slate-200">
+                    <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700 bg-slate-50">
+                      Reg No
+                    </th>
+                    <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700 bg-slate-50">
+                      Name
+                    </th>
+                    <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700 bg-slate-50">
+                      Section
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {mentees.map(m => (
+                    <tr key={m.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="py-3 px-4">
+                        <span className="text-sm font-medium text-slate-900">{m.reg_no}</span>
+                      </td>
+                      <td className="py-3 px-4">
+                        <span className="text-sm text-slate-700">{m.username}</span>
+                      </td>
+                      <td className="py-3 px-4">
+                        <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium bg-blue-100 text-blue-800">
+                          {m.section_name || 'N/A'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )

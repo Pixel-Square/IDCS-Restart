@@ -4,6 +4,15 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db.models.signals import m2m_changed
 from django.dispatch import receiver
+from django.core.validators import RegexValidator
+import re
+
+
+class UsernameValidator(RegexValidator):
+    """Custom validator that allows spaces in usernames."""
+    regex = r'^[\w\s.@+-]+$'
+    message = 'Enter a valid username. This value may contain letters, numbers, spaces, and @/./+/-/_ characters.'
+    flags = 0
 
 
 class User(AbstractUser):
@@ -12,6 +21,16 @@ class User(AbstractUser):
     All students, staff, HODs, admins are users.
     Their actual capabilities are decided by roles + permissions.
     """
+    username = models.CharField(
+        max_length=150,
+        unique=True,
+        help_text='Required. 150 characters or fewer. Letters, numbers, spaces, and @/./+/-/_ characters.',
+        validators=[UsernameValidator()],
+        error_messages={
+            'unique': 'A user with that username already exists.',
+        },
+    )
+    
     roles = models.ManyToManyField(
         'Role',
         through='UserRole',

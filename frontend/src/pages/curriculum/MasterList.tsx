@@ -1,14 +1,11 @@
 
 
 import React, { useEffect, useState } from 'react';
-import PillButton from '../../components/PillButton';
-import '../../components/PillButton.css';
 import { fetchMasters } from '../../services/curriculum';
 import { useLocation, useNavigate } from 'react-router-dom';
 import CurriculumLayout from './CurriculumLayout';
 import { Link } from 'react-router-dom';
-import './CurriculumPage.css';
-import '../Dashboard.css';
+import { BookOpen, Download, Upload, Edit } from 'lucide-react';
 
 export default function MasterList() {
   const [data, setData] = useState<any[]>([]);
@@ -56,7 +53,7 @@ export default function MasterList() {
     const headers = ['regulation','semester','course_code','course_name','category','class_type','l','t','p','s','c','internal_mark','external_mark','for_all_departments','editable','departments'];
     const lines = [headers.join(',')];
     for (const m of rows) {
-      const deps = (m.for_all_departments ? '' : (m.departments_display || []).map((d:any)=>d.code).join(','));
+      const deps = (m.for_all_departments ? '' : (m.departments_display || []).map((d:any)=>d.short_name || d.shortname || d.code || d.name).join(','));
       const vals = [m.regulation, m.semester, m.course_code || '', m.course_name || '', m.category || '', m.class_type || '', m.l ?? 0, m.t ?? 0, m.p ?? 0, m.s ?? 0, m.c ?? 0, m.internal_mark ?? '', m.external_mark ?? '', m.for_all_departments ? 'True' : 'False', m.editable ? 'True' : 'False', deps];
       lines.push(vals.map(csvEscape).join(','));
     }
@@ -116,181 +113,188 @@ export default function MasterList() {
 
   if (loading) return (
     <CurriculumLayout>
-      <div className="db-loading">Loading masters…</div>
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading masters…</p>
+        </div>
+      </div>
     </CurriculumLayout>
   );
 
   return (
     <CurriculumLayout>
-      <div className="curriculum-header">
-        <span className="curriculum-header-icon">
-          <svg width="28" height="28" fill="none" viewBox="0 0 48 48"><rect width="48" height="48" rx="12" fill="#e0e7ff"/><path d="M16 32V16h16v16H16zm2-2h12V18H18v12zm2-2v-8h8v8h-8z" fill="#6366f1"/></svg>
-        </span>
-        <div>
-          <h2 className="curriculum-header-title">Department Curriculum</h2>
-          <div className="curriculum-header-sub">View and manage all department curriculum entries.</div>
-        </div>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-          {(() => {
-            try {
-              const roles = JSON.parse(localStorage.getItem('roles') || '[]');
-              const isIQAC = Array.isArray(roles) && roles.some((r: string) => String(r).toLowerCase() === 'iqac');
-              if (isIQAC) return (
-                <>
-                  <Link to="/curriculum/master/new" className="btn-primary" style={{ textDecoration: 'none', padding: '8px 16px', borderRadius: 8 }}>New Master</Link>
-                </>
-              );
-            } catch (e) {}
-            return null;
-          })()}
-          {/* Download editable subjects and import CSV */}
-          <button className="btn" onClick={() => handleDownloadVisible()} style={{ marginLeft: 8 }}>Download Editable</button>
-          <label className="btn" style={{ marginLeft: 8, cursor: 'pointer' }}>
-            Import CSV
-            <input id="master-import-file" type="file" accept=".csv" style={{ display: 'none' }} onChange={e => handleImportFile(e)} />
-          </label>
-        </div>
-      </div>
-      {uniqueRegs.length > 0 && (
-        <div className="curriculum-regs-row">
-          <span style={{ color: '#374151', fontWeight: 500 }}>Regulation:</span>
-          <div className="curriculum-regs-pills">
-            {uniqueRegs.map(r => {
-              const isActive = selectedReg === r;
-              return (
-                <PillButton
-                  key={r}
-                  onClick={() => setSelectedReg(r)}
-                  variant={isActive ? 'primary' : 'secondary'}
-                  style={isActive ? { boxShadow: '0 2px 8px #e0e7ff' } : {}}
-                >
-                  {r}
-                </PillButton>
-              );
-            })}
+      <div className="px-4 pb-6">
+        {/* Header */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center flex-shrink-0">
+              <BookOpen className="w-6 h-6 text-indigo-600" />
+            </div>
+            <div>
+              <h2 className="text-2xl font-bold text-gray-900">Master Curriculum</h2>
+              <p className="text-sm text-gray-600 mt-1">View and manage all master curriculum entries.</p>
+            </div>
           </div>
-          <div style={{ width: 16 }} />
-          <span style={{ color: '#374151', fontWeight: 500 }}>Semester:</span>
-          <select
-            value={selectedSem ?? ''}
-            onChange={e => setSelectedSem(e.target.value ? Number(e.target.value) : null)}
-            style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid #d1d5db', background: '#fff', color: '#1e293b', fontWeight: 500, marginLeft: 8 }}
-          >
-            {uniqueSems.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
+          <div className="flex flex-wrap gap-2">
+            {(() => {
+              try {
+                const roles = JSON.parse(localStorage.getItem('roles') || '[]');
+                const isIQAC = Array.isArray(roles) && roles.some((r: string) => String(r).toLowerCase() === 'iqac');
+                if (isIQAC) return (
+                  <Link
+                    to="/curriculum/master/new"
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-all duration-200 shadow-sm hover:shadow-md"
+                  >
+                    New Master
+                  </Link>
+                );
+              } catch (e) {}
+              return null;
+            })()}
+            <button
+              onClick={() => handleDownloadVisible()}
+              className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 transition-all duration-200 shadow-sm hover:shadow-md"
+            >
+              <Download className="w-4 h-4" />
+              <span className="hidden sm:inline">Download</span>
+            </button>
+            <label className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-all duration-200 shadow-sm hover:shadow-md cursor-pointer">
+              <Upload className="w-4 h-4" />
+              <span className="hidden sm:inline">Import CSV</span>
+              <input id="master-import-file" type="file" accept=".csv" className="hidden" onChange={e => handleImportFile(e)} />
+            </label>
+          </div>
         </div>
-      )}
-      <div style={{ overflowX: 'auto', marginTop: 8 }}>
-        {flash && (
-          <div style={{ marginBottom: 8, display: 'inline-block', background: '#ecfccb', color: '#365314', padding: '8px 12px', borderRadius: 8, fontWeight: 600 }}>{flash}</div>
+        
+        {/* Filters */}
+        {uniqueRegs.length > 0 && (
+          <div className="flex flex-wrap items-center gap-4 mb-6 bg-white rounded-lg shadow-sm p-4">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-gray-700">Regulation:</span>
+              <select
+                value={selectedReg ?? ''}
+                onChange={e => setSelectedReg(e.target.value || null)}
+                className="px-4 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                {uniqueRegs.map(r => (
+                  <option key={r} value={r}>{r}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-gray-700">Semester:</span>
+              <select
+                value={selectedSem ?? ''}
+                onChange={e => setSelectedSem(e.target.value ? Number(e.target.value) : null)}
+                className="px-4 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                {uniqueSems.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+          </div>
         )}
-        <table className="curriculum-table">
-          <thead>
-            <tr>
-              <th>Sem</th>
-              <th>Code</th>
-              <th>Course</th>
-              <th>CAT</th>
-              <th>Class</th>
-              <th>Elective</th>
-              <th>L</th>
-              <th>T</th>
-              <th>P</th>
-              <th>S</th>
-              <th>C</th>
-              <th>INT</th>
-              <th>EXT</th>
-              <th>TTL</th>
-              <th>Depts</th>
-              <th>Editable</th>
-              <th>Status</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.filter(m => (!selectedReg || m.regulation === selectedReg) && (!selectedSem || m.semester === selectedSem)).map(m => (
-              <tr key={m.id} style={{ background: m.editable ? '#f8fafc' : '#fff' }}>
-                <td>{m.semester}</td>
-                <td>{m.course_code || '-'}</td>
-                <td>{m.course_name || '-'}</td>
-                <td>{m.category || '-'}</td>
-                <td>{m.class_type || '-'}</td>
-                <td style={{ textAlign: 'center' }}>{m.is_elective ? <span style={{ color: '#059669', fontWeight: 600 }}>Yes</span> : <span style={{ color: '#9ca3af' }}>No</span>}</td>
-                <td>{m.l ?? 0}</td>
-                <td>{m.t ?? 0}</td>
-                <td>{m.p ?? 0}</td>
-                <td>{m.s ?? 0}</td>
-                <td>{m.c ?? 0}</td>
-                <td>{m.internal_mark ?? '-'}</td>
-                <td>{m.external_mark ?? '-'}</td>
-                <td>{m.total_mark ?? '-'}</td>
-                <td>{m.for_all_departments ? 'ALL' : (m.departments_display || []).map((d:any)=>d.code).join(', ')}</td>
-                <td style={{ padding: '10px 8px' }}>{m.editable ? <span style={{ color: '#059669', fontWeight: 600 }}>Yes</span> : <span style={{ color: '#9ca3af' }}>No</span>}</td>
-                <td>
-                  <span className={`curriculum-status ${String(m.status || '').toLowerCase()}`}>{
-                    m.status === 'APPROVED' ? 'Approved' :
-                    m.status === 'REJECTED' ? 'Rejected' :
-                    'Pending'
-                  }</span>
-                </td>
-                <td>
-                  <div className="curriculum-actions">
-                    <Link
-                      to={`/curriculum/master/${m.id}`}
-                      style={{ textDecoration: 'none' }}
-                    >
-                      <PillButton variant="secondary" style={{ minWidth: 70, padding: '0 14px', height: 32, borderRadius: 999, fontWeight: 600, fontSize: 15 }}>
-                        Edit
-                      </PillButton>
-                    </Link>
-                    {m.status === 'PENDING' && (
-                      <>
-                        <button
-                          type="button"
-                          style={{
-                            padding: '6px 18px',
-                            borderRadius: 8,
-                            fontWeight: 600,
-                            fontSize: 16,
-                            minWidth: 100,
-                            background: 'linear-gradient(90deg, #22c55e, #16a34a)',
-                            color: '#fff',
-                            border: 'none',
-                            boxShadow: '0 2px 8px #bbf7d0',
-                            cursor: 'pointer',
-                            transition: 'background 0.18s, color 0.18s, box-shadow 0.18s',
-                            letterSpacing: '0.5px'
-                          }}
-                        >
-                          Approve
-                        </button>
-                        <button
-                          type="button"
-                          style={{
-                            padding: '6px 18px',
-                            borderRadius: 8,
-                            fontWeight: 600,
-                            fontSize: 16,
-                            minWidth: 100,
-                            background: 'linear-gradient(90deg, #ef4444, #b91c1c)',
-                            color: '#fff',
-                            border: 'none',
-                            boxShadow: '0 2px 8px #fecaca',
-                            cursor: 'pointer',
-                            transition: 'background 0.18s, color 0.18s, box-shadow 0.18s',
-                            letterSpacing: '0.5px'
-                          }}
-                        >
-                          Reject
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        
+        {/* Flash Message */}
+        {flash && (
+          <div className="mb-4 inline-block bg-green-100 text-green-800 px-4 py-2 rounded-lg font-semibold">
+            {flash}
+          </div>
+        )}
+        
+        {/* Scrollable Table View */}
+        <div className="w-full overflow-x-auto bg-white rounded-lg shadow-md">
+          <table className="w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-3 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">Code</th>
+                  <th className="px-3 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">Course</th>
+                  <th className="px-3 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">CAT</th>
+                  <th className="px-3 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">Class</th>
+                  <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">Elective</th>
+                  <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">L</th>
+                  <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">T</th>
+                  <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">P</th>
+                  <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">S</th>
+                  <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">C</th>
+                  <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">INT</th>
+                  <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">EXT</th>
+                  <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">TTL</th>
+                  <th className="px-3 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">Depts</th>
+                  <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">Editable</th>
+                  <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {data.filter(m => (!selectedReg || m.regulation === selectedReg) && (!selectedSem || m.semester === selectedSem)).length === 0 ? (
+                  <tr>
+                    <td colSpan={16} className="px-4 py-8 text-center text-gray-500">
+                      No curriculum entries found for the selected filters.
+                    </td>
+                  </tr>
+                ) : (
+                  data.filter(m => (!selectedReg || m.regulation === selectedReg) && (!selectedSem || m.semester === selectedSem)).map(m => (
+                    <tr key={m.id} className={`hover:bg-gray-50 transition-colors ${m.editable ? 'bg-blue-50/30' : ''}`}>
+                      <td className="px-3 py-3 text-sm text-gray-900 whitespace-nowrap">{m.course_code || '-'}</td>
+                      <td className="px-3 py-3 text-sm text-gray-900 font-medium min-w-[200px]">{m.course_name || '-'}</td>
+                      <td className="px-3 py-3 text-sm text-gray-700 whitespace-nowrap">{m.category || '-'}</td>
+                      <td className="px-3 py-3 text-sm text-gray-700 whitespace-nowrap">{m.class_type || '-'}</td>
+                      <td className="px-3 py-3 text-sm text-center whitespace-nowrap">
+                        {m.is_elective ? <span className="text-green-700 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}
+                      </td>
+                      <td className="px-3 py-3 text-sm text-center text-gray-900 whitespace-nowrap">{m.l ?? 0}</td>
+                      <td className="px-3 py-3 text-sm text-center text-gray-900 whitespace-nowrap">{m.t ?? 0}</td>
+                      <td className="px-3 py-3 text-sm text-center text-gray-900 whitespace-nowrap">{m.p ?? 0}</td>
+                      <td className="px-3 py-3 text-sm text-center text-gray-900 whitespace-nowrap">{m.s ?? 0}</td>
+                      <td className="px-3 py-3 text-sm text-center text-gray-900 whitespace-nowrap">{m.c ?? 0}</td>
+                      <td className="px-3 py-3 text-sm text-center text-gray-900 whitespace-nowrap">{m.internal_mark ?? '-'}</td>
+                      <td className="px-3 py-3 text-sm text-center text-gray-900 whitespace-nowrap">{m.external_mark ?? '-'}</td>
+                      <td className="px-3 py-3 text-sm text-center text-gray-900 font-semibold whitespace-nowrap">{m.total_mark ?? '-'}</td>
+                      <td className="px-3 py-3 text-sm text-gray-700 whitespace-nowrap">
+                        {m.for_all_departments ? 'ALL' : 
+                          (m.departments_display && m.departments_display.length > 0) ?
+                            m.departments_display.map((d:any) => 
+                              d.short_name || d.shortname || d.code || d.name
+                            ).join(', ') :
+                            'No Depts'
+                        }
+                      </td>
+                      <td className="px-3 py-3 text-sm text-center whitespace-nowrap">
+                        {m.editable ? <span className="text-green-700 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}
+                      </td>
+                      <td className="px-3 py-3 whitespace-nowrap">
+                        <div className="flex items-center justify-center gap-2">
+                          <Link
+                            to={`/curriculum/master/${m.id}`}
+                            className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                            title="Edit"
+                          >
+                            <Edit className="w-4 h-4" />
+                          </Link>
+                          {m.status === 'PENDING' && (
+                            <>
+                              <button
+                                type="button"
+                                className="px-3 py-1.5 text-green-600 hover:bg-green-50 text-xs font-medium rounded-lg transition-colors"
+                              >
+                                Approve
+                              </button>
+                              <button
+                                type="button"
+                                className="px-3 py-1.5 text-red-600 hover:bg-red-50 text-xs font-medium rounded-lg transition-colors"
+                              >
+                                Reject
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+        </div>
       </div>
     </CurriculumLayout>
   );

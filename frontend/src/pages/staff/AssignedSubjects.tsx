@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import { fetchAssignedSubjects } from '../../services/staff'
-import './AssignedSubjects.css'
 import { fetchSubjectBatches, createSubjectBatch } from '../../services/subjectBatches'
 import fetchWithAuth from '../../services/fetchAuth'
+import { BookOpen, Users, Calendar, AlertCircle, FileText, RotateCcw } from 'lucide-react'
 
 type AssignedSubject = {
   id: number
@@ -13,49 +13,7 @@ type AssignedSubject = {
   semester?: number | null
 }
 
-// Icons as inline SVG components
-const BookIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
-    <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
-  </svg>
-)
 
-const UsersIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-    <circle cx="9" cy="7" r="4"></circle>
-    <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-    <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-  </svg>
-)
-
-const CalendarIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
-    <line x1="16" y1="2" x2="16" y2="6"></line>
-    <line x1="8" y1="2" x2="8" y2="6"></line>
-    <line x1="3" y1="10" x2="21" y2="10"></line>
-  </svg>
-)
-
-const AlertCircleIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="10"></circle>
-    <line x1="12" y1="8" x2="12" y2="12"></line>
-    <line x1="12" y1="16" x2="12.01" y2="16"></line>
-  </svg>
-)
-
-const FileTextIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-    <polyline points="14 2 14 8 20 8"></polyline>
-    <line x1="16" y1="13" x2="8" y2="13"></line>
-    <line x1="16" y1="17" x2="8" y2="17"></line>
-    <polyline points="10 9 9 9 8 9"></polyline>
-  </svg>
-)
 
 export default function AssignedSubjectsPage() {
   const [items, setItems] = useState<AssignedSubject[]>([])
@@ -65,6 +23,9 @@ export default function AssignedSubjectsPage() {
   const [error, setError] = useState<string | null>(null)
   const [editingBatchId, setEditingBatchId] = useState<number | null>(null)
   const [editingBatchName, setEditingBatchName] = useState('')
+  const [editingBatchStudents, setEditingBatchStudents] = useState<any[]>([])
+  const [editingSelectedStudentIds, setEditingSelectedStudentIds] = useState<number[]>([])
+  const [editingBatch, setEditingBatch] = useState<any | null>(null)
   const [selectedStudentIds, setSelectedStudentIds] = useState<number[]>([])
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerStudents, setPickerStudents] = useState<any[]>([])
@@ -232,22 +193,62 @@ export default function AssignedSubjectsPage() {
   async function startEditBatch(b:any){
     setEditingBatchId(b.id)
     setEditingBatchName(b.name || '')
+    setEditingBatch(b)
+    setEditingSelectedStudentIds((b.students || []).map((s:any) => s.id))
+    
+    // Load all available students for the batch's curriculum_row
+    if (b.curriculum_row && b.curriculum_row.id) {
+      try {
+        // Find the subject/item that corresponds to this curriculum_row
+        const matchingItem = items.find(item => item.curriculum_row_id === b.curriculum_row.id)
+        if (matchingItem && matchingItem.section_id) {
+          const sres = await fetchWithAuth(`/api/academics/sections/${matchingItem.section_id}/students/`)
+          if (sres.ok) {
+            const sdata = await sres.json()
+            const allStudents = (sdata.results || sdata)
+            setEditingBatchStudents(allStudents)
+          }
+        }
+      } catch (e: any) {
+        console.error('Failed to load students for batch editing:', e)
+        setEditingBatchStudents(b.students || [])
+      }
+    } else {
+      setEditingBatchStudents(b.students || [])
+    }
   }
 
   async function saveBatchEdit(){
     if(!editingBatchId) return
     try{
-      const res = await fetchWithAuth(`/api/academics/subject-batches/${editingBatchId}/`, { method: 'PATCH', body: JSON.stringify({ name: editingBatchName }) })
+      const payload = { 
+        name: editingBatchName,
+        student_ids: editingSelectedStudentIds
+      }
+      const res = await fetchWithAuth(`/api/academics/subject-batches/${editingBatchId}/`, { method: 'PATCH', body: JSON.stringify(payload) })
       if(!res.ok) throw new Error(await res.text())
       const bs = await fetchSubjectBatches()
       setBatches(bs)
-      setEditingBatchId(null)
-      setEditingBatchName('')
-      alert('Batch updated')
+      cancelBatchEdit()
+      alert('Batch updated successfully')
     }catch(e:any){
       console.error('saveBatchEdit failed', e)
       alert('Failed to update batch: ' + (e?.message || e))
     }
+  }
+
+  function cancelBatchEdit(){
+    setEditingBatchId(null)
+    setEditingBatchName('')
+    setEditingBatch(null)
+    setEditingBatchStudents([])
+    setEditingSelectedStudentIds([])
+  }
+
+  function toggleEditingStudentSelect(id: number){
+    setEditingSelectedStudentIds(prev => 
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    )
   }
 
   async function deleteBatch(id:number){
@@ -273,42 +274,47 @@ export default function AssignedSubjectsPage() {
   })
 
   return (
-    <div className="assigned-subjects-container">
+    <div className="min-h-screen bg-gradient-to-b from-blue-50 via-white to-gray-50 p-6">
       {/* Header Section */}
-      <div className="assigned-subjects-header">
-        <div className="header-left">
-          <div className="header-icon">
-            <BookIcon />
+      <div className="bg-gradient-to-r from-white to-blue-50 rounded-xl shadow-lg p-6 mb-6">
+        <div className="flex justify-between items-center">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-gradient-to-br from-blue-100 to-indigo-200 rounded-xl flex items-center justify-center">
+              <BookOpen className="w-6 h-6 text-blue-700" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">Assigned Subjects</h1>
+              <p className="text-sm text-gray-600 mt-1">View all subjects assigned to you for the current academic session</p>
+            </div>
           </div>
-          <div>
-            <h1 className="header-title">Assigned Subjects</h1>
-            <p className="header-subtitle">View all subjects assigned to you for the current academic session</p>
-          </div>
+          {!loading && !error && items.length > 0 && (
+            <div className="flex items-center gap-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-4 py-2 rounded-full">
+              <span className="text-sm font-medium">Total Subjects</span>
+              <span className="bg-white/20 text-white px-3 py-1 rounded-full text-sm font-semibold">{items.length}</span>
+            </div>
+          )}
         </div>
-        {!loading && !error && items.length > 0 && (
-          <div className="subject-count-badge">
-            <span>Total Subjects</span>
-            <span className="count">{items.length}</span>
-          </div>
-        )}
       </div>
 
       {/* Loading State */}
       {loading && (
-        <div className="loading-container">
-          <div className="loading-spinner"></div>
-          <p className="loading-text">Loading your assigned subjects...</p>
+        <div className="flex flex-col items-center justify-center py-16">
+          <div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mb-4"></div>
+          <p className="text-gray-600 font-medium">Loading your assigned subjects...</p>
         </div>
       )}
 
       {/* Error State */}
       {error && !loading && (
-        <div className="error-container">
-          <div className="error-icon">
-            <AlertCircleIcon />
+        <div className="bg-white rounded-xl shadow-lg p-8 text-center">
+          <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <AlertCircle className="w-8 h-8 text-red-600" />
           </div>
-          <p className="error-message">{error}</p>
-          <button className="retry-btn" onClick={load}>
+          <p className="text-red-600 font-medium mb-4">{error}</p>
+          <button 
+            className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium transition-colors" 
+            onClick={load}
+          >
             Try Again
           </button>
         </div>
@@ -316,97 +322,130 @@ export default function AssignedSubjectsPage() {
 
       {/* Empty State */}
       {!loading && !error && items.length === 0 && (
-        <div className="empty-container">
-          <div className="empty-icon">
-            <FileTextIcon />
+        <div className="bg-white rounded-xl shadow-lg p-12 text-center">
+          <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <FileText className="w-8 h-8 text-gray-400" />
           </div>
-          <h3 className="empty-title">No Subjects Assigned</h3>
-          <p className="empty-subtitle">You don't have any subjects assigned for the current session.</p>
+          <h3 className="text-xl font-semibold text-gray-900 mb-2">No Subjects Assigned</h3>
+          <p className="text-gray-600">You don't have any subjects assigned for the current session.</p>
         </div>
       )}
 
       {/* Table View */}
       {!loading && !error && items.length > 0 && (
-        <div className="subjects-table-container">
-          <table className="subjects-table">
-            <thead>
-              <tr>
-                <th className="serial-cell">S.No</th>
-                <th className="subject-cell">Subject</th>
-                <th className="section-cell">Section</th>
-                <th className="batch-cell">Batch</th>
-                <th className="semester-cell">Semester</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((item, index) => (
-                <tr key={item.id}>
-                  <td className="serial-cell" data-label="S.No">
-                    <span className="serial-number">{index + 1}</span>
-                  </td>
-                  <td className="subject-cell" data-label="Subject">
-                    <div className="subject-info">
-                      <span className="subject-name">
-                        {item.subject_name || 'Unnamed Subject'}
-                      </span>
-                      {item.subject_code && (
-                        <span className="subject-code">{item.subject_code}</span>
-                      )}
-                    </div>
-                    <div style={{marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
-                      {item.section_id ? (
-                        <>
-                          <button type="button" className="as-btn primary" onClick={() => openPickerForAssignment(item)}>Create Batch</button>
-                          <button type="button" className="as-btn secondary" onClick={() => openListStudents(item)}>List Students</button>
-                        </>
-                      ) : (
-                        <>
-                          <button type="button" className="as-btn secondary" onClick={() => openListStudents(item)}>List Students</button>
-                          <span className="no-data" style={{ fontSize: 13, color: '#666' }}>Department-wide elective</span>
-                        </>
-                      )}
-                    </div>
-                  </td>
-                  <td className="section-cell" data-label="Section">
-                    {item.section_name ? (
-                      <span className="section-badge">
-                        <UsersIcon />
-                        {item.section_name}
-                      </span>
-                    ) : (
-                      <span className="no-data">—</span>
-                    )}
-                  </td>
-                  <td className="batch-cell" data-label="Batch">
-                    {item.batch ? (
-                      <span className="batch-badge">
-                        <CalendarIcon />
-                        {item.batch}
-                      </span>
-                    ) : (
-                      <span className="no-data">—</span>
-                    )}
-                  </td>
-                  <td className="semester-cell" data-label="Semester">
-                    {item.semester != null ? (
-                      <span className="semester-badge">{item.semester}</span>
-                    ) : (
-                      <span className="no-data">—</span>
-                    )}
-                  </td>
+        <div className="bg-white rounded-xl shadow-lg overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="bg-gradient-to-r from-gray-50 to-blue-50 border-b-2 border-gray-200">
+                  <th className="px-6 py-4 text-left text-sm font-semibold text-blue-700">S.No</th>
+                  <th className="px-6 py-4 text-left text-sm font-semibold text-blue-700">Subject</th>
+                  <th className="px-6 py-4 text-left text-sm font-semibold text-blue-700">Section</th>
+                  <th className="px-6 py-4 text-left text-sm font-semibold text-blue-700">Batch</th>
+                  <th className="px-6 py-4 text-left text-sm font-semibold text-blue-700">Semester</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {items.map((item, index) => (
+                  <tr key={item.id} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-6 py-4">
+                      <span className="text-sm font-medium text-gray-900">{index + 1}</span>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="space-y-3">
+                        <div>
+                          <div className="font-semibold text-gray-900">
+                            {item.subject_name || 'Unnamed Subject'}
+                          </div>
+                          {item.subject_code && (
+                            <div className="text-sm text-blue-600 font-medium">{item.subject_code}</div>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {item.section_id ? (
+                            <>
+                              <button 
+                                type="button" 
+                                className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors" 
+                                onClick={() => openPickerForAssignment(item)}
+                              >
+                                Create Batch
+                              </button>
+                              <button 
+                                type="button" 
+                                className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors" 
+                                onClick={() => openListStudents(item)}
+                              >
+                                List Students
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button 
+                                type="button" 
+                                className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors" 
+                                onClick={() => openListStudents(item)}
+                              >
+                                List Students
+                              </button>
+                              <span className="text-xs text-gray-500 px-2 py-1">Department-wide elective</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      {item.section_name ? (
+                        <div className="flex items-center gap-2 bg-blue-50 text-blue-700 px-3 py-1 rounded-full w-fit">
+                          <Users className="w-4 h-4" />
+                          <span className="text-sm font-medium">{item.section_name}</span>
+                        </div>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4">
+                      {item.batch ? (
+                        <div className="flex items-center gap-2 bg-green-50 text-green-700 px-3 py-1 rounded-full w-fit">
+                          <Calendar className="w-4 h-4" />
+                          <span className="text-sm font-medium">{item.batch}</span>
+                        </div>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4">
+                      {item.semester != null ? (
+                        <span className="bg-purple-100 text-purple-800 px-3 py-1 rounded-full text-sm font-semibold">
+                          Sem {item.semester}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
       {/* Subject Batches - existing only; creation via subject actions */}
-      <div className="subject-batches-container">
-        <h3>Student Subject Batches</h3>
-        <div>
-          <h4>Existing</h4>
-          {batches.length === 0 && <div>No batches</div>}
+      <div className="mt-6">
+        <div className="bg-white rounded-xl shadow-lg p-6">
+          <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+            <Users className="w-5 h-5 text-blue-600" />
+            Student Subject Batches
+          </h3>
+          <div>
+            <h4 className="text-lg font-semibold text-gray-800 mb-3">Existing Batches</h4>
+            {batches.length === 0 && (
+              <div className="text-center py-8 text-gray-500">
+                <Users className="w-12 h-12 mx-auto mb-2 text-gray-300" />
+                <p>No batches created yet</p>
+              </div>
+            )}
 
           {/* Render batches grouped under each assigned subject */}
           {items.map(item => {
@@ -414,106 +453,248 @@ export default function AssignedSubjectsPage() {
             const group = crId ? (batchesByCurriculum[crId] || []) : []
             if (!group || group.length === 0) return null
             return (
-              <div key={`subject-${item.id}`} style={{ marginBottom: 12, borderBottom: '1px solid #f2f2f2', paddingBottom: 8 }}>
-                <div style={{ fontWeight: 800, marginBottom: 6 }}>{item.subject_name || item.subject_code || 'Unnamed Subject'}</div>
-                {group.map((b:any) => (
-                  <div key={b.id} style={{ padding: 8, border: '1px solid #eee', marginBottom: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div style={{ flex: 1 }}>
-                      {editingBatchId === b.id ? (
-                        <input value={editingBatchName} onChange={e=>setEditingBatchName(e.target.value)} style={{ padding: 6, width: '100%' }} />
-                      ) : (
-                        <div style={{ fontWeight: 700 }}>{b.name}</div>
-                      )}
-                      <div style={{ fontSize: 13, color: '#666' }}>{(b.students || []).map((s:any)=>s.reg_no).join(', ')}</div>
-                    </div>
-                    <div style={{ marginLeft: 12, display: 'flex', gap: 8 }}>
-                      {editingBatchId === b.id ? (
-                        <>
-                          <button className="as-btn primary" onClick={saveBatchEdit}>Save</button>
-                          <button className="as-btn secondary" onClick={()=>{ setEditingBatchId(null); setEditingBatchName('') }}>Cancel</button>
-                        </>
-                      ) : (
-                        <>
-                          <button className="as-btn secondary" onClick={()=>startEditBatch(b)}>Edit</button>
-                          <button className="as-btn ghost" onClick={()=>deleteBatch(b.id)}>Delete</button>
-                        </>
-                      )}
-                    </div>
+                <div key={`subject-${item.id}`} className="mb-6 border-b border-gray-100 pb-4 last:border-b-0">
+                  <div className="font-bold text-gray-900 mb-3">{item.subject_name || item.subject_code || 'Unnamed Subject'}</div>
+                  <div className="space-y-3">
+                    {group.map((b:any) => (
+                      <div key={b.id} className="bg-gray-50 rounded-lg p-4">
+                        <div className="flex justify-between items-start">
+                          <div className="flex-1">
+                            <div className="font-semibold text-gray-900 mb-2">{b.name}</div>
+                            <div className="text-sm text-gray-600">
+                              <span className="font-medium">{(b.students || []).length} students</span>
+                            </div>
+                          </div>
+                          <div className="ml-4 flex gap-2">
+                            <button 
+                              className="bg-blue-100 hover:bg-blue-200 text-blue-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors" 
+                              onClick={()=>startEditBatch(b)}
+                            >
+                              Edit
+                            </button>
+                            <button 
+                              className="bg-red-100 hover:bg-red-200 text-red-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors" 
+                              onClick={()=>deleteBatch(b.id)}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            )
-          })}
+                </div>
+              )
+            })}
 
-          {/* Batches that don't map to any curriculum_row (or to our assignments) */}
-          {(() => {
-            const unmatched = batches.filter(b => {
-              const cr = b.curriculum_row && b.curriculum_row.id ? b.curriculum_row.id : null
-              return !cr || !items.some(it => it.curriculum_row_id === cr)
-            })
-            if (unmatched.length === 0) return null
-            return (
-              <div style={{ marginTop: 8 }}>
-                <div style={{ fontWeight: 800, marginBottom: 6 }}>Other Batches</div>
-                {unmatched.map((b:any) => (
-                  <div key={`other-${b.id}`} style={{ padding: 8, border: '1px solid #eee', marginBottom: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div style={{ flex: 1 }}>
-                      {editingBatchId === b.id ? (
-                        <input value={editingBatchName} onChange={e=>setEditingBatchName(e.target.value)} style={{ padding: 6, width: '100%' }} />
-                      ) : (
-                        <div style={{ fontWeight: 700 }}>{b.name}</div>
-                      )}
-                      <div style={{ fontSize: 13, color: '#666' }}>{(b.students || []).map((s:any)=>s.reg_no).join(', ')}</div>
-                    </div>
-                    <div style={{ marginLeft: 12, display: 'flex', gap: 8 }}>
-                      {editingBatchId === b.id ? (
-                        <>
-                          <button className="as-btn primary" onClick={saveBatchEdit}>Save</button>
-                          <button className="as-btn secondary" onClick={()=>{ setEditingBatchId(null); setEditingBatchName('') }}>Cancel</button>
-                        </>
-                      ) : (
-                        <>
-                          <button className="as-btn secondary" onClick={()=>startEditBatch(b)}>Edit</button>
-                          <button className="as-btn ghost" onClick={()=>deleteBatch(b.id)}>Delete</button>
-                        </>
-                      )}
-                    </div>
+            {/* Batches that don't map to any curriculum_row (or to our assignments) */}
+            {(() => {
+              const unmatched = batches.filter(b => {
+                const cr = b.curriculum_row && b.curriculum_row.id ? b.curriculum_row.id : null
+                return !cr || !items.some(it => it.curriculum_row_id === cr)
+              })
+              if (unmatched.length === 0) return null
+              return (
+                <div className="mt-6">
+                  <div className="font-bold text-gray-900 mb-3">Other Batches</div>
+                  <div className="space-y-3">
+                    {unmatched.map((b:any) => (
+                      <div key={`other-${b.id}`} className="bg-gray-50 rounded-lg p-4">
+                        <div className="flex justify-between items-start">
+                          <div className="flex-1">
+                            <div className="font-semibold text-gray-900 mb-2">{b.name}</div>
+                            <div className="text-sm text-gray-600">
+                              <span className="font-medium">{(b.students || []).length} students</span>
+                            </div>
+                          </div>
+                          <div className="ml-4 flex gap-2">
+                            <button 
+                              className="bg-blue-100 hover:bg-blue-200 text-blue-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors" 
+                              onClick={()=>startEditBatch(b)}
+                            >
+                              Edit
+                            </button>
+                            <button 
+                              className="bg-red-100 hover:bg-red-200 text-red-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors" 
+                              onClick={()=>deleteBatch(b.id)}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            )
-          })()}
+                </div>
+              )
+            })()}
           </div>
+        </div>
       </div>
 
       {/* Picker Modal */}
       {pickerOpen && (
-        <div className="picker-overlay" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1200 }}>
-          <div style={{ background: '#fff', padding: 16, width: 760, maxHeight: '80vh', overflow: 'auto', borderRadius: 6 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-              <div>
-                <h3 style={{ margin: 0 }}>{batchNamesById[pickerItem?.id || ''] || 'Create Batch'}</h3>
-                <div style={{ fontSize: 13, color: '#666' }}>{pickerItem?.subject_name || pickerItem?.subject_code}</div>
-              </div>
-              <div>
-                <button type="button" className="as-btn secondary" onClick={() => { setPickerOpen(false); setPickerStudents([]); setPickerItem(null); }} style={{ marginRight: 8 }}>Cancel</button>
-                <button type="button" className="as-btn primary" onClick={submitPicker}>Create Batch</button>
-              </div>
-            </div>
-
-            <div style={{ marginBottom: 8 }}>
-              <strong>Students ({pickerStudents.length})</strong>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-              {pickerStudents.map((s:any) => (
-                <label key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 8, border: '1px solid #eee', borderRadius: 4 }}>
-                  <input type="checkbox" checked={pickerSelectedIds.includes(s.id)} onChange={() => togglePickerSelect(s.id)} />
-                  <div style={{ display: 'flex', flexDirection: 'column' }}>
-                    <span style={{ fontWeight: 600 }}>{s.username || s.full_name || s.reg_no}</span>
-                    <span style={{ fontSize: 12, color: '#666' }}>{s.reg_no || ''}</span>
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[80vh] overflow-hidden">
+            <div className="p-6 border-b border-gray-200">
+              <div className="flex justify-between items-start">
+                <div>
+                  <h3 className="text-xl font-bold text-gray-900 mb-1">
+                    {batchNamesById[pickerItem?.id || ''] || 'Create Batch'}
+                  </h3>
+                  <div className="text-sm text-gray-600">
+                    {pickerItem?.subject_name || pickerItem?.subject_code}
                   </div>
+                </div>
+                <div className="flex gap-2">
+                  <button 
+                    type="button" 
+                    className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded-lg font-medium transition-colors" 
+                    onClick={() => { setPickerOpen(false); setPickerStudents([]); setPickerItem(null); }}
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="button" 
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors" 
+                    onClick={submitPicker}
+                  >
+                    Create Batch
+                  </button>
+                </div>
+              </div>
+            </div>
+            
+            <div className="p-6">
+              <div className="mb-4">
+                <h4 className="font-semibold text-gray-900 mb-2">Students ({pickerStudents.length})</h4>
+                <p className="text-sm text-gray-600">Select students to include in this batch</p>
+              </div>
+              
+              <div className="max-h-96 overflow-y-auto">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {pickerStudents.map((s:any) => (
+                    <label 
+                      key={s.id} 
+                      className="flex items-center gap-3 p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors"
+                    >
+                      <input 
+                        type="checkbox" 
+                        checked={pickerSelectedIds.includes(s.id)} 
+                        onChange={() => togglePickerSelect(s.id)} 
+                        className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                      />
+                      <div>
+                        <div className="font-medium text-gray-900">
+                          {s.username || s.full_name || s.reg_no}
+                        </div>
+                        {s.reg_no && (
+                          <div className="text-xs text-gray-500">{s.reg_no}</div>
+                        )}
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Batch Edit Modal */}
+      {editingBatchId && editingBatch && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[80vh] overflow-hidden">
+            <div className="p-6 border-b border-gray-200">
+              <div className="flex justify-between items-start">
+                <div>
+                  <h3 className="text-xl font-bold text-gray-900 mb-1">
+                    Edit Batch
+                  </h3>
+                  <div className="text-sm text-gray-600">
+                    Modify batch name and student assignments
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button 
+                    type="button" 
+                    className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded-lg font-medium transition-colors" 
+                    onClick={cancelBatchEdit}
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="button" 
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors" 
+                    onClick={saveBatchEdit}
+                  >
+                    Save Changes
+                  </button>
+                </div>
+              </div>
+            </div>
+            
+            <div className="p-6">
+              {/* Batch Name */}
+              <div className="mb-6">
+                <label className="block text-sm font-semibold text-gray-900 mb-2">
+                  Batch Name
                 </label>
-              ))}
+                <input 
+                  type="text"
+                  value={editingBatchName} 
+                  onChange={e=>setEditingBatchName(e.target.value)} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Enter batch name"
+                />
+              </div>
+
+              {/* Student Selection */}
+              <div>
+                <h4 className="font-semibold text-gray-900 mb-2 flex items-center justify-between">
+                  <span>Students ({editingSelectedStudentIds.length} selected)</span>
+                  <div className="text-sm text-gray-600">
+                    Click to add/remove students
+                  </div>
+                </h4>
+                
+                <div className="max-h-80 overflow-y-auto border border-gray-200 rounded-lg p-4">
+                  {editingBatchStudents.length === 0 ? (
+                    <div className="text-center text-gray-500 py-4">
+                      <Users className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+                      <p>No students available for this batch</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {editingBatchStudents.map((s:any) => (
+                        <label 
+                          key={s.id} 
+                          className={`flex items-center gap-3 p-3 border rounded-lg cursor-pointer transition-colors ${
+                            editingSelectedStudentIds.includes(s.id) 
+                              ? 'border-blue-300 bg-blue-50' 
+                              : 'border-gray-200 hover:bg-gray-50'
+                          }`}
+                        >
+                          <input 
+                            type="checkbox" 
+                            checked={editingSelectedStudentIds.includes(s.id)} 
+                            onChange={() => toggleEditingStudentSelect(s.id)} 
+                            className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                          />
+                          <div>
+                            <div className="font-medium text-gray-900">
+                              {s.username || s.full_name || s.reg_no}
+                            </div>
+                            {s.reg_no && (
+                              <div className="text-xs text-gray-500">{s.reg_no}</div>
+                            )}
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         </div>

@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import PillButton from '../../components/PillButton';
 import { useParams, useNavigate } from 'react-router-dom';
 import CurriculumLayout from './CurriculumLayout';
 import { createMaster, updateMaster, fetchMasters, fetchDeptRows } from '../../services/curriculum';
+import { BookOpen, Save, X as CancelIcon } from 'lucide-react';
 
 export default function MasterEditor() {
   const { id } = useParams();
@@ -80,170 +80,248 @@ export default function MasterEditor() {
 
   return (
     <CurriculumLayout>
-      <div className="welcome" style={{ marginBottom: 24 }}>
-        <div className="welcome-left">
-          <svg className="welcome-icon" fill="none" viewBox="0 0 48 48"><rect width="48" height="48" rx="12" fill="#e0e7ff"/><path d="M16 32V16h16v16H16zm2-2h12V18H18v12zm2-2v-8h8v8h-8z" fill="#6366f1"/></svg>
+      <div className="px-2 sm:px-4 pb-4">
+        {/* Header */}
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 sm:w-12 sm:h-12 bg-indigo-100 rounded-xl flex items-center justify-center flex-shrink-0">
+            <BookOpen className="w-5 h-5 sm:w-6 sm:h-6 text-indigo-600" />
+          </div>
           <div>
-            <h2 className="welcome-title" style={{ fontSize: 22, marginBottom: 2 }}>{id === 'new' ? 'New Master' : 'Edit Master'}</h2>
-            <div className="welcome-sub">{id === 'new' ? 'Create a new master curriculum entry.' : 'Edit the selected master curriculum entry.'}</div>
+            <h2 className="text-lg sm:text-xl font-bold text-gray-900">{id === 'new' ? 'New Master' : 'Edit Master'}</h2>
+            <p className="text-gray-600 text-xs sm:text-sm mt-1">{id === 'new' ? 'Create a new master curriculum entry.' : 'Edit the selected master curriculum entry.'}</p>
           </div>
         </div>
+
+        {/* Form */}
+        <form
+          onSubmit={e => { e.preventDefault(); save(); }}
+          className="bg-white rounded-lg shadow-md p-3 sm:p-4 lg:p-6 space-y-4"
+          autoComplete="off"
+        >
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">Regulation</label>
+              <input 
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
+                value={form.regulation || ''} 
+                onChange={e => setForm({...form, regulation: e.target.value})} 
+                required 
+              />
+            </div>
+            <div>
+              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">Semester</label>
+              <input 
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
+                type="number" 
+                min={1} 
+                value={form.semester || 1} 
+                onChange={e => setForm({...form, semester: Number(e.target.value)})} 
+                required 
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">Course Code</label>
+              <input 
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
+                value={form.course_code ?? ''} 
+                onChange={e => setForm({...form, course_code: e.target.value})} 
+                placeholder="Optional" 
+              />
+            </div>
+            <div>
+              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">Course Name</label>
+              <input 
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
+                value={form.course_name || ''} 
+                onChange={e => setForm({...form, course_name: e.target.value})} 
+                required 
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">CAT</label>
+              <input 
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
+                value={form.category || ''} 
+                onChange={e => setForm({...form, category: e.target.value})} 
+                placeholder="e.g. CORE" 
+              />
+            </div>
+            <div>
+              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">Class</label>
+              <input 
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
+                value={form.class_type || ''} 
+                onChange={e => setForm({...form, class_type: e.target.value})} 
+                placeholder="e.g. Theory" 
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+            <div>
+              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">L</label>
+              <input 
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-sm" 
+                type="number" 
+                min={0} 
+                value={form.l || 0} 
+                onChange={e => setForm({...form, l: Number(e.target.value)})} 
+              />
+            </div>
+            <div>
+              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">T</label>
+              <input 
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-sm" 
+                type="number" 
+                min={0} 
+                value={form.t || 0} 
+                onChange={e => setForm({...form, t: Number(e.target.value)})} 
+              />
+            </div>
+            <div>
+              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">P</label>
+              <input 
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-sm" 
+                type="number" 
+                min={0} 
+                value={form.p || 0} 
+                onChange={e => setForm({...form, p: Number(e.target.value)})} 
+              />
+            </div>
+            <div>
+              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">S</label>
+              <input 
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-sm" 
+                type="number" 
+                min={0} 
+                value={form.s || 0} 
+                onChange={e => setForm({...form, s: Number(e.target.value)})} 
+              />
+            </div>
+            <div>
+              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">C</label>
+              <input 
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-sm" 
+                type="number" 
+                min={0} 
+                value={form.c || 0} 
+                onChange={e => setForm({...form, c: Number(e.target.value)})} 
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">Internal Mark</label>
+              <input
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                type="number"
+                min={0}
+                value={form.internal_mark ?? ''}
+                onChange={e => setForm({...form, internal_mark: e.target.value === '' ? '' : Number(e.target.value)})}
+              />
+            </div>
+            <div>
+              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">External Mark</label>
+              <input
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                type="number"
+                min={0}
+                value={form.external_mark ?? ''}
+                onChange={e => setForm({...form, external_mark: e.target.value === '' ? '' : Number(e.target.value)})}
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg">
+              <input 
+                type="checkbox" 
+                checked={!!form.for_all_departments} 
+                onChange={e => setForm({...form, for_all_departments: e.target.checked})} 
+                id="forAllDepts" 
+                className="w-4 h-4 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
+              />
+              <label htmlFor="forAllDepts" className="text-xs sm:text-sm font-semibold text-indigo-900">For All Departments</label>
+            </div>
+            <div>
+              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">Departments</label>
+              {form.for_all_departments ? (
+                <div className="text-gray-600 text-xs sm:text-sm p-2 bg-gray-50 rounded-lg">Applies to all departments</div>
+              ) : (
+                <div className="max-h-32 overflow-y-auto p-2 border border-gray-300 rounded-lg bg-white">
+                  {departments.length === 0 && <div className="text-gray-400 text-xs">No departments available</div>}
+                  {departments.map(d => (
+                    <div key={d.id} className="flex items-center gap-1.5 mb-1.5">
+                      <input
+                        type="checkbox"
+                        checked={Array.isArray(form.departments) ? form.departments.includes(d.id) : false}
+                        onChange={e => {
+                          const cur = Array.isArray(form.departments) ? [...form.departments] : [];
+                          if (e.target.checked) {
+                            if (!cur.includes(d.id)) cur.push(d.id);
+                          } else {
+                            const idx = cur.indexOf(d.id); if (idx >= 0) cur.splice(idx, 1);
+                          }
+                          setForm({ ...form, departments: cur });
+                        }}
+                        id={`dept-${d.id}`}
+                        className="w-3.5 h-3.5 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
+                      />
+                      <label htmlFor={`dept-${d.id}`} className="text-xs sm:text-sm text-gray-700">{d.code} — {d.name}</label>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <div className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg">
+              <input 
+                type="checkbox" 
+                checked={!!form.editable} 
+                onChange={e => setForm({...form, editable: e.target.checked})} 
+                id="editable" 
+                className="w-3.5 h-3.5 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
+              />
+              <label htmlFor="editable" className="text-xs sm:text-sm font-semibold text-indigo-900">Editable</label>
+            </div>
+            <div className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg">
+              <input 
+                type="checkbox" 
+                checked={!!form.is_elective} 
+                onChange={e => setForm({...form, is_elective: e.target.checked})} 
+                id="is_elective" 
+                className="w-3.5 h-3.5 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
+              />
+              <label htmlFor="is_elective" className="text-xs sm:text-sm font-semibold text-indigo-900">Is Elective</label>
+            </div>
+          </div>
+          {savedMessage && (
+            <div className="bg-green-100 text-green-800 px-3 py-1.5 rounded-lg font-semibold text-sm inline-block">{savedMessage}</div>
+          )}
+          
+          <div className="flex flex-col sm:flex-row gap-2">
+            <button
+              type="submit"
+              className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+              disabled={loading}
+            >
+              <Save className="w-4 h-4" />
+              {loading ? 'Saving…' : 'Save'}
+            </button>
+            <button
+              type="button"
+              className="flex items-center justify-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg font-semibold hover:bg-gray-50 transition-colors text-sm"
+              onClick={() => navigate('/curriculum/master')}
+            >
+              <CancelIcon className="w-4 h-4" />
+              Cancel
+            </button>
+          </div>
+        </form>
       </div>
-      <form
-        onSubmit={e => { e.preventDefault(); save(); }}
-        style={{
-          background: '#fff',
-          borderRadius: 10,
-          boxShadow: '0 2px 8px #e5e7eb',
-          padding: 32,
-          maxWidth: 700,
-          margin: '0 auto',
-          display: 'grid',
-          gap: 22
-        }}
-        autoComplete="off"
-      >
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>Regulation</label>
-            <input className="input" value={form.regulation || ''} onChange={e => setForm({...form, regulation: e.target.value})} required style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
-          </div>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>Semester</label>
-            <input className="input" type="number" min={1} value={form.semester || 1} onChange={e => setForm({...form, semester: Number(e.target.value)})} required style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
-          </div>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>Course Code</label>
-            <input className="input" value={form.course_code ?? ''} onChange={e => setForm({...form, course_code: e.target.value})} placeholder="Optional" style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
-          </div>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>Course Name</label>
-            <input className="input" value={form.course_name || ''} onChange={e => setForm({...form, course_name: e.target.value})} required style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
-          </div>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>CAT</label>
-            <input className="input" value={form.category || ''} onChange={e => setForm({...form, category: e.target.value})} placeholder="e.g. CORE" style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
-          </div>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>Class</label>
-            <input className="input" value={form.class_type || ''} onChange={e => setForm({...form, class_type: e.target.value})} placeholder="e.g. Theory" style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
-          </div>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 18 }}>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>L</label>
-            <input className="input" type="number" min={0} value={form.l || 0} onChange={e => setForm({...form, l: Number(e.target.value)})} style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
-          </div>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>T</label>
-            <input className="input" type="number" min={0} value={form.t || 0} onChange={e => setForm({...form, t: Number(e.target.value)})} style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
-          </div>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>P</label>
-            <input className="input" type="number" min={0} value={form.p || 0} onChange={e => setForm({...form, p: Number(e.target.value)})} style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
-          </div>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>S</label>
-            <input className="input" type="number" min={0} value={form.s || 0} onChange={e => setForm({...form, s: Number(e.target.value)})} style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
-          </div>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>C</label>
-            <input className="input" type="number" min={0} value={form.c || 0} onChange={e => setForm({...form, c: Number(e.target.value)})} style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
-          </div>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>Internal Mark</label>
-            <input
-              className="input"
-              type="number"
-              min={0}
-              value={form.internal_mark ?? ''}
-              onChange={e => setForm({...form, internal_mark: e.target.value === '' ? '' : Number(e.target.value)})}
-              style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }}
-            />
-          </div>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>External Mark</label>
-            <input
-              className="input"
-              type="number"
-              min={0}
-              value={form.external_mark ?? ''}
-              onChange={e => setForm({...form, external_mark: e.target.value === '' ? '' : Number(e.target.value)})}
-              style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }}
-            />
-          </div>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
-            <input type="checkbox" checked={!!form.for_all_departments} onChange={e => setForm({...form, for_all_departments: e.target.checked})} id="forAllDepts" />
-            <label htmlFor="forAllDepts" style={{ fontWeight: 600, color: '#3730a3', marginBottom: 0 }}>For All Departments</label>
-          </div>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>Departments</label>
-            {form.for_all_departments ? (
-              <div style={{ marginTop: 6, color: '#6b7280' }}>Applies to all departments</div>
-            ) : (
-              <div style={{ marginTop: 6, maxHeight: 220, overflowY: 'auto', padding: 6, border: '1px solid #e5e7eb', borderRadius: 6 }}>
-                {departments.length === 0 && <div style={{ color: '#9ca3af' }}>No departments available</div>}
-                {departments.map(d => (
-                  <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                    <input
-                      type="checkbox"
-                      checked={Array.isArray(form.departments) ? form.departments.includes(d.id) : false}
-                      onChange={e => {
-                        const cur = Array.isArray(form.departments) ? [...form.departments] : [];
-                        if (e.target.checked) {
-                          if (!cur.includes(d.id)) cur.push(d.id);
-                        } else {
-                          const idx = cur.indexOf(d.id); if (idx >= 0) cur.splice(idx, 1);
-                        }
-                        setForm({ ...form, departments: cur });
-                      }}
-                      id={`dept-${d.id}`}
-                    />
-                    <label htmlFor={`dept-${d.id}`} style={{ marginBottom: 0 }}>{d.code} — {d.name}</label>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
-          <input type="checkbox" checked={!!form.editable} onChange={e => setForm({...form, editable: e.target.checked})} id="editable" />
-          <label htmlFor="editable" style={{ fontWeight: 600, color: '#3730a3', marginBottom: 0 }}>Editable</label>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
-          <input type="checkbox" checked={!!form.is_elective} onChange={e => setForm({...form, is_elective: e.target.checked})} id="is_elective" />
-          <label htmlFor="is_elective" style={{ fontWeight: 600, color: '#3730a3', marginBottom: 0 }}>Is Elective</label>
-        </div>
-        {savedMessage && (
-          <div style={{ background: '#ecfccb', color: '#365314', padding: '8px 12px', borderRadius: 8, fontWeight: 600, display: 'inline-block' }}>{savedMessage}</div>
-        )}
-        <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
-          <button
-            type="submit"
-            className="btn-primary"
-            style={{ padding: '6px 18px', borderRadius: 8, fontWeight: 600, fontSize: 16, minWidth: 100 }}
-            disabled={loading}
-          >
-            {loading ? 'Saving…' : 'Save'}
-          </button>
-          <button
-            type="button"
-            className="btn-secondary"
-            style={{ padding: '6px 18px', borderRadius: 8, fontWeight: 600, fontSize: 16, minWidth: 100 }}
-            onClick={() => navigate('/curriculum/master')}
-          >
-            Cancel
-          </button>
-        </div>
-      </form>
     </CurriculumLayout>
   );
 }

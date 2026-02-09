@@ -6,7 +6,7 @@ from academics.models import Department, Semester
 class DepartmentSmallSerializer(serializers.ModelSerializer):
     class Meta:
         model = Department
-        fields = ('id', 'code', 'name')
+        fields = ('id', 'code', 'name', 'short_name')
 
 
 class CurriculumMasterSerializer(serializers.ModelSerializer):
