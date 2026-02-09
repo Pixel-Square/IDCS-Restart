@@ -60,3 +60,12 @@ for uname in ('SYED AKBAR S','Avudaiappan T'):   # ← REPLACE with real usernam
     print('dept roles:', list(DepartmentRole.objects.filter(staff__user=u).values('department__code','department__short_name','role','is_active','academic_year__name')))
     print('effective_depts:', get_user_effective_departments(u))
     print('permissions:', get_user_permissions(u))
+
+
+
+
+
+
+
+
+

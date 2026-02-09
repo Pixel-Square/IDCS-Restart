@@ -20,6 +20,7 @@ import StudentTimetable from './pages/student/TimetableView';
 import StaffTimetable from './pages/staff/TimetableView';
 import AssignedSubjectsPage from './pages/staff/AssignedSubjects';
 import PeriodAttendance from './pages/staff/PeriodAttendance';
+import AttendanceAnalytics from './pages/staff/AttendanceAnalytics';
 import StudentAttendancePage from './pages/student/Attendance';
 import MentorAssign from './pages/advisor/MentorAssign';
 import MyMentees from './pages/staff/MyMentees';
@@ -117,6 +118,9 @@ export default function App() {
               } />
               <Route path="/staff/period-attendance" element={
                 <ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={['academics.mark_attendance']} element={<PeriodAttendance />} />
+              } />
+              <Route path="/staff/analytics" element={
+                <ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={['analytics.view_all_analytics', 'analytics.view_department_analytics', 'analytics.view_class_analytics']} element={<AttendanceAnalytics />} />
               } />
               <Route path="/staff/mentees" element={
                 <ProtectedRoute user={user} requiredProfile={'STAFF'} element={<MyMentees />} />

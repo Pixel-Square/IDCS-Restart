@@ -5,6 +5,7 @@ from .views import MentorStaffListView, MentorStudentsForStaffView, MentorMapCre
 from .views import AcademicYearViewSet
 from .views import StaffAssignedSubjectsView, SectionStudentsView
 from .views import SubjectBatchViewSet, PeriodAttendanceSessionViewSet, StaffPeriodsView, StudentAttendanceView
+from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView
 
 router = DefaultRouter()
 router.register(r'section-advisors', SectionAdvisorViewSet, basename='section-advisor')
@@ -32,5 +33,6 @@ urlpatterns = [
     path('my-students/', AdvisorMyStudentsView.as_view()),
     path('staff/periods/', StaffPeriodsView.as_view()),
     path('student/attendance/', StudentAttendanceView.as_view()),
-    # attendance endpoints removed
+    path('analytics/attendance/', AttendanceAnalyticsView.as_view()),
+    path('analytics/filters/', AnalyticsFiltersView.as_view()),
 ]

@@ -94,6 +94,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'period_attendance', label: 'Mark Attendance', to: '/staff/period-attendance' });
   }
 
+  // Attendance analytics for staff
+  if (flags.is_staff && (permsLower.includes('analytics.view_all_analytics') || permsLower.includes('analytics.view_department_analytics') || permsLower.includes('analytics.view_class_analytics'))) {
+    items.push({ key: 'attendance_analytics', label: 'Attendance Analytics', to: '/staff/analytics' });
+  }
+
   // fallback: always show profile
   items.unshift({ key: 'profile', label: 'Profile', to: '/profile' });
 
