@@ -17,7 +17,7 @@ from .models import (
 from .models import TeachingAssignment
 from .models import StudentMentorMap, SectionAdvisor, DepartmentRole
 from .models import StudentSubjectBatch
-from .models import PeriodAttendanceSession, PeriodAttendanceRecord
+from .models import PeriodAttendanceSession, PeriodAttendanceRecord, AttendanceUnlockRequest
 from django import forms
 from django.db import models
 from django.core.exceptions import ValidationError
@@ -952,3 +952,13 @@ class PeriodAttendanceRecordAdmin(admin.ModelAdmin):
     search_fields = ('student__reg_no', 'student__user__username')
     list_filter = ('status',)
     raw_id_fields = ('session', 'student', 'marked_by')
+
+
+@admin.register(AttendanceUnlockRequest)
+class AttendanceUnlockRequestAdmin(admin.ModelAdmin):
+    list_display = ('id', 'session', 'requested_by', 'requested_at', 'status', 'reviewed_by', 'reviewed_at')
+    list_filter = ('status', 'requested_at', 'reviewed_at')
+    search_fields = ('requested_by__user__username', 'requested_by__staff_id', 'reviewed_by__user__username')
+    raw_id_fields = ('session', 'requested_by', 'reviewed_by')
+    readonly_fields = ('requested_at', 'reviewed_at')
+    date_hierarchy = 'requested_at'

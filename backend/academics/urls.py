@@ -4,8 +4,8 @@ from .views import SectionAdvisorViewSet, HODStaffListView, HODSectionsView, Tea
 from .views import MentorStaffListView, MentorStudentsForStaffView, MentorMapCreateView, MentorUnmapView, MentorMyMenteesView
 from .views import AcademicYearViewSet
 from .views import StaffAssignedSubjectsView, SectionStudentsView
-from .views import SubjectBatchViewSet, PeriodAttendanceSessionViewSet, StaffPeriodsView, StudentAttendanceView
-from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView
+from .views import SubjectBatchViewSet, PeriodAttendanceSessionViewSet, AttendanceUnlockRequestViewSet, StaffPeriodsView, StudentAttendanceView
+from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView, ClassAttendanceReportView
 
 router = DefaultRouter()
 router.register(r'section-advisors', SectionAdvisorViewSet, basename='section-advisor')
@@ -13,6 +13,7 @@ router.register(r'teaching-assignments', TeachingAssignmentViewSet, basename='te
 router.register(r'academic-years', AcademicYearViewSet, basename='academic-year')
 router.register(r'subject-batches', SubjectBatchViewSet, basename='subject-batch')
 router.register(r'period-attendance', PeriodAttendanceSessionViewSet, basename='period-attendance')
+router.register(r'attendance-unlock-requests', AttendanceUnlockRequestViewSet, basename='attendance-unlock-request')
 
 # Expose router at the app root so when the app is included under
 # `/api/academics/` the endpoints become `/api/academics/section-advisors/`, etc.
@@ -35,4 +36,5 @@ urlpatterns = [
     path('student/attendance/', StudentAttendanceView.as_view()),
     path('analytics/attendance/', AttendanceAnalyticsView.as_view()),
     path('analytics/filters/', AnalyticsFiltersView.as_view()),
+    path('analytics/class-report/', ClassAttendanceReportView.as_view()),
 ]

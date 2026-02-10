@@ -14,6 +14,8 @@ class TimetableSlotAdmin(admin.ModelAdmin):
     list_display = ('template', 'index', 'start_time', 'end_time', 'is_break', 'is_lunch', 'label')
     list_filter = ('template', 'is_break', 'is_lunch')
     ordering = ('template', 'index')
+    # Hide index in the admin form; index is auto-managed
+    exclude = ('index',)
 
 
 @admin.register(TimetableAssignment)

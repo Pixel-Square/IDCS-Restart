@@ -8,7 +8,13 @@ import {
   Calendar,
   Download,
   Filter,
-  AlertCircle
+  AlertCircle,
+  CheckCircle,
+  XCircle,
+  Clock,
+  RefreshCw,
+  X,
+  Loader2
 } from 'lucide-react';
 import fetchWithAuth from '../../services/fetchAuth';
 
@@ -59,6 +65,26 @@ interface StudentStat {
   attendance_rate: number;
 }
 
+interface ClassReport {
+  date: string;
+  section_id: number;
+  section_name: string;
+  total_strength: number;
+  present: number;
+  absent: number;
+  leave: number;
+  late: number;
+  on_duty: number;
+  batch_name?: string;
+  department_name?: string;
+  department_short?: string;
+  absent_list: string[];
+  leave_list: string[];
+  od_list: string[];
+  late_list: string[];
+  attendance_percentage: number;
+}
+
 interface DailyTrend {
   day: string;
   total: number;
@@ -97,6 +123,7 @@ const AttendanceAnalytics: React.FC = () => {
   // Filters
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [singleDay, setSingleDay] = useState(true);
   const [selectedDepartment, setSelectedDepartment] = useState('');
   const [selectedSection, setSelectedSection] = useState('');
   const [availableFilters, setAvailableFilters] = useState<FiltersData | null>(null);
@@ -107,17 +134,93 @@ const AttendanceAnalytics: React.FC = () => {
   const [departmentStats, setDepartmentStats] = useState<DepartmentStat[]>([]);
   const [classStats, setClassStats] = useState<ClassStat[]>([]);
   const [studentStats, setStudentStats] = useState<StudentStat[]>([]);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [classReport, setClassReport] = useState<ClassReport | null>(null);
+  // Requests modal
+  const [requestsOpen, setRequestsOpen] = useState(false);
+  const [requestsLoading, setRequestsLoading] = useState(false);
+  const [requests, setRequests] = useState<any[]>([]);
+  const pendingCount = requests.filter(r => r.status === 'PENDING').length;
+
+  // Auto-refresh requests when modal opens
+  useEffect(() => {
+    if (requestsOpen) {
+      loadRequests();
+    }
+  }, [requestsOpen]);
+
+  const loadRequests = async () => {
+    setRequestsLoading(true);
+    try {
+      const res = await fetchWithAuth('/api/academics/attendance-unlock-requests/');
+      const data = await res.json();
+      console.log('Unlock requests response:', data);
+      if (res.ok) {
+        const requestsList = Array.isArray(data) ? data : (data.results || data.data || []);
+        console.log('Setting requests:', requestsList);
+        console.log('Request IDs:', requestsList.map((r: any) => ({ requestId: r.id, sessionId: r.session, status: r.status })));
+        setRequests(requestsList);
+      } else {
+        console.error('Failed to load requests:', data);
+        setRequests([]);
+      }
+    } catch (e) {
+      console.error('Error loading requests:', e);
+      setRequests([]);
+    } finally {
+      setRequestsLoading(false);
+    }
+  };
+
+  const handleRequestAction = async (id: number, action: 'approve' | 'reject') => {
+    console.log(`Attempting to ${action} request with ID:`, id);
+    if (!window.confirm(`Are you sure you want to ${action} this request?`)) return;
+    setRequestsLoading(true);
+    try {
+      const res = await fetchWithAuth(`/api/academics/attendance-unlock-requests/${id}/${action}/`, { method: 'POST' });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.detail || 'Failed');
+      }
+      alert(`Request ${action === 'approve' ? 'approved' : 'rejected'} successfully!`);
+      // Reload all requests to get fresh data from server
+      await loadRequests();
+    } catch (e: any) {
+      alert('Failed: ' + (e?.message || String(e)));
+      setRequestsLoading(false);
+    }
+  };
+
+  const fetchClassReport = async (sectionId: number) => {
+    setReportLoading(true);
+    setReportOpen(true);
+    setClassReport(null);
+    try {
+      const todayIso = new Date().toISOString().split('T')[0];
+      const params = new URLSearchParams({ section_id: String(sectionId), date: todayIso });
+      const resp = await fetchWithAuth(`/api/academics/analytics/class-report/?${params}`);
+      const data = await resp.json();
+      if (resp.ok) {
+        setClassReport(data);
+      } else {
+        setClassReport(null);
+      }
+    } catch (err) {
+      setClassReport(null);
+    } finally {
+      setReportLoading(false);
+    }
+  };
 
   useEffect(() => {
     loadFilters();
     
-    // Set default dates (last 30 days)
+    // Set default dates (today)
     const today = new Date();
-    const thirtyDaysAgo = new Date(today);
-    thirtyDaysAgo.setDate(today.getDate() - 30);
-    
-    setEndDate(today.toISOString().split('T')[0]);
-    setStartDate(thirtyDaysAgo.toISOString().split('T')[0]);
+    const isoToday = today.toISOString().split('T')[0];
+    setEndDate(isoToday);
+    setStartDate(isoToday);
   }, []);
 
   useEffect(() => {
@@ -241,15 +344,200 @@ const AttendanceAnalytics: React.FC = () => {
             {permissionLevel === 'class' && 'Class Level Access'}
           </p>
         </div>
-        <button
-          onClick={exportToCSV}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-          disabled={loading}
-        >
-          <Download className="w-4 h-4" />
-          Export CSV
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setRequestsOpen(true)}
+            className="relative flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+          >
+            <AlertCircle className="w-4 h-4" />
+            {permissionLevel === 'all' ? 'All Requests' : 'My Requests'}
+            {pendingCount > 0 && (
+              <span className="absolute -top-2 -right-2 flex items-center justify-center w-6 h-6 text-xs font-bold text-white bg-red-600 rounded-full">
+                {pendingCount}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={exportToCSV}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            disabled={loading}
+          >
+            <Download className="w-4 h-4" />
+            Export CSV
+          </button>
+        </div>
       </div>
+
+      {/* Requests Modal */}
+      {requestsOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl w-full max-w-6xl max-h-[85vh] flex flex-col shadow-2xl">
+            {/* Header */}
+            <div className="sticky top-0 bg-gradient-to-r from-indigo-600 to-blue-600 px-6 py-4 flex items-center justify-between rounded-t-xl">
+              <div className="flex items-center gap-3">
+                <AlertCircle className="w-6 h-6 text-white" />
+                <h3 className="text-xl font-bold text-white">
+                  {permissionLevel === 'all' ? 'All Unlock Requests' : 'My Unlock Requests'}
+                </h3>
+                {pendingCount > 0 && (
+                  <span className="px-2 py-1 bg-white/20 text-white text-sm rounded-lg font-medium">
+                    {pendingCount} Pending
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={loadRequests}
+                  disabled={requestsLoading}
+                  className="p-2 hover:bg-white/10 rounded-lg transition-colors disabled:opacity-50"
+                  title="Refresh"
+                >
+                  <RefreshCw className={`w-5 h-5 text-white ${requestsLoading ? 'animate-spin' : ''}`} />
+                </button>
+                <button 
+                  onClick={() => { setRequestsOpen(false); setRequests([]); }}
+                  className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+                >
+                  <X className="w-5 h-5 text-white" />
+                </button>
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {requestsLoading && (
+                <div className="flex flex-col items-center justify-center py-12 space-y-3">
+                  <Loader2 className="w-12 h-12 text-indigo-600 animate-spin" />
+                  <p className="text-gray-600">Loading requests...</p>
+                </div>
+              )}
+              
+              {!requestsLoading && requests.length === 0 && (
+                <div className="flex flex-col items-center justify-center py-12 space-y-3">
+                  <div className="bg-gray-100 p-4 rounded-full">
+                    <AlertCircle className="w-12 h-12 text-gray-400" />
+                  </div>
+                  <h3 className="text-lg font-medium text-gray-900">No Requests Found</h3>
+                  <p className="text-gray-600 text-sm text-center max-w-md">
+                    {permissionLevel === 'all' 
+                      ? 'There are no unlock requests at this time' 
+                      : 'You have no unlock requests. To request an unlock, go to the attendance marking page and click "Unlock Session" on a locked period.'}
+                  </p>
+                </div>
+              )}
+              
+              {!requestsLoading && requests.length > 0 && (
+                <div className="space-y-3">
+                  {requests.map((r) => {
+                    const statusColors = {
+                      PENDING: 'bg-yellow-100 text-yellow-800 border-yellow-300',
+                      APPROVED: 'bg-green-100 text-green-800 border-green-300',
+                      REJECTED: 'bg-red-100 text-red-800 border-red-300'
+                    };
+                    const statusIcons = {
+                      PENDING: Clock,
+                      APPROVED: CheckCircle,
+                      REJECTED: XCircle
+                    };
+                    const StatusIcon = statusIcons[r.status as keyof typeof statusIcons] || Clock;
+                    
+                    return (
+                      <div key={r.id} className="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+                        <div className="flex items-start justify-between gap-4">
+                          {/* Left: Request Info */}
+                          <div className="flex-1 space-y-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-medium text-gray-500">Request #{r.id} (Session: {r.session_id || r.session})</span>
+                              <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium border ${statusColors[r.status as keyof typeof statusColors] || statusColors.PENDING}`}>
+                                <StatusIcon className="w-3 h-3" />
+                                {r.status}
+                              </span>
+                            </div>
+                            
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+                              <div>
+                                <span className="text-gray-500">Session:</span>
+                                <span className="ml-2 font-medium text-gray-900">{r.session_display || `Session #${r.session && r.session.id || 'N/A'}`}</span>
+                              </div>
+                              {permissionLevel === 'all' && (
+                                <div>
+                                  <span className="text-gray-500">Requested by:</span>
+                                  <span className="ml-2 font-medium text-gray-900">
+                                    {r.requested_by && typeof r.requested_by === 'object' 
+                                      ? r.requested_by.username || r.requested_by.staff_id || r.requested_by.id 
+                                      : r.requested_by_display || 'N/A'}
+                                  </span>
+                                </div>
+                              )}
+                              <div>
+                                <span className="text-gray-500">Requested at:</span>
+                                <span className="ml-2 font-medium text-gray-900">
+                                  {r.requested_at ? new Date(r.requested_at).toLocaleString() : 'N/A'}
+                                </span>
+                              </div>
+                              {r.note && (
+                                <div className="col-span-2">
+                                  <span className="text-gray-500">Note:</span>
+                                  <span className="ml-2 text-gray-700 italic">{r.note}</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Right: Actions */}
+                          <div className="flex items-center gap-2">
+                            {r.status === 'PENDING' ? (
+                              permissionLevel === 'all' ? (
+                                <>
+                                  <button
+                                    onClick={() => handleRequestAction(r.id, 'approve')}
+                                    disabled={requestsLoading}
+                                    className="flex items-center gap-1.5 px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                                  >
+                                    <CheckCircle className="w-4 h-4" />
+                                    Approve
+                                  </button>
+                                  <button
+                                    onClick={() => handleRequestAction(r.id, 'reject')}
+                                    disabled={requestsLoading}
+                                    className="flex items-center gap-1.5 px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                                  >
+                                    <XCircle className="w-4 h-4" />
+                                    Reject
+                                  </button>
+                                </>
+                              ) : (
+                                <div className="text-sm text-gray-500 italic flex items-center gap-1.5">
+                                  <Clock className="w-4 h-4" />
+                                  Waiting for approval
+                                </div>
+                              )
+                            ) : (
+                              <div className="text-sm text-gray-500">
+                                {(r.reviewed_by_display || r.reviewed_by) && (
+                                  <div>
+                                    <span className="text-gray-500">Reviewed by:</span>
+                                    <span className="ml-1 font-medium">{r.reviewed_by_display || `Staff #${r.reviewed_by}`}</span>
+                                  </div>
+                                )}
+                                {r.reviewed_at && (
+                                  <div className="text-xs text-gray-400">
+                                    {new Date(r.reviewed_at).toLocaleString()}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
@@ -259,29 +547,82 @@ const AttendanceAnalytics: React.FC = () => {
         </div>
         
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {/* Date Range */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Start Date
-            </label>
-            <input
-              type="date"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-          </div>
-          
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              End Date
-            </label>
-            <input
-              type="date"
-              value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
+          {/* Date Picker */}
+          <div className="col-span-1 md:col-span-2 lg:col-span-1">
+            <label className="block text-sm font-medium text-gray-700 mb-1">Date Options</label>
+            <div className="flex items-center gap-3">
+              <label className="inline-flex items-center">
+                <input type="checkbox" checked={singleDay} onChange={(e) => {
+                  const val = e.target.checked;
+                  setSingleDay(val);
+                  // when switching to single day, ensure start/end align
+                  const todayIso = new Date().toISOString().split('T')[0];
+                  if (val) {
+                    const dateToUse = startDate || todayIso;
+                    setStartDate(dateToUse);
+                    setEndDate(dateToUse);
+                  }
+                }} className="mr-2" />
+                Single Day
+              </label>
+              <button type="button" onClick={() => {
+                const todayIso = new Date().toISOString().split('T')[0];
+                setStartDate(todayIso);
+                setEndDate(todayIso);
+              }} className="px-2 py-1 text-xs bg-gray-100 rounded">Today</button>
+            </div>
+
+            {singleDay ? (
+              <div className="mt-2">
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    const todayIso = new Date().toISOString().split('T')[0];
+                    if (!val) {
+                      setStartDate(todayIso);
+                      setEndDate(todayIso);
+                    } else {
+                      setStartDate(val);
+                      setEndDate(val);
+                    }
+                  }}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent mt-2"
+                />
+              </div>
+            ) : (
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (!val) {
+                      const todayIso = new Date().toISOString().split('T')[0];
+                      setStartDate(todayIso);
+                    } else {
+                      setStartDate(val);
+                    }
+                  }}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (!val) {
+                      const todayIso = new Date().toISOString().split('T')[0];
+                      setEndDate(todayIso);
+                    } else {
+                      setEndDate(val);
+                    }
+                  }}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+            )}
           </div>
 
           {/* Department Filter (for 'all' permission) */}
@@ -333,7 +674,22 @@ const AttendanceAnalytics: React.FC = () => {
 
       {/* View Type Tabs */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-2">
-        <div className="flex gap-2">
+        {/* Small screens: compact select */}
+        <div className="sm:hidden">
+          <select
+            value={viewType}
+            onChange={(e) => setViewType(e.target.value as ViewType)}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="overview">Overview</option>
+            <option value="department">By Department</option>
+            <option value="class">By Class</option>
+            <option value="student">By Student</option>
+          </select>
+        </div>
+
+        {/* Larger screens: button tabs */}
+        <div className="hidden sm:flex gap-2">
           <button
             onClick={() => setViewType('overview')}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
@@ -345,7 +701,7 @@ const AttendanceAnalytics: React.FC = () => {
             <BarChart3 className="w-4 h-4" />
             Overview
           </button>
-          
+
           <button
             onClick={() => setViewType('department')}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
@@ -357,7 +713,7 @@ const AttendanceAnalytics: React.FC = () => {
             <Building2 className="w-4 h-4" />
             By Department
           </button>
-          
+
           <button
             onClick={() => setViewType('class')}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
@@ -369,7 +725,7 @@ const AttendanceAnalytics: React.FC = () => {
             <GraduationCap className="w-4 h-4" />
             By Class
           </button>
-          
+
           <button
             onClick={() => setViewType('student')}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
@@ -509,7 +865,31 @@ const AttendanceAnalytics: React.FC = () => {
       {/* Department View */}
       {!loading && viewType === 'department' && (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-          <div className="overflow-x-auto">
+          {/* Mobile cards */}
+          <div className="sm:hidden p-4 space-y-3">
+            {departmentStats.map((dept) => (
+              <div key={dept.department_id} className="bg-white border border-gray-100 rounded-lg p-3 shadow-sm">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <div className="text-sm font-semibold">{dept.department_short} - {dept.department_name}</div>
+                    <div className="text-xs text-gray-500">Total: {dept.total_records}</div>
+                  </div>
+                  <div className="text-sm text-right">
+                    <div className="text-green-600 font-semibold">{dept.present}</div>
+                    <div className="text-xs text-gray-500">Present</div>
+                  </div>
+                </div>
+                <div className="mt-2 grid grid-cols-4 gap-2 text-xs text-center">
+                  <div className="text-red-600">{dept.absent}<div className="text-gray-400">Absent</div></div>
+                  <div className="">{dept.leave}<div className="text-gray-400">Leave</div></div>
+                  <div className="">{dept.on_duty}<div className="text-gray-400">OD</div></div>
+                  <div className="">{dept.attendance_rate}%<div className="text-gray-400">Rate</div></div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="hidden sm:block overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
@@ -579,7 +959,35 @@ const AttendanceAnalytics: React.FC = () => {
       {/* Class View */}
       {!loading && viewType === 'class' && (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-          <div className="overflow-x-auto">
+          {/* Mobile cards */}
+          <div className="sm:hidden p-4 space-y-3">
+            {classStats.map((cls) => (
+              <div key={cls.section_id} className="bg-white border border-gray-100 rounded-lg p-3 shadow-sm">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <div className="text-sm font-semibold">{cls.section_name}</div>
+                    <div className="text-xs text-gray-500">{cls.course_name} — {cls.department}</div>
+                  </div>
+                  <div className="text-sm text-right">
+                    <div className="text-green-600 font-semibold">{cls.present}</div>
+                    <div className="text-xs text-gray-500">Present</div>
+                  </div>
+                </div>
+                <div className="mt-2 grid grid-cols-4 gap-2 text-xs text-center">
+                  <div className="text-gray-900">{cls.total_records}<div className="text-gray-400">Total</div></div>
+                  <div className="text-red-600">{cls.absent}<div className="text-gray-400">Absent</div></div>
+                  <div className="">{cls.leave}<div className="text-gray-400">Leave</div></div>
+                  <div className="">{cls.on_duty}<div className="text-gray-400">OD</div></div>
+                </div>
+                <div className="mt-3 flex justify-between items-center">
+                  <div className="text-sm text-gray-600">Rate: {cls.attendance_rate}%</div>
+                  <button onClick={() => fetchClassReport(cls.section_id)} className="px-2 py-1 text-xs bg-indigo-600 text-white rounded">Report</button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="hidden sm:block overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
@@ -644,6 +1052,14 @@ const AttendanceAnalytics: React.FC = () => {
                         {cls.attendance_rate}%
                       </span>
                     </td>
+                    <td className="px-4 py-4">
+                      <button
+                        onClick={() => fetchClassReport(cls.section_id)}
+                        className="px-2 py-1 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700"
+                      >
+                        Report
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -657,10 +1073,113 @@ const AttendanceAnalytics: React.FC = () => {
         </div>
       )}
 
+      {/* Report Modal */}
+      {reportOpen && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-lg w-11/12 max-w-md p-6">
+            {reportLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600"></div>
+              </div>
+            ) : classReport ? (
+              <div>
+                <div className="flex justify-between items-start mb-4">
+                  <div>
+                    <h3 className="text-lg font-semibold">Class Report</h3>
+                    <p className="text-sm text-gray-600">{classReport.department_short} / {classReport.batch_name} / {classReport.section_name} — {new Date(classReport.date).toLocaleDateString()}</p>
+                  </div>
+                  <button onClick={() => setReportOpen(false)} className="text-gray-500">Close</button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 mb-4">
+                  <div className="p-3 bg-gray-50 rounded text-sm">
+                    <div className="text-xs text-gray-500">Total Strength</div>
+                    <div className="text-lg font-bold">{classReport.total_strength}</div>
+                  </div>
+                  <div className="p-3 bg-gray-50 rounded text-sm">
+                    <div className="text-xs text-gray-500">Attendance %</div>
+                    <div className="text-lg font-bold">{classReport.attendance_percentage}%</div>
+                  </div>
+                  <div className="p-3 bg-green-50 rounded text-sm">
+                    <div className="text-xs text-gray-500">Present</div>
+                    <div className="text-lg font-bold text-green-600">{classReport.present}</div>
+                  </div>
+                  <div className="p-3 bg-red-50 rounded text-sm">
+                    <div className="text-xs text-gray-500">Absent</div>
+                    <div className="text-lg font-bold text-red-600">{classReport.absent}</div>
+                  </div>
+                  <div className="p-3 bg-yellow-50 rounded text-sm">
+                    <div className="text-xs text-gray-500">Leave</div>
+                    <div className="text-lg font-bold">{classReport.leave}</div>
+                  </div>
+                  <div className="p-3 bg-gray-50 rounded text-sm">
+                    <div className="text-xs text-gray-500">OD</div>
+                    <div className="text-lg font-bold">{classReport.on_duty}</div>
+                  </div>
+                  <div className="p-3 bg-gray-50 rounded text-sm col-span-2">
+                    <div className="text-xs text-gray-500">Late</div>
+                    <div className="text-lg font-bold">{classReport.late}</div>
+                  </div>
+                </div>
+
+                <div>
+                  <h4 className="text-sm font-semibold mb-2">Students (last 3 digits)</h4>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <div className="text-xs text-gray-500">Absent</div>
+                      <div className="font-mono">{(classReport.absent_list && classReport.absent_list.length) ? classReport.absent_list.join(', ') : '—'}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500">Leave</div>
+                      <div className="font-mono">{(classReport.leave_list && classReport.leave_list.length) ? classReport.leave_list.join(', ') : '—'}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500">OD</div>
+                      <div className="font-mono">{(classReport.od_list && classReport.od_list.length) ? classReport.od_list.join(', ') : '—'}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500">Late</div>
+                      <div className="font-mono">{(classReport.late_list && classReport.late_list.length) ? classReport.late_list.join(', ') : '—'}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="text-sm text-gray-500">No report available.</div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Student View */}
       {!loading && viewType === 'student' && (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-          <div className="overflow-x-auto">
+          {/* Mobile cards */}
+          <div className="sm:hidden p-4 space-y-3">
+            {studentStats.map((student) => (
+              <div key={student.student_id} className="bg-white border border-gray-100 rounded-lg p-3 shadow-sm">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <div className="text-sm font-semibold">{student.reg_no} — {student.name}</div>
+                    <div className="text-xs text-gray-500">{student.section}</div>
+                  </div>
+                  <div className="text-sm text-right">
+                    <div className="text-green-600 font-semibold">{student.present}</div>
+                    <div className="text-xs text-gray-500">Present</div>
+                  </div>
+                </div>
+                <div className="mt-2 grid grid-cols-4 gap-2 text-xs text-center">
+                  <div className="text-gray-900">{student.total_records}<div className="text-gray-400">Total</div></div>
+                  <div className="text-red-600">{student.absent}<div className="text-gray-400">Absent</div></div>
+                  <div className="">{student.leave}<div className="text-gray-400">Leave</div></div>
+                  <div className="">{student.late}<div className="text-gray-400">Late</div></div>
+                </div>
+                <div className="mt-3 text-sm text-gray-600">Rate: {student.attendance_rate}%</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="hidden sm:block overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>

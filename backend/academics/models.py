@@ -723,6 +723,30 @@ class PeriodAttendanceRecord(models.Model):
         return f"{self.student.reg_no} -> {self.get_status_display()} @ {self.session.date}"
 
 
+class AttendanceUnlockRequest(models.Model):
+    STATUS_CHOICES = (
+        ('PENDING', 'Pending'),
+        ('APPROVED', 'Approved'),
+        ('REJECTED', 'Rejected')
+    )
+
+    session = models.ForeignKey(PeriodAttendanceSession, on_delete=models.CASCADE, related_name='unlock_requests')
+    requested_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='attendance_unlock_requests')
+    requested_at = models.DateTimeField(auto_now_add=True)
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default='PENDING')
+    reviewed_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='attendance_unlock_reviews')
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    note = models.TextField(blank=True)
+
+    class Meta:
+        verbose_name = 'Attendance Unlock Request'
+        verbose_name_plural = 'Attendance Unlock Requests'
+        ordering = ('-requested_at',)
+
+    def __str__(self):
+        return f"UnlockRequest session={self.session_id} status={self.status} requested_by={getattr(self.requested_by, 'staff_id', None)}"
+
+
 # Historically the code deleted users when profiles were removed.
 # That behavior is unsafe for audit/history. Do NOT delete users when
 # profiles are removed; prefer deactivation via accounts.services.deactivate_user.

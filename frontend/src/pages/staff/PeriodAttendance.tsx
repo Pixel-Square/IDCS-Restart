@@ -326,44 +326,54 @@ export default function PeriodAttendance(){
     }
 
     const isLocked = selected.attendance_session_locked
-    const action = isLocked ? 'unlock' : 'lock'
-    
     const confirmed = window.confirm(
-      isLocked 
-        ? 'Are you sure you want to unlock this attendance session? This will allow edits again.'
+      isLocked
+        ? 'Are you sure you want to request an unlock for this attendance session? Unlocking requires approval.'
         : 'Are you sure you want to lock this attendance session? This will prevent any further changes to attendance records.'
     )
-    
+
     if (!confirmed) return
 
     setLocking(true)
     try {
-      const res = await fetchWithAuth(
-        `/api/academics/period-attendance/${selected.attendance_session_id}/${action}/`,
-        { method: 'POST' }
-      )
-
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}))
-        throw new Error(errorData.detail || `Failed to ${action} session`)
+      if (isLocked) {
+        // Create an unlock request instead of immediately unlocking
+        const reqRes = await fetchWithAuth('/api/academics/attendance-unlock-requests/', {
+          method: 'POST',
+          body: JSON.stringify({ session: selected.attendance_session_id, note: '' }),
+        })
+        if (!reqRes.ok) {
+          const err = await reqRes.json().catch(() => ({}))
+          if (reqRes.status === 400 && err.detail?.includes('already pending')) {
+            alert('An unlock request for this session already exists and is pending approval. Please check the Requests section for status.')
+          } else {
+            throw new Error(err.detail || 'Failed to create unlock request')
+          }
+        } else {
+          const reqData = await reqRes.json()
+          console.log('Unlock request created:', reqData)
+          alert('Unlock request submitted successfully! Check the "My Requests" button in the Analytics page to view the status.')
+        }
+        // do not change locked state until approval
+      } else {
+        // Lock immediately
+        const res = await fetchWithAuth(
+          `/api/academics/period-attendance/${selected.attendance_session_id}/lock/`,
+          { method: 'POST' }
+        )
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => ({}))
+          throw new Error(errorData.detail || `Failed to lock session`)
+        }
+        const sessionData = await res.json()
+        console.log('Session locked successfully:', sessionData)
+        setSelected({ ...selected, attendance_session_locked: sessionData.is_locked })
+        await fetchPeriods()
+        alert('Attendance session locked successfully!')
       }
-
-      const sessionData = await res.json()
-      console.log(`Session ${action}ed successfully:`, sessionData)
-
-      // Update selected period's locked status
-      setSelected({
-        ...selected,
-        attendance_session_locked: sessionData.is_locked
-      })
-
-      // Refresh periods list to update UI
-      await fetchPeriods()
-
-      alert(`Attendance session ${isLocked ? 'unlocked' : 'locked'} successfully!`)
     } catch (e) {
-      console.error(`${action} error:`, e)
-      alert(`Failed to ${action} attendance: ` + (e instanceof Error ? e.message : String(e)))
+      console.error('toggleLock error:', e)
+      alert('Failed to perform lock/unlock: ' + (e instanceof Error ? e.message : String(e)))
     } finally {
       setLocking(false)
     }
@@ -545,9 +555,12 @@ export default function PeriodAttendance(){
                   </div>
                   <div className="mt-3">
                     {p.attendance_session_locked ? (
-                      <button disabled className="w-full px-3 py-2 bg-amber-100 text-amber-800 border border-amber-300 rounded-lg text-sm font-medium cursor-not-allowed flex items-center justify-center gap-2">
+                      <button 
+                        onClick={() => openPeriod(p)}
+                        className="w-full px-3 py-2 bg-amber-100 text-amber-800 border border-amber-300 rounded-lg text-sm font-medium hover:bg-amber-200 flex items-center justify-center gap-2"
+                      >
                         <Lock className="w-4 h-4" />
-                        Attendance Locked
+                        {p.attendance_session_id ? 'View Locked Session' : 'View Locked Period'}
                       </button>
                     ) : (
                       <button 

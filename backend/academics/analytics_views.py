@@ -73,6 +73,12 @@ class AttendanceAnalyticsView(APIView):
         ).select_related('student', 'session__section', 'session__section__batch', 'session__section__batch__course', 'session__section__batch__course__department')
         
         # Apply permission-based filtering
+        # Only consider Period 1 across the day for all analytics (show period 1 counts only)
+        try:
+            sessions_qs = sessions_qs.filter(period__index=1)
+            records_qs = records_qs.filter(session__period__index=1)
+        except Exception:
+            pass
         if not can_view_all:
             if can_view_department and staff_profile:
                 # Filter by staff's department
@@ -147,7 +153,8 @@ class AttendanceAnalyticsView(APIView):
             count=Count('id')
         ).order_by('-count')
         
-        present_count = records_qs.filter(status='P').count()
+        # Treat 'P', 'OD' and 'LATE' as present for attendance percentage
+        present_count = records_qs.filter(status__in=['P', 'OD', 'LATE']).count()
         absent_count = records_qs.filter(status='A').count()
         
         attendance_rate = (present_count / total_records * 100) if total_records > 0 else 0
@@ -155,7 +162,7 @@ class AttendanceAnalyticsView(APIView):
         # Trend over time (daily) - use simple date grouping
         daily_stats = records_qs.values('session__date').annotate(
             total=Count('id'),
-            present=Count('id', filter=Q(status='P')),
+            present=Count('id', filter=Q(status__in=['P', 'OD', 'LATE'])),
             absent=Count('id', filter=Q(status='A'))
         ).order_by('session__date')
         
@@ -189,7 +196,7 @@ class AttendanceAnalyticsView(APIView):
             'session__section__batch__course__department__short_name'
         ).annotate(
             total_records=Count('id'),
-            present_count=Count('id', filter=Q(status='P')),
+            present_count=Count('id', filter=Q(status__in=['P', 'OD', 'LATE'])),
             absent_count=Count('id', filter=Q(status='A')),
             leave_count=Count('id', filter=Q(status='LEAVE')),
             od_count=Count('id', filter=Q(status='OD'))
@@ -222,10 +229,11 @@ class AttendanceAnalyticsView(APIView):
             'session__section__batch__course__department__short_name'
         ).annotate(
             total_records=Count('id'),
-            present_count=Count('id', filter=Q(status='P')),
+            present_count=Count('id', filter=Q(status__in=['P', 'OD', 'LATE'])),
             absent_count=Count('id', filter=Q(status='A')),
             leave_count=Count('id', filter=Q(status='LEAVE')),
-            od_count=Count('id', filter=Q(status='OD'))
+            od_count=Count('id', filter=Q(status='OD')),
+            late_count=Count('id', filter=Q(status='LATE'))
         ).order_by('-total_records')
         
         result = []
@@ -255,7 +263,7 @@ class AttendanceAnalyticsView(APIView):
             'student__section__name'
         ).annotate(
             total_records=Count('id'),
-            present_count=Count('id', filter=Q(status='P')),
+            present_count=Count('id', filter=Q(status__in=['P', 'OD', 'LATE'])),
             absent_count=Count('id', filter=Q(status='A')),
             leave_count=Count('id', filter=Q(status='LEAVE')),
             od_count=Count('id', filter=Q(status='OD')),
@@ -369,4 +377,121 @@ class AnalyticsFiltersView(APIView):
             'permission_level': 'all' if can_view_all else ('department' if can_view_department else 'class'),
             'departments': departments,
             'sections': sections
+        })
+
+
+class ClassAttendanceReportView(APIView):
+    """Return a compact report for a given section and date (defaults to today)."""
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        user = request.user
+        perms = get_user_permissions(user)
+        staff_profile = getattr(user, 'staff_profile', None)
+
+        # permission: allow if user can view class or department or all
+        can_view_all = 'analytics.view_all_analytics' in perms or user.is_superuser
+        can_view_department = 'analytics.view_department_analytics' in perms or can_view_all
+        can_view_class = 'analytics.view_class_analytics' in perms or can_view_department
+        if not (can_view_all or can_view_department or can_view_class):
+            raise PermissionDenied('You do not have permission to view analytics')
+
+        section_id = request.query_params.get('section_id')
+        date_str = request.query_params.get('date')
+        try:
+            if date_str:
+                target_date = date.fromisoformat(date_str)
+            else:
+                target_date = date.today()
+        except Exception:
+            target_date = date.today()
+
+        if not section_id:
+            return Response({'detail': 'section_id required'}, status=400)
+
+        # permission-based section scoping
+        allowed_section_ids = None
+        if not can_view_all:
+            if can_view_department and staff_profile:
+                from .models import TeachingAssignment
+                dept_roles = DepartmentRole.objects.filter(staff=staff_profile, is_active=True)
+                dept_ids = [dr.department_id for dr in dept_roles if dr.department_id]
+                teaching_depts = TeachingAssignment.objects.filter(staff=staff_profile, is_active=True).values_list('section__batch__course__department_id', flat=True).distinct()
+                dept_ids.extend(list(teaching_depts))
+                dept_ids = list(set(filter(None, dept_ids)))
+                if dept_ids:
+                    allowed_section_ids = list(Section.objects.filter(batch__course__department_id__in=dept_ids).values_list('id', flat=True))
+                else:
+                    allowed_section_ids = []
+            elif can_view_class and staff_profile:
+                from .models import SectionAdvisor
+                allowed_section_ids = list(SectionAdvisor.objects.filter(advisor=staff_profile, is_active=True).values_list('section_id', flat=True))
+
+        if allowed_section_ids is not None and int(section_id) not in allowed_section_ids:
+            return Response({'detail': 'Permission denied for this section'}, status=403)
+
+        # Build records for the given section/date (Period 1 only)
+        recs = PeriodAttendanceRecord.objects.filter(
+            session__section_id=int(section_id),
+            session__date=target_date,
+            session__period__index=1
+        ).select_related('student').order_by('-id')
+
+        # total strength: count students in the section
+        total_strength = StudentProfile.objects.filter(section_id=int(section_id)).count()
+
+        # counts
+        present_count = recs.filter(status__in=['P', 'OD', 'LATE']).count()
+        absent_count = recs.filter(status='A').count()
+        leave_count = recs.filter(status='LEAVE').count()
+        od_count = recs.filter(status='OD').count()
+        late_count = recs.filter(status='LATE').count()
+
+        # build lists of all students' reg_no last-3-digits per status (unique, preserve order)
+        def last3_list_for(status_code):
+            seen = set()
+            out = []
+            for r in recs.filter(status=status_code).select_related('student'):
+                reg = getattr(getattr(r, 'student', None), 'reg_no', None)
+                if not reg:
+                    continue
+                suffix = reg[-3:]
+                if suffix not in seen:
+                    out.append(suffix)
+                    seen.add(suffix)
+            return out
+
+        absent_list = last3_list_for('A')
+        leave_list = last3_list_for('LEAVE')
+        od_list = last3_list_for('OD')
+        late_list = last3_list_for('LATE')
+
+        attendance_pct = (present_count / total_strength * 100) if total_strength > 0 else 0
+
+        # section display + batch/department
+        section_obj = Section.objects.filter(pk=int(section_id)).select_related('batch', 'batch__course', 'batch__course__department').first()
+        section_name = section_obj.name if section_obj else ''
+        batch_name = getattr(getattr(section_obj, 'batch', None), 'name', '') if section_obj else ''
+        dept = getattr(getattr(getattr(section_obj, 'batch', None), 'course', None), 'department', None) if section_obj else None
+        department_name = getattr(dept, 'name', '') if dept else ''
+        department_short = getattr(dept, 'short_name', '') if dept else ''
+
+        return Response({
+            'date': target_date.isoformat(),
+            'section_id': int(section_id),
+            'section_name': section_name,
+            'batch_name': batch_name,
+            'department_name': department_name,
+            'department_short': department_short,
+            'total_strength': total_strength,
+            'present': present_count,
+            'absent': absent_count,
+            'leave': leave_count,
+            'late': late_count,
+            'on_duty': od_count,
+            'absent_list': absent_list,
+            'leave_list': leave_list,
+            'od_list': od_list,
+            'late_list': late_list,
+            'attendance_percentage': round(attendance_pct, 2)
         })

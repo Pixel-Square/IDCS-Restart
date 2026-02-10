@@ -6,6 +6,7 @@ from rest_framework.views import APIView
 from rest_framework.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404
 from django.db import transaction
+import logging
 
 from .permissions import IsHODOfDepartment
 
@@ -19,6 +20,7 @@ from .models import (
     StudentProfile,
 )
 from .models import PeriodAttendanceSession, PeriodAttendanceRecord
+from .models import AttendanceUnlockRequest
 
 from .serializers import (
     SectionAdvisorSerializer,
@@ -26,7 +28,7 @@ from .serializers import (
     StudentSimpleSerializer,
 )
 from .serializers import AcademicYearSerializer
-from .serializers import PeriodAttendanceSessionSerializer, BulkPeriodAttendanceSerializer
+from .serializers import PeriodAttendanceSessionSerializer, BulkPeriodAttendanceSerializer, AttendanceUnlockRequestSerializer
 from accounts.utils import get_user_permissions
 from .utils import get_user_effective_departments
 from .serializers import TeachingAssignmentInfoSerializer
@@ -1346,6 +1348,139 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
 
+class AttendanceUnlockRequestViewSet(viewsets.ModelViewSet):
+    """Manage attendance unlock requests: create by staff, list/approve by admins."""
+    queryset = AttendanceUnlockRequest.objects.select_related('session__section', 'requested_by', 'reviewed_by').order_by('-requested_at')
+    serializer_class = AttendanceUnlockRequestSerializer
+    permission_classes = (IsAuthenticated,)
+    pagination_class = None  # Disable pagination for simpler response
+    logger = logging.getLogger(__name__)
+
+    def get_queryset(self):
+        user = self.request.user
+        perms = get_user_permissions(user)
+        self.logger.info(f"User {user.username} permissions: {perms}")
+        # Only users with analytics.view_all_analytics (or superuser) can view all requests
+        if 'analytics.view_all_analytics' in perms or user.is_superuser:
+            self.logger.info(f"User {user.username} has admin access - returning all requests")
+            # Return fresh queryset for admins to see all requests
+            qs = AttendanceUnlockRequest.objects.select_related('session__section', 'requested_by', 'reviewed_by').order_by('-requested_at')
+            self.logger.info(f"Admin queryset count: {qs.count()}")
+            return qs
+        staff_profile = getattr(user, 'staff_profile', None)
+        if staff_profile:
+            self.logger.info(f"Staff profile found: ID={staff_profile.id}, Staff_ID={staff_profile.staff_id}")
+            # Return filtered queryset for regular staff to see only their requests
+            qs = AttendanceUnlockRequest.objects.select_related('session__section', 'requested_by', 'reviewed_by').filter(requested_by=staff_profile).order_by('-requested_at')
+            self.logger.info(f"Staff {user.username} queryset count: {qs.count()}")
+            # Log each request for debugging
+            for req in qs:
+                self.logger.info(f"  - Request #{req.id}: status={req.status}, session={req.session_id}, requested_by={req.requested_by_id}")
+            return qs
+        self.logger.warning(f"User {user.username} has no staff profile - returning empty queryset")
+        return AttendanceUnlockRequest.objects.none()
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+        self.logger.info(f"Returning {len(serializer.data)} requests to user {request.user.username}")
+        for item in serializer.data:
+            self.logger.info(f"  - Request #{item['id']}: status={item['status']}")
+        return Response(serializer.data)
+
+    def create(self, request, *args, **kwargs):
+        user = request.user
+        staff_profile = getattr(user, 'staff_profile', None)
+        if not staff_profile:
+            return Response({'detail': 'Only staff may request unlocks'}, status=403)
+
+        session_id = request.data.get('session') or request.data.get('session_id')
+        note = request.data.get('note', '')
+        try:
+            session = PeriodAttendanceSession.objects.filter(pk=int(session_id)).first()
+        except Exception:
+            session = None
+        if not session:
+            return Response({'detail': 'Session not found'}, status=404)
+
+        # Check if there's already a pending request for this session
+        existing_pending = AttendanceUnlockRequest.objects.filter(
+            session=session,
+            status='PENDING'
+        ).first()
+        
+        if existing_pending:
+            # Return existing request instead of creating duplicate
+            ser = AttendanceUnlockRequestSerializer(existing_pending, context={'request': request})
+            return Response({
+                'detail': 'An unlock request for this session is already pending',
+                'existing_request': ser.data
+            }, status=400)
+
+        req = AttendanceUnlockRequest.objects.create(session=session, requested_by=staff_profile, note=note)
+        self.logger.info(f"Created unlock request #{req.id} for session {session.id} by staff {staff_profile.id} (user: {user.username})")
+        ser = AttendanceUnlockRequestSerializer(req, context={'request': request})
+        return Response(ser.data, status=201)
+
+    @action(detail=True, methods=['post'], url_path='approve')
+    def approve(self, request, pk=None):
+        user = request.user
+        perms = get_user_permissions(user)
+        if not ('analytics.view_all_analytics' in perms or user.is_superuser):
+            return Response({'detail': 'Permission denied'}, status=403)
+        
+        # Use direct model lookup instead of get_object() to bypass queryset filtering
+        try:
+            req = AttendanceUnlockRequest.objects.get(pk=pk)
+        except AttendanceUnlockRequest.DoesNotExist:
+            return Response({'detail': f'Request with ID {pk} not found'}, status=404)
+        
+        self.logger.info(f"User {user.username} approving request #{req.id} (status: {req.status}, requested_by: {req.requested_by_id})")
+        if req.status != 'PENDING':
+            return Response({'detail': 'Request already processed'}, status=400)
+        req.status = 'APPROVED'
+        req.reviewed_by = getattr(user, 'staff_profile', None)
+        import django.utils.timezone as tz
+        req.reviewed_at = tz.now()
+        req.save()
+        self.logger.info(f"Request #{req.id} approved successfully")
+
+        try:
+            sess = req.session
+            sess.is_locked = False
+            sess.save(update_fields=['is_locked'])
+        except Exception:
+            pass
+
+        ser = AttendanceUnlockRequestSerializer(req, context={'request': request})
+        return Response(ser.data)
+
+    @action(detail=True, methods=['post'], url_path='reject')
+    def reject(self, request, pk=None):
+        user = request.user
+        perms = get_user_permissions(user)
+        if not ('analytics.view_all_analytics' in perms or user.is_superuser):
+            return Response({'detail': 'Permission denied'}, status=403)
+        
+        # Use direct model lookup instead of get_object() to bypass queryset filtering
+        try:
+            req = AttendanceUnlockRequest.objects.get(pk=pk)
+        except AttendanceUnlockRequest.DoesNotExist:
+            return Response({'detail': f'Request with ID {pk} not found'}, status=404)
+        
+        self.logger.info(f"User {user.username} rejecting request #{req.id} (status: {req.status}, requested_by: {req.requested_by_id})")
+        if req.status != 'PENDING':
+            return Response({'detail': 'Request already processed'}, status=400)
+        req.status = 'REJECTED'
+        req.reviewed_by = getattr(user, 'staff_profile', None)
+        import django.utils.timezone as tz
+        req.reviewed_at = tz.now()
+        req.save()
+        self.logger.info(f"Request #{req.id} rejected successfully, new status: {req.status}")
+        ser = AttendanceUnlockRequestSerializer(req, context={'request': request})
+        return Response(ser.data)
+
+
 class StaffPeriodsView(APIView):
     permission_classes = (IsAuthenticated,)
 
@@ -1676,7 +1811,7 @@ class StudentAttendanceView(APIView):
             subj_map = {}
 
             # statuses considered present for percentage calculation
-            present_statuses = {'P', 'OD', 'LATE', 'LEAVE'}
+            present_statuses = {'P', 'OD', 'LATE'}
 
             for r in qs:
                 sess = getattr(r, 'session', None)

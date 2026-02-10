@@ -31,6 +31,14 @@ export default function TimetableEditor(){
       if(list && list.length){
         const active = (list as any[]).find(t=> t.is_active) || list[0]
         setSelected(active)
+        // Auto-fill new slot index to be one greater than the highest existing period index
+        try{
+          const periods = (active && active.periods) || []
+          const maxIndex = periods.length ? Math.max(...periods.map((p:any)=> Number(p.index || p.position || 0))) : 0
+          setNewSlot(prev => ({ ...prev, index: Number(maxIndex) + 1 }))
+        }catch(_){
+          // ignore failures and keep default
+        }
       }
     }catch(e){ console.error(e); alert('Failed to load templates') }
     finally{ setLoading(false) }

@@ -12,6 +12,7 @@ from rest_framework.validators import UniqueTogetherValidator
 from academics.models import StudentProfile
 from academics.models import PeriodAttendanceSession, PeriodAttendanceRecord
 from timetable.models import TimetableSlot
+from academics.models import AttendanceUnlockRequest
 
 
 class AcademicYearSerializer(serializers.ModelSerializer):
@@ -398,6 +399,49 @@ class SectionAdvisorSerializer(serializers.ModelSerializer):
     class Meta:
         model = SectionAdvisor
         fields = ('id', 'section', 'section_id', 'advisor', 'advisor_id', 'academic_year', 'is_active', 'department_id')
+
+
+class AttendanceUnlockRequestSerializer(serializers.ModelSerializer):
+    session_id = serializers.IntegerField(source='session.id', read_only=True)
+    session_display = serializers.SerializerMethodField(read_only=True)
+    requested_by = serializers.SerializerMethodField(read_only=True)
+    requested_by_display = serializers.SerializerMethodField(read_only=True)
+    reviewed_by_display = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = AttendanceUnlockRequest
+        fields = ('id', 'session', 'session_id', 'session_display', 'requested_by', 'requested_by_display', 'requested_at', 'status', 'reviewed_by', 'reviewed_by_display', 'reviewed_at', 'note')
+        read_only_fields = ('requested_at',)
+
+    def get_session_display(self, obj):
+        try:
+            sess = obj.session
+            return f"{getattr(sess, 'section', '')} | {getattr(sess, 'period', '')} @ {getattr(sess, 'date', '')}"
+        except Exception:
+            return None
+
+    def get_requested_by(self, obj):
+        try:
+            sb = obj.requested_by
+            return {'id': getattr(sb, 'id', None), 'staff_id': getattr(sb, 'staff_id', None), 'username': getattr(getattr(sb, 'user', None), 'username', None)}
+        except Exception:
+            return None
+
+    def get_requested_by_display(self, obj):
+        try:
+            sb = obj.requested_by
+            return getattr(getattr(sb, 'user', None), 'username', None) or getattr(sb, 'staff_id', None) or str(getattr(sb, 'id', ''))
+        except Exception:
+            return None
+
+    def get_reviewed_by_display(self, obj):
+        try:
+            rb = obj.reviewed_by
+            if rb:
+                return getattr(getattr(rb, 'user', None), 'username', None) or getattr(rb, 'staff_id', None) or str(getattr(rb, 'id', ''))
+        except Exception:
+            pass
+        return None
 
     def get_department_id(self, obj):
         try:
