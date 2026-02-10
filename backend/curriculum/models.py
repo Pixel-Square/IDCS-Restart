@@ -130,7 +130,7 @@ class CurriculumDepartment(models.Model):
     total_mark = models.PositiveSmallIntegerField(null=True, blank=True)
 
     total_hours = models.PositiveIntegerField(null=True, blank=True)
-    question_paper_type = models.CharField(max_length=64, default='QP1')
+    question_paper_type = models.CharField(max_length=64, default='QP1', blank=True)
     editable = models.BooleanField(default=False)
     overridden = models.BooleanField(default=False)
 
@@ -233,7 +233,7 @@ class ElectiveSubject(models.Model):
     total_mark = models.PositiveSmallIntegerField(null=True, blank=True)
 
     total_hours = models.PositiveIntegerField(null=True, blank=True)
-    question_paper_type = models.CharField(max_length=64, default='QP1')
+    question_paper_type = models.CharField(max_length=64, default='QP1', blank=True)
 
     editable = models.BooleanField(default=False)
     overridden = models.BooleanField(default=False)
@@ -307,6 +307,9 @@ class ElectiveChoice(models.Model):
         verbose_name = 'Elective Choice'
         verbose_name_plural = 'Elective Choices'
         unique_together = ('student', 'elective_subject', 'academic_year')
+        permissions = [
+            ('import_elective_choices', 'Can import elective student mappings'),
+        ]
 
     def __str__(self):
         try:

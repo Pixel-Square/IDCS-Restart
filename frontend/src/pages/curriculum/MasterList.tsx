@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { fetchMasters } from '../../services/curriculum';
+import fetchWithAuth from '../../services/fetchAuth';
 import { useLocation, useNavigate } from 'react-router-dom';
 import CurriculumLayout from './CurriculumLayout';
 import { Link } from 'react-router-dom';
@@ -33,9 +34,6 @@ export default function MasterList() {
       .catch(err => console.error(err))
       .finally(() => setLoading(false));
   }, []);
-
-  // helpers for download / import
-  const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
   function csvEscape(v: any) {
     if (v === null || v === undefined) return '';
@@ -75,13 +73,15 @@ export default function MasterList() {
     try{
       const fd = new FormData();
       fd.append('csv_file', file, file.name);
-      // Use native fetch so browser sets Content-Type boundary; include Authorization header manually
-      const token = window.localStorage.getItem('access');
-      const headers: any = {};
-      if (token) headers['Authorization'] = `Bearer ${token}`;
-      const res = await fetch(`${API_BASE}/api/curriculum/master/import/`, { method: 'POST', body: fd, headers });
+      // Use fetchWithAuth for automatic token refresh handling
+      const res = await fetchWithAuth(`/api/curriculum/master/import/`, { method: 'POST', body: fd });
+      
+      if (res.status === 401) {
+        alert('Your session has expired. Please refresh the page and try again.');
+        return;
+      }
+      
       if (!res.ok) {
-        // network-level failures and CORS preflight errors often throw before here
         let txt = '';
         try{ txt = await res.text() }catch(_){ txt = res.statusText }
         alert('Import failed: ' + (txt || res.statusText));

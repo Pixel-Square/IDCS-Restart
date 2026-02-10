@@ -32,7 +32,7 @@ class CurriculumBySectionView(APIView):
         try:
             from curriculum.models import CurriculumDepartment
             qs = CurriculumDepartment.objects.filter(department=dept, semester__number=sem)
-            data = [{'id': c.pk, 'course_code': c.course_code, 'course_name': c.course_name} for c in qs]
+            data = [{'id': c.pk, 'course_code': c.course_code, 'course_name': c.course_name, 'regulation': c.regulation, 'class_type': c.class_type, 'is_elective': c.is_elective} for c in qs]
             return Response({'results': data})
         except Exception:
             return Response({'results': []})
@@ -49,12 +49,27 @@ class SectionTimetableView(APIView):
 
         # collect assignments for this section
         qs = TimetableAssignment.objects.select_related('period', 'staff', 'curriculum_row', 'subject_batch').filter(section=sec)
-        # If requesting student is a student profile, filter assignments to those
-        # that are either unbatched or belong to a batch that includes the student.
+        # If requesting student is a student profile, apply strict batch filtering:
+        # For subjects that have batch assignments, only show the student's specific batch
+        # For subjects that don't have batch assignments, show the unbatched assignments
         student_profile = getattr(request.user, 'student_profile', None)
         if student_profile:
             from django.db.models import Q
-            qs = qs.filter(Q(subject_batch__isnull=True) | Q(subject_batch__students=student_profile)).distinct()
+            
+            # Find curriculum rows that have batch assignments for this section
+            batched_curriculum_rows = TimetableAssignment.objects.filter(
+                section=sec, 
+                subject_batch__isnull=False
+            ).values_list('curriculum_row_id', flat=True).distinct()
+            
+            # Filter assignments based on batch logic:
+            # 1. For batched subjects: only show assignments where student is in the batch
+            # 2. For non-batched subjects: show unbatched assignments
+            qs = qs.filter(
+                Q(curriculum_row_id__in=batched_curriculum_rows, subject_batch__students=student_profile) |
+                Q(curriculum_row_id__isnull=True, subject_batch__isnull=True) |
+                Q(~Q(curriculum_row_id__in=batched_curriculum_rows), subject_batch__isnull=True)
+            ).distinct()
         # group by day -> list of assignments with period index and times
         out = {}
         for a in qs:
@@ -75,18 +90,9 @@ class SectionTimetableView(APIView):
                 except Exception:
                     staff_obj = None
 
-            # resolve subject_batch: prefer explicit assignment batch, else if
-            # requesting user is a student try to find a batch for the same
-            # curriculum_row that includes the student so the UI can show the
-            # student's mapped batch for unbatched assignments (e.g. double
-            # period entries created without a batch on one slot).
+            # Use only the explicitly assigned subject_batch - do not try to resolve
+            # batch information for unbatched assignments as they are meant for all students
             sb = getattr(a, 'subject_batch', None)
-            if sb is None and student_profile:
-                try:
-                    from academics.models import StudentSubjectBatch
-                    sb = StudentSubjectBatch.objects.filter(curriculum_row=a.curriculum_row, students=student_profile).first()
-                except Exception:
-                    sb = None
 
             # prefer elective subject display when applicable
             subj_text = a.subject_text
@@ -152,7 +158,13 @@ class SectionTimetableView(APIView):
                 'subject_text': subj_text,
                 'elective_subject_id': elective_id,
                 'subject_batch': {'id': sb.pk, 'name': getattr(sb, 'name', None)} if sb else None,
-                'staff': {'id': staff_obj.pk, 'staff_id': getattr(staff_obj, 'staff_id', None), 'username': getattr(getattr(staff_obj, 'user', None), 'username', None)} if staff_obj else None,
+                'staff': {
+                    'id': staff_obj.pk, 
+                    'staff_id': getattr(staff_obj, 'staff_id', None), 
+                    'username': getattr(getattr(staff_obj, 'user', None), 'username', None),
+                    'first_name': getattr(getattr(staff_obj, 'user', None), 'first_name', ''),
+                    'last_name': getattr(getattr(staff_obj, 'user', None), 'last_name', '')
+                } if staff_obj else None,
             }
 
             # Avoid duplicate entries for the same period: prefer student-specific batch
@@ -186,6 +198,25 @@ class SectionTimetableView(APIView):
         try:
             from timetable.models import SpecialTimetableEntry
             special_qs = SpecialTimetableEntry.objects.filter(is_active=True, timetable__section=sec).select_related('timetable', 'period', 'staff', 'curriculum_row', 'subject_batch')
+            # Filter special entries by student batch using the same strict logic
+            # For subjects with batch assignments, only show the student's batch
+            # For subjects without batch assignments, show unbatched entries
+            if student_profile:
+                from django.db.models import Q
+                
+                # Find curriculum rows that have batch assignments for special entries in this section
+                batched_special_curriculum_rows = SpecialTimetableEntry.objects.filter(
+                    timetable__section=sec,
+                    is_active=True,
+                    subject_batch__isnull=False
+                ).values_list('curriculum_row_id', flat=True).distinct()
+                
+                special_qs = special_qs.filter(
+                    Q(curriculum_row_id__in=batched_special_curriculum_rows, subject_batch__students=student_profile) |
+                    Q(curriculum_row_id__isnull=True, subject_batch__isnull=True) |
+                    Q(~Q(curriculum_row_id__in=batched_special_curriculum_rows), subject_batch__isnull=True)
+                ).distinct()
+            
             for e in special_qs:
                 try:
                     daynum = e.date.isoweekday()
@@ -212,6 +243,9 @@ class SectionTimetableView(APIView):
                                 curr_obj = {'id': e.curriculum_row.id, 'course_code': getattr(e.curriculum_row, 'course_code', None), 'course_name': getattr(e.curriculum_row, 'course_name', None)}
                         except Exception:
                             curr_obj = {'id': e.curriculum_row.id, 'course_code': getattr(e.curriculum_row, 'course_code', None), 'course_name': getattr(e.curriculum_row, 'course_name', None)}
+                    
+                    # Use only the explicitly assigned subject_batch for special entries
+                    sb = getattr(e, 'subject_batch', None)
 
                     lst.append({
                         'id': f"special-{getattr(e, 'id', None)}",
@@ -225,11 +259,18 @@ class SectionTimetableView(APIView):
                         'elective_subject': elective_obj,
                         'subject_text': subj_text,
                         'elective_subject_id': elective_id,
-                        'subject_batch': {'id': getattr(e.subject_batch, 'pk', None), 'name': getattr(e.subject_batch, 'name', None)} if getattr(e, 'subject_batch', None) else None,
-                        'staff': {'id': getattr(e.staff, 'pk', None), 'staff_id': getattr(getattr(e.staff, 'user', None), 'username', None)} if getattr(e, 'staff', None) else None,
+                        'subject_batch': {'id': sb.pk, 'name': getattr(sb, 'name', None)} if sb else None,
+                        'staff': {
+                            'id': getattr(e.staff, 'pk', None), 
+                            'staff_id': getattr(e.staff, 'staff_id', None),
+                            'username': getattr(getattr(e.staff, 'user', None), 'username', None),
+                            'first_name': getattr(getattr(e.staff, 'user', None), 'first_name', ''),
+                            'last_name': getattr(getattr(e.staff, 'user', None), 'last_name', '')
+                        } if getattr(e, 'staff', None) else None,
                         'section': {'id': getattr(sec, 'pk', None), 'name': getattr(sec, 'name', None)} if sec else None,
                         'is_special': True,
                         'date': getattr(e, 'date', None),
+                        'timetable_name': getattr(e.timetable, 'name', None) if getattr(e, 'timetable', None) else None,
                     })
                 except Exception:
                     continue
@@ -295,7 +336,15 @@ class SectionSubjectsStaffView(APIView):
                         staff_map[getattr(cr, 'id')] = getattr(getattr(a.staff, 'user', None), 'username', None)
 
             for c in qs:
-                results.append({'id': c.id, 'course_code': c.course_code, 'course_name': c.course_name, 'staff': staff_map.get(c.id)})
+                results.append({
+                    'id': c.id, 
+                    'course_code': c.course_code, 
+                    'course_name': c.course_name, 
+                    'regulation': c.regulation,
+                    'class_type': c.class_type,
+                    'is_elective': c.is_elective,
+                    'staff': staff_map.get(c.id)
+                })
 
             # include any timetable-only subjects (no curriculum_row) with staff
             for a in tassigns:
@@ -623,7 +672,13 @@ class StaffTimetableView(APIView):
                 'subject_text': subj_text,
                 'elective_subject_id': elective_id,
                 'subject_batch': {'id': a.subject_batch.pk, 'name': getattr(a.subject_batch, 'name', None)} if getattr(a, 'subject_batch', None) else None,
-                'staff': {'id': staff_obj.pk, 'staff_id': getattr(staff_obj, 'staff_id', None), 'username': getattr(getattr(staff_obj, 'user', None), 'username', None)} if staff_obj else None,
+                'staff': {
+                    'id': staff_obj.pk, 
+                    'staff_id': getattr(staff_obj, 'staff_id', None), 
+                    'username': getattr(getattr(staff_obj, 'user', None), 'username', None),
+                    'first_name': getattr(getattr(staff_obj, 'user', None), 'first_name', ''),
+                    'last_name': getattr(getattr(staff_obj, 'user', None), 'last_name', '')
+                } if staff_obj else None,
                 'section': section_info,
             })
             # If a date was provided and a special entry exists for this section/period/date,
@@ -714,7 +769,13 @@ class StaffTimetableView(APIView):
                         'subject_text': subj_text,
                         'elective_subject_id': elective_id,
                         'subject_batch': {'id': getattr(e.subject_batch, 'pk', None), 'name': getattr(e.subject_batch, 'name', None)} if getattr(e, 'subject_batch', None) else None,
-                        'staff': {'id': getattr(e.staff, 'pk', None), 'staff_id': getattr(getattr(e.staff, 'user', None), 'username', None)} if getattr(e, 'staff', None) else None,
+                        'staff': {
+                            'id': getattr(e.staff, 'pk', None), 
+                            'staff_id': getattr(e.staff, 'staff_id', None),
+                            'username': getattr(getattr(e.staff, 'user', None), 'username', None),
+                            'first_name': getattr(getattr(e.staff, 'user', None), 'first_name', ''),
+                            'last_name': getattr(getattr(e.staff, 'user', None), 'last_name', '')
+                        } if getattr(e, 'staff', None) else None,
                         'section': section_info,
                         'is_special': True,
                         'date': getattr(e, 'date', None),
@@ -823,16 +884,30 @@ class SpecialTimetableEntryViewSet(viewsets.ModelViewSet):
                 return qs.filter(staff=staff_profile)
 
         if student_profile:
-            # show entries for the student's section and either unbatched or matching student's batch
+            # Apply strict batch filtering for students: only show entries for subjects
+            # where the student is in the assigned batch, or unbatched subjects with no batch assignments
             try:
                 from academics.models import StudentSubjectBatch
                 sec = getattr(student_profile, 'section', None)
                 if not sec:
                     return SpecialTimetableEntry.objects.none()
+                
                 # entries for the section
                 sec_q = qs.filter(timetable__section=sec)
-                # include only if subject_batch is null or includes this student
-                return sec_q.filter(Q(subject_batch__isnull=True) | Q(subject_batch__students=student_profile)).distinct()
+                
+                # Find curriculum rows that have batch assignments for special entries in this section
+                batched_curriculum_rows = SpecialTimetableEntry.objects.filter(
+                    timetable__section=sec,
+                    is_active=True,
+                    subject_batch__isnull=False
+                ).values_list('curriculum_row_id', flat=True).distinct()
+                
+                # Apply strict filtering
+                return sec_q.filter(
+                    Q(curriculum_row_id__in=batched_curriculum_rows, subject_batch__students=student_profile) |
+                    Q(curriculum_row_id__isnull=True, subject_batch__isnull=True) |
+                    Q(~Q(curriculum_row_id__in=batched_curriculum_rows), subject_batch__isnull=True)
+                ).distinct()
             except Exception:
                 return qs.filter(timetable__section=getattr(student_profile, 'section', None))
 

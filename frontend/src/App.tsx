@@ -13,6 +13,7 @@ import ProfilePage from "./pages/Profile";
 import MasterList from './pages/curriculum/MasterList';
 import MasterEditor from './pages/curriculum/MasterEditor';
 import DeptList from './pages/curriculum/DeptList';
+import ElectiveImport from './pages/curriculum/ElectiveImport';
 import AdvisorAssignments from './pages/hod/AdvisorAssignments';
 import TeachingAssignmentsPage from './pages/hod/TeachingAssignments';
 import MyStudentsPage from './pages/advisor/MyStudents';
@@ -85,6 +86,9 @@ export default function App() {
               <Route path="/curriculum/master/:id" element={<MasterEditor />} />
               <Route path="/curriculum/master/new" element={<MasterEditor />} />
               <Route path="/curriculum/department" element={<DeptList />} />
+              <Route path="/curriculum/elective-import" element={
+                <ProtectedRoute user={user} requiredPermissions={["curriculum.import_elective_choices"]} element={<ElectiveImport />} />
+              } />
               <Route path="/hod/advisors" element={
                 <ProtectedRoute user={user} requiredRoles={["HOD"]} requiredPermissions={["academics.assign_advisor"]} element={<AdvisorAssignments />} />
               } />
@@ -123,7 +127,7 @@ export default function App() {
                 <ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={['analytics.view_all_analytics', 'analytics.view_department_analytics', 'analytics.view_class_analytics']} element={<AttendanceAnalytics />} />
               } />
               <Route path="/staff/mentees" element={
-                <ProtectedRoute user={user} requiredProfile={'STAFF'} element={<MyMentees />} />
+                <ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={['academics.view_mentees']} element={<MyMentees />} />
               } />
               <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
             </Routes>

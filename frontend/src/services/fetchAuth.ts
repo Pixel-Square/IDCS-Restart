@@ -1,24 +1,55 @@
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
 
-async function refreshToken(): Promise<string> {
-  const refresh = window.localStorage.getItem('refresh')
-  if (!refresh) throw new Error('no refresh token')
+let isRefreshing = false
+let refreshPromise: Promise<string> | null = null
 
-  const res = await fetch(`${API_BASE}/api/accounts/token/refresh/`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refresh }),
-  })
-  if (!res.ok) throw new Error('refresh failed')
-  const data = await res.json()
-  if (data.access) window.localStorage.setItem('access', data.access)
-  if (data.refresh) window.localStorage.setItem('refresh', data.refresh)
-  return data.access
+async function refreshToken(): Promise<string> {
+  // Prevent multiple simultaneous refresh attempts
+  if (isRefreshing && refreshPromise) {
+    return refreshPromise
+  }
+
+  isRefreshing = true
+  refreshPromise = (async () => {
+    try {
+      const refresh = window.localStorage.getItem('refresh')
+      if (!refresh) throw new Error('no refresh token')
+
+      const res = await fetch(`${API_BASE}/api/accounts/token/refresh/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh }),
+      })
+      
+      if (!res.ok) {
+        // If refresh fails, clear auth tokens
+        window.localStorage.removeItem('access')
+        window.localStorage.removeItem('refresh')
+        throw new Error('refresh failed')
+      }
+      
+      const data = await res.json()
+      if (data.access) window.localStorage.setItem('access', data.access)
+      if (data.refresh) window.localStorage.setItem('refresh', data.refresh)
+      return data.access
+    } finally {
+      isRefreshing = false
+      refreshPromise = null
+    }
+  })()
+
+  return refreshPromise
 }
 
 export async function fetchWithAuth(input: RequestInfo | URL, init: RequestInit = {}, retry = true): Promise<Response> {
   const token = window.localStorage.getItem('access')
-  const headers = Object.assign({}, (init.headers || {}), { 'Content-Type': 'application/json' })
+  
+  // Don't set Content-Type for FormData - browser will set it automatically with boundary
+  const isFormData = init.body instanceof FormData
+  const headers = Object.assign({}, (init.headers || {}))
+  if (!isFormData) {
+    headers['Content-Type'] = 'application/json'
+  }
   if (token) headers['Authorization'] = `Bearer ${token}`
 
   // Normalize API requests: if caller used a leading '/api/...' path,
@@ -34,18 +65,24 @@ export async function fetchWithAuth(input: RequestInfo | URL, init: RequestInit 
   }
 
   const res = await fetch(finalInput, { ...init, headers })
-  if (res.status !== 401) return res
+  
+  // If not a 401 or retry is disabled, return the response as-is
+  if (res.status !== 401 || !retry) return res
 
-  // try refresh once
-  if (!retry) return res
+  // Try to refresh token and retry the request
   try {
     const newAccess = await refreshToken()
-    const headers2 = Object.assign({}, (init.headers || {}), { 'Content-Type': 'application/json', 'Authorization': `Bearer ${newAccess}` })
+    const headers2 = Object.assign({}, (init.headers || {}))
+    if (!isFormData) {
+      headers2['Content-Type'] = 'application/json'
+    }
+    headers2['Authorization'] = `Bearer ${newAccess}`
     // retry the same resolved URL (finalInput) so we don't accidentally hit the Vite dev server
     return fetch(finalInput, { ...init, headers: headers2 })
   } catch (e) {
-    // failed to refresh -> clear tokens
-    try { window.localStorage.removeItem('access'); window.localStorage.removeItem('refresh'); } catch(_){}
+    // If refresh fails, return the original 401 response
+    // Tokens already cleared in refreshToken()
+    console.error('Token refresh failed:', e)
     return res
   }
 }

@@ -2,9 +2,9 @@ import React, { useEffect, useState } from 'react'
 import { User, BookOpen, Save, Edit, X } from 'lucide-react'
 import fetchWithAuth from '../../services/fetchAuth'
 
-type Section = { id: number; name: string; batch: string; department_id?: number; semester?: number; department?: { id: number; code?: string } }
-type Staff = { id: number; user: string; staff_id: string; department?: { id?: number; code?: string; name?: string } }
-type CurriculumRow = { id: number; course_code?: string; course_name?: string; department?: { id: number; code?: string }; semester?: number }
+type Section = { id: number; name: string; batch: string; batch_regulation?: { id: number; code: string; name?: string } | null; department_id?: number; semester?: number; department?: { id: number; code?: string } }
+type Staff = { id: number; user: string | { username?: string; first_name?: string; last_name?: string }; staff_id: string; department?: { id?: number; code?: string; name?: string } }
+type CurriculumRow = { id: number; course_code?: string; course_name?: string; department?: { id: number; code?: string }; semester?: number; regulation?: string }
 type TeachingAssignment = { 
   id: number
   staff: string | number
@@ -14,7 +14,35 @@ type TeachingAssignment = {
   curriculum_row?: { id: number; course_code?: string; course_name?: string }
   curriculum_row_details?: { id: number; course_code?: string; course_name?: string; semester?: number }
   section_details?: { id: number; name: string; batch: string; semester?: number }
-  staff_details?: { id: number; user: string; staff_id: string }
+  staff_details?: { id: number; user: string | { username?: string; first_name?: string; last_name?: string }; staff_id: string }
+}
+
+// Helper function to get display name from user
+const getStaffDisplayName = (staff: Staff) => {
+  if (typeof staff.user === 'string') {
+    return staff.user
+  }
+  if (staff.user && typeof staff.user === 'object') {
+    const firstName = staff.user.first_name || ''
+    const lastName = staff.user.last_name || ''
+    const fullName = `${firstName} ${lastName}`.trim()
+    return fullName || staff.user.username || staff.staff_id
+  }
+  return staff.staff_id
+}
+
+const getAssignmentStaffName = (staffDetails: any) => {
+  if (!staffDetails) return '—'
+  if (typeof staffDetails.user === 'string') {
+    return staffDetails.user
+  }
+  if (staffDetails.user && typeof staffDetails.user === 'object') {
+    const firstName = staffDetails.user.first_name || ''
+    const lastName = staffDetails.user.last_name || ''
+    const fullName = `${firstName} ${lastName}`.trim()
+    return fullName || staffDetails.user.username || staffDetails.staff_id
+  }
+  return staffDetails.staff_id || '—'
 }
 
 export default function TeachingAssignmentsPage(){
@@ -22,6 +50,7 @@ export default function TeachingAssignmentsPage(){
   const [staff, setStaff] = useState<Staff[]>([])
   const [departments, setDepartments] = useState<{ id: number; name?: string; code?: string; short_name?: string }[]>([])
   const [selectedDept, setSelectedDept] = useState<number | null>(null)
+  const [selectedElectiveDept, setSelectedElectiveDept] = useState<number | null>(null)
   const [curriculum, setCurriculum] = useState<CurriculumRow[]>([])
   const [assignments, setAssignments] = useState<TeachingAssignment[]>([])
   const [electiveOptions, setElectiveOptions] = useState<any[]>([])
@@ -54,17 +83,28 @@ export default function TeachingAssignmentsPage(){
         return r.json()
       }
 
-      if (sres.ok){ const d = await safeJson(sres); const secs = (d.results || d).map((r:any) => ({ id: r.section_id, name: r.section_name, batch: r.batch, department_id: r.department_id, semester: r.semester, department: r.department })); setSections(secs); }
-      // fetch canonical departments list from academics endpoint
-      try{
-        const dres = await fetchWithAuth('/api/academics/departments/')
-        if(dres.ok){ const dd = await safeJson(dres); setDepartments((dd.results || dd) as any[]) }
-      }catch(e){ /* fallback: ignore */ }
+      if (sres.ok){ const d = await safeJson(sres); const secs = (d.results || d).map((r:any) => ({ id: r.section_id, name: r.section_name, batch: r.batch, batch_regulation: r.batch_regulation, department_id: r.department_id, semester: r.semester, department: r.department })); setSections(secs); }
       if (staffRes.ok){ const d = await safeJson(staffRes); let staffList = (d.results || d) as Staff[]; // if backend didn't filter, apply client-side filter
         if (selectedDept){ staffList = staffList.filter(s => (s.department && s.department.id === selectedDept) || (s as any).department === selectedDept) }
         setStaff(staffList)
       }
-      if (curRes.ok){ const d = await safeJson(curRes); const rows = (d.results || d); setCurriculum(rows); setElectiveParents(rows.filter((r:any)=> r.is_elective)) }
+      if (curRes.ok){ 
+        const d = await safeJson(curRes); 
+        const rows = (d.results || d); 
+        setCurriculum(rows); 
+        setElectiveParents(rows.filter((r:any)=> r.is_elective));
+        
+        // Extract unique departments from curriculum data (already filtered by backend based on user's department roles)
+        const deptMap = new Map();
+        rows.forEach((r: any) => {
+          if (r.department && r.department.id) {
+            deptMap.set(r.department.id, r.department);
+          }
+        });
+        if (deptMap.size > 0) {
+          setDepartments(Array.from(deptMap.values()));
+        }
+      }
       if (electRes.ok){ const d = await safeJson(electRes); setElectiveOptions(d.results || d) }
       if (taRes.ok){ const d = await safeJson(taRes); setAssignments(d.results || d) }
     }catch(e){ console.error(e); alert('Failed to load teaching assignment data') }
@@ -185,22 +225,45 @@ export default function TeachingAssignmentsPage(){
     return editingElectives.has(key)
   }
 
-  async function assignElective(electiveId:number, staffId:number){
+  async function assignElective(electiveId:number, staffId:number, existingAssignmentId?: number){
     if (!staffId) {
       alert('Select staff')
       return Promise.reject('No staff selected')
     }
-    const payload = { elective_subject_id: electiveId, staff_id: Number(staffId), is_active: true }
+    
     try {
-      const res = await fetchWithAuth('/api/academics/teaching-assignments/', { method: 'POST', body: JSON.stringify(payload) })
-      if (res.ok) { 
-        alert('Assigned successfully'); 
-        fetchData();
-        return Promise.resolve()
-      } else { 
-        const txt = await res.text(); 
-        alert('Error: ' + txt);
-        return Promise.reject(txt)
+      if (existingAssignmentId) {
+        // Update existing assignment
+        const payload = { staff_id: Number(staffId), is_active: true }
+        const res = await fetchWithAuth(`/api/academics/teaching-assignments/${existingAssignmentId}/`, { 
+          method: 'PATCH', 
+          body: JSON.stringify(payload) 
+        })
+        if (res.ok) { 
+          alert('Updated successfully'); 
+          fetchData();
+          return Promise.resolve()
+        } else { 
+          const txt = await res.text(); 
+          alert('Error: ' + txt);
+          return Promise.reject(txt)
+        }
+      } else {
+        // Create new assignment
+        const payload = { elective_subject_id: electiveId, staff_id: Number(staffId), is_active: true }
+        const res = await fetchWithAuth('/api/academics/teaching-assignments/', { 
+          method: 'POST', 
+          body: JSON.stringify(payload) 
+        })
+        if (res.ok) { 
+          alert('Assigned successfully'); 
+          fetchData();
+          return Promise.resolve()
+        } else { 
+          const txt = await res.text(); 
+          alert('Error: ' + txt);
+          return Promise.reject(txt)
+        }
       }
     } catch (error) {
       alert('Error: ' + error);
@@ -272,6 +335,7 @@ export default function TeachingAssignmentsPage(){
               {sections.map(section => {
                 const sectionSubjects = curriculum.filter(c => 
                   (section.semester ? (c.semester === section.semester) : true) &&
+                  (section.batch_regulation ? (c.regulation === section.batch_regulation.code) : true) &&
                   !c.is_elective
                 );
                 
@@ -284,9 +348,16 @@ export default function TeachingAssignmentsPage(){
                           <h4 className="text-lg font-semibold text-blue-900">
                             {section.batch} / {section.name}
                           </h4>
-                          <p className="text-blue-700 text-sm">
-                            Semester: {section.semester || 'Not specified'}
-                          </p>
+                          <div className="flex items-center gap-3 mt-1">
+                            <p className="text-blue-700 text-sm">
+                              Semester: {section.semester || 'Not specified'}
+                            </p>
+                            {section.batch_regulation && (
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800 border border-indigo-200">
+                                Regulation: {section.batch_regulation.code}
+                              </span>
+                            )}
+                          </div>
                         </div>
                         <div className="text-blue-600 text-sm font-medium">
                           Section ID: {section.id}
@@ -324,22 +395,23 @@ export default function TeachingAssignmentsPage(){
                                     {subject.course_name || 'Unnamed'}
                                   </td>
                                   <td className="px-4 py-3">
-                                    {existingAssignment ? (
-                                      <div className="text-sm text-gray-900 font-medium">
-                                        {existingAssignment.staff_details?.staff_id} - {existingAssignment.staff_details?.user}
-                                      </div>
-                                    ) : editing ? (
+                                    {editing ? (
                                       <select 
-                                        id={`staff-${section.id}-${subject.id}`} 
+                                        id={`staff-${section.id}-${subject.id}`}
+                                        defaultValue={existingAssignment?.staff_details?.id || existingAssignment?.staff || ''}
                                         className="w-full p-2 border border-gray-300 rounded-lg bg-white text-gray-700 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                                       >
                                         <option value="">-- select staff --</option>
                                         {staff.map(st => (
                                           <option key={st.id} value={st.id}>
-                                            {st.staff_id} - {st.user}
+                                            {st.staff_id} - {getStaffDisplayName(st)}
                                           </option>
                                         ))}
                                       </select>
+                                    ) : existingAssignment ? (
+                                      <div className="text-sm text-gray-900 font-medium">
+                                        {existingAssignment.staff_details?.staff_id} - {getAssignmentStaffName(existingAssignment.staff_details)}
+                                      </div>
                                     ) : (
                                       <div className="text-sm text-gray-500 italic">
                                         Not assigned
@@ -363,26 +435,49 @@ export default function TeachingAssignmentsPage(){
                                               const staffSel = document.getElementById(`staff-${section.id}-${subject.id}`) as HTMLSelectElement;
                                               if (!staffSel?.value) return alert('Select staff member');
                                               
-                                              const payload = { 
-                                                section_id: section.id, 
-                                                staff_id: Number(staffSel.value), 
-                                                curriculum_row_id: subject.id, 
-                                                is_active: true 
-                                              };
-                                              
-                                              fetchWithAuth('/api/academics/teaching-assignments/', { 
-                                                method: 'POST', 
-                                                body: JSON.stringify(payload) 
-                                              })
-                                              .then(res => {
-                                                if (res.ok) {
-                                                  alert('Assigned successfully');
-                                                  cancelEditing(section.id, subject.id);
-                                                  fetchData();
-                                                } else {
-                                                  res.text().then(txt => alert('Error: ' + txt));
-                                                }
-                                              });
+                                              if (existingAssignment) {
+                                                // Update existing assignment
+                                                const payload = { 
+                                                  staff_id: Number(staffSel.value), 
+                                                  is_active: true 
+                                                };
+                                                
+                                                fetchWithAuth(`/api/academics/teaching-assignments/${existingAssignment.id}/`, { 
+                                                  method: 'PATCH', 
+                                                  body: JSON.stringify(payload) 
+                                                })
+                                                .then(res => {
+                                                  if (res.ok) {
+                                                    alert('Updated successfully');
+                                                    cancelEditing(section.id, subject.id);
+                                                    fetchData();
+                                                  } else {
+                                                    res.text().then(txt => alert('Error: ' + txt));
+                                                  }
+                                                });
+                                              } else {
+                                                // Create new assignment
+                                                const payload = { 
+                                                  section_id: section.id, 
+                                                  staff_id: Number(staffSel.value), 
+                                                  curriculum_row_id: subject.id, 
+                                                  is_active: true 
+                                                };
+                                                
+                                                fetchWithAuth('/api/academics/teaching-assignments/', { 
+                                                  method: 'POST', 
+                                                  body: JSON.stringify(payload) 
+                                                })
+                                                .then(res => {
+                                                  if (res.ok) {
+                                                    alert('Assigned successfully');
+                                                    cancelEditing(section.id, subject.id);
+                                                    fetchData();
+                                                  } else {
+                                                    res.text().then(txt => alert('Error: ' + txt));
+                                                  }
+                                                });
+                                              }
                                             }}
                                             className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors border border-green-300"
                                             title="Save Assignment"
@@ -418,11 +513,44 @@ export default function TeachingAssignmentsPage(){
         {canViewElectives && (
         <div className="bg-white rounded-lg shadow-sm p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Elective Subject Assignments</h3>
+          
+          {/* Department Filter Buttons */}
+          {departments.length > 1 && (
+            <div className="mb-6">
+              <h4 className="text-sm font-medium text-gray-700 mb-3">Filter by Department</h4>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => setSelectedElectiveDept(null)}
+                  className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
+                    selectedElectiveDept === null
+                      ? 'bg-blue-100 text-blue-700'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  All Departments
+                </button>
+                {departments.map(d => (
+                  <button
+                    key={d.id}
+                    onClick={() => setSelectedElectiveDept(d.id)}
+                    className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
+                      selectedElectiveDept === d.id
+                        ? 'bg-blue-100 text-blue-700'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    {d.short_name || d.code || d.name || `Dept ${d.id}`}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="space-y-4">
-            {electiveParents.length === 0 ? (
-              <div className="text-gray-500 text-sm">No elective parents found.</div>
+            {electiveParents.filter(p => !selectedElectiveDept || (p.department && p.department.id === selectedElectiveDept)).length === 0 ? (
+              <div className="text-gray-500 text-sm">No elective parents found for the selected department.</div>
             ) : (
-              electiveParents.map(parent => (
+              electiveParents.filter(p => !selectedElectiveDept || (p.department && p.department.id === selectedElectiveDept)).map(parent => (
                 <div key={parent.id} className="bg-gray-50 border border-gray-200 rounded-lg p-4">
                   <div className="flex justify-between items-center mb-4">
                     <div className="font-semibold text-gray-900">{parent.course_name || parent.course_code || 'Elective'}</div>
@@ -447,18 +575,19 @@ export default function TeachingAssignmentsPage(){
                             {opt.course_code || '-'} — {opt.course_name || '-'}
                           </div>
                           <div className="min-w-[200px]">
-                            {existingElectiveAssignment ? (
-                              <div className="text-sm text-gray-900 font-medium">
-                                {existingElectiveAssignment.staff_details?.staff_id} - {existingElectiveAssignment.staff_details?.user}
-                              </div>
-                            ) : editingElective ? (
+                            {editingElective ? (
                               <select 
-                                id={`elective-staff-${opt.id}`} 
+                                id={`elective-staff-${opt.id}`}
+                                defaultValue={existingElectiveAssignment?.staff_details?.id || existingElectiveAssignment?.staff || ''}
                                 className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-700 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                               >
                                 <option value="">-- select staff --</option>
-                                {staff.map(st => (<option key={st.id} value={st.id}>{st.staff_id} - {st.user}</option>))}
+                                {staff.map(st => (<option key={st.id} value={st.id}>{st.staff_id} - {getStaffDisplayName(st)}</option>))}
                               </select>
+                            ) : existingElectiveAssignment ? (
+                              <div className="text-sm text-gray-900 font-medium">
+                                {existingElectiveAssignment.staff_details?.staff_id} - {getAssignmentStaffName(existingElectiveAssignment.staff_details)}
+                              </div>
                             ) : (
                               <div className="text-sm text-gray-500 italic">
                                 Not assigned
@@ -483,7 +612,7 @@ export default function TeachingAssignmentsPage(){
                                     const staffSel = document.getElementById(`elective-staff-${opt.id}`) as HTMLSelectElement;
                                     if (!staffSel?.value) return alert('Select staff member');
                                     
-                                    assignElective(opt.id, Number(staffSel.value))
+                                    assignElective(opt.id, Number(staffSel.value), existingElectiveAssignment?.id)
                                       .then(() => {
                                         cancelEditingElective(opt.id);
                                       })

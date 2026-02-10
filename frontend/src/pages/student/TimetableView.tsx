@@ -57,45 +57,7 @@ export default function StudentTimetable(){
         if(!res.ok) throw new Error(await res.text())
         const data = await res.json()
         let tt = data.results || []
-        // Attempt to resolve missing subject_batch for this student by
-        // fetching subject-batches for curriculum rows referenced in the
-        // timetable and matching the current student.
-        try{
-          const needs = new Set<number>()
-          for(const d of tt){
-            for(const a of (d.assignments||[])){
-              if(!a.subject_batch && a.curriculum_row && a.curriculum_row.id) needs.add(a.curriculum_row.id)
-            }
-          }
-          if(studentId && needs.size){
-            const crIds = Array.from(needs)
-            const crToBatch: Record<number, any> = {}
-            await Promise.all(crIds.map(async (crId) => {
-              try{
-                const sres = await fetchWithAuth(`/api/academics/subject-batches/?page_size=0&curriculum_row_id=${crId}`)
-                if(!sres.ok) return
-                const sdata = await sres.json()
-                const batches = sdata.results || sdata || []
-                for(const b of batches){
-                  if(Array.isArray(b.students) && b.students.find((s:any) => s.id === studentId)){
-                    crToBatch[crId] = b
-                    break
-                  }
-                }
-              }catch(e){ /* ignore per-batch failures */ }
-            }))
-            if(Object.keys(crToBatch).length){
-              for(const d of tt){
-                for(const a of (d.assignments||[])){
-                  if(!a.subject_batch && a.curriculum_row && a.curriculum_row.id){
-                    const b = crToBatch[a.curriculum_row.id]
-                    if(b) a.subject_batch = { id: b.id, name: b.name }
-                  }
-                }
-              }
-            }
-          }
-        }catch(e){ console.error('resolve student batches failed', e) }
+        // Backend should handle subject batch filtering and resolution for students
 
         setTimetable(tt)
         // derive periods from first day's assignments or ask templates endpoint
@@ -210,8 +172,15 @@ export default function StudentTimetable(){
                                       >
                                         <div className="font-semibold text-gray-900 text-xs leading-tight flex items-center gap-1">
                                           <BookOpen className="h-3 w-3" />
-                                          {shortLabel(a.curriculum_row || a.subject_text)}
-                                          {a.is_special && <span className="text-amber-600 ml-1">• Special</span>}
+                                          {a.is_special 
+                                            ? (a.timetable_name || 'Special')
+                                            : shortLabel(a.curriculum_row || a.subject_text)
+                                          }
+                                          {a.is_special && (
+                                            <span className="text-amber-600 ml-1">
+                                              • {shortLabel(a.curriculum_row || a.subject_text)}
+                                            </span>
+                                          )}
                                         </div>
                                         <div className="text-xs text-gray-700 mt-1 flex items-center gap-1">
                                           <Users className="h-3 w-3" />

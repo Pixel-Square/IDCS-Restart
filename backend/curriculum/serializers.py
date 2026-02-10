@@ -76,6 +76,7 @@ class ElectiveSubjectSerializer(serializers.ModelSerializer):
     department_id = serializers.PrimaryKeyRelatedField(queryset=Department.objects.all(), source='department', write_only=True)
     semester = serializers.IntegerField(source='semester.number', read_only=True)
     semester_id = serializers.PrimaryKeyRelatedField(queryset=Semester.objects.all(), source='semester', write_only=True, required=False)
+    student_count = serializers.IntegerField(read_only=True, default=0)
 
     class Meta:
         model = ElectiveSubject
@@ -84,9 +85,10 @@ class ElectiveSubjectSerializer(serializers.ModelSerializer):
             'class_type', 'category', 'is_elective', 'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark',
             'total_hours', 'question_paper_type', 'editable', 'overridden',
             'approval_status', 'approved_by', 'approved_at',
+            'student_count',
             'created_by', 'created_at', 'updated_at'
         ]
-        read_only_fields = ('created_by', 'created_at', 'updated_at')
+        read_only_fields = ('created_by', 'created_at', 'updated_at', 'student_count')
 
     def create(self, validated_data):
         user = self.context['request'].user

@@ -22,10 +22,11 @@ class TimetableAssignmentSerializer(serializers.ModelSerializer):
     day = serializers.IntegerField(write_only=True)
     # accept a numeric subject_batch id in payload; resolve to object in validate to avoid import-time cycles
     subject_batch_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
+    staff_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
 
     class Meta:
         model = TimetableAssignment
-        fields = ('id', 'period', 'period_id', 'day', 'section', 'section_id', 'staff', 'curriculum_row', 'subject_batch', 'subject_batch_id', 'subject_text')
+        fields = ('id', 'period', 'period_id', 'day', 'section', 'section_id', 'staff', 'staff_id', 'curriculum_row', 'subject_batch', 'subject_batch_id', 'subject_text')
         read_only_fields = ('period', 'section')
 
     def __init__(self, *args, **kwargs):
@@ -56,6 +57,16 @@ class TimetableAssignmentSerializer(serializers.ModelSerializer):
                 if sb:
                     attrs['subject_batch'] = sb
                     subject_batch = sb
+            except Exception:
+                pass
+        # resolve staff if provided as id in initial_data
+        if 'staff_id' in self.initial_data and 'staff' not in attrs:
+            try:
+                from academics.models import StaffProfile
+                staff_id = int(self.initial_data.get('staff_id'))
+                staff = StaffProfile.objects.filter(pk=staff_id).first()
+                if staff:
+                    attrs['staff'] = staff
             except Exception:
                 pass
         if curriculum_row and section:
@@ -93,11 +104,12 @@ class SpecialTimetableEntrySerializer(serializers.ModelSerializer):
     period_id = serializers.PrimaryKeyRelatedField(queryset=TimetableSlot.objects.all(), source='period', write_only=True)
     # accept numeric subject_batch id from payload
     subject_batch_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
+    staff_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
 
     class Meta:
         model = SpecialTimetableEntry
         # expose only id-based writable fields to avoid duplicate source mapping
-        fields = ('id', 'timetable_id', 'date', 'period_id', 'staff', 'curriculum_row', 'subject_batch', 'subject_batch_id', 'subject_text', 'is_active')
+        fields = ('id', 'timetable_id', 'date', 'period_id', 'staff', 'staff_id', 'curriculum_row', 'subject_batch', 'subject_batch_id', 'subject_text', 'is_active')
 
     def validate(self, attrs):
         # resolve subject_batch if provided as id in initial_data
@@ -108,6 +120,16 @@ class SpecialTimetableEntrySerializer(serializers.ModelSerializer):
                 sb = StudentSubjectBatch.objects.filter(pk=sb_id).first()
                 if sb:
                     attrs['subject_batch'] = sb
+            except Exception:
+                pass
+        # resolve staff if provided as id in initial_data
+        if 'staff_id' in self.initial_data and 'staff' not in attrs:
+            try:
+                from academics.models import StaffProfile
+                staff_id = int(self.initial_data.get('staff_id'))
+                staff = StaffProfile.objects.filter(pk=staff_id).first()
+                if staff:
+                    attrs['staff'] = staff
             except Exception:
                 pass
         return attrs

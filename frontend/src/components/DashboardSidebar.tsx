@@ -1,7 +1,7 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import useDashboard from '../hooks/useDashboard';
-import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, FileText } from 'lucide-react';
+import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, FileText, Upload } from 'lucide-react';
 import { useSidebar } from './SidebarContext';
 
 const ICON_MAP: Record<string, any> = {
@@ -9,6 +9,7 @@ const ICON_MAP: Record<string, any> = {
   curriculum_master: BookOpen,
   assigned_subjects: BookOpen,
   department_curriculum: Layout,
+  elective_import: Upload,
   student_curriculum_view: Grid,
   home: Home,
   hod_advisors: Users,
@@ -55,6 +56,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // Curriculum master/department: require explicit curriculum permissions if present, otherwise rely on entry point
   if (entry.curriculum_master && (permsLower.some(p => p.includes('curriculum')) || entry.curriculum_master)) items.push({ key: 'curriculum_master', label: 'Curriculum Master', to: '/curriculum/master' });
   if (entry.department_curriculum && (permsLower.some(p => p.includes('curriculum')) || entry.department_curriculum)) items.push({ key: 'department_curriculum', label: 'Department Curriculum', to: '/curriculum/department' });
+  if (permsLower.includes('curriculum.import_elective_choices')) items.push({ key: 'elective_import', label: 'Elective Import', to: '/curriculum/elective-import' });
 
   // HOD pages: require HOD role or explicit permission
   if (entry.hod_advisors && (rolesUpper.includes('HOD') || permsLower.includes('academics.assign_advisor'))) items.push({ key: 'hod_advisors', label: 'Advisor Assign', to: '/hod/advisors' });
@@ -86,8 +88,10 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'assigned_subjects', label: 'Assigned Subjects', to: '/staff/assigned-subjects' });
   }
 
-  // Staff: view my mentees
-  if (flags.is_staff) items.push({ key: 'my_mentees', label: 'My Mentees', to: '/staff/mentees' });
+  // Staff: view my mentees - requires permission
+  if (flags.is_staff && permsLower.includes('academics.view_mentees')) {
+    items.push({ key: 'my_mentees', label: 'My Mentees', to: '/staff/mentees' });
+  }
 
   // Period attendance for staff
   if (flags.is_staff && (permsLower.includes('academics.mark_attendance') || rolesUpper.includes('HOD') || rolesUpper.includes('ADVISOR'))) {

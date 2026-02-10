@@ -3,7 +3,8 @@
 
 {% block content %}
   <h1>{{ title }}</h1>
-  <p>Upload an Excel (.xlsx) file with headers on the first row. Expected columns: staff_id, username, email, first_name, last_name, department, designation, password</p>
+  <p>Upload an Excel (.xlsx) file with headers on the first row. Expected columns: staff_id, username, email, first_name, last_name, department, designation, role, password</p>
+  <p><strong>Role field</strong>: Specify roles like STAFF, HOD, AHOD, ADVISOR, IQAC, PRINCIPAL. Department roles (HOD/AHOD) will automatically update the department role table.</p>
   <p>
     <a href="{% url 'admin:academics_staff_template' %}" class="button">Download Excel template</a>
   </p>

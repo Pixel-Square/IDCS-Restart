@@ -4,11 +4,466 @@ import { Calendar, Clock, BookOpen, Users, Edit, Trash2, Plus, X, Save, AlertCir
 
 const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
 
+// Stable CellPopup component outside main component to prevent recreation on every render
+function CellPopup({ 
+  editingCell,
+  periods,
+  assignmentMap,
+  specialName,
+  setSpecialName,
+  selectedSpecialId,
+  setSelectedSpecialId,
+  specialTimetables,
+  specialDate,
+  setSpecialDate,
+  curriculum,
+  currentSectionRegulation,
+  editingCurriculumId,
+  setEditingCurriculumId,
+  customSubjectText,
+  setCustomSubjectText,
+  editingAvailableBatches,
+  setEditingAvailableBatches,
+  editingBatchId,
+  setEditingBatchId,
+  isCustomAssignment,
+  setIsCustomAssignment,
+  customAssignmentText,
+  setCustomAssignmentText,
+  selectedStaffId,
+  setSelectedStaffId,
+  staffList,
+  sectionId,
+  shortLabel,
+  loadBatchesForCurriculum,
+  handleDeleteSpecialEntry,
+  handleDeleteAssignment,
+  handleUpdateAssignment,
+  handleAssign,
+  loadTimetable,
+  setShowCellPopup,
+  setEditingCell,
+  fetchWithAuth
+}: any) {
+  if(!editingCell) return null
+  const day = editingCell.day
+  const periodId = editingCell.periodId
+  const assigned = assignmentMap[day] && assignmentMap[day][periodId] || []
+  const periodObj = periods.find((p: any) => p.id === periodId) || {}
+  
+  return (
+    <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50 p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+        <div className="bg-gradient-to-r from-indigo-600 to-purple-600 px-6 py-4 flex justify-between items-center">
+          <div className="flex items-center gap-3 text-white">
+            <Calendar className="h-5 w-5" />
+            <h3 className="text-lg font-semibold">
+              Day {day} • {periodObj.label || `${periodObj.start_time||''} - ${periodObj.end_time||''}`}
+            </h3>
+          </div>
+          <button 
+            onClick={()=>{ setShowCellPopup(false); setEditingCell(null) }}
+            className="text-white hover:bg-white hover:bg-opacity-20 rounded-lg p-1.5 transition-colors"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div>
+              <div className="flex items-center gap-2 mb-4">
+                <BookOpen className="h-5 w-5 text-indigo-600" />
+                <h4 className="text-lg font-semibold text-gray-900">Existing Assignments</h4>
+              </div>
+              {assigned.length === 0 ? (
+                <div className="text-center py-8 bg-gray-50 rounded-lg border-2 border-dashed border-gray-200">
+                  <AlertCircle className="h-8 w-8 text-gray-400 mx-auto mb-2" />
+                  <p className="text-gray-500">No assignment yet</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {assigned.map((a:any)=> (
+                    <div 
+                      key={a.id} 
+                      className={`rounded-lg p-4 border-2 ${
+                        a.is_special 
+                          ? 'bg-amber-50 border-amber-200' 
+                          : 'bg-blue-50 border-blue-200'
+                      }`}
+                    >
+                      <div className="font-bold text-gray-900 flex items-center gap-2">
+                        <BookOpen className="h-4 w-4" />
+                        {a.is_special 
+                          ? (a.timetable_name || 'Special')
+                          : shortLabel(a.curriculum_row || a.subject_text)
+                        }
+                        {a.is_special && (
+                          <span className="text-amber-600 text-sm">
+                            • {shortLabel(a.curriculum_row || a.subject_text)}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-sm text-gray-700 mt-2 flex items-center gap-1">
+                        <Users className="h-3.5 w-3.5" />
+                        {a.staff?.username || '—'}{a.subject_batch ? ` • Batch: ${a.subject_batch.name}` : ''}
+                      </div>
+                      {a.is_special && (
+                        <div className="text-xs text-amber-700 mt-2 flex items-center gap-1">
+                          <Calendar className="h-3.5 w-3.5" />
+                          Date: {a.date || ''} • {periodObj.label || `${periodObj.start_time || ''}${periodObj.start_time && periodObj.end_time ? ' - ' : ''}${periodObj.end_time || ''}`}
+                        </div>
+                      )}
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button 
+                          onClick={async ()=>{
+                            const crid = a.curriculum_row?.id || null
+                            const existingBatchId = a.subject_batch?.id || null
+                            setEditingCurriculumId(crid)
+                            setEditingBatchId(existingBatchId)
+                            if(crid){
+                              const list = await loadBatchesForCurriculum(crid)
+                              if(existingBatchId && !list.find((b:any)=> b.id === existingBatchId)){
+                                try{
+                                  const pres = await fetchWithAuth(`/api/academics/subject-batches/${existingBatchId}/`)
+                                  if(pres.ok){
+                                    const pb = await pres.json()
+                                    setEditingAvailableBatches((prev: any) => {
+                                      if(prev.find((x: any)=> x.id === pb.id)) return prev
+                                      return [...prev, pb]
+                                    })
+                                  }
+                                }catch(e){ console.error('failed to load existing batch', e) }
+                              }
+                            } else if(existingBatchId){
+                              try{
+                                const pres = await fetchWithAuth(`/api/academics/subject-batches/${existingBatchId}/`)
+                                if(pres.ok){
+                                  const pb = await pres.json()
+                                  setEditingAvailableBatches((prev: any) => {
+                                    if(prev.find((x: any)=> x.id === pb.id)) return prev
+                                    return [...prev, pb]
+                                  })
+                                }
+                              }catch(e){ console.error('failed to load existing batch', e) }
+                            }
+                          }}
+                          className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-1"
+                        >
+                          <Edit className="h-3.5 w-3.5" />
+                          Edit
+                        </button>
+                        <button 
+                          onClick={()=> { if(a.is_special) { handleDeleteSpecialEntry(a.id) } else { handleDeleteAssignment(a.id) } }}
+                          className="px-3 py-1.5 bg-red-600 text-white text-sm rounded-lg hover:bg-red-700 transition-colors flex items-center gap-1"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          Delete
+                        </button>
+                        <button 
+                          onClick={async ()=>{
+                            if(!editingCurriculumId) return alert('Select new subject from right panel then click Update')
+                            const payload:any = {}
+                            if(editingCurriculumId) payload.curriculum_row = editingCurriculumId
+                            if(editingBatchId !== null) payload.subject_batch_id = editingBatchId
+                            await handleUpdateAssignment(a.id, payload)
+                          }}
+                          className="px-3 py-1.5 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 transition-colors flex items-center gap-1"
+                        >
+                          <Save className="h-3.5 w-3.5" />
+                          Update
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <div className="flex items-center gap-2 mb-4">
+                <Plus className="h-5 w-5 text-green-600" />
+                <h4 className="text-lg font-semibold text-gray-900">Assign / Edit</h4>
+              </div>
+              
+              <div className="space-y-4 bg-gray-50 rounded-lg p-4 border border-gray-200">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Assignment Type</label>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => {
+                        setIsCustomAssignment(false)
+                        setCustomAssignmentText('')
+                        setSelectedStaffId(null)
+                      }}
+                      className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
+                        !isCustomAssignment 
+                          ? 'bg-indigo-600 text-white border-indigo-600' 
+                          : 'bg-white text-gray-700 border-gray-300 hover:border-indigo-300'
+                      }`}
+                    >
+                      From Curriculum
+                    </button>
+                    <button
+                      onClick={() => {
+                        setIsCustomAssignment(true)
+                        setEditingCurriculumId(null)
+                        setEditingBatchId(null)
+                        setEditingAvailableBatches([])
+                      }}
+                      className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
+                        isCustomAssignment 
+                          ? 'bg-indigo-600 text-white border-indigo-600' 
+                          : 'bg-white text-gray-700 border-gray-300 hover:border-indigo-300'
+                      }`}
+                    >
+                      Custom Subject
+                    </button>
+                  </div>
+                </div>
+
+                {!isCustomAssignment ? (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Subject</label>
+                      <select 
+                        value={editingCurriculumId || ''} 
+                        onChange={async (e) => {
+                          const val = Number(e.target.value) || null
+                          setEditingCurriculumId(val)
+                          setEditingBatchId(null)
+                          if(val){
+                            await loadBatchesForCurriculum(val)
+                          } else {
+                            setEditingAvailableBatches([])
+                          }
+                        }}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      >
+                        <option value="">Select subject…</option>
+                        {curriculum
+                          .filter((c: any) => !currentSectionRegulation?.code || c.regulation === currentSectionRegulation.code)
+                          .map((c: any) => (
+                            <option key={c.id} value={c.id}>{c.course_code} — {c.course_name}</option>
+                          ))}
+                      </select>
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Batch (optional)</label>
+                      <select 
+                        value={editingBatchId || ''} 
+                        onChange={e=> setEditingBatchId(Number(e.target.value) || null)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      >
+                        <option value="">Select batch (optional)</option>
+                        {editingAvailableBatches.map((b: any) => (
+                          <option key={b.id} value={b.id}>{b.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Subject Name</label>
+                      <input
+                        type="text"
+                        value={customAssignmentText}
+                        onChange={(e) => setCustomAssignmentText(e.target.value)}
+                        placeholder="Enter custom subject name..."
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      />
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Staff (optional)</label>
+                      <select
+                        value={selectedStaffId || ''}
+                        onChange={(e) => setSelectedStaffId(Number(e.target.value) || null)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      >
+                        <option value="">Select staff (optional)…</option>
+                        {staffList.map((staff: any) => (
+                          <option key={staff.id} value={staff.id}>
+                            {(() => {
+                              const firstName = staff.user?.first_name || '';
+                              const lastName = staff.user?.last_name || '';
+                              const fullName = `${firstName} ${lastName}`.trim();
+                              return fullName || staff.user?.username || staff.staff_id;
+                            })()}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </>
+                )}
+                
+                <button 
+                  onClick={async ()=>{
+                    if(isCustomAssignment) {
+                      if(!customAssignmentText.trim()) return alert('Subject name is required')
+                      await handleAssign(day, periodId)
+                    } else {
+                      if(!editingCurriculumId) return alert('Select a subject')
+                      await handleAssign(day, periodId, editingCurriculumId)
+                    }
+                    setShowCellPopup(false)
+                    setEditingCell(null)
+                  }}
+                  className="w-full px-4 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center gap-2 font-medium"
+                >
+                  <Plus className="h-4 w-4" />
+                  Assign to Period
+                </button>
+              </div>
+
+              <div className="mt-6 border-t border-gray-200 pt-6">
+                <div className="flex items-center gap-2 mb-3">
+                  <AlertCircle className="h-5 w-5 text-amber-600" />
+                  <h4 className="text-lg font-semibold text-gray-900">Mark Special Period</h4>
+                </div>
+                <p className="text-sm text-gray-600 mb-4">Create a date-specific override for this period.</p>
+                
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Special timetable</label>
+                    <select 
+                      value={selectedSpecialId ?? ''} 
+                      onChange={e=> setSelectedSpecialId(e.target.value ? Number(e.target.value) : null)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                    >
+                      <option value="">Create new…</option>
+                      {specialTimetables.map((t: any) => (
+                        <option key={t.id} value={t.id}>{t.name} {t.is_active? '': '(inactive)'}</option>
+                      ))}
+                    </select>
+                    {!selectedSpecialId && (
+                      <input 
+                        key="special-name-input"
+                        placeholder="Name for new special timetable" 
+                        value={specialName} 
+                        onChange={(e) => {
+                          e.preventDefault()
+                          setSpecialName(e.target.value)
+                        }}
+                        className="w-full mt-2 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                      />
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Date</label>
+                    <input 
+                      type="date" 
+                      value={specialDate||''} 
+                      onChange={e=> setSpecialDate(e.target.value || null)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Subject</label>
+                    <select 
+                      value={editingCurriculumId ?? ''} 
+                      onChange={(e) => {
+                        const val = Number(e.target.value) || null
+                        setEditingCurriculumId(val)
+                        setCustomSubjectText('')
+                        setEditingBatchId(null)
+                        // Load batches asynchronously without blocking the UI
+                        if(val && val !== -1) {
+                          loadBatchesForCurriculum(val).catch(console.error)
+                        }
+                      }}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                    >
+                      <option value="">-- choose from section subjects --</option>
+                      {curriculum
+                        .filter((c: any) => !currentSectionRegulation?.code || c.regulation === currentSectionRegulation.code)
+                        .map((c: any) => (
+                          <option key={c.id} value={c.id}>{c.course_code} — {c.course_name}</option>
+                        ))}
+                      <option value="-1">Custom text…</option>
+                    </select>
+                    {editingCurriculumId === -1 && (
+                      <input 
+                        key="custom-subject-input"
+                        placeholder="Custom subject text" 
+                        value={customSubjectText} 
+                        onChange={(e) => {
+                          e.preventDefault()
+                          setCustomSubjectText(e.target.value)
+                        }}
+                        className="w-full mt-2 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                      />
+                    )}
+                  </div>
+
+                  {editingAvailableBatches && editingAvailableBatches.length > 0 && editingCurriculumId && editingCurriculumId !== -1 && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Batch (optional)</label>
+                      <select 
+                        value={editingBatchId || ''} 
+                        onChange={e=> setEditingBatchId(Number(e.target.value) || null)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                      >
+                        <option value="">None</option>
+                        {editingAvailableBatches.map((b: any) => (
+                          <option key={b.id} value={b.id}>{b.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  <button 
+                    onClick={async ()=>{
+                      if(!specialDate) return alert('Select a date')
+                      try{
+                        let timetableId = selectedSpecialId
+                        if(!timetableId){
+                          const name = specialName || `Special - ${specialDate}`
+                          const tRes = await fetchWithAuth('/api/timetable/special-timetables/', { method: 'POST', body: JSON.stringify({ name, section: sectionId, is_active: true }) })
+                          if(!tRes.ok){ const txt = await tRes.text(); return alert('Failed to create special timetable: '+txt) }
+                          const tData = await tRes.json()
+                          timetableId = tData.id
+                        }
+
+                        const entryPayload: any = { timetable_id: timetableId, timetable: timetableId, date: specialDate, period_id: periodId, period: periodId }
+                        if(editingCurriculumId && editingCurriculumId !== -1) entryPayload.curriculum_row = editingCurriculumId
+                        if(editingCurriculumId === -1 && customSubjectText) entryPayload.subject_text = customSubjectText
+                        if(editingBatchId) entryPayload.subject_batch_id = editingBatchId
+
+                        const eRes = await fetchWithAuth('/api/timetable/special-entries/', { method: 'POST', body: JSON.stringify(entryPayload) })
+                        if(!eRes.ok){ const txt = await eRes.text(); return alert('Failed to create special entry: '+txt) }
+                        alert('Special period created')
+                        await loadTimetable()
+                        setShowCellPopup(false)
+                        setEditingCell(null)
+                      }catch(err){ console.error(err); alert('Failed to create special entry') }
+                    }}
+                    className="w-full px-4 py-2.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors flex items-center justify-center gap-2 font-medium"
+                  >
+                    <AlertCircle className="h-4 w-4" />
+                    Mark Special Period
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function TimetableEditor(){
   const [sections, setSections] = useState<any[]>([])
   const [templates, setTemplates] = useState<any[]>([])
   const [periods, setPeriods] = useState<any[]>([])
   const [sectionId, setSectionId] = useState<number | null>(null)
+  const [sectionDepartmentId, setSectionDepartmentId] = useState<number | null>(null)
+  const [currentSectionRegulation, setCurrentSectionRegulation] = useState<any>(null)
   const [templateId, setTemplateId] = useState<number | null>(null)
   const [curriculum, setCurriculum] = useState<any[]>([])
   const [timetable, setTimetable] = useState<any[]>([])
@@ -23,6 +478,10 @@ export default function TimetableEditor(){
   const [selectedSpecialId, setSelectedSpecialId] = useState<number | null>(null)
   const [specialName, setSpecialName] = useState<string>('')
   const [customSubjectText, setCustomSubjectText] = useState<string>('')
+  const [isCustomAssignment, setIsCustomAssignment] = useState<boolean>(false)
+  const [customAssignmentText, setCustomAssignmentText] = useState<string>('')
+  const [selectedStaffId, setSelectedStaffId] = useState<number | null>(null)
+  const [staffList, setStaffList] = useState<any[]>([])
 
   useEffect(()=>{
     // Advisors don't have access to the HOD sections endpoint; use my-students
@@ -31,11 +490,19 @@ export default function TimetableEditor(){
         if(!r.ok) return []
         return r.json()
       }).then(d=>{
-        const secs = (d.results || []).map((entry:any) => ({ id: entry.section_id, name: entry.section_name, batch: '' }))
+        const secs = (d.results || []).map((entry:any) => ({ 
+          id: entry.section_id, 
+          name: entry.section_name, 
+          batch: entry.batch,
+          batch_regulation: entry.batch_regulation,
+          department_id: entry.department_id
+        }))
         setSections(secs)
         // auto-select first section so advisor doesn't need manual selection
         if(!sectionId && secs.length > 0){
           setSectionId(secs[0].id)
+          setSectionDepartmentId(secs[0].department_id)
+          setCurrentSectionRegulation(secs[0].batch_regulation)
         }
       })
     fetchWithAuth('/api/timetable/templates/')
@@ -52,6 +519,12 @@ export default function TimetableEditor(){
 
   useEffect(()=>{
     if(sectionId){
+      // Update regulation when section changes
+      const selectedSection = sections.find(s => s.id === sectionId)
+      if(selectedSection) {
+        setCurrentSectionRegulation(selectedSection.batch_regulation)
+      }
+      
       fetchWithAuth(`/api/timetable/curriculum-for-section/?section_id=${sectionId}`)
         .then(r=>r.json()).then(d=>setCurriculum(d.results || []))
       loadTimetable()
@@ -65,8 +538,16 @@ export default function TimetableEditor(){
         if(!r.ok) return []
         return r.json()
       }).then(d=> setSpecialTimetables(d.results || []))
+      
+      // fetch staff list for custom assignments - filtered by section's department
+      if(sectionDepartmentId) {
+        fetchWithAuth(`/api/academics/advisor-staff/?department=${sectionDepartmentId}`).then(r=>{
+          if(!r.ok) return []
+          return r.json()
+        }).then(d=> setStaffList(d.results || d || []))
+      }
     }
-  },[sectionId])
+  },[sectionId, sectionDepartmentId])
 
   async function loadTimetable(){
     if(!sectionId) return
@@ -117,11 +598,27 @@ export default function TimetableEditor(){
     return target.toISOString().slice(0,10)
   }
 
-  async function handleAssign(day:number, periodId:number, curriculumId:number){
-    if(!curriculumId || !sectionId) return alert('Select a curriculum row and section first')
-    const payload: any = { period_id: periodId, day, section_id: sectionId, curriculum_row: curriculumId }
-    // include subject_batch if selected in the editor
-    if(editingBatchId) payload.subject_batch_id = editingBatchId
+  async function handleAssign(day:number, periodId:number, curriculumId?:number){
+    if(!sectionId) return alert('Section is required')
+    
+    const payload: any = { 
+      period_id: periodId, 
+      day, 
+      section_id: sectionId 
+    }
+    
+    if(isCustomAssignment) {
+      // Custom assignment
+      if(!customAssignmentText.trim()) return alert('Subject name is required')
+      payload.subject_text = customAssignmentText.trim()
+      if(selectedStaffId) payload.staff_id = selectedStaffId
+    } else {
+      // Curriculum-based assignment
+      if(!curriculumId) return alert('Select a curriculum row first')
+      payload.curriculum_row = curriculumId
+      if(editingBatchId) payload.subject_batch_id = editingBatchId
+    }
+    
     const res = await fetchWithAuth('/api/timetable/assignments/', { method: 'POST', body: JSON.stringify(payload) })
     if(!res.ok){ const txt = await res.text(); return alert('Failed: '+txt) }
     
@@ -129,6 +626,8 @@ export default function TimetableEditor(){
     setEditingCurriculumId(null)
     setEditingAvailableBatches([])
     setEditingBatchId(null)
+    setCustomAssignmentText('')
+    setSelectedStaffId(null)
     // reload from server to pick up resolved staff/subject_batch fields
     await loadTimetable()
   }
@@ -173,12 +672,25 @@ export default function TimetableEditor(){
               >
                 <div className="font-semibold text-gray-900 text-xs leading-tight flex items-center gap-1">
                   <BookOpen className="h-3 w-3" />
-                  {shortLabel(asg.curriculum_row || asg.subject_text)}
-                  {asg.is_special && <span className="text-amber-600 ml-1">• Special</span>}
+                  {asg.is_special 
+                    ? (asg.timetable_name || 'Special')
+                    : shortLabel(asg.curriculum_row || asg.subject_text)
+                  }
+                  {asg.is_special && (
+                    <span className="text-amber-600 ml-1">
+                      • {shortLabel(asg.curriculum_row || asg.subject_text)}
+                    </span>
+                  )}
                 </div>
                 <div className="text-xs text-gray-700 mt-1 flex items-center gap-1">
                   <Users className="h-3 w-3" />
-                  Staff: {asg.staff?.username || '—'}{asg.subject_batch ? ` • Batch: ${asg.subject_batch.name}` : ''}
+                  Staff: {(() => {
+                    if (!asg.staff) return '—';
+                    const firstName = asg.staff.first_name || '';
+                    const lastName = asg.staff.last_name || '';
+                    const fullName = `${firstName} ${lastName}`.trim();
+                    return fullName || asg.staff.username || '—';
+                  })()}{asg.subject_batch ? ` • Batch: ${asg.subject_batch.name}` : ''}
                 </div>
               </div>
             ))}
@@ -234,318 +746,33 @@ export default function TimetableEditor(){
     }catch(e){ console.error(e); alert('Update failed') }
   }
 
-  function CellPopup(){
-    if(!editingCell) return null
-    const day = editingCell.day
-    const periodId = editingCell.periodId
-    const assigned = assignmentMap[day] && assignmentMap[day][periodId] || []
-    const periodObj = periods.find(p=> p.id === periodId) || {}
+  // Create a comprehensive subjects list combining curriculum and staff assignments
+  const getCombinedSubjectsList = () => {
+    if (!currentSectionRegulation?.code) return []
     
-    return (
-      <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50 p-4">
-        <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
-          <div className="bg-gradient-to-r from-indigo-600 to-purple-600 px-6 py-4 flex justify-between items-center">
-            <div className="flex items-center gap-3 text-white">
-              <Calendar className="h-5 w-5" />
-              <h3 className="text-lg font-semibold">
-                Day {day} • {periodObj.label || `${periodObj.start_time||''} - ${periodObj.end_time||''}`}
-              </h3>
-            </div>
-            <button 
-              onClick={()=>{ setShowCellPopup(false); setEditingCell(null) }}
-              className="text-white hover:bg-white hover:bg-opacity-20 rounded-lg p-1.5 transition-colors"
-            >
-              <X className="h-5 w-5" />
-            </button>
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-6">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div>
-                <div className="flex items-center gap-2 mb-4">
-                  <BookOpen className="h-5 w-5 text-indigo-600" />
-                  <h4 className="text-lg font-semibold text-gray-900">Existing Assignments</h4>
-                </div>
-                {assigned.length === 0 ? (
-                  <div className="text-center py-8 bg-gray-50 rounded-lg border-2 border-dashed border-gray-200">
-                    <AlertCircle className="h-8 w-8 text-gray-400 mx-auto mb-2" />
-                    <p className="text-gray-500">No assignment yet</p>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {assigned.map((a:any)=> (
-                      <div 
-                        key={a.id} 
-                        className={`rounded-lg p-4 border-2 ${
-                          a.is_special 
-                            ? 'bg-amber-50 border-amber-200' 
-                            : 'bg-blue-50 border-blue-200'
-                        }`}
-                      >
-                        <div className="font-bold text-gray-900 flex items-center gap-2">
-                          <BookOpen className="h-4 w-4" />
-                          {shortLabel(a.curriculum_row || a.subject_text)}
-                          {a.is_special && <span className="text-amber-600 text-sm">• Special</span>}
-                        </div>
-                        <div className="text-sm text-gray-700 mt-2 flex items-center gap-1">
-                          <Users className="h-3.5 w-3.5" />
-                          {a.staff?.username || '—'}{a.subject_batch ? ` • Batch: ${a.subject_batch.name}` : ''}
-                        </div>
-                        {a.is_special && (
-                          <div className="text-xs text-amber-700 mt-2 flex items-center gap-1">
-                            <Calendar className="h-3.5 w-3.5" />
-                            Date: {a.date || ''} • {periodObj.label || `${periodObj.start_time || ''}${periodObj.start_time && periodObj.end_time ? ' - ' : ''}${periodObj.end_time || ''}`}
-                          </div>
-                        )}
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <button 
-                            onClick={async ()=>{
-                              const crid = a.curriculum_row?.id || null
-                              const existingBatchId = a.subject_batch?.id || null
-                              setEditingCurriculumId(crid)
-                              setEditingBatchId(existingBatchId)
-                              if(crid){
-                                const list = await loadBatchesForCurriculum(crid)
-                                if(existingBatchId && !list.find((b:any)=> b.id === existingBatchId)){
-                                  try{
-                                    const pres = await fetchWithAuth(`/api/academics/subject-batches/${existingBatchId}/`)
-                                    if(pres.ok){
-                                      const pb = await pres.json()
-                                      setEditingAvailableBatches(prev => {
-                                        if(prev.find(x=> x.id === pb.id)) return prev
-                                        return [...prev, pb]
-                                      })
-                                    }
-                                  }catch(e){ console.error('failed to load existing batch', e) }
-                                }
-                              } else if(existingBatchId){
-                                try{
-                                  const pres = await fetchWithAuth(`/api/academics/subject-batches/${existingBatchId}/`)
-                                  if(pres.ok){
-                                    const pb = await pres.json()
-                                    setEditingAvailableBatches(prev => {
-                                      if(prev.find(x=> x.id === pb.id)) return prev
-                                      return [...prev, pb]
-                                    })
-                                  }
-                                }catch(e){ console.error('failed to load existing batch', e) }
-                              }
-                            }}
-                            className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-1"
-                          >
-                            <Edit className="h-3.5 w-3.5" />
-                            Edit
-                          </button>
-                          <button 
-                            onClick={()=> { if(a.is_special) { handleDeleteSpecialEntry(a.id) } else { handleDeleteAssignment(a.id) } }}
-                            className="px-3 py-1.5 bg-red-600 text-white text-sm rounded-lg hover:bg-red-700 transition-colors flex items-center gap-1"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                            Delete
-                          </button>
-                          <button 
-                            onClick={async ()=>{
-                              if(!editingCurriculumId) return alert('Select new subject from right panel then click Update')
-                              const payload:any = {}
-                              if(editingCurriculumId) payload.curriculum_row = editingCurriculumId
-                              if(editingBatchId !== null) payload.subject_batch_id = editingBatchId
-                              await handleUpdateAssignment(a.id, payload)
-                            }}
-                            className="px-3 py-1.5 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 transition-colors flex items-center gap-1"
-                          >
-                            <Save className="h-3.5 w-3.5" />
-                            Update
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div>
-                <div className="flex items-center gap-2 mb-4">
-                  <Plus className="h-5 w-5 text-green-600" />
-                  <h4 className="text-lg font-semibold text-gray-900">Assign / Edit</h4>
-                </div>
-                
-                <div className="space-y-4 bg-gray-50 rounded-lg p-4 border border-gray-200">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Subject</label>
-                    <select 
-                      value={editingCurriculumId || ''} 
-                      onChange={async e=>{
-                        const val = Number(e.target.value) || null
-                        setEditingCurriculumId(val)
-                        setEditingBatchId(null)
-                        if(val){
-                          await loadBatchesForCurriculum(val)
-                        } else {
-                          setEditingAvailableBatches([])
-                        }
-                      }}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                    >
-                      <option value="">Select subject…</option>
-                      {curriculum.map(c=> (
-                        <option key={c.id} value={c.id}>{c.course_code} — {c.course_name}</option>
-                      ))}
-                    </select>
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Batch (optional)</label>
-                    <select 
-                      value={editingBatchId || ''} 
-                      onChange={e=> setEditingBatchId(Number(e.target.value) || null)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                    >
-                      <option value="">Select batch (optional)</option>
-                      {editingAvailableBatches.map(b=> (
-                        <option key={b.id} value={b.id}>{b.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                  
-                  <button 
-                    onClick={async ()=>{
-                      if(!editingCurriculumId) return alert('Select a subject')
-                      await handleAssign(day, periodId, editingCurriculumId)
-                      setShowCellPopup(false)
-                      setEditingCell(null)
-                    }}
-                    className="w-full px-4 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center gap-2 font-medium"
-                  >
-                    <Plus className="h-4 w-4" />
-                    Assign to Period
-                  </button>
-                </div>
-
-                <div className="mt-6 border-t border-gray-200 pt-6">
-                  <div className="flex items-center gap-2 mb-3">
-                    <AlertCircle className="h-5 w-5 text-amber-600" />
-                    <h4 className="text-lg font-semibold text-gray-900">Mark Special Period</h4>
-                  </div>
-                  <p className="text-sm text-gray-600 mb-4">Create a date-specific override for this period.</p>
-                  
-                  <div className="space-y-3">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Special timetable</label>
-                      <select 
-                        value={selectedSpecialId ?? ''} 
-                        onChange={e=> setSelectedSpecialId(e.target.value ? Number(e.target.value) : null)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
-                      >
-                        <option value="">Create new…</option>
-                        {specialTimetables.map(t=> (
-                          <option key={t.id} value={t.id}>{t.name} {t.is_active? '': '(inactive)'}</option>
-                        ))}
-                      </select>
-                      {!selectedSpecialId && (
-                        <input 
-                          placeholder="Name for new special timetable" 
-                          value={specialName} 
-                          onChange={e=> setSpecialName(e.target.value)}
-                          className="w-full mt-2 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
-                        />
-                      )}
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Date</label>
-                      <input 
-                        type="date" 
-                        value={specialDate||''} 
-                        onChange={e=> setSpecialDate(e.target.value || null)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Subject</label>
-                      <select 
-                        value={editingCurriculumId ?? ''} 
-                        onChange={async e=>{
-                          const val = Number(e.target.value) || null
-                          setEditingCurriculumId(val)
-                          setCustomSubjectText('')
-                          setEditingBatchId(null)
-                          if(val) await loadBatchesForCurriculum(val)
-                        }}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
-                      >
-                        <option value="">-- choose from section subjects --</option>
-                        {curriculum.map(c=> (
-                          <option key={c.id} value={c.id}>{c.course_code} — {c.course_name}</option>
-                        ))}
-                        <option value="-1">Custom text…</option>
-                      </select>
-                      {editingCurriculumId === -1 && (
-                        <input 
-                          placeholder="Custom subject text" 
-                          value={customSubjectText} 
-                          onChange={e=> setCustomSubjectText(e.target.value)}
-                          className="w-full mt-2 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
-                        />
-                      )}
-                    </div>
-
-                    {editingAvailableBatches && editingAvailableBatches.length > 0 && editingCurriculumId && editingCurriculumId !== -1 && (
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1.5">Batch (optional)</label>
-                        <select 
-                          value={editingBatchId || ''} 
-                          onChange={e=> setEditingBatchId(Number(e.target.value) || null)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
-                        >
-                          <option value="">None</option>
-                          {editingAvailableBatches.map(b=> (
-                            <option key={b.id} value={b.id}>{b.name}</option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-
-                    <button 
-                      onClick={async ()=>{
-                        if(!specialDate) return alert('Select a date')
-                        try{
-                          let timetableId = selectedSpecialId
-                          if(!timetableId){
-                            const name = specialName || `Special - ${specialDate}`
-                            const tRes = await fetchWithAuth('/api/timetable/special-timetables/', { method: 'POST', body: JSON.stringify({ name, section: sectionId, is_active: true }) })
-                            if(!tRes.ok){ const txt = await tRes.text(); return alert('Failed to create special timetable: '+txt) }
-                            const tData = await tRes.json()
-                            timetableId = tData.id
-                          }
-
-                          const entryPayload: any = { timetable_id: timetableId, timetable: timetableId, date: specialDate, period_id: periodId, period: periodId }
-                          if(editingCurriculumId && editingCurriculumId !== -1) entryPayload.curriculum_row = editingCurriculumId
-                          if(editingCurriculumId === -1 && customSubjectText) entryPayload.subject_text = customSubjectText
-                          if(editingBatchId) entryPayload.subject_batch_id = editingBatchId
-
-                          const eRes = await fetchWithAuth('/api/timetable/special-entries/', { method: 'POST', body: JSON.stringify(entryPayload) })
-                          if(!eRes.ok){ const txt = await eRes.text(); return alert('Failed to create special entry: '+txt) }
-                          alert('Special period created')
-                          await loadTimetable()
-                          setShowCellPopup(false)
-                          setEditingCell(null)
-                        }catch(err){ console.error(err); alert('Failed to create special entry') }
-                      }}
-                      className="w-full px-4 py-2.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors flex items-center justify-center gap-2 font-medium"
-                    >
-                      <AlertCircle className="h-4 w-4" />
-                      Mark Special Period
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+    // Filter curriculum by regulation
+    const regulationFilteredCurriculum = curriculum.filter((subject: any) => 
+      subject.regulation === currentSectionRegulation.code
     )
+    
+    // Create map of staff assignments
+    const staffMap = new Map()
+    subjectStaffList.forEach((staffSubject: any) => {
+      if (staffSubject.id && staffSubject.staff) {
+        staffMap.set(staffSubject.id, staffSubject.staff)
+      }
+    })
+    
+    // Combine curriculum with staff data
+    const combined = regulationFilteredCurriculum.map((subject: any) => ({
+      ...subject,
+      staff: staffMap.get(subject.id) || '—'
+    }))
+    
+    return combined
   }
+
+  const filteredSubjectStaffList = getCombinedSubjectsList()
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 p-6">
@@ -572,6 +799,16 @@ export default function TimetableEditor(){
                   </span>
                 </div>
               </div>
+              {currentSectionRegulation && (
+                <div className="px-4 py-2 bg-gradient-to-r from-emerald-50 to-teal-50 rounded-lg border border-emerald-200">
+                  <div className="flex items-center gap-2">
+                    <BookOpen className="h-4 w-4 text-emerald-600" />
+                    <span className="font-semibold text-emerald-900">
+                      Regulation: {currentSectionRegulation.code}
+                    </span>
+                  </div>
+                </div>
+              )}
               {templateId && (
                 <div className="px-4 py-2 bg-gray-50 rounded-lg border border-gray-200">
                   <div className="flex items-center gap-2">
@@ -643,7 +880,14 @@ export default function TimetableEditor(){
           <div className="p-6 border-b border-gray-100">
             <div className="flex items-center gap-2">
               <Users className="h-5 w-5 text-indigo-600" />
-              <h3 className="text-lg font-semibold text-gray-900">Subjects & Staff Reference</h3>
+              <h3 className="text-lg font-semibold text-gray-900">
+                Subjects & Staff Reference
+                {currentSectionRegulation && (
+                  <span className="ml-2 text-sm font-normal text-gray-600">
+                    (Regulation: {currentSectionRegulation.code})
+                  </span>
+                )}
+              </h3>
             </div>
           </div>
           
@@ -656,26 +900,46 @@ export default function TimetableEditor(){
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {subjectStaffList.length === 0 ? (
+                {filteredSubjectStaffList.length === 0 ? (
                   <tr>
                     <td colSpan={2} className="px-6 py-8 text-center">
                       <BookOpen className="h-8 w-8 text-gray-400 mx-auto mb-2" />
-                      <p className="text-gray-500">No subjects found</p>
+                      <p className="text-gray-500">
+                        {currentSectionRegulation 
+                          ? `No subjects found for regulation ${currentSectionRegulation.code}`
+                          : 'No subjects found'}
+                      </p>
                     </td>
                   </tr>
                 ) : (
-                  subjectStaffList.map((r:any) => (
+                  filteredSubjectStaffList.map((r:any) => (
                     <tr key={String(r.id)} className="hover:bg-gray-50 transition-colors">
                       <td className="px-6 py-3 text-sm text-gray-900">
                         <div className="flex items-center gap-2">
                           <BookOpen className="h-4 w-4 text-indigo-600" />
-                          {r.course_code ? `${r.course_code} — ${r.course_name}` : r.course_name}
+                          <div>
+                            <div className="font-medium">
+                              {r.course_code ? `${r.course_code} — ${r.course_name}` : r.course_name}
+                            </div>
+                            {r.class_type && (
+                              <div className="text-xs text-gray-500 mt-1">
+                                {r.class_type} {r.is_elective ? '• Elective' : ''}
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </td>
                       <td className="px-6 py-3 text-sm text-gray-700">
                         <div className="flex items-center gap-2">
                           <Users className="h-4 w-4 text-gray-500" />
-                          {r.staff || '—'}
+                          <span className={r.staff === '—' ? 'text-gray-400 italic' : ''}>
+                            {r.staff}
+                          </span>
+                          {r.staff === '—' && (
+                            <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded-full">
+                              Not Assigned
+                            </span>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -687,7 +951,48 @@ export default function TimetableEditor(){
         </div>
       </div>
       
-      {showCellPopup ? <CellPopup /> : null}
+      {showCellPopup ? (
+        <CellPopup 
+          editingCell={editingCell}
+          periods={periods}
+          assignmentMap={assignmentMap}
+          specialName={specialName}
+          setSpecialName={setSpecialName}
+          selectedSpecialId={selectedSpecialId}
+          setSelectedSpecialId={setSelectedSpecialId}
+          specialTimetables={specialTimetables}
+          specialDate={specialDate}
+          setSpecialDate={setSpecialDate}
+          curriculum={curriculum}
+          currentSectionRegulation={currentSectionRegulation}
+          editingCurriculumId={editingCurriculumId}
+          setEditingCurriculumId={setEditingCurriculumId}
+          customSubjectText={customSubjectText}
+          setCustomSubjectText={setCustomSubjectText}
+          editingAvailableBatches={editingAvailableBatches}
+          setEditingAvailableBatches={setEditingAvailableBatches}
+          editingBatchId={editingBatchId}
+          setEditingBatchId={setEditingBatchId}
+          isCustomAssignment={isCustomAssignment}
+          setIsCustomAssignment={setIsCustomAssignment}
+          customAssignmentText={customAssignmentText}
+          setCustomAssignmentText={setCustomAssignmentText}
+          selectedStaffId={selectedStaffId}
+          setSelectedStaffId={setSelectedStaffId}
+          staffList={staffList}
+          sectionId={sectionId}
+          shortLabel={shortLabel}
+          loadBatchesForCurriculum={loadBatchesForCurriculum}
+          handleDeleteSpecialEntry={handleDeleteSpecialEntry}
+          handleDeleteAssignment={handleDeleteAssignment}
+          handleUpdateAssignment={handleUpdateAssignment}
+          handleAssign={handleAssign}
+          loadTimetable={loadTimetable}
+          setShowCellPopup={setShowCellPopup}
+          setEditingCell={setEditingCell}
+          fetchWithAuth={fetchWithAuth}
+        />
+      ) : null}
     </div>
   )
 }

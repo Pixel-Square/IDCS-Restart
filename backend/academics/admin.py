@@ -583,36 +583,70 @@ class StaffProfileAdmin(admin.ModelAdmin):
                                 sp.department = dept
                                 sp.save(update_fields=['department'])
 
-                        # If a logical department role (HOD/AHOD) was provided, update DepartmentRole
+                        # If a logical role was provided, handle role assignment
                         try:
                             rv = str(role_value).strip().upper() if role_value is not None else ''
                         except Exception:
                             rv = ''
-                        if rv in ('HOD', 'AHOD'):
+                        
+                        if rv:
                             try:
-                                # re-resolve department if not set
-                                if not getattr(sp, 'department', None) and department_name:
-                                    dept = Department.objects.filter(models.Q(code__iexact=department_name) | models.Q(name__iexact=department_name) | models.Q(short_name__iexact=department_name)).first()
-                                if dept:
-                                    # choose active academic year if available
-                                    ay = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.order_by('-id').first()
-                                    if ay:
-                                        # deactivate existing HOD for the department/year when assigning a new HOD
-                                        if rv == 'HOD':
-                                            DepartmentRole.objects.filter(department=dept, academic_year=ay, role='HOD', is_active=True).update(is_active=False)
-                                        # create the new department role record
-                                        DepartmentRole.objects.create(department=dept, staff=sp, role=rv, academic_year=ay, is_active=True)
-                                        # also ensure the logical Role (HOD/AHOD) is assigned to the user
-                                        try:
-                                            logical_role, _ = Role.objects.get_or_create(name=rv)
-                                            if logical_role not in user.roles.all():
-                                                user.roles.add(logical_role)
-                                        except ValidationError as ve:
-                                            errors.append(f'Row {i}: failed to assign logical role {rv}: {ve}')
-                                        except Exception as e:
-                                            errors.append(f'Row {i}: error assigning logical role {rv}: {e}')
+                                # Ensure the role exists in the system
+                                logical_role, _ = Role.objects.get_or_create(name=rv)
+                                
+                                # Add the logical role to user if not already assigned
+                                if logical_role not in user.roles.all():
+                                    user.roles.add(logical_role)
+                                    
+                                # Handle department-specific roles (HOD, AHOD) - update DepartmentRole table
+                                if rv in ('HOD', 'AHOD'):
+                                    # Re-resolve department if not already resolved
+                                    if not dept and department_name:
+                                        dept = Department.objects.filter(
+                                            models.Q(code__iexact=department_name) | 
+                                            models.Q(name__iexact=department_name) | 
+                                            models.Q(short_name__iexact=department_name)
+                                        ).first()
+                                    
+                                    if dept:
+                                        # Get active academic year
+                                        ay = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.order_by('-id').first()
+                                        if ay:
+                                            # For HOD role, deactivate existing HOD for the department/year
+                                            if rv == 'HOD':
+                                                DepartmentRole.objects.filter(
+                                                    department=dept, 
+                                                    academic_year=ay, 
+                                                    role='HOD', 
+                                                    is_active=True
+                                                ).update(is_active=False)
+                                            
+                                            # Create or update the department role record
+                                            dept_role, created = DepartmentRole.objects.get_or_create(
+                                                department=dept,
+                                                staff=sp,
+                                                role=rv,
+                                                academic_year=ay,
+                                                defaults={'is_active': True}
+                                            )
+                                            if not created:
+                                                dept_role.is_active = True
+                                                dept_role.save()
+                                    else:
+                                        errors.append(f'Row {i}: Department required for role {rv} but not found: {department_name}')
+                                            
+                                # Handle advisor role assignment
+                                elif rv == 'ADVISOR':
+                                    # Advisors are handled through section assignments, not department roles
+                                    pass
+                                    
+                                # Handle other institutional roles (IQAC, PRINCIPAL, etc.)
+                                # These don't need department role entries, just the role assignment
+                                
+                            except ValidationError as ve:
+                                errors.append(f'Row {i}: failed to assign role {rv}: {ve}')
                             except Exception as e:
-                                errors.append(f'Row {i}: failed to set department role {rv}: {e}')
+                                errors.append(f'Row {i}: error assigning role {rv}: {e}')
 
                         if designation and (not sp.designation):
                             sp.designation = designation
@@ -626,11 +660,11 @@ class StaffProfileAdmin(admin.ModelAdmin):
                         except Exception:
                             pass
 
-                        # ensure logical Role 'STAFF'
+                        # ensure logical Role 'STAFF' - always assign STAFF role by default
                         try:
-                            role_obj, _ = Role.objects.get_or_create(name='STAFF')
-                            if role_obj not in user.roles.all():
-                                user.roles.add(role_obj)
+                            staff_role, _ = Role.objects.get_or_create(name='STAFF')
+                            if staff_role not in user.roles.all():
+                                user.roles.add(staff_role)
                         except ValidationError as ve:
                             errors.append(f'Row {i}: failed to assign role STAFF: {ve}')
                         except Exception as e:
@@ -655,22 +689,35 @@ class StaffProfileAdmin(admin.ModelAdmin):
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = 'import'
-        headers = ['staff_id', 'username', 'email', 'first_name', 'last_name', 'department', 'designation', 'password']
+        headers = ['staff_id', 'username', 'email', 'first_name', 'last_name', 'department', 'designation', 'role', 'password']
         ws.append(headers)
-        ws.append(['STAFF001', 'jsmith', 'jsmith@example.edu', 'John', 'Smith', 'CSE', 'Lecturer', 'changeme'])
+        ws.append(['STAFF001', 'jsmith', 'jsmith@example.edu', 'John', 'Smith', 'CSE', 'Lecturer', 'STAFF', 'changeme'])
 
         # departments list (use short_name for dropdown values)
         depts = list(Department.objects.values_list('short_name', flat=True))
+        # available roles
+        from accounts.models import Role
+        roles = list(Role.objects.values_list('name', flat=True))
+        if not roles:  # fallback if no roles exist
+            roles = ['STAFF', 'HOD', 'AHOD', 'ADVISOR', 'IQAC', 'PRINCIPAL']
+            
         lists = wb.create_sheet(title='lists')
         for i, d in enumerate(depts, start=1):
             lists.cell(row=i, column=1, value=d)
+        for i, r in enumerate(roles, start=1):
+            lists.cell(row=i, column=2, value=r)
         lists.sheet_state = 'hidden'
 
         try:
             from openpyxl.worksheet.datavalidation import DataValidation
-            dv = DataValidation(type='list', formula1=f"=lists!$A$1:$A${len(depts) or 1}", allow_blank=True)
-            ws.add_data_validation(dv)
-            dv.add('F2:F500')
+            # Department validation (column F)
+            dv_dept = DataValidation(type='list', formula1=f"=lists!$A$1:$A${len(depts) or 1}", allow_blank=True)
+            ws.add_data_validation(dv_dept)
+            dv_dept.add('F2:F500')
+            # Role validation (column H)
+            dv_role = DataValidation(type='list', formula1=f"=lists!$B$1:$B${len(roles) or 1}", allow_blank=True)
+            ws.add_data_validation(dv_role)
+            dv_role.add('H2:H500')
         except Exception:
             pass
 
@@ -786,9 +833,15 @@ class SubjectAdmin(admin.ModelAdmin):
 
 @admin.register(Batch)
 class BatchAdmin(admin.ModelAdmin):
-    list_display = ('name', 'course', 'start_year', 'end_year')
-    search_fields = ('name', 'course__name')
-    list_filter = ('course',)
+    list_display = ('name', 'course', 'regulation_display', 'start_year', 'end_year')
+    search_fields = ('name', 'course__name', 'regulation__code', 'regulation__name')
+    list_filter = ('course', 'regulation')
+    raw_id_fields = ('regulation',)
+    
+    def regulation_display(self, obj):
+        reg = getattr(obj, 'regulation', None)
+        return getattr(reg, 'code', '—') if reg else '—'
+    regulation_display.short_description = 'Regulation'
 
 
 @admin.register(TeachingAssignment)

@@ -2,6 +2,7 @@ from rest_framework import viewsets, status, serializers
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
+from django.db.models import Count, Q
 from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject
 from .serializers import CurriculumMasterSerializer, CurriculumDepartmentSerializer, ElectiveSubjectSerializer
 from .permissions import IsIQACOrReadOnly
@@ -270,6 +271,7 @@ class ElectiveSubjectViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = ElectiveSubject.objects.all().select_related('department', 'parent', 'semester')
+        qs = qs.annotate(student_count=Count('choices', filter=Q(choices__is_active=True)))
         req = self.request
         dept_id = req.query_params.get('department_id')
         regulation = req.query_params.get('regulation')

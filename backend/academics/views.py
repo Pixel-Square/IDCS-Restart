@@ -326,6 +326,12 @@ class MentorMyMenteesView(APIView):
 
     def get(self, request):
         user = request.user
+        perms = get_user_permissions(user)
+        
+        # Check for view_mentees permission
+        if not ('academics.view_mentees' in perms or user.has_perm('academics.view_studentmentormap') or user.is_superuser):
+            return Response({'detail': 'You do not have permission to view mentees'}, status=status.HTTP_403_FORBIDDEN)
+        
         staff_profile = getattr(user, 'staff_profile', None)
         if not staff_profile:
             return Response({'results': []})
@@ -583,15 +589,19 @@ class HODSectionsView(APIView):
         if not dept_ids:
             return Response({'results': []})
 
-        sections = Section.objects.filter(batch__course__department_id__in=dept_ids).select_related('batch__course__department')
+        sections = Section.objects.filter(batch__course__department_id__in=dept_ids).select_related('batch__course__department', 'batch__regulation')
         results = []
         for s in sections:
-            course = getattr(getattr(s, 'batch', None), 'course', None)
+            batch = getattr(s, 'batch', None)
+            course = getattr(batch, 'course', None) if batch else None
             dept = getattr(course, 'department', None) if course is not None else None
+            reg = getattr(batch, 'regulation', None) if batch else None
             results.append({
                 'id': s.id,
                 'name': str(s),
-                'batch_id': getattr(getattr(s, 'batch', None), 'id', None),
+                'batch_id': getattr(batch, 'id', None),
+                'batch_name': getattr(batch, 'name', None),
+                'batch_regulation': {'id': getattr(reg, 'id', None), 'code': getattr(reg, 'code', None), 'name': getattr(reg, 'name', None)} if reg else None,
                 'course_id': getattr(course, 'id', None),
                 'department_id': getattr(dept, 'id', None),
                 'department_code': getattr(dept, 'code', None),
@@ -715,7 +725,19 @@ class AdvisorStaffListView(APIView):
 
         results = []
         for s in staff_qs:
-            results.append({'id': s.id, 'user': getattr(s.user, 'username', None), 'staff_id': s.staff_id, 'department': getattr(s.department, 'id', None)})
+            user_data = None
+            if s.user:
+                user_data = {
+                    'username': s.user.username,
+                    'first_name': getattr(s.user, 'first_name', ''),
+                    'last_name': getattr(s.user, 'last_name', '')
+                }
+            results.append({
+                'id': s.id, 
+                'user': user_data, 
+                'staff_id': s.staff_id, 
+                'department': getattr(s.department, 'id', None)
+            })
         return Response({'results': results})
 
 
@@ -841,6 +863,16 @@ class SubjectBatchViewSet(viewsets.ModelViewSet):
                 qs = qs.filter(curriculum_row_id=cr_id)
             except Exception:
                 pass
+        
+        # allow filtering by student_id to find batches containing a specific student
+        student_id = self.request.query_params.get('student_id')
+        if student_id:
+            try:
+                student_id = int(student_id)
+                qs = qs.filter(students__id=student_id).distinct()
+            except Exception:
+                pass
+        
         return qs
 
     def perform_create(self, serializer):
@@ -1508,7 +1540,7 @@ class AdvisorMyStudentsView(APIView):
                 return Response({'results': []})
 
             # find active advisor mappings for current active academic year(s)
-            advisor_qs = SectionAdvisor.objects.filter(advisor=staff_profile, is_active=True, academic_year__is_active=True).select_related('section', 'section__batch', 'section__batch__course')
+            advisor_qs = SectionAdvisor.objects.filter(advisor=staff_profile, is_active=True, academic_year__is_active=True).select_related('section', 'section__batch', 'section__batch__course', 'section__batch__regulation')
             sections = [a.section for a in advisor_qs]
             if not sections:
                 return Response({'results': []})
@@ -1576,10 +1608,12 @@ class AdvisorMyStudentsView(APIView):
                 else:
                     sem_val = getattr(sem_obj, 'number', str(sem_obj))
 
+                reg = getattr(batch, 'regulation', None) if batch else None
                 results.append({
                     'section_id': sec.id,
                     'section_name': str(sec),
                     'batch': getattr(batch, 'name', None),
+                    'batch_regulation': {'id': getattr(reg, 'id', None), 'code': getattr(reg, 'code', None), 'name': getattr(reg, 'name', None)} if reg else None,
                     'department_id': getattr(course, 'department_id', None) if course is not None else None,
                     'department': {'id': getattr(dept, 'id', None), 'code': getattr(dept, 'code', None)} if dept else None,
                     'semester': sem_val,

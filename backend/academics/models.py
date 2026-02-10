@@ -191,6 +191,7 @@ class Batch(models.Model):
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='batches')
     start_year = models.PositiveSmallIntegerField(null=True, blank=True)
     end_year = models.PositiveSmallIntegerField(null=True, blank=True)
+    regulation = models.ForeignKey('curriculum.Regulation', on_delete=models.SET_NULL, null=True, blank=True, related_name='batches', help_text='Curriculum regulation this batch follows')
 
     class Meta:
         unique_together = ('name', 'course')

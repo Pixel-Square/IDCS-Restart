@@ -177,8 +177,15 @@ export default function StaffTimetable(){
                                       }`}
                                     >
                                       <div className="font-semibold text-gray-900 text-xs leading-tight">
-                                        {shortLabel(a.elective_subject || a.curriculum_row || a.subject_text)}
-                                        {a.is_special && <span className="text-amber-600 ml-1">• Special</span>}
+                                        {a.is_special 
+                                          ? (a.timetable_name || 'Special')
+                                          : shortLabel(a.elective_subject || a.curriculum_row || a.subject_text)
+                                        }
+                                        {a.is_special && (
+                                          <span className="text-amber-600 ml-1">
+                                            • {shortLabel(a.elective_subject || a.curriculum_row || a.subject_text)}
+                                          </span>
+                                        )}
                                       </div>
                                       <div className="text-xs text-blue-700 font-medium mt-1">
                                         {formatSectionInfo(a)}
