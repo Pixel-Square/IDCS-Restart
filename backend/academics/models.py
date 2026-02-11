@@ -586,6 +586,18 @@ class TeachingAssignment(models.Model):
         null=True,
         blank=True,
     )
+    custom_subject = models.CharField(
+        max_length=32,
+        choices=(
+            ('CODE_TANTRA', 'Code Tantra'),
+            ('SPORTS', 'Sports'),
+            ('LIBRARY', 'Library'),
+            ('YOGA', 'Yoga'),
+            ('INTERNSHIP', 'Internship'),
+        ),
+        null=True,
+        blank=True,
+    )
     section = models.ForeignKey(
         Section,
         on_delete=models.CASCADE,

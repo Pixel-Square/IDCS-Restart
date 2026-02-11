@@ -176,6 +176,15 @@ class SectionAdvisorViewSet(viewsets.ModelViewSet):
 
         return super().create(request, *args, **kwargs)
 
+    def perform_destroy(self, instance):
+        """Allow only users with assign_advisor permission or the model delete perm or superuser to delete an advisor assignment."""
+        user = self.request.user
+        perms = get_user_permissions(user)
+        if not (user.is_superuser or ('academics.assign_advisor' in perms) or user.has_perm('academics.delete_sectionadvisor')):
+            raise PermissionDenied('You do not have permission to delete advisor assignments.')
+        # Deleting the instance will trigger post_delete signal to remove ADVISOR role if no other active mapping exists
+        instance.delete()
+
 
 class MentorStaffListView(APIView):
     permission_classes = (IsAuthenticated,)
@@ -196,6 +205,29 @@ class MentorStaffListView(APIView):
         for s in staffs:
             data.append({'id': s.id, 'user_id': getattr(getattr(s, 'user', None), 'id', None), 'username': getattr(getattr(s, 'user', None), 'username', None), 'staff_id': s.staff_id})
         return Response({'results': data})
+
+
+class CustomSubjectsListView(APIView):
+    """Return the list of allowed custom subject choices for TeachingAssignment.custom_subject."""
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        try:
+            field = TeachingAssignment._meta.get_field('custom_subject')
+            choices = getattr(field, 'choices', []) or []
+            results = [{'value': c[0], 'label': c[1]} for c in choices]
+            return Response({'results': results})
+        except Exception as e:
+            logging.getLogger(__name__).exception('Failed to get custom subject choices: %s', e)
+            try:
+                # Fallback: return distinct non-null values present in DB
+                qs = TeachingAssignment.objects.exclude(custom_subject__isnull=True).exclude(custom_subject__exact='').values_list('custom_subject', flat=True).distinct()
+                results = [{'value': v, 'label': v} for v in qs]
+                return Response({'results': results})
+            except Exception as e2:
+                logging.getLogger(__name__).exception('Fallback failed for custom subject choices: %s', e2)
+                # Return safe empty result to avoid 500 in the UI
+                return Response({'results': []})
 
 
 class MentorStudentsForStaffView(APIView):

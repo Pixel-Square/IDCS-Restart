@@ -42,6 +42,7 @@ function CellPopup({
   handleAssign,
   loadTimetable,
   setShowCellPopup,
+  customSubjectOptions,
   setEditingCell,
   fetchWithAuth
 }: any) {
@@ -267,13 +268,16 @@ function CellPopup({
                   <>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1.5">Subject Name</label>
-                      <input
-                        type="text"
-                        value={customAssignmentText}
+                      <select
+                        value={customAssignmentText || ''}
                         onChange={(e) => setCustomAssignmentText(e.target.value)}
-                        placeholder="Enter custom subject name..."
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                      />
+                      >
+                        <option value="">Select custom subject…</option>
+                        {customSubjectOptions.map((opt: any) => (
+                          <option key={opt.value} value={opt.label}>{opt.label}</option>
+                        ))}
+                      </select>
                     </div>
                     
                     <div>
@@ -387,16 +391,20 @@ function CellPopup({
                       <option value="-1">Custom text…</option>
                     </select>
                     {editingCurriculumId === -1 && (
-                      <input 
+                      <select
                         key="custom-subject-input"
-                        placeholder="Custom subject text" 
-                        value={customSubjectText} 
+                        value={customSubjectText || ''}
                         onChange={(e) => {
                           e.preventDefault()
                           setCustomSubjectText(e.target.value)
                         }}
                         className="w-full mt-2 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
-                      />
+                      >
+                        <option value="">-- choose custom subject --</option>
+                        {customSubjectOptions.map((opt:any) => (
+                          <option key={opt.value} value={opt.label}>{opt.label}</option>
+                        ))}
+                      </select>
                     )}
                   </div>
 
@@ -478,6 +486,7 @@ export default function TimetableEditor(){
   const [selectedSpecialId, setSelectedSpecialId] = useState<number | null>(null)
   const [specialName, setSpecialName] = useState<string>('')
   const [customSubjectText, setCustomSubjectText] = useState<string>('')
+  const [customSubjectOptions, setCustomSubjectOptions] = useState<any[]>([])
   const [isCustomAssignment, setIsCustomAssignment] = useState<boolean>(false)
   const [customAssignmentText, setCustomAssignmentText] = useState<string>('')
   const [selectedStaffId, setSelectedStaffId] = useState<number | null>(null)
@@ -515,6 +524,11 @@ export default function TimetableEditor(){
           setPeriods(active.periods || [])
         }
       })
+    // load migrated custom subject choices for dropdowns
+    fetchWithAuth('/api/academics/custom-subjects/')
+      .then(r => r.ok ? r.json() : { results: [] })
+      .then(d => setCustomSubjectOptions(d.results || []))
+      .catch(err => console.error('Failed to load custom subjects', err))
   },[])
 
   useEffect(()=>{
@@ -991,6 +1005,7 @@ export default function TimetableEditor(){
           setShowCellPopup={setShowCellPopup}
           setEditingCell={setEditingCell}
           fetchWithAuth={fetchWithAuth}
+          customSubjectOptions={customSubjectOptions}
         />
       ) : null}
     </div>

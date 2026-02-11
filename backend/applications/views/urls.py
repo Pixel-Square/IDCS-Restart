@@ -7,6 +7,7 @@ from .application_views import (
     ApplicationApproveView,
     ApplicationRejectView,
 )
+from .types_views import ApplicationTypeListView, ApplicationTypeSchemaView
 
 urlpatterns = [
     path('api/applications/', CreateApplicationView.as_view(), name='applications-create'),
@@ -15,4 +16,7 @@ urlpatterns = [
     path('api/applications/<int:id>/', ApplicationDetailView.as_view(), name='applications-detail'),
     path('api/applications/<int:id>/approve/', ApplicationApproveView.as_view(), name='applications-approve'),
     path('api/applications/<int:id>/reject/', ApplicationRejectView.as_view(), name='applications-reject'),
+    # Application types and schema
+    path('api/application-types/', ApplicationTypeListView.as_view(), name='application-types-list'),
+    path('api/application-types/<int:id>/schema/', ApplicationTypeSchemaView.as_view(), name='application-types-schema'),
 ]

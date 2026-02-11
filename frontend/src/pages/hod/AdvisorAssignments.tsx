@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { User, Edit, BookOpen, Save, X } from 'lucide-react'
+import { User, Edit, BookOpen, Save, X, Trash2 } from 'lucide-react'
 import fetchWithAuth from '../../services/fetchAuth'
 
 type Section = { id: number; name: string; batch: string; department_id?: number; department_code?: string; department_short_name?: string }
@@ -252,6 +252,26 @@ export default function AdvisorAssignments() {
                                           title="Cancel"
                                         >
                                           <X className="h-4 w-4" />
+                                        </button>
+                                      )}
+                                      {assignedAdvisor && (
+                                        <button
+                                          disabled={!canAssign}
+                                          className={`p-2 text-sm font-medium rounded-lg transition-colors flex items-center justify-center ${
+                                            canAssign ? 'bg-red-50 text-red-700 border border-red-300 hover:bg-red-100' : 'text-gray-400 bg-gray-100 cursor-not-allowed'
+                                          }`}
+                                          onClick={async () => {
+                                            if (!canAssign) return
+                                            if (!confirm('Delete advisor assignment for this section?')) return
+                                            try {
+                                              const res = await fetchWithAuth(`/api/academics/section-advisors/${assignedAdvisor.id}/`, { method: 'DELETE' })
+                                              if (!res.ok) { const txt = await res.text(); return alert('Delete failed: ' + txt) }
+                                              await fetchData()
+                                            } catch (e) { console.error(e); alert('Delete failed') }
+                                          }}
+                                          title="Delete Assignment"
+                                        >
+                                          <Trash2 className="h-4 w-4" />
                                         </button>
                                       )}
                                     </div>

@@ -87,6 +87,15 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
 
     def get_subject_name(self, obj):
         try:
+            # If assignment uses a custom_subject code, prefer its display label
+            try:
+                cs = getattr(obj, 'custom_subject', None)
+                if cs:
+                    fld = obj._meta.get_field('custom_subject')
+                    choices_map = dict(getattr(fld, 'choices', []))
+                    return choices_map.get(cs, cs)
+            except Exception:
+                pass
             if getattr(obj, 'curriculum_row', None):
                 row = obj.curriculum_row
                 return getattr(row, 'course_name', None)
@@ -155,10 +164,11 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
     section_details = serializers.SerializerMethodField(read_only=True)
     curriculum_row_details = serializers.SerializerMethodField(read_only=True)
     section_name = serializers.CharField(source='section.name', read_only=True)
+    custom_subject = serializers.CharField(allow_null=True, required=False)
 
     class Meta:
         model = TeachingAssignment
-        fields = ('id', 'staff_id', 'section_id', 'academic_year', 'subject', 'curriculum_row_id', 'elective_subject_id', 'is_active', 'staff_details', 'section_details', 'curriculum_row_details', 'section_name')
+        fields = ('id', 'staff_id', 'section_id', 'academic_year', 'subject', 'curriculum_row_id', 'elective_subject_id', 'custom_subject', 'is_active', 'staff_details', 'section_details', 'curriculum_row_details', 'section_name')
 
     def get_subject(self, obj):
         # prefer curriculum row display
@@ -395,6 +405,12 @@ class SectionAdvisorSerializer(serializers.ModelSerializer):
     advisor = serializers.StringRelatedField(read_only=True)
     academic_year = serializers.PrimaryKeyRelatedField(queryset=AcademicYear.objects.all(), required=False, allow_null=True)
     department_id = serializers.SerializerMethodField(read_only=True)
+
+    def get_department_id(self, obj):
+        try:
+            return obj.section.batch.course.department_id
+        except Exception:
+            return None
 
     class Meta:
         model = SectionAdvisor
