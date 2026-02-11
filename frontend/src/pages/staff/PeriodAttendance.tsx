@@ -12,6 +12,8 @@ type PeriodItem = {
   subject_batch_id?: number | null
   attendance_session_id?: number | null
   attendance_session_locked?: boolean
+  unlock_request_status?: string | null
+  unlock_request_id?: number | null
   elective_subject_id?: number | null
   elective_subject_name?: string | null
 }
@@ -326,6 +328,7 @@ export default function PeriodAttendance(){
     }
 
     const isLocked = selected.attendance_session_locked
+    const selectedSessId = selected.attendance_session_id
     const confirmed = window.confirm(
       isLocked
         ? 'Are you sure you want to request an unlock for this attendance session? Unlocking requires approval.'
@@ -353,6 +356,16 @@ export default function PeriodAttendance(){
           const reqData = await reqRes.json()
           console.log('Unlock request created:', reqData)
           alert('Unlock request submitted successfully! Check the "My Requests" button in the Analytics page to view the status.')
+          // update UI to reflect pending state immediately
+          try{
+            setSelected(s => s ? ({ ...s, unlock_request_status: reqData.status, unlock_request_id: reqData.id }) : s)
+            setPeriods(prev => prev.map(p => {
+              if (p.attendance_session_id && selectedSessId && p.attendance_session_id === selectedSessId){
+                return { ...p, unlock_request_status: reqData.status, unlock_request_id: reqData.id }
+              }
+              return p
+            }))
+          }catch(e){ console.warn('Failed to update local unlock status', e) }
         }
         // do not change locked state until approval
       } else {
@@ -551,6 +564,20 @@ export default function PeriodAttendance(){
                         </span>
                       </div>
                       <div className="text-sm italic text-slate-600">{p.subject_display || p.subject || 'No subject'}</div>
+                      {/* Unlock request status label */}
+                      {p.unlock_request_status && (
+                        <div className="mt-2">
+                          {p.unlock_request_status === 'PENDING' && (
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-amber-100 text-amber-800 border border-amber-300 rounded-md text-xs font-medium">Pending</span>
+                          )}
+                          {p.unlock_request_status === 'APPROVED' && (
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-green-100 text-green-800 border border-green-300 rounded-md text-xs font-medium">Approved</span>
+                          )}
+                          {p.unlock_request_status === 'REJECTED' && (
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-red-100 text-red-800 border border-red-300 rounded-md text-xs font-medium">Rejected</span>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="mt-3">
@@ -616,10 +643,27 @@ export default function PeriodAttendance(){
                 {selected.period.label || `Period ${selected.period.index}`} — {selected.section_name}
               </h3>
               {selected.attendance_session_locked && (
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-100 text-amber-800 border border-amber-300 rounded-lg text-sm font-medium">
-                  <Lock className="w-3.5 h-3.5" />
-                  Locked
-                </span>
+                <>
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-100 text-amber-800 border border-amber-300 rounded-lg text-sm font-medium">
+                    <Lock className="w-3.5 h-3.5" />
+                    Locked
+                  </span>
+                  {selected.unlock_request_status === 'PENDING' && (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-50 text-amber-800 border border-amber-200 rounded-lg text-sm font-medium ml-3">
+                      Pending
+                    </span>
+                  )}
+                  {selected.unlock_request_status === 'APPROVED' && (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-green-50 text-green-800 border border-green-200 rounded-lg text-sm font-medium ml-3">
+                      Approved
+                    </span>
+                  )}
+                  {selected.unlock_request_status === 'REJECTED' && (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-red-50 text-red-800 border border-red-200 rounded-lg text-sm font-medium ml-3">
+                      Rejected
+                    </span>
+                  )}
+                </>
               )}
             </div>
             <button 
@@ -642,29 +686,52 @@ export default function PeriodAttendance(){
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
-                  {students.map(s=> (
-                    <tr key={s.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="py-3 px-4 text-sm font-medium text-slate-900">{s.reg_no}</td>
-                      <td className="py-3 px-4 text-sm text-slate-700">{s.username}</td>
-                      <td className="py-3 px-4">
-                        <div className="relative inline-block">
-                          <select 
-                            value={marks[s.id] || 'P'} 
-                            onChange={e=> setMark(s.id, e.target.value)}
-                            disabled={selected.attendance_session_locked}
-                            className="appearance-none px-3 py-1.5 pr-8 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
-                          >
-                            <option value="P">Present</option>
-                            <option value="A">Absent</option>
-                            <option value="LEAVE">Leave</option>
-                            <option value="OD">On Duty</option>
-                            <option value="LATE">Late</option>
-                          </select>
-                          <ChevronDown className="w-4 h-4 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                  {students.map(s=> {
+                    const status = marks[s.id] || 'P'
+                    const statusSelectClasses: Record<string,string> = {
+                      P: 'bg-green-50 text-green-800 border-green-300',
+                      A: 'bg-red-50 text-red-800 border-red-300',
+                      LEAVE: 'bg-amber-50 text-amber-800 border-amber-300',
+                      OD: 'bg-blue-50 text-blue-800 border-blue-300',
+                      LATE: 'bg-indigo-50 text-indigo-800 border-indigo-300',
+                    }
+                    const statusBadgeClasses: Record<string,string> = {
+                      P: 'bg-green-600',
+                      A: 'bg-red-600',
+                      LEAVE: 'bg-amber-600',
+                      OD: 'bg-blue-600',
+                      LATE: 'bg-indigo-600',
+                    }
+                    const statusCls = statusSelectClasses[status] || statusSelectClasses['P']
+                    const badgeCls = statusBadgeClasses[status] || statusBadgeClasses['P']
+
+                    return (
+                      <tr key={s.id} className="hover:bg-slate-50 transition-colors">
+                        <td className="py-3 px-4 text-sm font-medium text-slate-900">{s.reg_no}</td>
+                        <td className="py-3 px-4 text-sm text-slate-700">{s.username}</td>
+                        <td className="py-3 px-4">
+                          <div className="flex items-center">
+                            <span className={`inline-block w-3 h-3 rounded-full mr-2 ${badgeCls}`} />
+                            <div className="relative inline-block">
+                              <select 
+                                value={marks[s.id] || 'P'} 
+                                onChange={e=> setMark(s.id, e.target.value)}
+                                disabled={selected.attendance_session_locked}
+                                className={`appearance-none px-3 py-1.5 pr-8 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent ${statusCls} ${selected.attendance_session_locked ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''}`}
+                              >
+                                <option value="P">Present</option>
+                                <option value="A">Absent</option>
+                                <option value="LEAVE">Leave</option>
+                                <option value="OD">On Duty</option>
+                                <option value="LATE">Late</option>
+                              </select>
+                              <ChevronDown className="w-4 h-4 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>

@@ -35,6 +35,12 @@ export default function ElectiveImport() {
     loadElectives();
   }, [selectedRegulation, selectedSemester, selectedDept]);
 
+  // Load filter options from the full dataset once on mount so
+  // filters don't get reduced by the currently selected filters.
+  useEffect(() => {
+    loadFilterOptions();
+  }, []);
+
   const loadElectives = async () => {
     setLoading(true);
     try {
@@ -45,22 +51,30 @@ export default function ElectiveImport() {
       
       const data = await fetchElectives(params);
       setElectives(data || []);
-      
-      // Extract unique values for filters
-      const uniqueRegs = [...new Set(data.map((e: Elective) => e.regulation))].filter(Boolean).sort() as string[];
-      const uniqueSems = [...new Set(data.map((e: Elective) => e.semester))].filter(Boolean).sort((a, b) => (a as number) - (b as number)) as number[];
-      const uniqueDepts = Array.from(
-        new Map(data.map((e: Elective) => e.department).filter(Boolean).map((d: Department) => [d.id, d])).values()
-      ).sort((a, b) => ((a as Department).code || '').localeCompare((b as Department).code || '')) as Department[];
-      
-      setRegulations(uniqueRegs);
-      setSemesters(uniqueSems);
-      setDepartments(uniqueDepts);
     } catch (error) {
       console.error('Failed to load electives:', error);
       setElectives([]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadFilterOptions = async () => {
+    try {
+      const data = await fetchElectives();
+      if (!data || !Array.isArray(data)) return;
+
+      const uniqueRegs = [...new Set(data.map((e: Elective) => e.regulation))].filter(Boolean).sort() as string[];
+      const uniqueSems = [...new Set(data.map((e: Elective) => e.semester))].filter(Boolean).sort((a, b) => (a as number) - (b as number)) as number[];
+      const uniqueDepts = Array.from(
+        new Map(data.map((e: Elective) => e.department).filter(Boolean).map((d: Department) => [d.id, d])).values()
+      ).sort((a, b) => ((a as Department).code || '').localeCompare((b as Department).code || '')) as Department[];
+
+      setRegulations(uniqueRegs);
+      setSemesters(uniqueSems);
+      setDepartments(uniqueDepts);
+    } catch (error) {
+      console.error('Failed to load filter options:', error);
     }
   };
 

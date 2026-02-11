@@ -1554,6 +1554,18 @@ class StaffPeriodsView(APIView):
 
             # find existing session for this section/period/date (if any)
             session = PeriodAttendanceSession.objects.filter(section=a.section, period=a.period, date=date).first()
+            # determine latest unlock request status for this session (if any)
+            unlock_status = None
+            unlock_id = None
+            try:
+                if session:
+                    req = AttendanceUnlockRequest.objects.filter(session=session).order_by('-requested_at').first()
+                    if req:
+                        unlock_status = getattr(req, 'status', None)
+                        unlock_id = getattr(req, 'id', None)
+            except Exception:
+                unlock_status = None
+                unlock_id = None
             # attempt to resolve if staff is assigned to an elective sub-option for this curriculum_row
             resolved_subject_display = None
             try:
@@ -1585,6 +1597,9 @@ class StaffPeriodsView(APIView):
                 'subject_batch_id': getattr(a, 'subject_batch_id', None),
                 'attendance_session_id': getattr(session, 'id', None),
                 'attendance_session_locked': getattr(session, 'is_locked', False) if session else False,
+                # include latest unlock request status (if any) so frontend can show pending/approved/rejected
+                'unlock_request_status': unlock_status,
+                'unlock_request_id': unlock_id,
             })
         # Also include any SpecialTimetableEntry items for this date where the current
         # staff is the assigned staff or is mapped via a TeachingAssignment for the
@@ -1638,6 +1653,19 @@ class StaffPeriodsView(APIView):
                 else:
                     subj_disp = se.subject_text or None
 
+                # determine latest unlock request for special session (if any)
+                special_unlock_status = None
+                special_unlock_id = None
+                try:
+                    if sess:
+                        sreq = AttendanceUnlockRequest.objects.filter(session=sess).order_by('-requested_at').first()
+                        if sreq:
+                            special_unlock_status = getattr(sreq, 'status', None)
+                            special_unlock_id = getattr(sreq, 'id', None)
+                except Exception:
+                    special_unlock_status = None
+                    special_unlock_id = None
+
                 results.append({
                     'id': -(se.id),
                     'section_id': se.timetable.section.id,
@@ -1649,6 +1677,8 @@ class StaffPeriodsView(APIView):
                     'subject_batch_id': getattr(se, 'subject_batch_id', None),
                     'attendance_session_id': getattr(sess, 'id', None),
                     'attendance_session_locked': getattr(sess, 'is_locked', False) if sess else False,
+                    'unlock_request_status': special_unlock_status,
+                    'unlock_request_id': special_unlock_id,
                     'is_special': True,
                 })
         except Exception:
