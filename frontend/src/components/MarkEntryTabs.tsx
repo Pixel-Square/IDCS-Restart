@@ -631,7 +631,12 @@ export default function MarkEntryTabs({
               ) : normalizeClassType(classType) === 'PRACTICAL' ? (
                 <ReviewEntry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} assessmentKey="cia1" viewerMode={Boolean(viewerMode)} />
               ) : (
-                <Cia1Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
+                <Cia1Entry
+                  subjectId={subjectId}
+                  teachingAssignmentId={selectedTaId ?? undefined}
+                  classType={classType ?? null}
+                  questionPaperType={questionPaperType ?? null}
+                />
               )
             ) : active === 'cia2' ? (
               normalizeClassType(classType) === 'LAB' ? (
@@ -647,7 +652,12 @@ export default function MarkEntryTabs({
               ) : normalizeClassType(classType) === 'PRACTICAL' ? (
                 <ReviewEntry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} assessmentKey="cia2" viewerMode={Boolean(viewerMode)} />
               ) : (
-                <Cia2Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
+                <Cia2Entry
+                  subjectId={subjectId}
+                  teachingAssignmentId={selectedTaId ?? undefined}
+                  classType={classType ?? null}
+                  questionPaperType={questionPaperType ?? null}
+                />
               )
             ) : active === 'model' ? (
               normalizeClassType(classType) === 'LAB' ? (

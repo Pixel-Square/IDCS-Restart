@@ -836,70 +836,98 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
             """Best-effort mirror into OBE edit-request queue for IQAC screens."""
             try:
                 from OBE.models import ObeEditRequest
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception('Failed to import OBE.models for SPECIAL edit-request backlink')
+                return
 
-                staff_user = getattr(staff_profile, 'user', None)
-                if staff_user is None:
-                    return
+            staff_user = getattr(staff_profile, 'user', None)
+            if staff_user is None:
+                return
 
+            subject_code = ''
+            subject_name = ''
+            try:
+                subject_code = (
+                    getattr(row, 'course_code', None)
+                    or getattr(getattr(row, 'master', None), 'course_code', None)
+                    or getattr(getattr(ta, 'subject', None), 'code', None)
+                    or getattr(getattr(ta, 'curriculum_row', None), 'course_code', None)
+                    or ''
+                )
+            except Exception:
                 subject_code = ''
+            try:
+                subject_name = (
+                    getattr(row, 'course_name', None)
+                    or getattr(getattr(row, 'master', None), 'course_name', None)
+                    or getattr(getattr(ta, 'subject', None), 'name', None)
+                    or ''
+                )
+            except Exception:
                 subject_name = ''
-                try:
-                    subject_code = getattr(row, 'course_code', None) or getattr(getattr(row, 'master', None), 'course_code', None) or ''
-                except Exception:
-                    subject_code = ''
-                try:
-                    subject_name = getattr(row, 'course_name', None) or getattr(getattr(row, 'master', None), 'course_name', None) or ''
-                except Exception:
-                    subject_name = ''
 
-                if not subject_code:
-                    return
+            if not subject_code:
+                # If we couldn't resolve a meaningful subject code from the curriculum
+                # row or subject, fall back to a stable teaching-assignment based code.
+                try:
+                    subject_code = (
+                        getattr(getattr(ta, 'subject', None), 'code', None)
+                        or getattr(getattr(ta, 'curriculum_row', None), 'course_code', None)
+                        or f"TA-{getattr(ta, 'id', '')}"
+                        or ''
+                    )
+                except Exception:
+                    subject_code = f"TA-{getattr(ta, 'id', '')}"
 
+            if not subject_code:
+                return
+
+            section_name = ''
+            try:
+                section_name = getattr(getattr(ta, 'section', None), 'name', None) or str(getattr(ta, 'section', ''))
+            except Exception:
                 section_name = ''
-                try:
-                    section_name = getattr(getattr(ta, 'section', None), 'name', None) or str(getattr(ta, 'section', ''))
-                except Exception:
-                    section_name = ''
 
-                o, created = ObeEditRequest.objects.get_or_create(
+            try:
+                # Always create a new pending OBE edit request so faculty can re-request
+                # multiple times without hitting a limit. IQAC will see each request instantly.
+                ObeEditRequest.objects.create(
                     staff_user=staff_user,
                     academic_year=ta.academic_year,
                     subject_code=subject_code,
+                    subject_name=subject_name or '',
                     assessment='model',
                     scope='MARK_MANAGER',
-                    defaults={
-                        'teaching_assignment': ta,
-                        'subject_name': subject_name or '',
-                        'section_name': section_name or '',
-                        'reason': 'Edit request: enabled assessments (SPECIAL course global selection)',
-                    },
+                    reason='Edit request: enabled assessments (SPECIAL course global selection)',
+                    teaching_assignment=ta,
+                    section_name=section_name or '',
                 )
-                if not created:
-                    # Keep pending status if the special request is pending.
-                    # Do not override approved/rejected here; review sync updates it.
-                    try:
-                        update_fields = []
-                        if getattr(o, 'teaching_assignment_id', None) is None and getattr(ta, 'id', None) is not None:
-                            o.teaching_assignment = ta
-                            update_fields.append('teaching_assignment')
-                        if subject_name and (getattr(o, 'subject_name', '') or '') != (subject_name or ''):
-                            o.subject_name = subject_name or ''
-                            update_fields.append('subject_name')
-                        if section_name and (getattr(o, 'section_name', '') or '') != (section_name or ''):
-                            o.section_name = section_name or ''
-                            update_fields.append('section_name')
-                        if update_fields:
-                            update_fields.append('updated_at')
-                            o.save(update_fields=update_fields)
-                    except Exception:
-                        pass
             except Exception:
+                import logging
+                logging.getLogger(__name__).exception('Failed to create ObeEditRequest backlink for subject_code=%s ta=%s', subject_code, getattr(ta, 'id', None))
                 return
 
-        if existing and (existing.status == SpecialCourseAssessmentEditRequest.STATUS_PENDING or existing.is_edit_granted()):
-            _ensure_obe_backlink()
-            ser = SpecialCourseAssessmentEditRequestSerializer(existing)
-            return Response(ser.data)
+        if existing:
+            # If an existing request is currently granted (approved and within window),
+            # return it unchanged so the caller knows edit access is active.
+            if existing.is_edit_granted():
+                _ensure_obe_backlink()
+                ser = SpecialCourseAssessmentEditRequestSerializer(existing)
+                return Response(ser.data)
+
+            # If a pending request exists, treat a new request as a "re-send".
+            # Update the requested timestamp and mirror into the OBE backlink,
+            # then return with 201 so frontends display a fresh "sent" response.
+            if existing.status == SpecialCourseAssessmentEditRequest.STATUS_PENDING:
+                try:
+                    existing.requested_at = timezone.now()
+                    existing.save(update_fields=['requested_at'])
+                except Exception:
+                    pass
+                _ensure_obe_backlink()
+                ser = SpecialCourseAssessmentEditRequestSerializer(existing)
+                return Response(ser.data, status=201)
 
         req = SpecialCourseAssessmentEditRequest.objects.create(selection=sel, requested_by=staff_profile)
 

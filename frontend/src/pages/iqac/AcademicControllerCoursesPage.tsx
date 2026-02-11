@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { fetchDeptRows, fetchMasters, DeptRow, Master } from '../../services/curriculum';
+import { fetchDeptRows, DeptRow } from '../../services/curriculum';
 
 type CourseCard = {
   course_code: string;
@@ -16,7 +16,6 @@ function normalize(s: any) {
 export default function AcademicControllerCoursesPage(): JSX.Element {
   const navigate = useNavigate();
   const [rows, setRows] = useState<DeptRow[]>([]);
-  const [masters, setMasters] = useState<Master[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState('');
@@ -25,15 +24,13 @@ export default function AcademicControllerCoursesPage(): JSX.Element {
     let mounted = true;
     (async () => {
       try {
-        const [dept, master] = await Promise.all([fetchDeptRows(), fetchMasters()]);
+        const dept = await fetchDeptRows();
         if (!mounted) return;
         setRows(Array.isArray(dept) ? dept : []);
-        setMasters(Array.isArray(master) ? master : []);
         setError(null);
       } catch (e: any) {
         if (!mounted) return;
         setRows([]);
-        setMasters([]);
         setError(e?.message || 'Failed to load courses');
       } finally {
         if (mounted) setLoading(false);
@@ -47,46 +44,36 @@ export default function AcademicControllerCoursesPage(): JSX.Element {
   const courses = useMemo(() => {
     const map = new Map<string, CourseCard>();
 
-    // Start with Curriculum Master so "all courses" appear.
-    for (const m of masters || []) {
-      const code = normalize((m as any).course_code);
-      if (!code) continue;
-      if (!map.has(code)) {
-        map.set(code, {
-          course_code: code,
-          course_name: normalize((m as any).course_name),
-          class_type: normalize((m as any).class_type) || null,
-          question_paper_type: null,
-        });
-      }
-    }
-
-    // Merge/override with department rows when present (QP type + any overrides).
+    // Department Curriculum is the source of truth for course selection.
+    // Multiple departments can have rows with the same course_code; pick the best row per code.
     for (const r of rows || []) {
       const code = normalize((r as any).course_code);
       if (!code) continue;
 
+      const incoming: CourseCard = {
+        course_code: code,
+        course_name: normalize((r as any).course_name),
+        class_type: normalize((r as any).class_type) || null,
+        question_paper_type: normalize((r as any).question_paper_type) || null,
+      };
+
       const existing = map.get(code);
       if (!existing) {
-        map.set(code, {
-          course_code: code,
-          course_name: normalize((r as any).course_name),
-          class_type: normalize((r as any).class_type) || null,
-          question_paper_type: normalize((r as any).question_paper_type) || null,
-        });
+        map.set(code, incoming);
         continue;
       }
 
-      const merged: CourseCard = {
-        course_code: code,
-        course_name: normalize((r as any).course_name) || existing.course_name,
-        class_type: normalize((r as any).class_type) || existing.class_type || null,
-        question_paper_type: normalize((r as any).question_paper_type) || existing.question_paper_type || null,
-      };
-      map.set(code, merged);
+      const score = (c: CourseCard) =>
+        (c.course_name ? 1 : 0) +
+        (c.class_type ? 1 : 0) +
+        (c.question_paper_type ? 1 : 0) +
+        (String(c.question_paper_type || '').trim().toUpperCase() && String(c.question_paper_type || '').trim().toUpperCase() !== 'QP1' ? 1 : 0);
+
+      // Keep whichever has "better" metadata; ties keep existing.
+      if (score(incoming) > score(existing)) map.set(code, incoming);
     }
     return Array.from(map.values()).sort((a, b) => a.course_code.localeCompare(b.course_code));
-  }, [rows, masters]);
+  }, [rows]);
 
   const filtered = useMemo(() => {
     const needle = normalize(q).toLowerCase();

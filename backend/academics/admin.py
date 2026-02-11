@@ -21,6 +21,8 @@ from .models import (
     StudentSectionAssignment,
     StaffDepartmentAssignment,
     RoleAssignment,
+    SpecialCourseAssessmentSelection,
+    SpecialCourseAssessmentEditRequest,
 )
 from .models import TeachingAssignment
 from .models import StudentMentorMap, SectionAdvisor, DepartmentRole
@@ -29,6 +31,18 @@ from .models import PeriodAttendanceSession, PeriodAttendanceRecord
 from django import forms
 from django.db import models
 from django.core.exceptions import ValidationError
+
+try:
+    from curriculum.models import SPECIAL_ASSESSMENT_CHOICES
+except Exception:
+    SPECIAL_ASSESSMENT_CHOICES = (
+        ('ssa1', 'SSA 1'),
+        ('ssa2', 'SSA 2'),
+        ('formative1', 'Formative 1'),
+        ('formative2', 'Formative 2'),
+        ('cia1', 'CIA 1'),
+        ('cia2', 'CIA 2'),
+    )
 
 
 class StudentProfileForm(forms.ModelForm):
@@ -522,3 +536,202 @@ class PeriodAttendanceRecordAdmin(admin.ModelAdmin):
     search_fields = ('student__reg_no', 'student__user__username')
     list_filter = ('status',)
     raw_id_fields = ('session', 'student', 'marked_by')
+
+
+class SpecialCourseAssessmentEditRequestInline(admin.TabularInline):
+    model = SpecialCourseAssessmentEditRequest
+    extra = 0
+    fields = ('requested_by', 'status', 'requested_at', 'reviewed_by', 'reviewed_at', 'can_edit_until', 'used_at')
+    readonly_fields = ('requested_at', 'reviewed_at', 'used_at')
+    raw_id_fields = ('requested_by', 'reviewed_by')
+
+
+class SpecialCourseAssessmentSelectionAdminForm(forms.ModelForm):
+    enabled_assessments = forms.MultipleChoiceField(
+        choices=SPECIAL_ASSESSMENT_CHOICES,
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+        help_text='Enabled assessment tables for this SPECIAL course (saved globally per academic year).',
+    )
+
+    class Meta:
+        model = SpecialCourseAssessmentSelection
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        inst = getattr(self, 'instance', None)
+        if inst and getattr(inst, 'enabled_assessments', None):
+            self.fields['enabled_assessments'].initial = list(inst.enabled_assessments or [])
+
+    def clean_enabled_assessments(self):
+        vals = self.cleaned_data.get('enabled_assessments') or []
+        return [str(v).strip().lower() for v in vals if str(v).strip()]
+
+    def clean(self):
+        cleaned = super().clean()
+        ea = cleaned.get('enabled_assessments') or []
+        if not ea:
+            self.add_error('enabled_assessments', 'Select at least one assessment for Special courses.')
+        return cleaned
+
+
+@admin.register(SpecialCourseAssessmentSelection)
+class SpecialCourseAssessmentSelectionAdmin(admin.ModelAdmin):
+    form = SpecialCourseAssessmentSelectionAdminForm
+    list_display = (
+        'id',
+        'master_course_code',
+        'master_course_name',
+        'department_code',
+        'academic_year',
+        'locked',
+        'enabled_assessments_display',
+        'updated_at',
+    )
+    list_filter = (
+        'academic_year',
+        'locked',
+        'curriculum_row__department',
+        'curriculum_row__master__regulation',
+        'curriculum_row__master__semester',
+    )
+    search_fields = (
+        'curriculum_row__course_code',
+        'curriculum_row__course_name',
+        'curriculum_row__master__course_code',
+        'curriculum_row__master__course_name',
+        'curriculum_row__department__code',
+    )
+    raw_id_fields = ('curriculum_row', 'academic_year', 'created_by')
+    readonly_fields = ('created_at', 'updated_at')
+    inlines = (SpecialCourseAssessmentEditRequestInline,)
+
+    def master_course_code(self, obj):
+        try:
+            m = getattr(getattr(obj, 'curriculum_row', None), 'master', None)
+            return getattr(m, 'course_code', None) or getattr(obj.curriculum_row, 'course_code', None)
+        except Exception:
+            return None
+
+    master_course_code.short_description = 'Course Code'
+
+    def master_course_name(self, obj):
+        try:
+            m = getattr(getattr(obj, 'curriculum_row', None), 'master', None)
+            return getattr(m, 'course_name', None) or getattr(obj.curriculum_row, 'course_name', None)
+        except Exception:
+            return None
+
+    master_course_name.short_description = 'Course Name'
+
+    def department_code(self, obj):
+        try:
+            return getattr(getattr(obj.curriculum_row, 'department', None), 'code', None)
+        except Exception:
+            return None
+
+    department_code.short_description = 'Dept'
+
+    def enabled_assessments_display(self, obj):
+        vals = getattr(obj, 'enabled_assessments', None) or []
+        if not vals:
+            return '(none)'
+        order = [k for k, _ in SPECIAL_ASSESSMENT_CHOICES]
+        label_map = {k: v for k, v in SPECIAL_ASSESSMENT_CHOICES}
+        normalized = {str(x).strip().lower() for x in vals}
+        display = [label_map.get(k, k) for k in order if k in normalized]
+        return ', '.join(display) if display else ', '.join(sorted(normalized))
+
+    enabled_assessments_display.short_description = 'Assessments'
+
+    def save_model(self, request, obj, form, change):
+        """Keep SPECIAL selection global across all departments of the same master.
+
+        The faculty UI treats enabled assessments as a *global* selection for a
+        SPECIAL course (master) per academic year. Editing a single row in admin
+        should propagate to all department rows to avoid mismatches.
+        """
+        actor_staff = getattr(getattr(request, 'user', None), 'staff_profile', None)
+        with transaction.atomic():
+            if not getattr(obj, 'created_by', None) and actor_staff:
+                obj.created_by = actor_staff
+            super().save_model(request, obj, form, change)
+
+            master_id = None
+            try:
+                master_id = obj.curriculum_row.master_id
+            except Exception:
+                master_id = None
+
+            if not master_id:
+                return
+
+            try:
+                from curriculum.models import CurriculumDepartment
+
+                dept_rows = CurriculumDepartment.objects.filter(master_id=master_id)
+            except Exception:
+                dept_rows = []
+
+            for row in dept_rows:
+                if not row:
+                    continue
+                sel, created = SpecialCourseAssessmentSelection.objects.get_or_create(
+                    curriculum_row=row,
+                    academic_year=obj.academic_year,
+                    defaults={
+                        'enabled_assessments': list(obj.enabled_assessments or []),
+                        'locked': bool(obj.locked),
+                        'created_by': obj.created_by,
+                    },
+                )
+                if created:
+                    continue
+                if sel.enabled_assessments != obj.enabled_assessments or sel.locked != obj.locked:
+                    sel.enabled_assessments = list(obj.enabled_assessments or [])
+                    sel.locked = bool(obj.locked)
+                    sel.save(update_fields=['enabled_assessments', 'locked', 'updated_at'])
+
+
+@admin.register(SpecialCourseAssessmentEditRequest)
+class SpecialCourseAssessmentEditRequestAdmin(admin.ModelAdmin):
+    list_display = (
+        'id',
+        'course_code',
+        'academic_year',
+        'requested_by',
+        'status',
+        'requested_at',
+        'can_edit_until',
+        'used_at',
+    )
+    list_filter = ('status', 'selection__academic_year')
+    search_fields = (
+        'requested_by__staff_id',
+        'requested_by__user__username',
+        'selection__curriculum_row__course_code',
+        'selection__curriculum_row__course_name',
+        'selection__curriculum_row__master__course_code',
+        'selection__curriculum_row__master__course_name',
+    )
+    raw_id_fields = ('selection', 'requested_by', 'reviewed_by')
+    readonly_fields = ('requested_at',)
+
+    def academic_year(self, obj):
+        try:
+            return obj.selection.academic_year
+        except Exception:
+            return None
+
+    academic_year.short_description = 'Academic Year'
+
+    def course_code(self, obj):
+        try:
+            cr = obj.selection.curriculum_row
+            m = getattr(cr, 'master', None)
+            return getattr(m, 'course_code', None) or getattr(cr, 'course_code', None)
+        except Exception:
+            return None
+
+    course_code.short_description = 'Course Code'

@@ -3,9 +3,15 @@
 import os
 from pathlib import Path
 from datetime import timedelta
-from dotenv import load_dotenv
 
-load_dotenv()
+# Make python-dotenv optional so local tooling (manage.py, migrations) can run
+# even if the dependency isn't installed in the current environment.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except Exception:
+    pass
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -130,3 +136,8 @@ if DEBUG:
 # Always allow the production dashboard hostname if not already present
 if 'https://db.zynix.us' not in CSRF_TRUSTED_ORIGINS:
     CSRF_TRUSTED_ORIGINS.append('https://db.zynix.us')
+
+# Optional: restrict which account may publish marks via the web UI/backend.
+# Set to a username or email (string). If empty/None publishing remains unrestricted
+# (aside from existing permission checks). Example: 'iqac.user@example.com'
+OBE_PUBLISH_ALLOWED_USERNAME = os.getenv('OBE_PUBLISH_ALLOWED_USERNAME', '')

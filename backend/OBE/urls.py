@@ -58,6 +58,11 @@ urlpatterns = [
     path('due-schedules', views.due_schedules),
     path('due-schedule-upsert', views.due_schedule_upsert),
     path('due-schedule-bulk-upsert', views.due_schedule_bulk_upsert),
+    path('due-schedule-delete', views.due_schedule_delete),
+
+    # Semester helpers (OBE Master)
+    path('semesters', views.obe_semesters),
+
     path('global-publish-controls', views.global_publish_controls),
     path('global-publish-controls/bulk-set', views.global_publish_controls_bulk_set),
     path('global-publish-controls/bulk-reset', views.global_publish_controls_bulk_reset),
@@ -82,4 +87,8 @@ urlpatterns = [
     path('iqac/class-type-weights/save', views.class_type_weights_upsert),
     path('iqac/internal-mark-mapping/<str:subject_id>', views.internal_mark_mapping_get),
     path('iqac/internal-mark-mapping/<str:subject_id>/save', views.internal_mark_mapping_upsert),
+
+    # IQAC QP Pattern config
+    path('iqac/qp-pattern', views.qp_pattern_get),
+    path('iqac/qp-pattern/save', views.qp_pattern_upsert),
 ]

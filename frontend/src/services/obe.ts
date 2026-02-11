@@ -6,6 +6,7 @@ export type TeachingAssignmentItem = {
   section_id: number;
   section_name: string;
   academic_year: string;
+  semester?: number | null;
 };
 
 // Safe fetch for teaching assignments: use axios apiClient so automatic refresh runs
@@ -108,6 +109,7 @@ export type PublishWindowResponse = {
   remaining_seconds: number | null;
   approval_until: string | null;
   academic_year: { id: number; name: string } | null;
+  semester?: { id: number; number: number | null } | null;
   teaching_assignment_id: number | null;
 };
 
@@ -121,6 +123,7 @@ export type EditWindowResponse = {
   approval_until: string | null;
   now: string | null;
   academic_year: { id: number; name: string } | null;
+  semester?: { id: number; number: number | null } | null;
   teaching_assignment_id: number | null;
 };
 
@@ -318,9 +321,9 @@ export async function fetchEditWindow(
   return res.json();
 }
 
-export async function fetchGlobalPublishControls(academicYearIds: number[], assessments: string[]): Promise<{ results: Array<{ id: number; academic_year: { id: number; name: string } | null; assessment: string; is_open: boolean; updated_at: string | null; updated_by: number | null }> }> {
+export async function fetchGlobalPublishControls(semesterIds: number[], assessments: string[]): Promise<{ results: Array<{ id: number; semester: { id: number; number: number | null } | null; assessment: string; is_open: boolean; updated_at: string | null; updated_by: number | null }> }> {
   const qpParts: string[] = [];
-  if (academicYearIds?.length) qpParts.push(`academic_year_ids=${encodeURIComponent(academicYearIds.join(','))}`);
+  if (semesterIds?.length) qpParts.push(`semester_ids=${encodeURIComponent(semesterIds.join(','))}`);
   if (assessments?.length) qpParts.push(`assessments=${encodeURIComponent(assessments.join(','))}`);
   const qp = qpParts.length ? `?${qpParts.join('&')}` : '';
   const url = `${apiBase()}/api/obe/global-publish-controls${qp}`;
@@ -329,7 +332,7 @@ export async function fetchGlobalPublishControls(academicYearIds: number[], asse
   return res.json();
 }
 
-export async function bulkSetGlobalPublishControls(payload: { academic_year_ids: number[]; assessments: string[]; is_open: boolean }): Promise<{ status: string; updated: number }> {
+export async function bulkSetGlobalPublishControls(payload: { semester_ids: number[]; assessments: string[]; is_open: boolean }): Promise<{ status: string; updated: number }> {
   const url = `${apiBase()}/api/obe/global-publish-controls/bulk-set`;
   const res = await fetch(url, {
     method: 'POST',
@@ -340,7 +343,7 @@ export async function bulkSetGlobalPublishControls(payload: { academic_year_ids:
   return res.json();
 }
 
-export async function bulkResetGlobalPublishControls(payload: { academic_year_ids: number[]; assessments: string[] }): Promise<{ status: string; deleted: number }> {
+export async function bulkResetGlobalPublishControls(payload: { semester_ids: number[]; assessments: string[] }): Promise<{ status: string; deleted: number }> {
   const url = `${apiBase()}/api/obe/global-publish-controls/bulk-reset`;
   const res = await fetch(url, {
     method: 'POST',
@@ -351,9 +354,18 @@ export async function bulkResetGlobalPublishControls(payload: { academic_year_id
   return res.json();
 }
 
+export type ObeSemesterRow = { id: number; number: number };
+
+export async function fetchObeSemesters(): Promise<{ results: ObeSemesterRow[] }> {
+  const url = `${apiBase()}/api/obe/semesters`;
+  const res = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', ...authHeader() } });
+  if (!res.ok) await parseError(res, 'Semesters fetch failed');
+  return res.json();
+}
+
 export type DueScheduleRow = {
   id: number;
-  academic_year: { id: number; name: string };
+  semester: { id: number; number: number | null } | null;
   subject_code: string;
   subject_name: string;
   assessment: DueAssessmentKey;
@@ -362,23 +374,23 @@ export type DueScheduleRow = {
   updated_at: string | null;
 };
 
-export async function fetchDueSchedules(academicYearIds: number[]): Promise<{ results: DueScheduleRow[] }> {
-  const qp = academicYearIds?.length ? `?academic_year_ids=${encodeURIComponent(academicYearIds.join(','))}` : '';
+export async function fetchDueSchedules(semesterIds: number[]): Promise<{ results: DueScheduleRow[] }> {
+  const qp = semesterIds?.length ? `?semester_ids=${encodeURIComponent(semesterIds.join(','))}` : '';
   const url = `${apiBase()}/api/obe/due-schedules${qp}`;
   const res = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', ...authHeader() } });
   if (!res.ok) await parseError(res, 'Due schedules fetch failed');
   return res.json();
 }
 
-export async function fetchDueScheduleSubjects(academicYearIds: number[]): Promise<{ subjects_by_academic_year: Record<string, Array<{ subject_code: string; subject_name: string }>> }> {
-  const qp = `?academic_year_ids=${encodeURIComponent(academicYearIds.join(','))}`;
+export async function fetchDueScheduleSubjects(semesterIds: number[]): Promise<{ subjects_by_semester: Record<string, Array<{ subject_code: string; subject_name: string }>> }> {
+  const qp = `?semester_ids=${encodeURIComponent(semesterIds.join(','))}`;
   const url = `${apiBase()}/api/obe/due-schedule-subjects${qp}`;
   const res = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', ...authHeader() } });
   if (!res.ok) await parseError(res, 'Due schedule subjects fetch failed');
   return res.json();
 }
 
-export async function upsertDueSchedule(payload: { academic_year_id: number; subject_code: string; subject_name?: string; assessment: DueAssessmentKey; due_at: string }): Promise<any> {
+export async function upsertDueSchedule(payload: { semester_id: number; subject_code: string; subject_name?: string; assessment: DueAssessmentKey; due_at: string }): Promise<any> {
   const url = `${apiBase()}/api/obe/due-schedule-upsert`;
   const res = await fetch(url, {
     method: 'POST',
@@ -389,7 +401,7 @@ export async function upsertDueSchedule(payload: { academic_year_id: number; sub
   return res.json();
 }
 
-export async function bulkUpsertDueSchedule(payload: { academic_year_id: number; subject_codes: string[]; assessments: DueAssessmentKey[]; due_at: string }): Promise<{ status: string; updated: number }> {
+export async function bulkUpsertDueSchedule(payload: { semester_id: number; subject_codes: string[]; assessments: DueAssessmentKey[]; due_at: string }): Promise<{ status: string; updated: number }> {
   const url = `${apiBase()}/api/obe/due-schedule-bulk-upsert`;
   const res = await fetch(url, {
     method: 'POST',
@@ -397,6 +409,124 @@ export async function bulkUpsertDueSchedule(payload: { academic_year_id: number;
     body: JSON.stringify(payload),
   });
   if (!res.ok) await parseError(res, 'Due schedule bulk save failed');
+  return res.json();
+}
+
+export type QpPatternExam = 'CIA' | 'CIA1' | 'CIA2' | 'MODEL';
+
+export type QpPatternConfig = {
+  marks: number[];
+  cos?: Array<number | string>;
+};
+
+export type QpPatternResponse = {
+  class_type: string;
+  question_paper_type: string | null;
+  exam: QpPatternExam;
+  pattern: QpPatternConfig;
+  updated_at: string | null;
+  updated_by: number | null;
+};
+
+function normalizeQpPattern(raw: any): QpPatternConfig {
+  // Legacy: pattern is an array of marks.
+  if (Array.isArray(raw)) {
+    const marks = raw
+      .map((x: any) => Number(x))
+      .filter((n: any) => Number.isFinite(n));
+    return { marks };
+  }
+
+  // New: pattern is an object.
+  if (raw && typeof raw === 'object') {
+    const marksRaw = Array.isArray((raw as any).marks) ? (raw as any).marks : [];
+    const marks = marksRaw
+      .map((x: any) => Number(x))
+      .filter((n: any) => Number.isFinite(n));
+
+    const cosRaw = Array.isArray((raw as any).cos) ? (raw as any).cos : undefined;
+    const cos = cosRaw
+      ? cosRaw.map((v: any) => {
+          if (typeof v === 'string') return v;
+          const n = Number(v);
+          return Number.isFinite(n) ? n : '';
+        })
+      : undefined;
+
+    const out: QpPatternConfig = { marks };
+    if (cos) out.cos = cos.filter((v: any) => v !== '');
+    return out;
+  }
+
+  return { marks: [] };
+}
+
+export async function fetchIqacQpPattern(params: { class_type: string; question_paper_type?: string | null; exam: QpPatternExam }): Promise<QpPatternResponse> {
+  const qpParts: string[] = [];
+  qpParts.push(`class_type=${encodeURIComponent(String(params.class_type || '').trim())}`);
+  if (params.question_paper_type) qpParts.push(`question_paper_type=${encodeURIComponent(String(params.question_paper_type || '').trim())}`);
+  qpParts.push(`exam=${encodeURIComponent(String(params.exam || '').trim())}`);
+  const qp = qpParts.length ? `?${qpParts.join('&')}` : '';
+  const url = `${apiBase()}/api/obe/iqac/qp-pattern${qp}`;
+  const res = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', ...authHeader() } });
+  if (!res.ok) await parseError(res, 'QP pattern fetch failed');
+  const data = await res.json();
+  const pattern = normalizeQpPattern(data?.pattern);
+  return {
+    class_type: String(data?.class_type || ''),
+    question_paper_type: data?.question_paper_type == null ? null : String(data.question_paper_type),
+    exam: (() => {
+      const e = String(data?.exam || 'CIA').trim().toUpperCase();
+      if (e === 'MODEL') return 'MODEL';
+      if (e === 'CIA1') return 'CIA1';
+      if (e === 'CIA2') return 'CIA2';
+      return 'CIA';
+    })(),
+    pattern,
+    updated_at: data?.updated_at ?? null,
+    updated_by: typeof data?.updated_by === 'number' ? data.updated_by : null,
+  };
+}
+
+export async function upsertIqacQpPattern(payload: { class_type: string; question_paper_type?: string | null; exam: QpPatternExam; pattern: QpPatternConfig }): Promise<QpPatternResponse> {
+  const url = `${apiBase()}/api/obe/iqac/qp-pattern/save`;
+  const body = {
+    class_type: String(payload.class_type || '').trim(),
+    question_paper_type: payload.question_paper_type ? String(payload.question_paper_type || '').trim() : null,
+    exam: payload.exam,
+    pattern: {
+      marks: Array.isArray(payload.pattern?.marks) ? payload.pattern.marks : [],
+      cos: Array.isArray(payload.pattern?.cos) ? payload.pattern.cos : undefined,
+    },
+  };
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeader() }, body: JSON.stringify(body) });
+  if (!res.ok) await parseError(res, 'QP pattern save failed');
+  const data = await res.json();
+  const pattern = normalizeQpPattern(data?.pattern);
+  return {
+    class_type: String(data?.class_type || ''),
+    question_paper_type: data?.question_paper_type == null ? null : String(data.question_paper_type),
+    exam: (() => {
+      const e = String(data?.exam || 'CIA').trim().toUpperCase();
+      if (e === 'MODEL') return 'MODEL';
+      if (e === 'CIA1') return 'CIA1';
+      if (e === 'CIA2') return 'CIA2';
+      return 'CIA';
+    })(),
+    pattern,
+    updated_at: data?.updated_at ?? null,
+    updated_by: typeof data?.updated_by === 'number' ? data.updated_by : null,
+  };
+}
+
+export async function deleteDueSchedule(payload: { semester_id: number; subject_code: string; assessment: DueAssessmentKey }): Promise<{ status: string; deleted: number }> {
+  const url = `${apiBase()}/api/obe/due-schedule-delete`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) await parseError(res, 'Due schedule delete failed');
   return res.json();
 }
 

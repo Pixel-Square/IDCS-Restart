@@ -2,9 +2,10 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import OBEDueDatesPage from '../OBEDueDatesPage';
 import AcademicControllerCoursesPage from './AcademicControllerCoursesPage';
+import AcademicControllerQPPage from './AcademicControllerQPPage';
 import AcademicControllerWeightsPage from './AcademicControllerWeightsPage';
 
-type TabKey = 'dashboard' | 'due_dates' | 'courses' | 'weights';
+type TabKey = 'dashboard' | 'due_dates' | 'courses' | 'weights' | 'qp';
 
 export default function AcademicControllerPage(): JSX.Element {
   const location = useLocation();
@@ -25,6 +26,7 @@ export default function AcademicControllerPage(): JSX.Element {
     { key: 'weights', label: 'Weights' },
     { key: 'due_dates', label: 'OBE Due Dates' },
     { key: 'courses', label: 'Courses' },
+    { key: 'qp', label: 'QP' },
   ];
 
   return (
@@ -63,6 +65,7 @@ export default function AcademicControllerPage(): JSX.Element {
         {tab === 'weights' && <AcademicControllerWeightsPage />}
         {tab === 'due_dates' && <OBEDueDatesPage />}
         {tab === 'courses' && <AcademicControllerCoursesPage />}
+        {tab === 'qp' && <AcademicControllerQPPage />}
       </div>
     </main>
   );

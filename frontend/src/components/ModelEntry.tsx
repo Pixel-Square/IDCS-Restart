@@ -2,6 +2,10 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { normalizeClassType } from '../constants/classTypes';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
+import * as OBE from '../services/obe';
+import { formatRemaining, usePublishWindow } from '../hooks/usePublishWindow';
+import { useMarkTableLock } from '../hooks/useMarkTableLock';
+import { useEditWindow } from '../hooks/useEditWindow';
 
 type Props = {
   subjectId: string;
@@ -45,8 +49,16 @@ const DEFAULT_MODEL_QUESTIONS: QuestionDef[] = [
 ];
 
 export default function ModelEntry({ subjectId, classType, teachingAssignmentId, questionPaperType }: Props) {
-  const questions = useMemo(() => DEFAULT_MODEL_QUESTIONS, []);
   const visibleBtls = useMemo(() => [1, 2, 3, 4, 5, 6] as const, []);
+
+  const normalizeAbsenceKind = (value: unknown): AbsenceKind => {
+    const s = String(value ?? 'AL')
+      .trim()
+      .toUpperCase();
+    if (s === 'ML' || s === 'MALPRACTICE') return 'ML';
+    if (s === 'SKL' || s === 'SICK' || s === 'SICKLEAVE' || s === 'SL') return 'SKL';
+    return 'AL';
+  };
 
   const cellTh: React.CSSProperties = {
     border: '1px solid #111',
@@ -71,21 +83,84 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   };
 
   const SNO_COL_WIDTH = 32;
-  const colSpan = 4 + questions.length + 1 + 4 + visibleBtls.length * 2;
 
   const [students, setStudents] = useState<TeachingAssignmentRosterStudent[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [savingDraft, setSavingDraft] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [savedBy, setSavedBy] = useState<string | null>(null);
+  const [publishedAt, setPublishedAt] = useState<string | null>(null);
+  const [publishedViewSnapshot, setPublishedViewSnapshot] = useState<any | null>(null);
+  const [publishedViewLoading, setPublishedViewLoading] = useState(false);
+  const [publishedViewError, setPublishedViewError] = useState<string | null>(null);
+  const publishedAutoFetchOnceRef = useRef(false);
+  const [autosaveReady, setAutosaveReady] = useState(false);
+  const suppressAutosaveRef = useRef(false);
   const [showAbsenteesOnly, setShowAbsenteesOnly] = useState(false);
   const [absenteesSnapshotKeys, setAbsenteesSnapshotKeys] = useState<string[] | null>(null);
   const [limitDialog, setLimitDialog] = useState<{ title: string; message: string } | null>(null);
   const [tcplSheet, setTcplSheet] = useState<TcplSheetState>({});
   const [theorySheet, setTheorySheet] = useState<TcplSheetState>({});
+  const [iqacPattern, setIqacPattern] = useState<{ marks: number[]; cos?: Array<number | string> } | null>(null);
+
+  const [requestReason, setRequestReason] = useState('');
+  const [requesting, setRequesting] = useState(false);
+  const [requestMessage, setRequestMessage] = useState<string | null>(null);
+
+  const [publishedEditModalOpen, setPublishedEditModalOpen] = useState(false);
+  const [editRequestReason, setEditRequestReason] = useState('');
+  const [editRequestBusy, setEditRequestBusy] = useState(false);
+
+  const [lockedViewOpen, setLockedViewOpen] = useState(false);
 
   const normalizedClassType = useMemo(() => normalizeClassType(classType), [classType]);
   const isTheory = normalizedClassType === 'THEORY';
   const isTcplLike = normalizedClassType === 'TCPL' || normalizedClassType === 'TCPR';
   const tcplLikeKind = normalizedClassType === 'TCPR' ? 'TCPR' : 'TCPL';
+
+  const {
+    data: publishWindow,
+    loading: publishWindowLoading,
+    error: publishWindowError,
+    remainingSeconds,
+    publishAllowed,
+    refresh: refreshPublishWindow,
+  } = usePublishWindow({
+    assessment: 'model',
+    subjectCode: subjectId,
+    teachingAssignmentId,
+  });
+
+  const { data: markLock, refresh: refreshMarkLock } = useMarkTableLock({
+    assessment: 'model',
+    subjectCode: String(subjectId || ''),
+    teachingAssignmentId,
+    options: { poll: false },
+  });
+
+  const { data: markEntryEditWindow, refresh: refreshMarkEntryEditWindow } = useEditWindow({
+    assessment: 'model',
+    subjectCode: String(subjectId || ''),
+    scope: 'MARK_ENTRY',
+    teachingAssignmentId,
+    options: { poll: false },
+  });
+
+  const isPublished = Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published) || Boolean(publishedViewSnapshot);
+  const entryOpen =
+    !isPublished ? true : Boolean(markLock?.entry_open) || Boolean(markEntryEditWindow?.allowed_by_approval);
+  const publishedEditLocked = Boolean(isPublished && !entryOpen);
+
+  const globalLocked = Boolean(publishWindow?.global_override_active && publishWindow?.global_is_open === false);
+
+  useEffect(() => {
+    // Reset the locked-view toggle when switching subjects or when editing becomes open.
+    setLockedViewOpen(false);
+  }, [subjectId, teachingAssignmentId, publishedEditLocked]);
 
   const qpTypeStorageKey = useMemo(
     () => `model_qp_type_${subjectId}_${String(teachingAssignmentId ?? 'none')}`,
@@ -94,15 +169,79 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   const [qpType, setQpType] = useState<string>('');
 
   useEffect(() => {
-    const stored = lsGet<string>(qpTypeStorageKey);
-    if (typeof stored === 'string') {
-      setQpType(stored);
+    const norm = (v: any) => {
+      const s = String(v ?? '').trim().toUpperCase();
+      if (s === 'QP2') return 'QP2';
+      if (s === 'QP1') return 'QP1';
+      return '';
+    };
+
+    // Prefer the course/header-provided QP (so changes in the header reflect here).
+    const incoming = norm(questionPaperType);
+    if (incoming) {
+      setQpType(incoming);
+      try {
+        lsSet(qpTypeStorageKey, incoming);
+      } catch {
+        // ignore
+      }
       return;
     }
-    setQpType(String(questionPaperType ?? ''));
+
+    // Fallback to last local selection for this sheet.
+    const stored = lsGet<string>(qpTypeStorageKey);
+    const fromStorage = norm(stored);
+    setQpType(fromStorage || 'QP1');
   }, [qpTypeStorageKey, questionPaperType]);
 
   const normalizedQpType = String(qpType ?? '').trim().toUpperCase();
+
+  useEffect(() => {
+    let alive = true;
+    const run = async () => {
+      let classKey = String(normalizedClassType || '').trim().toUpperCase();
+      if (classKey.startsWith('THEORY')) classKey = 'THEORY';
+      if (!classKey) {
+        setIqacPattern(null);
+        return;
+      }
+
+      const qpKey = normalizedQpType === 'QP2' ? 'QP2' : normalizedQpType === 'QP1' ? 'QP1' : '';
+      const qpForApi = classKey === 'THEORY' ? (qpKey ? qpKey : null) : null;
+
+      try {
+        const res = await OBE.fetchIqacQpPattern({
+          class_type: classKey,
+          question_paper_type: qpForApi,
+          exam: 'MODEL',
+        });
+        const p = Array.isArray(res?.pattern?.marks) ? res.pattern.marks : [];
+        if (!alive) return;
+        setIqacPattern(p.length ? (res.pattern as any) : null);
+      } catch {
+        if (!alive) return;
+        setIqacPattern(null);
+      }
+    };
+    run();
+    return () => {
+      alive = false;
+    };
+  }, [normalizedClassType, normalizedQpType]);
+
+  const questions = useMemo<QuestionDef[]>(() => {
+    const marks = Array.isArray((iqacPattern as any)?.marks) ? (iqacPattern as any).marks : null;
+    if (Array.isArray(marks) && marks.length) {
+      return marks.map((max, idx) => ({
+        key: `q${idx + 1}`,
+        label: `Q${idx + 1}`,
+        max: Number(max) || 0,
+      }));
+    }
+    return DEFAULT_MODEL_QUESTIONS;
+  }, [iqacPattern]);
+
+  const colSpan = 4 + questions.length + 1 + 4 + visibleBtls.length * 2;
 
   const activeSheet: TcplSheetState = isTcplLike ? (tcplSheet || {}) : (theorySheet || {});
 
@@ -117,34 +256,364 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     textAlign: 'center',
   };
 
+  const loadRoster = async (opts?: { silent?: boolean }) => {
+    const silent = Boolean(opts?.silent);
+    if (!teachingAssignmentId) {
+      setStudents([]);
+      if (!silent) setError(null);
+      return;
+    }
+    if (!silent) setLoading(true);
+    if (!silent) setError(null);
+    try {
+      const res = await fetchTeachingAssignmentRoster(teachingAssignmentId);
+      const roster = (res?.students || []) as TeachingAssignmentRosterStudent[];
+      const sorted = [...roster].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+      setStudents(sorted);
+    } catch (e: any) {
+      setStudents([]);
+      if (!silent) setError(e?.message || 'Failed to load roster');
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  };
+
   useEffect(() => {
+    loadRoster();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teachingAssignmentId]);
+
+  type ModelDraftPayload = {
+    version: 1;
+    qpType: string;
+    classType: string;
+    tcplLikeKind: 'TCPR' | 'TCPL';
+    theoryQuestionBtl: Record<string, BtlValue>;
+    tcplQuestionBtl: Record<string, BtlValue>;
+    theorySheet: TcplSheetState;
+    tcplSheet: TcplSheetState;
+  };
+
+  const buildPayload = (): ModelDraftPayload => {
+    return {
+      version: 1,
+      qpType: String(qpType ?? ''),
+      classType: String(normalizedClassType ?? ''),
+      tcplLikeKind,
+      theoryQuestionBtl: (theoryQuestionBtl || {}) as Record<string, BtlValue>,
+      tcplQuestionBtl: (tcplQuestionBtl || {}) as Record<string, BtlValue>,
+      theorySheet: (theorySheet || {}) as TcplSheetState,
+      tcplSheet: (tcplSheet || {}) as TcplSheetState,
+    };
+  };
+
+  const applyPayload = (raw: any) => {
+    if (!raw || typeof raw !== 'object') return;
+    // Avoid auto-saving immediately when hydrating from server.
+    suppressAutosaveRef.current = true;
+
+    const nextQpType = typeof raw.qpType === 'string' ? raw.qpType : null;
+    if (nextQpType != null) {
+      const v = String(nextQpType || '').trim().toUpperCase();
+      const next = v === 'QP2' ? 'QP2' : 'QP1';
+      setQpType(next);
+      try {
+        lsSet(qpTypeStorageKey, next);
+      } catch {
+        // ignore
+      }
+    }
+
+    if (raw.theoryQuestionBtl && typeof raw.theoryQuestionBtl === 'object') {
+      setTheoryQuestionBtl({
+        ...defaultTheoryQuestionBtl,
+        ...(raw.theoryQuestionBtl as Record<string, BtlValue>),
+      });
+      try {
+        lsSet(theoryQuestionBtlStorageKey, {
+          ...defaultTheoryQuestionBtl,
+          ...(raw.theoryQuestionBtl as Record<string, BtlValue>),
+        });
+      } catch {
+        // ignore
+      }
+    }
+
+    if (raw.tcplQuestionBtl && typeof raw.tcplQuestionBtl === 'object') {
+      setTcplQuestionBtl({
+        ...defaultTcplQuestionBtl,
+        ...(raw.tcplQuestionBtl as Record<string, BtlValue>),
+      });
+      try {
+        lsSet(tcplQuestionBtlStorageKey, {
+          ...defaultTcplQuestionBtl,
+          ...(raw.tcplQuestionBtl as Record<string, BtlValue>),
+        });
+      } catch {
+        // ignore
+      }
+    }
+
+    if (raw.tcplSheet && typeof raw.tcplSheet === 'object') {
+      setTcplSheet(raw.tcplSheet as TcplSheetState);
+      try {
+        lsSet(tcplSheetStorageKey, raw.tcplSheet);
+      } catch {
+        // ignore
+      }
+    }
+
+    if (raw.theorySheet && typeof raw.theorySheet === 'object') {
+      setTheorySheet(raw.theorySheet as TcplSheetState);
+      try {
+        lsSet(theorySheetStorageKey, raw.theorySheet);
+      } catch {
+        // ignore
+      }
+    }
+
+    // Re-enable autosave on the next tick after state updates settle.
+    window.setTimeout(() => {
+      suppressAutosaveRef.current = false;
+    }, 0);
+  };
+
+  const loadDraftFromDb = async (opts?: { silent?: boolean }) => {
+    if (!subjectId) return;
+    const silent = Boolean(opts?.silent);
+    if (!silent) setRefreshing(true);
+    if (!silent) setActionError(null);
+    try {
+      const resp = await OBE.fetchDraft<any>('model', subjectId, teachingAssignmentId);
+      if (resp?.draft) applyPayload(resp.draft);
+      setSavedAt(resp?.updated_at ? new Date(resp.updated_at).toLocaleString() : null);
+      const by = resp?.updated_by;
+      setSavedBy(typeof by?.name === 'string' ? by.name : typeof by?.username === 'string' ? by.username : null);
+    } catch (e: any) {
+      if (!silent) setActionError(e?.message || 'Failed to refresh draft');
+    } finally {
+      if (!silent) setRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    // Load server draft on entry so previously saved MODEL drafts appear.
+    setAutosaveReady(false);
     let mounted = true;
     (async () => {
-      if (!teachingAssignmentId) {
-        setStudents([]);
-        setError(null);
-        return;
-      }
-      setLoading(true);
-      setError(null);
       try {
-        const res = await fetchTeachingAssignmentRoster(teachingAssignmentId);
-        if (!mounted) return;
-        const roster = (res?.students || []) as TeachingAssignmentRosterStudent[];
-        const sorted = [...roster].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
-        setStudents(sorted);
-      } catch (e: any) {
-        if (!mounted) return;
-        setStudents([]);
-        setError(e?.message || 'Failed to load roster');
+        await loadDraftFromDb({ silent: true });
       } finally {
-        if (mounted) setLoading(false);
+        if (mounted) setAutosaveReady(true);
       }
     })();
     return () => {
       mounted = false;
     };
-  }, [teachingAssignmentId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subjectId, teachingAssignmentId]);
+
+  const refreshAll = async () => {
+    setRefreshing(true);
+    setActionError(null);
+    try {
+      await Promise.all([
+        loadRoster({ silent: true }),
+        loadDraftFromDb({ silent: true }),
+        refreshPublishWindow({ silent: true }),
+        refreshMarkLock({ silent: true }),
+      ]);
+      // Best-effort: if published already, refresh the published snapshot for viewing.
+      try {
+        await refreshPublishedSnapshot(false);
+      } catch {
+        // ignore
+      }
+    } catch (e: any) {
+      setActionError(e?.message || 'Refresh failed');
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const saveLocal = () => {
+    try {
+      lsSet(qpTypeStorageKey, String(qpType ?? ''));
+      lsSet(theoryQuestionBtlStorageKey, theoryQuestionBtl);
+      lsSet(tcplQuestionBtlStorageKey, tcplQuestionBtl);
+      lsSet(tcplSheetStorageKey, tcplSheet);
+      lsSet(theorySheetStorageKey, theorySheet);
+      alert('Saved locally.');
+    } catch (e: any) {
+      alert(e?.message || 'Local save failed');
+    }
+  };
+
+  const saveDraftToDb = async () => {
+    if (!subjectId) return;
+    setSavingDraft(true);
+    setActionError(null);
+    try {
+      await OBE.saveDraft('model', subjectId, buildPayload());
+      setSavedAt(new Date().toLocaleString());
+    } catch (e: any) {
+      setActionError(e?.message || 'Draft save failed');
+    } finally {
+      setSavingDraft(false);
+    }
+  };
+
+  const publish = async () => {
+    if (!subjectId) return;
+    if (globalLocked) {
+      setActionError('Publishing is locked by IQAC.');
+      return;
+    }
+    if (!publishAllowed) {
+      setActionError('Publish window is closed. Please request IQAC approval.');
+      return;
+    }
+
+    // If already published and locked, use the Publish action as an entry point to request edits.
+    if (isPublished && publishedEditLocked) {
+      setPublishedEditModalOpen(true);
+      return;
+    }
+
+    setPublishing(true);
+    setActionError(null);
+    try {
+      await OBE.publishLabSheet('model', subjectId, buildPayload(), teachingAssignmentId);
+      setPublishedAt(new Date().toLocaleString());
+      await refreshPublishedSnapshot(false);
+      refreshPublishWindow({ silent: true });
+      refreshMarkLock({ silent: true });
+      try {
+        window.dispatchEvent(new CustomEvent('obe:published', { detail: { subjectId, assessment: 'model' } }));
+      } catch {
+        // ignore
+      }
+    } catch (e: any) {
+      setActionError(e?.message || 'Publish failed');
+    } finally {
+      setPublishing(false);
+    }
+  };
+
+  const requestApproval = async () => {
+    if (!subjectId) return;
+    setRequesting(true);
+    setRequestMessage(null);
+    setActionError(null);
+    try {
+      await OBE.createPublishRequest({
+        assessment: 'model',
+        subject_code: subjectId,
+        reason: requestReason,
+        teaching_assignment_id: teachingAssignmentId,
+      });
+      setRequestMessage('Request sent to IQAC for approval.');
+    } catch (e: any) {
+      setActionError(e?.message || 'Failed to request approval');
+    } finally {
+      setRequesting(false);
+      refreshPublishWindow({ silent: true });
+    }
+  };
+
+  const requestEdit = async () => {
+    if (!subjectId) return;
+    setEditRequestBusy(true);
+    setActionError(null);
+    try {
+      await OBE.createEditRequest({
+        assessment: 'model',
+        subject_code: String(subjectId),
+        scope: 'MARK_ENTRY',
+        reason: editRequestReason || `Edit request: MODEL marks entry for ${subjectId}`,
+        teaching_assignment_id: teachingAssignmentId,
+      });
+      alert('Edit request sent to IQAC. Waiting for approval...');
+      setPublishedEditModalOpen(false);
+      setEditRequestReason('');
+      refreshMarkLock({ silent: true });
+      refreshMarkEntryEditWindow({ silent: true });
+    } catch (e: any) {
+      setActionError(e?.message || 'Failed to request edit');
+    } finally {
+      setEditRequestBusy(false);
+    }
+  };
+
+  async function refreshPublishedSnapshot(showLoading: boolean, opts?: { applyToMain?: boolean }) {
+    if (!subjectId) return;
+    if (showLoading) setPublishedViewLoading(true);
+    setPublishedViewError(null);
+    try {
+      const resp = await OBE.fetchPublishedLabSheet('model', String(subjectId), teachingAssignmentId);
+      const data = (resp as any)?.data ?? null;
+      const looksLikeModelPayload = Boolean(
+        data &&
+          typeof data === 'object' &&
+          Number((data as any).version) === 1 &&
+          (typeof (data as any).classType === 'string' || typeof (data as any).qpType === 'string') &&
+          ('theorySheet' in (data as any) || 'tcplSheet' in (data as any)),
+      );
+
+      if (looksLikeModelPayload) {
+        setPublishedViewSnapshot(data);
+        // When published+locked, the main grid should reflect the published snapshot.
+        if (opts?.applyToMain || publishedEditLocked) {
+          applyPayload(data);
+        }
+      } else {
+        setPublishedViewSnapshot(null);
+        if (showLoading || opts?.applyToMain) setPublishedViewError('No published snapshot found.');
+      }
+    } catch (e: any) {
+      if (showLoading || opts?.applyToMain) setPublishedViewError(e?.message || 'Failed to load published sheet');
+    } finally {
+      if (showLoading) setPublishedViewLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!subjectId) return;
+    refreshPublishedSnapshot(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subjectId, teachingAssignmentId]);
+
+  useEffect(() => {
+    if (!subjectId) return;
+    // When the sheet becomes published+locked, load the published snapshot into the table.
+    if (!publishedEditLocked) {
+      publishedAutoFetchOnceRef.current = false;
+      return;
+    }
+
+    if (publishedAutoFetchOnceRef.current) return;
+    publishedAutoFetchOnceRef.current = true;
+
+    if (publishedViewSnapshot && typeof publishedViewSnapshot === 'object') {
+      applyPayload(publishedViewSnapshot);
+      return;
+    }
+
+    // Show loading/error so users can tell the view is updating.
+    refreshPublishedSnapshot(true, { applyToMain: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [publishedEditLocked, subjectId, teachingAssignmentId]);
+
+  useEffect(() => {
+    // While locked after publish, periodically check if IQAC updated the lock row.
+    if (!subjectId) return;
+    if (!isPublished) return;
+    if (entryOpen) return;
+    const tid = window.setInterval(() => {
+      refreshMarkLock({ silent: true });
+    }, 30000);
+    return () => window.clearInterval(tid);
+  }, [entryOpen, isPublished, subjectId, refreshMarkLock]);
 
   const rowsToRender = useMemo(() => {
     if (students.length) return students;
@@ -158,6 +627,16 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   }, [activeSheet]);
 
   const tcplQuestions = useMemo(() => {
+    // Prefer IQAC-configured QP pattern if present.
+    const marks = Array.isArray((iqacPattern as any)?.marks) ? (iqacPattern as any).marks : null;
+    if (Array.isArray(marks) && marks.length && isTcplLike) {
+      return marks.map((max, i) => ({
+        key: `q${i + 1}`,
+        label: `Q${i + 1}`,
+        max: Number(max) || 0,
+      }));
+    }
+
     // TCPL: 15 questions (10x2 marks + 5x16 marks)
     // TCPR: 12 questions (8x2 marks + 4x16 marks)
     const count = tcplLikeKind === 'TCPR' ? 12 : 15;
@@ -170,7 +649,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
         max: idx <= twoMarkCount ? 2 : 16,
       };
     });
-  }, [tcplLikeKind]);
+  }, [tcplLikeKind, iqacPattern, isTcplLike]);
 
   const tcplTotalMax = useMemo(() => tcplQuestions.reduce((sum, q) => sum + q.max, 0), [tcplQuestions]);
 
@@ -183,8 +662,18 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   const tcplLabLabel = tcplLikeKind === 'TCPR' ? 'REVIEW' : 'LAB';
 
   // THEORY header template (matches provided screenshot)
-  const theoryQuestions = useMemo<QuestionDef[]>(
-    () => [
+  const theoryQuestions = useMemo<QuestionDef[]>(() => {
+    // Prefer IQAC-configured QP pattern if present.
+    const marks = Array.isArray((iqacPattern as any)?.marks) ? (iqacPattern as any).marks : null;
+    if (Array.isArray(marks) && marks.length && isTheory) {
+      return marks.map((max, i) => ({
+        key: `q${i + 1}`,
+        label: `Q${i + 1}`,
+        max: Number(max) || 0,
+      }));
+    }
+
+    return [
       { key: 'q1', label: 'Q1', max: 2 },
       { key: 'q2', label: 'Q2', max: 2 },
       { key: 'q3', label: 'Q3', max: 2 },
@@ -201,25 +690,34 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
       { key: 'q14', label: 'Q14', max: 14 },
       { key: 'q15', label: 'Q15', max: 14 },
       { key: 'q16', label: 'Q16', max: 10 },
-    ],
-    [],
-  );
+    ];
+  }, [iqacPattern, isTheory]);
 
   const theoryCoCount = 5;
   const theoryTotalMax = useMemo(() => theoryQuestions.reduce((sum, q) => sum + q.max, 0), [theoryQuestions]);
 
   // CO mapping row under Q1..Q16.
-  const theoryCosRow = useMemo(
-    () => [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 1, 2, 3, 4, 5, 5] as const,
-    [],
-  );
+  const theoryCosRow = useMemo(() => {
+    const defaultRow = [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 1, 2, 3, 4, 5, 5];
+    const cos = Array.isArray((iqacPattern as any)?.cos) ? (iqacPattern as any).cos : null;
+    if (isTheory && Array.isArray(cos) && cos.length === theoryQuestions.length) {
+      return cos.map((v: any) => {
+        const n = Number(v);
+        if (Number.isFinite(n)) return Math.max(1, Math.min(5, Math.trunc(n)));
+        return 1;
+      });
+    }
+    if (theoryQuestions.length === defaultRow.length) return defaultRow;
+    return Array.from({ length: theoryQuestions.length }, (_, i) => defaultRow[i % defaultRow.length]);
+  }, [iqacPattern, isTheory, theoryQuestions.length]);
 
   // BTL mapping row under Q1..Q16.
   // Default derived from screenshot: BTL2=8, BTL3=54, BTL4=28, BTL5=10.
-  const defaultTheoryBtlRow = useMemo(
-    () => [2, 2, 3, 3, 3, 2, 2, 3, 3, 3, 4, 4, 3, 3, 3, 5] as const,
-    [],
-  );
+  const defaultTheoryBtlRow = useMemo(() => {
+    const defaultRow = [2, 2, 3, 3, 3, 2, 2, 3, 3, 3, 4, 4, 3, 3, 3, 5];
+    if (theoryQuestions.length === defaultRow.length) return defaultRow;
+    return Array.from({ length: theoryQuestions.length }, (_, i) => defaultRow[i % defaultRow.length]);
+  }, [theoryQuestions.length]);
 
   const theoryCoTheoryMaxRow = useMemo(() => {
     const coMax: number[] = Array.from({ length: theoryCoCount }, () => 0);
@@ -290,9 +788,20 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   // - TCPL mapping is from the provided header screenshot.
   // - TCPR uses CO1..CO4 only, following the same repeating pattern.
   const tcplCosRow = useMemo(() => {
-    if (tcplLikeKind === 'TCPR') return [1, 1, 2, 2, 3, 3, 4, 4, 1, 2, 3, 4] as const;
-    return [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 1, 2, 3, 4, 5] as const;
-  }, [tcplLikeKind]);
+    const base = tcplLikeKind === 'TCPR'
+      ? [1, 1, 2, 2, 3, 3, 4, 4, 1, 2, 3, 4]
+      : [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 1, 2, 3, 4, 5];
+    const cos = Array.isArray((iqacPattern as any)?.cos) ? (iqacPattern as any).cos : null;
+    if (isTcplLike && Array.isArray(cos) && cos.length === tcplQuestions.length) {
+      return cos.map((v: any) => {
+        const n = Number(v);
+        if (Number.isFinite(n)) return Math.max(1, Math.min(5, Math.trunc(n)));
+        return 1;
+      });
+    }
+    if (tcplQuestions.length === base.length) return base;
+    return Array.from({ length: tcplQuestions.length }, (_, i) => base[i % base.length]);
+  }, [iqacPattern, isTcplLike, tcplLikeKind, tcplQuestions.length]);
 
   const tcplStoragePrefix = tcplLikeKind === 'TCPR' ? 'tcpr' : 'tcpl';
   const tcplQuestionBtlStorageKey = useMemo(() => `model_${tcplStoragePrefix}_questionBtl_${subjectId}`, [subjectId, tcplStoragePrefix]);
@@ -362,6 +871,41 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
       return updated;
     });
   };
+
+  // Auto-save to backend (debounced) when there is typing/activity.
+  // No background timer runs when the sheet is idle.
+  useEffect(() => {
+    if (!autosaveReady) return;
+    if (!subjectId) return;
+    if (publishedEditLocked) return;
+    if (suppressAutosaveRef.current) return;
+
+    let cancelled = false;
+    const tid = window.setTimeout(async () => {
+      try {
+        await OBE.saveDraft('model', subjectId, buildPayload());
+        if (!cancelled) setSavedAt(new Date().toLocaleString());
+      } catch {
+        // Ignore autosave errors (manual Save Draft shows errors).
+      }
+    }, 700);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(tid);
+    };
+  }, [
+    autosaveReady,
+    subjectId,
+    teachingAssignmentId,
+    publishedEditLocked,
+    qpType,
+    normalizedClassType,
+    theoryQuestionBtl,
+    tcplQuestionBtl,
+    theorySheet,
+    tcplSheet,
+  ]);
 
   const clampCell = (value: string, max: number): CellNumber => {
     const raw = String(value ?? '');
@@ -512,36 +1056,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
             {' '}| Class: <b>{normalizedClassType}</b>
           </>
         ) : null}
-        {' '}| QP:
-        <input
-          value={qpType}
-          onChange={(e) => {
-            const next = String(e.target.value ?? '');
-            setQpType(next);
-            try {
-              lsSet(qpTypeStorageKey, next);
-            } catch {
-              // ignore
-            }
-          }}
-          placeholder="QP1"
-          style={{
-            marginLeft: 6,
-            padding: '2px 6px',
-            borderRadius: 8,
-            border: '1px solid #e5e7eb',
-            fontSize: 12,
-            color: '#111827',
-            width: 110,
-          }}
-        />
-        {normalizedQpType ? (
-          <>
-            {' '}<span style={{ color: '#6b7280' }}>(</span>
-            <b>{normalizedQpType}</b>
-            <span style={{ color: '#6b7280' }}>)</span>
-          </>
-        ) : null}
+        {' '}| QP: <b>{normalizedQpType || 'QP1'}</b>
       </div>
 
       {loading ? <div style={{ color: '#6b7280', marginBottom: 8 }}>Loading roster…</div> : null}
@@ -563,6 +1078,178 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
           {error}
         </div>
       ) : null}
+
+      {actionError ? (
+        <div
+          style={{
+            background: '#fff7ed',
+            border: '1px solid #fed7aa',
+            color: '#9a3412',
+            padding: 10,
+            borderRadius: 10,
+            marginBottom: 10,
+            maxWidth: '100%',
+            whiteSpace: 'pre-wrap',
+            overflowWrap: 'anywhere',
+            wordBreak: 'break-word',
+          }}
+        >
+          {actionError}
+        </div>
+      ) : null}
+
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+        <button
+          onClick={saveDraftToDb}
+          className="obe-btn obe-btn-success"
+          disabled={savingDraft || !subjectId || publishedEditLocked}
+          title={publishedEditLocked ? 'Published sheets are locked (IQAC must open editing).' : undefined}
+        >
+          {savingDraft ? 'Saving…' : 'Save Draft'}
+        </button>
+        <button onClick={saveLocal} className="obe-btn" disabled={!subjectId || publishedEditLocked}>
+          Save
+        </button>
+        <button onClick={refreshAll} className="obe-btn" disabled={refreshing || !subjectId}>
+          {refreshing ? 'Refreshing…' : 'Refresh'}
+        </button>
+        <button
+          onClick={publish}
+          className="obe-btn obe-btn-primary"
+          disabled={publishing || !publishAllowed || !subjectId || (isPublished && publishedEditLocked)}
+          title={
+            isPublished && publishedEditLocked
+              ? 'Published and locked (use View/Edit on the lock panel).'
+              : !publishAllowed
+                ? 'Publish window is closed.'
+                : undefined
+          }
+        >
+          {publishing ? 'Publishing…' : 'Publish'}
+        </button>
+      </div>
+
+      <div style={{ marginBottom: 10, fontSize: 12, color: publishAllowed ? '#065f46' : '#b91c1c' }}>
+        {publishWindowLoading ? (
+          'Checking publish due time…'
+        ) : publishWindowError ? (
+          publishWindowError
+        ) : publishWindow?.due_at ? (
+          <>
+            Due: {new Date(publishWindow.due_at).toLocaleString()} • Remaining: {formatRemaining(remainingSeconds)}
+          </>
+        ) : (
+          'Due time not set by IQAC.'
+        )}
+      </div>
+
+      {globalLocked ? (
+        <div style={{ marginBottom: 10, border: '1px solid #fde68a', background: '#fffbeb', borderRadius: 12, padding: 12 }}>
+          <div style={{ fontWeight: 800, marginBottom: 6 }}>Locked by IQAC</div>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>Publishing is currently locked globally by IQAC.</div>
+        </div>
+      ) : !publishAllowed ? (
+        <div style={{ marginBottom: 10, border: '1px solid #fecaca', background: '#fff7ed', borderRadius: 12, padding: 12 }}>
+          <div style={{ fontWeight: 800, marginBottom: 6 }}>Publish window closed</div>
+          <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10 }}>
+            Request IQAC approval to open the publish window.
+          </div>
+          <textarea
+            value={requestReason}
+            onChange={(e) => setRequestReason(e.target.value)}
+            placeholder="Reason (optional)"
+            rows={3}
+            style={{ width: '100%', padding: 10, borderRadius: 10, border: '1px solid #e5e7eb', resize: 'vertical' }}
+          />
+          <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button className="obe-btn obe-btn-success" onClick={requestApproval} disabled={requesting || !subjectId}>
+              {requesting ? 'Requesting…' : 'Request Approval'}
+            </button>
+          </div>
+          {requestMessage ? <div style={{ marginTop: 10, fontSize: 12, color: '#065f46' }}>{requestMessage}</div> : null}
+        </div>
+      ) : null}
+
+      <div style={{ marginBottom: 10, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12, background: '#fff' }}>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>Saved</div>
+          <div style={{ fontWeight: 700 }}>{savedAt || '—'}</div>
+          {savedBy ? (
+            <div style={{ fontSize: 12, color: '#6b7280' }}>
+              by <span style={{ color: '#0369a1', fontWeight: 700 }}>{savedBy}</span>
+            </div>
+          ) : null}
+        </div>
+        <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12, background: '#fff' }}>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>Published</div>
+          <div style={{ fontWeight: 700 }}>{publishedAt || '—'}</div>
+          <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button
+              className="obe-btn"
+              disabled={!isPublished || !subjectId}
+              onClick={() => refreshPublishedSnapshot(true, { applyToMain: true })}
+              title={!isPublished ? 'Publish first to view the published snapshot.' : undefined}
+            >
+              {publishedViewLoading ? 'Loading…' : 'View Published'}
+            </button>
+            <button className="obe-btn" onClick={() => refreshMarkLock()} disabled={!subjectId}>
+              Refresh Lock
+            </button>
+          </div>
+          {publishedViewError ? <div style={{ marginTop: 8, fontSize: 12, color: '#b91c1c' }}>{publishedViewError}</div> : null}
+        </div>
+      </div>
+
+      {publishedEditLocked ? (
+        <div style={{ marginBottom: 10, border: '1px solid #fde68a', background: '#fffbeb', borderRadius: 12, padding: 12 }}>
+          <div style={{ fontWeight: 800, marginBottom: 6 }}>Published & locked</div>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>
+            Editing and auto-save are disabled until IQAC opens the edit window.
+          </div>
+        </div>
+      ) : null}
+
+      {publishedEditModalOpen ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 80 }}
+          onClick={() => setPublishedEditModalOpen(false)}
+        >
+          <div
+            style={{
+              width: 'min(520px, 96vw)',
+              background: '#fff',
+              borderRadius: 16,
+              border: '1px solid #e5e7eb',
+              padding: 14,
+              boxShadow: '0 12px 30px rgba(0,0,0,0.18)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>Edit Request</div>
+            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 6 }}>
+              This will send an edit request to IQAC for published MODEL marks. Once approved, the entry will open for editing until the approval expires.
+            </div>
+            <textarea
+              value={editRequestReason}
+              onChange={(e) => setEditRequestReason(e.target.value)}
+              placeholder="Reason (optional)"
+              rows={3}
+              style={{ width: '100%', padding: 10, borderRadius: 10, border: '1px solid #e5e7eb', resize: 'vertical', marginTop: 10 }}
+            />
+            <div style={{ marginTop: 10, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button className="obe-btn" disabled={editRequestBusy} onClick={() => setPublishedEditModalOpen(false)}>
+                Close
+              </button>
+              <button className="obe-btn obe-btn-success" disabled={editRequestBusy || !subjectId} onClick={requestEdit}>
+                {editRequestBusy ? 'Sending…' : 'Send Request'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
 
       {
         /* Show for all MODEL types. Disabled until at least one AB is marked. */
@@ -590,7 +1277,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                 onClick={(e) => {
                   e.stopPropagation();
                   setShowAbsenteesOnly(false);
-                                  setAbsenteesSnapshotKeys(null);
+                  setAbsenteesSnapshotKeys(null);
                 }}
                 role="button"
                 aria-label="Close absentees list"
@@ -618,8 +1305,122 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
         </div>
       </>
 
-      <div className="obe-table-wrapper" style={{ overflowX: 'auto' }}>
-        <table className="obe-table" style={{ width: 'max-content', minWidth: '100%', tableLayout: 'auto' }}>
+      {/* Table overlays similar to SSA/Lab */}
+      <div style={{ position: 'relative', minHeight: publishedEditLocked && !lockedViewOpen ? 220 : undefined }}>
+        {isPublished && publishedEditLocked ? (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              zIndex: 30,
+              pointerEvents: 'none',
+              background: 'linear-gradient(180deg, rgba(34,197,94,0.18) 0%, rgba(16,185,129,0.24) 100%)',
+            }}
+          />
+        ) : null}
+
+        {isPublished && publishedEditLocked ? (
+          <div
+            style={{
+              position: 'absolute',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              top: 12,
+              zIndex: 40,
+              background: 'rgba(255,255,255,0.98)',
+              border: '1px solid #e5e7eb',
+              padding: '10px 14px',
+              borderRadius: 999,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              boxShadow: '0 6px 18px rgba(17,24,39,0.06)',
+              pointerEvents: 'auto',
+              maxWidth: 'min(720px, 96vw)',
+            }}
+          >
+            <div
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: 999,
+                display: 'grid',
+                placeItems: 'center',
+                background: '#fef3c7',
+                border: '1px solid #f59e0b33',
+                color: '#92400e',
+              }}
+              aria-hidden="true"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path
+                  d="M7 11V8a5 5 0 0 1 10 0v3"
+                  stroke="#92400e"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M6 11h12a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z"
+                  stroke="#92400e"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontWeight: 900, fontSize: 18, color: '#111827', lineHeight: 1.1 }}>Published — Locked</div>
+              <div style={{ fontSize: 13, color: '#6b7280', marginTop: 2 }}>
+                {publishedViewLoading
+                  ? 'Loading published marks…'
+                  : publishedViewError
+                    ? publishedViewError
+                    : 'Marks are published. IQAC approval is required to edit.'}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                className="obe-btn"
+                disabled={!isPublished || !subjectId}
+                onClick={async () => {
+                  // Toggle visibility of the read-only table while locked.
+                  setLockedViewOpen((p) => !p);
+                  try {
+                    await refreshPublishedSnapshot(true, { applyToMain: true });
+                  } catch {
+                    // ignore
+                  }
+                }}
+                title={!isPublished ? 'Publish first to view the published snapshot.' : undefined}
+              >
+                {publishedViewLoading ? 'Loading…' : 'View'}
+              </button>
+              <button
+                className="obe-btn obe-btn-success"
+                disabled={!subjectId}
+                onClick={() => setPublishedEditModalOpen(true)}
+                title="Ask IQAC to open editing for published marks"
+              >
+                Edit
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="obe-table-wrapper" style={{ overflowX: 'auto' }}>
+          <table
+            className="obe-table"
+            style={{
+              width: 'max-content',
+              minWidth: '100%',
+              tableLayout: 'auto',
+              pointerEvents: publishedEditLocked ? 'none' : undefined,
+              opacity: publishedEditLocked ? 0.78 : 1,
+              display: publishedEditLocked && !lockedViewOpen ? 'none' : undefined,
+            }}
+          >
           {!isTcplLike ? (
             <>
               {isTheory ? (
@@ -812,7 +1613,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                           const row = (activeSheet || ({} as any))[rowKey] || ({} as TcplRowEntry);
                           const absent = Boolean(row.absent);
 
-                          const kind: AbsenceKind | null = absent ? ((row as any).absentKind || 'AL') : null;
+                          const kind: AbsenceKind | null = absent ? normalizeAbsenceKind((row as any).absentKind) : null;
                           const canEditAbsent = Boolean(showAbsenteesOnly && absent && (kind === 'ML' || kind === 'SKL'));
 
                           const assignedTotal = absent && kind === 'AL' ? 0 : null;
@@ -854,7 +1655,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                               setTheoryCell(rowKey, {
                                 ...row,
                                 absent: true,
-                                absentKind: (((row as any).absentKind || 'AL') as AbsenceKind),
+                                absentKind: normalizeAbsenceKind((row as any).absentKind),
                                 q: Object.fromEntries(theoryQuestions.map((q) => [q.key, ''])),
                               });
                               return;
@@ -870,7 +1671,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                             setTheoryCell(rowKey, {
                               ...row,
                               absent: true,
-                              absentKind: v,
+                              absentKind: normalizeAbsenceKind(v),
                             });
                           };
 
@@ -913,11 +1714,11 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                                   <input type="checkbox" checked={absent} onChange={(e) => setAbsent(e.target.checked)} />
                                   {absent ? (
                                     <div className="obe-ios-select" title="Absent type">
-                                      <span className="obe-ios-select-value">{String((row as any).absentKind || 'AL')}</span>
+                                      <span className="obe-ios-select-value">{kind || 'AL'}</span>
                                       <select
                                         aria-label="Absent type"
-                                        value={((row as any).absentKind || 'AL') as any}
-                                        onChange={(e) => setAbsentKind(e.target.value as AbsenceKind)}
+                                        value={(kind || 'AL') as any}
+                                        onChange={(e) => setAbsentKind(normalizeAbsenceKind(e.target.value))}
                                       >
                                         <option value="AL">AL</option>
                                         <option value="ML">ML</option>
@@ -1086,7 +1887,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                       const row = (activeSheet || ({} as any))[rowKey] || ({} as TcplRowEntry);
                       const absent = Boolean(row.absent);
 
-                      const kind: AbsenceKind | null = absent ? ((row as any).absentKind || 'AL') : null;
+                      const kind: AbsenceKind | null = absent ? normalizeAbsenceKind((row as any).absentKind) : null;
                       const canEditAbsent = Boolean(showAbsenteesOnly && absent && (kind === 'ML' || kind === 'SKL'));
 
                       const assignedTotal = absent && kind === 'AL' ? 0 : null;
@@ -1105,7 +1906,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                           setTheoryCell(rowKey, {
                             ...row,
                             absent: true,
-                            absentKind: (((row as any).absentKind || 'AL') as AbsenceKind),
+                            absentKind: normalizeAbsenceKind((row as any).absentKind),
                             q: Object.fromEntries(questions.map((q) => [q.key, ''])),
                           });
                           return;
@@ -1121,7 +1922,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                         setTheoryCell(rowKey, {
                           ...row,
                           absent: true,
-                          absentKind: v,
+                          absentKind: normalizeAbsenceKind(v),
                         });
                       };
 
@@ -1164,8 +1965,12 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                               <input type="checkbox" checked={absent} onChange={(e) => setAbsent(e.target.checked)} />
                               {absent ? (
                                 <div className="obe-ios-select" title="Absent type">
-                                  <span className="obe-ios-select-value">{String((row as any).absentKind || 'AL')}</span>
-                                  <select aria-label="Absent type" value={((row as any).absentKind || 'AL') as any} onChange={(e) => setAbsentKind(e.target.value as AbsenceKind)}>
+                                  <span className="obe-ios-select-value">{kind || 'AL'}</span>
+                                  <select
+                                    aria-label="Absent type"
+                                    value={(kind || 'AL') as any}
+                                    onChange={(e) => setAbsentKind(normalizeAbsenceKind(e.target.value))}
+                                  >
                                     <option value="AL">AL</option>
                                     <option value="ML">ML</option>
                                     <option value="SKL">SKL</option>
@@ -1456,7 +2261,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                       const absent = Boolean(row.absent);
                       const lab = (row.lab ?? '') as CellNumber;
 
-                      const kind: AbsenceKind | null = absent ? ((row as any).absentKind || 'AL') : null;
+                      const kind: AbsenceKind | null = absent ? normalizeAbsenceKind((row as any).absentKind) : null;
                       const canEditAbsent = Boolean(showAbsenteesOnly && absent && (kind === 'ML' || kind === 'SKL'));
                       const assignedTotal = absent && kind === 'AL' ? 0 : null;
                       const cap = absent && kind === 'ML' ? 60 : absent && kind === 'SKL' ? 75 : null;
@@ -1506,7 +2311,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                           setTcplCell(rowKey, {
                             ...row,
                             absent: true,
-                            absentKind: (((row as any).absentKind || 'AL') as AbsenceKind),
+                            absentKind: normalizeAbsenceKind((row as any).absentKind),
                             q: Object.fromEntries(tcplQuestions.map((q) => [q.key, ''])),
                             lab: '',
                           });
@@ -1524,7 +2329,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                         setTcplCell(rowKey, {
                           ...row,
                           absent: true,
-                          absentKind: v,
+                          absentKind: normalizeAbsenceKind(v),
                         });
                       };
 
@@ -1615,8 +2420,12 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                         <input type="checkbox" checked={absent} onChange={(e) => setAbsent(e.target.checked)} />
                         {absent ? (
                           <div className="obe-ios-select" title="Absent type">
-                            <span className="obe-ios-select-value">{String((row as any).absentKind || 'AL')}</span>
-                            <select aria-label="Absent type" value={((row as any).absentKind || 'AL') as any} onChange={(e) => setAbsentKind(e.target.value as AbsenceKind)}>
+                            <span className="obe-ios-select-value">{kind || 'AL'}</span>
+                            <select
+                              aria-label="Absent type"
+                              value={(kind || 'AL') as any}
+                              onChange={(e) => setAbsentKind(normalizeAbsenceKind(e.target.value))}
+                            >
                               <option value="AL">AL</option>
                               <option value="ML">ML</option>
                               <option value="SKL">SKL</option>
@@ -1685,7 +2494,8 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
               </tbody>
             </>
           )}
-        </table>
+          </table>
+        </div>
       </div>
     </div>
   );

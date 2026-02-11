@@ -9,6 +9,8 @@ from django.contrib import messages
 from django.db import transaction
 import csv, io
 from academics.models import Department
+from academics.models import AcademicYear
+from academics.models import SpecialCourseAssessmentSelection
 
 
 class CurriculumMasterAdminForm(forms.ModelForm):
@@ -58,7 +60,34 @@ class CurriculumMasterAdmin(admin.ModelAdmin):
     def enabled_assessments_display(self, obj):
         if str(getattr(obj, 'class_type', '')).upper() != 'SPECIAL':
             return ''
-        vals = getattr(obj, 'enabled_assessments', None) or []
+
+        # Prefer the runtime SPECIAL selection for the currently active academic year.
+        # This is what the faculty UI saves (global per master+year), whereas
+        # CurriculumMaster.enabled_assessments is a default template.
+        vals = None
+        try:
+            active_year = AcademicYear.objects.filter(is_active=True).order_by('-id').first()
+        except Exception:
+            active_year = None
+
+        if active_year is not None:
+            try:
+                sel = (
+                    SpecialCourseAssessmentSelection.objects.filter(
+                        curriculum_row__master=obj,
+                        academic_year=active_year,
+                    )
+                    .order_by('-updated_at', '-id')
+                    .first()
+                )
+                if sel is not None:
+                    vals = getattr(sel, 'enabled_assessments', None)
+            except Exception:
+                vals = None
+
+        if vals is None:
+            vals = getattr(obj, 'enabled_assessments', None) or []
+
         if not vals:
             return '(none)'
         # show friendly labels in stable order

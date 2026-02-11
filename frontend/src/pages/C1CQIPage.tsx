@@ -19,6 +19,24 @@ type Props = {
   courseId: string;
 };
 
+type CoNum = 1 | 2 | 3 | 4 | 5;
+const CO_NUMS: CoNum[] = [1, 2, 3, 4, 5];
+type CoKey = `co${CoNum}`;
+
+function coKey(n: CoNum): CoKey {
+  return `co${n}` as CoKey;
+}
+
+function emptyCoRecord<T>(value: T): Record<CoKey, T> {
+  return {
+    co1: value,
+    co2: value,
+    co3: value,
+    co4: value,
+    co5: value,
+  };
+}
+
 type Student = {
   id: number;
   reg_no: string;
@@ -30,7 +48,7 @@ type QuestionDef = {
   key: string;
   label: string;
   max: number;
-  co: 1 | 2 | '1&2';
+  co: unknown;
   btl: 1 | 2 | 3 | 4 | 5 | 6;
 };
 
@@ -67,42 +85,80 @@ function toNumOrNull(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function parseCo(raw: unknown): 1 | 2 | '1&2' {
-  if (raw === '1&2' || raw === 'both') return '1&2';
-  if (typeof raw === 'string') {
-    const s = raw.trim();
-    if (s === '1&2' || s === '1,2' || s === '1/2' || s === '2/1') return '1&2';
-    if (s === '2') return 2;
-    if (s === '1') return 1;
-  }
+function toCoNums(raw: unknown): CoNum[] {
+  const clampCo = (n: number): CoNum | null => {
+    if (!Number.isFinite(n)) return null;
+    if (n < 1 || n > 5) return null;
+    return n as CoNum;
+  };
+
+  if (raw == null || raw === '') return [1];
+
   if (Array.isArray(raw)) {
-    const nums = raw.map((v) => Number(v)).filter((n) => Number.isFinite(n));
-    if (nums.includes(1) && nums.includes(2)) return '1&2';
-    if (nums.includes(2)) return 2;
-    if (nums.includes(1)) return 1;
+    const out: CoNum[] = [];
+    for (const v of raw) {
+      const n = clampCo(Number(v));
+      if (n && !out.includes(n)) out.push(n);
+    }
+    return out.length ? out : [1];
   }
-  const n = Number(raw);
-  if (n === 2) return 2;
-  if (n === 12) return '1&2';
-  return 1;
+
+  if (typeof raw === 'number') {
+    return [clampCo(raw) || 1];
+  }
+
+  const s = String(raw).trim().toLowerCase();
+  if (!s) return [1];
+  if (s === 'both') return [1, 2];
+
+  // common separators: 1&2, 1,2, 1/2, 1+2
+  const parts = s
+    .replace(/[^0-9,\/\+&]+/g, '')
+    .split(/[,\/\+&]+/g)
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+  if (parts.length > 1) {
+    const out: CoNum[] = [];
+    for (const p of parts) {
+      const n = clampCo(Number(p));
+      if (n && !out.includes(n)) out.push(n);
+    }
+    return out.length ? out : [1];
+  }
+
+  // handle legacy "12" meaning 1&2
+  if (s === '12') return [1, 2];
+
+  const single = clampCo(Number(s));
+  return [single || 1];
 }
 
-function coWeights(co: 1 | 2 | '1&2'): { co1: number; co2: number } {
-  if (co === '1&2') return { co1: 0.5, co2: 0.5 };
-  return co === 2 ? { co1: 0, co2: 1 } : { co1: 1, co2: 0 };
+function coWeightsFromCos(cos: CoNum[]): Record<CoKey, number> {
+  const out = emptyCoRecord(0);
+  const uniq = Array.from(new Set((cos || []).filter(Boolean))) as CoNum[];
+  const valid = uniq.filter((n) => CO_NUMS.includes(n));
+  const denom = valid.length || 1;
+  for (const n of valid.length ? valid : ([1] as CoNum[])) {
+    out[coKey(n)] = 1 / denom;
+  }
+  return out;
 }
 
-function effectiveCoWeightsForQuestion(questions: QuestionDef[], idx: number): { co1: number; co2: number } {
+function effectiveCoWeightsForQuestion(questions: QuestionDef[], idx: number): Record<CoKey, number> {
   const q = questions[idx];
-  if (!q) return { co1: 0, co2: 0 };
-  if (q.co === '1&2') return { co1: 0.5, co2: 0.5 };
+  if (!q) return emptyCoRecord(0);
 
-  const hasAnySplit = questions.some((x) => x.co === '1&2');
+  const parsed = toCoNums(q.co);
+
+  // Backward-compat: if the sheet does not declare any split-CO questions,
+  // and the last question looks like Q9, treat it as a 50/50 CO1+CO2 split.
+  const hasAnySplit = questions.some((x) => toCoNums(x.co).length > 1);
   const isLast = idx === questions.length - 1;
   const looksLikeQ9 = String(q.key || '').toLowerCase() === 'q9' || String(q.label || '').toLowerCase().includes('q9');
-  if (!hasAnySplit && isLast && looksLikeQ9) return { co1: 0.5, co2: 0.5 };
+  const effective = !hasAnySplit && isLast && looksLikeQ9 ? ([1, 2] as CoNum[]) : parsed;
 
-  return coWeights(q.co);
+  return coWeightsFromCos(effective);
 }
 
 function compareStudentName(a: { name?: string; reg_no?: string }, b: { name?: string; reg_no?: string }) {
@@ -147,6 +203,31 @@ function weightedBlendMark(args: {
 
 export default function C1CQIPage({ courseId }: Props): JSX.Element {
   const [masterCfg, setMasterCfg] = useState<any>(null);
+
+  const coSelectionKey = useMemo(() => `cqi_visible_cos_${courseId}`, [courseId]);
+  const [visibleCos, setVisibleCos] = useState<CoNum[]>(() => {
+    try {
+      const raw = lsGet<any>(`cqi_visible_cos_${courseId}`);
+      if (Array.isArray(raw)) {
+        const parsed = raw
+          .map((x) => Number(x))
+          .filter((n) => CO_NUMS.includes(n as any)) as CoNum[];
+        const uniq = Array.from(new Set(parsed)) as CoNum[];
+        return uniq.length ? uniq : [...CO_NUMS];
+      }
+    } catch {
+      // ignore
+    }
+    return [...CO_NUMS];
+  });
+
+  useEffect(() => {
+    try {
+      lsSet(coSelectionKey, visibleCos);
+    } catch {
+      // ignore
+    }
+  }, [coSelectionKey, visibleCos]);
 
   const [classType, setClassType] = useState<string | null>(null);
   const normalizedClassType = useMemo(() => normalizeClassType(classType), [classType]);
@@ -321,7 +402,7 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
           key: String(q?.key || ''),
           label: String(q?.label || q?.key || ''),
           max: Number(q?.max || 0),
-          co: parseCo(q?.co),
+          co: q?.co,
           btl: Math.min(6, Math.max(1, Number(q?.btl || 1))) as 1 | 2 | 3 | 4 | 5 | 6,
         }))
         .filter((q: any) => q.key);
@@ -330,14 +411,14 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
   }, [masterCfg]);
 
   const questionCoMax = useMemo(() => {
-    let co1 = 0;
-    let co2 = 0;
+    const out = emptyCoRecord(0);
     questions.forEach((q, idx) => {
       const w = effectiveCoWeightsForQuestion(questions, idx);
-      co1 += (Number(q.max) || 0) * w.co1;
-      co2 += (Number(q.max) || 0) * w.co2;
+      for (const n of CO_NUMS) {
+        out[coKey(n)] += (Number(q.max) || 0) * (w[coKey(n)] || 0);
+      }
     });
-    return { co1, co2 };
+    return out;
   }, [questions]);
 
   const maxes = useMemo(() => {
@@ -345,27 +426,29 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
     const f1Cfg = masterCfg?.assessments?.formative1 || {};
     const ciaCfg = masterCfg?.assessments?.cia1 || {};
 
-    const ssaCo1 = Number(ssaCfg?.coMax?.co1);
-    const ssaCo2 = Number(ssaCfg?.coMax?.co2);
+    const readCoMax = (cfg: any, fallbackByCo: Record<CoKey, number>) => {
+      const out = emptyCoRecord(0);
+      for (const n of CO_NUMS) {
+        const k = coKey(n);
+        const v = Number(cfg?.coMax?.[k]);
+        out[k] = Number.isFinite(v) ? Math.max(0, v) : fallbackByCo[k];
+      }
+      return out;
+    };
 
-    const ciaCo1 = Number(ciaCfg?.coMax?.co1);
-    const ciaCo2 = Number(ciaCfg?.coMax?.co2);
-
-    const f1Co = Number(f1Cfg?.maxCo);
+    const ssaFallback = { ...emptyCoRecord(0), co1: 10, co2: 10 };
+    const f1MaxCo = Number(f1Cfg?.maxCo);
+    const f1Fallback = {
+      ...emptyCoRecord(0),
+      co1: Number.isFinite(f1MaxCo) ? Math.max(0, f1MaxCo) : 10,
+      co2: Number.isFinite(f1MaxCo) ? Math.max(0, f1MaxCo) : 10,
+    };
+    const ciaFallback = questionCoMax;
 
     return {
-      ssa: {
-        co1: Number.isFinite(ssaCo1) ? Math.max(0, ssaCo1) : 10,
-        co2: Number.isFinite(ssaCo2) ? Math.max(0, ssaCo2) : 10,
-      },
-      cia: {
-        co1: Number.isFinite(ciaCo1) ? Math.max(0, ciaCo1) : questionCoMax.co1,
-        co2: Number.isFinite(ciaCo2) ? Math.max(0, ciaCo2) : questionCoMax.co2,
-      },
-      f1: {
-        co1: Number.isFinite(f1Co) ? Math.max(0, f1Co) : 10,
-        co2: Number.isFinite(f1Co) ? Math.max(0, f1Co) : 10,
-      },
+      ssa: readCoMax(ssaCfg, ssaFallback),
+      cia: readCoMax(ciaCfg, ciaFallback),
+      f1: readCoMax(f1Cfg, f1Fallback),
     };
   }, [masterCfg, questionCoMax]);
 
@@ -457,12 +540,7 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
     const out = new Map<
       number,
       {
-        ssaCo1: number | null;
-        ssaCo2: number | null;
-        ciaCo1: number | null;
-        ciaCo2: number | null;
-        f1Co1: number | null;
-        f1Co2: number | null;
+        [k: string]: any;
       }
     >();
 
@@ -546,7 +624,7 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
             key: String(q?.key || ''),
             label: String(q?.label || q?.key || ''),
             max: Number(q?.max || 0),
-            co: parseCo(q?.co),
+            co: q?.co,
             btl: Math.min(6, Math.max(1, Number(q?.btl || 1))) as 1 | 2 | 3 | 4 | 5 | 6,
           }))
           .filter((q: any) => q.key)
@@ -556,26 +634,40 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
 
     for (const s of students) {
       const total = ssaById.get(s.id) ?? null;
-      const ssaHalf = total == null ? null : total / 2;
-      const ssaCo1 = ssaHalf == null ? null : clamp(ssaHalf, 0, maxes.ssa.co1);
-      const ssaCo2 = ssaHalf == null ? null : clamp(ssaHalf, 0, maxes.ssa.co2);
+
+      const ssaMaxSum = CO_NUMS.reduce((acc, n) => acc + (maxes.ssa[coKey(n)] || 0), 0);
+      const ssaByCo: Record<CoKey, number | null> = emptyCoRecord(null);
+      for (const n of CO_NUMS) {
+        const k = coKey(n);
+        const mx = maxes.ssa[k] || 0;
+        if (total == null || !ssaMaxSum || !mx) {
+          ssaByCo[k] = null;
+          continue;
+        }
+        const v = (total / ssaMaxSum) * mx;
+        ssaByCo[k] = clamp(v, 0, mx);
+      }
 
       const frow = f1ById[String(s.id)] || {};
-      const skill1 = toNumOrNull(frow?.skill1);
-      const skill2 = toNumOrNull(frow?.skill2);
-      const att1 = toNumOrNull(frow?.att1);
-      const att2 = toNumOrNull(frow?.att2);
-      const f1Co1 = skill1 != null && att1 != null ? clamp(skill1 + att1, 0, maxes.f1.co1) : null;
-      const f1Co2 = skill2 != null && att2 != null ? clamp(skill2 + att2, 0, maxes.f1.co2) : null;
+      const f1ByCo: Record<CoKey, number | null> = emptyCoRecord(null);
+      for (const n of CO_NUMS) {
+        const k = coKey(n);
+        const mx = maxes.f1[k] || 0;
+        const skill = toNumOrNull((frow as any)?.[`skill${n}`]);
+        const att = toNumOrNull((frow as any)?.[`att${n}`]);
+        if (mx && skill != null && att != null) {
+          f1ByCo[k] = clamp(skill + att, 0, mx);
+        } else {
+          f1ByCo[k] = null;
+        }
+      }
 
       const crow = ciaById[String(s.id)] || {};
       const absent = Boolean(crow?.absent);
       const q = crow?.q && typeof crow.q === 'object' ? crow.q : {};
-      let ciaCo1: number | null = null;
-      let ciaCo2: number | null = null;
+      const ciaByCo: Record<CoKey, number | null> = emptyCoRecord(null);
       if (!absent) {
-        let c1 = 0;
-        let c2 = 0;
+        const sums = emptyCoRecord(0);
         let hasAny = false;
         ciaQuestions.forEach((qq, idx) => {
           const raw = q?.[qq.key];
@@ -584,16 +676,28 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
           hasAny = true;
           const mark = clamp(mark0, 0, Number(qq.max) || mark0);
           const w = effectiveCoWeightsForQuestion(ciaQuestions, idx);
-          c1 += mark * w.co1;
-          c2 += mark * w.co2;
+          for (const n of CO_NUMS) {
+            const k = coKey(n);
+            sums[k] += mark * (w[k] || 0);
+          }
         });
         if (hasAny) {
-          ciaCo1 = clamp(c1, 0, maxes.cia.co1);
-          ciaCo2 = clamp(c2, 0, maxes.cia.co2);
+          for (const n of CO_NUMS) {
+            const k = coKey(n);
+            const mx = maxes.cia[k] || 0;
+            ciaByCo[k] = mx ? clamp(sums[k], 0, mx) : null;
+          }
         }
       }
 
-      out.set(s.id, { ssaCo1, ssaCo2, ciaCo1, ciaCo2, f1Co1, f1Co2 });
+      const row: any = {};
+      for (const n of CO_NUMS) {
+        const k = coKey(n);
+        row[`ssaCo${n}`] = ssaByCo[k];
+        row[`f1Co${n}`] = f1ByCo[k];
+        row[`ciaCo${n}`] = ciaByCo[k];
+      }
+      out.set(s.id, row);
     }
 
     return out;
@@ -614,26 +718,35 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
 
       return students.map((s, idx) => {
         const m: any = byStudentId.get(s.id) || {};
-        const co1Raw = typeof m.ciaCo1 === 'number' ? (m.ciaCo1 as number) : null;
-        const co2Raw = typeof m.ciaCo2 === 'number' ? (m.ciaCo2 as number) : null;
-        const co1_3pt = pt3(co1Raw);
-        const co2_3pt = pt3(co2Raw);
-        const total = total100(co1Raw, co2Raw);
+        const rawByCo: Record<CoKey, number | null> = emptyCoRecord(null);
+        rawByCo.co1 = typeof m.ciaCo1 === 'number' ? (m.ciaCo1 as number) : null;
+        rawByCo.co2 = typeof m.ciaCo2 === 'number' ? (m.ciaCo2 as number) : null;
 
-        const flagCo1 = typeof co1_3pt === 'number' && co1_3pt < THRESHOLD_3PT;
-        const flagCo2 = typeof co2_3pt === 'number' && co2_3pt < THRESHOLD_3PT;
-        const cos = [flagCo1 ? 'CO1' : null, flagCo2 ? 'CO2' : null].filter(Boolean).join('+');
+        const pt3ByCo: Record<CoKey, number | null> = emptyCoRecord(null);
+        const flagByCo: Record<CoKey, boolean> = emptyCoRecord(false);
+        for (const n of CO_NUMS) {
+          const k = coKey(n);
+          pt3ByCo[k] = pt3(rawByCo[k]);
+          flagByCo[k] = typeof pt3ByCo[k] === 'number' && (pt3ByCo[k] as number) < THRESHOLD_3PT;
+        }
 
-        return {
+        const total = total100(rawByCo.co1, rawByCo.co2);
+
+        const cos = CO_NUMS.map((n) => (flagByCo[coKey(n)] ? `CO${n}` : null)).filter(Boolean).join('+');
+
+        const row: any = {
           sno: idx + 1,
           ...s,
-          co1_3pt,
-          co2_3pt,
           total,
-          flagCo1,
-          flagCo2,
           cos,
         };
+        for (const n of CO_NUMS) {
+          const k = coKey(n);
+          row[`${k}_3pt`] = pt3ByCo[k];
+          row[`flagCO${n}`] = flagByCo[k];
+        }
+
+        return row;
       });
     }
 
@@ -641,55 +754,52 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
     const ciaW = weights.cia1;
     const f1W = weights.formative1;
 
-    const co1MaxTotal = maxes.ssa.co1 + maxes.cia.co1 + maxes.f1.co1;
-    const co2MaxTotal = maxes.ssa.co2 + maxes.cia.co2 + maxes.f1.co2;
+    const maxTotalByCo: Record<CoKey, number> = emptyCoRecord(0);
+    for (const n of CO_NUMS) {
+      const k = coKey(n);
+      maxTotalByCo[k] = (maxes.ssa[k] || 0) + (maxes.cia[k] || 0) + (maxes.f1[k] || 0);
+    }
 
     return students.map((s, idx) => {
       const m = byStudentId.get(s.id);
 
-      const co1 = weightedBlendMark({
-        ssaMark: m?.ssaCo1 ?? null,
-        ciaMark: m?.ciaCo1 ?? null,
-        f1Mark: m?.f1Co1 ?? null,
-        ssaMax: maxes.ssa.co1,
-        ciaMax: maxes.cia.co1,
-        f1Max: maxes.f1.co1,
-        ssaW,
-        ciaW,
-        f1W,
-      });
+      const coMarkByCo: Record<CoKey, number | null> = emptyCoRecord(null);
+      const pt3ByCo: Record<CoKey, number | null> = emptyCoRecord(null);
+      const flagByCo: Record<CoKey, boolean> = emptyCoRecord(false);
 
-      const co2 = weightedBlendMark({
-        ssaMark: m?.ssaCo2 ?? null,
-        ciaMark: m?.ciaCo2 ?? null,
-        f1Mark: m?.f1Co2 ?? null,
-        ssaMax: maxes.ssa.co2,
-        ciaMax: maxes.cia.co2,
-        f1Max: maxes.f1.co2,
-        ssaW,
-        ciaW,
-        f1W,
-      });
+      for (const n of CO_NUMS) {
+        const k = coKey(n);
+        const coMark = weightedBlendMark({
+          ssaMark: (m as any)?.[`ssaCo${n}`] ?? null,
+          ciaMark: (m as any)?.[`ciaCo${n}`] ?? null,
+          f1Mark: (m as any)?.[`f1Co${n}`] ?? null,
+          ssaMax: maxes.ssa[k] || 0,
+          ciaMax: maxes.cia[k] || 0,
+          f1Max: maxes.f1[k] || 0,
+          ssaW,
+          ciaW,
+          f1W,
+        });
+        coMarkByCo[k] = coMark;
+        const denom = maxTotalByCo[k] || 0;
+        pt3ByCo[k] = coMark == null || !denom ? null : round2((coMark / denom) * 3);
+        flagByCo[k] = typeof pt3ByCo[k] === 'number' && (pt3ByCo[k] as number) < THRESHOLD_3PT;
+      }
 
-      const co1_3pt = co1 == null || !co1MaxTotal ? null : round2((co1 / co1MaxTotal) * 3);
-      const co2_3pt = co2 == null || !co2MaxTotal ? null : round2((co2 / co2MaxTotal) * 3);
-      const total = co1 != null && co2 != null ? Math.round((co1 + co2) || 0) : null;
+      const total = (() => {
+        const nums = CO_NUMS.map((n) => coMarkByCo[coKey(n)]).filter((v) => typeof v === 'number' && Number.isFinite(v)) as number[];
+        return nums.length ? Math.round(nums.reduce((a, b) => a + b, 0)) : null;
+      })();
 
-      const flagCo1 = typeof co1_3pt === 'number' && co1_3pt < THRESHOLD_3PT;
-      const flagCo2 = typeof co2_3pt === 'number' && co2_3pt < THRESHOLD_3PT;
+      const cos = CO_NUMS.map((n) => (flagByCo[coKey(n)] ? `CO${n}` : null)).filter(Boolean).join('+');
 
-      const cos = [flagCo1 ? 'CO1' : null, flagCo2 ? 'CO2' : null].filter(Boolean).join('+');
-
-      return {
-        sno: idx + 1,
-        ...s,
-        co1_3pt,
-        co2_3pt,
-        total,
-        flagCo1,
-        flagCo2,
-        cos,
-      };
+      const row: any = { sno: idx + 1, ...s, total, cos };
+      for (const n of CO_NUMS) {
+        const k = coKey(n);
+        row[`${k}_3pt`] = pt3ByCo[k];
+        row[`flagCO${n}`] = flagByCo[k];
+      }
+      return row;
     });
   }, [students, byStudentId, maxes, weights, isLabCourse]);
 
@@ -705,16 +815,14 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
   }, [computedRows, search]);
 
   const summary = useMemo(() => {
-    const flagged = computedRows.filter((r) => r.cos).length;
-    const co1 = computedRows.filter((r) => r.flagCo1).length;
-    const co2 = computedRows.filter((r) => r.flagCo2).length;
-    return {
-      strength: computedRows.length,
-      flagged,
-      co1,
-      co2,
-    };
-  }, [computedRows]);
+    const rowFlagged = (r: any) => visibleCos.some((n) => Boolean(r?.[`flagCO${n}`]));
+    const flagged = computedRows.filter((r: any) => rowFlagged(r)).length;
+    const out: any = { strength: computedRows.length, flagged };
+    for (const n of CO_NUMS) {
+      out[`co${n}`] = computedRows.filter((r) => Boolean((r as any)[`flagCO${n}`])).length;
+    }
+    return out as { strength: number; flagged: number } & Record<string, number>;
+  }, [computedRows, visibleCos]);
 
   const th: React.CSSProperties = {
     position: 'sticky',
@@ -778,7 +886,7 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
           <div>
             <div style={{ fontSize: 18, fontWeight: 950, color: '#0b4a6f' }}>C1-CQI</div>
             <div style={{ marginTop: 6, fontSize: 13, color: '#334155' }}>
-              Flags CO1 / CO2 when 3pt attainment is below <b>{THRESHOLD_3PT}</b>.
+              Flags CO1–CO5 when 3pt attainment is below <b>{THRESHOLD_3PT}</b>.
             </div>
           </div>
 
@@ -797,6 +905,58 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
                   </option>
                 ))}
               </select>
+            </div>
+
+            <div style={{ minWidth: 320 }}>
+              <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6, fontWeight: 700 }}>Show CO columns</div>
+              <div
+                style={{
+                  display: 'flex',
+                  gap: 10,
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                  padding: '10px 12px',
+                  borderRadius: 12,
+                  border: '1px solid #e2e8f0',
+                  background: '#fff',
+                }}
+              >
+                {CO_NUMS.map((n) => {
+                  const checked = visibleCos.includes(n);
+                  return (
+                    <label key={n} style={{ display: 'inline-flex', gap: 8, alignItems: 'center', cursor: 'pointer', userSelect: 'none' }}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(e) => {
+                          const next = e.target.checked
+                            ? (Array.from(new Set([...visibleCos, n])) as CoNum[])
+                            : (visibleCos.filter((x) => x !== n) as CoNum[]);
+                          setVisibleCos(next);
+                        }}
+                      />
+                      <span style={{ fontSize: 12, fontWeight: 800, color: '#0f172a' }}>{`CO${n}`}</span>
+                    </label>
+                  );
+                })}
+
+                <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                  <button
+                    type="button"
+                    onClick={() => setVisibleCos([...CO_NUMS])}
+                    style={{ padding: '6px 10px', borderRadius: 10, border: '1px solid #e2e8f0', background: '#f8fafc', fontSize: 12, fontWeight: 800, color: '#0f172a' }}
+                  >
+                    All
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setVisibleCos([])}
+                    style={{ padding: '6px 10px', borderRadius: 10, border: '1px solid #e2e8f0', background: '#fff', fontSize: 12, fontWeight: 800, color: '#0f172a' }}
+                  >
+                    None
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div>
@@ -841,8 +1001,9 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
         <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
           {pill(`Strength: ${summary.strength}`, 'neutral')}
           {pill(`Flagged: ${summary.flagged}`, summary.flagged ? 'danger' : 'neutral')}
-          {pill(`CO1 below: ${summary.co1}`, summary.co1 ? 'danger' : 'neutral')}
-          {pill(`CO2 below: ${summary.co2}`, summary.co2 ? 'danger' : 'neutral')}
+          {visibleCos.map((n) => (
+            <React.Fragment key={n}>{pill(`CO${n} below: ${(summary as any)[`co${n}`] ?? 0}`, (summary as any)[`co${n}`] ? 'danger' : 'neutral')}</React.Fragment>
+          ))}
         </div>
       </div>
 
@@ -865,13 +1026,14 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
                 <th style={{ ...th, minWidth: 260 }}>NAME</th>
                 <th style={{ ...th, width: 140 }}>CO's</th>
                 <th style={{ ...th, width: 90, textAlign: 'center' }}>100</th>
-                <th style={{ ...th, width: 90, textAlign: 'center' }}>CO1 (3pt)</th>
-                <th style={{ ...th, width: 90, textAlign: 'center' }}>CO2 (3pt)</th>
+                {visibleCos.map((n) => (
+                  <th key={n} style={{ ...th, width: 90, textAlign: 'center' }}>{`CO${n} (3pt)`}</th>
+                ))}
               </tr>
             </thead>
             <tbody>
               {visibleRows.map((r, i) => {
-                const isFlagged = Boolean(r.cos);
+                const isFlagged = visibleCos.some((n) => Boolean((r as any)[`flagCO${n}`]));
                 const zebra = i % 2 === 0;
                 const rowBg = isFlagged ? 'rgba(239, 68, 68, 0.10)' : zebra ? '#ffffff' : '#f8fafc';
 
@@ -895,15 +1057,12 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
                     </td>
                     <td style={{ ...td, minWidth: 260, fontWeight: 800 }}>{r.name}</td>
                     <td style={{ ...td, width: 140 }}>
-                      {r.flagCo1 && r.flagCo2 ? (
+                      {visibleCos.some((n) => Boolean((r as any)[`flagCO${n}`])) ? (
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                          {pill('CO1', 'danger')}
-                          {pill('CO2', 'danger')}
+                          {visibleCos.filter((n) => Boolean((r as any)[`flagCO${n}`])).map((n) => (
+                            <React.Fragment key={n}>{pill(`CO${n}`, 'danger')}</React.Fragment>
+                          ))}
                         </div>
-                      ) : r.flagCo1 ? (
-                        pill('CO1', 'danger')
-                      ) : r.flagCo2 ? (
-                        pill('CO2', 'danger')
                       ) : (
                         ''
                       )}
@@ -920,15 +1079,16 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
                     >
                       {r.total == null ? '' : Number.isFinite(Number(r.total)) ? String(Math.round(Number(r.total))) : r.total}
                     </td>
-                    <td style={cell3ptStyle(Boolean(r.flagCo1))}>{r.co1_3pt == null ? '' : r.co1_3pt}</td>
-                    <td style={cell3ptStyle(Boolean(r.flagCo2))}>{r.co2_3pt == null ? '' : r.co2_3pt}</td>
+                    {visibleCos.map((n) => (
+                      <td key={n} style={cell3ptStyle(Boolean((r as any)[`flagCO${n}`]))}>{(r as any)[`co${n}_3pt`] == null ? '' : (r as any)[`co${n}_3pt`]}</td>
+                    ))}
                   </tr>
                 );
               })}
 
               {!visibleRows.length && (
                 <tr>
-                  <td colSpan={8} style={{ padding: 18, textAlign: 'center', color: '#64748b' }}>
+                  <td colSpan={6 + visibleCos.length} style={{ padding: 18, textAlign: 'center', color: '#64748b' }}>
                     No rows.
                   </td>
                 </tr>

@@ -9,6 +9,7 @@ import {
   fetchPublishedCiaSheet,
   publishCiaSheet,
   saveDraft,
+  fetchIqacQpPattern,
 } from '../services/obe';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
@@ -18,6 +19,7 @@ import { formatRemaining, usePublishWindow } from '../hooks/usePublishWindow';
 import { useEditWindow } from '../hooks/useEditWindow';
 import { useMarkTableLock } from '../hooks/useMarkTableLock';
 import PublishLockOverlay from './PublishLockOverlay';
+import { normalizeClassType } from '../constants/classTypes';
 
 type Student = {
   id: number;
@@ -34,9 +36,11 @@ type Props = {
   subjectId: string;
   teachingAssignmentId?: number;
   assessmentKey?: AssessmentKey;
+  classType?: string | null;
+  questionPaperType?: string | null;
 };
 
-type CoValue = 1 | 2 | 3 | 4 | '1&2' | '3&4' | 'both';
+type CoValue = 1 | 2 | 3 | 4 | 5 | '1&2' | '3&4' | 'both';
 
 type QuestionDef = {
   key: string;
@@ -68,6 +72,7 @@ function parseCo(raw: unknown): CoValue {
     const s = raw.trim();
     if (s === '1&2' || s === '1,2' || s === '1/2' || s === '2/1') return '1&2';
     if (s === '3&4' || s === '3,4' || s === '3/4' || s === '4/3') return '3&4';
+    if (s === '5') return 5;
     if (s === '4') return 4;
     if (s === '3') return 3;
     if (s === '2') return 2;
@@ -83,6 +88,7 @@ function parseCo(raw: unknown): CoValue {
     if (nums.includes(1)) return 1;
   }
   const n = Number(raw);
+  if (n === 5) return 5;
   if (n === 4) return 4;
   if (n === 3) return 3;
   if (n === 2) return 2;
@@ -103,9 +109,17 @@ function isSplitCo(co: CoValue): boolean {
 
 function coWeights(co: CoValue, pair: CoPair): { a: number; b: number } {
   if (isSplitCo(co)) return { a: 0.5, b: 0.5 };
+
   // For CIA2, allow legacy configs that still use 1/2 tagging.
-  if (co === pair.b || (pair.a === 3 && co === 2)) return { a: 0, b: 1 };
-  return { a: 1, b: 0 };
+  const isLegacyCia2 = pair.a === 3;
+  const mapsToA = co === pair.a || (isLegacyCia2 && co === 1);
+  const mapsToB = co === pair.b || (isLegacyCia2 && co === 2);
+  if (mapsToA) return { a: 1, b: 0 };
+  if (mapsToB) return { a: 0, b: 1 };
+
+  // Any other CO (e.g., CO-5) is not represented in CIA's 2-CO attainment panel.
+  // Treat as "no contribution" rather than mis-attributing it.
+  return { a: 0, b: 0 };
 }
 
 function effectiveCoWeightsForQuestion(questions: QuestionDef[], idx: number, pair: CoPair): { a: number; b: number } {
@@ -201,27 +215,116 @@ function downloadCsv(filename: string, rows: Array<Record<string, string | numbe
   URL.revokeObjectURL(url);
 }
 
-export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentKey: assessmentKeyProp }: Props) {
+export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentKey: assessmentKeyProp, classType, questionPaperType }: Props) {
   const assessmentKey: AssessmentKey = assessmentKeyProp || 'cia1';
   const assessmentLabel = assessmentKey === 'cia2' ? 'CIA 2' : 'CIA 1';
   const coPair = useMemo(() => coPairForAssessment(assessmentKey), [assessmentKey]);
   const [masterCfg, setMasterCfg] = useState<any>(null);
   const [masterCfgWarning, setMasterCfgWarning] = useState<string | null>(null);
+  const [iqacPattern, setIqacPattern] = useState<{ marks: number[]; cos?: Array<number | string> } | null>(null);
+
+  const classTypeKey = useMemo(() => {
+    const v = String(normalizeClassType(classType) || '').trim().toUpperCase();
+    if (!v) return '';
+    // IQAC QP patterns are keyed by coarse class_type: THEORY/TCPR/TCPL/LAB.
+    // Some parts of the system may pass THEORY1/THEORY2/THEORY3; normalize those back to THEORY.
+    if (v.startsWith('THEORY')) return 'THEORY';
+    return v;
+  }, [classType]);
+
+  const qpTypeKey = useMemo(() => {
+    const s = String(questionPaperType ?? '')
+      .trim()
+      .toUpperCase();
+    if (s === 'QP2') return 'QP2';
+    if (s === 'QP1') return 'QP1';
+    return '';
+  }, [questionPaperType]);
+
+  useEffect(() => {
+    let alive = true;
+    const run = async () => {
+      if (!classTypeKey) {
+        setIqacPattern(null);
+        return;
+      }
+
+      // Only THEORY uses QP1/QP2. For TCPR/TCPL/LAB, IQAC saves patterns with question_paper_type = null.
+      const qpForApi = classTypeKey === 'THEORY' ? (qpTypeKey ? qpTypeKey : null) : null;
+
+      const examForApi = assessmentKey === 'cia2' ? 'CIA2' : 'CIA1';
+      let res: any = null;
+      let p: any[] = [];
+
+      // Prefer CIA1/CIA2-specific config.
+      try {
+        res = await fetchIqacQpPattern({
+          class_type: classTypeKey,
+          question_paper_type: qpForApi,
+          exam: examForApi as any,
+        });
+        p = Array.isArray(res?.pattern?.marks) ? res.pattern.marks : [];
+      } catch {
+        // ignore and try legacy CIA next
+      }
+
+      // Fallback to legacy shared CIA config if specific isn't configured or not supported by backend.
+      if (!p.length) {
+        try {
+          res = await fetchIqacQpPattern({
+            class_type: classTypeKey,
+            question_paper_type: qpForApi,
+            exam: 'CIA' as any,
+          });
+          p = Array.isArray(res?.pattern?.marks) ? res.pattern.marks : [];
+        } catch {
+          // ignore
+        }
+      }
+
+      if (!alive) return;
+      setIqacPattern(p.length ? (res.pattern as any) : null);
+    };
+    run();
+    return () => {
+      alive = false;
+    };
+  }, [classTypeKey, qpTypeKey, assessmentKey]);
+
   const questions = useMemo<QuestionDef[]>(() => {
     const qs = (masterCfg as any)?.assessments?.[assessmentKey]?.questions ?? (masterCfg as any)?.assessments?.cia1?.questions;
-    if (Array.isArray(qs) && qs.length) {
-      return qs
-        .map((q: any) => ({
-          key: String(q?.key || ''),
-          label: String(q?.label || q?.key || ''),
-          max: Number(q?.max || 0),
-          co: parseCo(q?.co),
-          btl: Math.min(6, Math.max(1, Number(q?.btl || 1))) as 1 | 2 | 3 | 4 | 5 | 6,
-        }))
-        .filter((q: any) => q.key);
+    const baseFromMaster: QuestionDef[] = Array.isArray(qs) && qs.length
+      ? qs
+          .map((q: any) => ({
+            key: String(q?.key || ''),
+            label: String(q?.label || q?.key || ''),
+            max: Number(q?.max || 0),
+            co: parseCo(q?.co),
+            btl: Math.min(6, Math.max(1, Number(q?.btl || 1))) as 1 | 2 | 3 | 4 | 5 | 6,
+          }))
+          .filter((q: any) => q.key)
+      : DEFAULT_QUESTIONS;
+
+    const marks = Array.isArray((iqacPattern as any)?.marks) ? (iqacPattern as any).marks : null;
+    const cos = Array.isArray((iqacPattern as any)?.cos) ? (iqacPattern as any).cos : null;
+    if (Array.isArray(marks) && marks.length) {
+      return marks
+        .map((max, idx) => {
+          const fallback = baseFromMaster[idx];
+          const coRaw = cos ? cos[idx] : undefined;
+          return {
+            key: `q${idx + 1}`,
+            label: `Q${idx + 1}`,
+            max: Number(max) || 0,
+            co: (coRaw != null ? parseCo(coRaw) : (fallback?.co ?? (coPair.a as any))) as CoValue,
+            btl: (fallback?.btl ?? 1) as 1 | 2 | 3 | 4 | 5 | 6,
+          };
+        })
+        .filter((q) => Boolean(q.key));
     }
-    return DEFAULT_QUESTIONS;
-  }, [masterCfg, assessmentKey]);
+
+    return baseFromMaster;
+  }, [masterCfg, assessmentKey, iqacPattern, coPair.a]);
 
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -231,7 +334,15 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   const [serverTotals, setServerTotals] = useState<Record<number, number | null>>({});
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
+  const [viewMarksModalOpen, setViewMarksModalOpen] = useState(false);
+  const [publishedViewLoading, setPublishedViewLoading] = useState(false);
+  const [publishedViewError, setPublishedViewError] = useState<string | null>(null);
+  const [publishedViewSheet, setPublishedViewSheet] = useState<any | null>(null);
+  const publishedViewTableRef = useRef<HTMLDivElement | null>(null);
+
   const [publishedEditModalOpen, setPublishedEditModalOpen] = useState(false);
+  const [editRequestReason, setEditRequestReason] = useState('');
+  const [editRequestBusy, setEditRequestBusy] = useState(false);
   const [showAbsenteesOnly, setShowAbsenteesOnly] = useState(false);
   const [absenteesSnapshot, setAbsenteesSnapshot] = useState<number[] | null>(null);
   const [limitDialog, setLimitDialog] = useState<{ title: string; message: string } | null>(null);
@@ -267,6 +378,9 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   const [markManagerModal, setMarkManagerModal] = useState<null | { mode: 'confirm' | 'request' }>(null);
   const [markManagerBusy, setMarkManagerBusy] = useState(false);
   const [markManagerError, setMarkManagerError] = useState<string | null>(null);
+  const [mmSelectedQuestions, setMmSelectedQuestions] = useState<number[]>([]);
+  const [mmSelectedMarks, setMmSelectedMarks] = useState<number[]>([]);
+  const [mmSelectedBtls, setMmSelectedBtls] = useState<number[]>([]);
   const [publishConsumedApprovals, setPublishConsumedApprovals] = useState<null | {
     markEntryApprovalUntil: string | null;
     markManagerApprovalUntil: string | null;
@@ -295,12 +409,20 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   const publishedEditLocked = Boolean(isPublished && !entryOpen);
   const tableBlocked = Boolean(globalLocked || (isPublished ? !entryOpen : !markManagerLocked));
 
-  function markManagerSnapshotOf(nextQuestionBtl: Record<string, 1 | 2 | 3 | 4 | 5 | 6 | ''>) {
+  function markManagerSnapshotOf(
+    nextQuestionBtl: Record<string, 1 | 2 | 3 | 4 | 5 | 6 | ''>,
+    selections?: { questions?: number[]; marks?: number[]; btls?: number[] },
+  ) {
     return JSON.stringify({
       assessmentKey,
       totalsMax,
       questions: (questions || []).map((q) => ({ key: q.key, label: q.label, max: q.max })),
       questionBtl: nextQuestionBtl,
+      mark_manager: {
+        questions: selections?.questions ?? [],
+        marks: selections?.marks ?? [],
+        btls: selections?.btls ?? [],
+      },
     });
   }
 
@@ -327,27 +449,59 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
 
   async function requestMarkEntryEdit() {
     if (!subjectId) return;
+    setEditRequestBusy(true);
     try {
       await createEditRequest({
         assessment: assessmentKey,
         subject_code: String(subjectId),
         scope: 'MARK_ENTRY',
-        reason: `Edit request: ${assessmentLabel} marks entry for ${subjectId}`,
+        reason: editRequestReason || `Edit request: ${assessmentLabel} marks entry for ${subjectId}`,
         teaching_assignment_id: teachingAssignmentId,
       });
       alert('Edit request sent to IQAC.');
+      setPublishedEditModalOpen(false);
       refreshMarkLock({ silent: true });
     } catch (e: any) {
       alert(e?.message || 'Request failed');
+    } finally {
+      setEditRequestBusy(false);
     }
   }
+
+  const refreshPublishedSheet = async (silent?: boolean) => {
+    if (!subjectId) return;
+    if (!silent) {
+      setPublishedViewError(null);
+      setPublishedViewLoading(true);
+    }
+    try {
+      const res = await fetchPublishedCiaSheet(assessmentKey, subjectId, teachingAssignmentId);
+      const data = res && (res as any).data != null ? (res as any).data : null;
+      setPublishedViewSheet(data);
+    } catch (e: any) {
+      if (!silent) setPublishedViewError(e?.message || 'Failed to load published sheet');
+    } finally {
+      if (!silent) setPublishedViewLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!viewMarksModalOpen) return;
+    setPublishedViewSheet(null);
+    refreshPublishedSheet(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMarksModalOpen, subjectId, assessmentKey]);
 
   async function confirmMarkManager() {
     if (!subjectId) return;
     setMarkManagerBusy(true);
     setMarkManagerError(null);
     try {
-      const snapshot = markManagerSnapshotOf(sheet.questionBtl);
+      const snapshot = markManagerSnapshotOf(sheet.questionBtl, {
+        questions: mmSelectedQuestions,
+        marks: mmSelectedMarks,
+        btls: mmSelectedBtls,
+      });
       const approvalUntil = markManagerEditWindow?.approval_until ? String(markManagerEditWindow.approval_until) : sheet.markManagerApprovalUntil || null;
       const nextSheet: Cia1Sheet = { ...sheet, markManagerLocked: true, markManagerSnapshot: snapshot, markManagerApprovalUntil: approvalUntil };
       const draft: Cia1DraftPayload = {
@@ -377,6 +531,40 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       setMarkManagerBusy(false);
     }
   }
+
+  function toggleMmQuestion(n: number) {
+    setMmSelectedQuestions((prev) => (prev.includes(n) ? prev.filter((x) => x !== n) : [...prev, n].sort((a, b) => a - b)));
+  }
+  function toggleMmMark(n: number) {
+    setMmSelectedMarks((prev) => (prev.includes(n) ? prev.filter((x) => x !== n) : [...prev, n].sort((a, b) => a - b)));
+  }
+  function toggleMmBtl(n: number) {
+    setMmSelectedBtls((prev) => (prev.includes(n) ? prev.filter((x) => x !== n) : [...prev, n].sort((a, b) => a - b)));
+  }
+
+  useEffect(() => {
+    // When opening the Mark Manager confirm modal, initialise selections from any existing snapshot
+    if (!markManagerModal || markManagerModal.mode !== 'confirm') return;
+    try {
+      if (sheet.markManagerSnapshot) {
+        const p = JSON.parse(String(sheet.markManagerSnapshot));
+        const mm = (p && (p as any).mark_manager) || {};
+        setMmSelectedQuestions(Array.isArray(mm.questions) ? mm.questions.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n)) : []);
+        setMmSelectedMarks(Array.isArray(mm.marks) ? mm.marks.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n)) : []);
+        setMmSelectedBtls(Array.isArray(mm.btls) ? mm.btls.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n)) : []);
+      } else {
+        // defaults: none selected
+        setMmSelectedQuestions([]);
+        setMmSelectedMarks([]);
+        setMmSelectedBtls([]);
+      }
+    } catch (e) {
+      setMmSelectedQuestions([]);
+      setMmSelectedMarks([]);
+      setMmSelectedBtls([]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [markManagerModal]);
 
   useEffect(() => {
     let mounted = true;
@@ -799,10 +987,10 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       };
 
       // Allow mark edits for absentees only when user explicitly opened the absentees list
-      // and the absence is ML/SKL (AL is treated as 0).
+      // (absentees are handled during publish/export: if marks are entered, the row is treated as present).
       const isAbsent = Boolean((existing as any).absent);
       const absenceKind = isAbsent ? String((existing as any).absentKind || 'AL').toUpperCase() : '';
-      const canEditAbsent = Boolean(showAbsenteesOnly && isAbsent && (absenceKind === 'ML' || absenceKind === 'SKL'));
+      const canEditAbsent = Boolean(showAbsenteesOnly && isAbsent);
       if (isAbsent && !canEditAbsent) return prev;
       const def = questions.find((q) => q.key === qKey);
       const max = def?.max ?? totalsMax;
@@ -839,6 +1027,14 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
           },
         },
       };
+    });
+  };
+
+  const hasAnyEnteredMarks = (row: Cia1RowState | null | undefined): boolean => {
+    if (!row || !row.q) return false;
+    return questions.some((q) => {
+      const v = (row.q as any)[q.key];
+      return v !== '' && v !== null && v !== undefined;
     });
   };
 
@@ -888,10 +1084,23 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
     setError(null);
     try {
       // Persist a snapshot of the sheet + question headers used for CO calculations.
+      // If an absentee has marks entered, treat them as present for publishing (so totals merge into overall mark list).
+      const mergedRowsByStudentId: Record<string, any> = {};
+      for (const [sid, row] of Object.entries(sheet.rowsByStudentId || {})) {
+        const r: any = row || {};
+        const entered = hasAnyEnteredMarks(r as any);
+        if (r.absent && entered) {
+          mergedRowsByStudentId[sid] = { ...r, absent: false, absentKind: undefined };
+        } else {
+          mergedRowsByStudentId[sid] = r;
+        }
+      }
+
       const data = {
         ...sheet,
         batchLabel: subjectId,
         questions,
+        rowsByStudentId: mergedRowsByStudentId,
       };
       await publishCiaSheet(assessmentKey, subjectId, data, teachingAssignmentId);
       setPublishedAt(new Date().toLocaleString());
@@ -902,6 +1111,17 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         } catch {
           // ignore
         }
+        // If view modal is open, scroll its table to bottom so user sees latest rows
+        setTimeout(() => {
+          try {
+            if (viewMarksModalOpen && publishedViewTableRef.current) {
+              const el = publishedViewTableRef.current;
+              el.scrollTop = el.scrollHeight;
+            }
+          } catch (e) {
+            // ignore
+          }
+        }, 50);
     } catch (e: any) {
       setError(e?.message || `Failed to publish ${assessmentLabel}`);
     } finally {
@@ -933,6 +1153,40 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         q: Object.fromEntries(questions.map((q) => [q.key, ''])),
       };
 
+      // Export rule:
+      // - If a student is marked absent and NO marks are entered, mark them as ABSENT in the full list.
+      // - If marks are entered for an absentee, treat them as present in the exported list.
+      const entered = hasAnyEnteredMarks(row as any);
+      const effectiveAbsent = Boolean(row.absent && !entered);
+      const effectiveAbsentKind = effectiveAbsent ? String((row as any).absentKind || 'AL') : '';
+
+      if (effectiveAbsent) {
+        const emptyQ = Object.fromEntries(questions.map((q) => [q.key, ''] as const));
+        return {
+          sno: i + 1,
+          registerNo: s.reg_no,
+          name: s.name,
+          absent: 1,
+          absentKind: effectiveAbsentKind,
+          ...emptyQ,
+          total: 'ABSENT',
+          [`co${coPair.a}_mark`]: '',
+          [`co${coPair.a}_pct`]: '',
+          [`co${coPair.b}_mark`]: '',
+          [`co${coPair.b}_pct`]: '',
+          ...Object.fromEntries(
+            visibleBtls.flatMap((n) => [
+              [`btl${n}_mark`, ''],
+              [`btl${n}_pct`, ''],
+            ]),
+          ),
+        };
+      }
+
+      // If an absentee has marks entered, export them as present.
+      const exportAbsent = 0;
+      const exportAbsentKind = '';
+
       const qMarks = Object.fromEntries(
         questions.map((q) => [q.key, clamp(Number(row.q?.[q.key] || 0), 0, q.max)]),
       );
@@ -958,8 +1212,8 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         sno: i + 1,
         registerNo: s.reg_no,
         name: s.name,
-        absent: row.absent ? 1 : 0,
-        absentKind: row.absent ? String((row as any).absentKind || 'AL') : '',
+        absent: exportAbsent,
+        absentKind: exportAbsentKind,
         ...qMarks,
         total,
         [`co${coPair.a}_mark`]: co1,
@@ -1257,7 +1511,36 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         <div style={{ color: '#6b7280', fontSize: 14, padding: '12px 0' }}>No students found for this subject.</div>
       ) : (
         <PublishLockOverlay locked={globalLocked}>
-          <div className="obe-table-wrapper" style={{ overflowX: 'auto' }}>
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Mark Manager</div>
+            <div
+              style={{
+                border: '1px solid #fcd34d',
+                background: markManagerLocked ? '#f3f4f6' : '#fff7ed',
+                padding: 12,
+                borderRadius: 12,
+                display: 'flex',
+                gap: 10,
+                alignItems: 'center',
+                flexWrap: 'wrap',
+              }}
+            >
+              <div style={{ fontWeight: 950, color: '#111827' }}>BTL configuration</div>
+              <div style={{ fontSize: 12, color: '#6b7280' }}>Set BTL per question in the BTL row, then confirm.</div>
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                <button
+                  className="obe-btn obe-btn-success"
+                  disabled={!subjectId || markManagerBusy}
+                  onClick={() => setMarkManagerModal({ mode: markManagerLocked ? 'request' : 'confirm' })}
+                >
+                  {markManagerLocked ? 'Edit' : 'Save'}
+                </button>
+              </div>
+            </div>
+            {markManagerError ? <div style={{ marginTop: 8, fontSize: 12, color: '#991b1b' }}>{markManagerError}</div> : null}
+          </div>
+
+          <div className="obe-table-wrapper" style={{ overflowX: 'auto', position: 'relative' }}>
             <table className="obe-table" style={{ width: 'max-content', minWidth: '100%', tableLayout: 'auto' }}>
             <thead>
               <tr>
@@ -1453,7 +1736,9 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                 const rowStyle: React.CSSProperties | undefined = row.absent ? { background: '#f1f5f9' } : undefined;
 
                 const kind = row.absent ? String((row as any).absentKind || 'AL').toUpperCase() : '';
-                const canEditAbsent = Boolean(showAbsenteesOnly && row.absent && (kind === 'ML' || kind === 'SKL'));
+                const canEditAbsent = Boolean(showAbsenteesOnly && row.absent);
+
+                const lockedInputs = Boolean(tableBlocked || globalLocked || publishedEditLocked);
 
                 const serverTotal = serverTotals[s.id];
 
@@ -1464,13 +1749,14 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                     <td style={{ ...cellTd, minWidth: 240, overflow: 'visible', textOverflow: 'clip' }}>{s.name}</td>
                     <td style={{ ...cellTd, textAlign: 'center', minWidth: 88 }}>
                       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-                        <input type="checkbox" checked={row.absent} onChange={(e) => setAbsent(s.id, e.target.checked)} />
+                        <input type="checkbox" checked={row.absent} disabled={lockedInputs} onChange={(e) => setAbsent(s.id, e.target.checked)} />
                         {row.absent ? (
                           <div className="obe-ios-select" title="Absent type">
                             <span className="obe-ios-select-value">{String((row as any).absentKind || 'AL')}</span>
                             <select
                               aria-label="Absent type"
                               value={((row as any).absentKind || 'AL') as any}
+                              disabled={lockedInputs}
                               onChange={(e) => setAbsentKind(s.id, e.target.value as AbsenceKind)}
                             >
                               <option value="AL">AL</option>
@@ -1489,7 +1775,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                           type="number"
                           min={0}
                           max={q.max}
-                          disabled={row.absent && !canEditAbsent}
+                          disabled={lockedInputs || (row.absent && !canEditAbsent)}
                           value={row.q?.[q.key] === '' || row.q?.[q.key] == null ? '' : clamp(Number(row.q?.[q.key] || 0), 0, q.max)}
                           onChange={(e) => setQuestionMark(s.id, q.key, e.target.value === '' ? '' : Number(e.target.value))}
                         />
@@ -1522,9 +1808,323 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
               })}
             </tbody>
           </table>
+
+            {tableBlocked && !globalLocked ? (
+              <>
+                <div
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    background: isPublished ? 'rgba(240,253,244,0.55)' : 'rgba(239,246,255,0.65)',
+                    border: `1px solid ${isPublished ? 'rgba(22,163,74,0.25)' : 'rgba(59,130,246,0.25)'}`,
+                    borderRadius: 6,
+                    pointerEvents: 'none',
+                  }}
+                />
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: '50%',
+                    top: 16,
+                    transform: 'translateX(-50%)',
+                    zIndex: 40,
+                    width: 300,
+                    background: 'rgba(255,255,255,0.98)',
+                    border: '1px solid #e5e7eb',
+                    padding: 12,
+                    borderRadius: 12,
+                    boxShadow: '0 6px 18px rgba(17,24,39,0.06)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 10,
+                    alignItems: 'stretch',
+                  }}
+                >
+                  <div>
+                    <div style={{ fontWeight: 950, color: '#111827' }}>{isPublished ? 'Published — Locked' : 'Table Locked'}</div>
+                    <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
+                      {isPublished ? 'Marks are published. Use View or Request Edit to ask IQAC for access.' : 'Confirm the Mark Manager to unlock student entry.'}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                    {!isPublished ? (
+                      <>
+                        <button className="obe-btn obe-btn-success" onClick={() => setMarkManagerModal({ mode: 'confirm' })} disabled={!subjectId || markManagerBusy}>
+                          Save Mark Manager
+                        </button>
+                        <button className="obe-btn" onClick={() => requestMarkManagerEdit()} disabled={markManagerBusy}>
+                          Request Access
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button className="obe-btn" onClick={() => setViewMarksModalOpen(true)}>
+                          View
+                        </button>
+                        <button className="obe-btn obe-btn-success" onClick={() => setPublishedEditModalOpen(true)} disabled={editRequestBusy}>
+                          Request Edit
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </>
+            ) : null}
           </div>
         </PublishLockOverlay>
       )}
+
+      {markManagerModal ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 9999 }}
+          onClick={() => {
+            if (markManagerBusy) return;
+            setMarkManagerModal(null);
+          }}
+        >
+          <div style={{ width: 'min(760px,96vw)', background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: 14 }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+              <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>{markManagerModal.mode === 'confirm' ? `Confirmation - ${assessmentLabel}` : `Request Edit - ${assessmentLabel}`}</div>
+              <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>{String(subjectId || '')}</div>
+            </div>
+
+            {markManagerModal.mode === 'confirm' ? (
+              <>
+                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10 }}>Confirm the selected BTL settings. After confirming, Mark Manager will be locked and the table will be editable.</div>
+
+                {/* Questions / Marks / BTL selectors removed as requested */}
+
+                <div style={{ overflowX: 'auto', border: '1px solid #e5e7eb', borderRadius: 12 }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ background: '#f9fafb' }}>
+                        <th style={{ textAlign: 'left', padding: 10, fontSize: 12, borderBottom: '1px solid #e5e7eb' }}>Question</th>
+                        <th style={{ textAlign: 'right', padding: 10, fontSize: 12, borderBottom: '1px solid #e5e7eb' }}>Max</th>
+                        <th style={{ textAlign: 'right', padding: 10, fontSize: 12, borderBottom: '1px solid #e5e7eb' }}>BTL</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {questions.map((q) => (
+                        <tr key={`mm_${q.key}`}>
+                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>{q.label}</td>
+                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{q.max}</td>
+                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>
+                            <select
+                              value={((sheet.questionBtl || ({} as any))[q.key] === '' ? '' : String((sheet.questionBtl || ({} as any))[q.key])) as any}
+                              onChange={(e) => {
+                                const v = e.target.value === '' ? '' : (Number(e.target.value) as 1 | 2 | 3 | 4 | 5 | 6);
+                                setQuestionBtl(q.key, v as any);
+                              }}
+                              style={{ padding: '6px 8px', borderRadius: 6, border: '1px solid #e5e7eb', background: '#fff' }}
+                              disabled={markManagerBusy || globalLocked}
+                            >
+                              <option value="">-</option>
+                              {[1, 2, 3, 4, 5, 6].map((n) => (
+                                <option key={n} value={String(n)}>
+                                  {n}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            ) : (
+              <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10 }}>This will send an edit request to IQAC. Mark Manager will remain locked until IQAC approves.</div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+              <button className="obe-btn" disabled={markManagerBusy} onClick={() => setMarkManagerModal(null)}>
+                Cancel
+              </button>
+              <button
+                className="obe-btn obe-btn-success"
+                disabled={markManagerBusy || !subjectId}
+                onClick={async () => {
+                  if (!subjectId) return;
+                  if (markManagerModal.mode === 'request') {
+                    setMarkManagerModal(null);
+                    await requestMarkManagerEdit();
+                    return;
+                  }
+                  await confirmMarkManager();
+                }}
+              >
+                {markManagerModal.mode === 'confirm' ? 'Confirm' : 'Send Request'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {viewMarksModalOpen ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 60 }}
+          onClick={() => setViewMarksModalOpen(false)}
+        >
+          <div style={{ width: 'min(1100px, 96vw)', background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: 0, display: 'flex', flexDirection: 'column' }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderBottom: '1px solid #eef2f7' }}>
+              <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>View Only</div>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setViewMarksModalOpen(false);
+                }}
+                aria-label="Close"
+                style={{ marginLeft: 'auto', border: 'none', background: 'transparent', fontSize: 20, lineHeight: 1, cursor: 'pointer' }}
+              >
+                ×
+              </button>
+            </div>
+
+            <div style={{ padding: 14 }}>
+              {publishedViewLoading ? <div style={{ color: '#6b7280' }}>Loading published sheet…</div> : null}
+              {publishedViewError ? <div style={{ color: '#991b1b', fontSize: 12, marginBottom: 8 }}>{publishedViewError}</div> : null}
+            </div>
+
+            {publishedViewSheet && (publishedViewSheet.rowsByStudentId || publishedViewSheet.rows_by_student_id) ? (
+              <div ref={publishedViewTableRef} style={{ overflow: 'auto', border: '1px solid #e5e7eb', borderRadius: 12, maxHeight: '60vh' }}>
+                <table className="obe-table" style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr>
+                      <th style={cellTh} colSpan={6 + visibleBtls.length * 2}>
+                        {sheet.termLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {sheet.batchLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {assessmentLabel} (PUBLISHED)
+                      </th>
+                    </tr>
+                    <tr>
+                      <th style={{ ...cellTh, width: SNO_COL_WIDTH, minWidth: SNO_COL_WIDTH }}>S.No</th>
+                      <th style={{ ...cellTh, minWidth: 70, overflow: 'visible', textOverflow: 'clip' }}>R.No</th>
+                      <th style={{ ...cellTh, minWidth: 240, overflow: 'visible', textOverflow: 'clip' }}>Name of the Students</th>
+                      <th style={cellTh}>Total</th>
+                      <th style={cellTh} colSpan={2}>CO-{coPair.a}</th>
+                      <th style={cellTh} colSpan={2}>CO-{coPair.b}</th>
+                      {visibleBtls.map((n) => (
+                        <th key={`pv_btl_${n}`} style={cellTh} colSpan={2}>
+                          BTL-{n}
+                        </th>
+                      ))}
+                    </tr>
+                    <tr>
+                      <th style={cellTh} />
+                      <th style={cellTh} />
+                      <th style={cellTh} />
+                      <th style={cellTh} />
+                      {Array.from({ length: 2 + visibleBtls.length }).flatMap((_, i) => (
+                        <React.Fragment key={`pv_hdr_${i}`}>
+                          <th style={cellTh}>Mark</th>
+                          <th style={cellTh}>%</th>
+                        </React.Fragment>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {students.map((s, i) => {
+                      const publishedRows = (publishedViewSheet.rowsByStudentId || publishedViewSheet.rows_by_student_id || {}) as any;
+                      const row = publishedRows[String(s.id)] || publishedRows[s.id] || {};
+                      const qObj = row.q || {};
+                      const qMarks = Object.fromEntries(questions.map((q) => [q.key, clamp(Number(qObj?.[q.key] || 0), 0, q.max)])) as Record<string, number>;
+                      const total = questions.reduce((sum, q) => sum + Number(qMarks[q.key] || 0), 0);
+
+                      let coA = 0;
+                      let coB = 0;
+                      for (let qi = 0; qi < questions.length; qi++) {
+                        const q = questions[qi];
+                        const w = effectiveCoWeightsForQuestion(questions, qi, coPair);
+                        const m = Number(qMarks[q.key] || 0);
+                        coA += m * w.a;
+                        coB += m * w.b;
+                      }
+
+                      const btl: Record<1 | 2 | 3 | 4 | 5 | 6, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
+                      for (const q of questions) {
+                        const v = (publishedViewSheet.questionBtl || publishedViewSheet.question_btl || sheet.questionBtl || ({} as any))[q.key];
+                        if (v === 1 || v === 2 || v === 3 || v === 4 || v === 5 || v === 6) {
+                          const vi = v as 1 | 2 | 3 | 4 | 5 | 6;
+                          btl[vi] += Number(qMarks[q.key] || 0);
+                        }
+                      }
+
+                      return (
+                        <tr key={`pv_${s.id}`}>
+                          <td style={{ ...cellTd, textAlign: 'center', width: SNO_COL_WIDTH, minWidth: SNO_COL_WIDTH, paddingLeft: 2, paddingRight: 2 }}>{i + 1}</td>
+                          <td style={{ ...cellTd, minWidth: 70, overflow: 'visible', textOverflow: 'clip' }}>{shortenRegisterNo(row.reg_no || sheet.rowsByStudentId[String(s.id)]?.reg_no || '')}</td>
+                          <td style={{ ...cellTd, minWidth: 240, overflow: 'visible', textOverflow: 'clip' }}>{s.name}</td>
+                          <td style={{ ...cellTd, textAlign: 'center', fontWeight: 900 }}>{total}</td>
+                          <td style={{ ...cellTd, textAlign: 'center' }}>{Math.round(coA)}</td>
+                          <td style={{ ...cellTd, textAlign: 'center' }}><span className="obe-pct-badge">{pct(coA, effectiveCoMax.a)}</span></td>
+                          <td style={{ ...cellTd, textAlign: 'center' }}>{Math.round(coB)}</td>
+                          <td style={{ ...cellTd, textAlign: 'center' }}><span className="obe-pct-badge">{pct(coB, effectiveCoMax.b)}</span></td>
+                          {visibleBtls.map((n) => (
+                            <React.Fragment key={`pv_btl_${s.id}_${n}`}>
+                              <td style={{ ...cellTd, textAlign: 'center' }}>{Math.round(btl[n as 1 | 2 | 3 | 4 | 5 | 6])}</td>
+                              <td style={{ ...cellTd, textAlign: 'center' }}><span className="obe-pct-badge">{pct(btl[n as 1 | 2 | 3 | 4 | 5 | 6], effectiveBtlMax[n as 1 | 2 | 3 | 4 | 5 | 6])}</span></td>
+                            </React.Fragment>
+                          ))}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : publishedViewLoading ? null : (
+              <div style={{ color: '#6b7280' }}>No published sheet found.</div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
+              <button className="obe-btn" onClick={() => setViewMarksModalOpen(false)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {publishedEditModalOpen ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 60 }}
+          onClick={() => {
+            if (editRequestBusy) return;
+            setPublishedEditModalOpen(false);
+          }}
+        >
+          <div style={{ width: 'min(560px, 96vw)', background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: 14 }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+              <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>Edit Request</div>
+              <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>{assessmentLabel} • {String(subjectId || '')}</div>
+            </div>
+
+            <div style={{ fontSize: 13, color: '#374151', marginBottom: 10, lineHeight: 1.35 }}>
+              This will send an edit request to IQAC for published marks. Once approved, the entry will open for editing until the approval expires.
+            </div>
+
+            <textarea
+              value={editRequestReason}
+              onChange={(e) => setEditRequestReason(e.target.value)}
+              placeholder="Reason (optional)"
+              rows={4}
+              style={{ width: '100%', padding: 10, borderRadius: 10, border: '1px solid #e5e7eb', resize: 'vertical' }}
+            />
+
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 12 }}>
+              <button className="obe-btn" disabled={editRequestBusy} onClick={() => setPublishedEditModalOpen(false)}>
+                Cancel
+              </button>
+              <button className="obe-btn obe-btn-success" disabled={editRequestBusy || !subjectId} onClick={requestMarkEntryEdit}>
+                {editRequestBusy ? 'Requesting…' : 'Send Request'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

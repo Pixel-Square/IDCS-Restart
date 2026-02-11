@@ -208,7 +208,7 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, asse
   const [rosterLoading, setRosterLoading] = useState(false);
   const [rosterError, setRosterError] = useState<string | null>(null);
 
-  const [selectedBtls, setSelectedBtls] = useState<number[]>([]);
+  const [selectedBtls, setSelectedBtls] = useState<number[]>(() => (isReview ? [3, 4] : []));
 
   const [savingDraft, setSavingDraft] = useState(false);
   const [publishing, setPublishing] = useState(false);
@@ -222,6 +222,7 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, asse
   const [publishedViewSnapshot, setPublishedViewSnapshot] = useState<PublishedSsa2Response | null>(null);
   const [publishedViewLoading, setPublishedViewLoading] = useState(false);
   const [publishedViewError, setPublishedViewError] = useState<string | null>(null);
+  const [showNameListLockedNotice, setShowNameListLockedNotice] = useState(false);
 
   const {
     data: publishWindow,
@@ -233,8 +234,8 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, asse
   } = usePublishWindow({ assessment: assessmentKey, subjectCode: subjectId, teachingAssignmentId });
 
   const { data: markLock, refresh: refreshMarkLock } = useMarkTableLock({ assessment: assessmentKey as any, subjectCode: String(subjectId || ''), teachingAssignmentId, options: { poll: false } });
-  const { data: markManagerEditWindow } = useEditWindow({ assessment: assessmentKey as any, subjectCode: String(subjectId || ''), scope: 'MARK_MANAGER', teachingAssignmentId, options: { poll: false } });
-  const { data: markEntryEditWindow } = useEditWindow({ assessment: assessmentKey as any, subjectCode: String(subjectId || ''), scope: 'MARK_ENTRY', teachingAssignmentId, options: { poll: false } });
+  const { data: markManagerEditWindow, refresh: refreshMarkManagerEditWindow } = useEditWindow({ assessment: assessmentKey as any, subjectCode: String(subjectId || ''), scope: 'MARK_MANAGER', teachingAssignmentId, options: { poll: true } });
+  const { data: markEntryEditWindow, refresh: refreshMarkEntryEditWindow } = useEditWindow({ assessment: assessmentKey as any, subjectCode: String(subjectId || ''), scope: 'MARK_ENTRY', teachingAssignmentId, options: { poll: true } });
 
   const globalLocked = Boolean(publishWindow?.global_override_active && publishWindow?.global_is_open === false);
 
@@ -256,7 +257,7 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, asse
   }, [subjectId]);
 
   const isPublished = Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published) || Boolean(publishedViewSnapshot);
-  const markManagerLocked = Boolean(sheet.markManagerLocked);
+  const markManagerLocked = isReview ? true : Boolean(sheet.markManagerLocked);
 
   const markEntryApprovalUntil = markEntryEditWindow?.approval_until ? String(markEntryEditWindow.approval_until) : null;
   const markManagerApprovalUntil = markManagerEditWindow?.approval_until ? String(markManagerEditWindow.approval_until) : null;
@@ -265,6 +266,7 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, asse
     Boolean(markEntryApprovalUntil) &&
     markEntryApprovalUntil !== (publishConsumedApprovals?.markEntryApprovalUntil ?? null);
   const markManagerApprovedFresh =
+    !isReview &&
     Boolean(markManagerEditWindow?.allowed_by_approval) &&
     Boolean(markManagerApprovalUntil) &&
     markManagerApprovalUntil !== (publishConsumedApprovals?.markManagerApprovalUntil ?? null);
@@ -272,7 +274,9 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, asse
   const entryOpen = !isPublished ? true : Boolean(markLock?.entry_open) || markEntryApprovedFresh || markManagerApprovedFresh;
   const publishedEditLocked = Boolean(isPublished && !entryOpen);
   const tableBlocked = Boolean(globalLocked || (isPublished ? !entryOpen : !markManagerLocked));
-  const showNameList = Boolean(sheet.markManagerSnapshot != null);
+  const showNameList = isReview ? true : Boolean(sheet.markManagerSnapshot != null);
+
+  const showPublishedLockPanel = (isReview ? isPublished : Boolean(publishedAt)) && publishedEditLocked;
 
   const visibleBtlIndices = useMemo(() => {
     const set = new Set(selectedBtls);
@@ -406,6 +410,7 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, asse
 
   // Mark Manager workflow sync: keep local sheet lock state in sync with server lock/approval
   useEffect(() => {
+    if (isReview) return;
     if (!subjectId) return;
 
     const published = Boolean(markLock?.exists && markLock?.is_published) || Boolean(publishedAt);
@@ -516,6 +521,23 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, asse
   }, [subjectId]);
 
   const prevEntryOpenRef = useRef<boolean>(Boolean(entryOpen));
+  const publishedViewTableRef = useRef<HTMLDivElement | null>(null);
+
+  async function refreshAll(showLoading = true) {
+    try {
+      refreshPublishWindow();
+      refreshMarkLock({ silent: false });
+      await refreshPublishedSnapshot(showLoading);
+      if (teachingAssignmentId) {
+        // reload roster to ensure name list sync
+        try {
+          await loadRoster();
+        } catch {}
+      }
+    } catch {
+      // ignore
+    }
+  }
   useEffect(() => {
     if (!subjectId) return;
     if (!isPublished) return;
@@ -627,12 +649,29 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, asse
       refreshPublishWindow();
       refreshMarkLock({ silent: true });
       refreshPublishedSnapshot(false);
+        // If the view-only modal is open, scroll that table to bottom so user sees latest rows
+        setTimeout(() => {
+          try {
+            if (viewMarksModalOpen && publishedViewTableRef.current) {
+              const el = publishedViewTableRef.current;
+              el.scrollTop = el.scrollHeight;
+            }
+          } catch (e) {
+            // ignore
+          }
+        }, 50);
         try {
           console.debug('obe:published dispatch', { assessment: assessmentKey, subjectId });
           window.dispatchEvent(new CustomEvent('obe:published', { detail: { subjectId, assessment: assessmentKey } }));
         } catch {
           // ignore
         }
+        // After publish, refresh the page state after 2 seconds and show locked notice
+        setTimeout(() => {
+          refreshAll(true);
+          setShowNameListLockedNotice(true);
+          setTimeout(() => setShowNameListLockedNotice(false), 5000);
+        }, 2000);
     } catch (e: any) {
       setSaveError(e?.message || `Failed to publish ${displayLabel}`);
     } finally {
@@ -686,6 +725,9 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, asse
         teaching_assignment_id: teachingAssignmentId,
       });
       alert('Edit request sent to IQAC.');
+      try {
+        await (refreshMarkManagerEditWindow ? refreshMarkManagerEditWindow({ silent: true }) : Promise.resolve());
+      } catch {}
     } catch (e: any) {
       setMarkManagerError(e?.message || 'Request failed');
       alert(e?.message || 'Request failed');
@@ -706,6 +748,9 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, asse
       });
       alert('Edit request sent to IQAC.');
       refreshMarkLock({ silent: true });
+      try {
+        await (refreshMarkEntryEditWindow ? refreshMarkEntryEditWindow({ silent: true }) : Promise.resolve());
+      } catch {}
     } catch (e: any) {
       alert(e?.message || 'Request failed');
     }
@@ -867,11 +912,20 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, asse
           <button onClick={saveDraftToDb} className="obe-btn obe-btn-success" disabled={savingDraft}>
             {savingDraft ? 'Saving…' : 'Save Draft'}
           </button>
+          <button onClick={() => refreshAll(true)} className="obe-btn" disabled={!subjectId}>
+            Refresh
+          </button>
           <button onClick={publish} className="obe-btn obe-btn-primary" disabled={publishing || !publishAllowed}>
             {publishing ? 'Publishing…' : 'Publish'}
           </button>
         </div>
       </div>
+
+      {showNameListLockedNotice ? (
+        <div style={{ marginTop: 8, padding: 8, background: '#ecfdf5', border: '1px solid #bbf7d0', borderRadius: 8, color: '#065f46', fontWeight: 700 }}>
+          Name list locked
+        </div>
+      ) : null}
 
       <div style={{ marginTop: 10, fontSize: 12, color: publishAllowed ? '#065f46' : '#b91c1c' }}>
         {publishWindowLoading ? (
@@ -949,6 +1003,7 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, asse
         </div>
       </div>
 
+      {!isReview ? (
       <div style={{ marginTop: 12, ...cardStyle }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ fontWeight: 800 }}>Mark Manager</div>
@@ -1008,16 +1063,18 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, asse
         </div>
         {markManagerError ? <div style={{ marginTop: 8, color: '#991b1b' }}>{markManagerError}</div> : null}
       </div>
+      ) : null}
 
       <div style={{ marginTop: 14 }}>
         {showNameList ? (
-          <div style={{ overflowX: 'auto' }}>
-            <PublishLockOverlay
-              locked={Boolean(globalLocked || publishedEditLocked)}
-              title={globalLocked ? 'Locked by IQAC' : 'Published — Locked'}
-              subtitle={globalLocked ? 'Publishing is turned OFF globally for this assessment.' : 'Marks are published. Request IQAC approval to edit.'}
-            >
-              <table style={{ borderCollapse: 'collapse', minWidth: 920 }}>
+          <div style={{ position: 'relative' }}>
+            <div style={{ overflowX: 'auto' }}>
+              <PublishLockOverlay
+                locked={Boolean(globalLocked || publishedEditLocked)}
+                title={globalLocked ? 'Locked by IQAC' : 'Published — Locked'}
+                subtitle={globalLocked ? 'Publishing is turned OFF globally for this assessment.' : 'Marks are published. Request IQAC approval to edit.'}
+              >
+                <table style={{ borderCollapse: 'collapse', minWidth: 920 }}>
           <thead>
             <tr>
               <th style={cellTh} colSpan={totalTableCols}>
@@ -1093,7 +1150,7 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, asse
             ) : tableBlocked && !publishedEditLocked ? (
               <tr>
                 <td colSpan={totalTableCols} style={{ padding: 20, textAlign: 'center', color: '#065f46', fontWeight: 900 }}>
-                  Table locked — confirm the Mark Manager to enable student marks
+                  {isReview ? 'Table locked' : 'Table locked — confirm the Mark Manager to enable student marks'}
                 </td>
               </tr>
             ) : (
@@ -1164,8 +1221,44 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, asse
               })
             )}
           </tbody>
-              </table>
-            </PublishLockOverlay>
+                </table>
+              </PublishLockOverlay>
+            </div>
+
+            {showPublishedLockPanel ? (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: '50%',
+                  top: 18,
+                  transform: 'translateX(-50%)',
+                  zIndex: 40,
+                  width: 360,
+                  background: 'rgba(255,255,255,0.98)',
+                  border: '1px solid #e5e7eb',
+                  padding: 10,
+                  borderRadius: 12,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                  alignItems: 'center',
+                  boxShadow: '0 6px 18px rgba(17,24,39,0.06)',
+                }}
+              >
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontWeight: 900, color: '#065f46' }}>Published</div>
+                  <div style={{ fontSize: 13, color: '#065f46' }}>Marks are locked. Request IQAC approval to edit.</div>
+                </div>
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+                  <button className="obe-btn" onClick={() => setViewMarksModalOpen(true)}>
+                    View
+                  </button>
+                  <button className="obe-btn obe-btn-success" onClick={() => setPublishedEditModalOpen(true)}>
+                    Request Edit
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : (
           <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 20, background: '#fff' }}>
@@ -1210,76 +1303,152 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, asse
           onClick={() => setViewMarksModalOpen(false)}
         >
           <div
-            style={{ width: 'min(1100px, 96vw)', maxHeight: 'min(80vh, 900px)', overflow: 'auto', background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: 14 }}
+            style={{ width: 'min(1100px, 96vw)', maxHeight: 'min(80vh, 900px)', background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: 0, display: 'flex', flexDirection: 'column' }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-              <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>View Published {displayLabel}</div>
-              <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>{displayLabel}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderBottom: '1px solid #eef2f7' }}>
+              <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>View Only</div>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setViewMarksModalOpen(false);
+                }}
+                aria-label="Close"
+                style={{ marginLeft: 'auto', border: 'none', background: 'transparent', fontSize: 20, lineHeight: 1, cursor: 'pointer' }}
+              >
+                ×
+              </button>
             </div>
 
-            {publishedViewLoading ? <div style={{ color: '#6b7280', marginBottom: 8 }}>Loading published marks…</div> : null}
-            {publishedViewError ? <div style={{ color: '#b91c1c', marginBottom: 8 }}>{publishedViewError}</div> : null}
+            <div style={{ padding: 14 }}>
+              {publishedViewLoading ? <div style={{ color: '#6b7280', marginBottom: 8 }}>Loading published marks…</div> : null}
+              {publishedViewError ? <div style={{ color: '#b91c1c', marginBottom: 8 }}>{publishedViewError}</div> : null}
+            </div>
 
-            <div style={{ overflowX: 'auto', border: '1px solid #e5e7eb', borderRadius: 12 }}>
-              <table style={{ width: '100%', minWidth: 720, borderCollapse: 'collapse' }}>
+            <div ref={publishedViewTableRef} style={{ overflow: 'auto', borderTop: '1px solid #e5e7eb', borderBottom: '1px solid #e5e7eb', borderLeft: '1px solid #e5e7eb', borderRight: '1px solid #e5e7eb', borderRadius: 0, maxHeight: '60vh' }}>
+              <table style={{ borderCollapse: 'collapse', minWidth: 920 }}>
                 <thead>
                   <tr>
-                    <th style={cellTh}>S.No</th>
-                    <th style={cellTh}>Register No.</th>
-                    <th style={cellTh}>Name</th>
-                    <th style={cellTh}>{showTotalColumn ? 'Total' : displayLabel}</th>
-                    <th style={cellTh}>CO-3%</th>
-                    <th style={cellTh}>CO-4%</th>
+                    <th style={cellTh} colSpan={totalTableCols}>
+                      {sheet.termLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {sheet.batchLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {displayLabel}
+                    </th>
+                  </tr>
+                  <tr>
+                    <th style={{ ...cellTh, width: 42, minWidth: 42 }} rowSpan={4}>S.No</th>
+                    <th style={cellTh} rowSpan={4}>Register No.</th>
+                    <th style={cellTh} rowSpan={3}>Name of the Students</th>
+
+                    <th style={cellTh}>{displayLabel}</th>
+                    {showTotalColumn ? <th style={cellTh}>Total</th> : null}
+
+                    <th style={cellTh} colSpan={4}>CO ATTAINMENT</th>
+                    {visibleBtlIndices.length ? <th style={cellTh} colSpan={visibleBtlIndices.length * 2}>BTL ATTAINMENT</th> : null}
+                  </tr>
+                  <tr>
+                    <th style={cellTh}>
+                      <div style={{ fontWeight: 800 }}>COs</div>
+                      <div style={{ fontSize: 12 }}>3,4</div>
+                    </th>
+                    {showTotalColumn ? <th style={cellTh} /> : null}
+
+                    <th style={cellTh} colSpan={2}>CO-3</th>
+                    <th style={cellTh} colSpan={2}>CO-4</th>
+
                     {visibleBtlIndices.map((n) => (
-                      <React.Fragment key={`v_btl_${n}`}>
-                        <th style={cellTh}>BTL{n}</th>
-                        <th style={cellTh}>BTL{n}%</th>
+                      <th key={`btl-head-${n}`} style={cellTh} colSpan={2}>
+                        BTL-{n}
+                      </th>
+                    ))}
+                  </tr>
+                  <tr>
+                    <th style={cellTh}>
+                      <div style={{ fontWeight: 800 }}>BTL</div>
+                      <div style={{ fontSize: 12 }}>{visibleBtlIndices.length ? visibleBtlIndices.join(',') : '-'}</div>
+                    </th>
+                    {showTotalColumn ? <th style={cellTh} /> : null}
+
+                    {Array.from({ length: 2 + visibleBtlIndices.length }).flatMap((_, i) => (
+                      <React.Fragment key={i}>
+                        <th style={cellTh}>Mark</th>
+                        <th style={cellTh}>%</th>
                       </React.Fragment>
                     ))}
                   </tr>
+                  <tr>
+                    <th style={cellTh}>Name / Max Marks</th>
+                    <th style={cellTh}>{MAX_ASMT2}</th>
+                    {showTotalColumn ? <th style={cellTh}>{MAX_ASMT2}</th> : null}
+                    <th style={cellTh}>{CO_MAX.co3}</th>
+                    <th style={cellTh}>%</th>
+                    <th style={cellTh}>{CO_MAX.co4}</th>
+                    <th style={cellTh}>%</th>
+                    {visibleBtlIndices.flatMap((n) => [
+                      <th key={`btl-max-${n}`} style={cellTh}>
+                        {isReview
+                          ? String(BTL_MAX_WHEN_VISIBLE)
+                          : String(Math.max(Number((BTL_MAX as any)[`btl${n}`] ?? 0) || 0, DEFAULT_BTL_MAX_WHEN_VISIBLE))}
+                      </th>,
+                      <th key={`btl-pct-${n}`} style={cellTh}>%</th>,
+                    ])}
+                  </tr>
                 </thead>
                 <tbody>
-                  {sheet.rows.map((r, i) => {
-                    const raw = publishedViewSnapshot?.marks?.[String(r.studentId)] ?? null;
-                    const numericTotal = raw == null || raw === '' ? null : clamp(Number(raw), 0, MAX_ASMT2);
+                  {sheet.rows.length === 0 ? (
+                    <tr>
+                      <td colSpan={totalTableCols} style={{ padding: 14, color: '#6b7280', fontSize: 13 }}>
+                        No students loaded yet. Choose a Teaching Assignment above, then click “Load/Refresh Roster”.
+                      </td>
+                    </tr>
+                  ) : (
+                    sheet.rows.map((r, idx) => {
+                      const raw = publishedViewSnapshot?.marks?.[String(r.studentId)] ?? null;
+                      const numericTotal = raw == null || raw === '' ? null : clamp(Number(raw), 0, MAX_ASMT2);
 
-                    const coSplitCount = 2;
-                    const coShare = numericTotal == null ? null : round1(numericTotal / coSplitCount);
-                    const co3 = coShare == null ? null : clamp(coShare, 0, CO_MAX.co3);
-                    const co4 = coShare == null ? null : clamp(coShare, 0, CO_MAX.co4);
+                      const coSplitCount = 2;
+                      const coShare = numericTotal == null ? null : round1(numericTotal / coSplitCount);
+                      const co3 = coShare == null ? null : clamp(coShare, 0, CO_MAX.co3);
+                      const co4 = coShare == null ? null : clamp(coShare, 0, CO_MAX.co4);
 
-                    const visibleIndicesZeroBased = visibleBtlIndices.map((n) => n - 1);
-                    const rawBtlMaxByIndex = [BTL_MAX.btl1, BTL_MAX.btl2, BTL_MAX.btl3, BTL_MAX.btl4, BTL_MAX.btl5, BTL_MAX.btl6];
-                    const btlMaxByIndex = rawBtlMaxByIndex.map((rawMax, idx) => {
-                      if (!visibleIndicesZeroBased.includes(idx)) return rawMax;
-                      return isReview ? BTL_MAX_WHEN_VISIBLE : rawMax > 0 ? rawMax : DEFAULT_BTL_MAX_WHEN_VISIBLE;
-                    });
-                    const btlShare = numericTotal == null ? null : visibleIndicesZeroBased.length ? round1(numericTotal / visibleIndicesZeroBased.length) : 0;
-                    const btlMarksByIndex = btlMaxByIndex.map((max, idx) => {
-                      if (numericTotal == null) return null;
-                      if (!visibleIndicesZeroBased.includes(idx)) return null;
-                      if (max > 0) return clamp(btlShare as number, 0, max);
-                      return round1(btlShare as number);
-                    });
+                      const visibleIndicesZeroBased = visibleBtlIndices.map((n) => n - 1);
+                      const rawBtlMaxByIndex = [BTL_MAX.btl1, BTL_MAX.btl2, BTL_MAX.btl3, BTL_MAX.btl4, BTL_MAX.btl5, BTL_MAX.btl6];
+                      const btlMaxByIndex = rawBtlMaxByIndex.map((rawMax, idx) => {
+                        if (!visibleIndicesZeroBased.includes(idx)) return rawMax;
+                        return isReview ? BTL_MAX_WHEN_VISIBLE : rawMax > 0 ? rawMax : DEFAULT_BTL_MAX_WHEN_VISIBLE;
+                      });
+                      const btlShare = numericTotal == null ? null : visibleIndicesZeroBased.length ? round1(numericTotal / visibleIndicesZeroBased.length) : 0;
+                      const btlMarksByIndex = btlMaxByIndex.map((max, i) => {
+                        if (numericTotal == null) return null;
+                        if (!visibleIndicesZeroBased.includes(i)) return null;
+                        if (max > 0) return clamp(btlShare as number, 0, max);
+                        return round1(btlShare as number);
+                      });
 
-                    return (
-                      <tr key={r.studentId}>
-                        <td style={cellTd}>{i + 1}</td>
-                        <td style={cellTd}>{shortenRegisterNo(r.registerNo)}</td>
-                        <td style={cellTd}>{r.name}</td>
-                        <td style={{ ...cellTd, textAlign: 'right' }}>{numericTotal == null ? '' : round1(numericTotal)}</td>
-                        <td style={{ ...cellTd, textAlign: 'right' }}>{co3 == null ? '' : round1(co3)}</td>
-                        <td style={{ ...cellTd, textAlign: 'right' }}>{co4 == null ? '' : round1(co4)}</td>
-                        {visibleBtlIndices.map((n) => (
-                          <React.Fragment key={`pv_${r.studentId}_${n}`}>
-                            <td style={{ ...cellTd, textAlign: 'right' }}>{btlMarksByIndex[n - 1] == null ? '' : round1(btlMarksByIndex[n - 1] as number)}</td>
-                            <td style={{ ...cellTd, textAlign: 'right' }}>{pct(btlMarksByIndex[n - 1], btlMaxByIndex[n - 1])}</td>
-                          </React.Fragment>
-                        ))}
-                      </tr>
-                    );
-                  })}
+                      return (
+                        <tr key={String(r.studentId || idx)}>
+                          <td style={{ ...cellTd, textAlign: 'center', width: 42, minWidth: 42, paddingLeft: 2, paddingRight: 2 }}>{idx + 1}</td>
+                          <td style={cellTd}>{shortenRegisterNo(r.registerNo)}</td>
+                          <td style={cellTd}>{r.name}</td>
+                          <td style={{ ...cellTd, width: 90, background: '#fff7ed', textAlign: 'right' }}>{numericTotal == null ? '' : round1(numericTotal)}</td>
+                          {showTotalColumn ? <td style={{ ...cellTd, textAlign: 'right' }}>{numericTotal == null ? '' : round1(numericTotal)}</td> : null}
+                          <td style={{ ...cellTd, textAlign: 'right' }}>{co3 ?? ''}</td>
+                          <td style={{ ...cellTd, textAlign: 'right' }}>{pct(co3 as any, CO_MAX.co3)}</td>
+                          <td style={{ ...cellTd, textAlign: 'right' }}>{co4 ?? ''}</td>
+                          <td style={{ ...cellTd, textAlign: 'right' }}>{pct(co4 as any, CO_MAX.co4)}</td>
+                          {visibleBtlIndices.map((btl) => {
+                            const idx0 = btl - 1;
+                            const mark = btlMarksByIndex[idx0];
+                            const max = btlMaxByIndex[idx0];
+                            return (
+                              <React.Fragment key={btl}>
+                                <td style={{ ...cellTd, textAlign: 'right' }}>{mark ?? ''}</td>
+                                <td style={{ ...cellTd, textAlign: 'right' }}>{pct(mark as any, max)}</td>
+                              </React.Fragment>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })
+                  )}
                 </tbody>
               </table>
             </div>
@@ -1293,7 +1462,7 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, asse
         </div>
       ) : null}
 
-      {markManagerModal ? (
+      {markManagerModal && !isReview ? (
         <div
           role="dialog"
           aria-modal="true"

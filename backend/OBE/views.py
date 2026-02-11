@@ -236,6 +236,59 @@ def _touch_lock_after_publish(request, *, subject_code: str, subject_name: str, 
     return lock
 
 
+def _enforce_mark_entry_not_blocked(
+    request,
+    *,
+    subject_code: str,
+    subject_name: str,
+    assessment: str,
+    teaching_assignment_id: int | None = None,
+):
+    """Block edits after publish unless an IQAC approval window is active."""
+    user = getattr(request, 'user', None)
+    if _has_obe_master_permission(user):
+        return None
+
+    try:
+        ta = _resolve_staff_teaching_assignment(request, subject_code=subject_code, teaching_assignment_id=teaching_assignment_id)
+        academic_year = getattr(ta, 'academic_year', None) if ta else None
+        section_name = _resolve_section_name_from_ta(ta)
+        lock = _get_mark_table_lock_if_exists(
+            staff_user=user,
+            subject_code=str(subject_code),
+            assessment=str(assessment).lower(),
+            teaching_assignment=ta,
+            academic_year=academic_year,
+            section_name=section_name,
+        )
+    except Exception:
+        lock = None
+
+    if lock is None:
+        return None
+
+    try:
+        lock.recompute_blocks()
+    except Exception:
+        pass
+
+    if bool(getattr(lock, 'is_published', False)) and bool(getattr(lock, 'mark_entry_blocked', False)):
+        return Response(
+            {
+                'detail': 'Marks entry is locked after publish. Request IQAC approval to re-enter marks.',
+                'assessment': str(assessment).lower(),
+                'subject_code': str(subject_code),
+                'how_to_fix': [
+                    'Create an OBE Edit Request with scope=MARK_ENTRY (or MARK_MANAGER) for this assessment.',
+                    'Wait for IQAC approval; then re-publish within the approved window.',
+                ],
+            },
+            status=423,
+        )
+
+    return None
+
+
 def _has_obe_master_access(user) -> bool:
     if user is None:
         return False
@@ -259,6 +312,27 @@ def _has_obe_master_permission(user) -> bool:
         return False
     if getattr(user, 'is_superuser', False):
         return True
+
+    # IQAC/HAA users are treated as OBE masters for IQAC-managed configuration endpoints.
+    # Note: this codebase uses BOTH Django auth groups (user.groups) AND custom roles (user.roles).
+    # Allow either so an "IQAC role" user doesn't get blocked by missing Django group membership.
+    if getattr(user, 'is_authenticated', False):
+        try:
+            if user.groups.filter(name__in=['IQAC', 'HAA']).exists():
+                return True
+        except Exception:
+            pass
+        try:
+            if getattr(user, 'roles', None) is not None and user.roles.filter(name__in=['IQAC', 'HAA']).exists():
+                return True
+        except Exception:
+            try:
+                role_names = {str(r.name or '').strip().upper() for r in user.roles.all()}
+                if 'IQAC' in role_names or 'HAA' in role_names:
+                    return True
+            except Exception:
+                pass
+
     try:
         perms = get_user_permissions(user)
     except Exception:
@@ -270,6 +344,29 @@ def _require_obe_master_permission(request):
     if not _has_obe_master_permission(getattr(request, 'user', None)):
         return Response({'detail': 'OBE Master permission required.'}, status=status.HTTP_403_FORBIDDEN)
     return None
+
+
+def _require_publish_owner(request):
+    """If `settings.OBE_PUBLISH_ALLOWED_USERNAME` is set, only that user (username or email)
+    or superusers may perform publish actions. Return a Response on denial or None to allow.
+    """
+    allowed = getattr(settings, 'OBE_PUBLISH_ALLOWED_USERNAME', None)
+    if not allowed:
+        return None
+    user = getattr(request, 'user', None)
+    if not user or not getattr(user, 'is_authenticated', False):
+        return Response({'detail': 'Authentication required.'}, status=status.HTTP_403_FORBIDDEN)
+    if getattr(user, 'is_superuser', False):
+        return None
+    try:
+        allowed_norm = str(allowed or '').strip().lower()
+        uname = str(getattr(user, 'username', '') or '').strip().lower()
+        email = str(getattr(user, 'email', '') or '').strip().lower()
+        if uname == allowed_norm or email == allowed_norm:
+            return None
+    except Exception:
+        pass
+    return Response({'detail': 'Only the designated user may publish marks.'}, status=status.HTTP_403_FORBIDDEN)
 
 
 @api_view(['GET'])
@@ -370,6 +467,173 @@ def class_type_weights_upsert(request):
             }
 
     return Response({'results': out})
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def qp_pattern_get(request):
+    """Fetch the configured QP pattern for a key.
+
+    Query params:
+      class_type=THEORY|TCPR|TCPL|LAB|...
+      question_paper_type=QP1|QP2 (optional)
+    exam=CIA|CIA1|CIA2|MODEL
+
+        Returns:
+            { class_type, question_paper_type, exam, pattern: { marks: number[], cos?: (number|string)[] }, updated_at, updated_by }
+    """
+    from .models import ObeQpPatternConfig
+
+    qp = _get_query_params(request)
+    class_type = str(qp.get('class_type') or '').strip().upper()
+    question_paper_type = str(qp.get('question_paper_type') or '').strip().upper()
+    exam = str(qp.get('exam') or '').strip().upper()
+
+    if not class_type:
+        return Response({'detail': 'class_type is required'}, status=status.HTTP_400_BAD_REQUEST)
+    if exam not in {'CIA', 'CIA1', 'CIA2', 'MODEL'}:
+        return Response({'detail': 'exam must be CIA, CIA1, CIA2, or MODEL'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if question_paper_type not in {'QP1', 'QP2'}:
+        question_paper_type = ''
+    qp_type_val = question_paper_type if question_paper_type else None
+
+    obj = ObeQpPatternConfig.objects.filter(class_type=class_type, question_paper_type=qp_type_val, exam=exam).first()
+    # Backward-compat: CIA1/CIA2 fall back to legacy CIA config if not present.
+    if obj is None and exam in {'CIA1', 'CIA2'}:
+        obj = ObeQpPatternConfig.objects.filter(class_type=class_type, question_paper_type=qp_type_val, exam='CIA').first()
+    pattern = {'marks': []}
+    updated_at = None
+    updated_by = None
+    if obj is not None:
+        raw = getattr(obj, 'pattern', None)
+        if isinstance(raw, dict):
+            # New shape: { marks: [...], cos: [...] }
+            pattern = raw
+        elif isinstance(raw, list):
+            # Legacy shape: [marks...]
+            pattern = {'marks': raw}
+        else:
+            pattern = {'marks': []}
+        updated_at = obj.updated_at.isoformat() if getattr(obj, 'updated_at', None) else None
+        updated_by = obj.updated_by
+
+    return Response({
+        'class_type': class_type,
+        'question_paper_type': qp_type_val,
+        'exam': exam,
+        'pattern': pattern,
+        'updated_at': updated_at,
+        'updated_by': updated_by,
+    })
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def qp_pattern_upsert(request):
+    """Upsert QP pattern. IQAC/OBE master only.
+
+        Body:
+            { class_type: string, question_paper_type?: 'QP1'|'QP2'|null, exam: 'CIA'|'CIA1'|'CIA2'|'MODEL', pattern: number[] | { marks: number[], cos?: (number|string)[] } }
+    """
+    auth = _require_obe_master_permission(request)
+    if auth:
+        return auth
+
+    from .models import ObeQpPatternConfig
+
+    data = request.data if isinstance(request.data, dict) else {}
+    class_type = str(data.get('class_type') or '').strip().upper()
+    question_paper_type = str(data.get('question_paper_type') or '').strip().upper()
+    exam = str(data.get('exam') or '').strip().upper()
+    pattern_raw = data.get('pattern')
+
+    if not class_type:
+        return Response({'detail': 'class_type is required'}, status=status.HTTP_400_BAD_REQUEST)
+    if exam not in {'CIA', 'CIA1', 'CIA2', 'MODEL'}:
+        return Response({'detail': 'exam must be CIA, CIA1, CIA2, or MODEL'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if question_paper_type not in {'QP1', 'QP2'}:
+        question_paper_type = ''
+    qp_type_val = question_paper_type if question_paper_type else None
+
+    # Accept legacy list-only shape OR new object shape with CO mapping.
+    marks_raw = None
+    cos_raw = None
+    if isinstance(pattern_raw, list):
+        marks_raw = pattern_raw
+    elif isinstance(pattern_raw, dict):
+        marks_raw = pattern_raw.get('marks')
+        cos_raw = pattern_raw.get('cos')
+    else:
+        return Response({'detail': 'pattern must be a list or an object with marks'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if not isinstance(marks_raw, list):
+        return Response({'detail': 'pattern.marks must be a list'}, status=status.HTTP_400_BAD_REQUEST)
+
+    marks: list[float] = []
+    for x in marks_raw:
+        try:
+            v = float(x)
+            if v < 0:
+                return Response({'detail': 'pattern marks must be non-negative'}, status=status.HTTP_400_BAD_REQUEST)
+            marks.append(v)
+        except Exception:
+            return Response({'detail': 'pattern marks must be numbers'}, status=status.HTTP_400_BAD_REQUEST)
+
+    cos = None
+    if cos_raw is not None:
+        if not isinstance(cos_raw, list):
+            return Response({'detail': 'pattern.cos must be a list if provided'}, status=status.HTTP_400_BAD_REQUEST)
+        if len(cos_raw) != len(marks):
+            return Response({'detail': 'pattern.cos length must match pattern.marks length'}, status=status.HTTP_400_BAD_REQUEST)
+        cleaned_cos = []
+        for x in cos_raw:
+            # Allow numbers (1..n), or a small set of split markers.
+            if isinstance(x, str):
+                s = x.strip()
+                if s in {'both', '1&2', '3&4'}:
+                    cleaned_cos.append(s)
+                    continue
+                try:
+                    x = int(float(s))
+                except Exception:
+                    return Response({'detail': 'pattern.cos values must be numbers or split strings'}, status=status.HTTP_400_BAD_REQUEST)
+            if isinstance(x, (int, float)):
+                try:
+                    n = int(x)
+                except Exception:
+                    return Response({'detail': 'pattern.cos values must be numbers or split strings'}, status=status.HTTP_400_BAD_REQUEST)
+                if n <= 0:
+                    return Response({'detail': 'pattern.cos values must be positive'}, status=status.HTTP_400_BAD_REQUEST)
+                cleaned_cos.append(n)
+                continue
+            return Response({'detail': 'pattern.cos values must be numbers or split strings'}, status=status.HTTP_400_BAD_REQUEST)
+        cos = cleaned_cos
+
+    user_id = getattr(getattr(request, 'user', None), 'id', None)
+    stored_pattern = {'marks': marks}
+    if cos is not None:
+        stored_pattern['cos'] = cos
+
+    obj, _created = ObeQpPatternConfig.objects.update_or_create(
+        class_type=class_type,
+        question_paper_type=qp_type_val,
+        exam=exam,
+        defaults={'pattern': stored_pattern, 'updated_by': user_id},
+    )
+
+    return Response({
+        'status': 'ok',
+        'class_type': class_type,
+        'question_paper_type': qp_type_val,
+        'exam': exam,
+        'pattern': stored_pattern,
+        'updated_at': obj.updated_at.isoformat() if getattr(obj, 'updated_at', None) else None,
+        'updated_by': obj.updated_by,
+    })
 
 
 @api_view(['GET'])
@@ -566,7 +830,9 @@ def _resolve_staff_teaching_assignment(request, subject_code: str, teaching_assi
 
     # fallback: match by subject code
     qs = qs.filter(staff=staff_profile).filter(
-        Q(subject__code=subject_code) | Q(curriculum_row__course_code=subject_code)
+        Q(subject__code=subject_code)
+        | Q(curriculum_row__course_code=subject_code)
+        | Q(curriculum_row__master__course_code=subject_code)
     )
     # prefer active academic year
     if qs.filter(academic_year__is_active=True).exists():
@@ -600,7 +866,7 @@ def _resolve_curriculum_row_for_subject(request, subject_code: str, teaching_ass
             qs = qs.filter(department=dept)
         code = str(subject_code or '').strip()
         if code:
-            qs = qs.filter(course_code__iexact=code)
+            qs = qs.filter(Q(course_code__iexact=code) | Q(master__course_code__iexact=code))
         return qs.order_by('-updated_at').first()
     except Exception:
         return None
@@ -655,11 +921,25 @@ def _get_due_schedule_for_request(request, subject_code: str, assessment: str, t
 
     ta = _resolve_staff_teaching_assignment(request, subject_code=subject_code, teaching_assignment_id=teaching_assignment_id)
     academic_year = getattr(ta, 'academic_year', None) if ta else None
+    semester = None
+    try:
+        semester = getattr(getattr(ta, 'section', None), 'semester', None) if ta else None
+    except Exception:
+        semester = None
 
     schedule = None
-    if academic_year is not None:
+    # Prefer Semester-based schedules; fall back to AcademicYear for older rows.
+    if semester is not None:
+        schedule = ObeDueSchedule.objects.filter(
+            semester=semester,
+            subject_code=str(subject_code),
+            assessment=str(assessment).lower(),
+            is_active=True,
+        ).order_by('-updated_at').first()
+    if schedule is None and academic_year is not None:
         schedule = ObeDueSchedule.objects.filter(
             academic_year=academic_year,
+            semester__isnull=True,
             subject_code=str(subject_code),
             assessment=str(assessment).lower(),
             is_active=True,
@@ -693,10 +973,27 @@ def _get_due_schedule_for_request(request, subject_code: str, assessment: str, t
     global_updated_at = None
     global_updated_by = None
     allowed_by_global = None
-    if academic_year is not None:
+    if semester is not None:
+        try:
+            global_override = ObeGlobalPublishControl.objects.filter(
+                semester=semester,
+                assessment=str(assessment).lower(),
+            ).order_by('-updated_at').first()
+        except OperationalError:
+            global_override = None
+        if global_override is not None:
+            global_override_active = True
+            global_is_open = bool(getattr(global_override, 'is_open', True))
+            global_updated_at = getattr(global_override, 'updated_at', None)
+            global_updated_by = getattr(global_override, 'updated_by', None)
+            allowed_by_global = global_is_open
+
+    # Backward compatibility: older global overrides stored against AcademicYear.
+    if (not global_override_active) and academic_year is not None:
         try:
             global_override = ObeGlobalPublishControl.objects.filter(
                 academic_year=academic_year,
+                semester__isnull=True,
                 assessment=str(assessment).lower(),
             ).order_by('-updated_at').first()
         except OperationalError:
@@ -724,6 +1021,7 @@ def _get_due_schedule_for_request(request, subject_code: str, assessment: str, t
 
     return {
         'academic_year': academic_year,
+        'semester': semester,
         'teaching_assignment': ta,
         'schedule': schedule,
         'due_at': due_at,
@@ -739,6 +1037,23 @@ def _get_due_schedule_for_request(request, subject_code: str, assessment: str, t
         'global_updated_by': global_updated_by,
         'allowed_by_global': allowed_by_global,
     }
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def obe_semesters(request):
+    """IQAC helper: list all semesters used by sections/curriculum."""
+    auth = _require_obe_master(request)
+    if auth:
+        return auth
+
+    from academics.models import Semester
+
+    out = []
+    for s in Semester.objects.all().order_by('number'):
+        out.append({'id': s.id, 'number': getattr(s, 'number', None)})
+    return Response({'results': out})
 
 
 def _enforce_publish_window(request, subject_code: str, assessment: str):
@@ -833,7 +1148,7 @@ def _get_subject(subject_id: str, request=None):
         dept = getattr(staff_profile, 'current_department', None) if staff_profile else None
         if dept:
             row = (
-                CurriculumDepartment.objects.filter(department=dept, course_code=code)
+                CurriculumDepartment.objects.filter(department=dept).filter(Q(course_code__iexact=code) | Q(master__course_code__iexact=code))
                 .select_related('semester')
                 .order_by('-updated_at')
                 .first()
@@ -963,8 +1278,22 @@ def ssa1_publish(request, subject_id: str):
     if err:
         return err
     subject = _get_subject(subject_id, request)
+    pub_auth = _require_publish_owner(request)
+    if pub_auth:
+        return pub_auth
 
     gate = _enforce_publish_window(request, subject.code, 'ssa1')
+    if gate is not None:
+        return gate
+
+    ta_id = _get_teaching_assignment_id_from_request(request)
+    gate = _enforce_mark_entry_not_blocked(
+        request,
+        subject_code=subject.code,
+        subject_name=subject.name,
+        assessment='ssa1',
+        teaching_assignment_id=ta_id,
+    )
     if gate is not None:
         return gate
 
@@ -1004,7 +1333,6 @@ def ssa1_publish(request, subject_id: str):
         return Response({'detail': 'Validation error.', 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
-        ta_id = _get_teaching_assignment_id_from_request(request)
         _touch_lock_after_publish(
             request,
             subject_code=subject.code,
@@ -1049,8 +1377,22 @@ def review1_publish(request, subject_id: str):
     if err:
         return err
     subject = _get_subject(subject_id, request)
+    pub_auth = _require_publish_owner(request)
+    if pub_auth:
+        return pub_auth
 
     gate = _enforce_publish_window(request, subject.code, 'review1')
+    if gate is not None:
+        return gate
+
+    ta_id = _get_teaching_assignment_id_from_request(request)
+    gate = _enforce_mark_entry_not_blocked(
+        request,
+        subject_code=subject.code,
+        subject_name=subject.name,
+        assessment='review1',
+        teaching_assignment_id=ta_id,
+    )
     if gate is not None:
         return gate
 
@@ -1090,7 +1432,6 @@ def review1_publish(request, subject_id: str):
         return Response({'detail': 'Validation error.', 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
-        ta_id = _get_teaching_assignment_id_from_request(request)
         _touch_lock_after_publish(
             request,
             subject_code=subject.code,
@@ -1135,8 +1476,22 @@ def ssa2_publish(request, subject_id: str):
     if err:
         return err
     subject = _get_subject(subject_id, request)
+    pub_auth = _require_publish_owner(request)
+    if pub_auth:
+        return pub_auth
 
     gate = _enforce_publish_window(request, subject.code, 'ssa2')
+    if gate is not None:
+        return gate
+
+    ta_id = _get_teaching_assignment_id_from_request(request)
+    gate = _enforce_mark_entry_not_blocked(
+        request,
+        subject_code=subject.code,
+        subject_name=subject.name,
+        assessment='ssa2',
+        teaching_assignment_id=ta_id,
+    )
     if gate is not None:
         return gate
 
@@ -1176,7 +1531,6 @@ def ssa2_publish(request, subject_id: str):
         return Response({'detail': 'Validation error.', 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
-        ta_id = _get_teaching_assignment_id_from_request(request)
         _touch_lock_after_publish(
             request,
             subject_code=subject.code,
@@ -1221,8 +1575,22 @@ def review2_publish(request, subject_id: str):
     if err:
         return err
     subject = _get_subject(subject_id, request)
+    pub_auth = _require_publish_owner(request)
+    if pub_auth:
+        return pub_auth
 
     gate = _enforce_publish_window(request, subject.code, 'review2')
+    if gate is not None:
+        return gate
+
+    ta_id = _get_teaching_assignment_id_from_request(request)
+    gate = _enforce_mark_entry_not_blocked(
+        request,
+        subject_code=subject.code,
+        subject_name=subject.name,
+        assessment='review2',
+        teaching_assignment_id=ta_id,
+    )
     if gate is not None:
         return gate
 
@@ -1262,7 +1630,6 @@ def review2_publish(request, subject_id: str):
         return Response({'detail': 'Validation error.', 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
-        ta_id = _get_teaching_assignment_id_from_request(request)
         _touch_lock_after_publish(
             request,
             subject_code=subject.code,
@@ -1316,8 +1683,22 @@ def formative1_publish(request, subject_id: str):
     if err:
         return err
     subject = _get_subject(subject_id, request)
+    pub_auth = _require_publish_owner(request)
+    if pub_auth:
+        return pub_auth
 
     gate = _enforce_publish_window(request, subject.code, 'formative1')
+    if gate is not None:
+        return gate
+
+    ta_id = _get_teaching_assignment_id_from_request(request)
+    gate = _enforce_mark_entry_not_blocked(
+        request,
+        subject_code=subject.code,
+        subject_name=subject.name,
+        assessment='formative1',
+        teaching_assignment_id=ta_id,
+    )
     if gate is not None:
         return gate
 
@@ -1365,7 +1746,6 @@ def formative1_publish(request, subject_id: str):
         return Response({'detail': 'Validation error.', 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
-        ta_id = _get_teaching_assignment_id_from_request(request)
         _touch_lock_after_publish(
             request,
             subject_code=subject.code,
@@ -1418,8 +1798,22 @@ def formative2_publish(request, subject_id: str):
     if err:
         return err
     subject = _get_subject(subject_id, request)
+    pub_auth = _require_publish_owner(request)
+    if pub_auth:
+        return pub_auth
 
     gate = _enforce_publish_window(request, subject.code, 'formative2')
+    if gate is not None:
+        return gate
+
+    ta_id = _get_teaching_assignment_id_from_request(request)
+    gate = _enforce_mark_entry_not_blocked(
+        request,
+        subject_code=subject.code,
+        subject_name=subject.name,
+        assessment='formative2',
+        teaching_assignment_id=ta_id,
+    )
     if gate is not None:
         return gate
 
@@ -1467,7 +1861,6 @@ def formative2_publish(request, subject_id: str):
         return Response({'detail': 'Validation error.', 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
-        ta_id = _get_teaching_assignment_id_from_request(request)
         _touch_lock_after_publish(
             request,
             subject_code=subject.code,
@@ -1488,7 +1881,12 @@ def cia1_published_sheet(request, subject_id: str):
     if err:
         return err
 
+    pub_auth = _require_publish_owner(request)
+    if pub_auth:
+        return pub_auth
+
     subject = _get_subject(subject_id, request)
+
 
     ta_id = _get_teaching_assignment_id_from_request(request)
     gate = _enforce_assessment_enabled_for_course(request, subject_code=subject.code, assessment='cia1', teaching_assignment_id=ta_id)
@@ -1510,6 +1908,17 @@ def cia1_publish_sheet(request, subject_id: str):
     subject = _get_subject(subject_id, request)
 
     gate = _enforce_publish_window(request, subject.code, 'cia1')
+    if gate is not None:
+        return gate
+
+    ta_id = _get_teaching_assignment_id_from_request(request)
+    gate = _enforce_mark_entry_not_blocked(
+        request,
+        subject_code=subject.code,
+        subject_name=subject.name,
+        assessment='cia1',
+        teaching_assignment_id=ta_id,
+    )
     if gate is not None:
         return gate
     body = request.data or {}
@@ -1568,7 +1977,6 @@ def cia1_publish_sheet(request, subject_id: str):
             )
 
     try:
-        ta_id = _get_teaching_assignment_id_from_request(request)
         _touch_lock_after_publish(
             request,
             subject_code=subject.code,
@@ -1590,7 +1998,12 @@ def cia2_published_sheet(request, subject_id: str):
     if err:
         return err
 
+    pub_auth = _require_publish_owner(request)
+    if pub_auth:
+        return pub_auth
+
     subject = _get_subject(subject_id, request)
+
 
     ta_id = _get_teaching_assignment_id_from_request(request)
     gate = _enforce_assessment_enabled_for_course(request, subject_code=subject.code, assessment='cia2', teaching_assignment_id=ta_id)
@@ -1616,6 +2029,17 @@ def cia2_publish_sheet(request, subject_id: str):
     subject = _get_subject(subject_id, request)
 
     gate = _enforce_publish_window(request, subject.code, 'cia2')
+    if gate is not None:
+        return gate
+
+    ta_id = _get_teaching_assignment_id_from_request(request)
+    gate = _enforce_mark_entry_not_blocked(
+        request,
+        subject_code=subject.code,
+        subject_name=subject.name,
+        assessment='cia2',
+        teaching_assignment_id=ta_id,
+    )
     if gate is not None:
         return gate
     body = request.data or {}
@@ -1674,7 +2098,6 @@ def cia2_publish_sheet(request, subject_id: str):
             )
 
     try:
-        ta_id = _get_teaching_assignment_id_from_request(request)
         _touch_lock_after_publish(
             request,
             subject_code=subject.code,
@@ -1696,7 +2119,10 @@ def lab_published_sheet(request, assessment: str, subject_id: str):
     if err:
         return err
 
-    assessment = str(assessment or '').lower().strip()
+    pub_auth = _require_publish_owner(request)
+    if pub_auth:
+        return pub_auth
+
     if assessment not in ('cia1', 'cia2', 'model', 'formative1', 'formative2'):
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1728,6 +2154,17 @@ def lab_publish_sheet(request, assessment: str, subject_id: str):
     if gate is not None:
         return gate
 
+    ta_id = _get_teaching_assignment_id_from_request(request)
+    gate = _enforce_mark_entry_not_blocked(
+        request,
+        subject_code=subject.code,
+        subject_name=subject.name,
+        assessment=str(assessment).lower(),
+        teaching_assignment_id=ta_id,
+    )
+    if gate is not None:
+        return gate
+
     body = request.data or {}
     data = body.get('data', None)
     if data is None or not isinstance(data, dict):
@@ -1742,7 +2179,6 @@ def lab_publish_sheet(request, assessment: str, subject_id: str):
     )
 
     try:
-        ta_id = _get_teaching_assignment_id_from_request(request)
         _touch_lock_after_publish(
             request,
             subject_code=subject.code,
@@ -2556,11 +2992,19 @@ def publish_window(request, assessment: str, subject_id: str):
     academic_year = info.get('academic_year')
     ta = info.get('teaching_assignment')
 
+    # If publish is restricted to a single user, and the caller is not that user,
+    # present the same response shape but with publishing disabled so the UI
+    # will hide/disable the Publish button.
+    pub_auth = _require_publish_owner(request)
+    publish_allowed = bool(info.get('publish_allowed'))
+    if pub_auth:
+        publish_allowed = False
+
     return Response(
         {
             'assessment': assessment_key,
             'subject_code': subject_code,
-            'publish_allowed': bool(info.get('publish_allowed')),
+            'publish_allowed': publish_allowed,
             'allowed_by_due': bool(info.get('allowed_by_due')),
             'allowed_by_approval': bool(info.get('allowed_by_approval')),
             'global_override_active': bool(info.get('global_override_active')),
@@ -2892,74 +3336,67 @@ def mark_table_lock_confirm_mark_manager(request, assessment: str, subject_id: s
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def due_schedule_subjects(request):
-    """IQAC helper: list subject codes taught in the selected academic years."""
+    """IQAC helper: list subject codes for the selected semesters."""
     auth = _require_obe_master(request)
     if auth:
         return auth
 
     raw = (
-        getattr(request, 'query_params', {}).get('academic_year_ids')
+        getattr(request, 'query_params', {}).get('semester_ids')
         if hasattr(request, 'query_params')
-        else request.GET.get('academic_year_ids')
+        else request.GET.get('semester_ids')
     ) or (
-        getattr(request, 'query_params', {}).get('academic_year_id')
+        getattr(request, 'query_params', {}).get('semester_id')
         if hasattr(request, 'query_params')
-        else request.GET.get('academic_year_id')
+        else request.GET.get('semester_id')
     )
 
-    ay_ids: list[int] = []
+    sem_ids: list[int] = []
     for part in str(raw or '').split(','):
         part = part.strip()
         if not part:
             continue
         try:
-            ay_ids.append(int(part))
+            sem_ids.append(int(part))
         except Exception:
             continue
 
-    if not ay_ids:
-        return Response({'detail': 'academic_year_ids is required.'}, status=status.HTTP_400_BAD_REQUEST)
+    if not sem_ids:
+        return Response({'detail': 'semester_ids is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    tas = TeachingAssignment.objects.select_related('academic_year', 'subject', 'curriculum_row').filter(is_active=True, academic_year_id__in=ay_ids)
+    # Use curriculum mapping by Semester so IQAC can set schedules without relying on TA presence.
+    from curriculum.models import CurriculumDepartment, CurriculumMaster
 
     out: dict[str, dict[str, dict]] = {}
-    for ta in tas:
-        ay_id = str(getattr(ta, 'academic_year_id', '') or '')
-        if not ay_id:
+    dept_qs = CurriculumDepartment.objects.select_related('semester').filter(semester_id__in=sem_ids)
+    for r in dept_qs:
+        sem_id = str(getattr(r, 'semester_id', '') or '')
+        code = str(getattr(r, 'course_code', '') or '').strip()
+        name = str(getattr(r, 'course_name', '') or '').strip()
+        if not sem_id or not code:
             continue
+        out.setdefault(sem_id, {})
+        if code not in out[sem_id]:
+            out[sem_id][code] = {'subject_code': code, 'subject_name': name}
 
-        code = None
-        name = None
-        try:
-            if getattr(ta, 'curriculum_row', None):
-                code = getattr(ta.curriculum_row, 'course_code', None)
-                name = getattr(ta.curriculum_row, 'course_name', None)
-        except Exception:
-            pass
-        try:
-            if not code and getattr(ta, 'subject', None):
-                code = getattr(ta.subject, 'code', None)
-                name = name or getattr(ta.subject, 'name', None)
-        except Exception:
-            pass
-
-        code = str(code or '').strip()
-        if not code:
+    # Fallback to master curriculum if department rows are missing.
+    master_qs = CurriculumMaster.objects.select_related('semester').filter(semester_id__in=sem_ids)
+    for r in master_qs:
+        sem_id = str(getattr(r, 'semester_id', '') or '')
+        code = str(getattr(r, 'course_code', '') or '').strip()
+        name = str(getattr(r, 'course_name', '') or '').strip()
+        if not sem_id or not code:
             continue
-
-        out.setdefault(ay_id, {})
-        if code not in out[ay_id]:
-            out[ay_id][code] = {
-                'subject_code': code,
-                'subject_name': str(name or '').strip(),
-            }
+        out.setdefault(sem_id, {})
+        if code not in out[sem_id]:
+            out[sem_id][code] = {'subject_code': code, 'subject_name': name}
 
     return Response(
         {
-            'academic_year_ids': ay_ids,
-            'subjects_by_academic_year': {
-                ay: sorted(list(items.values()), key=lambda x: (x.get('subject_code') or ''))
-                for ay, items in out.items()
+            'semester_ids': sem_ids,
+            'subjects_by_semester': {
+                sem: sorted(list(items.values()), key=lambda x: (x.get('subject_code') or ''))
+                for sem, items in out.items()
             },
         }
     )
@@ -2969,40 +3406,42 @@ def due_schedule_subjects(request):
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def due_schedules(request):
-    """IQAC: list due schedules for academic years."""
+    """IQAC: list due schedules for semesters."""
     auth = _require_obe_master(request)
     if auth:
         return auth
 
     raw = (
-        getattr(request, 'query_params', {}).get('academic_year_ids')
+        getattr(request, 'query_params', {}).get('semester_ids')
         if hasattr(request, 'query_params')
-        else request.GET.get('academic_year_ids')
+        else request.GET.get('semester_ids')
     )
-    ay_ids: list[int] = []
+    sem_ids: list[int] = []
     for part in str(raw or '').split(','):
         part = part.strip()
         if not part:
             continue
         try:
-            ay_ids.append(int(part))
+            sem_ids.append(int(part))
         except Exception:
             continue
 
     from .models import ObeDueSchedule
-    qs = ObeDueSchedule.objects.select_related('academic_year').all().order_by('academic_year_id', 'subject_code', 'assessment')
-    if ay_ids:
-        qs = qs.filter(academic_year_id__in=ay_ids)
+    qs = ObeDueSchedule.objects.select_related('semester').filter(is_active=True).order_by('semester_id', 'subject_code', 'assessment')
+    if sem_ids:
+        qs = qs.filter(semester_id__in=sem_ids)
 
     items = []
     for r in qs:
         items.append(
             {
                 'id': r.id,
-                'academic_year': {
-                    'id': r.academic_year_id,
-                    'name': getattr(r.academic_year, 'name', None),
-                },
+                'semester': {
+                    'id': r.semester_id,
+                    'number': getattr(getattr(r, 'semester', None), 'number', None),
+                }
+                if r.semester_id
+                else None,
                 'subject_code': r.subject_code,
                 'subject_name': r.subject_name,
                 'assessment': r.assessment,
@@ -3018,6 +3457,53 @@ def due_schedules(request):
 @api_view(['POST'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
+def due_schedule_delete(request):
+    """IQAC: soft-delete a due schedule row (sets is_active=False).
+
+    Body: semester_id, subject_code, assessment
+    """
+    auth = _require_obe_master(request)
+    if auth:
+        return auth
+
+    body = request.data or {}
+    sem_id = body.get('semester_id')
+    subject_code = str(body.get('subject_code') or '').strip()
+    assessment = str(body.get('assessment') or '').strip().lower()
+
+    if not sem_id or not subject_code or not assessment:
+        return Response({'detail': 'semester_id, subject_code, assessment are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if assessment not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
+        return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    from academics.models import Semester
+    from .models import ObeDueSchedule
+
+    sem = Semester.objects.filter(id=int(sem_id)).first()
+    if not sem:
+        return Response({'detail': 'Semester not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    obj = ObeDueSchedule.objects.filter(
+        semester=sem,
+        subject_code=subject_code,
+        assessment=assessment,
+        is_active=True,
+    ).first()
+
+    if obj is None:
+        return Response({'status': 'ok', 'deleted': 0})
+
+    obj.is_active = False
+    obj.updated_by = getattr(request.user, 'id', None)
+    obj.save(update_fields=['is_active', 'updated_by', 'updated_at'])
+
+    return Response({'status': 'ok', 'deleted': 1})
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
 def due_schedule_upsert(request):
     """IQAC: create/update a due schedule row."""
     auth = _require_obe_master(request)
@@ -3025,31 +3511,31 @@ def due_schedule_upsert(request):
         return auth
 
     body = request.data or {}
-    ay_id = body.get('academic_year_id')
+    sem_id = body.get('semester_id')
     subject_code = str(body.get('subject_code') or '').strip()
     subject_name = str(body.get('subject_name') or '').strip()
     assessment = str(body.get('assessment') or '').strip().lower()
     due_at = _parse_due_at(body.get('due_at'))
 
-    if not ay_id or not subject_code or not assessment or due_at is None:
-        return Response({'detail': 'academic_year_id, subject_code, assessment, due_at are required.'}, status=status.HTTP_400_BAD_REQUEST)
+    if not sem_id or not subject_code or not assessment or due_at is None:
+        return Response({'detail': 'semester_id, subject_code, assessment, due_at are required.'}, status=status.HTTP_400_BAD_REQUEST)
 
     if assessment not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    from academics.models import AcademicYear, Subject
+    from academics.models import Semester, Subject
     from .models import ObeDueSchedule
 
-    ay = AcademicYear.objects.filter(id=int(ay_id)).first()
-    if not ay:
-        return Response({'detail': 'Academic year not found.'}, status=status.HTTP_404_NOT_FOUND)
+    sem = Semester.objects.filter(id=int(sem_id)).first()
+    if not sem:
+        return Response({'detail': 'Semester not found.'}, status=status.HTTP_404_NOT_FOUND)
 
     subj = Subject.objects.filter(code=subject_code).first()
     if not subject_name and subj is not None:
         subject_name = subj.name
 
     obj, _created = ObeDueSchedule.objects.update_or_create(
-        academic_year=ay,
+        semester=sem,
         subject_code=subject_code,
         assessment=assessment,
         defaults={
@@ -3065,7 +3551,7 @@ def due_schedule_upsert(request):
     return Response(
         {
             'id': obj.id,
-            'academic_year_id': obj.academic_year_id,
+            'semester_id': obj.semester_id,
             'subject_code': obj.subject_code,
             'subject_name': obj.subject_name,
             'assessment': obj.assessment,
@@ -3085,13 +3571,13 @@ def due_schedule_bulk_upsert(request):
         return auth
 
     body = request.data or {}
-    ay_id = body.get('academic_year_id')
+    sem_id = body.get('semester_id')
     assessments = body.get('assessments') or []
     subject_codes = body.get('subject_codes') or []
     due_at = _parse_due_at(body.get('due_at'))
 
-    if not ay_id or due_at is None:
-        return Response({'detail': 'academic_year_id and due_at are required.'}, status=status.HTTP_400_BAD_REQUEST)
+    if not sem_id or due_at is None:
+        return Response({'detail': 'semester_id and due_at are required.'}, status=status.HTTP_400_BAD_REQUEST)
 
     if not isinstance(assessments, list) or not assessments:
         return Response({'detail': 'assessments must be a non-empty list.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -3104,12 +3590,12 @@ def due_schedule_bulk_upsert(request):
     if bad:
         return Response({'detail': f'Invalid assessments: {bad}'}, status=status.HTTP_400_BAD_REQUEST)
 
-    from academics.models import AcademicYear, Subject
+    from academics.models import Semester, Subject
     from .models import ObeDueSchedule
 
-    ay = AcademicYear.objects.filter(id=int(ay_id)).first()
-    if not ay:
-        return Response({'detail': 'Academic year not found.'}, status=status.HTTP_404_NOT_FOUND)
+    sem = Semester.objects.filter(id=int(sem_id)).first()
+    if not sem:
+        return Response({'detail': 'Semester not found.'}, status=status.HTTP_404_NOT_FOUND)
 
     updated = 0
     for code in [str(s).strip() for s in subject_codes]:
@@ -3119,7 +3605,7 @@ def due_schedule_bulk_upsert(request):
         name = getattr(subj, 'name', '') if subj else ''
         for a in norm_assessments:
             ObeDueSchedule.objects.update_or_create(
-                academic_year=ay,
+                semester=sem,
                 subject_code=code,
                 assessment=a,
                 defaults={
@@ -3140,15 +3626,15 @@ def due_schedule_bulk_upsert(request):
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def global_publish_controls(request):
-    """IQAC: list global publish overrides for selected academic years and assessments.
+    """IQAC: list global publish overrides for selected semesters and assessments.
 
-    Query params: academic_year_ids (comma separated), assessments (comma separated)
+    Query params: semester_ids (comma separated), assessments (comma separated)
     """
     auth = _require_obe_master(request)
     if auth:
         return auth
 
-    raw_ay = (getattr(request, 'query_params', {}).get('academic_year_ids') if hasattr(request, 'query_params') else request.GET.get('academic_year_ids')) or ''
+    raw_ay = (getattr(request, 'query_params', {}).get('semester_ids') if hasattr(request, 'query_params') else request.GET.get('semester_ids')) or ''
     raw_assess = (getattr(request, 'query_params', {}).get('assessments') if hasattr(request, 'query_params') else request.GET.get('assessments')) or ''
 
     ay_ids: list[int] = []
@@ -3165,17 +3651,17 @@ def global_publish_controls(request):
 
     from .models import ObeGlobalPublishControl
 
-    qs = ObeGlobalPublishControl.objects.select_related('academic_year')
+    qs = ObeGlobalPublishControl.objects.select_related('semester')
     if ay_ids:
-        qs = qs.filter(academic_year_id__in=ay_ids)
+        qs = qs.filter(semester_id__in=ay_ids)
     if assessments:
         qs = qs.filter(assessment__in=assessments)
 
     out = []
-    for r in qs.order_by('academic_year_id', 'assessment'):
+    for r in qs.order_by('semester_id', 'assessment'):
         out.append({
             'id': r.id,
-            'academic_year': {'id': getattr(r, 'academic_year_id', None), 'name': getattr(getattr(r, 'academic_year', None), 'name', None)} if r.academic_year_id else None,
+            'semester': {'id': getattr(r, 'semester_id', None), 'number': getattr(getattr(r, 'semester', None), 'number', None)} if r.semester_id else None,
             'assessment': r.assessment,
             'is_open': bool(r.is_open),
             'updated_at': r.updated_at.isoformat() if r.updated_at else None,
@@ -3189,16 +3675,16 @@ def global_publish_controls(request):
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def global_publish_controls_bulk_set(request):
-    """IQAC: set (create/update) global publish override for combinations of academic_year_ids and assessments.
+    """IQAC: set (create/update) global publish override for combinations of semester_ids and assessments.
 
-    Body: { academic_year_ids: [1,2], assessments: ['ssa1'], is_open: true }
+    Body: { semester_ids: [1,2], assessments: ['ssa1'], is_open: true }
     """
     auth = _require_obe_master(request)
     if auth:
         return auth
 
     body = request.data or {}
-    ay_ids = body.get('academic_year_ids') or []
+    ay_ids = body.get('semester_ids') or []
     assessments = body.get('assessments') or []
     is_open = bool(body.get('is_open') if body.get('is_open') is not None else True)
 
@@ -3209,14 +3695,14 @@ def global_publish_controls_bulk_set(request):
     assessments = [str(a).strip().lower() for a in assessments if str(a).strip()]
 
     if not ay_ids or not assessments:
-        return Response({'detail': 'academic_year_ids and assessments are required.'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'detail': 'semester_ids and assessments are required.'}, status=status.HTTP_400_BAD_REQUEST)
 
     from .models import ObeGlobalPublishControl
     updated = 0
     for ay in ay_ids:
         for a in assessments:
             obj, created = ObeGlobalPublishControl.objects.update_or_create(
-                academic_year_id=ay,
+                semester_id=ay,
                 assessment=a,
                 defaults={
                     'is_open': is_open,
@@ -3234,14 +3720,14 @@ def global_publish_controls_bulk_set(request):
 def global_publish_controls_bulk_reset(request):
     """IQAC: remove global publish override rows to fall back to due dates.
 
-    Body: { academic_year_ids: [1,2], assessments: ['ssa1'] }
+    Body: { semester_ids: [1,2], assessments: ['ssa1'] }
     """
     auth = _require_obe_master(request)
     if auth:
         return auth
 
     body = request.data or {}
-    ay_ids = body.get('academic_year_ids') or []
+    ay_ids = body.get('semester_ids') or []
     assessments = body.get('assessments') or []
 
     try:
@@ -3251,10 +3737,10 @@ def global_publish_controls_bulk_reset(request):
     assessments = [str(a).strip().lower() for a in assessments if str(a).strip()]
 
     if not ay_ids or not assessments:
-        return Response({'detail': 'academic_year_ids and assessments are required.'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'detail': 'semester_ids and assessments are required.'}, status=status.HTTP_400_BAD_REQUEST)
 
     from .models import ObeGlobalPublishControl
-    qs = ObeGlobalPublishControl.objects.filter(academic_year_id__in=ay_ids, assessment__in=assessments)
+    qs = ObeGlobalPublishControl.objects.filter(semester_id__in=ay_ids, assessment__in=assessments)
     deleted, _ = qs.delete()
     return Response({'status': 'ok', 'deleted': int(deleted)})
 

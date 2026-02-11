@@ -21,6 +21,7 @@ export default function ReviewEntry({ subjectId, teachingAssignmentId, assessmen
       subjectId={subjectId}
       teachingAssignmentId={teachingAssignmentId}
       assessmentKey={assessmentKey}
+      skipMarkManager={true}
       label={config.label}
       coA={config.coA}
       coB={config.coB}

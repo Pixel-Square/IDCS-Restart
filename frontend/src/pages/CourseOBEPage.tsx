@@ -53,7 +53,15 @@ export default function CourseOBEPage(): JSX.Element {
   const courseId = decodeURIComponent(code);
   const [courseName, setCourseName] = React.useState<string | null>(null);
   const [courseClassType, setCourseClassType] = React.useState<string | null>(null);
-  const [courseQpType, setCourseQpType] = React.useState<string | null>(null);
+  const [courseQpType, setCourseQpType] = React.useState<string>(() => {
+    try {
+      const stored = localStorage.getItem(`obe_course_qp_${courseId}`);
+      const v = String(stored || '').trim().toUpperCase();
+      return v === 'QP2' ? 'QP2' : 'QP1';
+    } catch {
+      return 'QP1';
+    }
+  });
   const [courseEnabledAssessments, setCourseEnabledAssessments] = React.useState<string[] | null>(null);
 
   React.useEffect(() => {
@@ -99,8 +107,20 @@ export default function CourseOBEPage(): JSX.Element {
           const ct = String((pick as any).class_type || '').trim();
           setCourseClassType(ct || null);
         }
-        const qp = String((pick as any)?.question_paper_type || '').trim();
-        setCourseQpType(qp || null);
+        // Respect any user-selected override from localStorage.
+        let override: string | null = null;
+        try {
+          override = localStorage.getItem(`obe_course_qp_${courseId}`);
+        } catch {
+          override = null;
+        }
+        const ov = String(override || '').trim().toUpperCase();
+        if (ov === 'QP1' || ov === 'QP2') {
+          setCourseQpType(ov);
+        } else {
+          const qp = String((pick as any)?.question_paper_type || '').trim().toUpperCase();
+          setCourseQpType(qp === 'QP2' ? 'QP2' : 'QP1');
+        }
 
         if (normalizeClassType((pick as any)?.class_type) === 'SPECIAL') {
           // Signal SPECIAL immediately to avoid intermediate non-SPECIAL fetches.
@@ -136,9 +156,34 @@ export default function CourseOBEPage(): JSX.Element {
                 {courseClassType && (
                   <div style={{ color: '#374151', marginTop: 4 }}>Class type: <strong style={{ color: '#111827' }}>{String(courseClassType).toLowerCase()[0].toUpperCase() + String(courseClassType).toLowerCase().slice(1)}</strong></div>
                 )}
-                {courseQpType && (
-                  <div style={{ color: '#374151', marginTop: 2 }}>QP Type: <strong style={{ color: '#111827' }}>{String(courseQpType)}</strong></div>
-                )}
+                <div style={{ color: '#374151', marginTop: 2, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span>QP Type:</span>
+                  <select
+                    value={String(courseQpType || 'QP1').trim().toUpperCase() === 'QP2' ? 'QP2' : 'QP1'}
+                    onChange={(e) => {
+                      const v = String(e.target.value || '').trim().toUpperCase();
+                      const next = v === 'QP2' ? 'QP2' : 'QP1';
+                      setCourseQpType(next);
+                      try {
+                        localStorage.setItem(`obe_course_qp_${courseId}`, next);
+                      } catch {
+                        // ignore
+                      }
+                    }}
+                    style={{
+                      padding: '2px 6px',
+                      borderRadius: 8,
+                      border: '1px solid #e5e7eb',
+                      fontSize: 12,
+                      color: '#111827',
+                      width: 110,
+                      background: 'transparent',
+                    }}
+                  >
+                    <option value="QP1">QP1</option>
+                    <option value="QP2">QP2</option>
+                  </select>
+                </div>
               </div>
               <div>
                 <button onClick={() => navigate('/obe')} className="obe-btn obe-btn-secondary">Back to courses</button>

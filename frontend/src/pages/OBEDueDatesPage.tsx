@@ -1,112 +1,98 @@
-import React, { useEffect, useMemo, useState } from 'react';
-
-import fetchWithAuth from '../services/fetchAuth';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  bulkResetGlobalPublishControls,
+  bulkSetGlobalPublishControls,
   bulkUpsertDueSchedule,
   DueAssessmentKey,
   fetchDueScheduleSubjects,
-  fetchDueSchedules,
-  DueScheduleRow,
-  upsertDueSchedule,
   fetchGlobalPublishControls,
-  bulkSetGlobalPublishControls,
-  bulkResetGlobalPublishControls,
+  fetchObeSemesters,
 } from '../services/obe';
 
-type AcademicYear = {
-  id: number;
-  name: string;
-  parity?: string | null;
-  is_active?: boolean;
-};
+type SemesterRow = { id: number; number: number | null };
+
+const SEMESTER_NUMBERS = [1, 2, 3, 4, 5, 6, 7, 8] as const;
 
 const ALL_ASSESSMENTS: Array<{ key: DueAssessmentKey; label: string }> = [
   { key: 'cia1', label: 'CIA1' },
   { key: 'cia2', label: 'CIA2' },
   { key: 'ssa1', label: 'SSA1' },
+  { key: 'review1', label: 'REVIEW1' },
   { key: 'ssa2', label: 'SSA2' },
-  { key: 'formative1', label: 'Formative1' },
-  { key: 'formative2', label: 'Formative2' },
+  { key: 'review2', label: 'REVIEW2' },
+  { key: 'model', label: 'MODEL' },
+  { key: 'formative1', label: 'LAB1 (Formative1)' },
+  { key: 'formative2', label: 'LAB2 (Formative2)' },
 ];
 
-function toLocalDateInputValue(iso: string | null | undefined): { date: string; time: string } {
-  if (!iso) return { date: '', time: '' };
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return { date: '', time: '' };
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  return { date, time };
-}
+const ALL_ASSESSMENT_KEYS: DueAssessmentKey[] = ALL_ASSESSMENTS.map((a) => a.key);
 
 function combineDateTime(date: string, time: string): string | null {
   const dd = String(date || '').trim();
   const tt = String(time || '').trim();
   if (!dd || !tt) return null;
-  // send ISO-like string; backend will make it aware in server tz
   return `${dd}T${tt}:00`;
 }
 
-function formatCountdown(seconds: number): string {
-  const s = Math.abs(Math.floor(seconds));
-  const dd = Math.floor(s / (24 * 3600));
-  const hh = Math.floor((s % (24 * 3600)) / 3600);
-  const mm = Math.floor((s % 3600) / 60);
-  if (dd > 0) return `${dd}d ${String(hh).padStart(2, '0')}h ${String(mm).padStart(2, '0')}m`;
-  if (hh > 0) return `${hh}h ${String(mm).padStart(2, '0')}m`;
-  return `${mm}m`;
+// Semantics used here:
+// - ON: due dates enabled (no global overrides, or none returned)
+// - OFF: due dates disabled (override OPEN for every assessment)
+// - MIXED: partial overrides
+function computeToggleStatus(
+  globalControls: Array<{ is_open: boolean }> | null | undefined,
+  expected: number
+): 'ON' | 'OFF' | 'MIXED' {
+  if (!globalControls || globalControls.length === 0) return 'ON';
+  const openCount = globalControls.filter((g) => g.is_open === true).length;
+  if (globalControls.length === expected && openCount === expected) return 'OFF';
+  return 'MIXED';
 }
 
 export default function OBEDueDatesPage(): JSX.Element {
-  const [academicYears, setAcademicYears] = useState<AcademicYear[]>([]);
-  const [selectedAyIds, setSelectedAyIds] = useState<number[]>([]);
-  const [selectedAssessments, setSelectedAssessments] = useState<DueAssessmentKey[]>(['cia1', 'ssa1']);
+  const [semesters, setSemesters] = useState<SemesterRow[]>([]);
+  const [selectedSemNumber, setSelectedSemNumber] = useState<number>(1);
 
-  const [subjectsByAy, setSubjectsByAy] = useState<Record<string, Array<{ subject_code: string; subject_name: string }>>>({});
-  const [schedules, setSchedules] = useState<DueScheduleRow[]>([]);
+  const [selectedAssessments, setSelectedAssessments] = useState<DueAssessmentKey[]>(['ssa1', 'cia1']);
+  const [dueDate, setDueDate] = useState('');
+  const [dueTime, setDueTime] = useState('');
 
-  const [bulkDate, setBulkDate] = useState('');
-  const [bulkTime, setBulkTime] = useState('');
-  const [globalControls, setGlobalControls] = useState<Array<{ id: number; academic_year: { id: number; name: string } | null; assessment: string; is_open: boolean; updated_at: string | null; updated_by: number | null }>>([]);
+  const [subjectsBySemester, setSubjectsBySemester] = useState<Record<string, Array<{ subject_code: string; subject_name: string }>>>({});
+  const [globalControlsForSelected, setGlobalControlsForSelected] = useState<
+    Array<{
+      id: number;
+      semester: { id: number; number: number | null } | null;
+      assessment: string;
+      is_open: boolean;
+      updated_at: string | null;
+      updated_by: number | null;
+    }>
+  >([]);
 
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const [nowTick, setNowTick] = useState<number>(() => Date.now());
-
-  useEffect(() => {
-    // live countdown for loaded due schedules
-    const tid = window.setInterval(() => setNowTick(Date.now()), 1000);
-    return () => window.clearInterval(tid);
-  }, []);
-
-  const scheduleMap = useMemo(() => {
-    const map = new Map<string, DueScheduleRow>();
-    for (const r of schedules || []) {
-      map.set(`${r.academic_year?.id}|${r.subject_code}|${r.assessment}`, r);
-    }
-    return map;
-  }, [schedules]);
-
+  // Load semesters once
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
-        const res = await fetchWithAuth('/api/academics/academic-years/');
-        if (!res.ok) throw new Error(await res.text());
-        const json = await res.json();
-        const list = Array.isArray(json) ? json : (json?.results || []);
+        const resp = await fetchObeSemesters();
+        const list = Array.isArray(resp?.results) ? resp.results : [];
         if (!mounted) return;
-        setAcademicYears((list || []).map((x: any) => ({
-          id: Number(x.id),
-          name: String(x.name || ''),
-          parity: x.parity ?? null,
-          is_active: Boolean(x.is_active),
-        })).filter((x: AcademicYear) => Number.isFinite(x.id) && x.name));
+
+        const cleaned: SemesterRow[] = list
+          .map((x: any) => ({
+            id: Number(x.id),
+            number: x?.number === null || typeof x?.number === 'undefined' ? null : Number(x.number),
+          }))
+          .filter((x) => Number.isFinite(x.id));
+
+        cleaned.sort((a, b) => Number(a.number ?? 9999) - Number(b.number ?? 9999) || a.id - b.id);
+        setSemesters(cleaned);
       } catch (e: any) {
         if (!mounted) return;
-        setError(e?.message || 'Failed to load academic years');
+        setError(e?.message || 'Failed to load semesters');
       }
     })();
     return () => {
@@ -114,173 +100,163 @@ export default function OBEDueDatesPage(): JSX.Element {
     };
   }, []);
 
-  const toggleAy = (id: number) => {
-    setSelectedAyIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
-  };
+  const semesterIdByNumber = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const s of semesters) {
+      const num = s.number;
+      if (typeof num === 'number' && Number.isFinite(num)) map.set(num, s.id);
+    }
+    return map;
+  }, [semesters]);
 
-  const toggleAssessment = (key: DueAssessmentKey) => {
+  const selectedSemesterId = semesterIdByNumber.get(selectedSemNumber) ?? null;
+
+  const allSemesterIds = useMemo(() => {
+    const out: number[] = [];
+    for (const n of SEMESTER_NUMBERS) {
+      const id = semesterIdByNumber.get(n);
+      if (id) out.push(id);
+    }
+    return out;
+  }, [semesterIdByNumber]);
+
+  const toggleAssessment = useCallback((key: DueAssessmentKey) => {
     setSelectedAssessments((prev) => (prev.includes(key) ? prev.filter((x) => x !== key) : [...prev, key]));
-  };
+  }, []);
 
-  const reload = async () => {
+  const reloadSelectedSemester = useCallback(async () => {
     setLoading(true);
     setMessage(null);
     setError(null);
+
     try {
-      if (!selectedAyIds.length) {
-        setSubjectsByAy({});
-        setSchedules([]);
-        setMessage('Select Academic Year(s) to load courses.');
+      if (!selectedSemesterId) {
+        setSubjectsBySemester({});
+        setGlobalControlsForSelected([]);
+        setMessage(`Semester ${selectedSemNumber} is not available in the database.`);
         return;
       }
-      const [subjectsResp, schedulesResp] = await Promise.all([
-        fetchDueScheduleSubjects(selectedAyIds),
-        fetchDueSchedules(selectedAyIds),
+
+      const [subjectsResp, globalResp] = await Promise.all([
+        fetchDueScheduleSubjects([selectedSemesterId]),
+        fetchGlobalPublishControls([selectedSemesterId], ALL_ASSESSMENT_KEYS.map(String)),
       ]);
-      // also fetch global publish controls for UI
-      try {
-        const gc = await fetchGlobalPublishControls(selectedAyIds, selectedAssessments.map((x) => String(x)));
-        setGlobalControls(gc.results || []);
-      } catch (e) {
-        setGlobalControls([]);
-      }
-      setSubjectsByAy(subjectsResp.subjects_by_academic_year || {});
-      setSchedules(schedulesResp.results || []);
+
+      setSubjectsBySemester(subjectsResp?.subjects_by_semester || {});
+      setGlobalControlsForSelected(globalResp?.results || []);
     } catch (e: any) {
-      setError(e?.message || 'Failed to load due schedules');
+      setError(e?.message || 'Failed to load semester data');
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedSemesterId, selectedSemNumber]);
 
   useEffect(() => {
-    reload();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedAyIds.join(',')]);
+    void reloadSelectedSemester();
+  }, [reloadSelectedSemester]);
 
-  const allRows = useMemo(() => {
-    const out: Array<{ ayId: number; ayName: string; subject_code: string; subject_name: string }> = [];
-    for (const ayKey of Object.keys(subjectsByAy || {})) {
-      const ayId = Number(ayKey);
-      const ayName = academicYears.find((a) => a.id === ayId)?.name || `AY ${ayKey}`;
-      const list = subjectsByAy?.[ayKey] || [];
-      for (const s of list) {
-        out.push({ ayId, ayName, subject_code: s.subject_code, subject_name: s.subject_name });
+  const selectedSubjects = useMemo(() => {
+    if (!selectedSemesterId) return [];
+    const list = subjectsBySemester?.[String(selectedSemesterId)] || [];
+    return list.filter((x) => x && x.subject_code);
+  }, [subjectsBySemester, selectedSemesterId]);
+
+  const semesterToggleStatus = useMemo(() => {
+    return computeToggleStatus(globalControlsForSelected, ALL_ASSESSMENT_KEYS.length);
+  }, [globalControlsForSelected]);
+
+  const setSemesterDueDatesEnabled = useCallback(
+    async (enabled: boolean) => {
+      setLoading(true);
+      setMessage(null);
+      setError(null);
+
+      try {
+        if (!selectedSemesterId) throw new Error(`Semester ${selectedSemNumber} is not available in the database.`);
+        if (enabled) {
+          await bulkResetGlobalPublishControls({
+            semester_ids: [selectedSemesterId],
+            assessments: ALL_ASSESSMENT_KEYS.map(String),
+          });
+          setMessage(`Semester ${selectedSemNumber}: Due Dates ON (deadlines apply)`);
+        } else {
+          await bulkSetGlobalPublishControls({
+            semester_ids: [selectedSemesterId],
+            assessments: ALL_ASSESSMENT_KEYS.map(String),
+            is_open: true,
+          });
+          setMessage(`Semester ${selectedSemNumber}: Due Dates OFF (no deadline / no locking)`);
+        }
+        await reloadSelectedSemester();
+      } catch (e: any) {
+        setError(e?.message || 'Semester toggle failed');
+      } finally {
+        setLoading(false);
       }
-    }
-    out.sort((a, b) => (a.ayId - b.ayId) || a.subject_code.localeCompare(b.subject_code));
-    return out;
-  }, [subjectsByAy, academicYears]);
+    },
+    [reloadSelectedSemester, selectedSemNumber, selectedSemesterId]
+  );
 
-  const applyBulk = async () => {
+  const setOverallDueDatesEnabled = useCallback(
+    async (enabled: boolean) => {
+      setLoading(true);
+      setMessage(null);
+      setError(null);
+
+      try {
+        if (!allSemesterIds.length) throw new Error('No semesters found (1–8).');
+        if (enabled) {
+          await bulkResetGlobalPublishControls({
+            semester_ids: allSemesterIds,
+            assessments: ALL_ASSESSMENT_KEYS.map(String),
+          });
+          setMessage('All semesters: Due Dates ON (deadlines apply)');
+        } else {
+          await bulkSetGlobalPublishControls({
+            semester_ids: allSemesterIds,
+            assessments: ALL_ASSESSMENT_KEYS.map(String),
+            is_open: true,
+          });
+          setMessage('All semesters: Due Dates OFF (no deadline / no locking)');
+        }
+        await reloadSelectedSemester();
+      } catch (e: any) {
+        setError(e?.message || 'Overall toggle failed');
+      } finally {
+        setLoading(false);
+      }
+    },
+    [allSemesterIds, reloadSelectedSemester]
+  );
+
+  const saveForSemester = useCallback(async () => {
     setLoading(true);
     setMessage(null);
     setError(null);
+
     try {
-      const dueAt = combineDateTime(bulkDate, bulkTime);
-      if (!dueAt) throw new Error('Select bulk Due Date and Due Time');
-      if (!selectedAyIds.length) throw new Error('Select at least one Academic Year');
+      if (!selectedSemesterId) throw new Error(`Semester ${selectedSemNumber} is not available in the database.`);
+      const dueAt = combineDateTime(dueDate, dueTime);
+      if (!dueAt) throw new Error('Select end Due Date and Due Time');
       if (!selectedAssessments.length) throw new Error('Select at least one Exam/Assessment');
 
-      const byAy: Record<number, string[]> = {};
-      for (const row of allRows) {
-        if (!selectedAyIds.includes(row.ayId)) continue;
-        byAy[row.ayId] = byAy[row.ayId] || [];
-        byAy[row.ayId].push(row.subject_code);
-      }
+      const subjectCodes = Array.from(new Set(selectedSubjects.map((s) => String(s.subject_code).trim()).filter(Boolean)));
+      if (!subjectCodes.length) throw new Error(`No courses found for Semester ${selectedSemNumber}`);
 
-      let updated = 0;
-      for (const ayId of selectedAyIds) {
-        const codes = Array.from(new Set(byAy[ayId] || [])).filter(Boolean);
-        if (!codes.length) continue;
-        const resp = await bulkUpsertDueSchedule({ academic_year_id: ayId, subject_codes: codes, assessments: selectedAssessments, due_at: dueAt });
-        updated += Number(resp.updated || 0);
-      }
+      const resp = await bulkUpsertDueSchedule({
+        semester_id: selectedSemesterId,
+        subject_codes: subjectCodes,
+        assessments: selectedAssessments,
+        due_at: dueAt,
+      });
 
-      setMessage(`Saved bulk schedules (${updated} rows).`);
-      await reload();
-    } catch (e: any) {
-      setError(e?.message || 'Bulk save failed');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const computeGlobalStatus = () => {
-    if (!selectedAyIds.length || !selectedAssessments.length) return 'No selection';
-    if (!globalControls || globalControls.length === 0) return 'No override';
-    const allOpen = globalControls.every((g) => g.is_open === true);
-    const allClosed = globalControls.every((g) => g.is_open === false);
-    if (allOpen) return 'Global ON';
-    if (allClosed) return 'Global OFF';
-    return 'Mixed';
-  };
-
-  const setGlobal = async (isOpen: boolean) => {
-    setLoading(true);
-    setMessage(null);
-    setError(null);
-    try {
-      if (!selectedAyIds.length) throw new Error('Select at least one Academic Year');
-      if (!selectedAssessments.length) throw new Error('Select at least one Exam/Assessment');
-      await bulkSetGlobalPublishControls({ academic_year_ids: selectedAyIds, assessments: selectedAssessments.map((x) => String(x)), is_open: isOpen });
-      setMessage(`Global publish set to ${isOpen ? 'ON' : 'OFF'}`);
-      await reload();
-    } catch (e: any) {
-      setError(e?.message || 'Global set failed');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const resetGlobal = async () => {
-    setLoading(true);
-    setMessage(null);
-    setError(null);
-    try {
-      if (!selectedAyIds.length) throw new Error('Select at least one Academic Year');
-      if (!selectedAssessments.length) throw new Error('Select at least one Exam/Assessment');
-      await bulkResetGlobalPublishControls({ academic_year_ids: selectedAyIds, assessments: selectedAssessments.map((x) => String(x)) });
-      setMessage('Global overrides reset; using due dates');
-      await reload();
-    } catch (e: any) {
-      setError(e?.message || 'Global reset failed');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const saveCell = async (ayId: number, subjectCode: string, subjectName: string, assessment: DueAssessmentKey, date: string, time: string) => {
-    setLoading(true);
-    setMessage(null);
-    setError(null);
-    try {
-      const dueAt = combineDateTime(date, time);
-      if (!dueAt) throw new Error('Select Due Date and Due Time');
-      await upsertDueSchedule({ academic_year_id: ayId, subject_code: subjectCode, subject_name: subjectName, assessment, due_at: dueAt });
-      setMessage(`Saved ${subjectCode} • ${assessment.toUpperCase()}`);
-      await reload();
+      setMessage(`Semester ${selectedSemNumber}: Saved (${Number(resp?.updated || 0)} rows).`);
     } catch (e: any) {
       setError(e?.message || 'Save failed');
     } finally {
       setLoading(false);
     }
-  };
-
-  const [editing, setEditing] = useState<Record<string, { date: string; time: string }>>({});
-
-  const getEditing = (ayId: number, subjectCode: string, assessment: DueAssessmentKey) => {
-    const key = `${ayId}|${subjectCode}|${assessment}`;
-    const existing = editing[key];
-    if (existing) return existing;
-    const row = scheduleMap.get(key);
-    return toLocalDateInputValue(row?.due_at);
-  };
-
-  const setEditingCell = (ayId: number, subjectCode: string, assessment: DueAssessmentKey, patch: Partial<{ date: string; time: string }>) => {
-    const key = `${ayId}|${subjectCode}|${assessment}`;
-    setEditing((prev) => ({ ...prev, [key]: { ...getEditing(ayId, subjectCode, assessment), ...patch } }));
-  };
+  }, [dueDate, dueTime, selectedAssessments, selectedSemesterId, selectedSemNumber, selectedSubjects]);
 
   return (
     <main style={{ padding: 0, fontFamily: 'Arial, sans-serif', minHeight: '100vh', background: '#fff' }}>
@@ -288,164 +264,197 @@ export default function OBEDueDatesPage(): JSX.Element {
         <div className="welcome" style={{ marginBottom: 14 }}>
           <div className="welcome-left">
             <div>
-              <h2 className="welcome-title" style={{ fontSize: 22, marginBottom: 2 }}>OBE Master — Due Dates</h2>
-              <div className="welcome-sub">Set assessment due time by Academic Year + Course + Exam.</div>
+              <h2 className="welcome-title" style={{ fontSize: 22, marginBottom: 2 }}>
+                OBE Master — Due Dates
+              </h2>
+              <div className="welcome-sub">Sem 1–8 slider • exam checkboxes • end date/time • save.</div>
             </div>
           </div>
         </div>
 
         {error && (
-          <div style={{ background: '#fef2f2', border: '1px solid #ef444433', color: '#991b1b', padding: 10, borderRadius: 10, marginBottom: 10, whiteSpace: 'pre-wrap' }}>
+          <div
+            style={{
+              background: '#fef2f2',
+              border: '1px solid #ef444433',
+              color: '#991b1b',
+              padding: 10,
+              borderRadius: 10,
+              marginBottom: 10,
+              whiteSpace: 'pre-wrap',
+            }}
+          >
             {error}
           </div>
         )}
         {message && (
-          <div style={{ background: '#ecfdf5', border: '1px solid #10b98133', color: '#065f46', padding: 10, borderRadius: 10, marginBottom: 10 }}>
+          <div
+            style={{
+              background: '#ecfdf5',
+              border: '1px solid #10b98133',
+              color: '#065f46',
+              padding: 10,
+              borderRadius: 10,
+              marginBottom: 10,
+              whiteSpace: 'pre-wrap',
+            }}
+          >
             {message}
           </div>
         )}
 
-        <div style={{ display: 'grid', gridTemplateColumns: '360px 1fr', gap: 14, alignItems: 'start' }}>
-          <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 12 }}>
-            <div style={{ fontWeight: 800, marginBottom: 10 }}>Academic Years</div>
-            <div style={{ display: 'grid', gap: 8, maxHeight: 260, overflow: 'auto', paddingRight: 6 }}>
-              {academicYears.map((ay) => (
-                <label key={ay.id} style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 13 }}>
-                  <input type="checkbox" checked={selectedAyIds.includes(ay.id)} onChange={() => toggleAy(ay.id)} />
-                  <span style={{ fontWeight: 700 }}>{ay.name}</span>
-                  {ay.parity ? <span style={{ color: '#6b7280' }}>({ay.parity})</span> : null}
-                  {ay.is_active ? <span style={{ marginLeft: 'auto', fontSize: 12, color: '#16a34a', fontWeight: 700 }}>Active</span> : null}
-                </label>
+        {/* Overall */}
+        <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 12, marginBottom: 14 }}>
+          <div style={{ fontWeight: 900, marginBottom: 8 }}>Overall Due Dates ON / OFF (All Semesters)</div>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 13, color: '#374151', fontWeight: 700 }}>Semesters: 1–8</div>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+              <button
+                onClick={() => void setOverallDueDatesEnabled(true)}
+                disabled={loading}
+                className="obe-btn"
+                style={{ background: '#10b981', color: '#fff', borderRadius: 999, padding: '10px 18px', fontWeight: 800 }}
+                title="Use due dates (deadlines + locking apply)"
+              >
+                ON
+              </button>
+              <button
+                onClick={() => void setOverallDueDatesEnabled(false)}
+                disabled={loading}
+                className="obe-btn"
+                style={{ background: '#ef4444', color: '#fff', borderRadius: 999, padding: '10px 18px', fontWeight: 800 }}
+                title="No deadlines (locking disabled)"
+              >
+                OFF
+              </button>
+            </div>
+          </div>
+          <div style={{ marginTop: 8, fontSize: 12, color: '#6b7280' }}>OFF = global override OPEN. ON = reset overrides (use due dates).</div>
+        </div>
+
+        {/* Slider */}
+        <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 12, marginBottom: 14 }}>
+          <div style={{ fontWeight: 900, marginBottom: 10 }}>Semester Slider</div>
+
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ minWidth: 130, fontWeight: 900, fontSize: 16 }}>SEM {selectedSemNumber}</div>
+            <input
+              type="range"
+              min={1}
+              max={8}
+              step={1}
+              value={selectedSemNumber}
+              onChange={(e) => setSelectedSemNumber(Number(e.target.value))}
+              style={{ flex: '1 1 320px' }}
+            />
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {SEMESTER_NUMBERS.map((n) => (
+                <button
+                  key={n}
+                  className="obe-btn"
+                  disabled={loading}
+                  onClick={() => setSelectedSemNumber(n)}
+                  style={{
+                    padding: '6px 10px',
+                    borderRadius: 999,
+                    border: '1px solid #e5e7eb',
+                    background: n === selectedSemNumber ? '#111827' : '#fff',
+                    color: n === selectedSemNumber ? '#fff' : '#111827',
+                    fontWeight: 900,
+                  }}
+                >
+                  {n}
+                </button>
               ))}
-            </div>
-
-            <div style={{ height: 10 }} />
-
-            <div style={{ fontWeight: 800, marginBottom: 8 }}>Exam / Assessment</div>
-            <div style={{ display: 'grid', gap: 8 }}>
-              {ALL_ASSESSMENTS.map((a) => (
-                <label key={a.key} style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 13 }}>
-                  <input type="checkbox" checked={selectedAssessments.includes(a.key)} onChange={() => toggleAssessment(a.key)} />
-                  <span style={{ fontWeight: 700 }}>{a.label}</span>
-                </label>
-              ))}
-            </div>
-
-            <div style={{ height: 12 }} />
-
-            <div style={{ fontWeight: 800, marginBottom: 8 }}>Bulk Apply</div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <label style={{ fontSize: 12, color: '#374151' }}>
-                Due Date
-                <input value={bulkDate} onChange={(e) => setBulkDate(e.target.value)} type="date" style={{ display: 'block', marginTop: 4, padding: 8, borderRadius: 10, border: '1px solid #e5e7eb' }} />
-              </label>
-              <label style={{ fontSize: 12, color: '#374151' }}>
-                Time
-                <input value={bulkTime} onChange={(e) => setBulkTime(e.target.value)} type="time" style={{ display: 'block', marginTop: 4, padding: 8, borderRadius: 10, border: '1px solid #e5e7eb' }} />
-              </label>
-            </div>
-            <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button onClick={applyBulk} disabled={loading} className="obe-btn obe-btn-primary">{loading ? 'Saving…' : 'Apply to all loaded courses'}</button>
-              <button onClick={reload} disabled={loading} className="obe-btn">Refresh</button>
-            </div>
-            <div style={{ height: 12 }} />
-
-            <div style={{ fontWeight: 800, marginBottom: 8 }}>Global Turn OFF / ON</div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-              <div style={{ fontSize: 13, color: '#374151', fontWeight: 700 }}>{computeGlobalStatus()}</div>
-              <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-                <button onClick={() => setGlobal(true)} disabled={loading} className="obe-btn" style={{ background: '#10b981', color: '#fff', borderRadius: 999, padding: '10px 18px', fontWeight: 800 }}>Turn ON</button>
-                <button onClick={() => setGlobal(false)} disabled={loading} className="obe-btn" style={{ background: '#ef4444', color: '#fff', borderRadius: 999, padding: '10px 18px', fontWeight: 800 }}>Turn OFF</button>
-                <button onClick={resetGlobal} disabled={loading} className="obe-btn">Reset</button>
-              </div>
-            </div>
-            <div style={{ marginTop: 8, fontSize: 12, color: '#6b7280' }}>
-              Tip: Select Academic Year(s), pick Exam(s), then apply due date/time.
             </div>
           </div>
 
-          <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 12 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'baseline', marginBottom: 10 }}>
-              <div style={{ fontWeight: 800 }}>Courses</div>
-              <div style={{ fontSize: 12, color: '#6b7280' }}>{allRows.length} courses loaded</div>
+          <div style={{ marginTop: 10, fontSize: 12, color: '#6b7280' }}>Move slider or click 1–8 to switch semesters.</div>
+        </div>
+
+        {/* Semester controls */}
+        <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'baseline', marginBottom: 10 }}>
+            <div style={{ fontWeight: 900, fontSize: 16 }}>SEM {selectedSemNumber}</div>
+            <div style={{ fontSize: 12, color: '#6b7280' }}>{selectedSubjects.length} courses</div>
+          </div>
+
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <div style={{ minWidth: 260, flex: '1 1 360px' }}>
+              <div style={{ fontWeight: 800, marginBottom: 8 }}>Semester Due Dates ON / OFF</div>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ fontSize: 13, color: '#374151', fontWeight: 900 }}>Status: {semesterToggleStatus}</div>
+                <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                  <button
+                    onClick={() => void setSemesterDueDatesEnabled(true)}
+                    disabled={loading}
+                    className="obe-btn"
+                    style={{ background: '#10b981', color: '#fff', borderRadius: 999, padding: '10px 18px', fontWeight: 800 }}
+                  >
+                    ON
+                  </button>
+                  <button
+                    onClick={() => void setSemesterDueDatesEnabled(false)}
+                    disabled={loading}
+                    className="obe-btn"
+                    style={{ background: '#ef4444', color: '#fff', borderRadius: 999, padding: '10px 18px', fontWeight: 800 }}
+                  >
+                    OFF
+                  </button>
+                </div>
+              </div>
+              <div style={{ marginTop: 8, fontSize: 12, color: '#6b7280' }}>
+                If OFF: Semester {selectedSemNumber} will ignore due times (publish always allowed).
+              </div>
             </div>
 
-            {!selectedAyIds.length ? (
-              <div style={{ color: '#6b7280', padding: 10 }}>Select Academic Year(s) on the left.</div>
-            ) : loading ? (
-              <div style={{ color: '#6b7280', padding: 10 }}>Loading…</div>
-            ) : allRows.length === 0 ? (
-              <div style={{ color: '#6b7280', padding: 10 }}>No courses found for selected academic years.</div>
-            ) : (
-              <div style={{ overflowX: 'auto' }}>
-                <table className="obe-table" style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
-                  <thead>
-                    <tr>
-                      <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #e5e7eb' }}>Academic Year</th>
-                      <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #e5e7eb' }}>Course</th>
-                      {selectedAssessments.map((a) => (
-                        <th key={a} style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #e5e7eb', whiteSpace: 'nowrap' }}>{a.toUpperCase()} Due</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {allRows.map((row) => (
-                      <tr key={`${row.ayId}|${row.subject_code}`}>
-                        <td style={{ padding: 8, borderBottom: '1px solid #f3f4f6', whiteSpace: 'nowrap', fontWeight: 700 }}>{row.ayName}</td>
-                        <td style={{ padding: 8, borderBottom: '1px solid #f3f4f6' }}>
-                          <div style={{ fontWeight: 800 }}>{row.subject_code}</div>
-                          <div style={{ color: '#6b7280', fontSize: 12 }}>{row.subject_name || '—'}</div>
-                        </td>
-                        {selectedAssessments.map((a) => {
-                          const key = `${row.ayId}|${row.subject_code}|${a}`;
-                          const current = scheduleMap.get(key);
-                          const { date, time } = getEditing(row.ayId, row.subject_code, a);
-                          const dueIso = current?.due_at || null;
-                          let remainingLabel: string | null = null;
-                          if (dueIso) {
-                            const dueMs = new Date(dueIso).getTime();
-                            const nowMs = nowTick;
-                            if (Number.isFinite(dueMs)) {
-                              const sec = Math.floor((dueMs - nowMs) / 1000);
-                              remainingLabel = sec >= 0 ? `Remaining: ${formatCountdown(sec)}` : `Overdue: ${formatCountdown(sec)} ago`;
-                            }
-                          }
-                          return (
-                            <td key={key} style={{ padding: 8, borderBottom: '1px solid #f3f4f6', verticalAlign: 'top' }}>
-                              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                                <input
-                                  type="date"
-                                  value={date}
-                                  onChange={(e) => setEditingCell(row.ayId, row.subject_code, a, { date: e.target.value })}
-                                  style={{ padding: 6, borderRadius: 8, border: '1px solid #e5e7eb' }}
-                                />
-                                <input
-                                  type="time"
-                                  value={time}
-                                  onChange={(e) => setEditingCell(row.ayId, row.subject_code, a, { time: e.target.value })}
-                                  style={{ padding: 6, borderRadius: 8, border: '1px solid #e5e7eb' }}
-                                />
-                                <button
-                                  className="obe-btn obe-btn-primary"
-                                  disabled={loading}
-                                  onClick={() => saveCell(row.ayId, row.subject_code, row.subject_name, a, date, time)}
-                                >
-                                  Save
-                                </button>
-                              </div>
-                              <div style={{ marginTop: 6, fontSize: 12, color: '#6b7280' }}>
-                                Current: {current?.due_at ? new Date(current.due_at).toLocaleString() : '—'}
-                                {remainingLabel ? <span style={{ marginLeft: 8, fontWeight: 700, color: remainingLabel.startsWith('Overdue') ? '#b91c1c' : '#065f46' }}>{remainingLabel}</span> : null}
-                              </div>
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            <div style={{ minWidth: 280, flex: '2 1 520px' }}>
+              <div style={{ fontWeight: 800, marginBottom: 8 }}>Exam / Assessment</div>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                  gap: 8,
+                  maxHeight: 160,
+                  overflow: 'auto',
+                  paddingRight: 6,
+                }}
+              >
+                {ALL_ASSESSMENTS.map((a) => (
+                  <label key={a.key} style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 13 }}>
+                    <input type="checkbox" checked={selectedAssessments.includes(a.key)} onChange={() => toggleAssessment(a.key)} />
+                    <span style={{ fontWeight: 800 }}>{a.label}</span>
+                  </label>
+                ))}
               </div>
-            )}
+            </div>
+
+            <div style={{ minWidth: 260, flex: '1 1 360px' }}>
+              <div style={{ fontWeight: 800, marginBottom: 8 }}>End Date & Time</div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <input
+                  type="date"
+                  value={dueDate}
+                  onChange={(e) => setDueDate(e.target.value)}
+                  style={{ padding: 8, borderRadius: 10, border: '1px solid #e5e7eb' }}
+                />
+                <input
+                  type="time"
+                  value={dueTime}
+                  onChange={(e) => setDueTime(e.target.value)}
+                  style={{ padding: 8, borderRadius: 10, border: '1px solid #e5e7eb' }}
+                />
+                <button
+                  onClick={() => void saveForSemester()}
+                  disabled={loading}
+                  className="obe-btn obe-btn-primary"
+                  style={{ padding: '10px 16px', borderRadius: 10, fontWeight: 900 }}
+                >
+                  {loading ? 'Saving…' : 'Save (All Courses in SEM)'}
+                </button>
+              </div>
+              <div style={{ marginTop: 8, fontSize: 12, color: '#6b7280' }}>Applies to all courses loaded for the selected semester.</div>
+            </div>
           </div>
         </div>
       </div>

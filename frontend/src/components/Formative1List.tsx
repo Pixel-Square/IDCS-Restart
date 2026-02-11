@@ -1,10 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
 import { fetchMyTeachingAssignments } from '../services/obe';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
 import { fetchMasters } from '../services/curriculum';
-import { createPublishRequest, fetchDraft, publishFormative, saveDraft, fetchPublishedFormative, createEditRequest, confirmMarkManagerLock } from '../services/obe';
+import { createPublishRequest, fetchDraft, publishFormative, saveDraft, fetchPublishedFormative, createEditRequest, confirmMarkManagerLock, fetchEditWindow } from '../services/obe';
 import { useEditWindow } from '../hooks/useEditWindow';
 import { useMarkTableLock } from '../hooks/useMarkTableLock';
 import { formatRemaining, usePublishWindow } from '../hooks/usePublishWindow';
@@ -55,6 +55,7 @@ interface Formative1ListProps {
   subject?: any | null;
   teachingAssignmentId?: number;
   assessmentKey?: 'formative1' | 'formative2';
+  skipMarkManager?: boolean;
 }
 
 const DEFAULT_MAX_PART = 5;
@@ -163,7 +164,7 @@ function shortenRegisterNo(registerNo: string): string {
   return registerNo.slice(-8);
 }
 
-export default function Formative1List({ subjectId, teachingAssignmentId, assessmentKey: assessmentKeyProp }: Formative1ListProps) {
+export default function Formative1List({ subjectId, teachingAssignmentId, assessmentKey: assessmentKeyProp, skipMarkManager = false }: Formative1ListProps) {
   const assessmentKey: FormativeKey = (assessmentKeyProp as FormativeKey) || 'formative1';
   const assessmentLabel = assessmentKey === 'formative2' ? 'Formative 2' : 'Formative 1';
   const CO_A = assessmentKey === 'formative2' ? 3 : 1;
@@ -183,6 +184,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
   const [publishing, setPublishing] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
+  const [inlineViewOnly, setInlineViewOnly] = useState(false);
 
   const {
     data: publishWindow,
@@ -211,28 +213,219 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
   });
 
   const { data: markLock, refresh: refreshMarkLock } = useMarkTableLock({ assessment: assessmentKey as any, subjectCode: String(subjectId || ''), teachingAssignmentId, options: { poll: false } });
-  const { data: markManagerEditWindow } = useEditWindow({ assessment: assessmentKey as any, subjectCode: String(subjectId || ''), scope: 'MARK_MANAGER', teachingAssignmentId, options: { poll: false } });
-  const { data: markEntryEditWindow } = useEditWindow({ assessment: assessmentKey as any, subjectCode: String(subjectId || ''), scope: 'MARK_ENTRY', teachingAssignmentId, options: { poll: false } });
+  const { data: markManagerEditWindow, refresh: refreshMarkManagerEditWindow } = useEditWindow({ assessment: assessmentKey as any, subjectCode: String(subjectId || ''), scope: 'MARK_MANAGER', teachingAssignmentId, options: { poll: false } });
+  const { data: markEntryEditWindow, refresh: refreshMarkEntryEditWindow } = useEditWindow({ assessment: assessmentKey as any, subjectCode: String(subjectId || ''), scope: 'MARK_ENTRY', teachingAssignmentId, options: { poll: false } });
+
+  const [publishConsumedApprovals, setPublishConsumedApprovals] = useState<null | {
+    markEntryApprovalUntil: string | null;
+    markManagerApprovalUntil: string | null;
+  }>(null);
 
   const isPublished = Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published);
-  const markManagerLocked = Boolean(sheet.markManagerLocked);
+  const markManagerLocked = skipMarkManager ? true : Boolean(sheet.markManagerLocked);
   const markEntryApprovalUntil = markEntryEditWindow?.approval_until ? String(markEntryEditWindow.approval_until) : null;
   const markManagerApprovalUntil = markManagerEditWindow?.approval_until ? String(markManagerEditWindow.approval_until) : null;
-  const markEntryApprovedFresh = Boolean(markEntryEditWindow?.allowed_by_approval) && Boolean(markEntryApprovalUntil);
-  const markManagerApprovedFresh = Boolean(markManagerEditWindow?.allowed_by_approval) && Boolean(markManagerApprovalUntil);
+  const markEntryApprovedFresh =
+    Boolean(markEntryEditWindow?.allowed_by_approval) &&
+    Boolean(markEntryApprovalUntil) &&
+    markEntryApprovalUntil !== (publishConsumedApprovals?.markEntryApprovalUntil ?? null);
+  const markManagerApprovedFresh =
+    Boolean(markManagerEditWindow?.allowed_by_approval) &&
+    Boolean(markManagerApprovalUntil) &&
+    markManagerApprovalUntil !== (publishConsumedApprovals?.markManagerApprovalUntil ?? null);
   const entryOpen = !isPublished ? true : Boolean(markLock?.entry_open) || markEntryApprovedFresh || markManagerApprovedFresh;
   const publishedEditLocked = Boolean(isPublished && !entryOpen);
-  const tableBlocked = Boolean(globalLocked || (isPublished ? !entryOpen : !markManagerLocked));
-  const showNameList = Boolean(sheet.markManagerSnapshot != null);
+  const tableBlocked = skipMarkManager
+    ? Boolean(globalLocked || (isPublished ? true : false))
+    : Boolean(globalLocked || (isPublished ? !entryOpen : !markManagerLocked));
+  const showNameList = Boolean(sheet.markManagerSnapshot != null) || Boolean(isPublished);
 
   const [markManagerModal, setMarkManagerModal] = useState<null | { mode: 'confirm' | 'request' }>(null);
   const [markManagerBusy, setMarkManagerBusy] = useState(false);
+
+  const [viewMarksModalOpen, setViewMarksModalOpen] = useState(false);
+  const [publishedViewSnapshot, setPublishedViewSnapshot] = useState<Record<string, any> | null>(null);
+  const [publishedViewLoading, setPublishedViewLoading] = useState(false);
+  const [publishedViewError, setPublishedViewError] = useState<string | null>(null);
+
+  const [publishedEditModalOpen, setPublishedEditModalOpen] = useState(false);
+  const [editRequestReason, setEditRequestReason] = useState('');
+  const [editRequestBusy, setEditRequestBusy] = useState(false);
 
   const masterTermLabel = String(masterCfg?.termLabel || 'KRCT AY25-26');
   const f1Cfg = (masterCfg as any)?.assessments?.[assessmentKey] ?? (masterCfg as any)?.assessments?.formative1 ?? {};
   const MAX_PART = Number.isFinite(Number(f1Cfg?.maxPart)) ? Number(f1Cfg.maxPart) : DEFAULT_MAX_PART;
   const MAX_TOTAL = Number.isFinite(Number(f1Cfg?.maxTotal)) ? Number(f1Cfg.maxTotal) : DEFAULT_MAX_TOTAL;
   const MAX_CO = Number.isFinite(Number(f1Cfg?.maxCo)) ? Number(f1Cfg.maxCo) : DEFAULT_MAX_CO;
+
+  const snapshotPartBtl = useMemo(() => {
+    const raw = sheet.markManagerSnapshot;
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(String(raw));
+      const pb = (parsed as any)?.partBtl;
+      if (!pb || typeof pb !== 'object') return null;
+      const next: any = {};
+      for (const k of ['skill1', 'skill2', 'att1', 'att2']) {
+        const v = (pb as any)[k];
+        next[k] = v === '' || v == null ? '' : Number(v);
+        if (!(next[k] === '' || (Number.isFinite(next[k]) && next[k] >= 1 && next[k] <= 6))) next[k] = '';
+      }
+      return next as Record<string, 1 | 2 | 3 | 4 | 5 | 6 | ''>;
+    } catch {
+      return null;
+    }
+  }, [sheet.markManagerSnapshot]);
+
+  useEffect(() => {
+    setPublishConsumedApprovals(null);
+  }, [subjectId]);
+
+  const viewPartBtl = snapshotPartBtl || partBtl;
+
+  const refreshPublishedSnapshot = async (silent?: boolean) => {
+    if (!subjectId) return;
+    if (!silent) {
+      setPublishedViewError(null);
+      setPublishedViewLoading(true);
+    }
+    try {
+      const pub = await fetchPublishedFormative(assessmentKey, subjectId as string);
+      const marks = pub && (pub as any).marks && typeof (pub as any).marks === 'object' ? ((pub as any).marks as Record<string, any>) : null;
+      if (marks && Object.keys(marks).length) {
+        setPublishedViewSnapshot(marks);
+      } else {
+        setPublishedViewSnapshot(null);
+      }
+    } catch (e: any) {
+      if (!silent) setPublishedViewError(e?.message || 'Failed to load published marks');
+    } finally {
+      if (!silent) setPublishedViewLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!viewMarksModalOpen) return;
+    setPublishedViewSnapshot(null);
+    refreshPublishedSnapshot(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMarksModalOpen, subjectId, assessmentKey]);
+
+  const prevEntryOpenRef = useRef<boolean>(Boolean(entryOpen));
+  useEffect(() => {
+    // When IQAC opens MARK_ENTRY edits post-publish, reload the editable draft.
+    if (!subjectId) return;
+    if (!isPublished) return;
+
+    const prev = prevEntryOpenRef.current;
+    if (prev || !entryOpen) {
+      prevEntryOpenRef.current = Boolean(entryOpen);
+      return;
+    }
+
+    let mounted = true;
+    (async () => {
+      try {
+        const res = await fetchDraft<F1DraftPayload>(assessmentKey, String(subjectId));
+        if (!mounted) return;
+        const d = res?.draft as any;
+        const draftSheet = d?.sheet;
+        const draftPartBtl = d?.partBtl;
+
+        if (draftSheet && typeof draftSheet === 'object' && typeof draftSheet.rowsByStudentId === 'object') {
+          setSheet((prevSheet) => ({
+            ...prevSheet,
+            termLabel: String(draftSheet.termLabel || masterTermLabel || 'KRCT AY25-26'),
+            batchLabel: String(subjectId),
+            rowsByStudentId: draftSheet.rowsByStudentId || {},
+            markManagerLocked:
+              typeof draftSheet.markManagerLocked === 'boolean'
+                ? draftSheet.markManagerLocked
+                : Boolean(draftSheet.markManagerSnapshot ?? prevSheet.markManagerSnapshot),
+            markManagerSnapshot: draftSheet.markManagerSnapshot ?? prevSheet.markManagerSnapshot ?? null,
+            markManagerApprovalUntil: draftSheet.markManagerApprovalUntil ?? prevSheet.markManagerApprovalUntil ?? null,
+          }));
+        }
+
+        if (draftPartBtl && typeof draftPartBtl === 'object') {
+          const next: any = {};
+          for (const k of ['skill1', 'skill2', 'att1', 'att2']) {
+            const v = (draftPartBtl as any)[k];
+            next[k] = v === '' || v == null ? '' : Number(v);
+            if (!(next[k] === '' || (Number.isFinite(next[k]) && next[k] >= 1 && next[k] <= 6))) next[k] = '';
+          }
+          setPartBtl(next);
+        }
+      } catch {
+        // ignore
+      }
+    })();
+
+    prevEntryOpenRef.current = Boolean(entryOpen);
+    return () => {
+      mounted = false;
+    };
+  }, [entryOpen, isPublished, subjectId, assessmentKey, masterTermLabel]);
+
+  useEffect(() => {
+    // While locked after publish, periodically check if IQAC updated the lock/edit-window rows.
+    if (!subjectId) return;
+    if (!isPublished) return;
+    if (entryOpen) return;
+    const tid = window.setInterval(() => {
+      refreshMarkLock({ silent: true });
+      try {
+        refreshMarkEntryEditWindow?.({ silent: true });
+        refreshMarkManagerEditWindow?.({ silent: true });
+      } catch {
+        // ignore
+      }
+    }, 30000);
+    return () => window.clearInterval(tid);
+  }, [entryOpen, isPublished, subjectId, refreshMarkLock, refreshMarkEntryEditWindow, refreshMarkManagerEditWindow]);
+
+  async function requestMarkEntryEdit() {
+    if (!subjectId) return;
+    setEditRequestBusy(true);
+    try {
+      await createEditRequest({
+        assessment: assessmentKey,
+        subject_code: String(subjectId),
+        scope: 'MARK_ENTRY',
+        reason: editRequestReason || `Edit request: ${assessmentLabel} marks for ${subjectId}`,
+        teaching_assignment_id: teachingAssignmentId,
+      });
+      alert('Edit request sent to IQAC. Waiting for approval...');
+      setPublishedEditModalOpen(false);
+      // poll for approval
+      (async () => {
+        if (!subjectId) return;
+        const maxAttempts = 36; // ~3 minutes
+        const delay = 5000;
+        for (let i = 0; i < maxAttempts; i++) {
+          try {
+            const resp = await fetchEditWindow(assessmentKey, String(subjectId), 'MARK_ENTRY', teachingAssignmentId);
+            if (resp && resp.allowed_by_approval) {
+              try {
+                refreshMarkEntryEditWindow?.({ silent: true });
+                refreshMarkLock({ silent: true });
+              } catch {}
+              alert('IQAC approved the edit request. You can now edit marks.');
+              return;
+            }
+          } catch (e) {
+            // ignore transient errors
+          }
+          await new Promise((r) => setTimeout(r, delay));
+        }
+        alert('Edit request still pending. Please try again later.');
+      })();
+    } catch (e: any) {
+      alert(e?.message || 'Request failed');
+    } finally {
+      setEditRequestBusy(false);
+    }
+  }
 
   useEffect(() => {
     let mounted = true;
@@ -343,7 +536,30 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
     setMarkManagerBusy(true);
     try {
       await createEditRequest({ assessment: assessmentKey, subject_code: String(subjectId), scope: 'MARK_MANAGER', reason: `Request mark-manager edit for ${subjectId}`, teaching_assignment_id: teachingAssignmentId });
-      alert('Edit request sent to IQAC.');
+      alert('Edit request sent to IQAC. Waiting for approval...');
+      // poll for approval and refresh the edit window state when granted
+      (async () => {
+        if (!subjectId) return;
+        const maxAttempts = 36; // ~3 minutes
+        const delay = 5000;
+        for (let i = 0; i < maxAttempts; i++) {
+          try {
+            const resp = await fetchEditWindow(assessmentKey, String(subjectId), 'MARK_MANAGER', teachingAssignmentId);
+            if (resp && resp.allowed_by_approval) {
+              try {
+                refreshMarkManagerEditWindow?.({ silent: true });
+                refreshMarkLock({ silent: true });
+              } catch {}
+              alert('IQAC approved the mark-manager edit request. You can now edit mark-manager settings.');
+              return;
+            }
+          } catch (e) {
+            // ignore transient errors
+          }
+          await new Promise((r) => setTimeout(r, delay));
+        }
+        alert('Edit request still pending. Please try again later.');
+      })();
     } catch (e: any) {
       alert(e?.message || 'Request failed');
     } finally {
@@ -636,18 +852,39 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
 
   const publish = async () => {
     if (!subjectId) return;
+
+    if (globalLocked) {
+      setError('Publishing is locked by IQAC.');
+      return;
+    }
+    if (!publishAllowed) {
+      setError('Publish window is closed. Please request IQAC approval.');
+      return;
+    }
+
+    // If already published and locked, use Publish button as the entry-point to request edits.
+    if (isPublished && publishedEditLocked) {
+      setPublishedEditModalOpen(true);
+      return;
+    }
+
     setPublishing(true);
     setError(null);
     try {
       await publishFormative(assessmentKey, subjectId, sheet, teachingAssignmentId);
       setPublishedAt(new Date().toLocaleString());
+      setPublishConsumedApprovals(null);
+      // Ensure Mark Manager is re-locked locally to avoid a transient editable state.
+      setSheet((p) => ({ ...p, markManagerLocked: true }));
       refreshPublishWindow();
-        try {
-          console.debug('obe:published dispatch', { assessment: assessmentKey, subjectId });
-          window.dispatchEvent(new CustomEvent('obe:published', { detail: { subjectId, assessment: assessmentKey } }));
-        } catch {
-          // ignore
-        }
+      refreshMarkLock({ silent: true });
+      refreshPublishedSnapshot(true);
+      try {
+        console.debug('obe:published dispatch', { assessment: assessmentKey, subjectId });
+        window.dispatchEvent(new CustomEvent('obe:published', { detail: { subjectId, assessment: assessmentKey } }));
+      } catch {
+        // ignore
+      }
     } catch (e: any) {
       setError(e?.message || `Failed to publish ${assessmentLabel}`);
     } finally {
@@ -858,23 +1095,6 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
             <button className="obe-btn" onClick={() => refreshPublishWindow()} disabled={publishWindowLoading}>Refresh</button>
           </div>
         </div>
-      ) : !publishAllowed ? (
-        <div style={{ marginBottom: 10, border: '1px solid #fecaca', background: '#fff7ed', borderRadius: 12, padding: 12 }}>
-          <div style={{ fontWeight: 800, marginBottom: 6 }}>Publish time is over</div>
-          <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>Send a request to IQAC to approve publishing.</div>
-          <textarea
-            value={requestReason}
-            onChange={(e) => setRequestReason(e.target.value)}
-            placeholder="Reason (optional)"
-            rows={3}
-            style={{ width: '100%', padding: 10, borderRadius: 10, border: '1px solid #e5e7eb', resize: 'vertical' }}
-          />
-          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
-            <button className="obe-btn" onClick={() => refreshPublishWindow()} disabled={requesting || publishWindowLoading}>Refresh</button>
-            <button className="obe-btn obe-btn-primary" onClick={requestApproval} disabled={requesting}>{requesting ? 'Requesting…' : 'Request Approval'}</button>
-          </div>
-          {requestMessage ? <div style={{ marginTop: 8, fontSize: 12, color: '#065f46' }}>{requestMessage}</div> : null}
-        </div>
       ) : null}
 
       <div
@@ -906,8 +1126,575 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
       ) : (
         <PublishLockOverlay locked={globalLocked}>
           {showNameList ? (
-            <div className="obe-table-wrapper" style={{ position: 'relative' }}>
+            inlineViewOnly && isPublished ? (
+              <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12, background: '#fff' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, position: 'relative' }}>
+                  <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>View Only</div>
+                  <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280', marginRight: 36 }}>{assessmentLabel} • {String(subjectId || '')}</div>
+                  <button className="obe-btn" onClick={() => setInlineViewOnly(false)} style={{ position: 'absolute', right: 0, top: 0 }}>
+                    Close
+                  </button>
+                </div>
+
+                {publishedViewLoading ? <div style={{ color: '#6b7280' }}>Loading published marks…</div> : null}
+                {publishedViewError ? <div style={{ color: '#991b1b', fontSize: 12, marginBottom: 8 }}>{publishedViewError}</div> : null}
+
+                {(publishedViewSnapshot && Object.keys(publishedViewSnapshot).length) || students.length ? (
+                  <div style={{ overflowX: 'auto', border: '1px solid #e5e7eb', borderRadius: 12 }}>
+                    <table className="obe-table" style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr>
+                          <th style={cellTh} colSpan={totalTableCols}>
+                            {sheet.termLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {sheet.batchLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {assessmentLabel.toUpperCase()} (PUBLISHED)
+                          </th>
+                        </tr>
+                        <tr>
+                          <th style={{ ...cellTh, width: 42, minWidth: 42 }}>S.No</th>
+                          <th style={cellTh}>Register No.</th>
+                          <th style={cellTh}>Name of the Students</th>
+                          <th style={cellTh}>Skill 1</th>
+                          <th style={cellTh}>Skill 2</th>
+                          <th style={cellTh}>Att 1</th>
+                          <th style={cellTh}>Att 2</th>
+                          <th style={cellTh}>Total</th>
+                          <th style={cellTh} colSpan={2}>CO-{CO_A}</th>
+                          <th style={cellTh} colSpan={2}>CO-{CO_B}</th>
+                          {visibleBtlIndices.map((n) => (
+                            <th key={`pv_btl_${n}`} style={cellTh} colSpan={2}>
+                              BTL-{n}
+                            </th>
+                          ))}
+                        </tr>
+                        <tr>
+                          <th style={cellTh} />
+                          <th style={cellTh} />
+                          <th style={cellTh} />
+                          <th style={cellTh} />
+                          <th style={cellTh} />
+                          <th style={cellTh} />
+                          <th style={cellTh} />
+                          <th style={cellTh} />
+                          <th style={cellTh}>Mark</th>
+                          <th style={cellTh}>%</th>
+                          <th style={cellTh}>Mark</th>
+                          <th style={cellTh}>%</th>
+                          {visibleBtlIndices.map((n) => (
+                            <React.Fragment key={`pv_btl_sub_${n}`}>
+                              <th style={cellTh}>Mark</th>
+                              <th style={cellTh}>%</th>
+                            </React.Fragment>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {students.length ? (
+                          students.map((s, i) => {
+                            const v = (publishedViewSnapshot && (publishedViewSnapshot as any)[String(s.id)]) || {};
+                            const skill1 = typeof v.skill1 === 'number' ? clamp(Number(v.skill1), 1, MAX_PART) : toNumOrEmpty(v.skill1);
+                            const skill2 = typeof v.skill2 === 'number' ? clamp(Number(v.skill2), 1, MAX_PART) : toNumOrEmpty(v.skill2);
+                            const att1 = typeof v.att1 === 'number' ? clamp(Number(v.att1), 1, MAX_PART) : toNumOrEmpty(v.att1);
+                            const att2 = typeof v.att2 === 'number' ? clamp(Number(v.att2), 1, MAX_PART) : toNumOrEmpty(v.att2);
+
+                            const total = skill1 !== '' && skill2 !== '' && att1 !== '' && att2 !== '' ? clamp((skill1 as number) + (skill2 as number) + (att1 as number) + (att2 as number), 0, MAX_TOTAL) : '';
+                            const co1 = skill1 !== '' && att1 !== '' ? clamp((skill1 as number) + (att1 as number), 0, MAX_CO) : '';
+                            const co2 = skill2 !== '' && att2 !== '' ? clamp((skill2 as number) + (att2 as number), 0, MAX_CO) : '';
+
+                            const btlMaxByIndex = [0, 0, 0, 0, 0, 0];
+                            for (const p of parts) {
+                              const bv = (viewPartBtl as any)[p.key];
+                              if (bv === 1 || bv === 2 || bv === 3 || bv === 4 || bv === 5 || bv === 6) {
+                                btlMaxByIndex[bv - 1] += p.max;
+                              }
+                            }
+                            const visibleIndicesZeroBased = visibleBtlIndices.map((n) => n - 1);
+                            const btlShare = typeof total === 'number' && visibleIndicesZeroBased.length ? round1((total as number) / visibleIndicesZeroBased.length) : '';
+                            const btlMarksByIndex = btlMaxByIndex.map((max, idx) => {
+                              if (btlShare === '') return '';
+                              if (!visibleIndicesZeroBased.includes(idx)) return '';
+                              if (max > 0) return clamp(btlShare as number, 0, max);
+                              return round1(btlShare as number);
+                            });
+
+                            return (
+                              <tr key={`pv_${s.id}`}>
+                                <td style={{ ...cellTd, textAlign: 'center', width: 42, minWidth: 42, paddingLeft: 2, paddingRight: 2 }}>{i + 1}</td>
+                                <td style={cellTd}>{shortenRegisterNo(s.reg_no)}</td>
+                                <td style={cellTd}>{s.name || '—'}</td>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>{skill1}</td>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>{skill2}</td>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>{att1}</td>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>{att2}</td>
+                                <td style={{ ...cellTd, textAlign: 'center', fontWeight: 700 }}>{total}</td>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>{co1}</td>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>{co1 === '' ? '' : <span className="obe-pct-badge">{pct(co1 as number, MAX_CO)}</span>}</td>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>{co2}</td>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>{co2 === '' ? '' : <span className="obe-pct-badge">{pct(co2 as number, MAX_CO)}</span>}</td>
+                                {visibleBtlIndices.map((n) => {
+                                  const idx = n - 1;
+                                  const mark = btlMarksByIndex[idx];
+                                  const max = btlMaxByIndex[idx] ?? 0;
+                                  return (
+                                    <React.Fragment key={`pv_btl_cells_${s.id}_${n}`}>
+                                      <td style={{ ...cellTd, textAlign: 'center' }}>{mark}</td>
+                                      <td style={{ ...cellTd, textAlign: 'center' }}>{mark === '' ? '' : <span className="obe-pct-badge">{pct(Number(mark), max)}</span>}</td>
+                                    </React.Fragment>
+                                  );
+                                })}
+                              </tr>
+                            );
+                          })
+                        ) : (
+                          Object.keys((publishedViewSnapshot as any) || {}).map((k, i) => {
+                            const v = (publishedViewSnapshot as any)[k] || {};
+                            const skill1 = typeof v.skill1 === 'number' ? clamp(Number(v.skill1), 1, MAX_PART) : toNumOrEmpty(v.skill1);
+                            const skill2 = typeof v.skill2 === 'number' ? clamp(Number(v.skill2), 1, MAX_PART) : toNumOrEmpty(v.skill2);
+                            const att1 = typeof v.att1 === 'number' ? clamp(Number(v.att1), 1, MAX_PART) : toNumOrEmpty(v.att1);
+                            const att2 = typeof v.att2 === 'number' ? clamp(Number(v.att2), 1, MAX_PART) : toNumOrEmpty(v.att2);
+
+                            const total = skill1 !== '' && skill2 !== '' && att1 !== '' && att2 !== '' ? clamp((skill1 as number) + (skill2 as number) + (att1 as number) + (att2 as number), 0, MAX_TOTAL) : '';
+                            const co1 = skill1 !== '' && att1 !== '' ? clamp((skill1 as number) + (att1 as number), 0, MAX_CO) : '';
+                            const co2 = skill2 !== '' && att2 !== '' ? clamp((skill2 as number) + (att2 as number), 0, MAX_CO) : '';
+
+                            const btlMaxByIndex = [0, 0, 0, 0, 0, 0];
+                            for (const p of parts) {
+                              const bv = (viewPartBtl as any)[p.key];
+                              if (bv === 1 || bv === 2 || bv === 3 || bv === 4 || bv === 5 || bv === 6) {
+                                btlMaxByIndex[bv - 1] += p.max;
+                              }
+                            }
+                            const visibleIndicesZeroBased = visibleBtlIndices.map((n) => n - 1);
+                            const btlShare = typeof total === 'number' && visibleIndicesZeroBased.length ? round1((total as number) / visibleIndicesZeroBased.length) : '';
+                            const btlMarksByIndex = btlMaxByIndex.map((max, idx) => {
+                              if (btlShare === '') return '';
+                              if (!visibleIndicesZeroBased.includes(idx)) return '';
+                              if (max > 0) return clamp(btlShare as number, 0, max);
+                              return round1(btlShare as number);
+                            });
+
+                            return (
+                              <tr key={`pv_${k}`}>
+                                <td style={{ ...cellTd, textAlign: 'center', width: 42, minWidth: 42, paddingLeft: 2, paddingRight: 2 }}>{i + 1}</td>
+                                <td style={cellTd}>{shortenRegisterNo(String(v.reg_no ?? k))}</td>
+                                <td style={cellTd}>{v.name || '—'}</td>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>{skill1}</td>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>{skill2}</td>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>{att1}</td>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>{att2}</td>
+                                <td style={{ ...cellTd, textAlign: 'center', fontWeight: 700 }}>{total}</td>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>{co1}</td>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>{co1 === '' ? '' : <span className="obe-pct-badge">{pct(co1 as number, MAX_CO)}</span>}</td>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>{co2}</td>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>{co2 === '' ? '' : <span className="obe-pct-badge">{pct(co2 as number, MAX_CO)}</span>}</td>
+                                {visibleBtlIndices.map((n) => {
+                                  const idx = n - 1;
+                                  const mark = btlMarksByIndex[idx];
+                                  const max = btlMaxByIndex[idx] ?? 0;
+                                  return (
+                                    <React.Fragment key={`pv_btl_cells_${k}_${n}`}>
+                                      <td style={{ ...cellTd, textAlign: 'center' }}>{mark}</td>
+                                      <td style={{ ...cellTd, textAlign: 'center' }}>{mark === '' ? '' : <span className="obe-pct-badge">{pct(Number(mark), max)}</span>}</td>
+                                    </React.Fragment>
+                                  );
+                                })}
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : publishedViewLoading ? null : (
+                  <div style={{ color: '#6b7280' }}>No published marks found.</div>
+                )}
+
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
+                  <button className="obe-btn" onClick={() => setInlineViewOnly(false)}>
+                    Close
+                  </button>
+                </div>
+              </div>
+            ) : 
+              <div className="obe-table-wrapper" style={{ position: 'relative' }}>
               <table className="obe-table" style={{ minWidth: 1200 }}>
+                <thead>
+                  <tr>
+                    <th style={cellTh} colSpan={totalTableCols}>
+                      {sheet.termLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {sheet.batchLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {assessmentLabel.toUpperCase()}
+                    </th>
+                  </tr>
+                  <tr>
+                    <th style={{ ...cellTh, width: 42, minWidth: 42 }} rowSpan={3}>
+                      S.No
+                    </th>
+                    <th style={cellTh} rowSpan={3}>
+                      Register No.
+                    </th>
+                    <th style={cellTh} rowSpan={3}>
+                      Name of the Students
+                    </th>
+                    <th style={cellTh} colSpan={2}>
+                      Skill
+                    </th>
+                    <th style={cellTh} colSpan={2}>
+                      Attitude
+                    </th>
+                    <th style={cellTh} rowSpan={3}>
+                      Total
+                    </th>
+                    <th style={cellTh} colSpan={4}>
+                      CIA 1
+                    </th>
+                    {visibleBtlIndices.length ? (
+                      <th style={cellTh} colSpan={visibleBtlIndices.length * 2}>
+                        BTL
+                      </th>
+                    ) : null}
+                  </tr>
+                  <tr>
+                    <th style={cellTh}>1</th>
+                    <th style={cellTh}>2</th>
+                    <th style={cellTh}>1</th>
+                    <th style={cellTh}>2</th>
+                    <th style={cellTh} colSpan={2}>
+                      CO-{CO_A}
+                    </th>
+                    <th style={cellTh} colSpan={2}>
+                      CO-{CO_B}
+                    </th>
+                    {visibleBtlIndices.map((n) => (
+                      <th key={`btlhead-${n}`} style={cellTh} colSpan={2}>
+                        BTL-{n}
+                      </th>
+                    ))}
+                  </tr>
+                  <tr>
+                    <th style={cellTh} />
+                    <th style={cellTh} />
+                    <th style={cellTh} />
+                    <th style={cellTh} />
+                    <th style={cellTh}>Mark</th>
+                    <th style={cellTh}>%</th>
+                    <th style={cellTh}>Mark</th>
+                    <th style={cellTh}>%</th>
+                    {visibleBtlIndices.map((n) => (
+                      <React.Fragment key={`btl-sub-${n}`}>
+                        <th style={cellTh}>Mark</th>
+                        <th style={cellTh}>%</th>
+                      </React.Fragment>
+                    ))}
+                  </tr>
+                </thead>
+
+                <tbody>
+                  <tr>
+                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>
+                      {/* previously rendered lastPartKey value here which caused misalignment; keep this cell empty */}
+                    </td>
+                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} />
+                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>BTL</td>
+                    {parts.map((p) => (
+                      <td key={`btl-select-${p.key}`} style={{ ...cellTd, textAlign: 'center' }}>
+                        {(() => {
+                          const v = (partBtl as any)[p.key] ?? '';
+                          const display = v === '' ? '-' : String(v);
+                          return (
+                            <div style={{ position: 'relative', minWidth: 44 }}>
+                              <div
+                                style={{
+                                  width: '100%',
+                                  fontSize: 12,
+                                  padding: '2px 4px',
+                                  border: '1px solid #d1d5db',
+                                  borderRadius: 8,
+                                  background: '#fff',
+                                  textAlign: 'center',
+                                  userSelect: 'none',
+                                }}
+                                title={`BTL: ${display}`}
+                              >
+                                {display}
+                              </div>
+                              <select
+                                aria-label={`BTL for ${p.label}`}
+                                value={v}
+                                onChange={(e) => {
+                                  if (globalLocked) return;
+                                  const confirmed = sheet.markManagerSnapshot != null;
+                                  if (markManagerLocked && confirmed) return;
+                                  if (publishedEditLocked) return;
+                                  setPartBtl((prev) => ({
+                                    ...(prev || {}),
+                                    [p.key]: e.target.value === '' ? '' : (Number(e.target.value) as 1 | 2 | 3 | 4 | 5 | 6),
+                                  }));
+                                }}
+                                style={{
+                                  position: 'absolute',
+                                  inset: 0,
+                                  width: '100%',
+                                  height: '100%',
+                                  opacity: 0,
+                                  cursor: 'pointer',
+                                  appearance: 'none',
+                                  WebkitAppearance: 'none',
+                                  MozAppearance: 'none',
+                                }}
+                              >
+                                <option value="">-</option>
+                                {[1, 2, 3, 4, 5, 6].map((n) => (
+                                  <option key={n} value={n}>
+                                    {n}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          );
+                        })()}
+                      </td>
+                    ))}
+                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} />
+                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} colSpan={4} />
+                    {visibleBtlIndices.map((n) => (
+                      <React.Fragment key={`btl-pad-${n}`}>
+                        <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} />
+                        <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} />
+                      </React.Fragment>
+                    ))}
+                  </tr>
+
+                  <tr>
+                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} colSpan={3}>
+                      Name / Max Marks
+                    </td>
+                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_PART}</td>
+                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_PART}</td>
+                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_PART}</td>
+                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_PART}</td>
+                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_TOTAL}</td>
+                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_CO}</td>
+                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
+                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_CO}</td>
+                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
+                  </tr>
+
+                  {students.map((s, i) => {
+                    const row = sheet.rowsByStudentId[String(s.id)] || ({ studentId: s.id, skill1: '', skill2: '', att1: '', att2: '' } as F1RowState);
+
+                    const skill1 = typeof row.skill1 === 'number' ? clamp(Number(row.skill1), 1, MAX_PART) : '';
+                    const skill2 = typeof row.skill2 === 'number' ? clamp(Number(row.skill2), 1, MAX_PART) : '';
+                    const att1 = typeof row.att1 === 'number' ? clamp(Number(row.att1), 1, MAX_PART) : '';
+                    const att2 = typeof row.att2 === 'number' ? clamp(Number(row.att2), 1, MAX_PART) : '';
+
+                    const total = skill1 !== '' && skill2 !== '' && att1 !== '' && att2 !== '' ? clamp((skill1 as number) + (skill2 as number) + (att1 as number) + (att2 as number), 0, MAX_TOTAL) : '';
+                    const co1 = skill1 !== '' && att1 !== '' ? clamp((skill1 as number) + (att1 as number), 0, MAX_CO) : '';
+                    const co2 = skill2 !== '' && att2 !== '' ? clamp((skill2 as number) + (att2 as number), 0, MAX_CO) : '';
+
+                    const btlMaxByIndex = [0, 0, 0, 0, 0, 0];
+                    for (const p of parts) {
+                      const v = (partBtl as any)[p.key];
+                      if (v === 1 || v === 2 || v === 3 || v === 4 || v === 5 || v === 6) {
+                        btlMaxByIndex[v - 1] += p.max;
+                      }
+                    }
+                    const visibleIndicesZeroBased = visibleBtlIndices.map((n) => n - 1);
+                    const btlShare = typeof total === 'number' && visibleIndicesZeroBased.length ? round1((total as number) / visibleIndicesZeroBased.length) : '';
+                    const btlMarksByIndex = btlMaxByIndex.map((max, idx) => {
+                      if (btlShare === '') return '';
+                      if (!visibleIndicesZeroBased.includes(idx)) return '';
+                      if (max > 0) return clamp(btlShare as number, 0, max);
+                      return round1(btlShare as number);
+                    });
+
+                    const disabledInputs = visibleBtlIndices.length === 0;
+                    const lockedInputs = disabledInputs || tableBlocked || publishedEditLocked || globalLocked;
+
+                    return (
+                      <tr key={s.id}>
+                        <td style={{ ...cellTd, textAlign: 'center', width: 42, minWidth: 42, paddingLeft: 2, paddingRight: 2 }}>{i + 1}</td>
+                        <td style={cellTd}>{shortenRegisterNo(s.reg_no)}</td>
+                        <td style={cellTd}>{s.name || '—'}</td>
+
+                        <td style={cellTd}>
+                          <input
+                            style={inputStyle}
+                            type="number"
+                            min={1}
+                            max={MAX_PART}
+                            value={row.skill1 === '' ? '' : row.skill1}
+                            disabled={lockedInputs}
+                            onChange={(e) => updateMark(s.id, { skill1: e.target.value === '' ? '' : Number(e.target.value) })}
+                          />
+                        </td>
+                        <td style={cellTd}>
+                          <input
+                            style={inputStyle}
+                            type="number"
+                            min={1}
+                            max={MAX_PART}
+                            value={row.skill2 === '' ? '' : row.skill2}
+                            disabled={lockedInputs}
+                            onChange={(e) => updateMark(s.id, { skill2: e.target.value === '' ? '' : Number(e.target.value) })}
+                          />
+                        </td>
+                        <td style={cellTd}>
+                          <input
+                            style={inputStyle}
+                            type="number"
+                            min={1}
+                            max={MAX_PART}
+                            value={row.att1 === '' ? '' : row.att1}
+                            disabled={lockedInputs}
+                            onChange={(e) => updateMark(s.id, { att1: e.target.value === '' ? '' : Number(e.target.value) })}
+                          />
+                        </td>
+                        <td style={cellTd}>
+                          <input
+                            style={inputStyle}
+                            type="number"
+                            min={1}
+                            max={MAX_PART}
+                            value={row.att2 === '' ? '' : row.att2}
+                            disabled={lockedInputs}
+                            onChange={(e) => updateMark(s.id, { att2: e.target.value === '' ? '' : Number(e.target.value) })}
+                          />
+                        </td>
+
+                        <td style={{ ...cellTd, textAlign: 'center', fontWeight: 700 }}>{total}</td>
+
+                        <td style={{ ...cellTd, textAlign: 'center' }}>{co1}</td>
+                        <td style={{ ...cellTd, textAlign: 'center' }}>
+                          {co1 === '' ? '' : <span className="obe-pct-badge">{pct(co1 as number, MAX_CO)}</span>}
+                        </td>
+                        <td style={{ ...cellTd, textAlign: 'center' }}>{co2}</td>
+                        <td style={{ ...cellTd, textAlign: 'center' }}>
+                          {co2 === '' ? '' : <span className="obe-pct-badge">{pct(co2 as number, MAX_CO)}</span>}
+                        </td>
+                        {visibleBtlIndices.map((n) => {
+                          const idx = n - 1;
+                          const mark = btlMarksByIndex[idx];
+                          const max = btlMaxByIndex[idx] ?? 0;
+                          return (
+                            <React.Fragment key={`btl-cells-${n}`}>
+                              <td style={{ ...cellTd, textAlign: 'center' }}>{mark}</td>
+                              <td style={{ ...cellTd, textAlign: 'center' }}>{mark === '' ? '' : <span className="obe-pct-badge">{pct(Number(mark), max)}</span>}</td>
+                            </React.Fragment>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+
+              {visibleBtlIndices.length === 0 && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: 'rgba(255,255,255,0.85)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexDirection: 'column',
+                    gap: 10,
+                    padding: 20,
+                    borderRadius: 6,
+                  }}
+                >
+                  <div style={{ fontSize: 16, fontWeight: 700 }}>BTL values not selected</div>
+                  <div style={{ color: '#6b7280' }}>Assign BTL values in the BTL row below Skill/Attitude to enable entry.</div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      onClick={() => {
+                        if (globalLocked) return;
+                        const confirmed = sheet.markManagerSnapshot != null;
+                        if (markManagerLocked && confirmed) return;
+                        if (publishedEditLocked) return;
+                        setPartBtl({ skill1: 3, skill2: 4, att1: 3, att2: 4 });
+                      }}
+                      style={{ padding: '6px 10px' }}
+                    >
+                      Quick: BTL-3/4
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {tableBlocked && !globalLocked ? (
+                <>
+                  <div
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      background: isPublished ? 'rgba(240,253,244,0.55)' : 'rgba(239,246,255,0.65)',
+                      border: `1px solid ${isPublished ? 'rgba(22,163,74,0.25)' : 'rgba(59,130,246,0.25)'}`,
+                      borderRadius: 6,
+                      pointerEvents: 'none',
+                    }}
+                  />
+                  <div
+                    style={{
+                      position: 'absolute',
+                      left: '50%',
+                      top: 16,
+                      transform: 'translateX(-50%)',
+                      zIndex: 40,
+                      width: 280,
+                      background: 'rgba(255,255,255,0.98)',
+                      border: '1px solid #e5e7eb',
+                      padding: 12,
+                      borderRadius: 12,
+                      boxShadow: '0 6px 18px rgba(17,24,39,0.06)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 10,
+                      alignItems: 'stretch',
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontWeight: 950, color: '#111827' }}>{isPublished ? 'Published — Locked' : 'Table Locked'}</div>
+                      <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
+                        {isPublished ? 'Marks are published. Use View or Request Edit to ask IQAC for access.' : 'Confirm the Mark Manager to unlock the student list.'}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                      {!isPublished ? (
+                        <>
+                          <button className="obe-btn obe-btn-success" onClick={() => setMarkManagerModal({ mode: 'confirm' })} disabled={!subjectId || markManagerBusy}>
+                            Save Mark Manager
+                          </button>
+                          <button className="obe-btn" onClick={() => requestMarkManagerEdit()} disabled={markManagerBusy}>
+                            Request Access
+                          </button>
+                        </>
+                          ) : (
+                        <>
+                          <button
+                            className="obe-btn"
+                            onClick={() => {
+                              setInlineViewOnly(true);
+                              setPublishedViewSnapshot(null);
+                              try {
+                                refreshPublishedSnapshot(false);
+                              } catch {
+                                /* ignore */
+                              }
+                            }}
+                          >
+                            View
+                          </button>
+                          <button className="obe-btn obe-btn-success" onClick={() => requestMarkEntryEdit()}>
+                            Request Edit
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </>
+              ) : null}
+            </div>
           ) : (
             <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 20, background: '#fff' }}>
               <div style={{ fontWeight: 900, fontSize: 16 }}>{isPublished ? 'Published — Locked' : 'Table Locked'}</div>
@@ -924,10 +1711,19 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                   </>
                 ) : (
                   <>
-                    <button className="obe-btn" onClick={() => {}}>
+                    <button
+                      className="obe-btn"
+                      onClick={() => {
+                        setInlineViewOnly(true);
+                        setPublishedViewSnapshot(null);
+                        try {
+                          refreshPublishedSnapshot(false);
+                        } catch {}
+                      }}
+                    >
                       View
                     </button>
-                    <button className="obe-btn obe-btn-success" onClick={() => {}}>
+                    <button className="obe-btn obe-btn-success" onClick={() => requestMarkEntryEdit()}>
                       Request Edit
                     </button>
                   </>
@@ -935,319 +1731,326 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
               </div>
             </div>
           )}
-            <thead>
-              <tr>
-                <th style={cellTh} colSpan={totalTableCols}>
-                  {sheet.termLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {sheet.batchLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {assessmentLabel.toUpperCase()}
-                </th>
-              </tr>
-              <tr>
-                <th style={{ ...cellTh, width: 42, minWidth: 42 }} rowSpan={3}>
-                  S.No
-                </th>
-                <th style={cellTh} rowSpan={3}>
-                  Register No.
-                </th>
-                <th style={cellTh} rowSpan={3}>
-                  Name of the Students
-                </th>
-                <th style={cellTh} colSpan={2}>
-                  Skill
-                </th>
-                <th style={cellTh} colSpan={2}>
-                  Attitude
-                </th>
-                <th style={cellTh} rowSpan={3}>
-                  Total
-                </th>
-                <th style={cellTh} colSpan={4}>
-                  CIA 1
-                </th>
-                {visibleBtlIndices.length ? (
-                  <th style={cellTh} colSpan={visibleBtlIndices.length * 2}>
-                    BTL
-                  </th>
-                ) : null}
-              </tr>
-              <tr>
-                <th style={cellTh}>1</th>
-                <th style={cellTh}>2</th>
-                <th style={cellTh}>1</th>
-                <th style={cellTh}>2</th>
-                <th style={cellTh} colSpan={2}>
-                  CO-{CO_A}
-                </th>
-                <th style={cellTh} colSpan={2}>
-                  CO-{CO_B}
-                </th>
-                {visibleBtlIndices.map((n) => (
-                  <th key={`btlhead-${n}`} style={cellTh} colSpan={2}>
-                    BTL-{n}
-                  </th>
-                ))}
-              </tr>
-              <tr>
-                <th style={cellTh} />
-                <th style={cellTh} />
-                <th style={cellTh} />
-                <th style={cellTh} />
-                <th style={cellTh}>Mark</th>
-                <th style={cellTh}>%</th>
-                <th style={cellTh}>Mark</th>
-                <th style={cellTh}>%</th>
-                {visibleBtlIndices.map((n) => (
-                  <React.Fragment key={`btl-sub-${n}`}>
-                    <th style={cellTh}>Mark</th>
-                    <th style={cellTh}>%</th>
-                  </React.Fragment>
-                ))}
-              </tr>
-            </thead>
-
-            <tbody>
-              <tr>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>
-                  {(() => {
-                    const v = lastPartKey ? (partBtl as any)[lastPartKey] : '';
-                    return v === '' || v == null ? '-' : String(v);
-                  })()}
-                </td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} />
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>BTL</td>
-                {parts.map((p) => (
-                  <td key={`btl-select-${p.key}`} style={{ ...cellTd, textAlign: 'center' }}>
-                    {(() => {
-                      const v = (partBtl as any)[p.key] ?? '';
-                      const display = v === '' ? '-' : String(v);
-                      return (
-                        <div style={{ position: 'relative', minWidth: 44 }}>
-                          <div
-                            style={{
-                              width: '100%',
-                              fontSize: 12,
-                              padding: '2px 4px',
-                              border: '1px solid #d1d5db',
-                              borderRadius: 8,
-                              background: '#fff',
-                              textAlign: 'center',
-                              userSelect: 'none',
-                            }}
-                            title={`BTL: ${display}`}
-                          >
-                            {display}
-                          </div>
-                          <select
-                            aria-label={`BTL for ${p.label}`}
-                            value={v}
-                            onChange={(e) => {
-                              if (globalLocked) return;
-                              const confirmed = sheet.markManagerSnapshot != null;
-                              if (markManagerLocked && confirmed) return;
-                              if (publishedEditLocked) return;
-                              setPartBtl((prev) => ({
-                                ...(prev || {}),
-                                [p.key]: e.target.value === '' ? '' : (Number(e.target.value) as 1 | 2 | 3 | 4 | 5 | 6),
-                              }));
-                            }}
-                            style={{
-                              position: 'absolute',
-                              inset: 0,
-                              width: '100%',
-                              height: '100%',
-                              opacity: 0,
-                              cursor: 'pointer',
-                              appearance: 'none',
-                              WebkitAppearance: 'none',
-                              MozAppearance: 'none',
-                            }}
-                          >
-                            <option value="">-</option>
-                            {[1, 2, 3, 4, 5, 6].map((n) => (
-                              <option key={n} value={n}>
-                                {n}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      );
-                    })()}
-                  </td>
-                ))}
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} />
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} colSpan={4} />
-                {visibleBtlIndices.map((n) => (
-                  <React.Fragment key={`btl-pad-${n}`}>
-                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} />
-                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} />
-                  </React.Fragment>
-                ))}
-              </tr>
-
-              <tr>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} colSpan={3}>
-                  Name / Max Marks
-                </td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_PART}</td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_PART}</td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_PART}</td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_PART}</td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_TOTAL}</td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_CO}</td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_CO}</td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
-              </tr>
-
-              {students.map((s, i) => {
-                const row = sheet.rowsByStudentId[String(s.id)] || ({ studentId: s.id, skill1: '', skill2: '', att1: '', att2: '' } as F1RowState);
-
-                const skill1 = typeof row.skill1 === 'number' ? clamp(Number(row.skill1), 1, MAX_PART) : '';
-                const skill2 = typeof row.skill2 === 'number' ? clamp(Number(row.skill2), 1, MAX_PART) : '';
-                const att1 = typeof row.att1 === 'number' ? clamp(Number(row.att1), 1, MAX_PART) : '';
-                const att2 = typeof row.att2 === 'number' ? clamp(Number(row.att2), 1, MAX_PART) : '';
-
-                const total = skill1 !== '' && skill2 !== '' && att1 !== '' && att2 !== '' ? clamp((skill1 as number) + (skill2 as number) + (att1 as number) + (att2 as number), 0, MAX_TOTAL) : '';
-                const co1 = skill1 !== '' && att1 !== '' ? clamp((skill1 as number) + (att1 as number), 0, MAX_CO) : '';
-                const co2 = skill2 !== '' && att2 !== '' ? clamp((skill2 as number) + (att2 as number), 0, MAX_CO) : '';
-
-                const btlMaxByIndex = [0, 0, 0, 0, 0, 0];
-                for (const p of parts) {
-                  const v = (partBtl as any)[p.key];
-                  if (v === 1 || v === 2 || v === 3 || v === 4 || v === 5 || v === 6) {
-                    btlMaxByIndex[v - 1] += p.max;
-                  }
-                }
-                const visibleIndicesZeroBased = visibleBtlIndices.map((n) => n - 1);
-                const btlShare = typeof total === 'number' && visibleIndicesZeroBased.length ? round1((total as number) / visibleIndicesZeroBased.length) : '';
-                const btlMarksByIndex = btlMaxByIndex.map((max, idx) => {
-                  if (btlShare === '') return '';
-                  if (!visibleIndicesZeroBased.includes(idx)) return '';
-                  if (max > 0) return clamp(btlShare as number, 0, max);
-                  return round1(btlShare as number);
-                });
-
-                const disabledInputs = visibleBtlIndices.length === 0;
-
-                return (
-                  <tr key={s.id}>
-                    <td style={{ ...cellTd, textAlign: 'center', width: 42, minWidth: 42, paddingLeft: 2, paddingRight: 2 }}>{i + 1}</td>
-                    <td style={cellTd}>{shortenRegisterNo(s.reg_no)}</td>
-                    <td style={cellTd}>{s.name || '—'}</td>
-
-                    <td style={cellTd}>
-                      <input
-                        style={inputStyle}
-                        type="number"
-                        min={1}
-                        max={MAX_PART}
-                        value={row.skill1 === '' ? '' : row.skill1}
-                        disabled={disabledInputs}
-                        onChange={(e) => updateMark(s.id, { skill1: e.target.value === '' ? '' : Number(e.target.value) })}
-                      />
-                    </td>
-                    <td style={cellTd}>
-                      <input
-                        style={inputStyle}
-                        type="number"
-                        min={1}
-                        max={MAX_PART}
-                        value={row.skill2 === '' ? '' : row.skill2}
-                        disabled={disabledInputs}
-                        onChange={(e) => updateMark(s.id, { skill2: e.target.value === '' ? '' : Number(e.target.value) })}
-                      />
-                    </td>
-                    <td style={cellTd}>
-                      <input
-                        style={inputStyle}
-                        type="number"
-                        min={1}
-                        max={MAX_PART}
-                        value={row.att1 === '' ? '' : row.att1}
-                        disabled={disabledInputs}
-                        onChange={(e) => updateMark(s.id, { att1: e.target.value === '' ? '' : Number(e.target.value) })}
-                      />
-                    </td>
-                    <td style={cellTd}>
-                      <input
-                        style={inputStyle}
-                        type="number"
-                        min={1}
-                        max={MAX_PART}
-                        value={row.att2 === '' ? '' : row.att2}
-                        disabled={disabledInputs}
-                        onChange={(e) => updateMark(s.id, { att2: e.target.value === '' ? '' : Number(e.target.value) })}
-                      />
-                    </td>
-
-                    <td style={{ ...cellTd, textAlign: 'center', fontWeight: 700 }}>{total}</td>
-
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{co1}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>
-                      {co1 === '' ? '' : <span className="obe-pct-badge">{pct(co1 as number, MAX_CO)}</span>}
-                    </td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{co2}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>
-                      {co2 === '' ? '' : <span className="obe-pct-badge">{pct(co2 as number, MAX_CO)}</span>}
-                    </td>
-                    {visibleBtlIndices.map((n) => {
-                      const idx = n - 1;
-                      const mark = btlMarksByIndex[idx];
-                      const max = btlMaxByIndex[idx] ?? 0;
-                      return (
-                        <React.Fragment key={`btl-cells-${n}`}>
-                          <td style={{ ...cellTd, textAlign: 'center' }}>{mark}</td>
-                          <td style={{ ...cellTd, textAlign: 'center' }}>
-                            {mark === '' ? '' : <span className="obe-pct-badge">{pct(Number(mark), max)}</span>}
-                          </td>
-                        </React.Fragment>
-                      );
-                    })}
-                  </tr>
-                );
-              })}
-            </tbody>
-            </table>
-
-          {visibleBtlIndices.length === 0 && (
-            <div
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                right: 0,
-                bottom: 0,
-                background: 'rgba(255,255,255,0.85)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexDirection: 'column',
-                gap: 10,
-                padding: 20,
-                borderRadius: 6,
-              }}
-            >
-              <div style={{ fontSize: 16, fontWeight: 700 }}>BTL values not selected</div>
-              <div style={{ color: '#6b7280' }}>Assign BTL values in the BTL row below Skill/Attitude to enable entry.</div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  onClick={() => {
-                    if (globalLocked) return;
-                    const confirmed = sheet.markManagerSnapshot != null;
-                    if (markManagerLocked && confirmed) return;
-                    if (publishedEditLocked) return;
-                    setPartBtl({ skill1: 3, skill2: 4, att1: 3, att2: 4 });
-                  }}
-                  style={{ padding: '6px 10px' }}
-                >
-                  Quick: BTL-3/4
-                </button>
-              </div>
-            </div>
-          )}
-
-          </div>
         </PublishLockOverlay>
       )}
+
+      {markManagerModal && !skipMarkManager ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 9999 }}
+          onClick={() => {
+            if (markManagerBusy) return;
+            setMarkManagerModal(null);
+          }}
+        >
+          <div style={{ width: 'min(640px,96vw)', background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: 14 }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+              <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>{markManagerModal.mode === 'confirm' ? `Confirmation - ${assessmentLabel}` : `Request Edit - ${assessmentLabel}`}</div>
+              <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>{String(subjectId || '')}</div>
+            </div>
+
+            {markManagerModal.mode === 'confirm' ? (
+              <>
+                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10 }}>Confirm the selected BTL settings. After confirming, Mark Manager will be locked and the table will be editable.</div>
+                <div style={{ overflowX: 'auto', border: '1px solid #e5e7eb', borderRadius: 12 }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ background: '#f9fafb' }}>
+                        <th style={{ textAlign: 'left', padding: 10, fontSize: 12, borderBottom: '1px solid #e5e7eb' }}>Item</th>
+                        <th style={{ textAlign: 'right', padding: 10, fontSize: 12, borderBottom: '1px solid #e5e7eb' }}>Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>Skill/Attitude max</td>
+                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{MAX_PART}</td>
+                      </tr>
+                      <tr>
+                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>Total max</td>
+                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{MAX_TOTAL}</td>
+                      </tr>
+                      <tr>
+                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>CO-{CO_A} max</td>
+                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{MAX_CO}</td>
+                      </tr>
+                      <tr>
+                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>CO-{CO_B} max</td>
+                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{MAX_CO}</td>
+                      </tr>
+                      {parts.map((p) => (
+                        <tr key={`mm_${p.key}`}>
+                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>{p.label} BTL</td>
+                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{(partBtl as any)[p.key] === '' ? '-' : String((partBtl as any)[p.key])}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            ) : (
+              <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10 }}>This will send an edit request to IQAC. Mark Manager will remain locked until IQAC approves.</div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+              <button className="obe-btn" disabled={markManagerBusy} onClick={() => setMarkManagerModal(null)}>
+                Cancel
+              </button>
+              <button
+                className="obe-btn obe-btn-success"
+                disabled={markManagerBusy || !subjectId}
+                onClick={async () => {
+                  if (!subjectId) return;
+                  if (markManagerModal.mode === 'request') {
+                    setMarkManagerModal(null);
+                    await requestMarkManagerEdit();
+                    return;
+                  }
+                  await confirmMarkManager();
+                }}
+              >
+                {markManagerModal.mode === 'confirm' ? 'Confirm' : 'Send Request'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {viewMarksModalOpen ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 60, overflowY: 'auto' }}
+          onClick={() => setViewMarksModalOpen(false)}
+        >
+          <div style={{ width: 'min(1100px, 96vw)', maxHeight: '90vh', overflowY: 'auto', background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: 14 }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, position: 'relative' }}>
+              <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>View Only</div>
+              <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280', marginRight: 36 }}>{assessmentLabel} • {String(subjectId || '')}</div>
+              <button className="obe-btn" onClick={() => setViewMarksModalOpen(false)} style={{ position: 'absolute', right: 0, top: 0 }}>
+                Close
+              </button>
+            </div>
+
+            {publishedViewLoading ? <div style={{ color: '#6b7280' }}>Loading published marks…</div> : null}
+            {publishedViewError ? <div style={{ color: '#991b1b', fontSize: 12, marginBottom: 8 }}>{publishedViewError}</div> : null}
+
+            {(publishedViewSnapshot && Object.keys(publishedViewSnapshot).length) || students.length ? (
+              <div style={{ overflowX: 'auto', border: '1px solid #e5e7eb', borderRadius: 12 }}>
+                <table className="obe-table" style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr>
+                      <th style={cellTh} colSpan={totalTableCols}>
+                        {sheet.termLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {sheet.batchLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {assessmentLabel.toUpperCase()} (PUBLISHED)
+                      </th>
+                    </tr>
+                    <tr>
+                      <th style={{ ...cellTh, width: 42, minWidth: 42 }}>S.No</th>
+                      <th style={cellTh}>Register No.</th>
+                      <th style={cellTh}>Name of the Students</th>
+                      <th style={cellTh}>Skill 1</th>
+                      <th style={cellTh}>Skill 2</th>
+                      <th style={cellTh}>Att 1</th>
+                      <th style={cellTh}>Att 2</th>
+                      <th style={cellTh}>Total</th>
+                      <th style={cellTh} colSpan={2}>CO-{CO_A}</th>
+                      <th style={cellTh} colSpan={2}>CO-{CO_B}</th>
+                      {visibleBtlIndices.map((n) => (
+                        <th key={`pv_btl_${n}`} style={cellTh} colSpan={2}>
+                          BTL-{n}
+                        </th>
+                      ))}
+                    </tr>
+                    <tr>
+                      <th style={cellTh} />
+                      <th style={cellTh} />
+                      <th style={cellTh} />
+                      <th style={cellTh} />
+                      <th style={cellTh} />
+                      <th style={cellTh} />
+                      <th style={cellTh} />
+                      <th style={cellTh} />
+                      <th style={cellTh}>Mark</th>
+                      <th style={cellTh}>%</th>
+                      <th style={cellTh}>Mark</th>
+                      <th style={cellTh}>%</th>
+                      {visibleBtlIndices.map((n) => (
+                        <React.Fragment key={`pv_btl_sub_${n}`}>
+                          <th style={cellTh}>Mark</th>
+                          <th style={cellTh}>%</th>
+                        </React.Fragment>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {students.length ? (
+                      students.map((s, i) => {
+                        const v = (publishedViewSnapshot && (publishedViewSnapshot as any)[String(s.id)]) || {};
+                        const skill1 = typeof v.skill1 === 'number' ? clamp(Number(v.skill1), 1, MAX_PART) : toNumOrEmpty(v.skill1);
+                        const skill2 = typeof v.skill2 === 'number' ? clamp(Number(v.skill2), 1, MAX_PART) : toNumOrEmpty(v.skill2);
+                        const att1 = typeof v.att1 === 'number' ? clamp(Number(v.att1), 1, MAX_PART) : toNumOrEmpty(v.att1);
+                        const att2 = typeof v.att2 === 'number' ? clamp(Number(v.att2), 1, MAX_PART) : toNumOrEmpty(v.att2);
+
+                        const total = skill1 !== '' && skill2 !== '' && att1 !== '' && att2 !== '' ? clamp((skill1 as number) + (skill2 as number) + (att1 as number) + (att2 as number), 0, MAX_TOTAL) : '';
+                        const co1 = skill1 !== '' && att1 !== '' ? clamp((skill1 as number) + (att1 as number), 0, MAX_CO) : '';
+                        const co2 = skill2 !== '' && att2 !== '' ? clamp((skill2 as number) + (att2 as number), 0, MAX_CO) : '';
+
+                        const btlMaxByIndex = [0, 0, 0, 0, 0, 0];
+                        for (const p of parts) {
+                          const bv = (viewPartBtl as any)[p.key];
+                          if (bv === 1 || bv === 2 || bv === 3 || bv === 4 || bv === 5 || bv === 6) {
+                            btlMaxByIndex[bv - 1] += p.max;
+                          }
+                        }
+                        const visibleIndicesZeroBased = visibleBtlIndices.map((n) => n - 1);
+                        const btlShare = typeof total === 'number' && visibleIndicesZeroBased.length ? round1((total as number) / visibleIndicesZeroBased.length) : '';
+                        const btlMarksByIndex = btlMaxByIndex.map((max, idx) => {
+                          if (btlShare === '') return '';
+                          if (!visibleIndicesZeroBased.includes(idx)) return '';
+                          if (max > 0) return clamp(btlShare as number, 0, max);
+                          return round1(btlShare as number);
+                        });
+
+                        return (
+                          <tr key={`pv_${s.id}`}>
+                            <td style={{ ...cellTd, textAlign: 'center', width: 42, minWidth: 42, paddingLeft: 2, paddingRight: 2 }}>{i + 1}</td>
+                            <td style={cellTd}>{shortenRegisterNo(s.reg_no)}</td>
+                            <td style={cellTd}>{s.name || '—'}</td>
+                            <td style={{ ...cellTd, textAlign: 'center' }}>{skill1}</td>
+                            <td style={{ ...cellTd, textAlign: 'center' }}>{skill2}</td>
+                            <td style={{ ...cellTd, textAlign: 'center' }}>{att1}</td>
+                            <td style={{ ...cellTd, textAlign: 'center' }}>{att2}</td>
+                            <td style={{ ...cellTd, textAlign: 'center', fontWeight: 700 }}>{total}</td>
+                            <td style={{ ...cellTd, textAlign: 'center' }}>{co1}</td>
+                            <td style={{ ...cellTd, textAlign: 'center' }}>{co1 === '' ? '' : <span className="obe-pct-badge">{pct(co1 as number, MAX_CO)}</span>}</td>
+                            <td style={{ ...cellTd, textAlign: 'center' }}>{co2}</td>
+                            <td style={{ ...cellTd, textAlign: 'center' }}>{co2 === '' ? '' : <span className="obe-pct-badge">{pct(co2 as number, MAX_CO)}</span>}</td>
+                            {visibleBtlIndices.map((n) => {
+                              const idx = n - 1;
+                              const mark = btlMarksByIndex[idx];
+                              const max = btlMaxByIndex[idx] ?? 0;
+                              return (
+                                <React.Fragment key={`pv_btl_cells_${s.id}_${n}`}>
+                                  <td style={{ ...cellTd, textAlign: 'center' }}>{mark}</td>
+                                  <td style={{ ...cellTd, textAlign: 'center' }}>{mark === '' ? '' : <span className="obe-pct-badge">{pct(Number(mark), max)}</span>}</td>
+                                </React.Fragment>
+                              );
+                            })}
+                          </tr>
+                        );
+                      })
+                    ) : (
+                      Object.keys((publishedViewSnapshot as any) || {}).map((k, i) => {
+                        const v = (publishedViewSnapshot as any)[k] || {};
+                        const skill1 = typeof v.skill1 === 'number' ? clamp(Number(v.skill1), 1, MAX_PART) : toNumOrEmpty(v.skill1);
+                        const skill2 = typeof v.skill2 === 'number' ? clamp(Number(v.skill2), 1, MAX_PART) : toNumOrEmpty(v.skill2);
+                        const att1 = typeof v.att1 === 'number' ? clamp(Number(v.att1), 1, MAX_PART) : toNumOrEmpty(v.att1);
+                        const att2 = typeof v.att2 === 'number' ? clamp(Number(v.att2), 1, MAX_PART) : toNumOrEmpty(v.att2);
+
+                        const total = skill1 !== '' && skill2 !== '' && att1 !== '' && att2 !== '' ? clamp((skill1 as number) + (skill2 as number) + (att1 as number) + (att2 as number), 0, MAX_TOTAL) : '';
+                        const co1 = skill1 !== '' && att1 !== '' ? clamp((skill1 as number) + (att1 as number), 0, MAX_CO) : '';
+                        const co2 = skill2 !== '' && att2 !== '' ? clamp((skill2 as number) + (att2 as number), 0, MAX_CO) : '';
+
+                        const btlMaxByIndex = [0, 0, 0, 0, 0, 0];
+                        for (const p of parts) {
+                          const bv = (viewPartBtl as any)[p.key];
+                          if (bv === 1 || bv === 2 || bv === 3 || bv === 4 || bv === 5 || bv === 6) {
+                            btlMaxByIndex[bv - 1] += p.max;
+                          }
+                        }
+                        const visibleIndicesZeroBased = visibleBtlIndices.map((n) => n - 1);
+                        const btlShare = typeof total === 'number' && visibleIndicesZeroBased.length ? round1((total as number) / visibleIndicesZeroBased.length) : '';
+                        const btlMarksByIndex = btlMaxByIndex.map((max, idx) => {
+                          if (btlShare === '') return '';
+                          if (!visibleIndicesZeroBased.includes(idx)) return '';
+                          if (max > 0) return clamp(btlShare as number, 0, max);
+                          return round1(btlShare as number);
+                        });
+
+                        return (
+                          <tr key={`pv_${k}`}>
+                            <td style={{ ...cellTd, textAlign: 'center', width: 42, minWidth: 42, paddingLeft: 2, paddingRight: 2 }}>{i + 1}</td>
+                            <td style={cellTd}>{shortenRegisterNo(String(v.reg_no ?? k))}</td>
+                            <td style={cellTd}>{v.name || '—'}</td>
+                            <td style={{ ...cellTd, textAlign: 'center' }}>{skill1}</td>
+                            <td style={{ ...cellTd, textAlign: 'center' }}>{skill2}</td>
+                            <td style={{ ...cellTd, textAlign: 'center' }}>{att1}</td>
+                            <td style={{ ...cellTd, textAlign: 'center' }}>{att2}</td>
+                            <td style={{ ...cellTd, textAlign: 'center', fontWeight: 700 }}>{total}</td>
+                            <td style={{ ...cellTd, textAlign: 'center' }}>{co1}</td>
+                            <td style={{ ...cellTd, textAlign: 'center' }}>{co1 === '' ? '' : <span className="obe-pct-badge">{pct(co1 as number, MAX_CO)}</span>}</td>
+                            <td style={{ ...cellTd, textAlign: 'center' }}>{co2}</td>
+                            <td style={{ ...cellTd, textAlign: 'center' }}>{co2 === '' ? '' : <span className="obe-pct-badge">{pct(co2 as number, MAX_CO)}</span>}</td>
+                            {visibleBtlIndices.map((n) => {
+                              const idx = n - 1;
+                              const mark = btlMarksByIndex[idx];
+                              const max = btlMaxByIndex[idx] ?? 0;
+                              return (
+                                <React.Fragment key={`pv_btl_cells_${k}_${n}`}>
+                                  <td style={{ ...cellTd, textAlign: 'center' }}>{mark}</td>
+                                  <td style={{ ...cellTd, textAlign: 'center' }}>{mark === '' ? '' : <span className="obe-pct-badge">{pct(Number(mark), max)}</span>}</td>
+                                </React.Fragment>
+                              );
+                            })}
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            ) : publishedViewLoading ? null : (
+              <div style={{ color: '#6b7280' }}>No published marks found.</div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
+              <button className="obe-btn" onClick={() => setViewMarksModalOpen(false)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {publishedEditModalOpen ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 60 }}
+          onClick={() => {
+            if (editRequestBusy) return;
+            setPublishedEditModalOpen(false);
+          }}
+        >
+          <div style={{ width: 'min(560px, 96vw)', background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: 14 }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+              <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>Edit Request</div>
+              <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>{assessmentLabel} • {String(subjectId || '')}</div>
+            </div>
+
+            <div style={{ fontSize: 13, color: '#374151', marginBottom: 10, lineHeight: 1.35 }}>
+              This will send an edit request to IQAC for published marks. Once approved, the entry will open for editing until the approval expires.
+            </div>
+
+            <textarea
+              value={editRequestReason}
+              onChange={(e) => setEditRequestReason(e.target.value)}
+              placeholder="Reason (optional)"
+              rows={4}
+              style={{ width: '100%', padding: 10, borderRadius: 10, border: '1px solid #e5e7eb', resize: 'vertical' }}
+            />
+
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 12 }}>
+              <button className="obe-btn" disabled={editRequestBusy} onClick={() => setPublishedEditModalOpen(false)}>
+                Cancel
+              </button>
+              <button className="obe-btn obe-btn-success" disabled={editRequestBusy || !subjectId} onClick={requestMarkEntryEdit}>
+                {editRequestBusy ? 'Requesting…' : 'Send Request'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {key && (
         <div style={{ marginTop: 10, fontSize: 12, color: '#6b7280' }}>

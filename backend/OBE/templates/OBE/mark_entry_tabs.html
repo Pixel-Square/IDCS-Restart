@@ -12,6 +12,7 @@
     .tab:hover { color: #0f172a; background: #f1f5f9; }
     .tab.active { color: #1d4ed8; border-bottom: 2px solid #2563eb; border-radius: 0; padding-bottom: 6px; }
     .card { border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; background: white; }
+    .card-header { position: sticky; top: 18px; background: white; z-index: 20; padding-bottom: 6px; margin-bottom: 6px; }
     .btn { display: inline-block; padding: 8px 12px; border-radius: 8px; border: 1px solid #cbd5e1; background: #0ea5e9; color: white; text-decoration: none; cursor: pointer; }
     .btn:hover { filter: brightness(0.97); }
     table { width: 100%; border-collapse: collapse; }
@@ -59,22 +60,49 @@
     </div>
   {% elif tab == 'ssa1' %}
     <div class="card">
-      <h4 style="margin: 0 0 8px;">SSA1</h4>
-      <div class="muted" style="margin-bottom: 12px;">Students filtered by subject department / year / section</div>
+      <div class="card-header" style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:6px;">
+        <div>
+          <h4 style="margin: 0 0 8px;">SSA1</h4>
+          <div class="muted" style="margin-bottom: 0;">Students filtered by subject department / year / section</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button id="save-draft-btn" class="btn" style="background:#10b981;border-color:transparent;">Save Draft</button>
+          <button id="refresh-btn" class="btn" style="background:#fff;color:#0f172a;border:1px solid #cbd5e1;">Refresh</button>
+          <button id="publish-btn" class="btn" style="background:#0369a1;">Publish</button>
+        </div>
+      </div>
       {% include 'OBE/partials/students_table.html' %}
     </div>
   {% elif tab == 'formative1' %}
     <div class="card">
-      <h4 style="margin: 0 0 8px;">Formative 1</h4>
-      <div class="muted" style="margin-bottom: 12px;">Mark entry UI (placeholder)</div>
+      <div class="card-header" style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:6px;">
+        <div>
+          <h4 style="margin: 0 0 8px;">Formative 1</h4>
+          <div class="muted" style="margin-bottom: 0;">Mark entry UI (placeholder)</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button id="save-draft-btn" class="btn" style="background:#10b981;border-color:transparent;">Save Draft</button>
+          <button id="refresh-btn" class="btn" style="background:#fff;color:#0f172a;border:1px solid #cbd5e1;">Refresh</button>
+          <button id="publish-btn" class="btn" style="background:#0369a1;">Publish</button>
+        </div>
+      </div>
       {% include 'OBE/partials/students_table.html' %}
     </div>
   {% elif tab == 'cia1' %}
     <div class="card">
-      <h4 style="margin: 0 0 8px;">CIA1</h4>
-      <div class="muted" style="margin-bottom: 12px;">Students filtered by subject department / year / section</div>
+      <div class="card-header" style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:6px;">
+        <div>
+          <h4 style="margin: 0 0 8px;">CIA1</h4>
+          <div class="muted" style="margin-bottom: 0;">Students filtered by subject department / year / section</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button id="save-draft-btn" type="button" class="btn" style="background:#10b981;border-color:transparent;">Save Draft</button>
+          <button id="refresh-btn" type="button" class="btn" style="background:#fff;color:#0f172a;border:1px solid #cbd5e1;">Refresh</button>
+          <button id="publish-btn" type="button" class="btn" style="background:#0369a1;">Publish</button>
+        </div>
+      </div>
 
-      <form method="post" action="?tab=cia1">
+      <form id="cia1-form" method="post" action="?tab=cia1">
         {% csrf_token %}
         <table>
           <thead>
@@ -116,18 +144,48 @@
     </div>
   {% elif tab == 'ssa2' %}
     <div class="card">
-      <h4 style="margin: 0 0 8px;">SSA2</h4>
-      <div class="muted">SSA2 mark entry UI (placeholder)</div>
+      <div class="card-header" style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:6px;">
+        <div>
+          <h4 style="margin: 0 0 8px;">SSA2</h4>
+          <div class="muted" style="margin-bottom: 0;">SSA2 mark entry UI (placeholder)</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button id="save-draft-btn" class="btn" style="background:#10b981;border-color:transparent;">Save Draft</button>
+          <button id="refresh-btn" class="btn" style="background:#fff;color:#0f172a;border:1px solid #cbd5e1;">Refresh</button>
+          <button id="publish-btn" class="btn" style="background:#0369a1;">Publish</button>
+        </div>
+      </div>
+      <div style="margin-top:6px">{% include 'OBE/partials/students_table.html' %}</div>
     </div>
   {% elif tab == 'cia2' %}
     <div class="card">
-      <h4 style="margin: 0 0 8px;">CIA2</h4>
-      <div class="muted">CIA2 mark entry UI (placeholder)</div>
+      <div class="card-header" style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:6px;">
+        <div>
+          <h4 style="margin: 0 0 8px;">CIA2</h4>
+          <div class="muted" style="margin-bottom: 0;">CIA2 mark entry UI (placeholder)</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button id="save-draft-btn" class="btn" style="background:#10b981;border-color:transparent;">Save Draft</button>
+          <button id="refresh-btn" class="btn" style="background:#fff;color:#0f172a;border:1px solid #cbd5e1;">Refresh</button>
+          <button id="publish-btn" class="btn" style="background:#0369a1;">Publish</button>
+        </div>
+      </div>
+      <div style="margin-top:6px">{% include 'OBE/partials/students_table.html' %}</div>
     </div>
   {% elif tab == 'model' %}
     <div class="card">
-      <h4 style="margin: 0 0 8px;">MODEL</h4>
-      <div class="muted">Model Exam mark entry UI (placeholder)</div>
+      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:6px;">
+        <div>
+          <h4 style="margin: 0 0 8px;">MODEL</h4>
+          <div class="muted" style="margin-bottom: 0;">Model Exam mark entry UI (placeholder)</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button id="save-draft-btn" class="btn" style="background:#10b981;border-color:transparent;">Save Draft</button>
+          <button id="refresh-btn" class="btn" style="background:#fff;color:#0f172a;border:1px solid #cbd5e1;">Refresh</button>
+          <button id="publish-btn" class="btn" style="background:#0369a1;">Publish</button>
+        </div>
+      </div>
+      <div style="margin-top:6px">{% include 'OBE/partials/students_table.html' %}</div>
     </div>
   {% elif tab == 'lca' %}
     <div class="card">
@@ -154,3 +212,98 @@
   {% endif %}
 </body>
 </html>
+
+<script>
+// Minimal JS to handle publish/save-draft/refresh for SSA1/CIA1/Formative1 where applicable.
+function getCookie(name) {
+  const v = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+  return v ? v.pop() : '';
+}
+
+function qsAll(sel) { return Array.from(document.querySelectorAll(sel)); }
+
+async function checkPublishAllowed(assessment) {
+  try {
+    const res = await fetch(`/api/obe/publish-window/${encodeURIComponent(assessment)}/${encodeURIComponent('{{ subject.code }}')}`);
+    if (!res.ok) return false;
+    const j = await res.json();
+    return Boolean(j.publish_allowed);
+  } catch (e) {
+    return false;
+  }
+}
+
+function collectMarksRows() {
+  const rows = [];
+  qsAll('input[name^="mark_"]').forEach(inp => {
+    const m = inp.name.match(/^mark_(\d+)$/);
+    if (!m) return;
+    const sid = parseInt(m[1], 10);
+    const val = inp.value === '' ? null : inp.value;
+    rows.push({ studentId: sid, total: val });
+  });
+  return rows;
+}
+
+async function publishAssessment(assessment) {
+  const btn = document.getElementById('publish-btn');
+  if (!btn) return;
+  btn.disabled = true;
+  const rows = collectMarksRows();
+  const payload = { data: { rows } };
+  try {
+    // Map assessment to the correct publish endpoint. CIA endpoints use "-publish-sheet".
+    const endpointBase = (String(assessment || '').toLowerCase().startsWith('cia')) ? `${assessment}-publish-sheet` : `${assessment}-publish`;
+    const url = `/api/obe/${encodeURIComponent(endpointBase)}/${encodeURIComponent('{{ subject.code }}')}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) {
+      window.location = window.location.pathname + '?tab=' + encodeURIComponent(assessment) + '&saved=1';
+      return;
+    }
+    const text = await res.text();
+    alert('Publish failed: ' + (text || res.statusText));
+  } catch (e) {
+    alert('Publish error: ' + e);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function saveDraft(assessment) {
+  const btn = document.getElementById('save-draft-btn');
+  if (!btn) return;
+  btn.disabled = true;
+  const rows = collectMarksRows();
+  const data = { rows };
+  fetch(`/api/obe/draft/${encodeURIComponent(assessment)}/${encodeURIComponent('{{ subject.code }}')}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+    body: JSON.stringify({ data }),
+  }).then(r => r.ok ? window.location.reload() : r.text().then(t => alert('Save draft failed: ' + t))).catch(e => alert('Save draft error: ' + e)).finally(() => { btn.disabled = false; });
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  const pubBtn = document.getElementById('publish-btn');
+  const saveBtn = document.getElementById('save-draft-btn');
+  const refBtn = document.getElementById('refresh-btn');
+  if (!pubBtn && !saveBtn && !refBtn) return;
+  const assessment = (new URLSearchParams(window.location.search)).get('tab') || '{{ tab }}';
+  if (refBtn) refBtn.addEventListener('click', () => window.location.reload());
+  if (saveBtn) saveBtn.addEventListener('click', () => saveDraft(assessment));
+  if (pubBtn) {
+    const allowed = await checkPublishAllowed(assessment);
+    if (!allowed) {
+      pubBtn.disabled = true;
+      pubBtn.title = 'Publishing is not allowed for you at this time.';
+    }
+    pubBtn.addEventListener('click', () => {
+      if (!confirm('Publish marks now? This action will lock the marks.')) return;
+      publishAssessment(assessment);
+    });
+  }
+});
+</script>

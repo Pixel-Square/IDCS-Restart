@@ -1,50 +1,3 @@
-from django.db import models
-
-class ClassTypeWeights(models.Model):
-    CLASS_TYPE_CHOICES = [
-        ('THEORY', 'Theory'),
-        ('TCPR', 'Theory + Practical'),
-        ('TCPL', 'Theory + Practical + Lab'),
-        ('LAB', 'Lab'),
-        # Add more as needed
-    ]
-
-    class_type = models.CharField(max_length=16, choices=CLASS_TYPE_CHOICES, unique=True)
-    ssa1 = models.DecimalField(max_digits=5, decimal_places=2, default=1.5)
-    cia1 = models.DecimalField(max_digits=5, decimal_places=2, default=3)
-    formative1 = models.DecimalField(max_digits=5, decimal_places=2, default=2.5)
-    # INTERNAL MARK weightage row (13 numbers) configured by IQAC per class type.
-    # Stored as JSON so the frontend mapping schema can evolve.
-    internal_mark_weights = models.JSONField(default=list, blank=True)
-    updated_by = models.IntegerField(null=True, blank=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        verbose_name = 'Class Type Weights'
-        verbose_name_plural = 'Class Type Weights'
-        db_table = 'obe_class_type_weights'
-
-    def __str__(self):
-        return f"{self.class_type} Weights"
-
-
-class InternalMarkMapping(models.Model):
-    """IQAC-controlled internal mark mapping per subject.
-
-    Stored as JSON so the frontend can evolve the mapping schema
-    (cycle weightages, ME split, etc.) without frequent migrations.
-    """
-
-    subject = models.OneToOneField('academics.Subject', on_delete=models.CASCADE, related_name='internal_mark_mapping')
-    mapping = models.JSONField(default=dict)
-    updated_by = models.IntegerField(null=True, blank=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        db_table = 'obe_internal_mark_mapping'
-
-    def __str__(self):
-        return f"Internal Mark Mapping - {getattr(self.subject, 'code', '')}"
 import uuid
 from django.db import models
 from django.db.models import UniqueConstraint, Q
@@ -275,14 +228,18 @@ class LabPublishedSheet(models.Model):
 
 
 class ObeDueSchedule(models.Model):
-    """Assessment due schedule per Academic Year + Subject + Assessment.
+    """Assessment due schedule per Semester + Subject + Assessment.
 
     Used to time-gate publishing in faculty mark entry screens.
     """
 
     ASSESSMENT_CHOICES = AssessmentDraft.ASSESSMENT_CHOICES
 
-    academic_year = models.ForeignKey('academics.AcademicYear', on_delete=models.CASCADE, related_name='obe_due_schedules')
+    # NOTE: Semester is the canonical grouping (derived from Section.semester).
+    semester = models.ForeignKey('academics.Semester', on_delete=models.PROTECT, null=True, blank=True, related_name='obe_due_schedules')
+
+    # Backward compatibility: older rows were stored against AcademicYear.
+    academic_year = models.ForeignKey('academics.AcademicYear', on_delete=models.SET_NULL, null=True, blank=True, related_name='obe_due_schedules')
     subject = models.ForeignKey('academics.Subject', on_delete=models.SET_NULL, null=True, blank=True, related_name='obe_due_schedules')
     subject_code = models.CharField(max_length=64, db_index=True)
     subject_name = models.CharField(max_length=255, blank=True, default='')
@@ -297,9 +254,10 @@ class ObeDueSchedule(models.Model):
 
     class Meta:
         constraints = [
-            UniqueConstraint(fields=['academic_year', 'subject_code', 'assessment'], name='unique_obe_due_schedule'),
+            UniqueConstraint(fields=['semester', 'subject_code', 'assessment'], name='unique_obe_due_schedule_semester'),
         ]
         indexes = [
+            models.Index(fields=['semester', 'assessment']),
             models.Index(fields=['academic_year', 'assessment']),
             models.Index(fields=['subject_code', 'assessment']),
             models.Index(fields=['due_at']),
@@ -427,14 +385,17 @@ class ObeEditRequest(models.Model):
 
 
 class ObeGlobalPublishControl(models.Model):
-    """Optional global override per Academic Year + Assessment.
+    """Optional global override per Semester + Assessment.
 
     When present, this takes precedence over due schedules and publish requests.
     """
 
     ASSESSMENT_CHOICES = AssessmentDraft.ASSESSMENT_CHOICES
 
-    academic_year = models.ForeignKey('academics.AcademicYear', on_delete=models.CASCADE, related_name='obe_global_publish_controls')
+    semester = models.ForeignKey('academics.Semester', on_delete=models.PROTECT, null=True, blank=True, related_name='obe_global_publish_controls')
+
+    # Backward compatibility
+    academic_year = models.ForeignKey('academics.AcademicYear', on_delete=models.SET_NULL, null=True, blank=True, related_name='obe_global_publish_controls')
     assessment = models.CharField(max_length=20, choices=ASSESSMENT_CHOICES)
     is_open = models.BooleanField(default=True)
 
@@ -443,15 +404,16 @@ class ObeGlobalPublishControl(models.Model):
 
     class Meta:
         constraints = [
-            UniqueConstraint(fields=['academic_year', 'assessment'], name='unique_obe_global_publish_control'),
+            UniqueConstraint(fields=['semester', 'assessment'], name='unique_obe_global_publish_control_semester'),
         ]
         indexes = [
+            models.Index(fields=['semester', 'assessment']),
             models.Index(fields=['academic_year', 'assessment']),
             models.Index(fields=['assessment', 'updated_at']),
         ]
 
     def __str__(self) -> str:
-        return f"global:{self.academic_year_id}:{self.assessment} open={self.is_open}"
+        return f"global:sem={self.semester_id or '-'} ay={self.academic_year_id or '-'}:{self.assessment} open={self.is_open}"
 
 
 class ObeMarkTableLock(models.Model):
@@ -575,5 +537,22 @@ class ObeMarkTableLock(models.Model):
             # This ensures time-bound approvals automatically re-lock when they expire.
             # Pre-publish flows may keep this False, but after publish we default to locked.
             self.mark_manager_locked = bool(self.is_published) or bool(self.mark_manager_locked)
+
+
+class ObeQpPatternConfig(models.Model):
+    class_type = models.CharField(max_length=50)
+    question_paper_type = models.CharField(max_length=50, null=True, blank=True)
+    exam = models.CharField(max_length=50)
+    pattern = models.JSONField(default=list)
+    updated_by = models.IntegerField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            UniqueConstraint(
+                fields=['class_type', 'question_paper_type', 'exam'],
+                name='unique_qp_pattern_per_class_type_qp_exam'
+            )
+        ]
 
 

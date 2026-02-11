@@ -220,6 +220,12 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                         <span className="dsb-label">Dashboard</span>
                       </Link>
                     </li>
+                    <li className={`dsb-item ${loc.pathname.startsWith('/iqac/academic-controller') && new URLSearchParams(loc.search).get('tab') === 'qp' ? 'active' : ''}`}>
+                      <Link to={'/iqac/academic-controller?tab=qp'} className="dsb-link dsb-sub-link">
+                        <span className="dsb-icon"><Grid /></span>
+                        <span className="dsb-label">QP</span>
+                      </Link>
+                    </li>
                     <li className={`dsb-item ${loc.pathname.startsWith('/iqac/academic-controller') && new URLSearchParams(loc.search).get('tab') === 'due_dates' ? 'active' : ''}`}>
                       <Link to={'/iqac/academic-controller?tab=due_dates'} className="dsb-link dsb-sub-link">
                         <span className="dsb-icon"><CalendarClock /></span>

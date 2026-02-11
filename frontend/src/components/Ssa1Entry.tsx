@@ -191,7 +191,7 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId, label, asse
   const [rosterLoading, setRosterLoading] = useState(false);
   const [rosterError, setRosterError] = useState<string | null>(null);
 
-  const [selectedBtls, setSelectedBtls] = useState<number[]>([]);
+  const [selectedBtls, setSelectedBtls] = useState<number[]>(() => (isReview ? [3, 4] : []));
 
   const [savingDraft, setSavingDraft] = useState(false);
   const [publishing, setPublishing] = useState(false);
@@ -241,7 +241,7 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId, label, asse
   }, [subjectId]);
 
   const isPublished = Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published) || Boolean(publishedViewSnapshot);
-  const markManagerLocked = Boolean(sheet.markManagerLocked);
+  const markManagerLocked = isReview ? true : Boolean(sheet.markManagerLocked);
 
   const markEntryApprovalUntil = markEntryEditWindow?.approval_until ? String(markEntryEditWindow.approval_until) : null;
   const markManagerApprovalUntil = markManagerEditWindow?.approval_until ? String(markManagerEditWindow.approval_until) : null;
@@ -250,6 +250,7 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId, label, asse
     Boolean(markEntryApprovalUntil) &&
     markEntryApprovalUntil !== (publishConsumedApprovals?.markEntryApprovalUntil ?? null);
   const markManagerApprovedFresh =
+    !isReview &&
     Boolean(markManagerEditWindow?.allowed_by_approval) &&
     Boolean(markManagerApprovalUntil) &&
     markManagerApprovalUntil !== (publishConsumedApprovals?.markManagerApprovalUntil ?? null);
@@ -262,7 +263,9 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId, label, asse
 
   // Show the table only after Mark Manager has been confirmed (snapshot saved).
   // When published and locked, the table remains visible but strictly read-only.
-  const showNameList = Boolean(sheet.markManagerSnapshot != null);
+  const showNameList = isReview ? true : Boolean(sheet.markManagerSnapshot != null);
+
+  const showPublishedLockPanel = (isReview ? isPublished : Boolean(publishedAt)) && publishedEditLocked;
 
   const visibleBtlIndices = useMemo(() => {
     const set = new Set(selectedBtls);
@@ -381,6 +384,7 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId, label, asse
 
   // Mark Manager workflow sync: keep local sheet lock state in sync with server lock/approval
   useEffect(() => {
+    if (isReview) return;
     if (!subjectId) return;
 
     const isPublished = Boolean(markLock?.exists && markLock?.is_published) || Boolean(publishedAt);
@@ -866,10 +870,20 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId, label, asse
         </div>
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <button onClick={saveDraftToDb} className="obe-btn obe-btn-success" disabled={savingDraft || tableBlocked} title={tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : undefined}>
+          <button
+            onClick={saveDraftToDb}
+            className="obe-btn obe-btn-success"
+            disabled={savingDraft || tableBlocked}
+            title={!isReview && tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : undefined}
+          >
             {savingDraft ? 'Saving…' : 'Save Draft'}
           </button>
-          <button onClick={publish} className="obe-btn obe-btn-primary" disabled={publishing || !publishAllowed || tableBlocked} title={tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : undefined}>
+          <button
+            onClick={publish}
+            className="obe-btn obe-btn-primary"
+            disabled={publishing || !publishAllowed || tableBlocked}
+            title={!isReview && tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : undefined}
+          >
             {publishing ? 'Publishing…' : 'Publish'}
           </button>
         </div>
@@ -926,46 +940,145 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId, label, asse
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
               <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>View Published {displayLabel}</div>
               <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>{displayLabel}</div>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setViewMarksModalOpen(false);
+                }}
+                aria-label="Close"
+                style={{ marginLeft: 8, border: 'none', background: 'transparent', fontSize: 20, lineHeight: 1, cursor: 'pointer' }}
+              >
+                ×
+              </button>
             </div>
 
             {publishedViewLoading ? <div style={{ color: '#6b7280', marginBottom: 8 }}>Loading published marks…</div> : null}
             {publishedViewError ? <div style={{ color: '#b91c1c', marginBottom: 8 }}>{publishedViewError}</div> : null}
 
             <div style={{ overflowX: 'auto', border: '1px solid #e5e7eb', borderRadius: 12 }}>
-              <table style={{ width: '100%', minWidth: 720, borderCollapse: 'collapse' }}>
+              <table style={{ borderCollapse: 'collapse', minWidth: 920 }}>
                 <thead>
                   <tr>
-                    <th style={cellTh}>S.No</th>
-                    <th style={cellTh}>Register No.</th>
-                    <th style={cellTh}>Name</th>
-                    <th style={cellTh}>{showTotalColumn ? 'Total' : displayLabel}</th>
-                    <th style={cellTh}>CO-1%</th>
-                    <th style={cellTh}>CO-2%</th>
+                    <th style={cellTh} colSpan={totalTableCols}>
+                      {sheet.termLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {sheet.batchLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {displayLabel}
+                    </th>
+                  </tr>
+                  <tr>
+                    <th style={{ ...cellTh, width: 42, minWidth: 42 }} rowSpan={4}>S.No</th>
+                    <th style={cellTh} rowSpan={4}>Register No.</th>
+                    <th style={cellTh} rowSpan={3}>Name of the Students</th>
+
+                    <th style={cellTh}>{displayLabel}</th>
+                    {showTotalColumn ? <th style={cellTh}>Total</th> : null}
+
+                    <th style={cellTh} colSpan={4}>CO ATTAINMENT</th>
+                    {visibleBtlIndices.length ? <th style={cellTh} colSpan={visibleBtlIndices.length * 2}>BTL ATTAINMENT</th> : null}
+                  </tr>
+                  <tr>
+                    <th style={cellTh}>
+                      <div style={{ fontWeight: 800 }}>COs</div>
+                      <div style={{ fontSize: 12 }}>1,2</div>
+                    </th>
+                    {showTotalColumn ? <th style={cellTh} /> : null}
+
+                    <th style={cellTh} colSpan={2}>CO-1</th>
+                    <th style={cellTh} colSpan={2}>CO-2</th>
+
                     {visibleBtlIndices.map((n) => (
-                      <React.Fragment key={`v_btl_${n}`}>
-                        <th style={cellTh}>BTL{n}</th>
-                        <th style={cellTh}>BTL{n}%</th>
+                      <th key={`btl-head-${n}`} style={cellTh} colSpan={2}>
+                        BTL-{n}
+                      </th>
+                    ))}
+                  </tr>
+                  <tr>
+                    <th style={cellTh}>
+                      <div style={{ fontWeight: 800 }}>BTL</div>
+                      <div style={{ fontSize: 12 }}>{visibleBtlIndices.length ? visibleBtlIndices.join(',') : '-'}</div>
+                    </th>
+                    {showTotalColumn ? <th style={cellTh} /> : null}
+
+                    {Array.from({ length: 2 + visibleBtlIndices.length }).flatMap((_, i) => (
+                      <React.Fragment key={i}>
+                        <th style={cellTh}>Mark</th>
+                        <th style={cellTh}>%</th>
                       </React.Fragment>
                     ))}
                   </tr>
+                  <tr>
+                    <th style={cellTh}>Name / Max Marks</th>
+                    <th style={cellTh}>{MAX_ASMT1}</th>
+                    {showTotalColumn ? <th style={cellTh}>{MAX_ASMT1}</th> : null}
+                    <th style={cellTh}>{CO_MAX.co1}</th>
+                    <th style={cellTh}>%</th>
+                    <th style={cellTh}>{CO_MAX.co2}</th>
+                    <th style={cellTh}>%</th>
+                    {visibleBtlIndices.flatMap((n) => [
+                      <th key={`btl-max-${n}`} style={cellTh}>
+                        {isReview
+                          ? String(BTL_MAX_WHEN_VISIBLE)
+                          : String(Math.max(Number((BTL_MAX as any)[`btl${n}`] ?? 0) || 0, DEFAULT_BTL_MAX_WHEN_VISIBLE))}
+                      </th>,
+                      <th key={`btl-pct-${n}`} style={cellTh}>%</th>,
+                    ])}
+                  </tr>
                 </thead>
                 <tbody>
-                  {sheet.rows.map((r, i) => (
-                    <tr key={r.studentId}>
-                      <td style={cellTd}>{i + 1}</td>
-                      <td style={cellTd}>{shortenRegisterNo(r.registerNo)}</td>
-                      <td style={cellTd}>{r.name}</td>
-                      <td style={{ ...cellTd, textAlign: 'right' }}>{typeof r.total === 'number' ? round1(r.total) : ''}</td>
-                      <td style={{ ...cellTd, textAlign: 'right' }}>{''}</td>
-                      <td style={{ ...cellTd, textAlign: 'right' }}>{''}</td>
-                      {visibleBtlIndices.map((n) => (
-                        <React.Fragment key={`pv_${r.studentId}_${n}`}>
-                          <td style={{ ...cellTd, textAlign: 'right' }}>{''}</td>
-                          <td style={{ ...cellTd, textAlign: 'right' }}>{''}</td>
-                        </React.Fragment>
-                      ))}
+                  {sheet.rows.length === 0 ? (
+                    <tr>
+                      <td colSpan={totalTableCols} style={{ padding: 14, color: '#6b7280', fontSize: 13 }}>
+                        No students loaded yet. Choose a Teaching Assignment above, then click “Load/Refresh Roster”.
+                      </td>
                     </tr>
-                  ))}
+                  ) : (
+                    sheet.rows.map((r, idx) => {
+                      const raw = publishedViewSnapshot?.marks?.[String(r.studentId)] ?? null;
+                      const numericTotal = raw == null || raw === '' ? null : clamp(Number(raw), 0, MAX_ASMT1);
+
+                      const coSplitCount = 2;
+                      const coShare = numericTotal == null ? null : round1(numericTotal / coSplitCount);
+                      const co1 = coShare == null ? null : clamp(coShare, 0, CO_MAX.co1);
+                      const co2 = coShare == null ? null : clamp(coShare, 0, CO_MAX.co2);
+
+                      const visibleIndicesZeroBased = visibleBtlIndices.map((n) => n - 1);
+                      const rawBtlMaxByIndex = [BTL_MAX.btl1, BTL_MAX.btl2, BTL_MAX.btl3, BTL_MAX.btl4, BTL_MAX.btl5, BTL_MAX.btl6];
+                      const btlMaxByIndex = rawBtlMaxByIndex.map((rawMax, idx) => {
+                        if (!visibleIndicesZeroBased.includes(idx)) return rawMax;
+                        return isReview ? BTL_MAX_WHEN_VISIBLE : rawMax > 0 ? rawMax : DEFAULT_BTL_MAX_WHEN_VISIBLE;
+                      });
+                      const btlShare = numericTotal == null ? null : visibleIndicesZeroBased.length ? round1(numericTotal / visibleIndicesZeroBased.length) : 0;
+                      const btlMarksByIndex = btlMaxByIndex.map((max, i) => {
+                        if (numericTotal == null) return null;
+                        if (!visibleIndicesZeroBased.includes(i)) return null;
+                        if (max > 0) return clamp(btlShare as number, 0, max);
+                        return round1(btlShare as number);
+                      });
+
+                      return (
+                        <tr key={String(r.studentId || idx)}>
+                          <td style={{ ...cellTd, textAlign: 'center', width: 42, minWidth: 42, paddingLeft: 2, paddingRight: 2 }}>{idx + 1}</td>
+                          <td style={cellTd}>{shortenRegisterNo(r.registerNo)}</td>
+                          <td style={cellTd}>{r.name}</td>
+                          <td style={{ ...cellTd, width: 90, background: '#fff7ed', textAlign: 'right' }}>{numericTotal == null ? '' : round1(numericTotal)}</td>
+                          {showTotalColumn ? <td style={{ ...cellTd, textAlign: 'right' }}>{numericTotal == null ? '' : round1(numericTotal)}</td> : null}
+                          <td style={{ ...cellTd, textAlign: 'right' }}>{co1 ?? ''}</td>
+                          <td style={{ ...cellTd, textAlign: 'right' }}>{pct(co1 as any, CO_MAX.co1)}</td>
+                          <td style={{ ...cellTd, textAlign: 'right' }}>{co2 ?? ''}</td>
+                          <td style={{ ...cellTd, textAlign: 'right' }}>{pct(co2 as any, CO_MAX.co2)}</td>
+                          {visibleBtlIndices.map((btl) => {
+                            const idx0 = btl - 1;
+                            const mark = btlMarksByIndex[idx0];
+                            const max = btlMaxByIndex[idx0];
+                            return (
+                              <React.Fragment key={btl}>
+                                <td style={{ ...cellTd, textAlign: 'right' }}>{mark ?? ''}</td>
+                                <td style={{ ...cellTd, textAlign: 'right' }}>{pct(mark as any, max)}</td>
+                              </React.Fragment>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })
+                  )}
                 </tbody>
               </table>
             </div>
@@ -1003,8 +1116,7 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId, label, asse
         </div>
       </div>
 
-      {/* BTL selection moved into Mark Manager modal */}
-
+      {!isReview ? (
       <div style={{ marginTop: 12, ...cardStyle }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ fontWeight: 800 }}>Mark Manager</div>
@@ -1056,6 +1168,7 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId, label, asse
         </div>
         {markManagerError ? <div style={{ marginTop: 8, color: '#991b1b' }}>{markManagerError}</div> : null}
       </div>
+      ) : null}
 
       <div style={{ marginTop: 14 }}>
         {showNameList ? (
@@ -1141,7 +1254,7 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId, label, asse
                   ) : tableBlocked && !publishedEditLocked ? (
                     <tr>
                       <td colSpan={totalTableCols} style={{ padding: 20, textAlign: 'center', color: '#065f46', fontWeight: 900 }}>
-                        Table locked — confirm the Mark Manager to enable student marks
+                        {isReview ? 'Table locked' : 'Table locked — confirm the Mark Manager to enable student marks'}
                       </td>
                     </tr>
                   ) : (
@@ -1288,7 +1401,7 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId, label, asse
         ) : null}
 
         {/* Green overlay when blocked after Publish */}
-        {publishedAt && publishedEditLocked ? (
+        {showPublishedLockPanel ? (
           <div
             style={{
               position: 'absolute',
@@ -1314,7 +1427,7 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId, label, asse
         ) : null}
 
         {/* Floating panel when blocked after Publish */}
-        {publishedAt && publishedEditLocked ? (
+        {showPublishedLockPanel ? (
           <div style={{ position: 'absolute', left: '40%', top: 18, zIndex: 40, width: 360, background: 'rgba(255,255,255,0.98)', border: '1px solid #e5e7eb', padding: 10, borderRadius: 12, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', boxShadow: '0 6px 18px rgba(17,24,39,0.06)' }}>
             <div style={{ textAlign: 'center' }}>
               <div style={{ fontWeight: 900, color: '#065f46' }}>Published</div>
@@ -1329,7 +1442,7 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId, label, asse
       </div>
 
       {/* Mark Manager modal */}
-      {markManagerModal ? (
+      {markManagerModal && !isReview ? (
         <div role="dialog" aria-modal="true" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 9999 }} onClick={() => { if (markManagerBusy) return; setMarkManagerModal(null); }}>
           <div style={{ width: 'min(640px,96vw)', background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: 14 }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
