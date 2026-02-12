@@ -11,6 +11,10 @@ type AssignedSubject = {
   section_name?: string | null
   batch?: string | null
   semester?: number | null
+  curriculum_row_id?: number | null
+  section_id?: number | null
+  elective_subject_id?: number | null
+  curriculum_row?: any
 }
 
 

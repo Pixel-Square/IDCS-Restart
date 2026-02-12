@@ -920,6 +920,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         studentId,
         absent: false,
         absentKind: undefined,
+        reg_no: '',
         q: Object.fromEntries(questions.map((q) => [q.key, ''])),
       };
 
@@ -945,6 +946,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         studentId,
         absent: true,
         absentKind: 'AL' as AbsenceKind,
+        reg_no: '',
         q: Object.fromEntries(questions.map((q) => [q.key, ''])),
       };
       return {
@@ -1016,6 +1018,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         studentId,
         absent: false,
         absentKind: undefined,
+        reg_no: '',
         q: Object.fromEntries(questions.map((q) => [q.key, ''])),
       };
 
@@ -1739,6 +1742,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
               {visibleStudents.map((s, i) => {
                 const row = sheet.rowsByStudentId[String(s.id)] || {
                   studentId: s.id,
+                  reg_no: (s as any).reg_no ?? '',
                   absent: false,
                   absentKind: undefined,
                   q: Object.fromEntries(questions.map((q) => [q.key, ''])),

@@ -74,6 +74,7 @@ type Props = {
   label: string;
   coA: number;
   coB?: number | null;
+  skipMarkManager?: boolean;
 
   // Customization options for other practical-style entries.
   itemLabel?: string; // singular

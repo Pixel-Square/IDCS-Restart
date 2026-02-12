@@ -619,7 +619,6 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
           ciaCo2: b == null ? null : clamp(b, 0, CO_MAX),
           f1Co1: null,
           f1Co2: null,
-          // @ts-expect-error - attach a private helper
           __labCoMax: CO_MAX,
         } as any);
       }

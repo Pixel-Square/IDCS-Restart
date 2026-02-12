@@ -713,13 +713,13 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
           if (!subjectList.length) throw new Error(`Subject with code ${subjectId} not found`);
           const subj = subjectList[0];
           if (!mounted) return;
-          setSubjectData({ course_code: subj.course_code, course_name: subj.course_name, department: subj.department, year: subj.semester, section: null });
+          setSubjectData({ course_code: subj.course_code, course_name: subj.course_name, department: subj.departments ? subj.departments[0] : undefined, year: subj.semester, section: null });
 
           // Attempt to fetch students by department/year/section if available
           const params = new URLSearchParams({
-            department: String(subj.department ?? ''),
+            department: String(subj.departments ? subj.departments[0] : ''),
             year: String(subj.semester ?? ''),
-            section: String(subj.section ?? ''),
+            section: String(''),
           });
 
           const studentsRes = await fetch(`${API_BASE}/api/academics/students/?${params.toString()}`, {

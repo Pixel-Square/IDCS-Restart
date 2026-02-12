@@ -285,11 +285,11 @@ export default function QuestionImportPage(): JSX.Element {
                         if (img.url) src = img.url;
                         else if (img.base64) src = img.base64.startsWith('data:') ? img.base64 : `data:image/png;base64,${img.base64}`;
                         else if (img.binary && img.binary instanceof Uint8Array) {
-                          const blob = new Blob([img.binary], { type: 'image/png' });
+                          const blob = new Blob([img.binary as any], { type: 'image/png' });
                           src = URL.createObjectURL(blob);
                         }
                       } else if (img instanceof Uint8Array) {
-                        const blob = new Blob([img], { type: 'image/png' });
+                        const blob = new Blob([img as any], { type: 'image/png' });
                         src = URL.createObjectURL(blob);
                       }
                     } catch (e) {

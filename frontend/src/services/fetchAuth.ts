@@ -46,7 +46,7 @@ export async function fetchWithAuth(input: RequestInfo | URL, init: RequestInit 
   
   // Don't set Content-Type for FormData - browser will set it automatically with boundary
   const isFormData = init.body instanceof FormData
-  const headers = Object.assign({}, (init.headers || {}))
+  const headers: any = Object.assign({}, (init.headers || {}))
   if (!isFormData) {
     headers['Content-Type'] = 'application/json'
   }
@@ -72,7 +72,7 @@ export async function fetchWithAuth(input: RequestInfo | URL, init: RequestInit 
   // Try to refresh token and retry the request
   try {
     const newAccess = await refreshToken()
-    const headers2 = Object.assign({}, (init.headers || {}))
+    const headers2: any = Object.assign({}, (init.headers || {}))
     if (!isFormData) {
       headers2['Content-Type'] = 'application/json'
     }

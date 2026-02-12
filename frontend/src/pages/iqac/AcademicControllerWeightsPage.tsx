@@ -209,7 +209,7 @@ export default function AcademicControllerWeightsPage() {
       const keysToSave = Array.from(new Set<string>([...CLASS_TYPES.map((ct) => normalizeClassType(String(ct))), 'THEORY1', 'THEORY2', 'THEORY3']));
 
       for (const k of keysToSave) {
-        const w = weights[k] ?? weights[k.toLowerCase()] ?? weights[k.toUpperCase()] ?? {};
+        const w = (weights[k] ?? weights[k.toLowerCase()] ?? weights[k.toUpperCase()] ?? {}) as any;
         normalized[k] = {
           ssa1: Number(w?.ssa1) || 0,
           cia1: Number(w?.cia1) || 0,

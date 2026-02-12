@@ -3,7 +3,6 @@ import CLASS_TYPES, { normalizeClassType } from '../../constants/classTypes';
 import CurriculumLayout from './CurriculumLayout';
 import { fetchDeptRows, updateDeptRow, approveDeptRow, createElective, fetchElectives } from '../../services/curriculum';
 import fetchWithAuth from '../../services/fetchAuth';
-import { useAppSelector } from '../../hooks';
 import { Edit, Check, X, Save } from 'lucide-react';
 
 export default function DeptList() {

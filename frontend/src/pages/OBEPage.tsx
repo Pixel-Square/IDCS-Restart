@@ -12,6 +12,7 @@ import { fetchMyTeachingAssignments, TeachingAssignmentItem } from '../services/
 
 const PRIMARY_API_BASE = import.meta.env.VITE_API_BASE || 'https://db.zynix.us';
 const FALLBACK_API_BASE = 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
 async function fetchWithFallback(url, options) {
   try {

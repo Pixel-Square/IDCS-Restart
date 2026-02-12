@@ -9,7 +9,7 @@ import CQIPage from './CQIPage';
 import LCAPage from './LCAPage';
 import InternalMarkCoursePage from './InternalMarkCoursePage';
 import { fetchMyTeachingAssignments } from '../services/obe';
-import { fetchDeptRows } from '../services/curriculum';
+import { fetchDeptRows, fetchElectives } from '../services/curriculum';
 import { fetchSpecialCourseEnabledAssessments } from '../services/obe';
 import { normalizeClassType } from '../constants/classTypes';
 
@@ -106,6 +106,22 @@ export default function CourseOBEPage(): JSX.Element {
         if (pick && (pick as any).class_type) {
           const ct = String((pick as any).class_type || '').trim();
           setCourseClassType(ct || null);
+        } else {
+          // If we couldn't find class_type on the curriculum row, check elective subjects
+          try {
+            const electives = await fetchElectives();
+            if (!mounted) return;
+            const match = (Array.isArray(electives) ? electives : (electives.results || [])).find((e: any) => String(e.course_code || '').trim().toUpperCase() === codeU);
+            if (match && match.class_type) {
+              setCourseClassType(String(match.class_type || '').trim() || null);
+              // If elective provides enabled assessments, use them for SPECIAL handling
+              if (Array.isArray(match.enabled_assessments) && match.enabled_assessments.length) {
+                setCourseEnabledAssessments(match.enabled_assessments.map((x: any) => String(x).trim().toLowerCase()).filter(Boolean));
+              }
+            }
+          } catch (e) {
+            // ignore elective fetch errors
+          }
         }
         // Respect any user-selected override from localStorage.
         let override: string | null = null;

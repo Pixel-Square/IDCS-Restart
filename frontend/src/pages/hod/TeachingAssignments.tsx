@@ -336,7 +336,7 @@ export default function TeachingAssignmentsPage(){
                 const sectionSubjects = curriculum.filter(c => 
                   (section.semester ? (c.semester === section.semester) : true) &&
                   (section.batch_regulation ? (c.regulation === section.batch_regulation.code) : true) &&
-                  !c.is_elective
+                  !((c as any).is_elective)
                 );
                 
                 return (
