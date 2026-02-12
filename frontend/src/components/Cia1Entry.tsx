@@ -600,89 +600,57 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       try {
         let data: any = null;
         
-        // Check if this is an elective TA before calling fetchCiaMarks
-        let isElective = false;
-        let electiveSubjectId: any = null;
-        if (teachingAssignmentId) {
-          try {
-            const taRes = await fetchWithAuth(`/api/academics/teaching-assignments/${teachingAssignmentId}/`);
-            if (taRes.ok) {
-              const taObj = await taRes.json();
-              if (taObj && taObj.elective_subject_id && !taObj.section_id) {
-                isElective = true;
-                electiveSubjectId = taObj.elective_subject_id;
-              }
-            }
-          } catch {
-            // ignore TA fetch error, proceed with normal flow
-          }
+        // First, get the user's teaching assignments for this subject to check if it's elective
+        let matchedTa: any = null;
+        try {
+          const myTAs = await fetchMyTeachingAssignments();
+          matchedTa = (myTAs || []).find((t: any) => {
+            const codeMatch = String(t.subject_code || '').trim().toUpperCase() === String(subjectId || '').trim().toUpperCase();
+            const idMatch = teachingAssignmentId ? t.id === teachingAssignmentId : false;
+            return idMatch || codeMatch;
+          });
+        } catch {
+          // ignore if can't fetch TAs
         }
 
-        // For elective TAs, fetch students from elective-choices directly
-        if (isElective && electiveSubjectId) {
+        // If we found a TA and it's an elective (has elective_subject_id, no section_id), fetch from elective-choices
+        if (matchedTa && matchedTa.elective_subject_id && !matchedTa.section_id) {
           try {
-            const esRes = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${encodeURIComponent(String(electiveSubjectId))}`);
+            const esRes = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${encodeURIComponent(String(matchedTa.elective_subject_id))}`);
             if (esRes.ok) {
               const esData = await esRes.json();
               const items = Array.isArray(esData.results) ? esData.results : Array.isArray(esData) ? esData : (esData.items || []);
               data = { 
                 students: (items || []).map((s: any) => ({ 
                   id: Number(s.student_id ?? s.id), 
-                  reg_no: s.reg_no ?? s.regno ?? '', 
-                  name: s.name ?? s.full_name ?? s.username ?? '', 
+                  reg_no: String(s.reg_no ?? s.regno ?? ''),
+                  name: String(s.name ?? s.full_name ?? s.username ?? ''),
                   section: s.section_name ?? s.section ?? null 
                 })), 
                 marks: {} 
               };
             }
-          } catch {
-            // if elective fetch fails, fall through to normal CIA marks fetch
+          } catch (err) {
+            console.warn('Elective-choices fetch failed, falling back:', err);
           }
         }
 
-        // Normal flow: fetch CIA marks (subject-level roster)
+        // If not elective or elective fetch failed, try normal CIA marks API
         if (!data) {
           try {
             data = await fetchCiaMarks(assessmentKey, subjectId, teachingAssignmentId);
           } catch (err) {
-            // If CIA fetch fails (e.g., 403 teaching assignment not found), try fallback via user's TAs
-            try {
-              const myTAs = await fetchMyTeachingAssignments();
-              const match = (myTAs || []).find((t: any) => String(t.subject_code || '').trim().toUpperCase() === String(subjectId || '').trim().toUpperCase());
-              if (match && match.id) {
-                // Try elective-choices first when TA represents an elective
-                try {
-                  const taRes = await fetchWithAuth(`/api/academics/teaching-assignments/${match.id}/`);
-                  if (taRes.ok) {
-                    const taObj = await taRes.json();
-                    if (taObj && taObj.elective_subject_id && !taObj.section_id) {
-                      const esRes = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${encodeURIComponent(String(taObj.elective_subject_id))}`);
-                      if (esRes.ok) {
-                        const esData = await esRes.json();
-                        const items = Array.isArray(esData.results) ? esData.results : Array.isArray(esData) ? esData : (esData.items || []);
-                        data = { students: (items || []).map((s: any) => ({ id: Number(s.student_id ?? s.id), reg_no: s.reg_no ?? s.regno ?? '', name: s.name ?? s.full_name ?? s.username ?? '', section: s.section_name ?? s.section ?? null })), marks: {} };
-                      }
-                    }
-                  }
-                } catch {
-                  // ignore elective attempt
-                }
-
-                // If still no data, try TA roster
-                if (!data) {
-                  try {
-                    const taResp = await fetchTeachingAssignmentRoster(match.id);
-                    data = { students: taResp.students || [], marks: {} };
-                  } catch {
-                    // ignore
-                  }
-                }
+            console.warn('CIA marks fetch failed:', err);
+            // Try TA roster as final fallback
+            if (matchedTa && matchedTa.id) {
+              try {
+                const taResp = await fetchTeachingAssignmentRoster(matchedTa.id);
+                data = { students: taResp.students || [], marks: {} };
+              } catch {
+                console.warn('TA roster fallback failed');
               }
-            } catch {
-              // ignore fallback
             }
-
-            // If still no data, rethrow original error so downstream handles it
+            // If still no data, rethrow original error
             if (!data) throw err;
           }
         }
@@ -698,49 +666,6 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
           }
           return String(a?.reg_no || '').localeCompare(String(b?.reg_no || ''), undefined, { numeric: true, sensitivity: 'base' });
         });
-        // If student list empty, try fallback via user's teaching assignments
-        if (!roster.length) {
-          try {
-            const myTAs = await fetchMyTeachingAssignments();
-            const match = (myTAs || []).find((t: any) => String(t.subject_code || '').trim().toUpperCase() === String(subjectId || '').trim().toUpperCase());
-            if (match && match.id) {
-              // Elective-aware: try TA detail -> elective-choices
-              try {
-                const taRes = await fetchWithAuth(`/api/academics/teaching-assignments/${match.id}/`);
-                if (taRes.ok) {
-                  const taObj = await taRes.json();
-                  if (taObj && taObj.elective_subject_id && !taObj.section_id) {
-                    const esRes = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${encodeURIComponent(String(taObj.elective_subject_id))}`);
-                    if (esRes.ok) {
-                      const data2 = await esRes.json();
-                      const items = Array.isArray(data2.results) ? data2.results : Array.isArray(data2) ? data2 : (data2.items || []);
-                      roster = (items || []).slice().map((s: any) => ({ id: Number(s.student_id ?? s.id), name: s.name ?? s.full_name ?? s.username ?? '', reg_no: s.reg_no ?? s.regno ?? '', section: s.section_name ?? s.section ?? null }));
-                    }
-                  }
-                }
-              } catch {
-                // ignore elective attempt
-              }
-
-              if (!roster.length) {
-                const taResp = await fetchTeachingAssignmentRoster(match.id);
-                roster = (taResp.students || []).slice().sort((a, b) => {
-                  const an = String(a?.name || '').trim().toLowerCase();
-                  const bn = String(b?.name || '').trim().toLowerCase();
-                  if (an && bn) {
-                    const byName = an.localeCompare(bn);
-                    if (byName) return byName;
-                  } else if (an || bn) {
-                    return an ? -1 : 1;
-                  }
-                  return String(a?.reg_no || '').localeCompare(String(b?.reg_no || ''), undefined, { numeric: true, sensitivity: 'base' });
-                });
-              }
-            }
-          } catch {
-            // ignore fallback
-          }
-        }
 
         setStudents(roster);
         const apiMarks = data.marks || {};
