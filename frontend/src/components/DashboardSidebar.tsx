@@ -1,8 +1,14 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
+
+
+
 import useDashboard from '../hooks/useDashboard';
-import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, FileText, Upload } from 'lucide-react';
+import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, FileText, Upload, Bell, CalendarClock } from 'lucide-react';
+import './DashboardSidebar.css';
+
 import { useSidebar } from './SidebarContext';
+import { fetchPendingPublishRequestCount } from '../services/obe';
 
 const ICON_MAP: Record<string, any> = {
   profile: User,
@@ -23,12 +29,73 @@ const ICON_MAP: Record<string, any> = {
   student_attendance: ClipboardList,
   my_mentees: Users,
   period_attendance: ClipboardList,
+  obe: BookOpen,
+  obe_master: BookOpen,
+  obe_due_dates: CalendarClock,
+  obe_requests: Bell,
+  academic_controller: Layout,
+
 };
 
 export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string }) {
   const { data, loading, error } = useDashboard(baseUrl);
   const loc = useLocation();
+
   const { collapsed, toggle } = useSidebar();
+  const [pendingObeReqCount, setPendingObeReqCount] = useState<number>(0);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  const perms = (data?.permissions || []).map((p) => String(p || '').toLowerCase());
+  const canObeMaster = perms.includes('obe.master.manage');
+
+  useEffect(() => {
+    let mounted = true;
+    const token = window.localStorage.getItem('access');
+    if (!canObeMaster || !token) {
+      setPendingObeReqCount(0);
+      return () => {
+        mounted = false;
+      };
+    }
+    (async () => {
+      try {
+        const resp = await fetchPendingPublishRequestCount();
+        if (!mounted) return;
+        setPendingObeReqCount(Number(resp.pending || 0));
+      } catch {
+        // badge is best-effort
+      }
+    })();
+    const interval = window.setInterval(() => {
+      (async () => {
+        try {
+          const resp = await fetchPendingPublishRequestCount();
+          if (!mounted) return;
+          setPendingObeReqCount(Number(resp.pending || 0));
+        } catch {
+          // ignore
+        }
+      })();
+    }, 30_000);
+    return () => {
+      mounted = false;
+      window.clearInterval(interval);
+    };
+  }, [canObeMaster]);
+
+  // auto-expand Academic when on /academic routes
+  useEffect(() => {
+    if (loc.pathname.startsWith('/academic')) {
+      setExpanded((p) => ({ ...p, academic: true }));
+    }
+  }, [loc.pathname]);
+
+  // auto-expand Academic Controller when on /iqac/academic-controller routes
+  useEffect(() => {
+    if (loc.pathname.startsWith('/iqac/academic-controller')) {
+      setExpanded((p) => ({ ...p, academic_controller: true }));
+    }
+  }, [loc.pathname]);
 
   if (loading) return (
     <aside className={`fixed top-16 left-0 h-[calc(100vh-4rem)] bg-white shadow-lg transition-all duration-300 z-30 ${collapsed ? '-translate-x-full lg:translate-x-0 lg:w-20' : 'w-full lg:w-64'}`}>
@@ -45,6 +112,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   );
   
   if (!data) return null;
+// ...existing code...
 
   const entry = data.entry_points || {};
 
@@ -52,6 +120,9 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   const permsLower = (data.permissions || []).map(p => (p || '').toString().toLowerCase());
   const rolesUpper = (data.roles || []).map(r => (r || '').toString().toUpperCase());
   const flags = data.flags || {};
+  const isIqac = rolesUpper.includes('IQAC');
+
+  
 
   // Curriculum master/department: require explicit curriculum permissions if present, otherwise rely on entry point
   if (entry.curriculum_master && (permsLower.some(p => p.includes('curriculum')) || entry.curriculum_master)) items.push({ key: 'curriculum_master', label: 'Curriculum Master', to: '/curriculum/master' });
@@ -106,22 +177,36 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // fallback: always show profile
   items.unshift({ key: 'profile', label: 'Profile', to: '/profile' });
 
+  // Only add OBE once
+  // Group OBE-related links under a single Academic page
+  // Show Academic for all staff
+  if (flags.is_staff && !items.some(item => item.key === 'academic')) {
+    items.push({ key: 'academic', label: 'Academic', to: '/academic' });
+  }
+  if (isIqac && !items.some((item) => item.key === 'academic_controller')) {
+    items.push({ key: 'academic_controller', label: 'Academic Controller', to: '/iqac/academic-controller' });
+  }
+  if (canObeMaster && !isIqac && !items.some(item => item.key === 'obe_due_dates')) {
+    items.push({ key: 'obe_due_dates', label: 'OBE: Due Dates', to: '/obe/master/due-dates' });
+  }
+  if (canObeMaster && !items.some(item => item.key === 'obe_requests')) {
+    items.push({ key: 'obe_requests', label: 'OBE: Requests', to: '/obe/master/requests' });
+  }
+
   return (
     <>
       {/* Mobile overlay backdrop */}
       {!collapsed && (
-        <div 
+        <div
           className="fixed inset-0 bg-black bg-opacity-50 z-20 lg:hidden"
           onClick={toggle}
         />
       )}
 
       {/* Sidebar */}
-      <aside className={`fixed top-16 left-0 h-[calc(100vh-4rem)] bg-white shadow-lg transition-all duration-300 z-30 overflow-y-auto ${
-        collapsed ? '-translate-x-full lg:translate-x-0 lg:w-20' : 'w-full lg:w-64'
-      }`}>
+      <aside className={`fixed top-16 left-0 h-[calc(100vh-4rem)] bg-white shadow-lg transition-all duration-300 z-30 overflow-y-auto ${collapsed ? '-translate-x-full lg:translate-x-0 lg:w-20' : 'w-full lg:w-64'}`}>
         {/* Header - Hidden */}
-        <div className="hidden"></div>
+        <div className="hidden" />
 
         {/* Navigation Links */}
         <nav className="py-6">
@@ -130,11 +215,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
             <li>
               <Link
                 to="/dashboard"
-                className={`flex items-center gap-3 px-3 py-3 rounded-lg transition-all duration-200 ${
-                  loc.pathname === '/dashboard'
-                    ? 'bg-blue-600 text-white shadow-md'
-                    : 'text-gray-700 hover:bg-blue-50 hover:text-blue-600'
-                } ${collapsed ? 'lg:justify-center lg:px-2' : ''}`}
+                className={`flex items-center gap-3 px-3 py-3 rounded-lg transition-all duration-200 ${loc.pathname === '/dashboard' ? 'bg-blue-600 text-white shadow-md' : 'text-gray-700 hover:bg-blue-50 hover:text-blue-600'} ${collapsed ? 'lg:justify-center lg:px-2' : ''}`}
                 onClick={() => { if (window.innerWidth < 1024) toggle(); }}
               >
                 <Home className={`flex-shrink-0 ${collapsed ? 'lg:w-5 lg:h-5' : 'w-6 h-6'}`} />
@@ -147,19 +228,70 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
               const Icon = ICON_MAP[i.key] || User;
               const active = loc.pathname.startsWith(i.to);
               return (
-                <li key={i.key}>
+                <li key={i.key} className="relative">
                   <Link
                     to={i.to}
-                    className={`flex items-center gap-3 px-3 py-3 rounded-lg transition-all duration-200 ${
-                      active
-                        ? 'bg-blue-600 text-white shadow-md'
-                        : 'text-gray-700 hover:bg-blue-50 hover:text-blue-600'
-                    } ${collapsed ? 'lg:justify-center lg:px-2' : ''}`}
-                    onClick={() => { if (window.innerWidth < 1024) toggle(); }}
+                    className={`flex items-center gap-3 px-3 py-3 rounded-lg transition-all duration-200 ${active ? 'bg-blue-600 text-white shadow-md' : 'text-gray-700 hover:bg-blue-50 hover:text-blue-600'} ${collapsed ? 'lg:justify-center lg:px-2' : ''}`}
+                    onClick={() => {
+                      // preserve mobile toggle behaviour
+                      if (window.innerWidth < 1024) toggle();
+                      // toggle submenu expansion for specific groups
+                      if (i.key === 'academic') setExpanded((p) => ({ ...p, academic: !p.academic }));
+                      if (i.key === 'academic_controller') setExpanded((p) => ({ ...p, academic_controller: !p.academic_controller }));
+                    }}
                   >
                     <Icon className={`flex-shrink-0 ${collapsed ? 'lg:w-5 lg:h-5' : 'w-6 h-6'}`} />
-                    <span className={`font-medium text-base ${collapsed ? 'lg:hidden' : ''}`}>{i.label}</span>
+                    <span className={`font-medium text-base ${collapsed ? 'lg:hidden' : ''}`}>
+                      {i.label}
+                      {i.key === 'obe_requests' && pendingObeReqCount > 0 ? (
+                        <span className="ml-2 inline-flex items-center justify-center px-2 py-0.5 text-xs font-medium rounded-full bg-red-600 text-white">{pendingObeReqCount}</span>
+                      ) : null}
+                    </span>
                   </Link>
+
+                  {/* Submenu for Academic: show OBE Master and Due Dates */}
+                  {i.key === 'academic' && canObeMaster && expanded.academic ? (
+                    <ul className="pl-8 mt-1 space-y-1">
+                      <li>
+                        <Link to={'/academic?tab=obe_master'} className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/academic') && new URLSearchParams(loc.search).get('tab') === 'obe_master' ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'}`} onClick={() => { if (window.innerWidth < 1024) toggle(); }}>
+                          <BookOpen className="w-4 h-4" /> <span>OBE Master</span>
+                        </Link>
+                      </li>
+                      {!isIqac ? (
+                        <li>
+                          <Link to={'/academic?tab=due_dates'} className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/academic') && new URLSearchParams(loc.search).get('tab') === 'due_dates' ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'}`} onClick={() => { if (window.innerWidth < 1024) toggle(); }}>
+                            <CalendarClock className="w-4 h-4" /> <span>OBE: Due Dates</span>
+                          </Link>
+                        </li>
+                      ) : null}
+                    </ul>
+                  ) : null}
+
+                  {/* Submenu for Academic Controller (IQAC) */}
+                  {i.key === 'academic_controller' && expanded.academic_controller ? (
+                    <ul className="pl-8 mt-1 space-y-1">
+                      <li>
+                        <Link to={'/iqac/academic-controller?tab=dashboard'} className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/iqac/academic-controller') && new URLSearchParams(loc.search).get('tab') === 'dashboard' ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'}`} onClick={() => { if (window.innerWidth < 1024) toggle(); }}>
+                          <Home className="w-4 h-4" /> <span>Dashboard</span>
+                        </Link>
+                      </li>
+                      <li>
+                        <Link to={'/iqac/academic-controller?tab=qp'} className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/iqac/academic-controller') && new URLSearchParams(loc.search).get('tab') === 'qp' ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'}`} onClick={() => { if (window.innerWidth < 1024) toggle(); }}>
+                          <Grid className="w-4 h-4" /> <span>QP</span>
+                        </Link>
+                      </li>
+                      <li>
+                        <Link to={'/iqac/academic-controller?tab=due_dates'} className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/iqac/academic-controller') && new URLSearchParams(loc.search).get('tab') === 'due_dates' ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'}`} onClick={() => { if (window.innerWidth < 1024) toggle(); }}>
+                          <CalendarClock className="w-4 h-4" /> <span>OBE Due Dates</span>
+                        </Link>
+                      </li>
+                      <li>
+                        <Link to={'/iqac/academic-controller?tab=courses'} className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/iqac/academic-controller') && new URLSearchParams(loc.search).get('tab') === 'courses' ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'}`} onClick={() => { if (window.innerWidth < 1024) toggle(); }}>
+                          <Grid className="w-4 h-4" /> <span>Courses</span>
+                        </Link>
+                      </li>
+                    </ul>
+                  ) : null}
                 </li>
               );
             })}
@@ -168,4 +300,5 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
       </aside>
     </>
   );
+// ...existing code...
 }

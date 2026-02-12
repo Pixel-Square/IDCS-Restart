@@ -1,7 +1,9 @@
-Django>=4.2
+Django>=5.1
 djangorestframework>=3.14
 djangorestframework-simplejwt>=5.2
 psycopg2-binary>=2.9
 django-cors-headers>=3.13
 python-dotenv>=1.0
 openpyxl>=3.0
+python-docx>=1.1
+

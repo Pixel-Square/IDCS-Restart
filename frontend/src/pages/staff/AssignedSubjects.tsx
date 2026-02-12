@@ -150,7 +150,14 @@ export default function AssignedSubjectsPage() {
       } else {
         throw new Error('No student mapping available for this assignment')
       }
-      const studs = (sdata.results || sdata)
+      const raw = (sdata.results || sdata) || []
+      const studs = raw.map((s:any) => ({
+        id: Number(s.id),
+        reg_no: String(s.reg_no ?? s.regno ?? ''),
+        name: String(s.username ?? s.name ?? s.full_name ?? ''),
+        section: s.section_name ?? s.section ?? null,
+        section_id: s.section_id ?? null,
+      }))
       setPickerStudents(studs)
       setPickerSelectedIds(studs.map((s:any)=>s.id))
       setPickerOpen(true)

@@ -1,0 +1,170 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>KR Database</title>
+    <link rel="icon" type="image/x-icon" href="https://cloud.zynix.us/index.php/core/preview?fileId=2583&x=1920&y=1080&a=true&etag=ef9075236d0cae7f0ffe0466ae3432f2">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://cloud.zynix.us/index.php/core/preview?fileId=2583&x=1920&y=1080&a=true&etag=ef9075236d0cae7f0ffe0466ae3432f2">
+    <meta name="theme-color" content="#3050e0">
+    <meta property="og:image" content="{% static 'images/favicon.png' %}">
+    <meta property="og:title" content="KR Group - Zynix">
+    <meta property="og:description" content="Build your desired apps...">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="{% static 'images/favicon.png' %}">
+  <link rel="stylesheet" href="{% static 'css/db_dashboard.css' %}">
+  <style>
+    html, body { 
+      height: 100%; 
+      margin: 0; 
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; 
+      color: #fff; 
+      background-color: #0a0f1c;
+    }
+    
+    .bg { 
+      position: fixed; 
+      inset: 0; 
+      background-size: cover; 
+      background-position: center center; 
+      filter: saturate(1.2) brightness(0.7); 
+      z-index: -2; 
+    }
+    
+    .bg::after { 
+      content: ""; 
+      position: absolute; 
+      inset: 0; 
+      background: linear-gradient(135deg, rgba(10, 15, 28, 0.9) 0%, rgba(30, 40, 80, 0.7) 100%);
+      z-index: -1; 
+    }
+    
+    .center { 
+      min-height: 100vh; 
+      display: flex; 
+      align-items: center; 
+      justify-content: center; 
+      padding: 2rem; 
+    }
+    
+    .card { 
+      width: 420px; 
+      max-width: calc(100% - 48px); 
+      background: rgba(15, 25, 45, 0.85); 
+      border-radius: 16px; 
+      padding: 3rem 2rem 2.5rem; 
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.05); 
+      text-align: center;
+      border: 1px solid rgba(100, 120, 220, 0.1);
+      backdrop-filter: blur(10px);
+    }
+    
+    .logo { 
+      width: 160px; 
+      height: auto; 
+      display: block; 
+      margin: 0 auto 1.5rem auto; 
+      filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.3));
+    }
+    
+    h1 { 
+      margin: 0 0 0.5rem 0; 
+      font-size: 2rem; 
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      background: linear-gradient(135deg, #fff 0%, #a0b8ff 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    
+    .tagline { 
+      margin: 0 0 2.5rem 0; 
+      color: #b0c4ff; 
+      font-size: 1.1rem; 
+      font-weight: 400;
+      letter-spacing: 0.3px;
+    }
+    
+    .actions { 
+      display: flex; 
+      flex-direction: column; 
+      gap: 16px; 
+      margin-top: 1rem; 
+    }
+    
+    .btn { 
+      display: inline-block; 
+      text-decoration: none; 
+      padding: 1rem 1.5rem; 
+      border-radius: 10px; 
+      background: rgba(255, 255, 255, 0.05); 
+      color: #e0e8ff; 
+      font-weight: 600; 
+      font-size: 1rem;
+      border: 1px solid rgba(100, 120, 220, 0.2);
+      transition: all 0.3s ease;
+      text-align: center;
+      letter-spacing: 0.5px;
+    }
+    
+    .btn.primary { 
+      background: linear-gradient(135deg, #4a6fff 0%, #3050e0 100%); 
+      border: none; 
+      color: white;
+      box-shadow: 0 8px 20px rgba(74, 111, 255, 0.3);
+      font-weight: 600;
+    }
+    
+    .btn.secondary {
+      background: rgba(40, 60, 140, 0.3);
+      border-color: rgba(80, 110, 220, 0.3);
+    }
+    
+    .btn:hover { 
+      transform: translateY(-2px); 
+      box-shadow: 0 12px 25px rgba(0, 0, 0, 0.3);
+    }
+    
+    .btn.primary:hover {
+      box-shadow: 0 12px 25px rgba(74, 111, 255, 0.4);
+      background: linear-gradient(135deg, #5a7fff 0%, #4060f0 100%);
+    }
+    
+    .footer {
+      margin-top: 2.5rem;
+      font-size: 0.85rem;
+      color: rgba(180, 200, 255, 0.5);
+      letter-spacing: 0.3px;
+    }
+    
+    @media (max-width: 480px) { 
+      .card { 
+        padding: 2.5rem 1.5rem 2rem; 
+      } 
+      .logo { 
+        width: 130px; 
+      }
+      h1 {
+        font-size: 1.75rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="bg" style="background-image: url('{% static 'images/images.jpg' %}');"></div>
+  <div class="center">
+    <div class="card">
+      <img class="logo" src="https://cloud.zynix.us/index.php/core/preview?fileId=1783&x=1920&y=1080&a=true&etag=372dc3ebd03616085f336a50d27d05cd" alt="KR Logo">
+      <h1>KR Database</h1>
+      <p class="tagline">IDCS DATABASE WITH SECUREx</p>
+      <div class="actions">
+        <a class="btn primary" href="/admin/">KR ADMINISTRATION</a>
+        <a class="btn secondary" href="/api/accounts/">Log in with a device</a>
+      </div>
+      <p class="footer">KR GROUPS &copy; </p>
+    </div>
+  </div>
+</body>
+</html>

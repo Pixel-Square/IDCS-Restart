@@ -20,7 +20,7 @@ class CurriculumMasterSerializer(serializers.ModelSerializer):
         model = CurriculumMaster
         fields = [
             'id', 'regulation', 'semester', 'semester_id', 'course_code', 'course_name', 'class_type', 'category',
-            'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark', 'is_elective',
+            'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark', 'is_elective', 'enabled_assessments',
             'for_all_departments', 'departments', 'departments_display', 'editable', 'created_by', 'created_at', 'updated_at'
         ]
         read_only_fields = ('created_by', 'created_at', 'updated_at')
@@ -47,7 +47,7 @@ class CurriculumDepartmentSerializer(serializers.ModelSerializer):
         model = CurriculumDepartment
         fields = [
             'id', 'master', 'department', 'department_id', 'regulation', 'semester', 'semester_id', 'course_code', 'course_name',
-            'class_type', 'category', 'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark', 'is_elective',
+            'class_type', 'category', 'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark', 'is_elective', 'enabled_assessments',
             'total_hours', 'question_paper_type', 'editable', 'overridden',
             'approval_status', 'approved_by', 'approved_at',
             'created_by', 'created_at', 'updated_at'

@@ -1,9 +1,17 @@
+﻿# Added 'OBE.apps.ObeConfig', on 2026-01-27
+# Added backend.OBE.apps.ObeConfig on 2026-01-27
 import os
 from pathlib import Path
 from datetime import timedelta
-from dotenv import load_dotenv
 
-load_dotenv()
+# Make python-dotenv optional so local tooling (manage.py, migrations) can run
+# even if the dependency isn't installed in the current environment.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except Exception:
+    pass
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -27,6 +35,9 @@ INSTALLED_APPS = [
     'curriculum',
     'college',
     'applications',
+    'OBE.apps.ObeConfig',
+    'template_api.apps.TemplateApiConfig',
+    'question_bank.apps.QuestionBankConfig',
     'timetable',
 ]
 
@@ -92,6 +103,9 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 AUTH_USER_MODEL = 'accounts.User'
@@ -111,6 +125,7 @@ SIMPLE_JWT = {
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
 
+# ...existing code...
 # Restrict CORS to explicit origins when credentials (cookies/auth) are used.
 # Wildcard '*' is invalid with `Access-Control-Allow-Credentials: true`.
 CORS_ALLOW_ALL_ORIGINS = False
@@ -120,3 +135,20 @@ CORS_ALLOWED_ORIGINS = [
 ]
 # Allow browser to include credentials (cookies or HTTP auth) in cross-origin requests
 CORS_ALLOW_CREDENTIALS = True
+
+# Allow configuring CSRF trusted origins via environment variable
+# Provide comma-separated origins including scheme, e.g. 'https://db.zynix.us'
+csrf_env = os.getenv('CSRF_TRUSTED_ORIGINS', '')
+CSRF_TRUSTED_ORIGINS = [h.strip() for h in csrf_env.split(',') if h.strip()]
+# In DEBUG add localhost aliases for convenience
+if DEBUG:
+    CSRF_TRUSTED_ORIGINS += ['http://localhost', 'http://127.0.0.1']
+# Always allow the production dashboard hostname if not already present
+if 'https://db.zynix.us' not in CSRF_TRUSTED_ORIGINS:
+    CSRF_TRUSTED_ORIGINS.append('https://db.zynix.us')
+
+# Optional: restrict which account may publish marks via the web UI/backend.
+# Set to a username or email (string). If empty/None publishing remains unrestricted
+# (aside from existing permission checks). Example: 'iqac.user@example.com'
+OBE_PUBLISH_ALLOWED_USERNAME = os.getenv('OBE_PUBLISH_ALLOWED_USERNAME', '')
+# ...existing code...

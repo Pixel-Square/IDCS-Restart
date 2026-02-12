@@ -1,0 +1,495 @@
+{% extends "admin/base_site.html" %}
+{% load i18n accounts_extras %}
+
+{% block content %}
+  <div style="max-width: 1100px;">
+    <h1>{{ title }}</h1>
+
+    {% if stage == 'upload' %}
+      <p style="color:#e6d132; margin-top: 6px;">
+        Upload a CSV with the exact columns below (case-sensitive and order-sensitive).
+      </p>
+
+      <div style="display:flex; gap: 14px; flex-wrap: wrap; margin: 12px 0;">
+        <div style="flex: 1 1 520px; border: 1px solid #680909; border-radius: 10px; padding: 12px; background: #680909;">
+          <div style="font-weight: 700; margin-bottom: 8px;">Required column order</div>
+          <div style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; padding: 10px; border: 1px solid #000000; border-radius: 8px; background: #000000; overflow-x:auto;">
+            {{ columns|join:"," }}
+          </div>
+
+          <div style="font-weight: 700; margin: 12px 0 8px;">Sample row</div>
+          <div style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; padding: 10px; border: 1px solid #680909; border-radius: 8px; background: #000000; overflow-x:auto;">
+            {% for c in columns %}{% if not forloop.first %},{% endif %}{{ sample_row|get_item:c }}{% endfor %}
+          </div>
+
+          <p style="color:#cfcfcf; font-size: 12px; margin-top: 10px;">
+            Notes: <strong>profile_type</strong> must be <strong>STUDENT</strong> or <strong>STAFF</strong>. For
+            <strong>STUDENT</strong>, <strong>reg_no</strong> is required and staff-related columns (<em>staff_id, department_code, designation</em>) may be left blank.
+            For <strong>STAFF</strong>, <strong>staff_id</strong> is required.
+          </p>
+        </div>
+
+        <div style="flex: 1 1 420px; border: 1px solid #ffdb38; border-radius: 10px; padding: 12px; background: #149f9f;">
+          <div style="font-weight: 700; margin-bottom: 8px;">Upload CSV</div>
+
+          {% if header_error %}
+            <div style="background:#fef2f2; border:1px solid #fecaca; color:#991b1b; padding: 10px; border-radius: 10px; margin-bottom: 10px;">
+              <div style="font-weight:700; margin-bottom:6px;">Header mismatch</div>
+              <div style="font-size:12px; margin-bottom:6px;">Expected:</div>
+              <div style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; padding: 8px; background:#fff; border:1px solid #fee2e2; border-radius:8px; overflow-x:auto;">{{ header_error.expected|join:"," }}</div>
+              <div style="font-size:12px; margin:10px 0 6px;">Found:</div>
+              <div style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; padding: 8px; background:#fff; border:1px solid #fee2e2; border-radius:8px; overflow-x:auto;">{{ header_error.found|join:"," }}</div>
+            </div>
+          {% endif %}
+
+          <form method="post" enctype="multipart/form-data" style="display:flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+            {% csrf_token %}
+            <input type="hidden" name="stage" value="preview" />
+            <input type="file" name="csv_file" accept=".csv,text/csv" required />
+            <button type="submit" class="default">Preview</button>
+          </form>
+        </div>
+      </div>
+
+    {% elif stage == 'map' %}
+      <h2>Column mapping</h2>
+      <p style="color:#374151;">Drag CSV columns (left) into the required fields (right). For fields like <b>section</b> you can also choose a single value to apply to all rows.</p>
+
+      <form id="mapping-form" method="post" style="margin-top:12px;">
+        {% csrf_token %}
+        <input type="hidden" name="stage" value="preview" />
+        <input type="hidden" name="mapping_token" value="{{ mapping_token }}" />
+        <div id="mapping-hidden-inputs"></div>
+
+        {{ missing_columns|json_script:"missing-columns-data" }}
+
+        <div style="display:flex; gap:14px; flex-wrap:wrap;">
+          <!-- Left: CSV columns + sample data -->
+          <div style="flex: 1 1 520px; background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:12px;">
+            <div style="font-weight:700; margin-bottom:8px;">CSV columns</div>
+            <div id="csv-columns" style="display:flex; flex-wrap:wrap; gap:8px; padding:8px; border:1px dashed #cbd5e1; border-radius:10px; min-height:48px;">
+              {% for h in found_headers %}
+                <div class="csv-col" draggable="true" data-col="{{ h }}" style="cursor:grab; user-select:none; padding:6px 10px; border:1px solid #e5e7eb; border-radius:999px; background:#f8fafc; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px;">
+                  {{ h }}
+                </div>
+              {% endfor %}
+            </div>
+
+            {% if sample_rows %}
+              <div style="font-weight:700; margin:12px 0 8px;">Sample data (first {{ sample_rows|length }} rows)</div>
+              <div style="border:1px solid #e5e7eb; border-radius:10px; overflow:auto; max-height:240px;">
+                <table style="border-collapse: collapse; width:100%; min-width: 700px;">
+                  <thead>
+                    <tr>
+                      {% for h in found_headers %}
+                        <th style="border-bottom:1px solid #e5e7eb; padding:6px; background:#f9fafb; text-align:left; font-size:12px;">{{ h }}</th>
+                      {% endfor %}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for r in sample_rows %}
+                      <tr>
+                        {% for h in found_headers %}
+                          <td style="border-top:1px solid #f3f4f6; padding:6px; font-size:12px;">{{ r|get_item:h }}</td>
+                        {% endfor %}
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            {% endif %}
+          </div>
+
+          <!-- Right: required columns -->
+          <div style="flex: 1 1 520px; background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:12px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+              <div style="font-weight:700;">Required columns</div>
+              <button type="button" id="clear-mapping" class="button" style="padding: 6px 10px;">Clear mapping</button>
+            </div>
+            <p style="margin:6px 0 10px; color:#6b7280; font-size:12px;">Tip: drop a pill onto a field. Missing/empty fields need a mapping.</p>
+
+            {% if required_columns %}
+              {% for col in required_columns %}
+                <div class="req-field" data-field="{{ col }}" style="border:1px solid #e5e7eb; border-radius:10px; padding:10px; margin-bottom:10px;">
+                  <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+                    <div style="font-weight:700;">
+                      {{ col }}
+                      {% if missing_columns and col in missing_columns %}
+                        <span style="margin-left:6px; font-size:11px; padding:2px 8px; border-radius:999px; background:#fef3c7; color:#92400e;">needs mapping</span>
+                      {% endif %}
+                    </div>
+                    <button type="button" class="button clear-field" style="padding: 4px 8px;">Clear</button>
+                  </div>
+
+                  <div class="dropzone" style="margin-top:8px; padding:10px; border:2px dashed #cbd5e1; border-radius:10px; background:#f9fafb;">
+                    <div class="mapped" style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; color:#111827;">Drop a CSV column here</div>
+                  </div>
+
+                  <!-- Static pickers for some fields -->
+                  <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                    {% if col == 'profile_type' %}
+                      <select class="static-val" data-kind="profile_type">
+                        <option value="STUDENT">STUDENT</option>
+                        <option value="STAFF">STAFF</option>
+                      </select>
+                      <button type="button" class="button use-static" style="padding: 4px 8px;">Use for all</button>
+                    {% elif col == 'roles' %}
+                      <select class="static-val" data-kind="roles" multiple size="4" style="min-width:260px;">
+                        {% for rr in role_choices %}
+                          <option value="{{ rr.name }}">{{ rr.label }}</option>
+                        {% endfor %}
+                      </select>
+                      <button type="button" class="button use-static" style="padding: 4px 8px;">Use for all</button>
+                    {% elif col == 'section' %}
+                      <select class="static-val" data-kind="section">
+                        <option value="">-- choose section --</option>
+                        {% for s in section_choices %}
+                          <option value="{{ s.pk }}">{{ s.label }}</option>
+                        {% endfor %}
+                      </select>
+                      <button type="button" class="button use-static" style="padding: 4px 8px;">Use for all</button>
+                    {% elif col == 'department_code' %}
+                      <select class="static-val" data-kind="department_code">
+                        <option value="">-- choose department --</option>
+                        {% for d in dept_choices %}
+                          <option value="{{ d.code }}">{{ d.label }}</option>
+                        {% endfor %}
+                      </select>
+                      <button type="button" class="button use-static" style="padding: 4px 8px;">Use for all</button>
+                    {% else %}
+                      <input class="static-val" type="text" placeholder="Static value for all (optional)" style="min-width:260px;" />
+                      <button type="button" class="button use-static" style="padding: 4px 8px;">Use for all</button>
+                    {% endif %}
+                    <button type="button" class="button use-empty" style="padding: 4px 8px;">Leave blank</button>
+                  </div>
+                </div>
+              {% endfor %}
+            {% else %}
+              <div style="color:#991b1b;">Mapping data not available. Please re-upload the CSV.</div>
+            {% endif %}
+          </div>
+        </div>
+
+        <div style="margin-top:12px;">
+          <button type="submit" class="default">Save mapping and Preview</button>
+          <a class="button" href="." style="padding: 6px 10px; margin-left:8px;">Cancel</a>
+        </div>
+      </form>
+
+      <script>
+        (function () {
+          const csvContainer = document.getElementById('csv-columns');
+          const form = document.getElementById('mapping-form');
+          const hidden = document.getElementById('mapping-hidden-inputs');
+          const clearAllBtn = document.getElementById('clear-mapping');
+          if (!csvContainer || !form || !hidden) return;
+
+          const esc = (value) => {
+            if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(value);
+            return String(value).replace(/[^a-zA-Z0-9_-]/g, (ch) => `\\${ch}`);
+          };
+
+          /** mapping[field] = { type: 'csv', col: '...' } | { type: 'static', val: '...' } | { type: 'empty' } | null */
+          const mapping = {};
+
+          // Fields that must be mapped before Preview (server-computed: missing columns + required-but-empty)
+          let requiredToMap = [];
+          const missingScript = document.getElementById('missing-columns-data');
+          if (missingScript) {
+            try {
+              const parsed = JSON.parse(missingScript.textContent || '[]');
+              if (Array.isArray(parsed)) requiredToMap = parsed;
+            } catch (e) {
+              requiredToMap = [];
+            }
+          }
+          requiredToMap = Array.from(new Set(requiredToMap));
+
+          function fieldElFor(name) {
+            return document.querySelector(`.req-field[data-field="${esc(name)}"]`);
+          }
+
+          function setFieldError(name, isError) {
+            const el = fieldElFor(name);
+            if (!el) return;
+            el.style.borderColor = isError ? '#fca5a5' : '#e5e7eb';
+            el.style.boxShadow = isError ? '0 0 0 3px rgba(239, 68, 68, 0.15)' : 'none';
+          }
+
+          function validateRequiredMappings() {
+            const missing = [];
+            requiredToMap.forEach((name) => {
+              const ok = !!mapping[name];
+              setFieldError(name, !ok);
+              if (!ok) missing.push(name);
+            });
+            return missing;
+          }
+
+          function createPill(colName) {
+            const el = document.createElement('div');
+            el.className = 'csv-col';
+            el.draggable = true;
+            el.dataset.col = colName;
+            el.textContent = colName;
+            el.style.cursor = 'grab';
+            el.style.userSelect = 'none';
+            el.style.padding = '6px 10px';
+            el.style.border = '1px solid #e5e7eb';
+            el.style.borderRadius = '999px';
+            el.style.background = '#f8fafc';
+            el.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, monospace';
+            el.style.fontSize = '12px';
+            bindPill(el);
+            return el;
+          }
+
+          function bindPill(pill) {
+            pill.addEventListener('dragstart', (e) => {
+              e.dataTransfer.setData('text/plain', pill.dataset.col || '');
+              e.dataTransfer.effectAllowed = 'move';
+            });
+          }
+
+          function setDropzoneText(fieldEl, text, muted) {
+            const mapped = fieldEl.querySelector('.mapped');
+            if (!mapped) return;
+            mapped.textContent = text;
+            mapped.style.color = muted ? '#6b7280' : '#111827';
+          }
+
+          function restorePreviousCsvColumn(prev) {
+            if (!prev) return;
+            if (prev.type === 'csv' && prev.col) {
+              // restore only if not already present
+              const exists = csvContainer.querySelector(`[data-col="${esc(prev.col)}"]`);
+              if (!exists) csvContainer.appendChild(createPill(prev.col));
+            }
+          }
+
+          function setMapping(field, next) {
+            const fieldEl = document.querySelector(`.req-field[data-field="${esc(field)}"]`);
+            if (!fieldEl) return;
+            const prev = mapping[field] || null;
+
+            // if replacing CSV mapping, restore previous column pill
+            if (prev && prev.type === 'csv' && (!next || next.type !== 'csv' || next.col !== prev.col)) {
+              restorePreviousCsvColumn(prev);
+            }
+
+            mapping[field] = next;
+
+            if (!next) {
+              setDropzoneText(fieldEl, 'Drop a CSV column here', true);
+              validateRequiredMappings();
+              return;
+            }
+            if (next.type === 'csv') {
+              setDropzoneText(fieldEl, `CSV: ${next.col}`, false);
+              // remove pill from csv list
+              const pill = csvContainer.querySelector(`[data-col="${esc(next.col)}"]`);
+              if (pill) pill.remove();
+            } else if (next.type === 'static') {
+              setDropzoneText(fieldEl, `Static: ${next.val || ''}`, false);
+            } else if (next.type === 'empty') {
+              setDropzoneText(fieldEl, 'Blank for all rows', false);
+            }
+
+            validateRequiredMappings();
+          }
+
+          // Bind existing pills
+          csvContainer.querySelectorAll('.csv-col').forEach(bindPill);
+
+          // Make dropzones accept drops
+          document.querySelectorAll('.req-field').forEach((fieldEl) => {
+            const field = fieldEl.dataset.field;
+            const dz = fieldEl.querySelector('.dropzone');
+            if (!field || !dz) return;
+
+            dz.addEventListener('dragover', (e) => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'move';
+            });
+            dz.addEventListener('drop', (e) => {
+              e.preventDefault();
+              const colName = e.dataTransfer.getData('text/plain');
+              if (!colName) return;
+              setMapping(field, { type: 'csv', col: colName });
+            });
+
+            // Clear button
+            const clearBtn = fieldEl.querySelector('.clear-field');
+            if (clearBtn) {
+              clearBtn.addEventListener('click', () => setMapping(field, null));
+            }
+
+            // Use static button
+            const staticBtn = fieldEl.querySelector('.use-static');
+            if (staticBtn) {
+              staticBtn.addEventListener('click', () => {
+                const input = fieldEl.querySelector('.static-val');
+                let val = '';
+                if (input) {
+                  if (input.tagName === 'SELECT' && input.multiple) {
+                    val = Array.from(input.selectedOptions || []).map(o => o.value).filter(Boolean).join(',');
+                  } else {
+                    val = input.value;
+                  }
+                }
+                setMapping(field, { type: 'static', val: val });
+              });
+            }
+
+            // Leave blank
+            const emptyBtn = fieldEl.querySelector('.use-empty');
+            if (emptyBtn) {
+              emptyBtn.addEventListener('click', () => setMapping(field, { type: 'empty' }));
+            }
+          });
+
+          // Auto-map exact name matches when possible
+          document.querySelectorAll('.req-field').forEach((fieldEl) => {
+            const field = fieldEl.dataset.field;
+            if (!field) return;
+            const pill = csvContainer.querySelector(`[data-col="${esc(field)}"]`);
+            if (pill) {
+              setMapping(field, { type: 'csv', col: field });
+            }
+          });
+
+          // Initial validation pass (highlights missing mappings)
+          validateRequiredMappings();
+
+          // Clear all
+          if (clearAllBtn) {
+            clearAllBtn.addEventListener('click', () => {
+              Object.keys(mapping).forEach((k) => setMapping(k, null));
+            });
+          }
+
+          // On submit, create hidden inputs map_<field>_type / map_<field>_col / map_<field>_val
+          form.addEventListener('submit', (e) => {
+            const missing = validateRequiredMappings();
+            if (missing.length) {
+              e.preventDefault();
+              const first = fieldElFor(missing[0]);
+              if (first && typeof first.scrollIntoView === 'function') {
+                first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              }
+              alert(`Please map these fields before preview:\n\n- ${missing.join('\n- ')}`);
+              return;
+            }
+
+            hidden.innerHTML = '';
+            const fields = document.querySelectorAll('.req-field');
+            fields.forEach((fieldEl) => {
+              const field = fieldEl.dataset.field;
+              if (!field) return;
+              const m = mapping[field] || null;
+              if (!m) return;
+
+              const type = document.createElement('input');
+              type.type = 'hidden';
+              type.name = `map_${field}_type`;
+              type.value = m.type;
+              hidden.appendChild(type);
+
+              if (m.type === 'csv') {
+                const col = document.createElement('input');
+                col.type = 'hidden';
+                col.name = `map_${field}_col`;
+                col.value = m.col;
+                hidden.appendChild(col);
+              }
+              if (m.type === 'static') {
+                const val = document.createElement('input');
+                val.type = 'hidden';
+                val.name = `map_${field}_val`;
+                val.value = m.val || '';
+                hidden.appendChild(val);
+              }
+            });
+          });
+        })();
+      </script>
+
+    {% elif stage == 'preview' %}
+      <div style="display:flex; gap: 12px; flex-wrap: wrap; align-items: center; margin: 10px 0 14px;">
+        <div style="color:#374151;">Rows detected: <b>{{ total_rows }}</b></div>
+        <form method="post" style="display:flex; gap: 8px; align-items:center;">
+          {% csrf_token %}
+          <input type="hidden" name="stage" value="confirm" />
+          <input type="hidden" name="token" value="{{ token }}" />
+          <button type="submit" class="default">Confirm Import</button>
+          <a class="button" href="." style="padding: 6px 10px;">Back</a>
+        </form>
+      </div>
+
+      {% if row_errors and row_errors|length %}
+        <div style="background:#fff7ed; border:1px solid #fed7aa; color:#9a3412; padding: 10px; border-radius: 10px; margin-bottom: 12px;">
+          <div style="font-weight:700; margin-bottom: 6px;">Validation warnings (showing up to 50)</div>
+          <ul style="margin: 0; padding-left: 18px; font-size: 12px;">
+            {% for e in row_errors %}
+              <li>Row {{ e.row_num }}: {{ e.errors|join:"; " }}</li>
+            {% endfor %}
+          </ul>
+          <div style="font-size: 12px; margin-top: 8px;">You can still confirm; invalid rows will fail during import and be reported.</div>
+        </div>
+      {% endif %}
+
+      <div style="border: 1px solid #e5e7eb; border-radius: 10px; overflow:auto; background:#fff;">
+        <table style="border-collapse: collapse; width: 100%; min-width: 980px;">
+          <thead>
+            <tr>
+              <th style="border-bottom:1px solid #e5e7eb; padding:8px; background:#f9fafb; text-align:left;">Row</th>
+              {% for c in columns %}
+                <th style="border-bottom:1px solid #e5e7eb; padding:8px; background:#f9fafb; text-align:left;">{{ c }}</th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in preview_rows %}
+              <tr>
+                <td style="border-top:1px solid #1c60e7; padding:8px;">{{ r.row_num }}</td>
+                {% for c in columns %}
+                  {% if r.profile_type == 'STUDENT' and c == 'staff_id' or r.profile_type == 'STUDENT' and c == 'department_code' or r.profile_type == 'STUDENT' and c == 'designation' %}
+                    <td style="border-top:1px solid #f3f4f6; padding:8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color:#9ca3af; font-style:italic;">(n/a)</td>
+                  {% else %}
+                    <td style="border-top:1px solid #f3f4f6; padding:8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;">{{ r|get_item:c }}</td>
+                  {% endif %}
+                {% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+    {% elif stage == 'result' %}
+      <div style="margin: 10px 0 14px;">
+        <div style="font-size: 14px;">Created users: <b>{{ created }}</b></div>
+      </div>
+
+      {% if failed and failed|length %}
+        <div style="background:#fef2f2; border:1px solid #fecaca; color:#991b1b; padding: 10px; border-radius: 10px; margin-bottom: 12px;">
+          <div style="font-weight:700; margin-bottom: 6px;">Failed rows</div>
+          <ul style="margin: 0; padding-left: 18px; font-size: 12px;">
+            {% for f in failed %}
+              <li>Row {{ f.row_num }} ({{ f.username }}): {{ f.error }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+
+      <div style="display:flex; gap: 10px;">
+        <a class="button" href="../" style="padding: 6px 10px;">Back to Users</a>
+        <a class="button" href="." style="padding: 6px 10px;">Import Another CSV</a>
+      </div>
+    {% else %}
+      <a class="button" href="." style="padding: 6px 10px;">Start Import</a>
+    {% endif %}
+
+  </div>
+{% endblock %}
+
+

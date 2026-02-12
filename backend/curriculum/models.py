@@ -1,6 +1,7 @@
 from django.db import models
 from django.conf import settings
 from academics.models import Department
+from django.core.exceptions import ValidationError
 
 
 CLASS_TYPE_CHOICES = (
@@ -10,7 +11,9 @@ CLASS_TYPE_CHOICES = (
     ('TCPR', 'Tcpr'),
     ('PRACTICAL', 'Practical'),
     ('AUDIT', 'Audit'),
+    ('SPECIAL', 'Special'),
 )
+
 
 
 class Regulation(models.Model):
@@ -34,6 +37,42 @@ class Regulation(models.Model):
 
     def __str__(self):
         return self.code
+
+
+
+SPECIAL_ASSESSMENT_CHOICES = (
+    ('ssa1', 'SSA1'),
+    ('formative1', 'Formative1'),
+    ('ssa2', 'SSA2'),
+    ('formative2', 'Formative2'),
+    ('cia1', 'CIA1'),
+    ('cia2', 'CIA2'),
+)
+
+
+def _normalize_assessment_keys(value) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, str):
+        # tolerate comma-separated strings
+        parts = [p.strip() for p in value.split(',') if p.strip()]
+        value = parts
+    if not isinstance(value, (list, tuple)):
+        return []
+    out: list[str] = []
+    for v in value:
+        k = str(v or '').strip().lower()
+        if k:
+            out.append(k)
+    # stable unique order
+    seen = set()
+    deduped: list[str] = []
+    for k in out:
+        if k in seen:
+            continue
+        seen.add(k)
+        deduped.append(k)
+    return deduped
 
 
 
@@ -66,6 +105,10 @@ class CurriculumMaster(models.Model):
     # if editable, departments may edit their copies
     editable = models.BooleanField(default=False)
 
+    # For class_type=SPECIAL: which assessment tables apply to this course.
+    # Stored as list of assessment keys: ['ssa1','formative1','ssa2','formative2','cia1','cia2']
+    enabled_assessments = models.JSONField(default=list, blank=True)
+
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -76,6 +119,7 @@ class CurriculumMaster(models.Model):
 
     def __str__(self):
         return f"{self.regulation} - Sem{self.semester} - {self.course_code or self.course_name or self.pk}"
+
 
     @property
     def regulation_obj(self):
@@ -89,6 +133,18 @@ class CurriculumMaster(models.Model):
             return None
         obj, _ = Regulation.objects.get_or_create(code=code)
         return obj
+
+    def clean(self):
+        super().clean()
+        self.enabled_assessments = _normalize_assessment_keys(self.enabled_assessments)
+        allowed = {k for k, _ in SPECIAL_ASSESSMENT_CHOICES}
+        invalid = [k for k in (self.enabled_assessments or []) if k not in allowed]
+        if invalid:
+            raise ValidationError({'enabled_assessments': f"Invalid assessment key(s): {', '.join(invalid)}"})
+        if str(self.class_type or '').upper() == 'SPECIAL':
+            if not self.enabled_assessments:
+                raise ValidationError({'enabled_assessments': 'Select at least one assessment for Special courses.'})
+
 
     def save(self, *args, **kwargs):
         # Ensure a Regulation record exists for this regulation string
@@ -104,6 +160,8 @@ class CurriculumMaster(models.Model):
             im = self.internal_mark or 0
             em = self.external_mark or 0
             self.total_mark = im + em
+        # Normalize + validate Special config
+        self.full_clean()
         super().save(*args, **kwargs)
 
 
@@ -134,6 +192,9 @@ class CurriculumDepartment(models.Model):
     editable = models.BooleanField(default=False)
     overridden = models.BooleanField(default=False)
 
+    # Copied from master when present; for SPECIAL courses controls visible assessments.
+    enabled_assessments = models.JSONField(default=list, blank=True)
+
     APPROVAL_PENDING = 'PENDING'
     APPROVAL_APPROVED = 'APPROVED'
     APPROVAL_REJECTED = 'REJECTED'
@@ -161,6 +222,7 @@ class CurriculumDepartment(models.Model):
     def __str__(self):
         return f"{self.department.code} - {self.regulation} - Sem{self.semester} - {self.course_code or self.course_name or self.pk}"
 
+
     @property
     def regulation_obj(self):
         code = (self.regulation or '').strip()
@@ -168,6 +230,17 @@ class CurriculumDepartment(models.Model):
             return None
         obj, _ = Regulation.objects.get_or_create(code=code)
         return obj
+
+    def clean(self):
+        super().clean()
+        self.enabled_assessments = _normalize_assessment_keys(self.enabled_assessments)
+        allowed = {k for k, _ in SPECIAL_ASSESSMENT_CHOICES}
+        invalid = [k for k in (self.enabled_assessments or []) if k not in allowed]
+        if invalid:
+            raise ValidationError({'enabled_assessments': f"Invalid assessment key(s): {', '.join(invalid)}"})
+        if str(self.class_type or '').upper() == 'SPECIAL':
+            if not self.enabled_assessments:
+                raise ValidationError({'enabled_assessments': 'Select at least one assessment for Special courses.'})
 
     def save(self, *args, **kwargs):
         # Ensure a Regulation record exists for this regulation string
@@ -199,6 +272,7 @@ class CurriculumDepartment(models.Model):
                 for f in protected_fields:
                     if getattr(old, f) != getattr(self, f):
                         raise ValidationError(f"Field '{f}' cannot be modified for department entry because master is not editable.")
+        self.full_clean()
         super().save(*args, **kwargs)
 
 

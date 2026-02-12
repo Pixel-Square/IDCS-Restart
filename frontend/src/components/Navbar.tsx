@@ -20,7 +20,7 @@ export default function Navbar({ user }: NavbarProps) {
     navigate("/login");
   };
 
-  return (
+  return (    // ...existing code...
     <nav className="bg-white shadow-md border-b border-gray-200 fixed top-0 left-0 right-0 z-40 overflow-x-hidden">
       <div className="px-4 max-w-full">
         <div className="flex items-center justify-between h-16">
@@ -43,7 +43,6 @@ export default function Navbar({ user }: NavbarProps) {
               />
             </Link>
           </div>
-
           {/* Right Section: User Menu or Login */}
           <div className="flex items-center gap-3">
             {user ? (
@@ -88,4 +87,5 @@ export default function Navbar({ user }: NavbarProps) {
       </div>
     </nav>
   );
+// ...existing code...
 }

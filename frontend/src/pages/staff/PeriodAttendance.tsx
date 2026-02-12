@@ -18,7 +18,7 @@ type PeriodItem = {
   elective_subject_name?: string | null
 }
 
-type Student = { id: number; reg_no: string; username: string }
+type Student = { id: number; reg_no: string; username?: string; name?: string; section?: string | null; section_id?: number | null }
 
 export default function PeriodAttendance(){
   const [date, setDate] = useState<string>(new Date().toISOString().slice(0,10))
@@ -132,9 +132,12 @@ export default function PeriodAttendance(){
       }
 
       setStudents((studs || []).map((s: any) => ({ 
-        id: s.id, 
-        reg_no: s.reg_no || s.regno || String(s.id), 
-        username: s.username || s.name || '' 
+        id: Number(s.id), 
+        reg_no: String(s.reg_no || s.regno || String(s.id)), 
+        name: String(s.name ?? s.full_name ?? s.username ?? ''),
+        username: String(s.username ?? s.name ?? ''),
+        section: s.section_name ?? s.section ?? null,
+        section_id: s.section_id ?? null,
       })));
       const initial: Record<number,string> = {};
       (studs||[]).forEach((s:any)=> initial[s.id] = 'P');
@@ -226,9 +229,12 @@ export default function PeriodAttendance(){
       }
 
       const studentList = (studs || []).map((s: any) => ({ 
-        id: s.id, 
-        reg_no: s.reg_no || s.regno || String(s.id), 
-        username: s.username || s.name || '' 
+        id: Number(s.id), 
+        reg_no: String(s.reg_no || s.regno || String(s.id)), 
+        name: String(s.name ?? s.full_name ?? s.username ?? ''),
+        username: String(s.username ?? s.name ?? ''),
+        section: s.section_name ?? s.section ?? null,
+        section_id: s.section_id ?? null,
       }))
 
       // Initialize marks as Present for all students

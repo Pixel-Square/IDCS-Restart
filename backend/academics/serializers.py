@@ -3,6 +3,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from .models import TeachingAssignment
+from .models import SpecialCourseAssessmentEditRequest
 from academics.models import Subject, Section
 from accounts.utils import get_user_permissions
 from academics.models import SectionAdvisor, StaffProfile
@@ -65,12 +66,14 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
             return None
 
     def get_subject_code(self, obj):
-        # prefer explicit subject, then curriculum row
+        # prefer curriculum_row first, then explicit Subject
         try:
-            # Prefer direct curriculum_row on the assignment first
             if getattr(obj, 'curriculum_row', None):
                 row = obj.curriculum_row
-                return getattr(row, 'course_code', None)
+                # department row may omit code/name; fall back to master entry if present
+                code = getattr(row, 'course_code', None) or (getattr(getattr(row, 'master', None), 'course_code', None) if getattr(row, 'master', None) else None)
+                if code:
+                    return code
             if getattr(obj, 'subject', None):
                 return getattr(obj.subject, 'code', None)
             # If this is an elective assignment without curriculum_row/subject, prefer elective_subject
@@ -98,7 +101,10 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
                 pass
             if getattr(obj, 'curriculum_row', None):
                 row = obj.curriculum_row
-                return getattr(row, 'course_name', None)
+                # prefer department row name, else use master.name
+                name = getattr(row, 'course_name', None) or (getattr(getattr(row, 'master', None), 'course_name', None) if getattr(row, 'master', None) else None)
+                if name:
+                    return name
             if getattr(obj, 'subject', None):
                 return getattr(obj.subject, 'name', None)
             if getattr(obj, 'elective_subject', None):
@@ -168,10 +174,12 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = TeachingAssignment
-        fields = ('id', 'staff_id', 'section_id', 'academic_year', 'subject', 'curriculum_row_id', 'elective_subject_id', 'custom_subject', 'is_active', 'staff_details', 'section_details', 'curriculum_row_details', 'section_name')
+
+        fields = ('id', 'staff_id', 'section_id', 'academic_year', 'subject', 'curriculum_row_id', 'elective_subject_id', 'custom_subject', 'is_active', 'staff_details', 'section_details', 'curriculum_row_details', 'section_name', 'enabled_assessments')
+        enabled_assessments = serializers.ListField(child=serializers.CharField(), required=False, allow_empty=True)
 
     def get_subject(self, obj):
-        # prefer curriculum row display
+        # prefer curriculum_row display, then explicit Subject
         try:
             # Prefer elective subject first
             if getattr(obj, 'elective_subject', None):
@@ -179,13 +187,12 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
                 return f"{getattr(es, 'course_code', '')} - {getattr(es, 'course_name', '')}".strip(' -')
             if getattr(obj, 'curriculum_row', None):
                 row = obj.curriculum_row
-                return f"{row.course_code or ''} - {row.course_name or ''}".strip(' -')
+                code = getattr(row, 'course_code', None) or (getattr(getattr(row, 'master', None), 'course_code', None) if getattr(row, 'master', None) else None)
+                name = getattr(row, 'course_name', None) or (getattr(getattr(row, 'master', None), 'course_name', None) if getattr(row, 'master', None) else None)
+                return f"{code or ''}{(' - ' + name) if name else ''}".strip(' -')
             if getattr(obj, 'subject', None):
                 return getattr(obj.subject, 'name', str(obj.subject))
-            # Do not fall back to arbitrary department curriculum rows —
-            # that may return an unrelated subject. If neither explicit
-            # curriculum_row nor subject is present, return None so the
-            # frontend doesn't display an incorrect shared subject.
+            # If neither present, return None
         except Exception:
             pass
         return None
@@ -369,6 +376,51 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
                 pass
 
         return super().create(validated_data)
+
+
+
+class SpecialCourseAssessmentEditRequestSerializer(serializers.ModelSerializer):
+    selection_id = serializers.IntegerField(source='selection.id', read_only=True)
+    curriculum_row_id = serializers.IntegerField(source='selection.curriculum_row_id', read_only=True)
+    academic_year_id = serializers.IntegerField(source='selection.academic_year_id', read_only=True)
+    requested_by_id = serializers.IntegerField(source='requested_by.id', read_only=True)
+    requested_by_user = serializers.SerializerMethodField(read_only=True)
+    reviewed_by_username = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = SpecialCourseAssessmentEditRequest
+        fields = (
+            'id',
+            'selection_id',
+            'curriculum_row_id',
+            'academic_year_id',
+            'requested_by_id',
+            'requested_by_user',
+            'status',
+            'requested_at',
+            'reviewed_by_username',
+            'reviewed_at',
+            'can_edit_until',
+            'used_at',
+        )
+
+    def get_requested_by_user(self, obj):
+        try:
+            u = getattr(getattr(obj, 'requested_by', None), 'user', None)
+            return getattr(u, 'username', None)
+        except Exception:
+            return None
+
+    def get_reviewed_by_username(self, obj):
+        try:
+            u = getattr(obj, 'reviewed_by', None)
+            return getattr(u, 'username', None)
+        except Exception:
+            return None
+
+
+
+
 def _user_can_manage_assignment(user, teaching_assignment: TeachingAssignment) -> bool:
     """Return True if `user` is allowed to manage the given teaching_assignment.
 

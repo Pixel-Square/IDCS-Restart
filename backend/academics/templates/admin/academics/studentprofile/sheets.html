@@ -1,0 +1,446 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+  <div style="max-width: 1400px;">
+    <h1>{{ title }}</h1>
+    <p style="color:#6b7280; margin-top:6px;">
+      Select users (drag to select multiple), assign <b>Section</b>, generate <b>reg_no</b> series, then save to create Student Profiles.
+    </p>
+
+    {{ sections|json_script:"sections-data" }}
+    {{ data_url|json_script:"data-url" }}
+    {{ save_url|json_script:"save-url" }}
+
+    <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; margin: 12px 0; padding: 12px; border: 1px solid #e5e7eb; border-radius: 10px; background: var(--body-bg, #fff);">
+      <div>
+        <div style="font-weight:700; margin-bottom:6px;">Bulk section</div>
+        <select id="bulk-section" style="min-width: 340px;">
+          <option value="">-- choose section --</option>
+          {% for s in sections %}
+            <option value="{{ s.id }}">{{ s.label }}</option>
+          {% endfor %}
+        </select>
+        <button type="button" class="button" id="apply-section" style="margin-left:8px;">Apply to selected</button>
+      </div>
+
+      <div>
+        <div style="font-weight:700; margin-bottom:6px;">Bulk status</div>
+        <select id="bulk-status" style="min-width: 160px;">
+          {% for v, label in status_choices %}
+            <option value="{{ v }}">{{ label }}</option>
+          {% endfor %}
+        </select>
+        <button type="button" class="button" id="apply-status" style="margin-left:8px;">Apply to selected</button>
+      </div>
+
+      <div style="flex:1 1 520px;">
+        <div style="font-weight:700; margin-bottom:6px;">Generate reg_no series</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+          <input id="series-prefix" type="text" placeholder="Prefix (e.g., 22CS)" style="min-width:160px;" />
+          <input id="series-start" type="number" placeholder="Start (e.g., 1)" style="width:120px;" />
+          <input id="series-width" type="number" placeholder="Digits (e.g., 3)" style="width:120px;" />
+          <button type="button" class="button" id="apply-series">Fill selected</button>
+        </div>
+        <div style="color:#6b7280; font-size:12px; margin-top:6px;">Fills in the current table order (after sort/filter).</div>
+      </div>
+
+      <div style="margin-left:auto;">
+        <button type="button" class="default" id="save-selected">Save selected</button>
+      </div>
+    </div>
+
+    <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom: 10px;">
+      <div style="flex: 1 1 280px;">
+        <label style="display:block; font-weight:700; margin-bottom:6px;">Quick filter (username/email)</label>
+        <input id="quick-filter" type="text" placeholder="type to filter..." style="width:100%;" />
+      </div>
+      <div style="flex: 1 1 280px;">
+        <label style="display:block; font-weight:700; margin-bottom:6px;">Batch</label>
+        <input id="filter-batch" type="text" placeholder="e.g., 2022" style="width:100%;" />
+      </div>
+      <div style="flex: 1 1 280px;">
+        <label style="display:block; font-weight:700; margin-bottom:6px;">Section contains</label>
+        <input id="filter-section" type="text" placeholder="e.g., Sem 3 / A" style="width:100%;" />
+      </div>
+    </div>
+
+    <div style="border: 1px solid #e5e7eb; border-radius: 10px; overflow:auto; background: var(--body-bg, #fff);">
+      <table id="sheet-table" style="border-collapse: collapse; width:100%; min-width: 1100px;">
+        <thead>
+          <tr>
+            <th data-key="selected" style="position:sticky; top:0; background:#f9fafb; border-bottom:1px solid #e5e7eb; padding:10px; width:64px;">Sel</th>
+            <th data-key="username" style="position:sticky; top:0; background:#f9fafb; border-bottom:1px solid #e5e7eb; padding:10px; cursor:pointer;">Username</th>
+            <th data-key="email" style="position:sticky; top:0; background:#f9fafb; border-bottom:1px solid #e5e7eb; padding:10px; cursor:pointer;">Email</th>
+            <th data-key="reg_no" style="position:sticky; top:0; background:#f9fafb; border-bottom:1px solid #e5e7eb; padding:10px;">Reg no</th>
+            <th data-key="section_label" style="position:sticky; top:0; background:#f9fafb; border-bottom:1px solid #e5e7eb; padding:10px; cursor:pointer;">Section</th>
+            <th data-key="batch" style="position:sticky; top:0; background:#f9fafb; border-bottom:1px solid #e5e7eb; padding:10px; cursor:pointer;">Batch</th>
+            <th data-key="status" style="position:sticky; top:0; background:#f9fafb; border-bottom:1px solid #e5e7eb; padding:10px; cursor:pointer;">Status</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div id="result" style="margin-top: 12px;"></div>
+
+    <form style="display:none;">{% csrf_token %}</form>
+  </div>
+
+  <script>
+    (function () {
+      // Endpoints
+      const dataUrl = JSON.parse(document.getElementById('data-url').textContent);
+      const saveUrl = JSON.parse(document.getElementById('save-url').textContent);
+
+      const sections = JSON.parse(document.getElementById('sections-data').textContent || '[]');
+      const tbody = document.querySelector('#sheet-table tbody');
+      const quickFilter = document.getElementById('quick-filter');
+      const filterBatch = document.getElementById('filter-batch');
+      const filterSection = document.getElementById('filter-section');
+      const result = document.getElementById('result');
+
+      const bulkSection = document.getElementById('bulk-section');
+      const applySection = document.getElementById('apply-section');
+      const bulkStatus = document.getElementById('bulk-status');
+      const applyStatus = document.getElementById('apply-status');
+
+      const prefixEl = document.getElementById('series-prefix');
+      const startEl = document.getElementById('series-start');
+      const widthEl = document.getElementById('series-width');
+      const applySeries = document.getElementById('apply-series');
+
+      const saveBtn = document.getElementById('save-selected');
+
+      let allRows = [];
+      let viewRows = [];
+      let sortKey = 'username';
+      let sortDir = 'asc';
+
+      // Drag selection state
+      let isDragSelecting = false;
+      let dragSelectValue = true;
+
+      function csrfToken() {
+        const m = document.cookie.match(/csrftoken=([^;]+)/);
+        return m ? m[1] : '';
+      }
+
+      function normalize(s) {
+        return (s || '').toString().toLowerCase();
+      }
+
+      function selectedIds() {
+        return new Set(viewRows.filter(r => r.selected).map(r => r.id));
+      }
+
+      function applyFilters() {
+        const q = normalize(quickFilter.value);
+        const b = normalize(filterBatch.value);
+        const sec = normalize(filterSection.value);
+
+        viewRows = allRows.filter(r => {
+          if (q) {
+            const hay = normalize(r.username) + ' ' + normalize(r.email);
+            if (!hay.includes(q)) return false;
+          }
+          if (b && !normalize(r.batch).includes(b)) return false;
+          if (sec && !normalize(r.section_label).includes(sec)) return false;
+          return true;
+        });
+
+        applySort();
+        render();
+      }
+
+      function applySort() {
+        const dir = sortDir === 'asc' ? 1 : -1;
+        viewRows.sort((a, b) => {
+          const av = (a[sortKey] ?? '').toString();
+          const bv = (b[sortKey] ?? '').toString();
+          return av.localeCompare(bv) * dir;
+        });
+      }
+
+      function sectionSelectHtml(currentId) {
+        const opts = ['<option value="">--</option>'].concat(
+          sections.map(s => `<option value="${s.id}" ${String(s.id) === String(currentId || '') ? 'selected' : ''}>${s.label}</option>`)
+        );
+        return `<select class="cell-section">${opts.join('')}</select>`;
+      }
+
+      function statusSelectHtml(current) {
+        const options = Array.from(document.querySelectorAll('#bulk-status option')).map(o => {
+          const v = o.value;
+          const label = o.textContent;
+          return `<option value="${v}" ${String(v) === String(current || 'ACTIVE') ? 'selected' : ''}>${label}</option>`;
+        });
+        return `<select class="cell-status">${options.join('')}</select>`;
+      }
+
+      function render() {
+        tbody.innerHTML = '';
+        const frag = document.createDocumentFragment();
+
+        for (const r of viewRows) {
+          const tr = document.createElement('tr');
+          tr.dataset.id = r.id;
+          tr.style.borderTop = '1px solid #f3f4f6';
+          tr.style.background = r.selected ? 'rgba(59,130,246,0.08)' : 'transparent';
+
+          tr.innerHTML = `
+            <td style="padding:10px; text-align:center;">
+              <input type="checkbox" class="row-select" ${r.selected ? 'checked' : ''} />
+            </td>
+            <td style="padding:10px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">${r.username}</td>
+            <td style="padding:10px;">${r.email || ''}</td>
+            <td style="padding:10px;"><input class="cell-regno" type="text" value="${(r.reg_no || '').replace(/"/g, '&quot;')}" style="width: 160px;" ${r.has_profile ? 'readonly' : ''} /></td>
+            <td style="padding:10px;">${sectionSelectHtml(r.section_id)}</td>
+            <td style="padding:10px;"><input class="cell-batch" type="text" value="${(r.batch || '').replace(/"/g, '&quot;')}" style="width: 120px;" /></td>
+            <td style="padding:10px;">${statusSelectHtml(r.status || 'ACTIVE')}</td>
+          `;
+
+          frag.appendChild(tr);
+        }
+
+        tbody.appendChild(frag);
+      }
+
+      function setSelected(id, value) {
+        const row = allRows.find(x => x.id === id);
+        if (!row) return;
+        row.selected = !!value;
+      }
+
+      function updateRowFromDom(tr) {
+        const id = Number(tr.dataset.id);
+        const row = allRows.find(x => x.id === id);
+        if (!row) return;
+
+        const reg = tr.querySelector('.cell-regno');
+        const sec = tr.querySelector('.cell-section');
+        const bat = tr.querySelector('.cell-batch');
+        const st = tr.querySelector('.cell-status');
+
+        row.reg_no = reg ? reg.value : '';
+        row.section_id = sec ? sec.value : '';
+        row.section_label = sec && sec.selectedOptions && sec.selectedOptions[0] ? (sec.selectedOptions[0].textContent || '') : '';
+        row.batch = bat ? bat.value : '';
+        row.status = st ? st.value : 'ACTIVE';
+      }
+
+      // Sorting
+      document.querySelectorAll('#sheet-table thead th[data-key]').forEach(th => {
+        const key = th.dataset.key;
+        if (!key || key === 'selected' || key === 'reg_no') return;
+        th.addEventListener('click', () => {
+          if (sortKey === key) {
+            sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+          } else {
+            sortKey = key;
+            sortDir = 'asc';
+          }
+          applySort();
+          render();
+        });
+      });
+
+      // Filtering
+      [quickFilter, filterBatch, filterSection].forEach(el => el.addEventListener('input', applyFilters));
+
+      // Drag selection
+      tbody.addEventListener('mousedown', (e) => {
+        const tr = e.target.closest('tr');
+        if (!tr) return;
+        const id = Number(tr.dataset.id);
+        const isCheckbox = e.target.classList.contains('row-select');
+
+        // Only start drag-select when clicking checkbox or first cell
+        if (!isCheckbox && e.target.tagName !== 'TD') return;
+
+        isDragSelecting = true;
+        dragSelectValue = !(allRows.find(x => x.id === id)?.selected);
+        setSelected(id, dragSelectValue);
+        render();
+        e.preventDefault();
+      });
+
+      tbody.addEventListener('mouseover', (e) => {
+        if (!isDragSelecting) return;
+        const tr = e.target.closest('tr');
+        if (!tr) return;
+        const id = Number(tr.dataset.id);
+        setSelected(id, dragSelectValue);
+        render();
+      });
+
+      window.addEventListener('mouseup', () => {
+        isDragSelecting = false;
+      });
+
+      // Keep edits in sync
+      tbody.addEventListener('change', (e) => {
+        const tr = e.target.closest('tr');
+        if (!tr) return;
+        const id = Number(tr.dataset.id);
+
+        if (e.target.classList.contains('row-select')) {
+          setSelected(id, e.target.checked);
+          render();
+          return;
+        }
+
+        updateRowFromDom(tr);
+      });
+
+      tbody.addEventListener('input', (e) => {
+        const tr = e.target.closest('tr');
+        if (!tr) return;
+        updateRowFromDom(tr);
+      });
+
+      // Bulk apply section/status
+      applySection.addEventListener('click', () => {
+        const secId = bulkSection.value;
+        const secLabel = bulkSection.selectedOptions && bulkSection.selectedOptions[0] ? bulkSection.selectedOptions[0].textContent : '';
+        allRows.forEach(r => {
+          if (!r.selected) return;
+          r.section_id = secId;
+          r.section_label = secLabel;
+        });
+        render();
+      });
+
+      applyStatus.addEventListener('click', () => {
+        const st = bulkStatus.value;
+        allRows.forEach(r => {
+          if (!r.selected) return;
+          r.status = st;
+        });
+        render();
+      });
+
+      // Series generator
+      applySeries.addEventListener('click', () => {
+        const prefix = (prefixEl.value || '').trim();
+        const start = Number(startEl.value || 0);
+        const width = Number(widthEl.value || 0);
+        if (!prefix || !start || !width) {
+          alert('Please enter prefix, start, and digits.');
+          return;
+        }
+
+        const selected = viewRows.filter(r => r.selected);
+        if (!selected.length) {
+          alert('Select at least one row first.');
+          return;
+        }
+
+        selected.forEach((r, i) => {
+          const n = start + i;
+          const num = String(n).padStart(width, '0');
+          if (!r.has_profile) r.reg_no = `${prefix}${num}`;
+        });
+
+        render();
+      });
+
+      // Save
+      saveBtn.addEventListener('click', async () => {
+        // ensure any current DOM edits are captured
+        document.querySelectorAll('#sheet-table tbody tr').forEach(updateRowFromDom);
+
+        const selected = allRows.filter(r => r.selected);
+        if (!selected.length) {
+          alert('No rows selected.');
+          return;
+        }
+
+        const rowsToSend = selected.map(r => ({
+          user_id: r.id,
+          has_profile: !!r.has_profile,
+          reg_no: r.reg_no || '',
+          section_id: r.section_id || '',
+          batch: r.batch || '',
+          status: r.status || 'ACTIVE',
+        }));
+
+        // Basic client validation
+        const missingReg = rowsToSend.filter(x => !x.has_profile && !(x.reg_no || '').trim());
+        if (missingReg.length) {
+          alert('reg_no is required for all selected rows that do not already have a StudentProfile.');
+          return;
+        }
+
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving...';
+        result.innerHTML = '';
+
+        try {
+          const resp = await fetch(saveUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-CSRFToken': csrfToken(),
+            },
+            body: JSON.stringify({ rows: rowsToSend }),
+          });
+          const data = await resp.json();
+
+          if (!resp.ok) {
+            result.innerHTML = `<div style="background:#fef2f2; border:1px solid #fecaca; color:#991b1b; padding:10px; border-radius:10px;">${data.detail || 'Save failed'}</div>`;
+            return;
+          }
+
+          const created = data.created || 0;
+          const failed = data.failed || [];
+
+          // Remove successfully created users from the list
+          const failedIds = new Set((failed || []).map(f => Number(f.user_id)));
+          allRows = allRows.filter(r => !(r.selected && !failedIds.has(r.id)));
+          viewRows = [];
+          applyFilters();
+
+          let html = `<div style="background:#ecfdf5; border:1px solid #a7f3d0; color:#065f46; padding:10px; border-radius:10px; margin-bottom:10px;">Created: ${created}</div>`;
+          if (failed.length) {
+            html += `<div style="background:#fffbeb; border:1px solid #fde68a; color:#92400e; padding:10px; border-radius:10px;">`;
+            html += `<div style="font-weight:700; margin-bottom:6px;">Failed rows</div>`;
+            html += `<ul style="margin:0; padding-left:18px;">`;
+            failed.forEach(f => {
+              html += `<li>User ${f.user_id}: ${f.error}</li>`;
+            });
+            html += `</ul></div>`;
+          }
+          result.innerHTML = html;
+
+        } catch (e) {
+          result.innerHTML = `<div style="background:#fef2f2; border:1px solid #fecaca; color:#991b1b; padding:10px; border-radius:10px;">${e}</div>`;
+        } finally {
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Save selected';
+        }
+      });
+
+      async function init() {
+        const resp = await fetch(dataUrl, { headers: { 'Accept': 'application/json' } });
+        const data = await resp.json();
+        const rows = (data.rows || []).map(r => ({
+          id: r.id,
+          username: r.username,
+          email: r.email,
+          selected: false,
+          has_profile: !!r.has_student_profile,
+          reg_no: r.reg_no || '',
+          section_id: r.section_id || '',
+          section_label: r.section_label || '',
+          batch: r.batch || '',
+          status: r.status || 'ACTIVE',
+        }));
+        allRows = rows;
+        applyFilters();
+      }
+
+      init();
+    })();
+  </script>
+{% endblock %}

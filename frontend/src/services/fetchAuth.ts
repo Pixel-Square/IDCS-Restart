@@ -80,10 +80,17 @@ export async function fetchWithAuth(input: RequestInfo | URL, init: RequestInit 
     // retry the same resolved URL (finalInput) so we don't accidentally hit the Vite dev server
     return fetch(finalInput, { ...init, headers: headers2 })
   } catch (e) {
-    // If refresh fails, return the original 401 response
-    // Tokens already cleared in refreshToken()
-    console.error('Token refresh failed:', e)
-    return res
+    // failed to refresh -> clear tokens, log and redirect to login
+    try { window.localStorage.removeItem('access'); window.localStorage.removeItem('refresh'); } catch (_) {}
+    console.error('Token refresh failed:', e);
+    try {
+      if (typeof window !== 'undefined') {
+        setTimeout(() => {
+          try { window.location.href = '/login'; } catch (_) {}
+        }, 50);
+      }
+    } catch (_) {}
+    return res;
   }
 }
 

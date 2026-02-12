@@ -1,0 +1,11 @@
+{
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "mammoth": "^1.11.0"
+  }
+  ,
+  "scripts": {
+    "parse-docx": "node parse_docx_mammoth.js"
+  }
+}
+

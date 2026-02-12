@@ -5,6 +5,7 @@ export type Master = {
   course_code?: string | null;
   course_name?: string | null;
   class_type?: string;
+  enabled_assessments?: string[];
   category?: string;
   is_elective?: boolean;
   l?: number; t?: number; p?: number; s?: number; c?: number;
@@ -24,6 +25,8 @@ export type DeptRow = {
   semester: number;
   course_code?: string | null;
   course_name?: string | null;
+  class_type?: string | null;
+  enabled_assessments?: string[];
   l?: number; t?: number; p?: number; s?: number; c?: number;
   internal_mark?: number | null;
   external_mark?: number | null;
@@ -80,6 +83,12 @@ export async function updateMaster(id: number, payload: Partial<Master>) {
 export async function fetchDeptRows(): Promise<DeptRow[]> {
   const res = await fetchWithAuth(`${API_BASE}/api/curriculum/department/`);
   if (!res.ok) throw new Error('Failed to fetch dept rows');
+  return res.json();
+}
+
+export async function fetchDeptRow(id: number): Promise<DeptRow> {
+  const res = await fetchWithAuth(`${API_BASE}/api/curriculum/department/${encodeURIComponent(String(id))}/`);
+  if (!res.ok) throw new Error('Failed to fetch dept row');
   return res.json();
 }
 

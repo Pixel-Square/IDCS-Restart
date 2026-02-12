@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import CLASS_TYPES, { normalizeClassType } from '../../constants/classTypes';
 import CurriculumLayout from './CurriculumLayout';
 import { fetchDeptRows, updateDeptRow, approveDeptRow, createElective, fetchElectives } from '../../services/curriculum';
 import fetchWithAuth from '../../services/fetchAuth';
@@ -287,15 +288,25 @@ export default function DeptList() {
                         }}
                       />
                     </td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input value={r.category || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, category: e.target.value } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
                     <td className="px-3 py-2 whitespace-nowrap">
-                      <select value={r.class_type || 'THEORY'} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, class_type: e.target.value } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
-                        <option value="THEORY">THEORY</option>
-                        <option value="LAB">LAB</option>
-                        <option value="TCPL">TCPL</option>
-                        <option value="TCPR">TCPR</option>
-                        <option value="PRACTICAL">PRACTICAL</option>
-                        <option value="AUDIT">AUDIT</option>
+                      <input
+                        value={r.category || ''}
+                        onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, category: e.target.value } : row))}
+                        className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 edit-cell-input"
+                      />
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      <select
+                        value={r.class_type || 'THEORY'}
+                        onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, class_type: e.target.value } : row))}
+                        className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 edit-cell-input"
+                        style={{ minWidth: 90 }}
+                      >
+                        {CLASS_TYPES.map((ct) => {
+                          const key = normalizeClassType(String(ct));
+                          const label = String(ct).charAt(0).toUpperCase() + String(ct).slice(1).toLowerCase();
+                          return <option key={key} value={key}>{label}</option>;
+                        })}
                       </select>
                     </td>
                     <td className="px-3 py-2 text-center whitespace-nowrap">

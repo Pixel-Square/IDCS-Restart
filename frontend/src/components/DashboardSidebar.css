@@ -1,0 +1,35 @@
+.dsb{
+  width: 260px;
+  padding: 20px;
+  box-sizing: border-box;
+  /* Fix sidebar to the left of the viewport, below the navbar */
+  position: fixed;
+  left: 0;
+  top: 64px; /* matches .navbar height */
+  height: calc(100vh - 64px);
+  z-index: 90;
+  overflow: auto; /* allow internal scrolling if sidebar content is long */
+  background: linear-gradient(180deg,#ffffff,#f8fafc);
+  border-right: 1px solid rgba(15,23,42,0.04);
+}
+.modern-dsb{ display:flex; flex-direction:column; }
+.dsb-header{ font-weight:700; font-size:16px; margin-bottom:14px; color:#0f172a; }
+.dsb-list{ list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:6px; }
+.dsb-item{ border-radius:10px; }
+.dsb-link{ display:flex; gap:10px; align-items:center; padding:10px 12px; color:#0f172a; text-decoration:none; border-radius:8px; }
+.dsb-icon{ width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; color:#10b981; }
+.dsb-label{ font-weight:600; display:flex; align-items:center; gap:8px; }
+.dsb-badge{ display:inline-flex; align-items:center; justify-content:center; min-width:18px; height:18px; padding:0 6px; border-radius:999px; background:#ef4444; color:#fff; font-size:11px; font-weight:800; line-height:18px; }
+.dsb-sublist{ list-style:none; margin:6px 0 0 46px; padding:0; display:flex; flex-direction:column; gap:6px; }
+.dsb-sub-link{ padding:6px 10px; border-radius:8px; font-weight:600; font-size:13px; }
+.dsb-item.active .dsb-link{ background: linear-gradient(90deg,#ecfdf5,#ffffff); box-shadow:0 6px 14px rgba(16,185,129,0.10); }
+.dsb-link:hover{ background:rgba(16,185,129,0.08); }
+
+.dsb a{ color:inherit; }
+
+/* Collapsed sidebar styles */
+.dsb.collapsed{ width:72px; padding:12px; }
+.dsb.collapsed .dsb-link{ justify-content:center; padding:8px; }
+.dsb.collapsed .dsb-label{ display:none; }
+.dsb.collapsed .dsb-header{ text-align:center; }
+.dsb.collapsed .dsb-icon{ width:36px; height:36px; }

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { getMe } from "./services/auth";
 import Navbar from "./components/Navbar";
@@ -6,6 +6,14 @@ import DashboardSidebar from './components/DashboardSidebar';
 import { useSidebar } from './components/SidebarContext';
 import TimetableEditor from './pages/advisor/TimetableEditor';
 import HodTimetableEditor from './pages/iqac/TimetableEditor';
+import ObeRequestsPage from './pages/iqac/ObeRequestsPage';
+import AcademicControllerPage from './pages/iqac/AcademicControllerPage';
+import AcademicControllerCoursePage from './pages/iqac/AcademicControllerCoursePage';
+import AcademicControllerCourseMarksPage from './pages/iqac/AcademicControllerCourseMarksPage';
+import AcademicControllerCourseOBEPage from './pages/iqac/AcademicControllerCourseOBEPage';
+import InternalMarkPage from './pages/iqac/InternalMarkPage';
+import OBERequestsPage from './pages/OBERequestsPage';
+import OBEDueDatesPage from './pages/OBEDueDatesPage';
 import ProtectedRoute from './components/ProtectedRoute';
 import HomePage from "./components/HomePage";
 import DashboardPage from "./pages/Dashboard";
@@ -14,6 +22,11 @@ import MasterList from './pages/curriculum/MasterList';
 import MasterEditor from './pages/curriculum/MasterEditor';
 import DeptList from './pages/curriculum/DeptList';
 import ElectiveImport from './pages/curriculum/ElectiveImport';
+import AcademicPage from './pages/AcademicPage';
+import QuestionImportPage from "./pages/QuestionImportPage";
+import OBEPage from './pages/OBEPage';
+import CourseOBEPage from './pages/CourseOBEPage';
+import OBERequestPage from './pages/OBERequestPage';
 import AdvisorAssignments from './pages/hod/AdvisorAssignments';
 import TeachingAssignmentsPage from './pages/hod/TeachingAssignments';
 import MyStudentsPage from './pages/advisor/MyStudents';
@@ -31,8 +44,10 @@ type Me = {
   id: number;
   username: string;
   email?: string;
-  roles?: string[] | RoleObj[];
+  roles?: string[];
   permissions?: string[];
+  profile_type?: string | null;
+  profile?: any | null;
 };
 
 export default function App() {
@@ -69,6 +84,10 @@ export default function App() {
     );
   }
 
+  const userPerms = Array.isArray(user?.permissions) ? user?.permissions : [];
+  const lowerPerms = userPerms.map((p) => String(p || '').toLowerCase());
+  // const canObeMaster = lowerPerms.includes('obe.master.manage');
+
   return (
     <div className="min-h-screen bg-gray-50 overflow-x-hidden">
       <Navbar user={user} />
@@ -79,16 +98,30 @@ export default function App() {
             collapsed ? 'lg:ml-20' : 'lg:ml-64'
           }`}>
             <Routes>
-              <Route path="/" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
+              <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/profile" element={<ProfilePage user={user} />} />
+              <Route path="/import/questions" element={<QuestionImportPage />} />
               <Route path="/curriculum/master" element={<MasterList />} />
               <Route path="/curriculum/master/:id" element={<MasterEditor />} />
               <Route path="/curriculum/master/new" element={<MasterEditor />} />
               <Route path="/curriculum/department" element={<DeptList />} />
+
               <Route path="/curriculum/elective-import" element={
                 <ProtectedRoute user={user} requiredPermissions={["curriculum.import_elective_choices"]} element={<ElectiveImport />} />
               } />
+
+              {/* OBE/marks/COAttainment routes removed */}
+              <Route path="/obe" element={<OBEPage />} />
+              <Route path="/obe/course/:code/*" element={<CourseOBEPage />} />
+              <Route
+                path="/obe/request"
+                element={<ProtectedRoute user={user} requiredProfile={'STAFF'} element={<OBERequestPage />} />}
+              />
+              <Route path="/obe/master/requests" element={<ProtectedRoute user={user} requiredPermissions={["obe.master.manage"]} element={<OBERequestsPage />} />} />
+              <Route path="/obe/master/due-dates" element={<ProtectedRoute user={user} requiredPermissions={["obe.master.manage"]} element={<OBEDueDatesPage />} />} />
+              <Route path="/academic" element={<AcademicPage />} />
+
               <Route path="/hod/advisors" element={
                 <ProtectedRoute user={user} requiredRoles={["HOD"]} requiredPermissions={["academics.assign_advisor"]} element={<AdvisorAssignments />} />
               } />
@@ -98,6 +131,30 @@ export default function App() {
               <Route path="/iqac/timetable" element={
                 <ProtectedRoute user={user} requiredPermissions={["timetable.manage_templates"]} element={<HodTimetableEditor />} />
               } />
+              <Route
+                path="/iqac/academic-controller"
+                element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} element={<AcademicControllerPage />} />}
+              />
+              <Route
+                path="/iqac/academic-controller/course/:courseCode"
+                element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} element={<AcademicControllerCoursePage />} />}
+              />
+              <Route
+                path="/iqac/academic-controller/course/:courseCode/marks/:taId"
+                element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} element={<AcademicControllerCourseMarksPage />} />}
+              />
+              <Route
+                path="/iqac/academic-controller/course/:courseCode/internal-mark/:taId"
+                element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} element={<InternalMarkPage />} />}
+              />
+              <Route
+                path="/iqac/academic-controller/course/:courseCode/obe/:taId/*"
+                element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} element={<AcademicControllerCourseOBEPage />} />}
+              />
+              <Route
+                path="/iqac/obe-requests"
+                element={<ProtectedRoute user={user} requiredPermissions={["obe.master.manage"]} element={<ObeRequestsPage />} />}
+              />
               <Route path="/advisor/timetable" element={
                 <ProtectedRoute user={user} requiredRoles={["ADVISOR"]} requiredPermissions={["timetable.assign"]} element={<TimetableEditor />} />
               } />
@@ -123,6 +180,7 @@ export default function App() {
               <Route path="/staff/period-attendance" element={
                 <ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={['academics.mark_attendance']} element={<PeriodAttendance />} />
               } />
+
               <Route path="/staff/analytics" element={
                 <ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={['analytics.view_all_analytics', 'analytics.view_department_analytics', 'analytics.view_class_analytics']} element={<AttendanceAnalytics />} />
               } />
@@ -140,6 +198,7 @@ export default function App() {
             <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
           </Routes>
         </div>
+
       )}
     </div>
   );

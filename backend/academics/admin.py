@@ -1,4 +1,11 @@
 from django.contrib import admin
+from django.urls import path, reverse
+from django.http import JsonResponse
+from django.shortcuts import render
+from django.contrib import messages
+from django.db import transaction
+from django.utils import timezone
+import json
 from .models import (
     AcademicYear,
     Department,
@@ -8,11 +15,14 @@ from .models import (
     Section,
     Batch,
     Subject,
+    PROFILE_STATUS_CHOICES,
     StudentProfile,
     StaffProfile,
     StudentSectionAssignment,
     StaffDepartmentAssignment,
     RoleAssignment,
+    SpecialCourseAssessmentSelection,
+    SpecialCourseAssessmentEditRequest,
 )
 from .models import TeachingAssignment
 from .models import StudentMentorMap, SectionAdvisor, DepartmentRole
@@ -33,6 +43,18 @@ from django.http import HttpResponse
 from django.utils import timezone
 
 import openpyxl
+
+try:
+    from curriculum.models import SPECIAL_ASSESSMENT_CHOICES
+except Exception:
+    SPECIAL_ASSESSMENT_CHOICES = (
+        ('ssa1', 'SSA 1'),
+        ('ssa2', 'SSA 2'),
+        ('formative1', 'Formative 1'),
+        ('formative2', 'Formative 2'),
+        ('cia1', 'CIA 1'),
+        ('cia2', 'CIA 2'),
+    )
 
 
 class StudentProfileForm(forms.ModelForm):
@@ -92,6 +114,151 @@ class StudentProfileAdmin(admin.ModelAdmin):
     # filter by the department through the section->semester->course relation
     list_filter = ('section__batch__course__department', 'batch')
     actions = ('deactivate_students', 'mark_alumni', 'delete_profiles_and_users')
+
+    change_list_template = 'admin/academics/studentprofile/change_list.html'
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom = [
+            path('sheets/', self.admin_site.admin_view(self.sheets_view), name='academics_studentprofile_sheets'),
+            path('sheets/data/', self.admin_site.admin_view(self.sheets_data_view), name='academics_studentprofile_sheets_data'),
+            path('sheets/save/', self.admin_site.admin_view(self.sheets_save_view), name='academics_studentprofile_sheets_save'),
+        ]
+        return custom + urls
+
+    def sheets_view(self, request):
+        if not self.has_add_permission(request):
+            messages.error(request, 'You do not have permission to use Sheets.')
+            return render(request, 'admin/academics/studentprofile/sheets.html', {
+                **self.admin_site.each_context(request),
+                'title': 'Student Profiles Sheets',
+                'sections': [],
+                'status_choices': list(PROFILE_STATUS_CHOICES),
+                'data_url': reverse('admin:academics_studentprofile_sheets_data'),
+                'save_url': reverse('admin:academics_studentprofile_sheets_save'),
+            })
+
+        sections_qs = Section.objects.select_related('semester__course__department').all().order_by(
+            'semester__course__department__code', 'semester__course__name', 'semester__number', 'name'
+        )
+        sections = [{'id': s.pk, 'label': str(s)} for s in sections_qs]
+
+        return render(request, 'admin/academics/studentprofile/sheets.html', {
+            **self.admin_site.each_context(request),
+            'title': 'Student Profiles Sheets',
+            'sections': sections,
+            'status_choices': list(PROFILE_STATUS_CHOICES),
+            'data_url': reverse('admin:academics_studentprofile_sheets_data'),
+            'save_url': reverse('admin:academics_studentprofile_sheets_save'),
+        })
+
+    def sheets_data_view(self, request):
+        if request.method != 'GET':
+            return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+        if not self.has_add_permission(request):
+            return JsonResponse({'detail': 'Forbidden'}, status=403)
+
+        # show all users (include existing students). Frontend will mark existing profiles as read-only.
+        from accounts.models import User
+
+        qs = User.objects.all().order_by('username').select_related('student_profile__section', 'staff_profile')
+        rows = []
+        for u in qs:
+            sp = getattr(u, 'student_profile', None)
+            rows.append({
+                'id': u.pk,
+                'username': u.username,
+                'email': u.email or '',
+                'has_student_profile': sp is not None,
+                'reg_no': sp.reg_no if sp is not None else '',
+                'section_id': sp.section.pk if (sp is not None and sp.section) else '',
+                'section_label': str(sp.section) if (sp is not None and sp.section) else '',
+                'batch': sp.batch if sp is not None else '',
+                'status': sp.status if sp is not None else 'ACTIVE',
+            })
+        return JsonResponse({'rows': rows})
+
+    def sheets_save_view(self, request):
+        if request.method != 'POST':
+            return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+        if not self.has_add_permission(request):
+            return JsonResponse({'detail': 'Forbidden'}, status=403)
+
+        try:
+            payload = json.loads((request.body or b'{}').decode('utf-8'))
+        except Exception:
+            return JsonResponse({'detail': 'Invalid JSON body'}, status=400)
+
+        rows = payload.get('rows') or []
+        if not isinstance(rows, list) or not rows:
+            return JsonResponse({'detail': 'No rows provided'}, status=400)
+
+        from accounts.models import User
+
+        created = 0
+        failed = []
+        today = timezone.now().date()
+
+        for idx, r in enumerate(rows, start=1):
+            try:
+                user_id = int(r.get('user_id'))
+            except Exception:
+                failed.append({'index': idx, 'user_id': r.get('user_id'), 'error': 'Invalid user_id'})
+                continue
+
+            reg_no = (r.get('reg_no') or '').strip()
+            batch = (r.get('batch') or '').strip()
+            status = (r.get('status') or 'ACTIVE').strip().upper()
+            section_id = (r.get('section_id') or '').strip()
+
+            if not reg_no:
+                failed.append({'index': idx, 'user_id': user_id, 'error': 'reg_no is required'})
+                continue
+
+            if status not in {c[0] for c in PROFILE_STATUS_CHOICES}:
+                failed.append({'index': idx, 'user_id': user_id, 'error': f'Invalid status: {status}'})
+                continue
+
+            try:
+                user = User.objects.select_related('student_profile', 'staff_profile').get(pk=user_id)
+            except User.DoesNotExist:
+                failed.append({'index': idx, 'user_id': user_id, 'error': 'User not found'})
+                continue
+
+            if getattr(user, 'student_profile', None) is not None:
+                failed.append({'index': idx, 'user_id': user_id, 'error': 'User already has a StudentProfile'})
+                continue
+
+            if getattr(user, 'staff_profile', None) is not None:
+                failed.append({'index': idx, 'user_id': user_id, 'error': 'User already has a StaffProfile'})
+                continue
+
+            section_obj = None
+            if section_id:
+                try:
+                    section_obj = Section.objects.filter(pk=int(section_id)).first()
+                except Exception:
+                    section_obj = None
+
+            try:
+                with transaction.atomic():
+                    sp = StudentProfile.objects.create(
+                        user=user,
+                        reg_no=reg_no,
+                        section=section_obj,
+                        batch=batch,
+                        status=status,
+                    )
+                    # keep history assignment too (optional, but better for later changes)
+                    if section_obj is not None:
+                        StudentSectionAssignment.objects.create(student=sp, section=section_obj, start_date=today)
+                    created += 1
+            except Exception as e:
+                failed.append({'index': idx, 'user_id': user_id, 'error': str(e)})
+
+        return JsonResponse({'created': created, 'failed': failed})
 
     def deactivate_students(self, request, queryset):
         from accounts.services import deactivate_user
@@ -454,6 +621,7 @@ class StaffProfileAdmin(admin.ModelAdmin):
         for p in queryset:
             deactivate_user(p.user, profile_status='INACTIVE', reason='deactivated via admin', actor=request.user)
     deactivate_staff.short_description = 'Deactivate selected staff profiles'
+
     def mark_resigned(self, request, queryset):
         for p in queryset:
             p.status = 'RESIGNED'
@@ -954,6 +1122,7 @@ class PeriodAttendanceRecordAdmin(admin.ModelAdmin):
     raw_id_fields = ('session', 'student', 'marked_by')
 
 
+
 @admin.register(AttendanceUnlockRequest)
 class AttendanceUnlockRequestAdmin(admin.ModelAdmin):
     list_display = ('id', 'session', 'requested_by', 'requested_at', 'status', 'reviewed_by', 'reviewed_at')
@@ -962,3 +1131,201 @@ class AttendanceUnlockRequestAdmin(admin.ModelAdmin):
     raw_id_fields = ('session', 'requested_by', 'reviewed_by')
     readonly_fields = ('requested_at', 'reviewed_at')
     date_hierarchy = 'requested_at'
+
+class SpecialCourseAssessmentEditRequestInline(admin.TabularInline):
+    model = SpecialCourseAssessmentEditRequest
+    extra = 0
+    fields = ('requested_by', 'status', 'requested_at', 'reviewed_by', 'reviewed_at', 'can_edit_until', 'used_at')
+    readonly_fields = ('requested_at', 'reviewed_at', 'used_at')
+    raw_id_fields = ('requested_by', 'reviewed_by')
+
+
+class SpecialCourseAssessmentSelectionAdminForm(forms.ModelForm):
+    enabled_assessments = forms.MultipleChoiceField(
+        choices=SPECIAL_ASSESSMENT_CHOICES,
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+        help_text='Enabled assessment tables for this SPECIAL course (saved globally per academic year).',
+    )
+
+    class Meta:
+        model = SpecialCourseAssessmentSelection
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        inst = getattr(self, 'instance', None)
+        if inst and getattr(inst, 'enabled_assessments', None):
+            self.fields['enabled_assessments'].initial = list(inst.enabled_assessments or [])
+
+    def clean_enabled_assessments(self):
+        vals = self.cleaned_data.get('enabled_assessments') or []
+        return [str(v).strip().lower() for v in vals if str(v).strip()]
+
+    def clean(self):
+        cleaned = super().clean()
+        ea = cleaned.get('enabled_assessments') or []
+        if not ea:
+            self.add_error('enabled_assessments', 'Select at least one assessment for Special courses.')
+        return cleaned
+
+
+@admin.register(SpecialCourseAssessmentSelection)
+class SpecialCourseAssessmentSelectionAdmin(admin.ModelAdmin):
+    form = SpecialCourseAssessmentSelectionAdminForm
+    list_display = (
+        'id',
+        'master_course_code',
+        'master_course_name',
+        'department_code',
+        'academic_year',
+        'locked',
+        'enabled_assessments_display',
+        'updated_at',
+    )
+    list_filter = (
+        'academic_year',
+        'locked',
+        'curriculum_row__department',
+        'curriculum_row__master__regulation',
+        'curriculum_row__master__semester',
+    )
+    search_fields = (
+        'curriculum_row__course_code',
+        'curriculum_row__course_name',
+        'curriculum_row__master__course_code',
+        'curriculum_row__master__course_name',
+        'curriculum_row__department__code',
+    )
+    raw_id_fields = ('curriculum_row', 'academic_year', 'created_by')
+    readonly_fields = ('created_at', 'updated_at')
+    inlines = (SpecialCourseAssessmentEditRequestInline,)
+
+    def master_course_code(self, obj):
+        try:
+            m = getattr(getattr(obj, 'curriculum_row', None), 'master', None)
+            return getattr(m, 'course_code', None) or getattr(obj.curriculum_row, 'course_code', None)
+        except Exception:
+            return None
+
+    master_course_code.short_description = 'Course Code'
+
+    def master_course_name(self, obj):
+        try:
+            m = getattr(getattr(obj, 'curriculum_row', None), 'master', None)
+            return getattr(m, 'course_name', None) or getattr(obj.curriculum_row, 'course_name', None)
+        except Exception:
+            return None
+
+    master_course_name.short_description = 'Course Name'
+
+    def department_code(self, obj):
+        try:
+            return getattr(getattr(obj.curriculum_row, 'department', None), 'code', None)
+        except Exception:
+            return None
+
+    department_code.short_description = 'Dept'
+
+    def enabled_assessments_display(self, obj):
+        vals = getattr(obj, 'enabled_assessments', None) or []
+        if not vals:
+            return '(none)'
+        order = [k for k, _ in SPECIAL_ASSESSMENT_CHOICES]
+        label_map = {k: v for k, v in SPECIAL_ASSESSMENT_CHOICES}
+        normalized = {str(x).strip().lower() for x in vals}
+        display = [label_map.get(k, k) for k in order if k in normalized]
+        return ', '.join(display) if display else ', '.join(sorted(normalized))
+
+    enabled_assessments_display.short_description = 'Assessments'
+
+    def save_model(self, request, obj, form, change):
+        """Keep SPECIAL selection global across all departments of the same master.
+
+        The faculty UI treats enabled assessments as a *global* selection for a
+        SPECIAL course (master) per academic year. Editing a single row in admin
+        should propagate to all department rows to avoid mismatches.
+        """
+        actor_staff = getattr(getattr(request, 'user', None), 'staff_profile', None)
+        with transaction.atomic():
+            if not getattr(obj, 'created_by', None) and actor_staff:
+                obj.created_by = actor_staff
+            super().save_model(request, obj, form, change)
+
+            master_id = None
+            try:
+                master_id = obj.curriculum_row.master_id
+            except Exception:
+                master_id = None
+
+            if not master_id:
+                return
+
+            try:
+                from curriculum.models import CurriculumDepartment
+
+                dept_rows = CurriculumDepartment.objects.filter(master_id=master_id)
+            except Exception:
+                dept_rows = []
+
+            for row in dept_rows:
+                if not row:
+                    continue
+                sel, created = SpecialCourseAssessmentSelection.objects.get_or_create(
+                    curriculum_row=row,
+                    academic_year=obj.academic_year,
+                    defaults={
+                        'enabled_assessments': list(obj.enabled_assessments or []),
+                        'locked': bool(obj.locked),
+                        'created_by': obj.created_by,
+                    },
+                )
+                if created:
+                    continue
+                if sel.enabled_assessments != obj.enabled_assessments or sel.locked != obj.locked:
+                    sel.enabled_assessments = list(obj.enabled_assessments or [])
+                    sel.locked = bool(obj.locked)
+                    sel.save(update_fields=['enabled_assessments', 'locked', 'updated_at'])
+
+
+@admin.register(SpecialCourseAssessmentEditRequest)
+class SpecialCourseAssessmentEditRequestAdmin(admin.ModelAdmin):
+    list_display = (
+        'id',
+        'course_code',
+        'academic_year',
+        'requested_by',
+        'status',
+        'requested_at',
+        'can_edit_until',
+        'used_at',
+    )
+    list_filter = ('status', 'selection__academic_year')
+    search_fields = (
+        'requested_by__staff_id',
+        'requested_by__user__username',
+        'selection__curriculum_row__course_code',
+        'selection__curriculum_row__course_name',
+        'selection__curriculum_row__master__course_code',
+        'selection__curriculum_row__master__course_name',
+    )
+    raw_id_fields = ('selection', 'requested_by', 'reviewed_by')
+    readonly_fields = ('requested_at',)
+
+    def academic_year(self, obj):
+        try:
+            return obj.selection.academic_year
+        except Exception:
+            return None
+
+    academic_year.short_description = 'Academic Year'
+
+    def course_code(self, obj):
+        try:
+            cr = obj.selection.curriculum_row
+            m = getattr(cr, 'master', None)
+            return getattr(m, 'course_code', None) or getattr(cr, 'course_code', None)
+        except Exception:
+            return None
+
+    course_code.short_description = 'Course Code'
