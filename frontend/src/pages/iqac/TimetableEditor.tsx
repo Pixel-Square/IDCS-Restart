@@ -131,7 +131,8 @@ export default function TimetableEditor(){
   }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
+    <div className="min-h-screen bg-gray-50 p-6">
+      <div className="max-w-[1600px] mx-auto">
       {/* Header */}
       <div className="flex items-center gap-4 mb-8">
         <span className="p-3 bg-indigo-100 rounded-xl">
@@ -155,8 +156,8 @@ export default function TimetableEditor(){
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Academic Years Sidebar */}
-        <div className="lg:col-span-1">
-          <div className="bg-white rounded-lg shadow-md p-6">
+        <div className="lg:col-span-1 flex flex-col">
+          <div className="bg-white rounded-lg shadow-md p-6 flex-grow">
             <div className="flex items-center gap-2 mb-4">
               <Calendar className="w-5 h-5 text-indigo-600" />
               <h3 className="text-lg font-semibold text-gray-900">Academic Years</h3>
@@ -209,7 +210,7 @@ export default function TimetableEditor(){
             {/* Existing Academic Years */}
             <div>
               <h4 className="text-sm font-semibold text-gray-700 mb-3">Existing Years</h4>
-              <div className="space-y-2">
+              <div className="flex flex-col gap-2">
                 {academicYears.map((ay:any)=> (
                   <div key={ay.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                     <div>
@@ -236,8 +237,8 @@ export default function TimetableEditor(){
         </div>
 
         {/* Template Management */}
-        <div className="lg:col-span-2">
-          <div className="bg-white rounded-lg shadow-md p-6">
+        <div className="lg:col-span-2 flex flex-col">
+          <div className="bg-white rounded-lg shadow-md p-6 flex-grow">
             <div className="flex items-center gap-2 mb-6">
               <Clock className="w-5 h-5 text-indigo-600" />
               <h3 className="text-lg font-semibold text-gray-900">Template Management</h3>
@@ -401,7 +402,7 @@ export default function TimetableEditor(){
                     <h5 className="text-lg font-medium text-gray-900">Add New Period</h5>
                   </div>
                   
-                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-6 mb-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Index</label>
                       <input 
@@ -478,6 +479,7 @@ export default function TimetableEditor(){
             )}
           </div>
         </div>
+      </div>
       </div>
     </div>
   )

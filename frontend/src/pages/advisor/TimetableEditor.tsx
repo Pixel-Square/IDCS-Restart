@@ -491,6 +491,7 @@ export default function TimetableEditor(){
   const [customAssignmentText, setCustomAssignmentText] = useState<string>('')
   const [selectedStaffId, setSelectedStaffId] = useState<number | null>(null)
   const [staffList, setStaffList] = useState<any[]>([])
+  const [selectedDay, setSelectedDay] = useState(0) // For mobile view
 
   useEffect(()=>{
     // Advisors don't have access to the HOD sections endpoint; use my-students
@@ -790,7 +791,7 @@ export default function TimetableEditor(){
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 p-6">
-      <div className="max-w-7xl mx-auto">
+      <div className="max-w-[1600px] mx-auto">
         {/* Header */}
         <div className="bg-white rounded-xl shadow-sm p-6 mb-6 border border-gray-100">
           <div className="flex items-center justify-between">
@@ -839,23 +840,43 @@ export default function TimetableEditor(){
 
         {/* Timetable Grid */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 mb-6 overflow-hidden">
-          <div className="p-6 border-b border-gray-100">
+          <div className="p-4 md:p-6 border-b border-gray-100">
             <div className="flex items-center gap-2">
               <Clock className="h-5 w-5 text-indigo-600" />
               <h3 className="text-lg font-semibold text-gray-900">Weekly Schedule</h3>
             </div>
           </div>
+
+          {/* Mobile: Day Selector Buttons */}
+          <div className="md:hidden p-4 border-b border-gray-100 bg-gray-50">
+            <div className="grid grid-cols-7 gap-1">
+              {DAYS.map((day, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => setSelectedDay(idx)}
+                  className={`px-2 py-2 rounded-lg font-semibold text-xs transition-all ${
+                    selectedDay === idx 
+                      ? 'bg-indigo-600 text-white shadow-md' 
+                      : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50'
+                  }`}
+                >
+                  {day}
+                </button>
+              ))}
+            </div>
+          </div>
           
-          <div className="overflow-x-auto">
-            <table className="w-full">
+          {/* Desktop: Full Weekly View */}
+          <div className="hidden md:block overflow-x-auto">
+            <table className="w-full table-fixed">
               <thead>
                 <tr className="bg-gradient-to-r from-slate-50 to-blue-50 border-b-2 border-gray-200">
-                  <th className="px-4 py-3 text-left font-semibold text-gray-700 min-w-[120px] sticky left-0 bg-gradient-to-r from-slate-50 to-blue-50 z-10">
-                    Day / Period
+                  <th className="w-24 px-3 py-3 text-left font-semibold text-gray-700">
+                    Day
                   </th>
-                  {periods.map(p=> (
-                    <th key={p.id} className="px-4 py-3 min-w-[160px]">
-                      <div className="text-sm font-bold text-indigo-700">
+                  {periods.filter(p => !p.is_break && !p.is_lunch).map(p=> (
+                    <th key={p.id} className="px-2 py-3">
+                      <div className="text-xs font-bold text-indigo-700">
                         {p.label || `Period ${p.index || ''}`}
                       </div>
                       <div className="text-xs text-gray-600 mt-0.5">
@@ -868,13 +889,13 @@ export default function TimetableEditor(){
               <tbody className="divide-y divide-gray-100">
                 {DAYS.map((d,di)=> (
                   <tr key={d} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-4 py-3 font-bold text-gray-900 bg-gray-50 sticky left-0 z-10">{d}</td>
-                    {periods.map(p=> {
+                    <td className="px-3 py-3 font-bold text-gray-900 bg-gray-50">{d}</td>
+                    {periods.filter(p => !p.is_break && !p.is_lunch).map(p=> {
                       const isSelected = editingCell && editingCell.day === (di+1) && editingCell.periodId === p.id
                       return (
                         <td 
                           key={p.id} 
-                          className={`px-4 py-3 align-top ${
+                          className={`px-2 py-2 align-top ${
                             isSelected ? 'bg-indigo-50 border-2 border-indigo-300 shadow-md' : ''
                           }`}
                         >
@@ -886,6 +907,40 @@ export default function TimetableEditor(){
                 ))}
               </tbody>
             </table>
+          </div>
+
+          {/* Mobile: Periods List for Selected Day */}
+          <div className="md:hidden">
+            <div className="p-4">
+              <h4 className="text-sm font-bold text-gray-700 mb-3">{DAYS[selectedDay]}'s Schedule</h4>
+              <div className="space-y-3">
+                {periods.filter(p => !p.is_break && !p.is_lunch).map((p, pidx) => {
+                  const isSelected = editingCell && editingCell.day === (selectedDay+1) && editingCell.periodId === p.id
+                  return (
+                    <div 
+                      key={`mobile-period-${pidx}`} 
+                      className={`border rounded-lg overflow-hidden ${
+                        isSelected ? 'border-indigo-500 shadow-md' : 'border-gray-200'
+                      }`}
+                    >
+                      <div className={`px-4 py-2 border-b ${
+                        isSelected ? 'bg-indigo-100 border-indigo-200' : 'bg-indigo-50 border-indigo-100'
+                      }`}>
+                        <div className="font-semibold text-sm text-indigo-900">
+                          {p.label || `Period ${p.index || ''}`}
+                        </div>
+                        <div className="text-xs text-gray-600 mt-0.5">
+                          {p.start_time ? `${p.start_time}${p.end_time ? ' - ' + p.end_time : ''}` : (p.is_break? 'Break' : '')}
+                        </div>
+                      </div>
+                      <div className="px-4 py-3 bg-white">
+                        {renderCell(selectedDay+1, p)}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
           </div>
         </div>
 
