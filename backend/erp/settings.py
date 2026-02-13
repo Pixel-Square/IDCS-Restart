@@ -17,9 +17,20 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'dev-secret')
 
-DEBUG = os.getenv('DEBUG', '1') == '1'
+DEBUG = os.getenv('DEBUG', '0') == '1'
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = (
+    ['*'] if DEBUG else [
+        'db.zynix.us',
+        'idcs.zynix.us',
+        '192.168.40.253',
+        'localhost',
+        '127.0.0.1',
+        '0.0.0.0',
+        '.db.zynix.us',   # allow all subdomains
+        '.idcs.zynix.us', # allow all subdomains
+    ]
+)
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -72,27 +83,16 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'erp.wsgi.application'
 
-DATABASE_URL = os.getenv('DATABASE_URL')
-if DATABASE_URL:
-    # Use dj-database-url in real deployments; default to Postgres URL
-    from django.db import connections
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.postgresql',
-            'NAME': os.getenv('DB_NAME'),
-            'USER': os.getenv('DB_USER'),
-            'PASSWORD': os.getenv('DB_PASS'),
-            'HOST': os.getenv('DB_HOST'),
-            'PORT': os.getenv('DB_PORT', '5432'),
-        }
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.getenv('DB_NAME'),
+        'USER': os.getenv('DB_USER'),
+        'PASSWORD': os.getenv('DB_PASS'),
+        'HOST': os.getenv('DB_HOST'),
+        'PORT': os.getenv('DB_PORT', '5432'),
     }
-else:
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
-        }
-    }
+}
 
 AUTH_PASSWORD_VALIDATORS = []
 
@@ -102,6 +102,7 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
@@ -130,8 +131,10 @@ SIMPLE_JWT = {
 # Wildcard '*' is invalid with `Access-Control-Allow-Credentials: true`.
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = [
-    'http://localhost:3000',
+    'http://localhost:81',
     'http://127.0.0.1:3000',
+    'https://idcs.zynix.us',
+    "http://192.168.40.253:81",
 ]
 # Allow browser to include credentials (cookies or HTTP auth) in cross-origin requests
 CORS_ALLOW_CREDENTIALS = True
@@ -146,6 +149,9 @@ if DEBUG:
 # Always allow the production dashboard hostname if not already present
 if 'https://db.zynix.us' not in CSRF_TRUSTED_ORIGINS:
     CSRF_TRUSTED_ORIGINS.append('https://db.zynix.us')
+# Always allow the production frontend hostname if not already present
+if 'https://idcs.zynix.us' not in CSRF_TRUSTED_ORIGINS:
+    CSRF_TRUSTED_ORIGINS.append('https://idcs.zynix.us')
 
 # Optional: restrict which account may publish marks via the web UI/backend.
 # Set to a username or email (string). If empty/None publishing remains unrestricted

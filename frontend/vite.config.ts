@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     host: true,
-    allowedHosts: ['api.zynix.us', "idcs.zynix.us"],
-    port: 3000,
+    allowedHosts: ['db.zynix.us', "idcs.zynix.us"],
+     port: 80,
   }
 })

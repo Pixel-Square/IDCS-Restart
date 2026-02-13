@@ -43,14 +43,18 @@ async function refreshToken(): Promise<string> {
 
 export async function fetchWithAuth(input: RequestInfo | URL, init: RequestInit = {}, retry = true): Promise<Response> {
   const token = window.localStorage.getItem('access')
-  
+
   // Don't set Content-Type for FormData - browser will set it automatically with boundary
   const isFormData = init.body instanceof FormData
   const headers: any = Object.assign({}, (init.headers || {}))
   if (!isFormData) {
     headers['Content-Type'] = 'application/json'
   }
-  if (token) headers['Authorization'] = `Bearer ${token}`
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  } else {
+    console.warn('No access token found in localStorage')
+  }
 
   // Normalize API requests: if caller used a leading '/api/...' path,
   // route it to the configured backend API base instead of the Vite dev server.
@@ -65,7 +69,13 @@ export async function fetchWithAuth(input: RequestInfo | URL, init: RequestInit 
   }
 
   const res = await fetch(finalInput, { ...init, headers })
-  
+
+  // Debug: log 400 errors
+  if (res.status === 400) {
+    const text = await res.text()
+    console.error('400 Bad Request:', { url: finalInput, token, response: text })
+  }
+
   // If not a 401 or retry is disabled, return the response as-is
   if (res.status !== 401 || !retry) return res
 

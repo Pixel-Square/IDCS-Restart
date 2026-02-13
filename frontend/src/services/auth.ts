@@ -1,6 +1,6 @@
 import axios, { AxiosHeaders } from 'axios'
 
-const BASE = `${import.meta.env.VITE_API_BASE || 'http://localhost:8000'}/api/accounts/`
+const BASE = `${import.meta.env.VITE_API_BASE || 'https://db.zynix.us'}/api/accounts/`
 
 // Create an axios instance used across the app so we can centrally handle
 // automatic access-token refresh on 401 responses.
