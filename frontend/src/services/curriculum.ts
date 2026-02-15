@@ -38,8 +38,8 @@ export type DeptRow = {
   is_elective?: boolean;
 };
 
-// Default to backend dev server if VITE_API_BASE isn't provided
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+// Default to production API if VITE_API_BASE isn't provided
+const API_BASE = import.meta.env.VITE_API_BASE || 'https://db.zynix.us';
 import fetchWithAuth from './fetchAuth';
 
 export async function fetchMasters(): Promise<Master[]> {

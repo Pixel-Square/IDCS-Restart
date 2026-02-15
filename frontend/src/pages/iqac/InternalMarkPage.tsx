@@ -12,6 +12,51 @@ export default function InternalMarkPage(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [mapping, setMapping] = useState<Record<string, any> | null>(null);
 
+  const DEFAULTS = {
+    header: ['CO1', 'CO1', 'CO1', 'CO2', 'CO2', 'CO2', 'CO3', 'CO3', 'CO3', 'CO4', 'CO4', 'CO4', 'CO1', 'CO2', 'CO3', 'CO4', 'CO5'],
+    weights: [1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 2.0, 2.0, 2.0, 2.0, 4.0],
+    cycles: ['ssa', 'cia', 'fa', 'ssa', 'cia', 'fa', 'ssa', 'cia', 'fa', 'ssa', 'cia', 'fa', 'ME', 'ME', 'ME', 'ME', 'ME'],
+  };
+
+  const splitCycleWeight = (total: unknown): [number, number, number] => {
+    const t = Number(total);
+    if (!Number.isFinite(t) || t <= 0) return [0, 0, 0];
+    const ssaW = 1.5;
+    const ciaW = 3.0;
+    const faW = 2.5;
+    const sum = ssaW + ciaW + faW;
+    const a = Math.round(((t * ssaW) / sum) * 100) / 100;
+    const b = Math.round(((t * ciaW) / sum) * 100) / 100;
+    const c = Math.round(((t * faW) / sum) * 100) / 100;
+    return [a, b, c];
+  };
+
+  const normalizeMapping = (m: any): Record<string, any> => {
+    const raw = m && typeof m === 'object' ? m : {};
+    let weights: any[] = Array.isArray((raw as any).weights) ? [...(raw as any).weights] : [];
+    weights = weights.map((x) => {
+      const n = Number(x);
+      return Number.isFinite(n) ? n : 0;
+    });
+
+    // Backward compatibility: old mapping had 13 weights with CO1/CO2 as single "cycle 1" columns.
+    if (weights.length === 13) {
+      const [co1Ssa, co1Cia, co1Fa] = splitCycleWeight(weights[0] ?? 0);
+      const [co2Ssa, co2Cia, co2Fa] = splitCycleWeight(weights[1] ?? 0);
+      weights = [co1Ssa, co1Cia, co1Fa, co2Ssa, co2Cia, co2Fa, ...weights.slice(2)];
+    }
+
+    while (weights.length < DEFAULTS.weights.length) weights.push(DEFAULTS.weights[weights.length] ?? 0);
+    weights = weights.slice(0, DEFAULTS.weights.length);
+
+    return {
+      ...raw,
+      header: DEFAULTS.header,
+      cycles: DEFAULTS.cycles,
+      weights,
+    };
+  };
+
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -19,7 +64,7 @@ export default function InternalMarkPage(): JSX.Element {
       try {
         const res = await fetchInternalMarkMapping(subjectId);
         if (!mounted) return;
-        setMapping(res?.mapping ?? null);
+        setMapping(res?.mapping ? normalizeMapping(res.mapping) : null);
       } catch (e: any) {
         if (!mounted) return;
         setError(e?.message || String(e));
@@ -31,14 +76,9 @@ export default function InternalMarkPage(): JSX.Element {
   }, [subjectId]);
 
   const ensureDefault = () => {
-    if (mapping) return mapping;
-    const defaults = {
-      header: ['CO1','CO2','CO3','CO3','CO3','CO4','CO4','CO4','CO1','CO2','CO3','CO4','CO5'],
-      weights: [7.0,7.0,1.5,3.0,2.5,1.5,3.0,2.5,2.0,2.0,2.0,2.0,4.0],
-      cycles: ['cycle 1','cycle 1','ssa','cia','fa','ssa','cia','fa','ME','ME','ME','ME','ME'],
-    };
-    setMapping(defaults);
-    return defaults;
+    if (mapping) return normalizeMapping(mapping);
+    setMapping(DEFAULTS);
+    return DEFAULTS;
   };
 
   const handleCellChange = (idx: number, value: string) => {
@@ -56,7 +96,7 @@ export default function InternalMarkPage(): JSX.Element {
     setSaving(true);
     setError(null);
     try {
-      const payload = mapping ?? ensureDefault();
+      const payload = normalizeMapping(mapping ?? ensureDefault());
       await upsertInternalMarkMapping(subjectId, payload);
       // notify other parts of app
       try { window.dispatchEvent(new CustomEvent('internal-mark:updated', { detail: { subjectId } })); } catch {}
@@ -70,10 +110,10 @@ export default function InternalMarkPage(): JSX.Element {
 
   if (loading) return <div style={{ padding: 18 }}>Loading…</div>;
 
-  const m = mapping ?? ensureDefault();
-  const headers: string[] = Array.isArray(m.header) ? m.header : [];
-  const weightsArr: any[] = Array.isArray(m.weights) ? m.weights : [];
-  const cycles: string[] = Array.isArray(m.cycles) ? m.cycles : [];
+  const m = normalizeMapping(mapping ?? ensureDefault());
+  const headers: string[] = m.header;
+  const weightsArr: any[] = m.weights;
+  const cycles: string[] = m.cycles;
 
   return (
     <main style={{ padding: 18 }}>

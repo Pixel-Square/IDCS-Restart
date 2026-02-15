@@ -14,6 +14,7 @@ import Ssa2Entry from './Ssa2Entry';
 import { DraftAssessmentKey, fetchMyTeachingAssignments, iqacResetAssessment, TeachingAssignmentItem } from '../services/obe';
 import * as OBE from '../services/obe';
 import FacultyAssessmentPanel from './FacultyAssessmentPanel';
+import fetchWithAuth from '../services/fetchAuth';
 
 type TabKey = 'dashboard' | 'ssa1' | 'review1' | 'ssa2' | 'review2' | 'formative1' | 'formative2' | 'cia1' | 'cia2' | 'model';
 
@@ -306,7 +307,22 @@ export default function MarkEntryTabs({
       try {
         const all = await fetchMyTeachingAssignments();
         if (!mounted) return;
-        const filtered = (all || []).filter((a) => a.subject_code === subjectId);
+        let filtered = (all || []).filter((a) => a.subject_code === subjectId);
+        
+        // If user doesn't have a TA for this subject, try to fetch from server
+        if (filtered.length === 0) {
+          try {
+            const taListRes = await fetchWithAuth(`/api/academics/teaching-assignments/?subject_code=${encodeURIComponent(String(subjectId || ''))}`);
+            if (taListRes.ok) {
+              const taListJson = await taListRes.json();
+              const items = Array.isArray(taListJson.results) ? taListJson.results : Array.isArray(taListJson) ? taListJson : (taListJson.items || []);
+              filtered = items || [];
+            }
+          } catch (err) {
+            console.warn('Server TA list fetch failed:', err);
+          }
+        }
+        
         setTas(filtered);
         setTaError(null);
 

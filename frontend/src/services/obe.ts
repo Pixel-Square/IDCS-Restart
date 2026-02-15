@@ -43,7 +43,7 @@ export type DraftAssessmentKey = 'ssa1' | 'review1' | 'ssa2' | 'review2' | 'cia1
 export type DueAssessmentKey = DraftAssessmentKey;
 
 function apiBase() {
-  return import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+  return import.meta.env.VITE_API_BASE || 'https://db.zynix.us';
 }
 
 function authHeader(): Record<string, string> {
@@ -59,7 +59,7 @@ export async function iqacResetAssessment(assessment: DraftAssessmentKey, subjec
 
 async function tryRefreshAccess(): Promise<string | null> {
   try {
-    const base = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+    const base = import.meta.env.VITE_API_BASE || 'https://db.zynix.us';
     const refresh = localStorage.getItem('refresh');
     if (!refresh) return null;
     const res = await axios.post(`${base}/api/accounts/token/refresh/`, { refresh });
@@ -552,6 +552,40 @@ export async function createEditRequest(payload: {
   return res.json();
 }
 
+export type MyLatestEditRequestItem = {
+  id: number;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | string;
+  assessment: DueAssessmentKey;
+  scope: EditScope;
+  subject_code: string;
+  reason: string | null;
+  requested_at: string | null;
+  updated_at: string | null;
+  reviewed_at: string | null;
+  approved_until: string | null;
+  is_active: boolean;
+  reviewed_by: { id: number | null; username: string | null; name: string | null } | null;
+};
+
+export async function fetchMyLatestEditRequest(payload: {
+  assessment: DueAssessmentKey;
+  subject_code: string;
+  scope: EditScope;
+  teaching_assignment_id?: number;
+}): Promise<{ result: MyLatestEditRequestItem | null }> {
+  const qpParts: string[] = [];
+  qpParts.push(`assessment=${encodeURIComponent(String(payload.assessment))}`);
+  qpParts.push(`subject_code=${encodeURIComponent(String(payload.subject_code))}`);
+  qpParts.push(`scope=${encodeURIComponent(String(payload.scope))}`);
+  if (typeof payload.teaching_assignment_id === 'number') qpParts.push(`teaching_assignment_id=${encodeURIComponent(String(payload.teaching_assignment_id))}`);
+  const qp = qpParts.length ? `?${qpParts.join('&')}` : '';
+  const url = `${apiBase()}/api/obe/edit-requests/my-latest${qp}`;
+  const res = await fetchWithAuth(url, { method: 'GET' });
+  if (res.status === 401) return { result: null };
+  if (!res.ok) await parseError(res, 'My edit request status fetch failed');
+  return res.json();
+}
+
 export type PendingEditRequestItem = {
   id: number;
   status: 'PENDING' | 'APPROVED' | 'REJECTED';
@@ -737,13 +771,21 @@ export async function rejectPublishRequest(reqId: number): Promise<any> {
 async function parseError(res: Response, fallback: string) {
   const text = await res.text();
   try {
-    const j = JSON.parse(text);
+    const trimmed = String(text ?? '').replace(/^\uFEFF/, '').trim();
+    const j = JSON.parse(trimmed);
     const detail = j?.detail || fallback;
     const how = Array.isArray(j?.how_to_fix) ? `\nHow to fix:\n- ${j.how_to_fix.join('\n- ')}` : '';
     const errors = Array.isArray(j?.errors) ? `\nErrors:\n- ${j.errors.join('\n- ')}` : '';
-    throw new Error(`${detail}${how}${errors}`);
+
+    const err: any = new Error(`${detail}${how}${errors}`);
+    err.status = res.status;
+    err.body = j;
+    throw err;
   } catch {
-    throw new Error(`${fallback}: ${res.status} ${text}`);
+    const err: any = new Error(`${fallback}: ${res.status} ${text}`);
+    err.status = res.status;
+    err.bodyText = text;
+    throw err;
   }
 }
 
@@ -1056,7 +1098,8 @@ export async function fetchCia1Marks(subjectId: string, teachingAssignmentId?: n
     return cleaned.slice(0, limit) + '… (truncated)';
   };
 
-  const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+  const DEFAULT_API_BASE = 'https://db.zynix.us';
+  const API_BASE = import.meta.env.VITE_API_BASE || (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://localhost:8000' : DEFAULT_API_BASE);
   const qp = teachingAssignmentId ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
   const url = `${API_BASE}/api/obe/cia1-marks/${encodeURIComponent(subjectId)}${qp}`;
   const token = window.localStorage.getItem('access');
@@ -1107,7 +1150,8 @@ export async function saveCia1Marks(subjectId: string, marks: Record<number, num
     return cleaned.slice(0, limit) + '… (truncated)';
   };
 
-  const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+  const DEFAULT_API_BASE = 'https://db.zynix.us';
+  const API_BASE = import.meta.env.VITE_API_BASE || (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://localhost:8000' : DEFAULT_API_BASE);
   const url = `${API_BASE}/api/obe/cia1-marks/${encodeURIComponent(subjectId)}`;
   const token = window.localStorage.getItem('access');
 

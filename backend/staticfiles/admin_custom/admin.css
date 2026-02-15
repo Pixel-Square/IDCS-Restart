@@ -1,0 +1,55 @@
+/* Custom admin overrides to increase contrast and improve interactivity */
+/* Darker header */
+.grp-header {
+  background: linear-gradient(90deg, #1f2937, #111827) !important;
+  color: #fff !important;
+}
+
+/* Sidebar background and hover */
+.grp-nav {
+  background: #0f1724 !important;
+}
+.grp-nav li a {
+  color: #cbd5e1 !important;
+}
+.grp-nav li a:hover, .grp-nav li a:focus {
+  background: rgba(255,255,255,0.03) !important;
+  color: #fff !important;
+}
+
+/* Cards and panels */
+.grp-module, .grp-column, .module {
+  background: #0b1220 !important;
+  border: 1px solid rgba(255,255,255,0.04) !important;
+  box-shadow: 0 1px 0 rgba(255,255,255,0.02) inset;
+  color: #e6eef8 !important;
+}
+
+/* Links and buttons */
+a, .grp-button, .button {
+  color: #93c5fd !important;
+}
+.grp-button:hover, .button:hover {
+  background: #0b1220 !important;
+  color: #bfdbfe !important;
+}
+
+/* Form inputs contrast */
+input, textarea, select {
+  background: #071126 !important;
+  color: #e6eef8 !important;
+  border: 1px solid rgba(255,255,255,0.04) !important;
+}
+
+/* Improve table zebra and hover */
+table tr:nth-child(even) { background: rgba(255,255,255,0.01); }
+table tr:hover { background: rgba(255,255,255,0.02); }
+
+/* Slightly larger clickable areas */
+.grp-header .grp-title, .grp-nav li a { padding: 10px 14px !important; }
+
+/* Make footer less bright */
+.grp-footer { color: rgba(255,255,255,0.5) !important; }
+
+/* Ensure our CSS loads last */
+/* End of custom admin CSS */

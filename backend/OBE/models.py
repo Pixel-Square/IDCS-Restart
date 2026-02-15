@@ -40,6 +40,22 @@ class ObeAssessmentMasterConfig(models.Model):
         db_table = 'obe_assessment_master_config'
 
 
+class InternalMarkMapping(models.Model):
+        """IQAC-managed internal mark mapping per Subject.
+
+        Stores a JSON object like:
+            { header: string[], cycles: string[], weights: number[] }
+        """
+
+        subject = models.OneToOneField('academics.Subject', on_delete=models.CASCADE, related_name='internal_mark_mapping')
+        mapping = models.JSONField(default=dict)
+        updated_by = models.IntegerField(null=True, blank=True)
+        updated_at = models.DateTimeField(auto_now=True)
+
+        class Meta:
+                db_table = 'obe_internal_mark_mapping'
+
+
 class Cia1Mark(models.Model):
     subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='cia1_marks')
     student = models.ForeignKey('academics.StudentProfile', on_delete=models.CASCADE, related_name='cia1_marks')
@@ -554,5 +570,45 @@ class ObeQpPatternConfig(models.Model):
                 name='unique_qp_pattern_per_class_type_qp_exam'
             )
         ]
+
+
+class ClassTypeWeights(models.Model):
+    """IQAC-controlled weights per class type.
+
+    Used in CO attainment and Internal Mark calculations.
+    """
+
+    class_type = models.CharField(max_length=50, unique=True)
+    ssa1 = models.DecimalField(max_digits=7, decimal_places=2, default=1.5)
+    cia1 = models.DecimalField(max_digits=7, decimal_places=2, default=3)
+    formative1 = models.DecimalField(max_digits=7, decimal_places=2, default=2.5)
+    internal_mark_weights = models.JSONField(default=list, blank=True)
+
+    updated_by = models.IntegerField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'obe_class_type_weights'
+        verbose_name = 'Class Type Weights'
+        verbose_name_plural = 'Class Type Weights'
+
+
+class InternalMarkMapping(models.Model):
+    """IQAC-managed internal mark mapping per Subject.
+
+    Stored as JSON so the frontend can define column headers, cycles and weights.
+    """
+
+    subject = models.OneToOneField(
+        'academics.Subject',
+        on_delete=models.CASCADE,
+        related_name='internal_mark_mapping',
+    )
+    mapping = models.JSONField(default=dict)
+    updated_by = models.IntegerField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'obe_internal_mark_mapping'
 
 

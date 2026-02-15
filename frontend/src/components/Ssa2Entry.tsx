@@ -8,6 +8,7 @@ import {
   createEditRequest,
   createPublishRequest,
   fetchDraft,
+  fetchMyTeachingAssignments,
   fetchPublishedReview2,
   fetchPublishedSsa2,
   publishReview2,
@@ -248,6 +249,9 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, asse
   const [markManagerBusy, setMarkManagerBusy] = useState(false);
   const [markManagerError, setMarkManagerError] = useState<string | null>(null);
 
+  const markManagerSaveActive = Boolean(subjectId && !markManagerBusy);
+  const displayPublishedLocked = !markManagerSaveActive && isPublished;
+
   const [publishConsumedApprovals, setPublishConsumedApprovals] = useState<null | {
     markEntryApprovalUntil: string | null;
     markManagerApprovalUntil: string | null;
@@ -479,33 +483,72 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, asse
   };
 
   const loadRoster = async () => {
-    if (!teachingAssignmentId) {
-      setRosterError('Select a Teaching Assignment/Section to load students.');
+    if (!subjectId) {
+      setRosterError('Subject ID is required.');
       return;
     }
     setRosterLoading(true);
     setRosterError(null);
     try {
+      let roster: TeachingAssignmentRosterStudent[] = [];
+      
+      // ALWAYS check user's TAs first (matching CIA logic) - handles electives correctly
+      let matchedTa: any = null;
       try {
-        const taRes = await fetchWithAuth(`/api/academics/teaching-assignments/${teachingAssignmentId}/`);
-        if (taRes.ok) {
-          const taObj = await taRes.json();
-          if (taObj && taObj.elective_subject_id && !taObj.section_id) {
-            const esRes = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${encodeURIComponent(String(taObj.elective_subject_id))}`);
-            if (!esRes.ok) throw new Error(`Elective-choices fetch failed: ${esRes.status}`);
-            const data = await esRes.json();
-            const items = Array.isArray(data.results) ? data.results : Array.isArray(data) ? data : (data.items || []);
-            const mapped = (items || []).map((s:any) => ({ id: Number(s.student_id ?? s.id), reg_no: String(s.reg_no ?? s.regno ?? ''), name: String(s.name ?? s.full_name ?? s.username ?? ''), section: s.section_name ?? s.section ?? null }));
-            mergeRosterIntoRows(mapped as TeachingAssignmentRosterStudent[]);
-            return;
-          }
+        const myTAs = await fetchMyTeachingAssignments();
+        console.log('[SSA2] My TAs:', myTAs?.length, 'for subject:', subjectId, 'teachingAssignmentId:', teachingAssignmentId);
+        matchedTa = (myTAs || []).find((t: any) => {
+          const codeMatch = String(t.subject_code || '').trim().toUpperCase() === String(subjectId || '').trim().toUpperCase();
+          const idMatch = teachingAssignmentId ? t.id === teachingAssignmentId : false;
+          return idMatch || codeMatch;
+        });
+        
+        if (matchedTa) {
+          console.log('[SSA2] Found TA match:', matchedTa.id, 'elective_subject_id:', matchedTa.elective_subject_id, 'section_id:', matchedTa.section_id);
+        } else {
+          console.log('[SSA2] No TA match found in user TAs');
         }
       } catch (err) {
-        // fall back
+        console.warn('[SSA2] My TAs fetch failed:', err);
       }
 
-      const res = await fetchTeachingAssignmentRoster(teachingAssignmentId);
-      mergeRosterIntoRows(res.students || []);
+      // If we found a TA and it's an elective (has elective_subject_id, no section_id), fetch from elective-choices
+      if (matchedTa && matchedTa.elective_subject_id && !matchedTa.section_id) {
+        console.log('[SSA2] Detected elective, fetching elective-choices for elective_subject_id:', matchedTa.elective_subject_id);
+        try {
+          const esRes = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${encodeURIComponent(String(matchedTa.elective_subject_id))}`);
+          if (esRes.ok) {
+            const esData = await esRes.json();
+            const items = Array.isArray(esData.results) ? esData.results : Array.isArray(esData) ? esData : (esData.items || []);
+            console.log('[SSA2] Elective choices returned:', items?.length, 'students');
+            roster = (items || []).map((s: any) => ({ 
+              id: Number(s.student_id ?? s.id), 
+              reg_no: String(s.reg_no ?? s.regno ?? ''),
+              name: String(s.name ?? s.full_name ?? s.username ?? ''),
+              section: s.section_name ?? s.section ?? null 
+            }));
+          } else {
+            console.warn('[SSA2] Elective-choices API returned error:', esRes.status);
+          }
+        } catch (err) {
+          console.warn('[SSA2] Elective-choices fetch failed:', err);
+        }
+      }
+
+      // If not elective or elective fetch failed, use regular TA roster
+      if (!roster.length && matchedTa && matchedTa.id) {
+        console.log('[SSA2] Fetching regular TA roster for TA ID:', matchedTa.id);
+        try {
+          const taResp = await fetchTeachingAssignmentRoster(matchedTa.id);
+          roster = taResp.students || [];
+          console.log('[SSA2] Regular roster returned:', roster.length, 'students');
+        } catch (err) {
+          console.warn('[SSA2] TA roster fetch failed:', err);
+        }
+      }
+
+      console.log('[SSA2] Final roster count:', roster.length);
+      mergeRosterIntoRows(roster);
     } catch (e: any) {
       setRosterError(e?.message || 'Failed to load roster');
     } finally {
@@ -514,10 +557,10 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, asse
   };
 
   useEffect(() => {
-    if (!teachingAssignmentId) return;
+    if (!subjectId) return;
     loadRoster();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [teachingAssignmentId]);
+  }, [teachingAssignmentId, subjectId]);
 
   async function refreshPublishedSnapshot(showLoading: boolean) {
     if (!subjectId) return;
@@ -1090,8 +1133,8 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, asse
             <div style={{ overflowX: 'auto' }}>
               <PublishLockOverlay
                 locked={Boolean(globalLocked || publishedEditLocked)}
-                title={globalLocked ? 'Locked by IQAC' : 'Published — Locked'}
-                subtitle={globalLocked ? 'Publishing is turned OFF globally for this assessment.' : 'Marks are published. Request IQAC approval to edit.'}
+                title={globalLocked ? 'Locked by IQAC' : displayPublishedLocked ? 'Published — Locked' : 'Table Locked'}
+                subtitle={globalLocked ? 'Publishing is turned OFF globally for this assessment.' : displayPublishedLocked ? 'Marks are published. Request IQAC approval to edit.' : 'Confirm the Mark Manager'}
               >
                 <table style={{ borderCollapse: 'collapse', minWidth: 920 }}>
           <thead>
@@ -1249,7 +1292,8 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, asse
                 style={{
                   position: 'absolute',
                   left: '50%',
-                  top: 18,
+                  top: isReview ? undefined : 6,
+                  bottom: isReview ? 18 : undefined,
                   transform: 'translateX(-50%)',
                   zIndex: 40,
                   width: 360,
@@ -1265,8 +1309,17 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, asse
                 }}
               >
                 <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontWeight: 900, color: '#065f46' }}>Published</div>
-                  <div style={{ fontSize: 13, color: '#065f46' }}>Marks are locked. Request IQAC approval to edit.</div>
+                  {displayPublishedLocked ? (
+                    <>
+                      <div style={{ fontWeight: 900, color: '#065f46' }}>Published</div>
+                      <div style={{ fontSize: 13, color: '#065f46' }}>Marks are locked. Request IQAC approval to edit.</div>
+                    </>
+                  ) : (
+                    <>
+                      <div style={{ fontWeight: 900, color: '#065f46' }}>Table Locked</div>
+                      <div style={{ fontSize: 13, color: '#065f46' }}>Confirm the Mark Manager</div>
+                    </>
+                  )}
                 </div>
                 <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
                   <button className="obe-btn" onClick={() => setViewMarksModalOpen(true)}>
@@ -1282,14 +1335,14 @@ export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, asse
         ) : (
           <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 20, background: '#fff' }}>
             <div style={{ display: 'grid', placeItems: 'center', padding: 40 }}>
-              <div style={{ fontWeight: 800, fontSize: 16, marginTop: 8 }}>{isPublished ? 'Published — Locked' : 'Table Locked'}</div>
+              <div style={{ fontWeight: 800, fontSize: 16, marginTop: 8 }}>{displayPublishedLocked ? 'Published — Locked' : 'Table Locked'}</div>
               <div style={{ color: '#6b7280', marginTop: 6 }}>
-                {isPublished
+                {displayPublishedLocked
                   ? 'Marks published. Use View to inspect or Request Edit to ask IQAC for edit access.'
                   : 'Confirm the Mark Manager to unlock the student list.'}
               </div>
               <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-                {isPublished ? (
+                {displayPublishedLocked ? (
                   <>
                     <button className="obe-btn" onClick={() => setViewMarksModalOpen(true)}>
                       View

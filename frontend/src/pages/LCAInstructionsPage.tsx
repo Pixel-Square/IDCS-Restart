@@ -108,8 +108,8 @@ export default function LCAInstructionsPage({ courseCode, courseName }: { course
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 420px', gap: 16, alignItems: 'start' }}>
-            <div style={{ ...styles.card, padding: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 16, alignItems: 'start' }}>
+            <div style={{ ...styles.card, padding: 14, gridColumn: '1 / -1' }}>
               <div style={styles.sectionTitle}>Overview</div>
               <p style={styles.paragraph}>
                 Use this page to map learner profiles (L1–L3) to instruction levels (IL-1..IL-3) and to define assessment distribution.
@@ -127,36 +127,6 @@ export default function LCAInstructionsPage({ courseCode, courseName }: { course
                   ]}
                 />
               </div>
-            </div>
-
-            <div style={{ ...styles.card, padding: 12 }}>
-              <div style={styles.sectionTitle}>IL Mapping</div>
-              <table style={styles.table}>
-                <thead>
-                  <tr>
-                    <th style={styles.th}>IL</th>
-                    <th style={styles.th}>Instruction Focus</th>
-                    <th style={styles.th}>Typical Assessment Emphasis</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td style={styles.td}>IL-1</td>
-                    <td style={styles.td}>Foundation, concepts, scaffolding</td>
-                    <td style={styles.td}>More formative; MCQ / guided tasks</td>
-                  </tr>
-                  <tr>
-                    <td style={styles.td}>IL-2</td>
-                    <td style={styles.td}>Application and practice</td>
-                    <td style={styles.td}>Mixture of practical and theory</td>
-                  </tr>
-                  <tr>
-                    <td style={styles.td}>IL-3</td>
-                    <td style={styles.td}>Advanced, synthesis, independent work</td>
-                    <td style={styles.td}>Problem-solving, projects, high-level questions</td>
-                  </tr>
-                </tbody>
-              </table>
             </div>
           </div>
 
@@ -236,6 +206,35 @@ export default function LCAInstructionsPage({ courseCode, courseName }: { course
               <div style={{ marginTop: 10 }}>
                 <div style={styles.note}>Tip: Use these templates as starting points and adapt percentages to the specific cohort.</div>
               </div>
+            </div>
+            <div style={{ ...styles.card, padding: 12 }}>
+              <div style={styles.sectionTitle}>IL Mapping</div>
+              <table style={styles.table}>
+                <thead>
+                  <tr>
+                    <th style={styles.th}>IL</th>
+                    <th style={styles.th}>Instruction Focus</th>
+                    <th style={styles.th}>Typical Assessment Emphasis</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style={styles.td}>IL-1</td>
+                    <td style={styles.td}>Foundation, concepts, scaffolding</td>
+                    <td style={styles.td}>More formative; MCQ / guided tasks</td>
+                  </tr>
+                  <tr>
+                    <td style={styles.td}>IL-2</td>
+                    <td style={styles.td}>Application and practice</td>
+                    <td style={styles.td}>Mixture of practical and theory</td>
+                  </tr>
+                  <tr>
+                    <td style={styles.td}>IL-3</td>
+                    <td style={styles.td}>Advanced, synthesis, independent work</td>
+                    <td style={styles.td}>Problem-solving, projects, high-level questions</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
         </div>

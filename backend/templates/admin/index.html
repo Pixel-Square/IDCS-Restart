@@ -1,0 +1,95 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static %}
+
+{% block content %}
+<div class="dashboard">
+  <div class="dashboard-header">
+    <h1 class="dashboard-title">{% trans "Dashboard" %}</h1>
+    <p class="dashboard-subtitle">{% trans "Welcome to KR DATABASE Administration" %}</p>
+  </div>
+
+  <!-- Quick Stats -->
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-label">{% trans "Total Apps" %}</div>
+      <div class="stat-value" id="total-apps">{{ app_list|length }}</div>
+    </div>
+    <div class="stat-card success">
+      <div class="stat-label">{% trans "Active Users" %}</div>
+      <div class="stat-value" id="active-users">-</div>
+    </div>
+    <div class="stat-card warning">
+      <div class="stat-label">{% trans "Models" %}</div>
+      <div class="stat-value" id="total-models">-</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">{% trans "System Status" %}</div>
+      <div class="stat-value" style="font-size:1.2rem; color:var(--kr-success);">{% trans "Active" %}</div>
+    </div>
+  </div>
+
+  <!-- Apps & Models -->
+  <div class="app-section">
+    <h2 class="section-title">{% trans "Applications & Models" %}</h2>
+    <div class="app-cards">
+      {% for app in app_list %}
+        <div class="app-card">
+          <div class="app-card-header">
+            {{ app.name }}
+          </div>
+          <div class="app-card-body">
+            <ul class="model-list">
+              {% for model in app.models %}
+                <li data-admin-url="{{ model.admin_url }}">
+                  <div class="model-item">
+                    <div class="model-name">
+                      <a href="{{ model.admin_url }}">{{ model.name }}</a>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:1rem;">
+                      <span class="model-count">0</span>
+                      <div class="model-actions">
+                        {% if model.add_url %}
+                          <a href="{{ model.add_url }}" title="{% trans 'Add' %}">+ {% trans "Add" %}</a>
+                        {% endif %}
+                      </div>
+                    </div>
+                  </div>
+                </li>
+              {% endfor %}
+            </ul>
+          </div>
+        </div>
+      {% empty %}
+        <p>{% trans "No apps registered." %}</p>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- Recent Actions -->
+  {% load log %}
+  {% get_admin_log 10 as admin_log for_user user %}
+  {% if admin_log %}
+  <div class="recent-actions">
+    <h2>{% trans "Recent Actions" %}</h2>
+    <ul class="action-list">
+      {% for entry in admin_log %}
+        <li>
+          {% if entry.is_deletion %}
+            {{ entry.object_repr }}
+          {% else %}
+            <a href="{{ entry.get_admin_url }}">{{ entry.object_repr }}</a>
+          {% endif %}
+          - {{ entry.change_message }} 
+          <small style="color:var(--kr-gray);">({{ entry.action_time|timesince }} {% trans "ago" %})</small>
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block extrahead %}
+  {{ block.super }}
+  <script src="{% static 'js/admin_dashboard.js' %}"></script>
+{% endblock %}

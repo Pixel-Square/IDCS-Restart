@@ -4,7 +4,7 @@ import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster } from '../services/roster';
 import fetchWithAuth from '../services/fetchAuth';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
-import { confirmMarkManagerLock, createEditRequest, createPublishRequest, fetchDraft, fetchPublishedLabSheet, publishLabSheet, saveDraft } from '../services/obe';
+import { confirmMarkManagerLock, createEditRequest, createPublishRequest, fetchDraft, fetchEditWindow, fetchMyLatestEditRequest, fetchPublishedLabSheet, publishLabSheet, saveDraft } from '../services/obe';
 import { useEditWindow } from '../hooks/useEditWindow';
 import { useMarkTableLock } from '../hooks/useMarkTableLock';
 import { usePublishWindow } from '../hooks/usePublishWindow';
@@ -87,6 +87,8 @@ type Props = {
 
   // IQAC viewer: view-only, ignore lock overlays / hidden rows.
   viewerMode?: boolean;
+  // When true, render the Published / Request Edit floating panel over the table
+  floatPanelOnTable?: boolean;
 };
 
 const DEFAULT_EXPERIMENTS = 5;
@@ -175,6 +177,7 @@ export default function LabCourseMarksEntry({
   label,
   coA,
   coB,
+  skipMarkManager = false,
 
   itemLabel,
   itemLabelPlural,
@@ -196,6 +199,8 @@ export default function LabCourseMarksEntry({
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
   const [publishedEditModalOpen, setPublishedEditModalOpen] = useState(false);
   const [viewMarksModalOpen, setViewMarksModalOpen] = useState(false);
+  const [editRequestReason, setEditRequestReason] = useState('');
+  const [editRequestBusy, setEditRequestBusy] = useState(false);
   const [publishedViewSnapshot, setPublishedViewSnapshot] = useState<LabDraftPayload | null>(null);
   const [publishedViewLoading, setPublishedViewLoading] = useState(false);
   const [publishedViewError, setPublishedViewError] = useState<string | null>(null);
@@ -241,15 +246,38 @@ export default function LabCourseMarksEntry({
     subjectCode: String(subjectId || ''),
     scope: 'MARK_MANAGER',
     teachingAssignmentId,
-    options: { poll: false },
+    options: { poll: true },
   });
+
+  const { data: markEntryEditWindow, refresh: refreshMarkEntryEditWindow } = useEditWindow({
+    assessment: assessmentKey as any,
+    subjectCode: String(subjectId || ''),
+    scope: 'MARK_ENTRY',
+    teachingAssignmentId,
+    options: { poll: true },
+  });
+
+  const [publishConsumedApprovals, setPublishConsumedApprovals] = useState<null | {
+    markEntryUnblockedUntil: string | null;
+    markManagerUnlockedUntil: string | null;
+  }>(null);
 
   // "Published" should be driven by the lock row, not by whether a snapshot object exists.
   // Otherwise a fresh page can be treated as published if the API returns a non-null payload.
   const isPublished = Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published);
-  // Deterministic rule: the marks table is OPEN only when the backend says so.
-  // This keeps pre-publish behavior consistent too: table stays locked while Mark Manager is editable.
-  const entryOpen = Boolean(markLock?.entry_open);
+  // Formative-style rule: pre-publish the table is editable; post-publish it is editable only when IQAC approves.
+  // Additionally, after a Publish click we "consume" any already-active approval window so it doesn't auto-unlock.
+  const markEntryUnblockedUntil = markLock?.mark_entry_unblocked_until ? String(markLock.mark_entry_unblocked_until) : null;
+  const markManagerUnlockedUntil = markLock?.mark_manager_unlocked_until ? String(markLock.mark_manager_unlocked_until) : null;
+  const markEntryApprovedFresh =
+    Boolean(markEntryUnblockedUntil) &&
+    Boolean(markLock?.entry_open) &&
+    (publishConsumedApprovals == null || markEntryUnblockedUntil !== (publishConsumedApprovals.markEntryUnblockedUntil ?? null));
+  const markManagerApprovedFresh =
+    Boolean(markManagerUnlockedUntil) &&
+    (publishConsumedApprovals == null || markManagerUnlockedUntil !== (publishConsumedApprovals.markManagerUnlockedUntil ?? null));
+
+  const entryOpen = !isPublished ? true : Boolean(markLock?.entry_open) && (publishConsumedApprovals == null || markEntryApprovedFresh || markManagerApprovedFresh);
   const publishedEditLocked = Boolean(isPublished && !entryOpen);
 
   const globalLocked = Boolean(publishWindow?.global_override_active && publishWindow?.global_is_open === false);
@@ -1038,15 +1066,65 @@ export default function LabCourseMarksEntry({
     if (!subjectId) return;
     setMarkManagerBusy(true);
     setMarkManagerError(null);
+    const startedAt = new Date();
+    const baselineUnlockedUntil = markLock?.mark_manager_unlocked_until ? String(markLock.mark_manager_unlocked_until) : null;
     try {
-      await createEditRequest({
+      const created = await createEditRequest({
         assessment: assessmentKey as any,
         subject_code: String(subjectId),
         scope: 'MARK_MANAGER',
         reason: `Edit request: Mark Manager changes for ${label}`,
         teaching_assignment_id: teachingAssignmentId,
       });
-      alert('Edit request sent to IQAC.');
+      alert('Edit request sent to IQAC. Waiting for approval...');
+
+      const createdId = Number((created as any)?.id);
+      const minReviewMs = startedAt.getTime() - 2000;
+      (async () => {
+        const maxAttempts = 36;
+        const delay = 5000;
+        for (let i = 0; i < maxAttempts; i++) {
+          try {
+            const resp = await fetchMyLatestEditRequest({
+              assessment: assessmentKey as any,
+              subject_code: String(subjectId),
+              scope: 'MARK_MANAGER',
+              teaching_assignment_id: teachingAssignmentId,
+            });
+            const row = resp?.result;
+            if (!row) throw new Error('No status');
+            if (Number.isFinite(createdId) && createdId > 0 && Number(row.id) !== createdId) throw new Error('Different request');
+            const reviewedAtMs = row.reviewed_at ? new Date(String(row.reviewed_at)).getTime() : 0;
+            const status = String(row.status || '').toUpperCase();
+            if (status === 'APPROVED' && reviewedAtMs >= minReviewMs) {
+              try {
+                refreshMarkLock({ silent: true });
+              } catch {}
+              alert('IQAC approved the mark-manager edit request. You can now edit mark-manager settings.');
+              return;
+            }
+            if (status === 'REJECTED' && reviewedAtMs >= minReviewMs) {
+              alert('IQAC rejected the mark-manager edit request.');
+              return;
+            }
+          } catch {
+            try {
+              const nextUntil = markLock?.mark_manager_unlocked_until ? String(markLock.mark_manager_unlocked_until) : null;
+              if (nextUntil && baselineUnlockedUntil && nextUntil !== baselineUnlockedUntil) {
+                try {
+                  refreshMarkLock({ silent: true });
+                } catch {}
+                alert('IQAC approved the mark-manager edit request. You can now edit mark-manager settings.');
+                return;
+              }
+            } catch {
+              // ignore
+            }
+          }
+          await new Promise((r) => setTimeout(r, delay));
+        }
+        alert('Edit request still pending. Please try again later.');
+      })();
     } catch (e: any) {
       setMarkManagerError(e?.message || 'Request failed');
       alert(e?.message || 'Request failed');
@@ -1609,15 +1687,25 @@ export default function LabCourseMarksEntry({
       return;
     }
 
-    // After publish, keep the table locked (no edits) until IQAC approval.
-    // If already published and entry edits are not open, do nothing.
-    if (publishedAt && !entryOpen) return;
+    // If already published and locked, use Publish as the entry-point to request edits.
+    if (isPublished && publishedEditLocked && !viewerMode) {
+      setPublishedEditModalOpen(true);
+      return;
+    }
 
     setPublishing(true);
+    const prevPublishedAt = publishedAt;
+    const prevConsumedApprovals = publishConsumedApprovals;
+    const consumedApprovals = {
+      markEntryUnblockedUntil,
+      markManagerUnlockedUntil,
+    };
     try {
       console.debug('publish called', { assessment: assessmentKey, subjectId, entryOpen, publishAllowed, globalLocked });
-      await publishLabSheet(assessmentKey, String(subjectId), draft, teachingAssignmentId);
+      // Optimistically switch UI to Published-Locked immediately.
       setPublishedAt(new Date().toLocaleString());
+      setPublishConsumedApprovals(consumedApprovals);
+      await publishLabSheet(assessmentKey, String(subjectId), draft, teachingAssignmentId);
       console.debug('publish succeeded', { assessment: assessmentKey, subjectId });
       await refreshPublishedSnapshot(false);
       refreshPublishWindow();
@@ -1629,6 +1717,8 @@ export default function LabCourseMarksEntry({
         // ignore
       }
     } catch (e: any) {
+      setPublishedAt(prevPublishedAt);
+      setPublishConsumedApprovals(prevConsumedApprovals);
       alert(e?.message || 'Publish failed');
     } finally {
       setPublishing(false);
@@ -1706,9 +1796,94 @@ export default function LabCourseMarksEntry({
     if (entryOpen) return;
     const tid = window.setInterval(() => {
       refreshMarkLock({ silent: true });
+      try {
+        refreshMarkEntryEditWindow?.({ silent: true });
+      } catch {
+        // ignore
+      }
     }, 30000);
     return () => window.clearInterval(tid);
-  }, [entryOpen, isPublished, subjectId, refreshMarkLock]);
+  }, [entryOpen, isPublished, subjectId, refreshMarkLock, refreshMarkEntryEditWindow]);
+
+  useEffect(() => {
+    setPublishConsumedApprovals(null);
+  }, [subjectId]);
+
+  async function requestMarkEntryEdit() {
+    if (!subjectId) return;
+    setEditRequestBusy(true);
+    const startedAt = new Date();
+    const baselineApprovalUntil = markEntryEditWindow?.approval_until ? String(markEntryEditWindow.approval_until) : null;
+    try {
+      const created = await createEditRequest({
+        assessment: assessmentKey as any,
+        subject_code: String(subjectId),
+        scope: 'MARK_ENTRY',
+        reason: editRequestReason || `Edit request: ${label} marks for ${String(subjectId)}`,
+        teaching_assignment_id: teachingAssignmentId,
+      });
+      alert('Edit request sent to IQAC. Waiting for approval...');
+      setPublishedEditModalOpen(false);
+
+      const createdId = Number((created as any)?.id);
+      const minReviewMs = startedAt.getTime() - 2000;
+
+      (async () => {
+        const maxAttempts = 36;
+        const delay = 5000;
+        for (let i = 0; i < maxAttempts; i++) {
+          try {
+            const resp = await fetchMyLatestEditRequest({
+              assessment: assessmentKey as any,
+              subject_code: String(subjectId),
+              scope: 'MARK_ENTRY',
+              teaching_assignment_id: teachingAssignmentId,
+            });
+            const row = resp?.result;
+            if (!row) throw new Error('No status');
+            if (Number.isFinite(createdId) && createdId > 0 && Number(row.id) !== createdId) throw new Error('Different request');
+
+            const reviewedAtMs = row.reviewed_at ? new Date(String(row.reviewed_at)).getTime() : 0;
+            const status = String(row.status || '').toUpperCase();
+            if (status === 'APPROVED' && reviewedAtMs >= minReviewMs) {
+              try {
+                refreshMarkLock({ silent: true });
+                refreshMarkEntryEditWindow?.({ silent: true });
+              } catch {}
+              alert('IQAC approved the edit request. You can now edit marks.');
+              return;
+            }
+            if (status === 'REJECTED' && reviewedAtMs >= minReviewMs) {
+              alert('IQAC rejected the edit request.');
+              return;
+            }
+          } catch {
+            // Fallback: only show approved if approval_until changes (prevents premature approved alerts).
+            try {
+              const w = await fetchEditWindow(assessmentKey as any, String(subjectId), 'MARK_ENTRY', teachingAssignmentId);
+              const nextUntil = w?.approval_until ? String(w.approval_until) : null;
+              if (w?.allowed_by_approval && nextUntil && nextUntil !== baselineApprovalUntil) {
+                try {
+                  refreshMarkLock({ silent: true });
+                  refreshMarkEntryEditWindow?.({ silent: true });
+                } catch {}
+                alert('IQAC approved the edit request. You can now edit marks.');
+                return;
+              }
+            } catch {
+              // ignore
+            }
+          }
+          await new Promise((r) => setTimeout(r, delay));
+        }
+        alert('Edit request still pending. Please try again later.');
+      })();
+    } catch (e: any) {
+      alert(e?.message || 'Request failed');
+    } finally {
+      setEditRequestBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (!viewMarksModalOpen) return;
@@ -1862,8 +2037,9 @@ export default function LabCourseMarksEntry({
 
   const floatingPanelStyle: React.CSSProperties = {
     position: 'absolute',
-    left: '40%',
-    top: 18,
+    left: '50%',
+    top: 6,
+    transform: 'translateX(-50%)',
     zIndex: 40,
     width: 160,
     background: 'rgba(255,255,255,0.98)',
@@ -2516,7 +2692,7 @@ export default function LabCourseMarksEntry({
               />
             ) : null}
             {/* Floating panel (image above, text below) when blocked by Mark Manager */}
-            {tableBlocked && !publishedEditLocked && !viewerMode ? (
+            {tableBlocked && !publishedEditLocked && !viewerMode && !floatPanelOnTable ? (
               <div style={floatingPanelStyle}>
                 <div style={{ width: 100, height: 72, display: 'grid', placeItems: 'center', background: '#fff', borderRadius: 8 }}>
                   <img
@@ -2547,15 +2723,15 @@ export default function LabCourseMarksEntry({
             ) : null}
 
             {/* Floating panel when blocked after Publish */}
-            {publishedEditLocked && !viewerMode ? (
+            {publishedEditLocked && !viewerMode && !floatPanelOnTable ? (
               <div style={floatingPanelStyle}>
                 <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontWeight: 900, color: '#065f46' }}>Published</div>
-                  <div style={{ fontSize: 13, color: '#065f46' }}>Marks are locked. Request IQAC approval to edit.</div>
+                  <div style={{ fontWeight: 950, color: '#065f46' }}>Published — Locked</div>
+                  <div style={{ fontSize: 13, color: '#065f46' }}>Table is locked. Request IQAC approval to edit.</div>
                 </div>
                 <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
                   <button type="button" className="obe-btn" onClick={() => setViewMarksModalOpen(true)}>
-                    View Marks
+                    View
                   </button>
                   <button
                     type="button"
@@ -2564,7 +2740,7 @@ export default function LabCourseMarksEntry({
                       setPublishedEditModalOpen(true);
                     }}
                   >
-                    Edit
+                    Request Edit
                   </button>
                 </div>
 
@@ -2908,7 +3084,10 @@ export default function LabCourseMarksEntry({
             padding: 16,
             zIndex: 60,
           }}
-          onClick={() => setPublishedEditModalOpen(false)}
+          onClick={() => {
+            if (editRequestBusy) return;
+            setPublishedEditModalOpen(false);
+          }}
         >
           <div
             style={{
@@ -2932,32 +3111,20 @@ export default function LabCourseMarksEntry({
               <div><strong>Saved:</strong> {savedAt || '—'}</div>
             </div>
 
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button type="button" className="obe-btn" onClick={() => setPublishedEditModalOpen(false)}>
-                Close
+            <textarea
+              value={editRequestReason}
+              onChange={(e) => setEditRequestReason(e.target.value)}
+              placeholder="Reason (optional)"
+              rows={4}
+              style={{ width: '100%', padding: 10, borderRadius: 10, border: '1px solid #e5e7eb', resize: 'vertical' }}
+            />
+
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 12 }}>
+              <button type="button" className="obe-btn" disabled={editRequestBusy} onClick={() => setPublishedEditModalOpen(false)}>
+                Cancel
               </button>
-              <button
-                type="button"
-                className="obe-btn obe-btn-primary"
-                onClick={async () => {
-                  if (!subjectId) return;
-                  try {
-                    await createEditRequest({
-                      assessment: assessmentKey as any,
-                      subject_code: String(subjectId),
-                      scope: 'MARK_ENTRY',
-                      reason: `Edit request: Marks entry for ${label}`,
-                      teaching_assignment_id: teachingAssignmentId,
-                    });
-                    alert('Edit request sent to IQAC.');
-                    setPublishedEditModalOpen(false);
-                    refreshMarkLock({ silent: true });
-                  } catch (e: any) {
-                    alert(e?.message || 'Request failed');
-                  }
-                }}
-              >
-                Request Edit
+              <button type="button" className="obe-btn obe-btn-success" disabled={editRequestBusy || !subjectId} onClick={requestMarkEntryEdit}>
+                {editRequestBusy ? 'Requesting…' : 'Send Request'}
               </button>
             </div>
           </div>
@@ -2991,9 +3158,12 @@ export default function LabCourseMarksEntry({
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-              <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>View Marks</div>
-              <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>{String(assessmentKey).toUpperCase()} LAB</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, position: 'relative' }}>
+              <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>View Only</div>
+              <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280', marginRight: 36 }}>{label} • {String(subjectId || '')}</div>
+              <button type="button" className="obe-btn obe-btn-success" onClick={() => setViewMarksModalOpen(false)} style={{ position: 'absolute', right: 0, top: 0 }}>
+                Close
+              </button>
             </div>
 
             {publishedViewLoading ? <div style={{ color: '#6b7280', marginBottom: 8 }}>Loading published marks…</div> : null}

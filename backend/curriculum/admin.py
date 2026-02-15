@@ -312,7 +312,7 @@ class CurriculumDepartmentAdmin(admin.ModelAdmin):
         ro = list(super().get_readonly_fields(request, obj))
         if obj and obj.master and not getattr(obj.master, 'editable', False):
             ro += [
-                'regulation', 'semester', 'course_code', 'course_name', 'class_type', 'category', 'is_elective',
+                'regulation', 'semester', 'course_code', 'course_name', 'category', 'is_elective',
                 'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark',
                 'total_hours', 'question_paper_type',
             ]

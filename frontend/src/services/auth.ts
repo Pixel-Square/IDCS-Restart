@@ -102,6 +102,10 @@ apiClient.interceptors.request.use(config => {
 })
 
 export async function getMe(){
+  const token = localStorage.getItem('access')
+  if (!token) {
+    throw new Error('no access token')
+  }
   const res = await apiClient.get('me/')
   const me = res.data
   try{

@@ -1,11 +1,16 @@
-from django.urls import path, include
+from django.urls import path, include, re_path
 from django.contrib import admin
 from django.conf import settings
+from django.views.static import serve as _serve
+import sys
+import erp.admin_customization
+from erp import admin_views
 from django.conf.urls.static import static
 from django.views.generic import TemplateView
 
 urlpatterns = [
     path('', TemplateView.as_view(template_name='db_dashboard.html'), name='db-dashboard'),
+    path('grappelli/', include('grappelli.urls')),
     path('admin/', admin.site.urls),
     path('api/accounts/', include('accounts.urls')),
     # also expose the same endpoints under /api/auth/ for compatibility
@@ -20,5 +25,23 @@ urlpatterns = [
     path('api/timetable/', include('timetable.urls')),
 ]
 
-if settings.DEBUG:
+# Admin dashboard data endpoint (counts for models) - always available
+urlpatterns += [
+    path('admin/dashboard-data/', admin_views.admin_counts, name='admin-dashboard-data'),
+]
+
+# During development using `manage.py runserver` we serve media and project
+# static files directly so the admin CSS and our logo are available even if
+# DEBUG is not toggled via env vars. This is a convenience for local work only.
+if 'runserver' in sys.argv or settings.DEBUG:
+    # Serve media
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+    # Serve project static files (from backend/static) when not using collectstatic
+    urlpatterns += [
+        re_path(r'^static/(?P<path>.*)$', _serve, {'document_root': settings.BASE_DIR / 'static'}),
+    ]
+
+    # Admin dashboard data endpoint (counts for models)
+    urlpatterns += [
+        path('admin/dashboard-data/', admin_views.admin_counts, name='admin-dashboard-data'),
+    ]

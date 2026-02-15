@@ -41,6 +41,9 @@ urlpatterns = [
     path('cia2-published-sheet/<str:subject_id>', views.cia2_published_sheet),
     path('cia2-publish-sheet/<str:subject_id>', views.cia2_publish_sheet),
 
+    # CIA protected Excel template
+    path('cia-export-template/<str:assessment>/<str:subject_id>', views.cia_export_template_xlsx),
+
     path('lab-published-sheet/<str:assessment>/<str:subject_id>', views.lab_published_sheet),
     path('lab-publish-sheet/<str:assessment>/<str:subject_id>', views.lab_publish_sheet),
 
@@ -75,6 +78,7 @@ urlpatterns = [
     path('publish-requests/<int:req_id>/reject', views.publish_request_reject),
 
     path('edit-request', views.edit_request_create),
+    path('edit-requests/my-latest', views.edit_requests_my_latest),
     path('edit-requests/pending', views.edit_requests_pending),
     path('edit-requests/pending-count', views.edit_requests_pending_count),
     path('edit-requests/history', views.edit_requests_history),

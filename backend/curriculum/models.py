@@ -10,6 +10,7 @@ CLASS_TYPE_CHOICES = (
     ('TCPL', 'Tcpl'),
     ('TCPR', 'Tcpr'),
     ('PRACTICAL', 'Practical'),
+    ('PROJECT', 'Project'),
     ('AUDIT', 'Audit'),
     ('SPECIAL', 'Special'),
 )

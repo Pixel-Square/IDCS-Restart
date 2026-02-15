@@ -1,6 +1,7 @@
 import fetchWithAuth from './fetchAuth';
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+const DEFAULT_API_BASE = 'https://db.zynix.us';
+const API_BASE = import.meta.env.VITE_API_BASE || (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://localhost:8000' : DEFAULT_API_BASE);
 
 export type IQACTeachingMapRow = {
   teaching_assignment_id: number;

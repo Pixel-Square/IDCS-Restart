@@ -160,11 +160,15 @@ class TeachingAssignmentStudentsView(APIView):
 
         section_name = getattr(getattr(ta, 'section', None), 'name', None)
 
-        # Best-effort subject metadata (supports both curriculum_row and legacy subject FK)
+        # Best-effort subject metadata (supports elective_subject, curriculum_row and legacy subject FK)
         subject_code = None
         subject_name = None
         subject_id = getattr(ta, 'subject_id', None)
         try:
+            if (not subject_code or not subject_name) and getattr(ta, 'elective_subject', None):
+                es = ta.elective_subject
+                subject_code = subject_code or getattr(es, 'course_code', None)
+                subject_name = subject_name or getattr(es, 'course_name', None)
             if getattr(ta, 'curriculum_row', None):
                 cr = ta.curriculum_row
                 subject_code = getattr(cr, 'course_code', None) or getattr(getattr(cr, 'master', None), 'course_code', None)
@@ -190,19 +194,46 @@ class TeachingAssignmentStudentsView(APIView):
             return getattr(user, 'username', None)
 
         students = []
-        s_qs = StudentSectionAssignment.objects.filter(section=ta.section, end_date__isnull=True).select_related('student__user')
-        for a in s_qs:
-            sp = a.student
-            u = getattr(sp, 'user', None)
-            students.append({
-                'id': sp.id,
-                'reg_no': getattr(sp, 'reg_no', None),
-                'name': _student_display_name(u),
-                'section': section_name,
-            })
 
-        # fallback: include legacy StudentProfile.section entries if none found
-        if not students:
+        # Elective TA rosters may not have a section; use elective-choices mapping.
+        if not getattr(ta, 'section_id', None) and getattr(ta, 'elective_subject_id', None):
+            try:
+                from curriculum.models import ElectiveChoice
+
+                eqs = (
+                    ElectiveChoice.objects.filter(is_active=True, elective_subject_id=int(ta.elective_subject_id))
+                    .exclude(student__isnull=True)
+                    .select_related('student__user', 'student__section')
+                )
+                if getattr(ta, 'academic_year_id', None):
+                    eqs = eqs.filter(academic_year_id=ta.academic_year_id)
+                for c in eqs:
+                    sp = getattr(c, 'student', None)
+                    if not sp:
+                        continue
+                    u = getattr(sp, 'user', None)
+                    students.append({
+                        'id': sp.id,
+                        'reg_no': getattr(sp, 'reg_no', None),
+                        'name': _student_display_name(u),
+                        'section': str(getattr(sp, 'section', '')) if getattr(sp, 'section_id', None) else None,
+                    })
+            except Exception:
+                students = []
+        else:
+            s_qs = StudentSectionAssignment.objects.filter(section=ta.section, end_date__isnull=True).select_related('student__user')
+            for a in s_qs:
+                sp = a.student
+                u = getattr(sp, 'user', None)
+                students.append({
+                    'id': sp.id,
+                    'reg_no': getattr(sp, 'reg_no', None),
+                    'name': _student_display_name(u),
+                    'section': section_name,
+                })
+
+        # fallback: include legacy StudentProfile.section entries if none found (section-based only)
+        if not students and getattr(ta, 'section', None) is not None:
             sp_qs = StudentProfile.objects.filter(section=ta.section).select_related('user')
             for sp in sp_qs:
                 u = getattr(sp, 'user', None)

@@ -8,5 +8,5 @@ type Props = {
 };
 
 export default function Formative2List(props: Props) {
-  return <Formative1List {...props} assessmentKey="formative2" skipMarkManager={true} />;
+  return <Formative1List {...props} assessmentKey="formative2" />;
 }

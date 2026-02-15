@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
+const API_BASE = import.meta.env.VITE_API_BASE || 'https://db.zynix.us'
 
 let isRefreshing = false
 let refreshPromise: Promise<string> | null = null
@@ -61,7 +61,7 @@ export async function fetchWithAuth(input: RequestInfo | URL, init: RequestInit 
   let finalInput: RequestInfo | URL = input
   try {
     if (typeof input === 'string' && input.startsWith('/api')) {
-      const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
+      const API_BASE = import.meta.env.VITE_API_BASE || 'https://db.zynix.us'
       finalInput = `${API_BASE}${input}`
     }
   } catch (e) {

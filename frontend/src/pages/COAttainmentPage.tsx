@@ -19,7 +19,7 @@ import { fetchDeptRow, fetchDeptRows, fetchMasters } from '../services/curriculu
 import { lsGet, lsSet } from '../utils/localStorage';
 import { isLabClassType, isSpecialClassType, normalizeClassType } from '../constants/classTypes';
 
-type Props = { courseId: string; enabledAssessments?: string[] | null };
+type Props = { courseId: string; enabledAssessments?: string[] | null; classType?: string | null };
 
 type Student = {
   id: number;
@@ -324,10 +324,10 @@ function weightedCoMarkFromComponents(args: {
   return Number.isFinite(out) ? clamp(out, 0, outOf) : null;
 }
 
-export function COAttainmentPage({ courseId, enabledAssessments }: Props): JSX.Element {
+export function COAttainmentPage({ courseId, enabledAssessments, classType: initialClassType }: Props): JSX.Element {
   const [masterCfg, setMasterCfg] = useState<any>(null);
 
-  const [classType, setClassType] = useState<string | null>(null);
+  const [classType, setClassType] = useState<string | null>(initialClassType ?? null);
   const isSpecialFromEnabledAssessments = useMemo(() => Array.isArray(enabledAssessments), [enabledAssessments]);
   const enabledSet = useMemo(() => {
     const arr = Array.isArray(enabledAssessments) ? enabledAssessments : [];
@@ -590,7 +590,22 @@ export function COAttainmentPage({ courseId, enabledAssessments }: Props): JSX.E
       try {
         const all = await fetchMyTeachingAssignments();
         if (!mounted) return;
-        const filtered = (all || []).filter((a) => a.subject_code === courseId);
+        let filtered = (all || []).filter((a) => a.subject_code === courseId);
+        
+        // If user doesn't have a TA for this subject, try to fetch from server
+        if (filtered.length === 0) {
+          try {
+            const taListRes = await fetchWithAuth(`/api/academics/teaching-assignments/?subject_code=${encodeURIComponent(String(courseId || ''))}`);
+            if (taListRes.ok) {
+              const taListJson = await taListRes.json();
+              const items = Array.isArray(taListJson.results) ? taListJson.results : Array.isArray(taListJson) ? taListJson : (taListJson.items || []);
+              filtered = items || [];
+            }
+          } catch (err) {
+            console.warn('Server TA list fetch failed:', err);
+          }
+        }
+        
         setTas(filtered);
         setTaError(null);
 
@@ -615,10 +630,41 @@ export function COAttainmentPage({ courseId, enabledAssessments }: Props): JSX.E
   }, [courseId, selectedTaId]);
 
   useEffect(() => {
+    // If parent provided a classType, use that and skip fetching
+    if (initialClassType) {
+      setClassType(initialClassType);
+      return;
+    }
+    
     let mounted = true;
     (async () => {
       try {
         const ta = (tas || []).find((t) => t.id === selectedTaId) || null;
+        
+        // Check if this is an elective TA first
+        const electiveSubjectId = (ta as any)?.elective_subject_id;
+        if (electiveSubjectId && !(ta as any)?.section_id) {
+          console.log('[COAttainment] Detected elective TA, fetching elective subject details for:', electiveSubjectId);
+          try {
+            const electiveRes = await fetchWithAuth(`/api/curriculum/elective-subjects/${electiveSubjectId}/`);
+            if (electiveRes.ok) {
+              const electiveData = await electiveRes.json();
+              const electiveClassType = electiveData?.class_type;
+              console.log('[COAttainment] Elective subject class_type:', electiveClassType);
+              
+              if (electiveClassType) {
+                if (!mounted) return;
+                setClassType(electiveClassType);
+                return;
+              }
+            } else {
+              console.warn('[COAttainment] Elective subject API returned error:', electiveRes.status);
+            }
+          } catch (err) {
+            console.warn('[COAttainment] Failed to fetch elective subject:', err);
+          }
+        }
+        
         const curriculumRowId = (ta as any)?.curriculum_row_id;
         if (!curriculumRowId) {
           // fallback: search dept rows / masters for this course code and pick its class_type
@@ -668,7 +714,7 @@ export function COAttainmentPage({ courseId, enabledAssessments }: Props): JSX.E
     return () => {
       mounted = false;
     };
-  }, [tas, selectedTaId]);
+  }, [tas, selectedTaId, initialClassType]);
 
   useEffect(() => {
     lsSet(configKey, { weights });

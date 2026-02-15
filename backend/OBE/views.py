@@ -99,6 +99,397 @@ from django.conf import settings
 import os
 
 
+def _student_display_name(user) -> str:
+    if not user:
+        return ''
+    try:
+        full = ' '.join([
+            str(getattr(user, 'first_name', '') or '').strip(),
+            str(getattr(user, 'last_name', '') or '').strip(),
+        ]).strip()
+        if full:
+            return full
+    except Exception:
+        pass
+    return str(getattr(user, 'username', '') or '').strip()
+
+
+def _get_students_for_teaching_assignment(ta):
+    """Best-effort roster resolution (mirrors academics.TeachingAssignmentStudentsView)."""
+    if not ta:
+        return []
+
+    students = []
+    section_name = getattr(getattr(ta, 'section', None), 'name', None)
+
+    # Elective TA rosters may not have a section; use elective-choices mapping.
+    if not getattr(ta, 'section_id', None) and getattr(ta, 'elective_subject_id', None):
+        try:
+            from curriculum.models import ElectiveChoice
+
+            eqs = (
+                ElectiveChoice.objects.filter(is_active=True, elective_subject_id=int(ta.elective_subject_id))
+                .exclude(student__isnull=True)
+                .select_related('student__user', 'student__section')
+            )
+            if getattr(ta, 'academic_year_id', None):
+                eqs = eqs.filter(academic_year_id=ta.academic_year_id)
+            for c in eqs:
+                sp = getattr(c, 'student', None)
+                if not sp:
+                    continue
+                students.append(sp)
+        except Exception:
+            students = []
+        return students
+
+    # Prefer active StudentSectionAssignment entries for the section.
+    try:
+        from academics.models import StudentSectionAssignment, StudentProfile
+
+        if getattr(ta, 'section', None) is not None:
+            s_qs = (
+                StudentSectionAssignment.objects.filter(section=ta.section, end_date__isnull=True)
+                .select_related('student__user')
+                .order_by('student__reg_no')
+            )
+            for a in s_qs:
+                students.append(a.student)
+
+        # fallback: include legacy StudentProfile.section entries if none found
+        if not students and getattr(ta, 'section', None) is not None:
+            sp_qs = StudentProfile.objects.filter(section=ta.section).select_related('user').order_by('reg_no')
+            students = list(sp_qs)
+    except Exception:
+        students = []
+
+    return students
+
+
+def _get_cia_questions_for_export(*, subject, assessment_key: str, class_type: str = '', question_paper_type: str = '') -> list[dict]:
+    """Return question definitions for CIA export.
+
+    Priority (most accurate first):
+    1) Saved draft sheet questions (exactly what the CIA entry UI is using)
+    2) Published sheet snapshot questions
+    3) IQAC QP pattern config (marks [+ optional CO mapping])
+    4) OBE master config questions
+    5) Hard fallback (common template)
+
+        Output shape:
+            [{ key: 'q1', label: 'Q1', max: 2.0 }, ...]
+    """
+    assessment_key = str(assessment_key or '').strip().lower()
+    class_type = str(class_type or '').strip().upper()
+    question_paper_type = str(question_paper_type or '').strip().upper()
+
+    def _coerce_questions(raw):
+        if not isinstance(raw, list):
+            return []
+        out = []
+        for idx, q in enumerate(raw):
+            if not isinstance(q, dict):
+                continue
+            key = str(q.get('key') or f"q{idx + 1}").strip() or f"q{idx + 1}"
+            label = str(q.get('label') or q.get('key') or f"Q{idx + 1}")
+            try:
+                mx = float(q.get('max') or 0)
+            except Exception:
+                mx = 0.0
+            if not label:
+                label = f"Q{idx + 1}"
+            out.append({'key': key, 'label': label, 'max': mx})
+        return out
+
+    # 1) Draft sheet questions (frontend saves full sheet JSON in AssessmentDraft)
+    try:
+        from .models import AssessmentDraft
+
+        d = AssessmentDraft.objects.filter(subject=subject, assessment=assessment_key).first()
+        if d and isinstance(getattr(d, 'data', None), dict):
+            qs = d.data.get('questions')
+            out = _coerce_questions(qs)
+            if out:
+                return out
+    except Exception:
+        pass
+
+    # 2) Published sheet questions (snapshot)
+    try:
+        if assessment_key == 'cia1':
+            from .models import Cia1PublishedSheet
+
+            row = Cia1PublishedSheet.objects.filter(subject=subject).first()
+        else:
+            from .models import Cia2PublishedSheet
+
+            row = Cia2PublishedSheet.objects.filter(subject=subject).first()
+        data = row.data if row and isinstance(getattr(row, 'data', None), dict) else None
+        if isinstance(data, dict):
+            out = _coerce_questions(data.get('questions'))
+            if out:
+                return out
+    except Exception:
+        pass
+
+    # 3) Prefer IQAC QP patterns, matching frontend logic.
+    try:
+        from .models import ObeQpPatternConfig
+
+        exam = 'CIA1' if assessment_key == 'cia1' else 'CIA2'
+        qp_for_db = question_paper_type if (class_type == 'THEORY' and question_paper_type in {'QP1', 'QP2'}) else None
+        obj = ObeQpPatternConfig.objects.filter(class_type=class_type, question_paper_type=qp_for_db, exam=exam).first()
+        if obj is None and exam in {'CIA1', 'CIA2'}:
+            obj = ObeQpPatternConfig.objects.filter(class_type=class_type, question_paper_type=qp_for_db, exam='CIA').first()
+
+        raw = getattr(obj, 'pattern', None) if obj is not None else None
+        if isinstance(raw, dict):
+            raw_marks = raw.get('marks')
+        else:
+            raw_marks = raw
+
+        if isinstance(raw_marks, list) and raw_marks:
+            out = []
+            for i, x in enumerate(raw_marks):
+                try:
+                    mx = float(x)
+                except Exception:
+                    mx = 0.0
+                out.append({'key': f"q{i + 1}", 'label': f"Q{i + 1}", 'max': mx})
+            if out:
+                return out
+    except Exception:
+        pass
+
+    # 4) Fallback: master config (if it has CIA question defs)
+    try:
+        row = ObeAssessmentMasterConfig.objects.filter(id=1).first()
+        cfg = row.config if row and isinstance(getattr(row, 'config', None), dict) else {}
+        assessments = cfg.get('assessments') if isinstance(cfg, dict) else None
+        if isinstance(assessments, dict):
+            key = assessment_key if assessment_key in assessments else 'cia1'
+            qs = (assessments.get(key) or {}).get('questions')
+            out = _coerce_questions(qs)
+            if out:
+                return out
+    except Exception:
+        pass
+
+    # 5) Last resort: match the common CIA sheet shown in the user's template.
+    return [{'key': f"q{i + 1}", 'label': f"Q{i + 1}", 'max': float(mx)} for i, mx in enumerate([2, 2, 2, 2, 2, 2, 16, 16, 8, 8])]
+
+
+def _get_cia_sheet_rows_for_export(*, subject, assessment_key: str) -> dict:
+    """Return rowsByStudentId map for CIA sheet export.
+
+    Priority:
+      1) Draft rows (most likely what staff is currently editing)
+      2) Published rows
+      3) Empty
+    """
+    assessment_key = str(assessment_key or '').strip().lower()
+    # Draft
+    try:
+        from .models import AssessmentDraft
+
+        d = AssessmentDraft.objects.filter(subject=subject, assessment=assessment_key).first()
+        if d and isinstance(getattr(d, 'data', None), dict):
+            rows_by = d.data.get('rowsByStudentId')
+            if isinstance(rows_by, dict):
+                return rows_by
+    except Exception:
+        pass
+
+    # Published
+    try:
+        if assessment_key == 'cia1':
+            from .models import Cia1PublishedSheet
+
+            row = Cia1PublishedSheet.objects.filter(subject=subject).first()
+        else:
+            from .models import Cia2PublishedSheet
+
+            row = Cia2PublishedSheet.objects.filter(subject=subject).first()
+        data = row.data if row and isinstance(getattr(row, 'data', None), dict) else None
+        if isinstance(data, dict):
+            rows_by = data.get('rowsByStudentId')
+            if isinstance(rows_by, dict):
+                return rows_by
+    except Exception:
+        pass
+
+    return {}
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def cia_export_template_xlsx(request, assessment: str, subject_id: str):
+    """Download a protected CIA Excel template.
+
+    Columns (matches screenshot):
+      Register No | Student Name | Qn (max) ... | Status
+    Only the Q columns and Status are editable; the rest is locked.
+
+    Query params:
+      teaching_assignment_id (optional, but recommended for correct roster)
+    """
+    staff_profile, err = _faculty_only(request)
+    if err:
+        return err
+
+    assessment_key = str(assessment or '').strip().lower()
+    if assessment_key not in {'cia1', 'cia2'}:
+        return Response({'detail': 'assessment must be cia1 or cia2'}, status=status.HTTP_400_BAD_REQUEST)
+
+    subject = _get_subject(subject_id, request)
+    ta_id = _get_teaching_assignment_id_from_request(request)
+
+    # Enforce enabled assessment for SPECIAL courses.
+    gate = _enforce_assessment_enabled_for_course(request, subject_code=subject.code, assessment=assessment_key, teaching_assignment_id=ta_id)
+    if gate is not None:
+        return gate
+
+    ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
+    row = _resolve_curriculum_row_for_subject(request, subject_code=subject.code, teaching_assignment_id=ta_id)
+
+    class_type = str(getattr(row, 'class_type', '') or '').strip().upper() if row else ''
+    qp_type = str(getattr(row, 'question_paper_type', '') or '').strip().upper() if row else ''
+
+    q_defs = _get_cia_questions_for_export(subject=subject, assessment_key=assessment_key, class_type=class_type, question_paper_type=qp_type)
+    rows_by_student_id = _get_cia_sheet_rows_for_export(subject=subject, assessment_key=assessment_key)
+
+    q_headers = []
+    q_keys: list[str] = []
+    for i, q in enumerate(q_defs):
+        key = str((q or {}).get('key') or f"q{i + 1}").strip() or f"q{i + 1}"
+        label = str((q or {}).get('label') or f"Q{i + 1}").strip() or f"Q{i + 1}"
+        try:
+            mx = float((q or {}).get('max') or 0)
+        except Exception:
+            mx = 0.0
+        q_keys.append(key)
+        q_headers.append(f"{label} ({mx:.2f})")
+
+    # Determine roster.
+    students = _get_students_for_teaching_assignment(ta) if ta is not None else []
+    if not students:
+        students = (
+            StudentProfile.objects.select_related('user', 'section')
+            .filter(section__semester=subject.semester)
+            .order_by('reg_no')
+        )
+        if not students.exists():
+            students = StudentProfile.objects.select_related('user', 'section').all().order_by('reg_no')
+
+    # Build workbook
+    import openpyxl
+    from openpyxl.styles import Font, Protection
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = assessment_key.upper()
+
+    headers = ['Register No', 'Student Name'] + q_headers + ['Status']
+    ws.append(headers)
+
+    # Style header
+    for c in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=c)
+        cell.font = Font(bold=True)
+
+    # Column widths (roughly matching screenshot)
+    ws.column_dimensions['A'].width = 20
+    ws.column_dimensions['B'].width = 28
+    # Q columns start at C
+    for i in range(len(q_headers)):
+        col_letter = openpyxl.utils.get_column_letter(3 + i)
+        ws.column_dimensions[col_letter].width = 12
+    ws.column_dimensions[openpyxl.utils.get_column_letter(3 + len(q_headers))].width = 12  # Status
+
+    # Fill rows
+    start_row = 2
+    def _cell_value(raw):
+        if raw is None:
+            return ''
+        if isinstance(raw, str) and raw.strip() == '':
+            return ''
+        # Keep ints as ints when possible.
+        try:
+            if isinstance(raw, bool):
+                return '1' if raw else '0'
+            if isinstance(raw, (int, float, Decimal)):
+                return float(raw)
+            s = str(raw).strip()
+            if s == '':
+                return ''
+            # If numeric string, keep numeric.
+            try:
+                return float(s)
+            except Exception:
+                return s
+        except Exception:
+            return ''
+
+    for idx, sp in enumerate(list(students), start=start_row):
+        reg_no = str(getattr(sp, 'reg_no', '') or '')
+        name = _student_display_name(getattr(sp, 'user', None))
+
+        sid = getattr(sp, 'id', None)
+        row_obj = rows_by_student_id.get(str(sid)) if sid is not None else None
+        if not isinstance(row_obj, dict):
+            row_obj = {}
+        absent = bool(row_obj.get('absent'))
+        q_map = row_obj.get('q') if isinstance(row_obj.get('q'), dict) else {}
+
+        q_vals = []
+        for k in q_keys:
+            q_vals.append(_cell_value(q_map.get(k)))
+
+        status_val = 'absent' if absent else 'present'
+        row_values = [reg_no, name] + q_vals + [status_val]
+        ws.append(row_values)
+
+    # Freeze header
+    ws.freeze_panes = 'C2'
+
+    # Protect sheet: lock everything except Q columns + Status column.
+    ws.protection.sheet = True
+    try:
+        # Use SECRET_KEY-derived password so users can't trivially unprotect.
+        ws.protection.set_password(str(getattr(settings, 'SECRET_KEY', 'obe'))[:32])
+    except Exception:
+        pass
+
+    # Unlock editable cells for all data rows.
+    last_row = ws.max_row
+    q_start_col = 3
+    q_end_col = 2 + len(q_headers)  # inclusive
+    status_col = 3 + len(q_headers)
+
+    for r in range(2, last_row + 1):
+        for c in range(q_start_col, status_col + 1):
+            ws.cell(row=r, column=c).protection = Protection(locked=False)
+        # Explicitly lock Reg No + Student Name
+        ws.cell(row=r, column=1).protection = Protection(locked=True)
+        ws.cell(row=r, column=2).protection = Protection(locked=True)
+
+    # Save to response
+    from io import BytesIO
+    bio = BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+
+    filename = f"{subject.code}_{assessment_key.upper()}_template.xlsx"
+    from django.http import HttpResponse
+    resp = HttpResponse(
+        bio.read(),
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+    resp['Content-Disposition'] = f'attachment; filename="{filename}"'
+    return resp
+
+
 def _parse_int(value):
     try:
         if value is None:
@@ -2258,31 +2649,64 @@ def cia1_marks(request, subject_id):
     except Exception:
         ta_id = None
 
+    # Resolve roster sources:
+    # - Normal TAs: section roster
+    # - Elective TAs (often sectionless): elective-choices roster
+    selected_ta = None
     if ta_id is not None:
         # If the UI provided a TA id, prefer scoping to that TA when it belongs
         # to the filtered `tas` queryset (i.e., the current user's / HOD's assignments).
         # If the provided TA id is not in `tas`, do NOT raise immediately; instead
         # fall back to the user's available TAs so the UI can still display a roster.
-        ta = tas.filter(id=ta_id).first()
-        if ta:
-            section_ids = [ta.section_id]
+        selected_ta = tas.filter(id=ta_id).first()
+        if selected_ta:
+            section_ids = [selected_ta.section_id]
         else:
             # Ignore the invalid/unowned TA id and use the user's own assignments instead.
             section_ids = list(tas.values_list('section_id', flat=True).distinct())
     else:
         section_ids = list(tas.values_list('section_id', flat=True).distinct())
-    
-    # If no section_ids found, return empty roster instead of 403
-    # (allows frontend fallback to navigate via fetchMyTeachingAssignments)
-    if not section_ids:
+
+    # Clean up null section ids (elective TAs may not have a section)
+    section_ids = [sid for sid in section_ids if sid]
+
+    elective_student_ids: list[int] = []
+    try:
+        # When TA is elective (has elective_subject_id and no section), roster should come
+        # from curriculum.ElectiveChoice rather than section.
+        from curriculum.models import ElectiveChoice
+
+        elective_subject_ids: list[int] = []
+        elective_ay_id = None
+        if selected_ta and getattr(selected_ta, 'elective_subject_id', None) and not getattr(selected_ta, 'section_id', None):
+            elective_subject_ids = [int(selected_ta.elective_subject_id)]
+            elective_ay_id = getattr(selected_ta, 'academic_year_id', None)
+        else:
+            elective_subject_ids = list(
+                tas.filter(section__isnull=True)
+                .exclude(elective_subject__isnull=True)
+                .values_list('elective_subject_id', flat=True)
+                .distinct()
+            )
+
+        if elective_subject_ids:
+            eqs = ElectiveChoice.objects.filter(is_active=True, elective_subject_id__in=elective_subject_ids).exclude(student__isnull=True)
+            if elective_ay_id:
+                eqs = eqs.filter(academic_year_id=elective_ay_id)
+            elective_student_ids = list(eqs.values_list('student_id', flat=True).distinct())
+    except Exception:
+        elective_student_ids = []
+
+    # If no section_ids and no elective students found, return empty roster instead of 403
+    if not section_ids and not elective_student_ids:
         students = StudentProfile.objects.none()
     else:
-        # Order roster by student name
         try:
             students = (
                 StudentProfile.objects.select_related('user', 'section')
                 .filter(
-                    Q(section_id__in=section_ids)
+                    Q(id__in=elective_student_ids)
+                    | Q(section_id__in=section_ids)
                     | Q(section_assignments__section_id__in=section_ids, section_assignments__end_date__isnull=True)
                 )
                 .distinct()
@@ -2295,6 +2719,7 @@ def cia1_marks(request, subject_id):
                     'error': str(e),
                     'how_to_fix': [
                         'Ensure the selected Teaching Assignment has a valid Section and Semester',
+                        'Ensure elective choices are imported for the elective subject',
                         'Ensure student section assignments are consistent',
                     ],
                 },
@@ -2484,27 +2909,54 @@ def cia2_marks(request, subject_id):
     except Exception:
         ta_id = None
 
+    selected_ta = None
     if ta_id is not None:
         # If the UI provided a TA id, prefer scoping to that TA when it belongs
         # to the filtered `tas` queryset. Fall back to user's TAs if not found.
-        ta = tas.filter(id=ta_id).first()
-        if ta:
-            section_ids = [ta.section_id]
+        selected_ta = tas.filter(id=ta_id).first()
+        if selected_ta:
+            section_ids = [selected_ta.section_id]
         else:
             section_ids = list(tas.values_list('section_id', flat=True).distinct())
     else:
         section_ids = list(tas.values_list('section_id', flat=True).distinct())
-    
-    # If no section_ids found, return empty roster instead of 403
-    if not section_ids:
+
+    section_ids = [sid for sid in section_ids if sid]
+
+    elective_student_ids: list[int] = []
+    try:
+        from curriculum.models import ElectiveChoice
+
+        elective_subject_ids: list[int] = []
+        elective_ay_id = None
+        if selected_ta and getattr(selected_ta, 'elective_subject_id', None) and not getattr(selected_ta, 'section_id', None):
+            elective_subject_ids = [int(selected_ta.elective_subject_id)]
+            elective_ay_id = getattr(selected_ta, 'academic_year_id', None)
+        else:
+            elective_subject_ids = list(
+                tas.filter(section__isnull=True)
+                .exclude(elective_subject__isnull=True)
+                .values_list('elective_subject_id', flat=True)
+                .distinct()
+            )
+
+        if elective_subject_ids:
+            eqs = ElectiveChoice.objects.filter(is_active=True, elective_subject_id__in=elective_subject_ids).exclude(student__isnull=True)
+            if elective_ay_id:
+                eqs = eqs.filter(academic_year_id=elective_ay_id)
+            elective_student_ids = list(eqs.values_list('student_id', flat=True).distinct())
+    except Exception:
+        elective_student_ids = []
+
+    if not section_ids and not elective_student_ids:
         students = StudentProfile.objects.none()
     else:
-        # Order roster by student name
         try:
             students = (
                 StudentProfile.objects.select_related('user', 'section')
                 .filter(
-                    Q(section_id__in=section_ids)
+                    Q(id__in=elective_student_ids)
+                    | Q(section_id__in=section_ids)
                     | Q(section_assignments__section_id__in=section_ids, section_assignments__end_date__isnull=True)
                 )
                 .distinct()
@@ -2517,6 +2969,7 @@ def cia2_marks(request, subject_id):
                     'error': str(e),
                     'how_to_fix': [
                         'Ensure the selected Teaching Assignment has a valid Section and Semester',
+                        'Ensure elective choices are imported for the elective subject',
                         'Ensure student section assignments are consistent',
                     ],
                 },
@@ -4113,6 +4566,105 @@ def edit_request_create(request):
         )
 
     return Response({'id': req.id, 'status': req.status, 'scope': req.scope, 'created_at': req.created_at.isoformat() if req.created_at else None})
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def edit_requests_my_latest(request):
+    """Faculty: fetch the latest edit request for this staff user (for status polling).
+
+    Query params:
+    - assessment (required)
+    - subject_code (required)
+    - scope (required: MARK_ENTRY or MARK_MANAGER)
+    - teaching_assignment_id (optional)
+    """
+    staff_profile, err = _faculty_only(request)
+    if err:
+        return err
+
+    qp = getattr(request, 'query_params', {}) if hasattr(request, 'query_params') else request.GET
+    assessment = str(qp.get('assessment') or '').strip().lower()
+    subject_code = str(qp.get('subject_code') or '').strip()
+    scope_raw = str(qp.get('scope') or '').strip().upper()
+    ta_id = None
+    try:
+        if qp.get('teaching_assignment_id') is not None and str(qp.get('teaching_assignment_id')).strip() != '':
+            ta_id = int(str(qp.get('teaching_assignment_id')))
+    except Exception:
+        ta_id = None
+
+    if assessment not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
+        return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
+    if not subject_code:
+        return Response({'detail': 'subject_code is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if scope_raw in {'MARKS', 'MARKS_ENTRY', 'MARK_ENTRY', 'TABLE'}:
+        scope = 'MARK_ENTRY'
+    elif scope_raw in {'MARK_MANAGER', 'MANAGER'}:
+        scope = 'MARK_MANAGER'
+    else:
+        return Response({'detail': 'scope is required (MARK_ENTRY or MARK_MANAGER).'}, status=status.HTTP_400_BAD_REQUEST)
+
+    info = _get_due_schedule_for_request(request, subject_code=subject_code, assessment=assessment, teaching_assignment_id=ta_id)
+    academic_year = info.get('academic_year')
+    if academic_year is None:
+        return Response({'detail': 'Unable to resolve academic year for this subject.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    ta = _resolve_staff_teaching_assignment(request, subject_code=subject_code, teaching_assignment_id=ta_id)
+
+    from .models import ObeEditRequest
+
+    qs = ObeEditRequest.objects.filter(
+        staff_user=request.user,
+        academic_year=academic_year,
+        subject_code=subject_code,
+        assessment=assessment,
+        scope=scope,
+    )
+    if ta is not None:
+        qs = qs.filter(teaching_assignment=ta)
+    req = qs.order_by('-updated_at').first()
+    if not req:
+        return Response({'result': None})
+
+    reviewer = getattr(req, 'reviewed_by', None)
+    now = timezone.now()
+    approved_until = getattr(req, 'approved_until', None)
+
+    return Response(
+        {
+            'result': {
+                'id': req.id,
+                'status': req.status,
+                'assessment': req.assessment,
+                'scope': req.scope,
+                'subject_code': req.subject_code,
+                'reason': req.reason,
+                'requested_at': req.created_at.isoformat() if req.created_at else None,
+                'updated_at': req.updated_at.isoformat() if req.updated_at else None,
+                'reviewed_at': req.reviewed_at.isoformat() if req.reviewed_at else None,
+                'approved_until': approved_until.isoformat() if approved_until else None,
+                'is_active': bool(approved_until and approved_until > now),
+                'reviewed_by': {
+                    'id': getattr(reviewer, 'id', None),
+                    'username': getattr(reviewer, 'username', None),
+                    'name': (
+                        ' '.join([
+                            str(getattr(reviewer, 'first_name', '') or '').strip(),
+                            str(getattr(reviewer, 'last_name', '') or '').strip(),
+                        ]).strip()
+                        if reviewer
+                        else None
+                    )
+                    or (getattr(reviewer, 'username', None) if reviewer else None),
+                }
+                if reviewer
+                else None,
+            }
+        }
+    )
 
 
 @api_view(['GET'])

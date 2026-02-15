@@ -12,7 +12,7 @@ import { fetchMyTeachingAssignments, TeachingAssignmentItem } from '../services/
 
 const PRIMARY_API_BASE = import.meta.env.VITE_API_BASE || 'https://db.zynix.us';
 const FALLBACK_API_BASE = 'http://localhost:8000';
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_BASE || 'https://db.zynix.us';
 
 async function fetchWithFallback(url, options) {
   try {
@@ -20,9 +20,18 @@ async function fetchWithFallback(url, options) {
     if (!res.ok) throw new Error('Primary failed');
     return res;
   } catch (e) {
-    // Try fallback
-    const res = await fetch(`${FALLBACK_API_BASE}${url}`, options);
-    return res;
+    // Only attempt the http://localhost fallback when the frontend itself
+    // is running on a localhost host. Browsers block requests from secure
+    // public origins to loopback/private addresses (Private Network Access),
+    // so avoid hitting the fallback when served from https production sites.
+    if (typeof window !== 'undefined') {
+      const h = window.location.hostname;
+      if (h === 'localhost' || h === '127.0.0.1') {
+        const res = await fetch(`${FALLBACK_API_BASE}${url}`, options);
+        return res;
+      }
+    }
+    throw e;
   }
 }
 

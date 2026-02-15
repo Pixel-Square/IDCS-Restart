@@ -189,11 +189,11 @@ export default function AcademicControllerCourseOBEPage(): JSX.Element {
 
         <div className="obe-tab-nav" aria-label="OBE Tabs" style={{ padding: '0 18px' }}>
           {[
+            { key: 'lca_instructions', label: 'LCA Instructions' },
+            { key: 'lca', label: 'LCA' },
             { key: 'cdap', label: 'CDAP' },
             { key: 'articulation', label: 'Articulation Matrix' },
             { key: 'marks', label: 'Mark Entry' },
-            { key: 'lca_instructions', label: 'LCA Instructions' },
-            { key: 'lca', label: 'LCA' },
             { key: 'co_attainment', label: 'CO ATTAINMENT' },
             { key: 'cqi', label: 'CQI' },
           ].map((t) => {

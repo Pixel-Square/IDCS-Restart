@@ -7,10 +7,13 @@ import {
   fetchPublishedCiaSheet,
   fetchPublishedFormative,
   fetchPublishedLabSheet,
+  fetchPublishedReview1,
+  fetchPublishedReview2,
   fetchPublishedSsa1,
   fetchPublishedSsa2,
   TeachingAssignmentItem,
 } from '../services/obe';
+import { fetchAssessmentMasterConfig } from '../services/cdapDb';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
 import fetchWithAuth from '../services/fetchAuth';
 import { fetchDeptRow, fetchDeptRows, fetchMasters } from '../services/curriculum';
@@ -30,9 +33,10 @@ type QuestionDef = { key: string; max: number; co: 1 | 2 | '1&2' };
 type QuestionDef34 = { key: string; max: number; co: 3 | 4 | '3&4' };
 
 const DEFAULT_INTERNAL_MAPPING = {
-  header: ['CO1', 'CO2', 'CO3', 'CO3', 'CO3', 'CO4', 'CO4', 'CO4', 'CO1', 'CO2', 'CO3', 'CO4', 'CO5'],
-  weights: [7.0, 7.0, 1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 2.0, 2.0, 2.0, 2.0, 4.0],
-  cycles: ['cycle 1', 'cycle 1', 'ssa', 'cia', 'fa', 'ssa', 'cia', 'fa', 'ME', 'ME', 'ME', 'ME', 'ME'],
+  // CO1/CO2 are split like CO3/CO4: ssa/cia/fa columns.
+  header: ['CO1', 'CO1', 'CO1', 'CO2', 'CO2', 'CO2', 'CO3', 'CO3', 'CO3', 'CO4', 'CO4', 'CO4', 'CO1', 'CO2', 'CO3', 'CO4', 'CO5'],
+  weights: [1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 2.0, 2.0, 2.0, 2.0, 4.0],
+  cycles: ['ssa', 'cia', 'fa', 'ssa', 'cia', 'fa', 'ssa', 'cia', 'fa', 'ssa', 'cia', 'fa', 'ME', 'ME', 'ME', 'ME', 'ME'],
 };
 
 const DEFAULT_CIA1_QUESTIONS: QuestionDef[] = [
@@ -149,6 +153,110 @@ function weightedOutOf(args: {
   return Number.isFinite(out) ? clamp(out, 0, outOf) : null;
 }
 
+function splitCycleWeight(total: number, ssaW: number, ciaW: number, faW: number): [number, number, number] {
+  const t = Number(total);
+  const s = Number(ssaW);
+  const c = Number(ciaW);
+  const f = Number(faW);
+  const sum = (Number.isFinite(s) ? s : 0) + (Number.isFinite(c) ? c : 0) + (Number.isFinite(f) ? f : 0);
+  if (!Number.isFinite(t) || t <= 0 || !sum) return [0, 0, 0];
+  const a = round2((t * (s || 0)) / sum);
+  const b = round2((t * (c || 0)) / sum);
+  const d = round2((t * (f || 0)) / sum);
+  return [a, b, d];
+}
+
+type InternalSchema = {
+  visible: number[];
+  header: string[];
+  cycles: string[];
+  labels: string[];
+};
+
+function buildInternalSchema(classType: string | null, enabledSet: Set<string>): InternalSchema {
+  const ct = normalizeClassType(classType);
+  const allHeader = DEFAULT_INTERNAL_MAPPING.header;
+  const allCycles = DEFAULT_INTERNAL_MAPPING.cycles;
+  const allLabels = [
+    'CO1-SSA',
+    'CO1-CIA',
+    'CO1-FA',
+    'CO2-SSA',
+    'CO2-CIA',
+    'CO2-FA',
+    'CO3-SSA',
+    'CO3-CIA',
+    'CO3-FA',
+    'CO4-SSA',
+    'CO4-CIA',
+    'CO4-FA',
+    'ME-CO1',
+    'ME-CO2',
+    'ME-CO3',
+    'ME-CO4',
+    'ME-CO5',
+  ];
+
+  // Default: show all 17 columns (theory-like schema)
+  let visible = Array.from({ length: 17 }, (_, i) => i);
+  let cycles = [...allCycles];
+  let labels = [...allLabels];
+
+  if (ct === 'TCPR') {
+    // TCPR uses Review1/Review2 instead of Formatives.
+    cycles = cycles.map((c, idx) => {
+      if (idx === 2 || idx === 5 || idx === 8 || idx === 11) return 'review';
+      return c;
+    });
+    labels = labels.map((l, idx) => {
+      if (idx === 2 || idx === 5 || idx === 8 || idx === 11) return l.replace('-FA', '-Review');
+      return l;
+    });
+  }
+
+  if (ct === 'TCPL') {
+    // TCPL uses LAB1/LAB2 stored under formative1/formative2.
+    cycles = cycles.map((c, idx) => {
+      if (idx === 2 || idx === 5 || idx === 8 || idx === 11) return 'lab';
+      return c;
+    });
+    labels = labels.map((l, idx) => {
+      if (idx === 2 || idx === 5) return l.replace('-FA', '-LAB1');
+      if (idx === 8 || idx === 11) return l.replace('-FA', '-LAB2');
+      return l;
+    });
+  }
+
+  if (ct === 'LAB' || ct === 'PRACTICAL') {
+    // Only CIA (lab-style) + MODEL(CO5) are used.
+    visible = [1, 4, 7, 10, 16];
+    const header = ['CO1', 'CO2', 'CO3', 'CO4', 'ME'];
+    const cyc = ['CIA 1', 'CIA 1', 'CIA 2', 'CIA 2', 'MODEL'];
+    const lab = ['CO1-CIA1', 'CO2-CIA1', 'CO3-CIA2', 'CO4-CIA2', 'ME-CO5'];
+    return { visible, header, cycles: cyc, labels: lab };
+  }
+
+  if (ct === 'SPECIAL' && enabledSet.size) {
+    // SPECIAL has only the enabled subset of SSA/CIA/Formative and no MODEL.
+    const allowed: number[] = [];
+    const pushIf = (cond: boolean, idxs: number[]) => {
+      if (cond) for (const i of idxs) allowed.push(i);
+    };
+    pushIf(enabledSet.has('ssa1'), [0, 3]);
+    pushIf(enabledSet.has('cia1'), [1, 4]);
+    pushIf(enabledSet.has('formative1'), [2, 5]);
+    pushIf(enabledSet.has('ssa2'), [6, 9]);
+    pushIf(enabledSet.has('cia2'), [7, 10]);
+    pushIf(enabledSet.has('formative2'), [8, 11]);
+    visible = allowed;
+  }
+
+  const header = visible.map((i) => allHeader[i]);
+  const cyc = visible.map((i) => cycles[i]);
+  const lab = visible.map((i) => labels[i]);
+  return { visible, header, cycles: cyc, labels: lab };
+}
+
 export default function InternalMarkCoursePage({ courseId, enabledAssessments }: Props): JSX.Element {
   const enabledSet = useMemo(() => new Set((enabledAssessments || []).map((x) => String(x || '').trim().toLowerCase()).filter(Boolean)), [enabledAssessments]);
 
@@ -157,6 +265,8 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
   const [taError, setTaError] = useState<string | null>(null);
 
   const [classType, setClassType] = useState<string | null>(null);
+
+  const [masterCfg, setMasterCfg] = useState<any>(null);
 
   const [students, setStudents] = useState<Student[]>([]);
   const [rosterError, setRosterError] = useState<string | null>(null);
@@ -174,6 +284,14 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
     cia2: null,
   });
 
+  const [publishedReview, setPublishedReview] = useState<{ r1: Record<string, any>; r2: Record<string, any> }>({ r1: {}, r2: {} });
+  const [publishedLab, setPublishedLab] = useState<{ cia1: any | null; cia2: any | null; model: any | null }>({
+    cia1: null,
+    cia2: null,
+    model: null,
+  });
+  const [publishedTcplLab, setPublishedTcplLab] = useState<{ lab1: any | null; lab2: any | null }>({ lab1: null, lab2: null });
+
   const [loadingData, setLoadingData] = useState(false);
   const [dataError, setDataError] = useState<string | null>(null);
 
@@ -181,9 +299,38 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
     let mounted = true;
     (async () => {
       try {
+        const cfg = await fetchAssessmentMasterConfig();
+        if (!mounted) return;
+        setMasterCfg(cfg || null);
+      } catch {
+        // ignore
+      }
+    })();
+    return () => { mounted = false; };
+  }, [courseId]);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
         const all = await fetchMyTeachingAssignments();
         if (!mounted) return;
-        const filtered = (all || []).filter((a) => String(a.subject_code) === String(courseId));
+        let filtered = (all || []).filter((a) => String(a.subject_code) === String(courseId));
+        
+        // If user doesn't have a TA for this subject, try to fetch from server
+        if (filtered.length === 0) {
+          try {
+            const taListRes = await fetchWithAuth(`/api/academics/teaching-assignments/?subject_code=${encodeURIComponent(String(courseId || ''))}`);
+            if (taListRes.ok) {
+              const taListJson = await taListRes.json();
+              const items = Array.isArray(taListJson.results) ? taListJson.results : Array.isArray(taListJson) ? taListJson : (taListJson.items || []);
+              filtered = items || [];
+            }
+          } catch (err) {
+            console.warn('Server TA list fetch failed:', err);
+          }
+        }
+        
         setTas(filtered);
         const stored = lsGet<number>(`internalMark_selectedTa_${courseId}`);
         const initial = (typeof stored === 'number' && filtered.some((f) => f.id === stored) ? stored : filtered[0]?.id) ?? null;
@@ -240,28 +387,53 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
     let mounted = true;
     (async () => {
       try {
-        const remote = await fetchClassTypeWeights();
-        if (!mounted) return;
         const ct = normalizeClassType(classType);
-        const w = (remote && (remote as any)[ct]) || null;
-        if (w) {
-          setWeights({
-            ssa1: Number.isFinite(Number(w.ssa1)) ? Number(w.ssa1) : 1.5,
-            cia1: Number.isFinite(Number(w.cia1)) ? Number(w.cia1) : 3,
-            formative1: Number.isFinite(Number(w.formative1)) ? Number(w.formative1) : 2.5,
-          });
+        const applyWeights = (w: any) => {
+          if (!w || typeof w !== 'object') return false;
+          const ssa1W = Number.isFinite(Number(w.ssa1)) ? Number(w.ssa1) : 1.5;
+          const cia1W = Number.isFinite(Number(w.cia1)) ? Number(w.cia1) : 3;
+          const fa1W = Number.isFinite(Number(w.formative1)) ? Number(w.formative1) : 2.5;
+          setWeights({ ssa1: ssa1W, cia1: cia1W, formative1: fa1W });
 
           const im = (w as any).internal_mark_weights;
           if (Array.isArray(im) && im.length) {
-            const arr = im.map((x: any, i: number) => {
+            let arr = im.map((x: any) => {
               const n = Number(x);
-              return Number.isFinite(n) ? n : (DEFAULT_INTERNAL_MAPPING.weights[i] ?? 0);
+              return Number.isFinite(n) ? n : 0;
             });
+
+            // Backward compatibility: old format had 13 weights with CO1/CO2 as a single "cycle 1" column.
+            // New format has 17 weights with CO1/CO2 split into ssa/cia/fa.
+            if (arr.length === 13 && DEFAULT_INTERNAL_MAPPING.weights.length === 17) {
+              const [co1Ssa, co1Cia, co1Fa] = splitCycleWeight(arr[0] || 0, ssa1W, cia1W, fa1W);
+              const [co2Ssa, co2Cia, co2Fa] = splitCycleWeight(arr[1] || 0, ssa1W, cia1W, fa1W);
+              arr = [co1Ssa, co1Cia, co1Fa, co2Ssa, co2Cia, co2Fa, ...arr.slice(2)];
+            }
+
             while (arr.length < DEFAULT_INTERNAL_MAPPING.weights.length) arr.push(DEFAULT_INTERNAL_MAPPING.weights[arr.length] ?? 0);
             setInternalMarkWeights(arr.slice(0, DEFAULT_INTERNAL_MAPPING.weights.length));
           } else {
             setInternalMarkWeights([...DEFAULT_INTERNAL_MAPPING.weights]);
           }
+          return true;
+        };
+
+        // Prefer server; fallback to localStorage (used when server save isn't available)
+        try {
+          const remote = await fetchClassTypeWeights();
+          if (!mounted) return;
+          const wRemote = (remote && (remote as any)[ct]) || null;
+          if (applyWeights(wRemote)) return;
+        } catch {
+          // ignore
+        }
+
+        try {
+          const local = lsGet<any>('iqac_class_type_weights');
+          const wLocal = (local && (local as any)[ct]) || null;
+          if (applyWeights(wLocal)) return;
+        } catch {
+          // ignore
         }
       } catch {
         // ignore
@@ -325,7 +497,18 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
       setLoadingData(true);
       setDataError(null);
       try {
-        const isTcpl = normalizeClassType(classType) === 'TCPL';
+        const ct = normalizeClassType(classType);
+        const taId = selectedTaId ?? undefined;
+        const isTcpl = ct === 'TCPL';
+        const isTcpr = ct === 'TCPR';
+        const isLabLike = ct === 'LAB' || ct === 'PRACTICAL';
+        const isSpecial = ct === 'SPECIAL' && enabledSet.size;
+        const allow = (k: string) => (!isSpecial ? true : enabledSet.has(String(k).toLowerCase()));
+
+        // reset optional snapshots to avoid stale render between class type switches
+        setPublishedReview({ r1: {}, r2: {} });
+        setPublishedLab({ cia1: null, cia2: null, model: null });
+        setPublishedTcplLab({ lab1: null, lab2: null });
 
         let ssa1Res: any = null;
         let ssa2Res: any = null;
@@ -334,57 +517,123 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
         let cia1Res: any = null;
         let cia2Res: any = null;
 
-        try { ssa1Res = await fetchPublishedSsa1(courseId); } catch { ssa1Res = null; }
-        try { ssa2Res = await fetchPublishedSsa2(courseId); } catch { ssa2Res = null; }
+        let review1Res: any = null;
+        let review2Res: any = null;
 
-        if (!ssa1Res?.marks) {
+        let labCia1Res: any = null;
+        let labCia2Res: any = null;
+        let labModelRes: any = null;
+
+        let tcplLab1Res: any = null;
+        let tcplLab2Res: any = null;
+
+        if (isLabLike) {
+          // LAB / PRACTICAL uses lab-style sheets for CIA1/CIA2/MODEL
+          try { const d = await fetchDraft('cia1', courseId, taId); if (d?.draft) labCia1Res = { data: (d.draft as any).data ?? d.draft }; } catch {}
+          try { const d = await fetchDraft('cia2', courseId, taId); if (d?.draft) labCia2Res = { data: (d.draft as any).data ?? d.draft }; } catch {}
+          try { const d = await fetchDraft('model', courseId, taId); if (d?.draft) labModelRes = { data: (d.draft as any).data ?? d.draft }; } catch {}
+          if (!labCia1Res?.data) {
+            try { labCia1Res = await fetchPublishedLabSheet('cia1', courseId, taId); } catch { labCia1Res = null; }
+          }
+          if (!labCia2Res?.data) {
+            try { labCia2Res = await fetchPublishedLabSheet('cia2', courseId, taId); } catch { labCia2Res = null; }
+          }
+          if (!labModelRes?.data) {
+            try { labModelRes = await fetchPublishedLabSheet('model', courseId, taId); } catch { labModelRes = null; }
+          }
+
+          if (!mounted) return;
+          setPublishedLab({
+            cia1: (labCia1Res as any)?.data ?? null,
+            cia2: (labCia2Res as any)?.data ?? null,
+            model: (labModelRes as any)?.data ?? null,
+          });
+
+          // No SSA/Formative/CIA sheet snapshots needed for lab-like.
+          setPublished({ ssa1: {}, ssa2: {}, f1: {}, f2: {}, cia1: null, cia2: null });
+          return;
+        }
+
+        // Prefer entered/draft marks (staff view), fallback to published.
+        if (allow('ssa1')) {
           try {
-            const d = await fetchDraft('ssa1', courseId);
+            const d = await fetchDraft('ssa1', courseId, taId);
             if (d?.draft && (d.draft as any).marks) ssa1Res = { marks: (d.draft as any).marks };
           } catch {}
         }
-        if (!ssa2Res?.marks) {
+        if (allow('ssa2')) {
           try {
-            const d = await fetchDraft('ssa2', courseId);
+            const d = await fetchDraft('ssa2', courseId, taId);
             if (d?.draft && (d.draft as any).marks) ssa2Res = { marks: (d.draft as any).marks };
           } catch {}
         }
 
+        if (allow('ssa1') && !ssa1Res?.marks) {
+          try { ssa1Res = await fetchPublishedSsa1(courseId, taId); } catch { ssa1Res = null; }
+        }
+        if (allow('ssa2') && !ssa2Res?.marks) {
+          try { ssa2Res = await fetchPublishedSsa2(courseId, taId); } catch { ssa2Res = null; }
+        }
+
+        if (isTcpr) {
+          try { const d = await fetchDraft('review1', courseId, taId); if (d?.draft && (d.draft as any).marks) review1Res = { marks: (d.draft as any).marks }; } catch {}
+          try { const d = await fetchDraft('review2', courseId, taId); if (d?.draft && (d.draft as any).marks) review2Res = { marks: (d.draft as any).marks }; } catch {}
+          if (!review1Res?.marks) {
+            try { review1Res = await fetchPublishedReview1(courseId, taId); } catch { review1Res = null; }
+          }
+          if (!review2Res?.marks) {
+            try { review2Res = await fetchPublishedReview2(courseId, taId); } catch { review2Res = null; }
+          }
+          if (!mounted) return;
+          setPublishedReview({ r1: review1Res?.marks || {}, r2: review2Res?.marks || {} });
+        }
+
         if (isTcpl) {
-          try { f1Res = await fetchPublishedLabSheet('formative1', courseId); } catch { f1Res = null; }
-          try { f2Res = await fetchPublishedLabSheet('formative2', courseId); } catch { f2Res = null; }
-          if (!f1Res?.data) {
-            try { const d = await fetchDraft('formative1', courseId); if (d?.draft) f1Res = { data: (d.draft as any).data ?? d.draft }; } catch {}
+          try { const d = await fetchDraft('formative1', courseId, taId); if (d?.draft) tcplLab1Res = { data: (d.draft as any).data ?? d.draft }; } catch {}
+          try { const d = await fetchDraft('formative2', courseId, taId); if (d?.draft) tcplLab2Res = { data: (d.draft as any).data ?? d.draft }; } catch {}
+          if (!tcplLab1Res?.data) {
+            try { tcplLab1Res = await fetchPublishedLabSheet('formative1', courseId, taId); } catch { tcplLab1Res = null; }
           }
-          if (!f2Res?.data) {
-            try { const d = await fetchDraft('formative2', courseId); if (d?.draft) f2Res = { data: (d.draft as any).data ?? d.draft }; } catch {}
+          if (!tcplLab2Res?.data) {
+            try { tcplLab2Res = await fetchPublishedLabSheet('formative2', courseId, taId); } catch { tcplLab2Res = null; }
           }
+
+          if (!mounted) return;
+          setPublishedTcplLab({ lab1: (tcplLab1Res as any)?.data ?? null, lab2: (tcplLab2Res as any)?.data ?? null });
         } else {
-          try { f1Res = await fetchPublishedFormative('formative1', courseId); } catch { f1Res = null; }
-          try { f2Res = await fetchPublishedFormative('formative2', courseId); } catch { f2Res = null; }
-          if (!f1Res?.marks) {
-            try { const d = await fetchDraft('formative1', courseId); if (d?.draft && (d.draft as any).marks) f1Res = { marks: (d.draft as any).marks }; } catch {}
+          if (!isTcpr && allow('formative1')) {
+            try { const d = await fetchDraft('formative1', courseId, taId); if (d?.draft && (d.draft as any).marks) f1Res = { marks: (d.draft as any).marks }; } catch {}
+            if (!f1Res?.marks) {
+              try { f1Res = await fetchPublishedFormative('formative1', courseId, taId); } catch { f1Res = null; }
+            }
           }
-          if (!f2Res?.marks) {
-            try { const d = await fetchDraft('formative2', courseId); if (d?.draft && (d.draft as any).marks) f2Res = { marks: (d.draft as any).marks }; } catch {}
+          if (!isTcpr && allow('formative2')) {
+            try { const d = await fetchDraft('formative2', courseId, taId); if (d?.draft && (d.draft as any).marks) f2Res = { marks: (d.draft as any).marks }; } catch {}
+            if (!f2Res?.marks) {
+              try { f2Res = await fetchPublishedFormative('formative2', courseId, taId); } catch { f2Res = null; }
+            }
           }
         }
 
-        try { cia1Res = await fetchPublishedCiaSheet('cia1', courseId); } catch { cia1Res = null; }
-        try { cia2Res = await fetchPublishedCiaSheet('cia2', courseId); } catch { cia2Res = null; }
-        if (!cia1Res?.data) {
-          try { const d = await fetchDraft('cia1', courseId); if (d?.draft) cia1Res = { data: (d.draft as any).data ?? d.draft }; } catch {}
+        if (allow('cia1')) {
+          try { const d = await fetchDraft('cia1', courseId, taId); if (d?.draft) cia1Res = { data: (d.draft as any).data ?? d.draft }; } catch {}
+          if (!cia1Res?.data) {
+            try { cia1Res = await fetchPublishedCiaSheet('cia1', courseId, taId); } catch { cia1Res = null; }
+          }
         }
-        if (!cia2Res?.data) {
-          try { const d = await fetchDraft('cia2', courseId); if (d?.draft) cia2Res = { data: (d.draft as any).data ?? d.draft }; } catch {}
+        if (allow('cia2')) {
+          try { const d = await fetchDraft('cia2', courseId, taId); if (d?.draft) cia2Res = { data: (d.draft as any).data ?? d.draft }; } catch {}
+          if (!cia2Res?.data) {
+            try { cia2Res = await fetchPublishedCiaSheet('cia2', courseId, taId); } catch { cia2Res = null; }
+          }
         }
 
         if (!mounted) return;
         setPublished({
           ssa1: ssa1Res?.marks || {},
           ssa2: ssa2Res?.marks || {},
-          f1: (isTcpl ? (f1Res?.data?.sheet?.rowsByStudentId || {}) : (f1Res?.marks || {})) || {},
-          f2: (isTcpl ? (f2Res?.data?.sheet?.rowsByStudentId || {}) : (f2Res?.marks || {})) || {},
+          f1: (f1Res?.marks || {}) || {},
+          f2: (f2Res?.marks || {}) || {},
           cia1: cia1Res?.data || null,
           cia2: cia2Res?.data || null,
         });
@@ -398,16 +647,17 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
 
     load();
     return () => { mounted = false; };
-  }, [courseId, classType, enabledSet]);
+  }, [courseId, classType, enabledSet, selectedTaId]);
+
+  const schema = useMemo(() => buildInternalSchema(classType, enabledSet), [classType, enabledSet]);
 
   const effMapping = useMemo(() => {
-    const header = DEFAULT_INTERNAL_MAPPING.header;
     const weightsArr = Array.isArray(internalMarkWeights) && internalMarkWeights.length ? internalMarkWeights : DEFAULT_INTERNAL_MAPPING.weights;
-    const weights = weightsArr.slice(0, DEFAULT_INTERNAL_MAPPING.weights.length);
-    while (weights.length < DEFAULT_INTERNAL_MAPPING.weights.length) weights.push(DEFAULT_INTERNAL_MAPPING.weights[weights.length] ?? 0);
-    const cycles = DEFAULT_INTERNAL_MAPPING.cycles;
-    return { header, weights, cycles };
-  }, [internalMarkWeights]);
+    const weightsAll = weightsArr.slice(0, DEFAULT_INTERNAL_MAPPING.weights.length);
+    while (weightsAll.length < DEFAULT_INTERNAL_MAPPING.weights.length) weightsAll.push(DEFAULT_INTERNAL_MAPPING.weights[weightsAll.length] ?? 0);
+    const weights = schema.visible.map((i) => weightsAll[i] ?? 0);
+    return { header: schema.header, weights, cycles: schema.cycles, visible: schema.visible, labels: schema.labels };
+  }, [internalMarkWeights, schema]);
 
   const maxTotal = useMemo(() => {
     const w = effMapping.weights.map((x: any) => Number(x) || 0);
@@ -429,20 +679,31 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
   }, []);
 
   const computedRows = useMemo(() => {
-    const w = effMapping.weights.map((x: any) => Number(x) || 0);
-    const wCo1Cycle = w[0] || 0;
-    const wCo2Cycle = w[1] || 0;
-    const wCo3Ssa = w[2] || 0;
-    const wCo3Cia = w[3] || 0;
-    const wCo3Fa = w[4] || 0;
-    const wCo4Ssa = w[5] || 0;
-    const wCo4Cia = w[6] || 0;
-    const wCo4Fa = w[7] || 0;
-    const wMeCo1 = w[8] || 0;
-    const wMeCo2 = w[9] || 0;
-    const wMeCo3 = w[10] || 0;
-    const wMeCo4 = w[11] || 0;
-    const wMeCo5 = w[12] || 0;
+    const ct = normalizeClassType(classType);
+
+    // Map the visible weights back into their 0..16 slot positions.
+    const wFull = new Array(17).fill(0);
+    for (let i = 0; i < effMapping.visible.length; i++) {
+      const idx = effMapping.visible[i];
+      wFull[idx] = Number(effMapping.weights[i]) || 0;
+    }
+    const wCo1Ssa = wFull[0] || 0;
+    const wCo1Cia = wFull[1] || 0;
+    const wCo1Fa = wFull[2] || 0;
+    const wCo2Ssa = wFull[3] || 0;
+    const wCo2Cia = wFull[4] || 0;
+    const wCo2Fa = wFull[5] || 0;
+    const wCo3Ssa = wFull[6] || 0;
+    const wCo3Cia = wFull[7] || 0;
+    const wCo3Fa = wFull[8] || 0;
+    const wCo4Ssa = wFull[9] || 0;
+    const wCo4Cia = wFull[10] || 0;
+    const wCo4Fa = wFull[11] || 0;
+    const wMeCo1 = wFull[12] || 0;
+    const wMeCo2 = wFull[13] || 0;
+    const wMeCo3 = wFull[14] || 0;
+    const wMeCo4 = wFull[15] || 0;
+    const wMeCo5 = wFull[16] || 0;
 
     const cia1Snap = published.cia1 && typeof published.cia1 === 'object' ? published.cia1 : null;
     const cia2Snap = published.cia2 && typeof published.cia2 === 'object' ? published.cia2 : null;
@@ -456,14 +717,59 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
     const cia1ById: Record<string, any> = cia1Snap?.rowsByStudentId && typeof cia1Snap.rowsByStudentId === 'object' ? cia1Snap.rowsByStudentId : {};
     const cia2ById: Record<string, any> = cia2Snap?.rowsByStudentId && typeof cia2Snap.rowsByStudentId === 'object' ? cia2Snap.rowsByStudentId : {};
 
-    const ssa1MaxCo = 10;
-    const ssa2MaxCo = 10;
     const cia1MaxCo = cia1Questions.reduce((s, q) => s + (q.co === 1 || q.co === '1&2' ? q.max * (q.co === '1&2' ? 0.5 : 1) : 0), 0);
     const cia1MaxCo2 = cia1Questions.reduce((s, q) => s + (q.co === 2 || q.co === '1&2' ? q.max * (q.co === '1&2' ? 0.5 : 1) : 0), 0);
     const cia2MaxCo3 = cia2Questions.reduce((s, q) => s + (q.co === 3 || q.co === '3&4' ? q.max * (q.co === '3&4' ? 0.5 : 1) : 0), 0);
     const cia2MaxCo4 = cia2Questions.reduce((s, q) => s + (q.co === 4 || q.co === '3&4' ? q.max * (q.co === '3&4' ? 0.5 : 1) : 0), 0);
 
-    const formativeMax = { co1: 10, co2: 10, co3: 10, co4: 10 };
+    const ssa1Cfg = masterCfg?.assessments?.ssa1 || {};
+    const ssa2Cfg = masterCfg?.assessments?.ssa2 || {};
+    const f1Cfg = masterCfg?.assessments?.formative1 || {};
+    const f2Cfg = masterCfg?.assessments?.formative2 || {};
+    const cia1Cfg = masterCfg?.assessments?.cia1 || {};
+    const cia2Cfg = masterCfg?.assessments?.cia2 || {};
+
+    const ssa1Co1 = Number(ssa1Cfg?.coMax?.co1);
+    const ssa1Co2 = Number(ssa1Cfg?.coMax?.co2);
+    const ssa2Co3 = Number(ssa2Cfg?.coMax?.co3 ?? ssa2Cfg?.coMax?.co1);
+    const ssa2Co4 = Number(ssa2Cfg?.coMax?.co4 ?? ssa2Cfg?.coMax?.co2);
+
+    const cia1Co1 = Number(cia1Cfg?.coMax?.co1);
+    const cia1Co2 = Number(cia1Cfg?.coMax?.co2);
+    const cia2Co3 = Number(cia2Cfg?.coMax?.co3 ?? cia2Cfg?.coMax?.co1);
+    const cia2Co4 = Number(cia2Cfg?.coMax?.co4 ?? cia2Cfg?.coMax?.co2);
+
+    const f1Co = Number(f1Cfg?.maxCo);
+    const f2Co = Number(f2Cfg?.maxCo);
+
+    const maxes = {
+      ssa1: {
+        co1: Number.isFinite(ssa1Co1) ? Math.max(0, ssa1Co1) : 10,
+        co2: Number.isFinite(ssa1Co2) ? Math.max(0, ssa1Co2) : 10,
+      },
+      ssa2: {
+        co3: Number.isFinite(ssa2Co3) ? Math.max(0, ssa2Co3) : 10,
+        co4: Number.isFinite(ssa2Co4) ? Math.max(0, ssa2Co4) : 10,
+      },
+      cia1: {
+        co1: Number.isFinite(cia1Co1) ? Math.max(0, cia1Co1) : cia1MaxCo,
+        co2: Number.isFinite(cia1Co2) ? Math.max(0, cia1Co2) : cia1MaxCo2,
+      },
+      cia2: {
+        co3: Number.isFinite(cia2Co3) ? Math.max(0, cia2Co3) : cia2MaxCo3,
+        co4: Number.isFinite(cia2Co4) ? Math.max(0, cia2Co4) : cia2MaxCo4,
+      },
+      f1: {
+        co1: Number.isFinite(f1Co) ? Math.max(0, f1Co) : 10,
+        co2: Number.isFinite(f1Co) ? Math.max(0, f1Co) : 10,
+      },
+      f2: {
+        co3: Number.isFinite(f2Co) ? Math.max(0, f2Co) : 10,
+        co4: Number.isFinite(f2Co) ? Math.max(0, f2Co) : 10,
+      },
+      review1: { co1: 15, co2: 15 },
+      review2: { co3: 15, co4: 15 },
+    };
 
     const taKey = String(selectedTaId ?? 'none');
     const modelSheet = (() => {
@@ -526,22 +832,227 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
     const scale = (mark: number | null, max: number, outOf: number) => {
       if (mark == null) return null;
       if (!max || !Number.isFinite(max)) return null;
-      return round2(clamp((mark / max) * outOf, 0, outOf));
+      return clamp((mark / max) * outOf, 0, outOf);
     };
+
+    // LAB/PRACTICAL: compute from lab-style sheets only
+    if (ct === 'LAB' || ct === 'PRACTICAL') {
+      const HALF = 30 / 2;
+      const readCoPair = (snapshot: any | null, coA: number, coB: number | null) => {
+        const sheet = snapshot?.sheet && typeof snapshot.sheet === 'object' ? snapshot.sheet : {};
+        const rowsByStudentId = sheet?.rowsByStudentId && typeof sheet.rowsByStudentId === 'object' ? sheet.rowsByStudentId : {};
+        const legacyExpCountA = clamp(Number(sheet?.expCountA ?? 0), 0, 12);
+        const legacyExpCountB = clamp(Number(sheet?.expCountB ?? 0), 0, 12);
+        const legacyCoAEnabled = Boolean(sheet?.coAEnabled);
+        const legacyCoBEnabled = Boolean(sheet?.coBEnabled);
+        const ciaEnabled = Boolean((sheet as any)?.ciaExamEnabled);
+
+        const cfgs = sheet?.coConfigs && typeof sheet.coConfigs === 'object' ? (sheet.coConfigs as any) : null;
+        const cfgA = cfgs ? cfgs[String(coA)] : null;
+        const cfgB = coB != null && cfgs ? cfgs[String(coB)] : null;
+
+        const coAEnabled = cfgA ? Boolean(cfgA.enabled) : legacyCoAEnabled;
+        const coBEnabled = coB != null ? (cfgB ? Boolean(cfgB.enabled) : legacyCoBEnabled) : false;
+
+        const expCountA = cfgA ? clamp(Number(cfgA.expCount ?? 0), 0, 12) : legacyExpCountA;
+        const expCountB = coB != null ? (cfgB ? clamp(Number(cfgB.expCount ?? 0), 0, 12) : legacyExpCountB) : 0;
+
+        const expMaxA = cfgA && Number.isFinite(Number(cfgA.expMax)) ? Number(cfgA.expMax) : Number.isFinite(Number((sheet as any)?.expMaxA)) ? Number((sheet as any).expMaxA) : 25;
+        const expMaxB = coB != null ? (cfgB && Number.isFinite(Number(cfgB.expMax)) ? Number(cfgB.expMax) : Number.isFinite(Number((sheet as any)?.expMaxB)) ? Number((sheet as any).expMaxB) : 25) : 0;
+
+        const CO_MAX_A = expMaxA + (ciaEnabled ? HALF : 0);
+        const CO_MAX_B = coB != null ? expMaxB + (ciaEnabled ? HALF : 0) : 0;
+
+        const normalizeMarksArray = (raw: any, expCount: number) => {
+          if (Array.isArray(raw)) return raw.map((x) => (typeof x === 'number' && Number.isFinite(x) ? x : null));
+          if (raw == null) return [];
+          return [];
+        };
+        const avgMarks = (arr: Array<number | null>) => {
+          const nums = (arr || []).filter((x) => typeof x === 'number' && Number.isFinite(x)) as number[];
+          if (!nums.length) return null;
+          return nums.reduce((s, n) => s + n, 0) / nums.length;
+        };
+
+        const get = (sid: number) => {
+          const row = rowsByStudentId[String(sid)] || {};
+          const marksByCo = (row as any)?.marksByCo && typeof (row as any).marksByCo === 'object' ? (row as any).marksByCo : {};
+          const rawA = marksByCo?.[String(coA)] ?? (row as any).marksA;
+          const rawB = coB != null ? (marksByCo?.[String(coB)] ?? (row as any).marksB) : [];
+
+          const marksA = normalizeMarksArray(rawA, expCountA).slice(0, coAEnabled ? expCountA : 0);
+          const marksB = normalizeMarksArray(rawB, expCountB).slice(0, coBEnabled ? expCountB : 0);
+          const avgA = avgMarks(marksA);
+          const avgB = avgMarks(marksB);
+          const ciaExamRaw = (row as any)?.ciaExam;
+          const ciaExamNum = typeof ciaExamRaw === 'number' && Number.isFinite(ciaExamRaw) ? ciaExamRaw : null;
+          const hasAny = avgA != null || avgB != null || ciaExamNum != null;
+
+          const a = !hasAny ? null : (avgA ?? 0) + (ciaEnabled ? (ciaExamNum ?? 0) / 2 : 0);
+          const b = !hasAny ? null : (avgB ?? 0) + (ciaEnabled ? (ciaExamNum ?? 0) / 2 : 0);
+
+          return {
+            a: a == null ? null : clamp(a, 0, CO_MAX_A),
+            b: b == null ? null : clamp(b, 0, CO_MAX_B),
+          };
+        };
+
+        return { get, CO_MAX_A, CO_MAX_B };
+      };
+
+      const c1 = readCoPair(publishedLab.cia1, 1, 2);
+      const c2 = readCoPair(publishedLab.cia2, 3, 4);
+      const m5 = readCoPair(publishedLab.model, 5, null);
+
+      const scale = (mark: number | null, max: number, outOf: number) => {
+        if (mark == null) return null;
+        if (!max || !Number.isFinite(max)) return null;
+        return clamp((mark / max) * outOf, 0, outOf);
+      };
+
+      return students.map((s, idx) => {
+        const r1 = c1.get(s.id);
+        const r2 = c2.get(s.id);
+        const r5 = m5.get(s.id);
+
+        const co1Ssa = null;
+        const co1Cia = scale(r1.a, c1.CO_MAX_A, wCo1Cia);
+        const co1Fa = null;
+        const co2Ssa = null;
+        const co2Cia = scale(r1.b, c1.CO_MAX_B, wCo2Cia);
+        const co2Fa = null;
+        const co3Ssa = null;
+        const co3Cia = scale(r2.a, c2.CO_MAX_A, wCo3Cia);
+        const co3Fa = null;
+        const co4Ssa = null;
+        const co4Cia = scale(r2.b, c2.CO_MAX_B, wCo4Cia);
+        const co4Fa = null;
+        const meCo1 = null;
+        const meCo2 = null;
+        const meCo3 = null;
+        const meCo4 = null;
+        const meCo5 = scale(r5.a, m5.CO_MAX_A, wMeCo5);
+
+        const partsFull = [
+          co1Ssa,
+          co1Cia,
+          co1Fa,
+          co2Ssa,
+          co2Cia,
+          co2Fa,
+          co3Ssa,
+          co3Cia,
+          co3Fa,
+          co4Ssa,
+          co4Cia,
+          co4Fa,
+          meCo1,
+          meCo2,
+          meCo3,
+          meCo4,
+          meCo5,
+        ];
+
+        const parts = effMapping.visible.map((i) => partsFull[i]);
+        const any = parts.some((p) => typeof p === 'number' && Number.isFinite(p));
+        const total = any ? round2(parts.reduce((s0, p) => s0 + (typeof p === 'number' && Number.isFinite(p) ? p : 0), 0)) : null;
+        const pct = total == null || !maxTotal ? null : round2((total / maxTotal) * 100);
+
+        return {
+          sno: idx + 1,
+          ...s,
+          cells: parts,
+          total,
+          pct,
+        };
+      });
+    }
 
     return students.map((s, idx) => {
       const ssa1Total = toNumOrNull(published.ssa1[String(s.id)]);
       const ssa2Total = toNumOrNull(published.ssa2[String(s.id)]);
-      const ssa1Half = ssa1Total == null ? null : clamp(ssa1Total / 2, 0, ssa1MaxCo);
-      const ssa2Half = ssa2Total == null ? null : clamp(ssa2Total / 2, 0, ssa2MaxCo);
+      const ssa1Half = ssa1Total == null ? null : Number(ssa1Total) / 2;
+      const ssa2Half = ssa2Total == null ? null : Number(ssa2Total) / 2;
+      const ssa1Co1Mark = ssa1Half == null ? null : clamp(ssa1Half, 0, maxes.ssa1.co1);
+      const ssa1Co2Mark = ssa1Half == null ? null : clamp(ssa1Half, 0, maxes.ssa1.co2);
+      const ssa2Co3Mark = ssa2Half == null ? null : clamp(ssa2Half, 0, maxes.ssa2.co3);
+      const ssa2Co4Mark = ssa2Half == null ? null : clamp(ssa2Half, 0, maxes.ssa2.co4);
+
+      // FA columns depend on class type:
+      // - TCPR: Review1/Review2
+      // - TCPL: LAB1/LAB2 (lab-style sheets)
+      // - THEORY/SPECIAL: Formatives
 
       const f1Row = (published.f1 || {})[String(s.id)] || {};
       const f2Row = (published.f2 || {})[String(s.id)] || {};
 
-      const f1Co1 = toNumOrNull((f1Row as any)?.skill1) != null && toNumOrNull((f1Row as any)?.att1) != null ? clamp(Number((f1Row as any).skill1) + Number((f1Row as any).att1), 0, formativeMax.co1) : null;
-      const f1Co2 = toNumOrNull((f1Row as any)?.skill2) != null && toNumOrNull((f1Row as any)?.att2) != null ? clamp(Number((f1Row as any).skill2) + Number((f1Row as any).att2), 0, formativeMax.co2) : null;
-      const f2Co3 = toNumOrNull((f2Row as any)?.skill1) != null && toNumOrNull((f2Row as any)?.att1) != null ? clamp(Number((f2Row as any).skill1) + Number((f2Row as any).att1), 0, formativeMax.co3) : null;
-      const f2Co4 = toNumOrNull((f2Row as any)?.skill2) != null && toNumOrNull((f2Row as any)?.att2) != null ? clamp(Number((f2Row as any).skill2) + Number((f2Row as any).att2), 0, formativeMax.co4) : null;
+      const f1Co1 = toNumOrNull((f1Row as any)?.skill1) != null && toNumOrNull((f1Row as any)?.att1) != null ? clamp(Number((f1Row as any).skill1) + Number((f1Row as any).att1), 0, maxes.f1.co1) : null;
+      const f1Co2 = toNumOrNull((f1Row as any)?.skill2) != null && toNumOrNull((f1Row as any)?.att2) != null ? clamp(Number((f1Row as any).skill2) + Number((f1Row as any).att2), 0, maxes.f1.co2) : null;
+      const f2Co3 = toNumOrNull((f2Row as any)?.skill1) != null && toNumOrNull((f2Row as any)?.att1) != null ? clamp(Number((f2Row as any).skill1) + Number((f2Row as any).att1), 0, maxes.f2.co3) : null;
+      const f2Co4 = toNumOrNull((f2Row as any)?.skill2) != null && toNumOrNull((f2Row as any)?.att2) != null ? clamp(Number((f2Row as any).skill2) + Number((f2Row as any).att2), 0, maxes.f2.co4) : null;
+
+      const review1Total = toNumOrNull(publishedReview.r1[String(s.id)]);
+      const review2Total = toNumOrNull(publishedReview.r2[String(s.id)]);
+      const review1Half = review1Total == null ? null : Number(review1Total) / 2;
+      const review2Half = review2Total == null ? null : Number(review2Total) / 2;
+      const review1Co1 = review1Half == null ? null : clamp(review1Half, 0, maxes.review1.co1);
+      const review1Co2 = review1Half == null ? null : clamp(review1Half, 0, maxes.review1.co2);
+      const review2Co3 = review2Half == null ? null : clamp(review2Half, 0, maxes.review2.co3);
+      const review2Co4 = review2Half == null ? null : clamp(review2Half, 0, maxes.review2.co4);
+
+      const readTcplLabPair = (snapshot: any | null) => {
+        const sheet = snapshot?.sheet && typeof snapshot.sheet === 'object' ? snapshot.sheet : {};
+        const rowsByStudentId = sheet?.rowsByStudentId && typeof sheet.rowsByStudentId === 'object' ? sheet.rowsByStudentId : {};
+        const expCountA = clamp(Number(sheet?.expCountA ?? 0), 0, 12);
+        const expCountB = clamp(Number(sheet?.expCountB ?? 0), 0, 12);
+        const expMaxA = Number.isFinite(Number(sheet?.expMaxA)) ? Number(sheet.expMaxA) : 25;
+        const expMaxB = Number.isFinite(Number(sheet?.expMaxB)) ? Number(sheet.expMaxB) : 25;
+        const ciaEnabled = (sheet as any)?.ciaExamEnabled !== false;
+        const HALF = 30 / 2;
+        const CO_MAX_A = expMaxA + (ciaEnabled ? HALF : 0);
+        const CO_MAX_B = expMaxB + (ciaEnabled ? HALF : 0);
+
+        const normalizeMarksArray = (raw: any, expCount: number) => {
+          if (Array.isArray(raw)) return raw.map((x) => (typeof x === 'number' && Number.isFinite(x) ? x : null));
+          if (raw == null) return [];
+          return [];
+        };
+        const avgMarks = (arr: Array<number | null>) => {
+          const nums = (arr || []).filter((x) => typeof x === 'number' && Number.isFinite(x)) as number[];
+          if (!nums.length) return null;
+          return nums.reduce((s0, n) => s0 + n, 0) / nums.length;
+        };
+
+        const get = (sid: number) => {
+          const row = rowsByStudentId[String(sid)] || {};
+          const marksA = normalizeMarksArray((row as any)?.marksA, expCountA);
+          const marksB = normalizeMarksArray((row as any)?.marksB, expCountB);
+          const avgA = avgMarks(marksA);
+          const avgB = avgMarks(marksB);
+          const ciaExamRaw = (row as any)?.ciaExam;
+          const ciaExamNum = typeof ciaExamRaw === 'number' && Number.isFinite(ciaExamRaw) ? ciaExamRaw : null;
+          const hasAny = avgA != null || avgB != null || ciaExamNum != null;
+
+          const a = !hasAny ? null : (avgA ?? 0) + (ciaEnabled ? (ciaExamNum ?? 0) / 2 : 0);
+          const b = !hasAny ? null : (avgB ?? 0) + (ciaEnabled ? (ciaExamNum ?? 0) / 2 : 0);
+
+          return {
+            a: a == null ? null : clamp(a, 0, CO_MAX_A),
+            b: b == null ? null : clamp(b, 0, CO_MAX_B),
+          };
+        };
+
+        return { get, CO_MAX_A, CO_MAX_B };
+      };
+
+      const tcplLab1 = ct === 'TCPL' ? readTcplLabPair(publishedTcplLab.lab1) : null;
+      const tcplLab2 = ct === 'TCPL' ? readTcplLabPair(publishedTcplLab.lab2) : null;
+      const tcpl1 = tcplLab1 ? tcplLab1.get(s.id) : null;
+      const tcpl2 = tcplLab2 ? tcplLab2.get(s.id) : null;
+      const tcplLab1Co1 = tcpl1?.a ?? null;
+      const tcplLab1Co2 = tcpl1?.b ?? null;
+      const tcplLab2Co3 = tcpl2?.a ?? null;
+      const tcplLab2Co4 = tcpl2?.b ?? null;
 
       const cia1Row = cia1ById[String(s.id)] || {};
       const cia2Row = cia2ById[String(s.id)] || {};
@@ -566,8 +1077,8 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
           c2 += mark * w12.co2;
         }
         if (hasAny) {
-          ciaCo1 = clamp(c1, 0, cia1MaxCo);
-          ciaCo2 = clamp(c2, 0, cia1MaxCo2);
+          ciaCo1 = clamp(c1, 0, maxes.cia1.co1);
+          ciaCo2 = clamp(c2, 0, maxes.cia1.co2);
         }
       }
 
@@ -588,43 +1099,41 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
           c4 += mark * w34.co4;
         }
         if (hasAny) {
-          ciaCo3 = clamp(c3, 0, cia2MaxCo3);
-          ciaCo4 = clamp(c4, 0, cia2MaxCo4);
+          ciaCo3 = clamp(c3, 0, maxes.cia2.co3);
+          ciaCo4 = clamp(c4, 0, maxes.cia2.co4);
         }
       }
 
-      // Cycle 1 combined (CO1/CO2) out of 7 using IQAC class-type weights.
-      const cycleCo1 = weightedOutOf({
-        ssaMark: ssa1Half,
-        ciaMark: ciaCo1,
-        faMark: f1Co1,
-        ssaMax: ssa1MaxCo,
-        ciaMax: cia1MaxCo,
-        faMax: formativeMax.co1,
-        ssaW: weights.ssa1,
-        ciaW: weights.cia1,
-        faW: weights.formative1,
-        outOf: wCo1Cycle,
-      });
-      const cycleCo2 = weightedOutOf({
-        ssaMark: ssa1Half,
-        ciaMark: ciaCo2,
-        faMark: f1Co2,
-        ssaMax: ssa1MaxCo,
-        ciaMax: cia1MaxCo2,
-        faMax: formativeMax.co2,
-        ssaW: weights.ssa1,
-        ciaW: weights.cia1,
-        faW: weights.formative1,
-        outOf: wCo2Cycle,
-      });
+      // CO1/CO2 split into SSA/CIA/FA columns.
+      const co1Ssa = scale(ssa1Co1Mark, maxes.ssa1.co1, wCo1Ssa);
+      const co1Cia = scale(ciaCo1, maxes.cia1.co1, wCo1Cia);
+      const co1Fa = ct === 'TCPR'
+        ? scale(review1Co1, maxes.review1.co1, wCo1Fa)
+        : ct === 'TCPL'
+          ? scale(tcplLab1Co1, tcplLab1?.CO_MAX_A ?? maxes.f1.co1, wCo1Fa)
+          : scale(f1Co1, maxes.f1.co1, wCo1Fa);
+      const co2Ssa = scale(ssa1Co2Mark, maxes.ssa1.co2, wCo2Ssa);
+      const co2Cia = scale(ciaCo2, maxes.cia1.co2, wCo2Cia);
+      const co2Fa = ct === 'TCPR'
+        ? scale(review1Co2, maxes.review1.co2, wCo2Fa)
+        : ct === 'TCPL'
+          ? scale(tcplLab1Co2, tcplLab1?.CO_MAX_B ?? maxes.f1.co2, wCo2Fa)
+          : scale(f1Co2, maxes.f1.co2, wCo2Fa);
 
-      const co3Ssa = scale(ssa2Half, ssa2MaxCo, wCo3Ssa);
-      const co3Cia = scale(ciaCo3, cia2MaxCo3, wCo3Cia);
-      const co3Fa = scale(f2Co3, formativeMax.co3, wCo3Fa);
-      const co4Ssa = scale(ssa2Half, ssa2MaxCo, wCo4Ssa);
-      const co4Cia = scale(ciaCo4, cia2MaxCo4, wCo4Cia);
-      const co4Fa = scale(f2Co4, formativeMax.co4, wCo4Fa);
+      const co3Ssa = scale(ssa2Co3Mark, maxes.ssa2.co3, wCo3Ssa);
+      const co3Cia = scale(ciaCo3, maxes.cia2.co3, wCo3Cia);
+      const co3Fa = ct === 'TCPR'
+        ? scale(review2Co3, maxes.review2.co3, wCo3Fa)
+        : ct === 'TCPL'
+          ? scale(tcplLab2Co3, tcplLab2?.CO_MAX_A ?? maxes.f2.co3, wCo3Fa)
+          : scale(f2Co3, maxes.f2.co3, wCo3Fa);
+      const co4Ssa = scale(ssa2Co4Mark, maxes.ssa2.co4, wCo4Ssa);
+      const co4Cia = scale(ciaCo4, maxes.cia2.co4, wCo4Cia);
+      const co4Fa = ct === 'TCPR'
+        ? scale(review2Co4, maxes.review2.co4, wCo4Fa)
+        : ct === 'TCPL'
+          ? scale(tcplLab2Co4, tcplLab2?.CO_MAX_B ?? maxes.f2.co4, wCo4Fa)
+          : scale(f2Co4, maxes.f2.co4, wCo4Fa);
 
       const model = getModelCoMarks(s);
       const meCo1 = scale(model.co1, model.max.co1, wMeCo1);
@@ -633,16 +1142,13 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
       const meCo4 = scale(model.co4, model.max.co4, wMeCo4);
       const meCo5 = scale(model.co5, model.max.co5, wMeCo5);
 
-      const parts = [cycleCo1, cycleCo2, co3Ssa, co3Cia, co3Fa, co4Ssa, co4Cia, co4Fa, meCo1, meCo2, meCo3, meCo4, meCo5];
-      const any = parts.some((p) => typeof p === 'number' && Number.isFinite(p));
-      const total = any ? round2(parts.reduce((s0, p) => s0 + (typeof p === 'number' && Number.isFinite(p) ? p : 0), 0)) : null;
-      const pct = total == null || !maxTotal ? null : round2((total / maxTotal) * 100);
-
-      return {
-        sno: idx + 1,
-        ...s,
-        cycleCo1,
-        cycleCo2,
+      const partsFull = [
+        co1Ssa,
+        co1Cia,
+        co1Fa,
+        co2Ssa,
+        co2Cia,
+        co2Fa,
         co3Ssa,
         co3Cia,
         co3Fa,
@@ -654,11 +1160,21 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
         meCo3,
         meCo4,
         meCo5,
+      ];
+      const parts = effMapping.visible.map((i: number) => partsFull[i]);
+      const any = parts.some((p) => typeof p === 'number' && Number.isFinite(p));
+      const total = any ? round2(parts.reduce((s0, p) => s0 + (typeof p === 'number' && Number.isFinite(p) ? p : 0), 0)) : null;
+      const pct = total == null || !maxTotal ? null : round2((total / maxTotal) * 100);
+
+      return {
+        sno: idx + 1,
+        ...s,
+        cells: parts,
         total,
         pct,
       };
     });
-  }, [effMapping, published, students, weights, maxTotal, courseId, selectedTaId, modelMaxes]);
+  }, [effMapping, published, publishedReview, publishedLab, publishedTcplLab, students, weights, maxTotal, courseId, selectedTaId, modelMaxes, masterCfg, classType]);
 
   const header = effMapping.header;
   const cycles = effMapping.cycles;
@@ -725,7 +1241,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
                 <td style={{ border: '1px solid #e5e7eb', padding: 6 }}>{r.sno}</td>
                 <td style={{ border: '1px solid #e5e7eb', padding: 6 }}>{r.reg_no}</td>
                 <td style={{ border: '1px solid #e5e7eb', padding: 6 }}>{r.name}</td>
-                {[r.cycleCo1, r.cycleCo2, r.co3Ssa, r.co3Cia, r.co3Fa, r.co4Ssa, r.co4Cia, r.co4Fa, r.meCo1, r.meCo2, r.meCo3, r.meCo4, r.meCo5].map((v: any, i: number) => (
+                {(Array.isArray(r.cells) ? r.cells : []).map((v: any, i: number) => (
                   <td key={i} style={{ border: '1px solid #e5e7eb', padding: 6, textAlign: 'center' }}>{v == null ? '' : Number(v).toFixed(2)}</td>
                 ))}
                 <td style={{ border: '1px solid #e5e7eb', padding: 6, textAlign: 'center', fontWeight: 800 }}>{r.total == null ? '' : Number(r.total).toFixed(2)}</td>

@@ -1,4 +1,4 @@
-export const CLASS_TYPES = ['Theory', 'Lab', 'Tcpl', 'Tcpr', 'Practical', 'Audit', 'Special'] as const;
+export const CLASS_TYPES = ['Theory', 'Lab', 'Tcpl', 'Tcpr', 'Practical', 'Project', 'Audit', 'Special'] as const;
 
 export type ClassType = (typeof CLASS_TYPES)[number] | string;
 

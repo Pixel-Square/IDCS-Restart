@@ -3,25 +3,29 @@ import CLASS_TYPES from '../../constants/classTypes';
 import { normalizeClassType } from '../../constants/classTypes';
 import { lsGet, lsSet } from '../../utils/localStorage';
 
-const DEFAULT_INTERNAL_MARK_WEIGHTS = [7.0, 7.0, 1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 2.0, 2.0, 2.0, 2.0, 4.0];
+const DEFAULT_INTERNAL_MARK_WEIGHTS = [1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 2.0, 2.0, 2.0, 2.0, 4.0];
 
 const INTERNAL_MARK_TABLE_CLASS_TYPES = ['THEORY1', 'THEORY2', 'THEORY3', 'TCPR', 'TCPL', 'LAB', 'AUDIT', 'PRACTICAL', 'SPECIAL'] as const;
 
 const THEORY_INTERNAL_SCHEMA = {
-  groupHeaders: ['CO1', 'CO2', 'CO3', 'CO4', 'CO5'] as const,
-  // 3*4 + 1 = 13
+  groupHeaders: ['CO1', 'CO2', 'CO3', 'CO4', 'ME'] as const,
+  // 3*4 + 5 = 17
   subHeaders: [
-    ['SSA', 'FA', 'CIA'],
-    ['SSA', 'FA', 'CIA'],
-    ['SSA', 'FA', 'CIA'],
-    ['SSA', 'FA', 'CIA'],
-    ['MODEL'],
+    ['SSA', 'CIA', 'FA'],
+    ['SSA', 'CIA', 'FA'],
+    ['SSA', 'CIA', 'FA'],
+    ['SSA', 'CIA', 'FA'],
+    ['CO1', 'CO2', 'CO3', 'CO4', 'CO5'],
   ] as const,
 } as const;
 
 const INTERNAL_MARK_LABELS: string[] = [
-  'C1-CO1',
-  'C1-CO2',
+  'CO1-SSA',
+  'CO1-CIA',
+  'CO1-FA',
+  'CO2-SSA',
+  'CO2-CIA',
+  'CO2-FA',
   'CO3-SSA',
   'CO3-CIA',
   'CO3-FA',
@@ -56,17 +60,45 @@ function displayClassTypeName(ct: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
 }
 
-function ensureInternalWeightsLen13(arr: Array<number | string> | null | undefined): Array<number | string> {
+function ensureInternalWeightsLen17(arr: Array<number | string> | null | undefined): Array<number | string> {
   const next = Array.isArray(arr) ? [...arr] : [...DEFAULT_INTERNAL_MARK_WEIGHTS];
-  while (next.length < 13) next.push('');
-  return next.slice(0, 13);
+  while (next.length < 17) next.push('');
+  return next.slice(0, 17);
+}
+
+function splitCycleWeight(total: unknown, ssaW: unknown, ciaW: unknown, faW: unknown): [number, number, number] {
+  const t = Number(total);
+  const s = Number(ssaW);
+  const c = Number(ciaW);
+  const f = Number(faW);
+  const sum = (Number.isFinite(s) ? s : 0) + (Number.isFinite(c) ? c : 0) + (Number.isFinite(f) ? f : 0);
+  if (!Number.isFinite(t) || t <= 0 || !sum) return [0, 0, 0];
+  const a = Math.round(((t * (s || 0)) / sum) * 100) / 100;
+  const b = Math.round(((t * (c || 0)) / sum) * 100) / 100;
+  const d = Math.round(((t * (f || 0)) / sum) * 100) / 100;
+  return [a, b, d];
+}
+
+function normalizeInternalWeightsLen17(
+  arr: Array<number | string> | null | undefined,
+  row?: { ssa1?: any; cia1?: any; formative1?: any },
+): Array<number | string> {
+  let next = Array.isArray(arr) ? [...arr] : [...DEFAULT_INTERNAL_MARK_WEIGHTS];
+  // Backward compatibility: old format had 13 weights with CO1/CO2 as single cycle columns.
+  if (next.length === 13) {
+    const [co1Ssa, co1Cia, co1Fa] = splitCycleWeight(next[0] ?? 0, row?.ssa1 ?? 1.5, row?.cia1 ?? 3, row?.formative1 ?? 2.5);
+    const [co2Ssa, co2Cia, co2Fa] = splitCycleWeight(next[1] ?? 0, row?.ssa1 ?? 1.5, row?.cia1 ?? 3, row?.formative1 ?? 2.5);
+    next = [co1Ssa, co1Cia, co1Fa, co2Ssa, co2Cia, co2Fa, ...next.slice(2)];
+  }
+  next = ensureInternalWeightsLen17(next);
+  return next;
 }
 
 function buildTheoryEnabledState(src: Record<string, WeightsRow>): TheoryEnabledState {
   const out: TheoryEnabledState = {};
   for (const k of ['THEORY1', 'THEORY2', 'THEORY3']) {
     // Default locked/dim until the user explicitly enables editing.
-    out[k] = new Array(13).fill(false);
+    out[k] = new Array(17).fill(false);
   }
   return out;
 }
@@ -127,11 +159,16 @@ export default function AcademicControllerWeightsPage() {
           const w = src[k] ?? src[String(k)] ?? src[String(k).toUpperCase()] ?? null;
           if (!w || typeof w !== 'object') continue;
           const im = Array.isArray((w as any).internal_mark_weights) ? (w as any).internal_mark_weights : null;
-          out[k] = {
+          const seedRow = {
             ssa1: (w as any).ssa1 ?? out[k].ssa1,
             cia1: (w as any).cia1 ?? out[k].cia1,
             formative1: (w as any).formative1 ?? out[k].formative1,
-            internal_mark_weights: ensureInternalWeightsLen13((im && im.length ? im : out[k].internal_mark_weights) as any),
+          };
+          out[k] = {
+            ssa1: seedRow.ssa1,
+            cia1: seedRow.cia1,
+            formative1: seedRow.formative1,
+            internal_mark_weights: normalizeInternalWeightsLen17((im && im.length ? im : out[k].internal_mark_weights) as any, seedRow),
           };
         }
         return out;
@@ -178,7 +215,7 @@ export default function AcademicControllerWeightsPage() {
     setWeights((prev) => {
       const row = prev[classType] || ({ ssa1: '', cia1: '', formative1: '', internal_mark_weights: [...DEFAULT_INTERNAL_MARK_WEIGHTS] } as WeightsRow);
       const next = Array.isArray(row.internal_mark_weights) ? [...row.internal_mark_weights] : [...DEFAULT_INTERNAL_MARK_WEIGHTS];
-      while (next.length < 13) next.push('');
+      while (next.length < 17) next.push('');
       next[index] = value;
       return {
         ...prev,
@@ -192,10 +229,10 @@ export default function AcademicControllerWeightsPage() {
 
   const toggleTheoryCol = (theoryKey: string, index: number, checked: boolean) => {
     setTheoryEnabled((prev) => {
-      const cur = Array.isArray(prev[theoryKey]) ? [...prev[theoryKey]] : new Array(13).fill(true);
-      while (cur.length < 13) cur.push(true);
+      const cur = Array.isArray(prev[theoryKey]) ? [...prev[theoryKey]] : new Array(17).fill(true);
+      while (cur.length < 17) cur.push(true);
       cur[index] = checked;
-      return { ...prev, [theoryKey]: cur.slice(0, 13) };
+      return { ...prev, [theoryKey]: cur.slice(0, 17) };
     });
   };
 
@@ -210,11 +247,15 @@ export default function AcademicControllerWeightsPage() {
 
       for (const k of keysToSave) {
         const w = (weights[k] ?? weights[k.toLowerCase()] ?? weights[k.toUpperCase()] ?? {}) as any;
+        const normalizedIm = normalizeInternalWeightsLen17(
+          Array.isArray(w?.internal_mark_weights) ? w.internal_mark_weights : DEFAULT_INTERNAL_MARK_WEIGHTS,
+          { ssa1: w?.ssa1, cia1: w?.cia1, formative1: w?.formative1 },
+        );
         normalized[k] = {
           ssa1: Number(w?.ssa1) || 0,
           cia1: Number(w?.cia1) || 0,
           formative1: Number(w?.formative1) || 0,
-          internal_mark_weights: ensureInternalWeightsLen13(Array.isArray(w?.internal_mark_weights) ? w.internal_mark_weights : DEFAULT_INTERNAL_MARK_WEIGHTS).map((x: any, i: number) => {
+          internal_mark_weights: ensureInternalWeightsLen17(normalizedIm).map((x: any, i: number) => {
             const v = Number(x);
             return Number.isFinite(v) ? v : (DEFAULT_INTERNAL_MARK_WEIGHTS[i] ?? 0);
           }),
@@ -299,30 +340,30 @@ export default function AcademicControllerWeightsPage() {
 
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontWeight: 800, marginBottom: 6 }}>Internal Mark Weightage</div>
-            <div style={{ color: '#6b7280', fontSize: 13 }}>This 13-value row controls the INTERNAL MARK table calculation by class type.</div>
+            <div style={{ color: '#6b7280', fontSize: 13 }}>This 17-value row controls the INTERNAL MARK table calculation by class type.</div>
           </div>
           <div style={{ marginBottom: 24 }}>
             {INTERNAL_MARK_TABLE_CLASS_TYPES.map((ct) => {
               const key = normalizeClassType(String(ct));
               const row = weights[key];
-              const arr = ensureInternalWeightsLen13(Array.isArray(row?.internal_mark_weights) ? row.internal_mark_weights : DEFAULT_INTERNAL_MARK_WEIGHTS);
+              const arr = normalizeInternalWeightsLen17(Array.isArray(row?.internal_mark_weights) ? row.internal_mark_weights : DEFAULT_INTERNAL_MARK_WEIGHTS, row);
 
               const isTheoryVariant = key === 'THEORY1' || key === 'THEORY2' || key === 'THEORY3';
               if (isTheoryVariant) {
-                const enabledArr = Array.isArray(theoryEnabled[key]) ? theoryEnabled[key] : new Array(13).fill(true);
+                const enabledArr = Array.isArray(theoryEnabled[key]) ? theoryEnabled[key] : new Array(17).fill(true);
                 const inputStyle = (enabled: boolean): React.CSSProperties => ({
                   width: INTERNAL_INPUT_WIDTH,
                   opacity: enabled ? 1 : 0.45,
                   pointerEvents: enabled ? 'auto' : 'none',
                 });
 
-                // Map UI cells to 13 indexes (CO1..CO4 => SSA/FA/CIA, CO5 => MODEL)
+                // Map UI cells to 17 indexes (CO1..CO4 => SSA/CIA/FA, ME => CO1..CO5)
                 const idxMap: number[][] = [
                   [0, 1, 2],
                   [3, 4, 5],
                   [6, 7, 8],
                   [9, 10, 11],
-                  [12],
+                  [12, 13, 14, 15, 16],
                 ];
 
                 return (

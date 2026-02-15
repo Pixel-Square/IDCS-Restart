@@ -1,0 +1,22 @@
+[Unit]
+Description=gunicorn daemon for IDCS
+After=network.target
+
+[Service]
+User=iqac
+Group=www-data
+WorkingDirectory=/home/iqac/IDCS-Restart/backend
+EnvironmentFile=/home/iqac/IDCS-Restart/backend/.env
+ExecStart=/home/iqac/IDCS-Restart/backend/.venv/bin/gunicorn \
+  --workers 3 \
+  --bind unix:/run/gunicorn.sock \
+  erp.wsgi:application
+
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+RuntimeDirectory=gunicorn
+RuntimeDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target

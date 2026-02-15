@@ -5,13 +5,14 @@ import fetchWithAuth from '../services/fetchAuth';
 import { fetchMyTeachingAssignments } from '../services/obe';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
 import { fetchMasters } from '../services/curriculum';
-import { createPublishRequest, fetchDraft, publishFormative, saveDraft, fetchPublishedFormative, createEditRequest, confirmMarkManagerLock, fetchEditWindow } from '../services/obe';
+import { createPublishRequest, fetchDraft, publishFormative, saveDraft, fetchPublishedFormative, createEditRequest, confirmMarkManagerLock, fetchEditWindow, fetchMyLatestEditRequest, fetchMarkTableLockStatus } from '../services/obe';
 import { useEditWindow } from '../hooks/useEditWindow';
 import { useMarkTableLock } from '../hooks/useMarkTableLock';
 import { formatRemaining, usePublishWindow } from '../hooks/usePublishWindow';
 import PublishLockOverlay from './PublishLockOverlay';
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+const DEFAULT_API_BASE = 'https://db.zynix.us';
+const API_BASE = import.meta.env.VITE_API_BASE || (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://localhost:8000' : DEFAULT_API_BASE);
 
 function authHeaders(): Record<string, string> {
   const token = window.localStorage.getItem('access');
@@ -214,8 +215,8 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
   });
 
   const { data: markLock, refresh: refreshMarkLock } = useMarkTableLock({ assessment: assessmentKey as any, subjectCode: String(subjectId || ''), teachingAssignmentId, options: { poll: false } });
-  const { data: markManagerEditWindow, refresh: refreshMarkManagerEditWindow } = useEditWindow({ assessment: assessmentKey as any, subjectCode: String(subjectId || ''), scope: 'MARK_MANAGER', teachingAssignmentId, options: { poll: false } });
-  const { data: markEntryEditWindow, refresh: refreshMarkEntryEditWindow } = useEditWindow({ assessment: assessmentKey as any, subjectCode: String(subjectId || ''), scope: 'MARK_ENTRY', teachingAssignmentId, options: { poll: false } });
+  const { data: markManagerEditWindow, refresh: refreshMarkManagerEditWindow } = useEditWindow({ assessment: assessmentKey as any, subjectCode: String(subjectId || ''), scope: 'MARK_MANAGER', teachingAssignmentId, options: { poll: true } });
+  const { data: markEntryEditWindow, refresh: refreshMarkEntryEditWindow } = useEditWindow({ assessment: assessmentKey as any, subjectCode: String(subjectId || ''), scope: 'MARK_ENTRY', teachingAssignmentId, options: { poll: true } });
 
   const [publishConsumedApprovals, setPublishConsumedApprovals] = useState<null | {
     markEntryApprovalUntil: string | null;
@@ -236,13 +237,15 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
     markManagerApprovalUntil !== (publishConsumedApprovals?.markManagerApprovalUntil ?? null);
   const entryOpen = !isPublished ? true : Boolean(markLock?.entry_open) || markEntryApprovedFresh || markManagerApprovedFresh;
   const publishedEditLocked = Boolean(isPublished && !entryOpen);
+  const showPublishedLockPanel = Boolean(isPublished && publishedEditLocked);
   const tableBlocked = skipMarkManager
-    ? Boolean(globalLocked || (isPublished ? true : false))
+    ? Boolean(globalLocked || (isPublished ? !entryOpen : false))
     : Boolean(globalLocked || (isPublished ? !entryOpen : !markManagerLocked));
-  const showNameList = Boolean(sheet.markManagerSnapshot != null) || Boolean(isPublished);
+  const showNameList = skipMarkManager ? true : Boolean(sheet.markManagerSnapshot != null) || Boolean(isPublished);
 
   const [markManagerModal, setMarkManagerModal] = useState<null | { mode: 'confirm' | 'request' }>(null);
   const [markManagerBusy, setMarkManagerBusy] = useState(false);
+  const displayPublishedLocked = isPublished;
 
   const [viewMarksModalOpen, setViewMarksModalOpen] = useState(false);
   const [publishedViewSnapshot, setPublishedViewSnapshot] = useState<Record<string, any> | null>(null);
@@ -388,8 +391,10 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
   async function requestMarkEntryEdit() {
     if (!subjectId) return;
     setEditRequestBusy(true);
+    const startedAt = new Date();
+    const baselineApprovalUntil = markEntryEditWindow?.approval_until ? String(markEntryEditWindow.approval_until) : null;
     try {
-      await createEditRequest({
+      const created = await createEditRequest({
         assessment: assessmentKey,
         subject_code: String(subjectId),
         scope: 'MARK_ENTRY',
@@ -398,24 +403,66 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
       });
       alert('Edit request sent to IQAC. Waiting for approval...');
       setPublishedEditModalOpen(false);
-      // poll for approval
+
+      const createdId = Number(created?.id);
+      const startedAtMs = startedAt.getTime();
+      const minReviewMs = startedAtMs - 2000; // small clock skew buffer
+
+      // poll for decision (approved/rejected) on THIS request
       (async () => {
         if (!subjectId) return;
         const maxAttempts = 36; // ~3 minutes
         const delay = 5000;
         for (let i = 0; i < maxAttempts; i++) {
           try {
-            const resp = await fetchEditWindow(assessmentKey, String(subjectId), 'MARK_ENTRY', teachingAssignmentId);
-            if (resp && resp.allowed_by_approval) {
-              try {
-                refreshMarkEntryEditWindow?.({ silent: true });
-                refreshMarkLock({ silent: true });
-              } catch {}
-              alert('IQAC approved the edit request. You can now edit marks.');
-              return;
+            const resp = await fetchMyLatestEditRequest({
+              assessment: assessmentKey,
+              subject_code: String(subjectId),
+              scope: 'MARK_ENTRY',
+              teaching_assignment_id: teachingAssignmentId,
+            });
+            const r = resp?.result;
+            if (r && Number.isFinite(createdId) && r.id !== createdId) {
+              // Ignore older/different requests (createEditRequest can reuse pending IDs, so this should usually match)
+              // but keep polling to be safe.
+            } else if (r?.status === 'APPROVED' && r?.is_active) {
+              const reviewedAtMs = r.reviewed_at ? new Date(r.reviewed_at).getTime() : NaN;
+              if (!Number.isFinite(reviewedAtMs) || reviewedAtMs < minReviewMs) {
+                // approved from an earlier cycle; don't show the "approved" alert for this request
+              } else {
+                try {
+                  refreshMarkEntryEditWindow?.({ silent: true });
+                  refreshMarkLock({ silent: true });
+                } catch {}
+                alert('IQAC approved the edit request. You can now edit marks.');
+                return;
+              }
+            } else if (r?.status === 'REJECTED') {
+              const reviewedAtMs = r.reviewed_at ? new Date(r.reviewed_at).getTime() : NaN;
+              if (!Number.isFinite(reviewedAtMs) || reviewedAtMs < minReviewMs) {
+                // old rejection; ignore for this request
+              } else {
+                alert('IQAC rejected the edit request.');
+                return;
+              }
             }
           } catch (e) {
-            // ignore transient errors
+            // Fallback: if staff-status endpoint isn't available yet, only show "approved"
+            // when edit-window approval_until changes (prevents premature approved alerts).
+            try {
+              const w = await fetchEditWindow(assessmentKey, String(subjectId), 'MARK_ENTRY', teachingAssignmentId);
+              const nextUntil = w?.approval_until ? String(w.approval_until) : null;
+              if (w?.allowed_by_approval && nextUntil && nextUntil !== baselineApprovalUntil) {
+                try {
+                  refreshMarkEntryEditWindow?.({ silent: true });
+                  refreshMarkLock({ silent: true });
+                } catch {}
+                alert('IQAC approved the edit request. You can now edit marks.');
+                return;
+              }
+            } catch {
+              // ignore
+            }
           }
           await new Promise((r) => setTimeout(r, delay));
         }
@@ -535,27 +582,70 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
   async function requestMarkManagerEdit() {
     if (!subjectId) return;
     setMarkManagerBusy(true);
+    const startedAt = new Date();
+    const baselineApprovalUntil = markManagerEditWindow?.approval_until ? String(markManagerEditWindow.approval_until) : null;
     try {
-      await createEditRequest({ assessment: assessmentKey, subject_code: String(subjectId), scope: 'MARK_MANAGER', reason: `Request mark-manager edit for ${subjectId}`, teaching_assignment_id: teachingAssignmentId });
+      const created = await createEditRequest({ assessment: assessmentKey, subject_code: String(subjectId), scope: 'MARK_MANAGER', reason: `Request mark-manager edit for ${subjectId}`, teaching_assignment_id: teachingAssignmentId });
       alert('Edit request sent to IQAC. Waiting for approval...');
-      // poll for approval and refresh the edit window state when granted
+
+      const createdId = Number(created?.id);
+      const startedAtMs = startedAt.getTime();
+      const minReviewMs = startedAtMs - 2000;
+
+      // poll for decision (approved/rejected) on THIS request and refresh the edit window state when granted
       (async () => {
         if (!subjectId) return;
         const maxAttempts = 36; // ~3 minutes
         const delay = 5000;
         for (let i = 0; i < maxAttempts; i++) {
           try {
-            const resp = await fetchEditWindow(assessmentKey, String(subjectId), 'MARK_MANAGER', teachingAssignmentId);
-            if (resp && resp.allowed_by_approval) {
-              try {
-                refreshMarkManagerEditWindow?.({ silent: true });
-                refreshMarkLock({ silent: true });
-              } catch {}
-              alert('IQAC approved the mark-manager edit request. You can now edit mark-manager settings.');
-              return;
+            const resp = await fetchMyLatestEditRequest({
+              assessment: assessmentKey,
+              subject_code: String(subjectId),
+              scope: 'MARK_MANAGER',
+              teaching_assignment_id: teachingAssignmentId,
+            });
+            const r = resp?.result;
+            if (r && Number.isFinite(createdId) && r.id !== createdId) {
+              // ignore
+            } else if (r?.status === 'APPROVED' && r?.is_active) {
+              const reviewedAtMs = r.reviewed_at ? new Date(r.reviewed_at).getTime() : NaN;
+              if (!Number.isFinite(reviewedAtMs) || reviewedAtMs < minReviewMs) {
+                // old approval; ignore
+              } else {
+                try {
+                  refreshMarkManagerEditWindow?.({ silent: true });
+                  refreshMarkLock({ silent: true });
+                } catch {}
+                alert('IQAC approved the mark-manager edit request. You can now edit mark-manager settings.');
+                return;
+              }
+            } else if (r?.status === 'REJECTED') {
+              const reviewedAtMs = r.reviewed_at ? new Date(r.reviewed_at).getTime() : NaN;
+              if (!Number.isFinite(reviewedAtMs) || reviewedAtMs < minReviewMs) {
+                // old rejection; ignore
+              } else {
+                alert('IQAC rejected the mark-manager edit request.');
+                return;
+              }
             }
           } catch (e) {
-            // ignore transient errors
+            // Fallback: if staff-status endpoint isn't available yet, only show "approved"
+            // when edit-window approval_until changes (prevents premature approved alerts).
+            try {
+              const w = await fetchEditWindow(assessmentKey, String(subjectId), 'MARK_MANAGER', teachingAssignmentId);
+              const nextUntil = w?.approval_until ? String(w.approval_until) : null;
+              if (w?.allowed_by_approval && nextUntil && nextUntil !== baselineApprovalUntil) {
+                try {
+                  refreshMarkManagerEditWindow?.({ silent: true });
+                  refreshMarkLock({ silent: true });
+                } catch {}
+                alert('IQAC approved the mark-manager edit request. You can now edit mark-manager settings.');
+                return;
+              }
+            } catch {
+              // ignore
+            }
           }
           await new Promise((r) => setTimeout(r, delay));
         }
@@ -667,102 +757,73 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
       setError(null);
 
       try {
-        // If a teaching assignment is specified, fetch roster by TA (preferred)
         let roster: Student[] = [];
-        if (typeof teachingAssignmentId === 'number') {
-          // Attempt elective-aware fetch: inspect TA details and use elective-choices when applicable
+        
+        // ALWAYS check user's TAs first (matching CIA logic) - this handles electives correctly
+        let matchedTa: any = null;
+        try {
+          const myTAs = await fetchMyTeachingAssignments();
+          console.log('[Formative] My TAs:', myTAs?.length, 'for subject:', subjectId, 'teachingAssignmentId:', teachingAssignmentId);
+          matchedTa = (myTAs || []).find((t: any) => {
+            const codeMatch = String(t.subject_code || '').trim().toUpperCase() === String(subjectId || '').trim().toUpperCase();
+            const idMatch = teachingAssignmentId ? t.id === teachingAssignmentId : false;
+            return idMatch || codeMatch;
+          });
+          
+          if (matchedTa) {
+            console.log('[Formative] Found TA match:', matchedTa.id, 'elective_subject_id:', matchedTa.elective_subject_id, 'section_id:', matchedTa.section_id);
+          } else {
+            console.log('[Formative] No TA match found in user TAs');
+          }
+        } catch (err) {
+          console.warn('[Formative] My TAs fetch failed:', err);
+        }
+
+        // If we found a TA and it's an elective (has elective_subject_id, no section_id), fetch from elective-choices
+        if (matchedTa && matchedTa.elective_subject_id && !matchedTa.section_id) {
+          console.log('[Formative] Detected elective, fetching elective-choices for elective_subject_id:', matchedTa.elective_subject_id);
           try {
-            const taRes = await fetchWithAuth(`/api/academics/teaching-assignments/${teachingAssignmentId}/`);
-            if (taRes.ok) {
-              const taObj = await taRes.json();
-              if (taObj && taObj.elective_subject_id && !taObj.section_id) {
-                const esRes = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${encodeURIComponent(String(taObj.elective_subject_id))}`);
-                if (!esRes.ok) throw new Error(`Elective-choices fetch failed: ${esRes.status}`);
-                const data = await esRes.json();
-                if (!mounted) return;
-                setSubjectData({ subject_name: taObj.subject_name || '', section: taObj.section_name || '' });
-                const items = Array.isArray(data.results) ? data.results : Array.isArray(data) ? data : (data.items || []);
-                roster = (items || []).map((s: any) => ({ id: Number(s.student_id ?? s.id), reg_no: String(s.reg_no ?? s.regno ?? ''), name: String(s.name ?? s.full_name ?? s.username ?? ''), section: s.section_name ?? s.section ?? null })).filter((s) => Number.isFinite(s.id));
-                roster.sort(compareStudentName);
-                setStudents(roster);
-                return;
-              }
+            const esRes = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${encodeURIComponent(String(matchedTa.elective_subject_id))}`);
+            if (esRes.ok) {
+              const esData = await esRes.json();
+              const items = Array.isArray(esData.results) ? esData.results : Array.isArray(esData) ? esData : (esData.items || []);
+              console.log('[Formative] Elective choices returned:', items?.length, 'students');
+              roster = (items || []).map((s: any) => ({ 
+                id: Number(s.student_id ?? s.id), 
+                reg_no: String(s.reg_no ?? s.regno ?? ''),
+                name: String(s.name ?? s.full_name ?? s.username ?? ''),
+                section: s.section_name ?? s.section ?? null 
+              })).filter((s) => Number.isFinite(s.id));
+              if (mounted) setSubjectData({ subject_name: matchedTa.subject_name, section: matchedTa.section_name || 'Elective' });
+            } else {
+              console.warn('[Formative] Elective-choices API returned error:', esRes.status);
             }
           } catch (err) {
-            // fall back to roster endpoint
+            console.warn('[Formative] Elective-choices fetch failed:', err);
           }
-          const resp = await fetchTeachingAssignmentRoster(teachingAssignmentId);
-          const ta = resp.teaching_assignment;
-          if (!mounted) return;
-          setSubjectData({ subject_name: resp.teaching_assignment.subject_name, section: resp.teaching_assignment.section_name });
-          roster = (resp.students || []).map((s: TeachingAssignmentRosterStudent) => ({
-            id: Number(s.id),
-            reg_no: String(s.reg_no ?? ''),
-            name: String(s.name ?? ''),
-            section: s.section ?? null,
-          })).filter((s) => Number.isFinite(s.id));
-          roster.sort(compareStudentName);
-          setStudents(roster);
-        } else {
-          // Find subject using curriculum master records (fallback when TA not provided)
-          const masters = await fetchMasters();
-          const subjectList = Array.isArray(masters)
-            ? masters.filter((m: any) => String(m.course_code || '').trim().toUpperCase() === String(subjectId || '').trim().toUpperCase())
-            : [];
-
-          if (!subjectList.length) throw new Error(`Subject with code ${subjectId} not found`);
-          const subj = subjectList[0];
-          if (!mounted) return;
-          setSubjectData({ course_code: subj.course_code, course_name: subj.course_name, department: subj.departments ? subj.departments[0] : undefined, year: subj.semester, section: null });
-
-          // Attempt to fetch students by department/year/section if available
-          const params = new URLSearchParams({
-            department: String(subj.departments ? subj.departments[0] : ''),
-            year: String(subj.semester ?? ''),
-            section: String(''),
-          });
-
-          const studentsRes = await fetch(`${API_BASE}/api/academics/students/?${params.toString()}`, {
-            headers: authHeaders(),
-          });
-
-          if (!studentsRes.ok) {
-            const text = await studentsRes.text();
-            throw new Error(`Failed to fetch students: ${studentsRes.status} ${text}`);
-          }
-
-          const studentsData = await studentsRes.json();
-          roster = (Array.isArray(studentsData) ? studentsData : [])
-            .map((s: any) => ({
-              id: Number(s.id),
-              reg_no: String(s.reg_no ?? ''),
-              name: String(s.name ?? ''),
-              section: s.section ?? null,
-            }))
-            .filter((s) => Number.isFinite(s.id));
-
-          // If no students found, try to locate a teaching assignment for this subject
-          // and use its roster as a fallback.
-          if (!roster.length) {
-            try {
-              const myTAs = await fetchMyTeachingAssignments();
-              const match = (myTAs || []).find((t: any) => String(t.subject_code || '').trim().toUpperCase() === String(subjectId || '').trim().toUpperCase());
-              if (match && match.id) {
-                const taResp = await fetchTeachingAssignmentRoster(match.id);
-                roster = (taResp.students || []).map((s: TeachingAssignmentRosterStudent) => ({ id: Number(s.id), reg_no: String(s.reg_no ?? ''), name: String(s.name ?? ''), section: s.section ?? null })).filter((s) => Number.isFinite(s.id));
-                if (mounted) setSubjectData({ subject_name: match.subject_name, section: match.section_name });
-              }
-            } catch {
-              // ignore fallback errors
-            }
-          }
-
-          // Requested: SSA1/CIA1/Formative1 student list in ascending name order
-          roster.sort(compareStudentName);
-
-          if (!mounted) return;
-          setStudents(roster);
         }
+
+        // If not elective or elective fetch failed, use regular TA roster
+        if (!roster.length && matchedTa && matchedTa.id) {
+          console.log('[Formative] Fetching regular TA roster for TA ID:', matchedTa.id);
+          try {
+            const taResp = await fetchTeachingAssignmentRoster(matchedTa.id);
+            roster = (taResp.students || []).map((s: TeachingAssignmentRosterStudent) => ({ 
+              id: Number(s.id), 
+              reg_no: String(s.reg_no ?? ''), 
+              name: String(s.name ?? ''), 
+              section: s.section ?? null 
+            })).filter((s) => Number.isFinite(s.id));
+            console.log('[Formative] Regular roster returned:', roster.length, 'students');
+            if (mounted) setSubjectData({ subject_name: matchedTa.subject_name, section: matchedTa.section_name });
+          } catch (err) {
+            console.warn('[Formative] TA roster fetch failed:', err);
+          }
+        }
+
+        console.log('[Formative] Final roster count:', roster.length);
+        roster.sort(compareStudentName);
+        if (mounted) setStudents(roster);
 
         // Try published formative first (published should take precedence over draft/local)
         let publishedMarks: Record<string, any> | null = null;
@@ -892,24 +953,63 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
 
     setPublishing(true);
     setError(null);
+    // Optimistically lock UI immediately so user sees Published state right away.
+    const prevPublishedAt = publishedAt;
+    const prevMarkManagerLocked = sheet.markManagerLocked;
+    const prevConsumedApprovals = publishConsumedApprovals;
+    const consumedApprovals = {
+      markEntryApprovalUntil,
+      markManagerApprovalUntil,
+    };
     try {
-      await publishFormative(assessmentKey, subjectId, sheet, teachingAssignmentId);
       setPublishedAt(new Date().toLocaleString());
-      setPublishConsumedApprovals(null);
-      // Ensure Mark Manager is re-locked locally to avoid a transient editable state.
+      // Consume any existing approvals so the table becomes locked immediately after Publish.
+      setPublishConsumedApprovals(consumedApprovals);
       setSheet((p) => ({ ...p, markManagerLocked: true }));
+
+      await publishFormative(assessmentKey, subjectId, sheet, teachingAssignmentId);
+
+      // on success, refresh server-side lock state and snapshots
       refreshPublishWindow();
       refreshMarkLock({ silent: true });
       refreshPublishedSnapshot(true);
       try {
-        console.debug('obe:published dispatch', { assessment: assessmentKey, subjectId });
         window.dispatchEvent(new CustomEvent('obe:published', { detail: { subjectId, assessment: assessmentKey } }));
       } catch {
         // ignore
       }
     } catch (e: any) {
-      setError(e?.message || `Failed to publish ${assessmentLabel}`);
+      const msg = String(e?.message || '');
+      // If server indicates already-locked/published, keep optimistic state, otherwise roll back
+      if (msg.includes('locked after publish') || msg.includes('Marks entry is locked')) {
+        setPublishedAt(new Date().toLocaleString());
+        setPublishConsumedApprovals(consumedApprovals);
+        setSheet((p) => ({ ...p, markManagerLocked: true }));
+        setError(null);
+      } else {
+        // rollback optimistic changes
+        setPublishedAt(prevPublishedAt ?? null);
+        setSheet((p) => ({ ...p, markManagerLocked: prevMarkManagerLocked }));
+        setPublishConsumedApprovals(prevConsumedApprovals ?? null);
+        setError(msg || `Failed to publish ${assessmentLabel}`);
+      }
     } finally {
+      try {
+        if (subjectId) {
+          const lock = await fetchMarkTableLockStatus(assessmentKey, String(subjectId), teachingAssignmentId);
+          if (lock?.exists && lock?.is_published) {
+            setPublishedAt(new Date().toLocaleString());
+            setSheet((p) => ({ ...p, markManagerLocked: true }));
+            setPublishConsumedApprovals((prev) => prev ?? consumedApprovals);
+            refreshPublishedSnapshot(true);
+            refreshMarkLock({ silent: true });
+            refreshPublishWindow();
+            setError(null);
+          }
+        }
+      } catch {
+        // ignore
+      }
       setPublishing(false);
     }
   };
@@ -1337,7 +1437,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
               </div>
             ) : 
               <div className="obe-table-wrapper" style={{ position: 'relative' }}>
-              <table className="obe-table" style={{ minWidth: 1200 }}>
+              <table className="obe-table" style={{ minWidth: 1200, pointerEvents: showPublishedLockPanel ? 'none' : 'auto' }}>
                 <thead>
                   <tr>
                     <th style={cellTh} colSpan={totalTableCols}>
@@ -1644,14 +1744,15 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                 </div>
               )}
 
-              {tableBlocked && !globalLocked ? (
+              {/* Locked overlays */}
+              {tableBlocked && !globalLocked && !showPublishedLockPanel ? (
                 <>
                   <div
                     style={{
                       position: 'absolute',
                       inset: 0,
-                      background: isPublished ? 'rgba(240,253,244,0.55)' : 'rgba(239,246,255,0.65)',
-                      border: `1px solid ${isPublished ? 'rgba(22,163,74,0.25)' : 'rgba(59,130,246,0.25)'}`,
+                      background: 'rgba(239,246,255,0.65)',
+                      border: '1px solid rgba(59,130,246,0.25)',
                       borderRadius: 6,
                       pointerEvents: 'none',
                     }}
@@ -1676,42 +1777,74 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                     }}
                   >
                     <div>
-                      <div style={{ fontWeight: 950, color: '#111827' }}>{isPublished ? 'Published — Locked' : 'Table Locked'}</div>
-                      <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
-                        {isPublished ? 'Marks are published. Use View or Request Edit to ask IQAC for access.' : 'Confirm the Mark Manager to unlock the student list.'}
-                      </div>
+                      <div style={{ fontWeight: 950, color: '#111827' }}>Table Locked</div>
+                      <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>Confirm the Mark Manager to unlock the student list.</div>
                     </div>
                     <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-                      {!isPublished ? (
-                        <>
-                          <button className="obe-btn obe-btn-success" onClick={() => setMarkManagerModal({ mode: 'confirm' })} disabled={!subjectId || markManagerBusy}>
-                            Save Mark Manager
-                          </button>
-                          <button className="obe-btn" onClick={() => requestMarkManagerEdit()} disabled={markManagerBusy}>
-                            Request Access
-                          </button>
-                        </>
-                          ) : (
-                        <>
-                          <button
-                            className="obe-btn"
-                            onClick={() => {
-                              setInlineViewOnly(true);
-                              setPublishedViewSnapshot(null);
-                              try {
-                                refreshPublishedSnapshot(false);
-                              } catch {
-                                /* ignore */
-                              }
-                            }}
-                          >
-                            View
-                          </button>
-                          <button className="obe-btn obe-btn-success" onClick={() => requestMarkEntryEdit()}>
-                            Request Edit
-                          </button>
-                        </>
-                      )}
+                      <button className="obe-btn obe-btn-success" onClick={() => setMarkManagerModal({ mode: 'confirm' })} disabled={!subjectId || markManagerBusy}>
+                        Save Mark Manager
+                      </button>
+                      <button className="obe-btn" onClick={() => requestMarkManagerEdit()} disabled={markManagerBusy}>
+                        Request Access
+                      </button>
+                    </div>
+                  </div>
+                </>
+              ) : null}
+
+              {showPublishedLockPanel && !globalLocked ? (
+                <>
+                  <div
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      background: 'linear-gradient(180deg, rgba(34,197,94,0.18) 0%, rgba(16,185,129,0.26) 100%)',
+                      border: '1px solid rgba(22,163,74,0.25)',
+                      borderRadius: 6,
+                      pointerEvents: 'none',
+                    }}
+                  />
+                  <div
+                    style={{
+                      position: 'absolute',
+                      left: '50%',
+                      top: 16,
+                      transform: 'translateX(-50%)',
+                      zIndex: 40,
+                      width: 320,
+                      background: 'rgba(255,255,255,0.98)',
+                      border: '1px solid #e5e7eb',
+                      padding: 12,
+                      borderRadius: 12,
+                      boxShadow: '0 6px 18px rgba(17,24,39,0.06)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 10,
+                      alignItems: 'stretch',
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontWeight: 950, color: '#065f46' }}>Published — Locked</div>
+                      <div style={{ fontSize: 12, color: '#065f46', marginTop: 4 }}>Marks are published. Use View or Request Edit to ask IQAC for access.</div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                      <button
+                        className="obe-btn"
+                        onClick={() => {
+                          setInlineViewOnly(true);
+                          setPublishedViewSnapshot(null);
+                          try {
+                            refreshPublishedSnapshot(false);
+                          } catch {
+                            /* ignore */
+                          }
+                        }}
+                      >
+                        View
+                      </button>
+                      <button className="obe-btn obe-btn-success" onClick={() => requestMarkEntryEdit()}>
+                        Request Edit
+                      </button>
                     </div>
                   </div>
                 </>
@@ -1719,10 +1852,10 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
             </div>
           ) : (
             <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 20, background: '#fff' }}>
-              <div style={{ fontWeight: 900, fontSize: 16 }}>{isPublished ? 'Published — Locked' : 'Table Locked'}</div>
-              <div style={{ color: '#6b7280', marginTop: 8 }}>{isPublished ? 'Marks published. Use View or Request Edit to ask IQAC for access.' : 'Confirm the Mark Manager to unlock the student list.'}</div>
+              <div style={{ fontWeight: 900, fontSize: 16 }}>{displayPublishedLocked ? 'Published — Locked' : 'Table Locked'}</div>
+              <div style={{ color: '#6b7280', marginTop: 8 }}>{displayPublishedLocked ? 'Marks published. Use View or Request Edit to ask IQAC for access.' : 'Confirm the Mark Manager to unlock the student list.'}</div>
               <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'flex-end' }}>
-                {!isPublished ? (
+                {!displayPublishedLocked ? (
                   <>
                     <button className="obe-btn obe-btn-success" onClick={() => setMarkManagerModal({ mode: 'confirm' })} disabled={!subjectId || markManagerBusy}>
                       Save Mark Manager
@@ -1803,7 +1936,31 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                       {parts.map((p) => (
                         <tr key={`mm_${p.key}`}>
                           <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>{p.label} BTL</td>
-                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{(partBtl as any)[p.key] === '' ? '-' : String((partBtl as any)[p.key])}</td>
+                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>
+                            <select
+                              className="obe-input"
+                              aria-label={`BTL for ${p.label}`}
+                              value={(partBtl as any)[p.key] ?? ''}
+                              disabled={markManagerBusy || globalLocked || publishedEditLocked}
+                              onChange={(e) => {
+                                if (globalLocked) return;
+                                if (publishedEditLocked) return;
+                                const raw = e.target.value;
+                                setPartBtl((prev) => ({
+                                  ...(prev || {}),
+                                  [p.key]: raw === '' ? '' : (Number(raw) as 1 | 2 | 3 | 4 | 5 | 6),
+                                }));
+                              }}
+                              style={{ minWidth: 110 }}
+                            >
+                              <option value="">-</option>
+                              {[1, 2, 3, 4, 5, 6].map((n) => (
+                                <option key={n} value={n}>
+                                  {n}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -1849,7 +2006,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, position: 'relative' }}>
               <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>View Only</div>
               <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280', marginRight: 36 }}>{assessmentLabel} • {String(subjectId || '')}</div>
-              <button className="obe-btn" onClick={() => setViewMarksModalOpen(false)} style={{ position: 'absolute', right: 0, top: 0 }}>
+              <button className="obe-btn obe-btn-success" onClick={() => setViewMarksModalOpen(false)} style={{ position: 'absolute', right: 0, top: 0 }}>
                 Close
               </button>
             </div>
@@ -2026,7 +2183,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
             )}
 
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
-              <button className="obe-btn" onClick={() => setViewMarksModalOpen(false)}>
+              <button className="obe-btn obe-btn-success" onClick={() => setViewMarksModalOpen(false)}>
                 Close
               </button>
             </div>

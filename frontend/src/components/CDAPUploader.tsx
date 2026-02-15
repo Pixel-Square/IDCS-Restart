@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+const DEFAULT_API_BASE = 'https://db.zynix.us';
+const API_BASE = import.meta.env.VITE_API_BASE || (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://localhost:8000' : DEFAULT_API_BASE);
 
 function authHeaders(): Record<string, string> {
   const token = window.localStorage.getItem('access');
@@ -91,7 +92,27 @@ export default function CDAPUploader({ subjectId, onUpload }: { subjectId?: stri
         />
       </div>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <button onClick={handleUpload} disabled={status === 'uploading'}>
+        <button
+          id="cdap-upload-button"
+          onClick={handleUpload}
+          disabled={status === 'uploading'}
+          aria-label="Upload CDAP Excel file"
+          title="Upload parsed CDAP Excel"
+          style={{
+            background: '#1d4ed8',
+            color: '#fff',
+            padding: '8px 14px',
+            borderRadius: 8,
+            border: 'none',
+            boxShadow: '0 8px 20px rgba(29,78,216,0.24)',
+            fontWeight: 600,
+            cursor: status === 'uploading' ? 'default' : 'pointer',
+            transition: 'transform 120ms ease, box-shadow 120ms ease, opacity 120ms ease',
+            opacity: status === 'uploading' ? 0.65 : 1,
+          }}
+          onMouseDown={(e) => { (e.currentTarget as HTMLButtonElement).style.transform = 'translateY(1px)'; }}
+          onMouseUp={(e) => { (e.currentTarget as HTMLButtonElement).style.transform = 'translateY(0)'; }}
+        >
           {status === 'uploading' ? 'Uploading...' : 'Upload Excel'}
         </button>
         {file && <span style={{ fontSize: 12, color: '#555' }}>{file.name}</span>}

@@ -110,8 +110,6 @@ function CollapsibleTable({
 }) {
   const [expanded, setExpanded] = useState(!collapsedByDefault);
 
-  const previewRows = rows?.length ? [rows[0]] : [];
-
   return (
     <section>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -134,7 +132,7 @@ function CollapsibleTable({
         ) : null}
       </div>
 
-      {expanded ? <Table headers={headers} rows={rows} /> : <Table headers={headers} rows={previewRows} />}
+      {expanded && <Table headers={headers} rows={rows} />}
     </section>
   );
 }

@@ -364,7 +364,7 @@ export default function LCAPage({ courseId, courseCode: courseCodeProp, courseNa
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
             <div>
               <h2 style={styles.title}>Previous Batch Result (PBR)</h2>
-              <div style={styles.subtitle}>Upload 1 Excel (required) and optionally a second Excel (max 2).</div>
+              <div style={styles.subtitle}>Upload up to 2 Excel files (max 2).</div>
             </div>
             <button type="button" onClick={() => navigate(`${courseBasePath}/lca`)} style={styles.btn}>
               Back
@@ -386,7 +386,7 @@ export default function LCAPage({ courseId, courseCode: courseCodeProp, courseNa
                 </td>
               </tr>
               <tr>
-                <td style={{ ...styles.tdLeft, fontWeight: 800 }}>CAY-2 Excel (optional)</td>
+                <td style={{ ...styles.tdLeft, fontWeight: 800 }}>CAY-2 Excel</td>
                 <td style={{ ...styles.tdLeft, ...styles.cellGreen }}>
                   <input
                     type="file"
@@ -481,8 +481,10 @@ export default function LCAPage({ courseId, courseCode: courseCodeProp, courseNa
                 <input
                   value={courseMeta.courseCode}
                   readOnly
+                  disabled
+                  aria-disabled="true"
                   title="Course code is locked"
-                  style={{ width: '100%', border: 'none', background: 'transparent', fontSize: 13, outline: 'none', cursor: 'not-allowed' }}
+                  style={{ width: '100%', border: 'none', background: 'transparent', fontSize: 13, outline: 'none', cursor: 'not-allowed', color: '#234451' }}
                 />
               </td>
             </tr>
@@ -492,8 +494,10 @@ export default function LCAPage({ courseId, courseCode: courseCodeProp, courseNa
                 <input
                   value={courseMeta.courseName}
                   readOnly
+                  disabled
+                  aria-disabled="true"
                   title="Course name is locked"
-                  style={{ width: '100%', border: 'none', background: 'transparent', fontSize: 13, outline: 'none', cursor: 'not-allowed' }}
+                  style={{ width: '100%', border: 'none', background: 'transparent', fontSize: 13, outline: 'none', cursor: 'not-allowed', color: '#234451' }}
                 />
               </td>
             </tr>

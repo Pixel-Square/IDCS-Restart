@@ -459,11 +459,13 @@ export default function LabEntry({
       return;
     }
 
-    // If no approval is active, ensure the sheet stays locked by default.
-    if (!Boolean(draft.sheet.markManagerLocked)) {
+    // If no approval is active, ensure the sheet starts editable by default.
+    // (markManagerLocked === true means the sheet is confirmed/locked and
+    // should block edits; default should be editable until user clicks Save.)
+    if (Boolean(draft.sheet.markManagerLocked)) {
       setDraft((p) => ({
         ...p,
-        sheet: { ...p.sheet, markManagerLocked: true },
+        sheet: { ...p.sheet, markManagerLocked: false },
       }));
     }
   }, [
@@ -517,7 +519,7 @@ export default function LabEntry({
 
   const markManagerLocked = Boolean(draft.sheet.markManagerLocked);
   const ciaExamEnabled = draft.sheet.ciaExamEnabled !== false;
-  const tableBlocked = isPublished ? !entryOpen : !markManagerLocked;
+  const tableBlocked = isPublished ? !entryOpen : markManagerLocked;
 
   function setCoEnabled(which: 'A' | 'B', enabled: boolean) {
     setDraft((p) => {
@@ -1017,7 +1019,15 @@ export default function LabEntry({
         }
       `}</style>
 
-      <div style={{ marginBottom: 10 }}>
+      <div
+        style={{
+          margin: '0 0 10px 0',
+          maxWidth: Math.min(minTableWidth, 1100),
+          width: '100%',
+          boxSizing: 'border-box',
+          overflow: 'hidden',
+        }}
+      >
         <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>COs enabled</div>
         <div
           style={{
@@ -1467,8 +1477,8 @@ export default function LabEntry({
                 </table>
               </div>
 
-              {/* Blue overlay when blocked by Mark Manager (not confirmed) */}
-              {!markManagerLocked ? (
+              {/* Blue overlay when blocked by Mark Manager (after Save/confirmation) */}
+              {markManagerLocked ? (
                 <div
                   style={{
                     position: 'absolute',

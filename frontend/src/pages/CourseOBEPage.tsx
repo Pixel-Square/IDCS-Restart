@@ -209,11 +209,11 @@ export default function CourseOBEPage(): JSX.Element {
 
           <div className="obe-tab-nav" aria-label="OBE Tabs">
             {[
+              { key: 'lca_instructions', label: 'LCA Instructions' },
+              { key: 'lca', label: 'LCA' },
               { key: 'cdap', label: 'CDAP' },
               { key: 'articulation', label: 'Articulation Matrix' },
               { key: 'marks', label: 'Mark Entry' },
-              { key: 'lca_instructions', label: 'LCA Instructions' },
-              { key: 'lca', label: 'LCA' },
               { key: 'co_attainment', label: 'CO ATTAINMENT' },
               { key: 'internal_mark', label: 'INTERNAL MARK' },
               { key: 'cqi', label: 'CQI' },
@@ -247,8 +247,8 @@ export default function CourseOBEPage(): JSX.Element {
             {activeTab === 'articulation' && <ArticulationMatrixPage courseId={courseId} />}
             {activeTab === 'marks' && <MarkEntryPage courseId={courseId} classType={courseClassType} questionPaperType={courseQpType} enabledAssessments={courseEnabledAssessments} />}
             {activeTab === 'lca_instructions' && <LCAInstructionsPage courseCode={courseId} courseName={courseName} />}
-            {activeTab === 'lca' && <LCAPage courseId={courseId} />}
-            {activeTab === 'co_attainment' && <COAttainmentPage courseId={courseId} enabledAssessments={courseEnabledAssessments} />}
+            {activeTab === 'lca' && <LCAPage courseId={courseId} courseCode={courseId} courseName={courseName} />}
+            {activeTab === 'co_attainment' && <COAttainmentPage courseId={courseId} enabledAssessments={courseEnabledAssessments} classType={courseClassType} />}
             {activeTab === 'internal_mark' && <InternalMarkCoursePage courseId={courseId} enabledAssessments={courseEnabledAssessments} />}
             {activeTab === 'cqi' && <CQIPage courseId={courseId} />}
           </div>

@@ -344,6 +344,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   const [publishedEditModalOpen, setPublishedEditModalOpen] = useState(false);
   const [editRequestReason, setEditRequestReason] = useState('');
   const [editRequestBusy, setEditRequestBusy] = useState(false);
+  const [editRequestMessage, setEditRequestMessage] = useState<string | null>(null);
   const [showAbsenteesOnly, setShowAbsenteesOnly] = useState(false);
   const [absenteesSnapshot, setAbsenteesSnapshot] = useState<number[] | null>(null);
   const [limitDialog, setLimitDialog] = useState<{ title: string; message: string } | null>(null);
@@ -389,6 +390,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
 
   useEffect(() => {
     setPublishConsumedApprovals(null);
+    setEditRequestMessage(null);
   }, [subjectId]);
 
   const isPublished = Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published);
@@ -459,7 +461,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         reason: editRequestReason || `Edit request: ${assessmentLabel} marks entry for ${subjectId}`,
         teaching_assignment_id: teachingAssignmentId,
       });
-      alert('Edit request sent to IQAC.');
+      setEditRequestMessage('Request sent to IQAC for edit approval.');
       setPublishedEditModalOpen(false);
       refreshMarkLock({ silent: true });
     } catch (e: any) {
@@ -468,6 +470,66 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       setEditRequestBusy(false);
     }
   }
+
+  // While locked after publish, periodically check if IQAC updated the lock row.
+  useEffect(() => {
+    if (!subjectId) return;
+    if (!isPublished) return;
+    if (entryOpen) return;
+    const tid = window.setInterval(() => {
+      refreshMarkLock({ silent: true });
+    }, 30000);
+    return () => window.clearInterval(tid);
+  }, [entryOpen, isPublished, subjectId, refreshMarkLock]);
+
+  const prevEntryOpenRef = useRef<boolean>(Boolean(entryOpen));
+  useEffect(() => {
+    // When IQAC opens MARK_ENTRY edits post-publish, reload the editable draft.
+    if (!subjectId) return;
+    if (!isPublished) return;
+
+    const prev = prevEntryOpenRef.current;
+    if (prev || !entryOpen) {
+      prevEntryOpenRef.current = Boolean(entryOpen);
+      return;
+    }
+
+    let mounted = true;
+    (async () => {
+      try {
+        const res = await fetchDraft<Cia1DraftPayload>(assessmentKey, subjectId);
+        if (!mounted) return;
+        const d = res?.draft as any;
+        if (d && typeof d === 'object') {
+          setSheet((prevSheet) => ({
+            ...prevSheet,
+            termLabel: String(d.termLabel || prevSheet.termLabel),
+            batchLabel: subjectId,
+            questionBtl: d.questionBtl && typeof d.questionBtl === 'object' ? d.questionBtl : prevSheet.questionBtl,
+            rowsByStudentId: d.rowsByStudentId && typeof d.rowsByStudentId === 'object' ? d.rowsByStudentId : prevSheet.rowsByStudentId,
+            markManagerLocked: d.markManagerLocked ?? prevSheet.markManagerLocked,
+            markManagerSnapshot: d.markManagerSnapshot ?? prevSheet.markManagerSnapshot,
+            markManagerApprovalUntil: d.markManagerApprovalUntil ?? prevSheet.markManagerApprovalUntil,
+          }));
+        } else {
+          // Fallback: refresh published sheet for view purposes.
+          refreshPublishedSheet(true);
+        }
+      } catch {
+        // ignore and fall back
+        try {
+          refreshPublishedSheet(true);
+        } catch {
+          // ignore
+        }
+      }
+    })();
+
+    prevEntryOpenRef.current = Boolean(entryOpen);
+    return () => {
+      mounted = false;
+    };
+  }, [entryOpen, isPublished, subjectId, assessmentKey]);
 
   const refreshPublishedSheet = async (silent?: boolean) => {
     if (!subjectId) return;
@@ -913,7 +975,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   }, [masterCfg, questionBtlMax, assessmentKey]);
 
   const setAbsent = (studentId: number, absent: boolean) => {
-    if (tableBlocked) return;
+    if (publishing || tableBlocked) return;
     setSheet((prev) => {
       const key = String(studentId);
       const existing = prev.rowsByStudentId[key] || {
@@ -939,7 +1001,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   };
 
   const setAbsentKind = (studentId: number, absentKind: AbsenceKind) => {
-    if (tableBlocked) return;
+    if (publishing || tableBlocked) return;
     setSheet((prev) => {
       const key = String(studentId);
       const existing = prev.rowsByStudentId[key] || {
@@ -964,7 +1026,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   };
 
   const setQuestionBtl = (qKey: string, value: 1 | 2 | 3 | 4 | 5 | 6 | '') => {
-    if (globalLocked) return;
+    if (publishing || globalLocked) return;
     const confirmed = sheet.markManagerSnapshot != null;
     if (markManagerLocked && confirmed) return;
     if (publishedEditLocked) return;
@@ -1011,7 +1073,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   }, [sheet.questionBtl, subjectId, sheet.rowsByStudentId, assessmentKey]);
 
   const setQuestionMark = (studentId: number, qKey: string, value: number | '') => {
-    if (tableBlocked) return;
+    if (publishing || tableBlocked) return;
     setSheet((prev) => {
       const key = String(studentId);
       const existing = prev.rowsByStudentId[key] || {
@@ -1116,8 +1178,25 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   };
 
   const publish = async () => {
+    if (!subjectId) return;
+    if (globalLocked) {
+      setError('Publishing is locked by IQAC.');
+      return;
+    }
+    if (!publishAllowed) {
+      setError('Publish window is closed. Please request IQAC approval.');
+      return;
+    }
+
+    // If already published and locked, use Publish action as the entry-point to request edits.
+    if (isPublished && publishedEditLocked) {
+      setPublishedEditModalOpen(true);
+      return;
+    }
+
     setPublishing(true);
     setError(null);
+    setEditRequestMessage(null);
     try {
       // Persist a snapshot of the sheet + question headers used for CO calculations.
       // If an absentee has marks entered, treat them as present for publishing (so totals merge into overall mark list).
@@ -1140,7 +1219,16 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       };
       await publishCiaSheet(assessmentKey, subjectId, data, teachingAssignmentId);
       setPublishedAt(new Date().toLocaleString());
+      // Consume any existing approvals so the table becomes locked immediately after Publish.
+      setPublishConsumedApprovals({
+        markEntryApprovalUntil,
+        markManagerApprovalUntil,
+      });
+      // Ensure Mark Manager is re-locked locally after publish.
+      setSheet((p) => ({ ...p, markManagerLocked: true }));
       refreshPublishWindow();
+      refreshMarkLock({ silent: true });
+      refreshPublishedSheet(true);
         try {
           console.debug('obe:published dispatch', { assessment: assessmentKey, subjectId });
           window.dispatchEvent(new CustomEvent('obe:published', { detail: { subjectId, assessment: assessmentKey } }));
@@ -1159,6 +1247,20 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
           }
         }, 50);
     } catch (e: any) {
+      const status = (e as any)?.status;
+      const detail = String((e as any)?.body?.detail || e?.message || '');
+
+      // If the sheet is already published, backend returns 423 (Locked) and instructs to request IQAC approval.
+      // UX expectation: do not show this as a publish failure; switch UI into the Published—Locked state.
+      if (status === 423) {
+        setPublishedAt((prev) => prev || new Date().toLocaleString());
+        refreshPublishWindow();
+        refreshMarkLock({ silent: true });
+        setError(null);
+        setPublishedEditModalOpen(true);
+        return;
+      }
+
       setError(e?.message || `Failed to publish ${assessmentLabel}`);
     } finally {
       setPublishing(false);
@@ -1266,6 +1368,32 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
     });
 
     downloadCsv(`${subjectId}_${assessmentKey.toUpperCase()}_sheet.csv`, out);
+  };
+
+  const exportSheetExcel = async () => {
+    try {
+      const qs = new URLSearchParams();
+      if (teachingAssignmentId) qs.set('teaching_assignment_id', String(teachingAssignmentId));
+      const DEFAULT_API_BASE = 'https://db.zynix.us';
+      const runtimeApiBase = (import.meta as any).env?.VITE_API_BASE || (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://localhost:8000' : DEFAULT_API_BASE);
+      const url = `${runtimeApiBase}/api/obe/cia-export-template/${encodeURIComponent(assessmentKey)}/${encodeURIComponent(subjectId)}${qs.toString() ? `?${qs.toString()}` : ''}`;
+      const res = await fetchWithAuth(url, { method: 'GET' });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(txt || `Export failed (${res.status})`);
+      }
+      const blob = await res.blob();
+      const href = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = href;
+      a.download = `${subjectId}_${assessmentKey.toUpperCase()}_template.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(href);
+      document.body.removeChild(a);
+    } catch (e: any) {
+      alert(e?.message || 'Failed to export Excel');
+    }
   };
 
   if (loading) return <div style={{ color: '#6b7280' }}>Loading {assessmentLabel} roster…</div>;
@@ -1447,15 +1575,18 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
               </span>
             ) : null}
           </button>
-          <button onClick={saveDraftToDb} className="obe-btn" disabled={saving || students.length === 0}>
+          <button onClick={saveDraftToDb} className="obe-btn" disabled={saving || students.length === 0 || tableBlocked || globalLocked}>
             {saving ? 'Saving…' : 'Save Draft'}
           </button>
           <button onClick={exportSheetCsv} className="obe-btn" disabled={students.length === 0}>
             Export CSV
           </button>
+          <button onClick={exportSheetExcel} className="obe-btn" disabled={students.length === 0}>
+            Export Excel
+          </button>
           <button
             onClick={publish}
-            disabled={publishing || students.length === 0 || !publishAllowed}
+            disabled={publishing || students.length === 0 || !publishAllowed || tableBlocked || globalLocked}
             className="obe-btn obe-btn-primary"
           >
             {publishing ? 'Publishing…' : 'Publish'}
@@ -1546,8 +1677,9 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       {students.length === 0 ? (
         <div style={{ color: '#6b7280', fontSize: 14, padding: '12px 0' }}>No students found for this subject.</div>
       ) : (
-        <PublishLockOverlay locked={globalLocked}>
-          <div style={{ marginBottom: 10 }}>
+        <div style={{ position: 'relative' }}>
+          <PublishLockOverlay locked={globalLocked}>
+            <div style={{ marginBottom: 10 }}>
             <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Mark Manager</div>
             <div
               style={{
@@ -1576,7 +1708,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
             {markManagerError ? <div style={{ marginTop: 8, fontSize: 12, color: '#991b1b' }}>{markManagerError}</div> : null}
           </div>
 
-          <div className="obe-table-wrapper" style={{ overflowX: 'auto', position: 'relative' }}>
+            <div className="obe-table-wrapper" style={{ overflowX: 'auto' }}>
             <table className="obe-table" style={{ width: 'max-content', minWidth: '100%', tableLayout: 'auto' }}>
             <thead>
               <tr>
@@ -1775,7 +1907,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                 const kind = row.absent ? String((row as any).absentKind || 'AL').toUpperCase() : '';
                 const canEditAbsent = Boolean(showAbsenteesOnly && row.absent);
 
-                const lockedInputs = Boolean(tableBlocked || globalLocked || publishedEditLocked);
+                const lockedInputs = Boolean(publishing || tableBlocked || globalLocked || publishedEditLocked);
 
                 const serverTotal = serverTotals[s.id];
 
@@ -1845,70 +1977,79 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
               })}
             </tbody>
           </table>
-
-            {tableBlocked && !globalLocked ? (
-              <>
-                <div
-                  style={{
-                    position: 'absolute',
-                    inset: 0,
-                    background: isPublished ? 'rgba(240,253,244,0.55)' : 'rgba(239,246,255,0.65)',
-                    border: `1px solid ${isPublished ? 'rgba(22,163,74,0.25)' : 'rgba(59,130,246,0.25)'}`,
-                    borderRadius: 6,
-                    pointerEvents: 'none',
-                  }}
-                />
-                <div
-                  style={{
-                    position: 'absolute',
-                    left: '50%',
-                    top: 16,
-                    transform: 'translateX(-50%)',
-                    zIndex: 40,
-                    width: 300,
-                    background: 'rgba(255,255,255,0.98)',
-                    border: '1px solid #e5e7eb',
-                    padding: 12,
-                    borderRadius: 12,
-                    boxShadow: '0 6px 18px rgba(17,24,39,0.06)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 10,
-                    alignItems: 'stretch',
-                  }}
-                >
-                  <div>
-                    <div style={{ fontWeight: 950, color: '#111827' }}>{isPublished ? 'Published — Locked' : 'Table Locked'}</div>
-                    <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
-                      {isPublished ? 'Marks are published. Use View or Request Edit to ask IQAC for access.' : 'Confirm the Mark Manager to unlock student entry.'}
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-                    {!isPublished ? (
-                      <>
-                        <button className="obe-btn obe-btn-success" onClick={() => setMarkManagerModal({ mode: 'confirm' })} disabled={!subjectId || markManagerBusy}>
-                          Save Mark Manager
-                        </button>
-                        <button className="obe-btn" onClick={() => requestMarkManagerEdit()} disabled={markManagerBusy}>
-                          Request Access
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <button className="obe-btn" onClick={() => setViewMarksModalOpen(true)}>
-                          View
-                        </button>
-                        <button className="obe-btn obe-btn-success" onClick={() => setPublishedEditModalOpen(true)} disabled={editRequestBusy}>
-                          Request Edit
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </>
-            ) : null}
           </div>
-        </PublishLockOverlay>
+          </PublishLockOverlay>
+
+          {tableBlocked && !globalLocked ? (
+            <>
+              <div
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  background: isPublished ? 'rgba(240,253,244,0.55)' : 'rgba(239,246,255,0.65)',
+                  border: `1px solid ${isPublished ? 'rgba(22,163,74,0.25)' : 'rgba(59,130,246,0.25)'}`,
+                  borderRadius: 12,
+                  pointerEvents: 'none',
+                }}
+              />
+              <div
+                style={{
+                  position: 'absolute',
+                  left: '50%',
+                  top: 16,
+                  transform: 'translateX(-50%)',
+                  zIndex: 40,
+                  width: 320,
+                  background: 'rgba(255,255,255,0.98)',
+                  border: '1px solid #e5e7eb',
+                  padding: 12,
+                  borderRadius: 12,
+                  boxShadow: '0 6px 18px rgba(17,24,39,0.06)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10,
+                  alignItems: 'stretch',
+                }}
+              >
+                <div>
+                  <div style={{ fontWeight: 950, color: '#111827' }}>{isPublished ? 'Published — Locked' : 'Table Locked'}</div>
+                  <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
+                    {isPublished ? 'Marks are published. Use View to inspect or Request Edit to ask IQAC for access.' : 'Confirm the Mark Manager to unlock student entry.'}
+                  </div>
+                  {isPublished && editRequestMessage ? <div style={{ marginTop: 8, fontSize: 12, color: '#065f46' }}>{editRequestMessage}</div> : null}
+                </div>
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                  {!isPublished ? (
+                    <>
+                      <button className="obe-btn obe-btn-success" onClick={() => setMarkManagerModal({ mode: 'confirm' })} disabled={!subjectId || markManagerBusy}>
+                        Save Mark Manager
+                      </button>
+                      <button className="obe-btn" onClick={() => requestMarkManagerEdit()} disabled={markManagerBusy}>
+                        Request Access
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button className="obe-btn" onClick={() => setViewMarksModalOpen(true)}>
+                        View
+                      </button>
+                      <button
+                        className="obe-btn obe-btn-success"
+                        onClick={() => {
+                          setEditRequestMessage(null);
+                          setPublishedEditModalOpen(true);
+                        }}
+                        disabled={editRequestBusy}
+                      >
+                        Request Edit
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            </>
+          ) : null}
+        </div>
       )}
 
       {markManagerModal ? (

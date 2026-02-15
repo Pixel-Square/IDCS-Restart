@@ -22,6 +22,8 @@ export default function ReviewEntry({ subjectId, teachingAssignmentId, assessmen
       teachingAssignmentId={teachingAssignmentId}
       assessmentKey={assessmentKey}
       skipMarkManager={true}
+      // Render the published-lock panel above the table for review pages
+      floatPanelOnTable={true}
       label={config.label}
       coA={config.coA}
       coB={config.coB}
