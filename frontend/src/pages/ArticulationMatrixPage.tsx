@@ -2,7 +2,7 @@
 import ArticulationMatrix from '../components/ArticulationMatrix';
 import { fetchArticulationMatrix } from '../services/cdapDb';
 
-type Props = { courseId?: string };
+type Props = { courseId?: string; embedded?: boolean };
 
 const styles = {
   container: {
@@ -160,7 +160,7 @@ const styles = {
   },
 };
 
-export default function ArticulationMatrixPage({ courseId }: Props) {
+export default function ArticulationMatrixPage({ courseId, embedded = false }: Props) {
   const [subject, setSubject] = useState<string>(courseId || '');
   const [matrix, setMatrix] = useState<any>(null);
   const [status, setStatus] = useState<'idle' | 'loading' | 'error' | 'success'>('idle');
@@ -202,23 +202,32 @@ export default function ArticulationMatrixPage({ courseId }: Props) {
     }
   }
 
+  const containerStyle: React.CSSProperties = embedded
+    ? { padding: 0 }
+    : (styles.container as React.CSSProperties);
+  const cardStyle: React.CSSProperties = embedded
+    ? { ...styles.card, maxWidth: '100%', margin: 0, borderRadius: 12, boxShadow: 'none' }
+    : (styles.card as React.CSSProperties);
+
   return (
-    <div style={styles.container}>
+    <div style={containerStyle}>
       <style>{`
         @keyframes spin {
           to { transform: rotate(360deg); }
         }
       `}</style>
       
-      <div style={styles.card}>
-        <div style={styles.header}>
-          <h1 style={styles.title}>Articulation Matrix</h1>
-          <p style={styles.subtitle}>
-            {subject ? `Course: ${subject}` : 'Select a course to view the articulation matrix'}
-          </p>
-        </div>
+      <div style={cardStyle}>
+        {!embedded && (
+          <div style={styles.header}>
+            <h1 style={styles.title}>Articulation Matrix</h1>
+            <p style={styles.subtitle}>
+              {subject ? `Course: ${subject}` : 'Select a course to view the articulation matrix'}
+            </p>
+          </div>
+        )}
 
-        <div style={styles.content}>
+        <div style={embedded ? { padding: 0 } : styles.content}>
           {!courseId && (
             <div style={styles.inputSection}>
               <label style={styles.label}>Course ID</label>

@@ -130,6 +130,7 @@ export default function CDAPEditor({
   const [articulationExtras, setArticulationExtras] = useState<Record<string, any>>({});
   const [loadingCloud, setLoadingCloud] = useState(false);
   const [cloudError, setCloudError] = useState<string | null>(null);
+  const [isLockedAfterSave, setIsLockedAfterSave] = useState(false);
 
   useEffect(() => {
     if (!subjectId) return;
@@ -445,6 +446,7 @@ export default function CDAPEditor({
           articulation_extras: articulationExtras,
         },
       });
+      setIsLockedAfterSave(true);
       alert('Saved to cloud.');
     } catch (e: any) {
       alert(e?.message || 'Failed to save to cloud');
@@ -533,6 +535,41 @@ export default function CDAPEditor({
         <div style={{ marginBottom: 8, fontSize: 12, color: '#b91c1c' }}>{cloudError}</div>
       ) : null}
 
+      {isLockedAfterSave && (
+        <div style={{
+          marginBottom: 12,
+          padding: '12px 16px',
+          background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
+          border: '1px solid #fbbf24',
+          borderRadius: 10,
+          color: '#92400e',
+          fontSize: 14,
+          fontWeight: 600,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+        }}>
+          <span>🔒 Document is locked after save. Click "Unlock to Edit" to make changes.</span>
+          <button
+            onClick={() => setIsLockedAfterSave(false)}
+            style={{
+              padding: '6px 14px',
+              borderRadius: 8,
+              border: '1px solid #92400e',
+              background: '#fff',
+              color: '#92400e',
+              cursor: 'pointer',
+              fontWeight: 600,
+              fontSize: 13,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            🔓 Unlock to Edit
+          </button>
+        </div>
+      )}
+
       <div style={{
         display: 'flex',
         flexWrap: 'wrap',
@@ -582,30 +619,34 @@ export default function CDAPEditor({
           </button>
           <button
             onClick={addRow}
+            disabled={isLockedAfterSave}
             style={{
               padding: '8px 12px',
               borderRadius: 8,
               border: '1px solid #059669',
-              background: '#10b981',
+              background: isLockedAfterSave ? '#d1d5db' : '#10b981',
               color: '#fff',
-              cursor: 'pointer',
+              cursor: isLockedAfterSave ? 'not-allowed' : 'pointer',
               fontWeight: 600,
               fontSize: 12,
+              opacity: isLockedAfterSave ? 0.5 : 1,
             }}
           >
             Add Row
           </button>
           <button
             onClick={saveAll}
+            disabled={isLockedAfterSave}
             style={{
               padding: '8px 12px',
               borderRadius: 8,
               border: '1px solid #2563eb',
-              background: '#2563eb',
+              background: isLockedAfterSave ? '#d1d5db' : '#2563eb',
               color: '#fff',
-              cursor: 'pointer',
+              cursor: isLockedAfterSave ? 'not-allowed' : 'pointer',
               fontWeight: 600,
               fontSize: 12,
+              opacity: isLockedAfterSave ? 0.5 : 1,
             }}
           >
             Save All
@@ -632,7 +673,8 @@ export default function CDAPEditor({
                   <textarea
                     value={headerRow.unit ?? ''}
                     onChange={(e) => group.items.forEach((item) => updateCell(item.index, 'unit', e.target.value))}
-                    style={{ width: '100%', padding: 8, border: '1px solid #cbd5e1', borderRadius: 8, marginTop: 6, fontSize: 12 }}
+                    disabled={isLockedAfterSave}
+                    style={{ width: '100%', padding: 8, border: '1px solid #cbd5e1', borderRadius: 8, marginTop: 6, fontSize: 12, background: isLockedAfterSave ? '#f3f4f6' : '#fff', cursor: isLockedAfterSave ? 'not-allowed' : 'text' }}
                     rows={2}
                   />
                 </div>
@@ -641,7 +683,8 @@ export default function CDAPEditor({
                   <textarea
                     value={headerRow.unit_name ?? ''}
                     onChange={(e) => group.items.forEach((item) => updateCell(item.index, 'unit_name', e.target.value))}
-                    style={{ width: '100%', padding: 8, border: '1px solid #cbd5e1', borderRadius: 8, marginTop: 6, fontSize: 12 }}
+                    disabled={isLockedAfterSave}
+                    style={{ width: '100%', padding: 8, border: '1px solid #cbd5e1', borderRadius: 8, marginTop: 6, fontSize: 12, background: isLockedAfterSave ? '#f3f4f6' : '#fff', cursor: isLockedAfterSave ? 'not-allowed' : 'text' }}
                     rows={2}
                   />
                 </div>
@@ -650,7 +693,8 @@ export default function CDAPEditor({
                   <textarea
                     value={headerRow.co ?? ''}
                     onChange={(e) => group.items.forEach((item) => updateCell(item.index, 'co', e.target.value))}
-                    style={{ width: '100%', padding: 8, border: '1px solid #cbd5e1', borderRadius: 8, marginTop: 6, fontSize: 12 }}
+                    disabled={isLockedAfterSave}
+                    style={{ width: '100%', padding: 8, border: '1px solid #cbd5e1', borderRadius: 8, marginTop: 6, fontSize: 12, background: isLockedAfterSave ? '#f3f4f6' : '#fff', cursor: isLockedAfterSave ? 'not-allowed' : 'text' }}
                     rows={2}
                   />
                 </div>
@@ -696,7 +740,8 @@ export default function CDAPEditor({
                                 <textarea
                                   value={item.row[c.key] ?? ''}
                                   onChange={(e) => updateCell(item.index, c.key, e.target.value)}
-                                  style={{ width: '100%', border: '1px solid #cbd5e1', borderRadius: 4, padding: 4, fontSize: 11 }}
+                                  disabled={isLockedAfterSave}
+                                  style={{ width: '100%', border: '1px solid #cbd5e1', borderRadius: 4, padding: 4, fontSize: 11, background: isLockedAfterSave ? '#f3f4f6' : '#fff', cursor: isLockedAfterSave ? 'not-allowed' : 'text' }}
                                   rows={2}
                                 />
                               </td>
@@ -707,6 +752,8 @@ export default function CDAPEditor({
                                   type="checkbox"
                                   checked={Boolean(item.row[c.key])}
                                   onChange={(e) => updateCell(item.index, c.key, e.target.checked)}
+                                  disabled={isLockedAfterSave}
+                                  style={{ cursor: isLockedAfterSave ? 'not-allowed' : 'pointer' }}
                                 />
                               </td>
                             ))}
@@ -715,14 +762,16 @@ export default function CDAPEditor({
                                 type="text"
                                 value={item.row.total_hours_required ?? ''}
                                 onChange={(e) => updateCell(item.index, 'total_hours_required', e.target.value)}
-                                style={{ width: 70, border: '1px solid #cbd5e1', borderRadius: 4, padding: 4, fontSize: 11 }}
+                                disabled={isLockedAfterSave}
+                                style={{ width: 70, border: '1px solid #cbd5e1', borderRadius: 4, padding: 4, fontSize: 11, background: isLockedAfterSave ? '#f3f4f6' : '#fff', cursor: isLockedAfterSave ? 'not-allowed' : 'text' }}
                               />
                             </td>
                             <td style={{ border: '1px solid #e2e8f0', padding: 4, textAlign: 'center' }}>
                               <button
                                 type="button"
                                 onClick={() => removeRow(item.index)}
-                                style={{ padding: '4px 8px', background: '#ef4444', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 11 }}
+                                disabled={isLockedAfterSave}
+                                style={{ padding: '4px 8px', background: isLockedAfterSave ? '#d1d5db' : '#ef4444', color: '#fff', border: 'none', borderRadius: 6, cursor: isLockedAfterSave ? 'not-allowed' : 'pointer', fontSize: 11, opacity: isLockedAfterSave ? 0.5 : 1 }}
                               >
                                 Delete
                               </button>
@@ -739,7 +788,8 @@ export default function CDAPEditor({
                 <button
                   type="button"
                   onClick={() => addRowToGroup(group.key)}
-                  style={{ padding: '8px 12px', background: '#059669', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 600 }}
+                  disabled={isLockedAfterSave}
+                  style={{ padding: '8px 12px', background: isLockedAfterSave ? '#d1d5db' : '#059669', color: '#fff', border: 'none', borderRadius: 8, cursor: isLockedAfterSave ? 'not-allowed' : 'pointer', fontWeight: 600, opacity: isLockedAfterSave ? 0.5 : 1 }}
                 >
                   Add Row to Unit {group.key}
                 </button>
@@ -757,8 +807,9 @@ export default function CDAPEditor({
             <textarea
               value={textbookDetails}
               onChange={(e) => setTextbookDetails(e.target.value)}
+              disabled={isLockedAfterSave}
               rows={4}
-              style={{ width: '100%', padding: 8, border: '1px solid #cbd5e1', borderRadius: 8, marginTop: 6 }}
+              style={{ width: '100%', padding: 8, border: '1px solid #cbd5e1', borderRadius: 8, marginTop: 6, background: isLockedAfterSave ? '#f3f4f6' : '#fff', cursor: isLockedAfterSave ? 'not-allowed' : 'text' }}
               placeholder="Textbook details (Excel: Column B, Row 64)"
             />
           </div>
@@ -767,8 +818,9 @@ export default function CDAPEditor({
             <textarea
               value={referenceDetails}
               onChange={(e) => setReferenceDetails(e.target.value)}
+              disabled={isLockedAfterSave}
               rows={4}
-              style={{ width: '100%', padding: 8, border: '1px solid #cbd5e1', borderRadius: 8, marginTop: 6 }}
+              style={{ width: '100%', padding: 8, border: '1px solid #cbd5e1', borderRadius: 8, marginTop: 6, background: isLockedAfterSave ? '#f3f4f6' : '#fff', cursor: isLockedAfterSave ? 'not-allowed' : 'text' }}
               placeholder="Reference book details (Excel: Column B, Row 68)"
             />
           </div>
@@ -787,7 +839,8 @@ export default function CDAPEditor({
               setActiveLearningGrid(activeLearningRowLabels.map(() => activeLearningPoLabels.map(() => false)));
               setActiveLearningDropdowns(activeLearningRowLabels.map(() => ''));
             }}
-            style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', background: '#f8fafc', cursor: 'pointer' }}
+            disabled={isLockedAfterSave}
+            style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', background: isLockedAfterSave ? '#e5e7eb' : '#f8fafc', cursor: isLockedAfterSave ? 'not-allowed' : 'pointer', opacity: isLockedAfterSave ? 0.5 : 1 }}
           >
             Clear All
           </button>
@@ -829,7 +882,8 @@ export default function CDAPEditor({
                           return next;
                         });
                       }}
-                      style={{ width: '100%', padding: 6, border: '1px solid #cbd5e1', borderRadius: 6 }}
+                      disabled={isLockedAfterSave}
+                      style={{ width: '100%', padding: 6, border: '1px solid #cbd5e1', borderRadius: 6, background: isLockedAfterSave ? '#f3f4f6' : '#fff', cursor: isLockedAfterSave ? 'not-allowed' : 'pointer' }}
                     >
                       <option value="">-- Select Activity --</option>
                       {(() => {
@@ -853,7 +907,7 @@ export default function CDAPEditor({
                       <input
                         type="checkbox"
                         checked={!!activeLearningGrid[r][c]}
-                        disabled={(() => {
+                        disabled={isLockedAfterSave || (() => {
                           const sel = activeLearningDropdowns?.[r] ?? '';
                           if (!sel) return false;
                           const mapped = findAnalysisPoMapping(sel);
@@ -867,6 +921,7 @@ export default function CDAPEditor({
                             return next;
                           });
                         }}
+                        style={{ cursor: isLockedAfterSave ? 'not-allowed' : 'pointer' }}
                       />
                     </td>
                   ))}

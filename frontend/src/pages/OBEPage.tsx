@@ -392,45 +392,55 @@ export default function OBEPage(): JSX.Element {
     : 'N/A';
 
       return (
-        <main className="obe-page" style={{ padding: 0, fontFamily: 'Arial, sans-serif', minHeight: '100vh', background: '#fff' }}>
-          <header style={{ marginBottom: 8, marginTop: 0, paddingTop: 0 }}>
+        <main className="obe-page" style={{ padding: '32px 48px', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif', minHeight: '100vh', background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)' }}>
+          <header style={{ marginBottom: 32, background: '#fff', padding: '28px 32px', borderRadius: 16, boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)' }}>
             <div style={{ display: 'flex', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', width: '100%' }}>
               <div style={{ textAlign: 'left' }}>
-                <h1 style={{ margin: 0 }}>
+                <h1 style={{ margin: 0, fontSize: 32, fontWeight: 700, color: '#0f172a', letterSpacing: '-0.02em' }}>
                   Outcome Based Education (OBE)
                 </h1>
                 {/* OBE/marks/COAttainment course header removed */}
-                <div style={{ marginTop: 4, color: '#444', fontSize: 15 }}>
+                <div style={{ marginTop: 8, color: '#64748b', fontSize: 16, fontWeight: 400 }}>
                   Select a course, then work through CDAP, Articulation Matrix and Mark Entry.
                 </div>
               </div>
             </div>
           </header>
               {/* Tabs header */}
-              <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+              <div style={{ display: 'flex', gap: 6, marginBottom: 24, background: '#fff', padding: '8px', borderRadius: 12, boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
                 <button
                   onClick={() => setActiveTab('courses')}
                   style={{
-                    padding: '8px 12px',
-                    borderRadius: 6,
-                    border: activeTab === 'courses' ? '2px solid #2563eb' : '1px solid #e5e7eb',
-                    background: activeTab === 'courses' ? '#f0f6ff' : '#fff',
-                    cursor: 'pointer'
+                    padding: '10px 24px',
+                    borderRadius: 8,
+                    border: 'none',
+                    background: activeTab === 'courses' ? 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)' : 'transparent',
+                    color: activeTab === 'courses' ? '#fff' : '#64748b',
+                    cursor: 'pointer',
+                    fontWeight: activeTab === 'courses' ? 600 : 500,
+                    fontSize: 15,
+                    transition: 'all 0.2s ease',
+                    boxShadow: activeTab === 'courses' ? '0 2px 8px rgba(37,99,235,0.2)' : 'none'
                   }}
                 >
-                  Courses
+                  📚 Courses
                 </button>
                 <button
                   onClick={() => setActiveTab('exam')}
                   style={{
-                    padding: '8px 12px',
-                    borderRadius: 6,
-                    border: activeTab === 'exam' ? '2px solid #2563eb' : '1px solid #e5e7eb',
-                    background: activeTab === 'exam' ? '#f0f6ff' : '#fff',
-                    cursor: 'pointer'
+                    padding: '10px 24px',
+                    borderRadius: 8,
+                    border: 'none',
+                    background: activeTab === 'exam' ? 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)' : 'transparent',
+                    color: activeTab === 'exam' ? '#fff' : '#64748b',
+                    cursor: 'pointer',
+                    fontWeight: activeTab === 'exam' ? 600 : 500,
+                    fontSize: 15,
+                    transition: 'all 0.2s ease',
+                    boxShadow: activeTab === 'exam' ? '0 2px 8px rgba(37,99,235,0.2)' : 'none'
                   }}
                 >
-                  Exam Management
+                  📝 Exam Management
                 </button>
               </div>
 
@@ -438,24 +448,24 @@ export default function OBEPage(): JSX.Element {
               {activeTab === 'courses' && (
                 <section
                   aria-label="Course selector"
-                  style={{ marginBottom: 24 }}
+                  style={{ marginBottom: 32 }}
                 >
-                  <div style={{ fontSize: 12, color: '#666', marginBottom: 10 }}>Select a course to work on:</div>
+                  <div style={{ fontSize: 14, color: '#475569', marginBottom: 20, fontWeight: 500 }}>Select a course to work on:</div>
                   <div
                     style={{
                       display: 'grid',
-                      gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-                      gap: 16,
-                      marginBottom: 24,
+                      gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+                      gap: 24,
+                      marginBottom: 32,
                     }}
                   >
                     {/* Course list: show assignments when available (safe fetch) */}
                     {loadingAssignments ? (
-                      <div style={{ gridColumn: '1/-1', color: '#666', fontSize: 16, textAlign: 'center', padding: 40 }}>Loading courses…</div>
+                      <div style={{ gridColumn: '1/-1', color: '#64748b', fontSize: 16, textAlign: 'center', padding: 60, background: '#fff', borderRadius: 12 }}>⏳ Loading courses…</div>
                     ) : assignments.length === 0 ? (
-                      <div style={{ gridColumn: '1/-1', color: '#888', fontSize: 20, textAlign: 'center', padding: 40 }}>
-                        No courses found. You have no teaching assignments.<br />
-                        (If you expect to see courses here, please check with your backend/API or contact admin.)
+                      <div style={{ gridColumn: '1/-1', color: '#94a3b8', fontSize: 18, textAlign: 'center', padding: 60, background: '#fff', borderRadius: 12, border: '2px dashed #e2e8f0' }}>
+                        📭 No courses found. You have no teaching assignments.<br />
+                        <span style={{ fontSize: 14, marginTop: 12, display: 'block' }}>(If you expect to see courses here, please check with your backend/API or contact admin.)</span>
                       </div>
                     ) : (
                       assignments
@@ -470,52 +480,60 @@ export default function OBEPage(): JSX.Element {
                             role="button"
                             tabIndex={0}
                             onKeyDown={(e) => { if (e.key === 'Enter') navigateToCourse(it.subject_code); }}
+                            onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-4px)'; e.currentTarget.style.boxShadow = '0 12px 24px rgba(0,0,0,0.1), 0 4px 8px rgba(0,0,0,0.06)'; e.currentTarget.style.borderColor = '#3b82f6'; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 4px 6px rgba(0,0,0,0.07), 0 2px 4px rgba(0,0,0,0.05)'; e.currentTarget.style.borderColor = '#e2e8f0'; }}
                             style={{
-                              border: '1px solid #e5e7eb',
-                              borderRadius: 10,
-                              padding: 18,
+                              border: '1px solid #e2e8f0',
+                              borderRadius: 12,
+                              padding: 24,
                               background: '#fff',
-                              boxShadow: '0 1px 4px #0001',
+                              boxShadow: '0 4px 6px rgba(0,0,0,0.07), 0 2px 4px rgba(0,0,0,0.05)',
                               display: 'flex',
                               flexDirection: 'column',
                               alignItems: 'flex-start',
-                              minHeight: 100,
+                              minHeight: 140,
                               position: 'relative',
-                              transition: 'border 0.2s, box-shadow 0.2s',
+                              transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
                               cursor: 'pointer',
                             }}
                           >
-                            <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 4 }}>{it.subject_name}</div>
-                            <div style={{ fontSize: 15, color: '#444', marginBottom: 12 }}>{it.subject_code}</div>
-                            <div style={{ marginTop: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <div style={{ fontWeight: 700, fontSize: 19, marginBottom: 6, color: '#0f172a', lineHeight: 1.3 }}>{it.subject_name}</div>
+                            <div style={{ fontSize: 14, color: '#3b82f6', marginBottom: 16, fontWeight: 600, background: '#eff6ff', padding: '4px 10px', borderRadius: 6 }}>{it.subject_code}</div>
+                            <div style={{ marginTop: 'auto', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                               <button
                                 onClick={(e) => { e.stopPropagation(); navigateToCourse(it.subject_code); }}
+                                onMouseEnter={(e) => { e.currentTarget.style.background = 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)'; e.currentTarget.style.transform = 'scale(1.05)'; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.background = 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)'; e.currentTarget.style.transform = 'scale(1)'; }}
                                 style={{
-                                  padding: '6px 14px',
-                                  borderRadius: 6,
+                                  padding: '8px 18px',
+                                  borderRadius: 8,
                                   border: 'none',
-                                  background: '#2563eb',
+                                  background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
                                   color: '#fff',
                                   fontWeight: 600,
-                                  fontSize: 15,
+                                  fontSize: 14,
                                   cursor: 'pointer',
-                                  boxShadow: '0 1px 2px #0001',
+                                  boxShadow: '0 2px 4px rgba(37,99,235,0.2)',
+                                  transition: 'all 0.2s ease',
                                 }}
                               >
-                                Open
+                                Open Course
                               </button>
 
                               <button
                                 onClick={(e) => { e.stopPropagation(); window.location.href = `/obe/course/${encodeURIComponent(it.subject_code)}/lca`; }}
+                                onMouseEnter={(e) => { e.currentTarget.style.background = '#f8fafc'; e.currentTarget.style.borderColor = '#3b82f6'; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.background = '#fff'; e.currentTarget.style.borderColor = '#e2e8f0'; }}
                                 style={{
-                                  padding: '6px 12px',
-                                  borderRadius: 6,
-                                  border: '1px solid #e5e7eb',
+                                  padding: '8px 14px',
+                                  borderRadius: 8,
+                                  border: '1px solid #e2e8f0',
                                   background: '#fff',
-                                  color: '#111827',
+                                  color: '#475569',
                                   fontWeight: 600,
                                   fontSize: 13,
                                   cursor: 'pointer',
+                                  transition: 'all 0.2s ease',
                                 }}
                               >
                                 LCA
@@ -523,15 +541,18 @@ export default function OBEPage(): JSX.Element {
 
                               <button
                                 onClick={(e) => { e.stopPropagation(); window.location.href = `/obe/course/${encodeURIComponent(it.subject_code)}/co_attainment`; }}
+                                onMouseEnter={(e) => { e.currentTarget.style.background = '#f8fafc'; e.currentTarget.style.borderColor = '#3b82f6'; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.background = '#fff'; e.currentTarget.style.borderColor = '#e2e8f0'; }}
                                 style={{
-                                  padding: '6px 12px',
-                                  borderRadius: 6,
-                                  border: '1px solid #e5e7eb',
+                                  padding: '8px 14px',
+                                  borderRadius: 8,
+                                  border: '1px solid #e2e8f0',
                                   background: '#fff',
-                                  color: '#111827',
+                                  color: '#475569',
                                   fontWeight: 600,
                                   fontSize: 13,
                                   cursor: 'pointer',
+                                  transition: 'all 0.2s ease',
                                 }}
                               >
                                 CO
@@ -548,47 +569,49 @@ export default function OBEPage(): JSX.Element {
 
               {/* Exam Management tab (placeholder) */}
               {activeTab === 'exam' && (
-                <section aria-label="Exam management" style={{ padding: 0 }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <section aria-label="Exam management" style={{ background: '#fff', padding: 28, borderRadius: 16, boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
                     {/* Upload area */}
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                      <input
-                        id="exam-upload-input"
-                        type="file"
-                        accept=".docx"
-                        style={{ display: 'none' }}
-                        onChange={(e) => {
-                          const f = e.target.files && e.target.files[0];
-                          if (f) {
-                            handleExamUploadFile(f);
-                          }
-                          // allow re-uploading the same file
-                          e.currentTarget.value = '';
-                        }}
-                      />
-                      <label htmlFor="exam-upload-input" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: '#2563eb', color: '#fff', borderRadius: 6, cursor: 'pointer' }}>
-                        {examUploadStatus === 'uploading' ? 'Uploading...' : 'Upload .docx'}
-                      </label>
+                    <div style={{ background: '#f8fafc', padding: 20, borderRadius: 12, border: '2px dashed #cbd5e1' }}>
+                      <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+                        <input
+                          id="exam-upload-input"
+                          type="file"
+                          accept=".docx"
+                          style={{ display: 'none' }}
+                          onChange={(e) => {
+                            const f = e.target.files && e.target.files[0];
+                            if (f) {
+                              handleExamUploadFile(f);
+                            }
+                            // allow re-uploading the same file
+                            e.currentTarget.value = '';
+                          }}
+                        />
+                        <label htmlFor="exam-upload-input" style={{ display: 'inline-flex', alignItems: 'center', gap: 10, padding: '12px 20px', background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)', color: '#fff', borderRadius: 10, cursor: 'pointer', fontWeight: 600, fontSize: 15, boxShadow: '0 2px 8px rgba(37,99,235,0.25)', transition: 'all 0.2s ease' }}>
+                          {examUploadStatus === 'uploading' ? '⏳ Uploading...' : '📤 Upload .docx'}
+                        </label>
 
-                      <div style={{ color: '#666', fontSize: 13 }}>
-                        Upload exam spreadsheets or related files here.
+                        <div style={{ color: '#64748b', fontSize: 14 }}>
+                          Upload exam spreadsheets or related files here.
+                        </div>
                       </div>
                     </div>
 
                     {/* Search bar */}
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
                       <input
                         type="search"
-                        placeholder="Search exams, courses, entries..."
-                        style={{ flex: 1, padding: '8px 10px', borderRadius: 6, border: '1px solid #e5e7eb' }}
+                        placeholder="🔍 Search exams, courses, entries..."
+                        style={{ flex: 1, padding: '12px 16px', borderRadius: 10, border: '1px solid #e2e8f0', fontSize: 15, background: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}
                         onChange={() => { /* TODO: wire search */ }}
                       />
-                      <button style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #e5e7eb', background: '#fff', cursor: 'pointer' }}>Search</button>
+                      <button style={{ padding: '12px 20px', borderRadius: 10, border: '1px solid #e2e8f0', background: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: 14, color: '#475569', transition: 'all 0.2s ease', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>Search</button>
                     </div>
 
                     {/* Recent uploads */}
-                    <div style={{ marginTop: 4 }}>
-                      <h3 style={{ margin: '6px 0' }}>Recent</h3>
+                    <div style={{ marginTop: 8 }}>
+                      <h3 style={{ margin: '12px 0 16px 0', fontSize: 18, fontWeight: 700, color: '#0f172a' }}>📋 Recent</h3>
                       {recentImports.length === 0 ? (
                         <div style={{ color: '#666' }}>
                           {/* No recents: show all uploaded DOCX files for this faculty */}
@@ -747,7 +770,7 @@ export default function OBEPage(): JSX.Element {
                       )}
                     </div>
                     {examUploadMessage && (
-                      <div style={{ marginTop: 8, fontSize: 13, color: examUploadStatus === 'error' ? '#b91c1c' : '#166534' }}>{examUploadMessage}</div>
+                      <div style={{ marginTop: 12, fontSize: 14, color: examUploadStatus === 'error' ? '#dc2626' : '#16a34a', background: examUploadStatus === 'error' ? '#fef2f2' : '#f0fdf4', padding: '12px 16px', borderRadius: 10, border: `1px solid ${examUploadStatus === 'error' ? '#fecaca' : '#bbf7d0'}` }}>{examUploadMessage}</div>
                     )}
                   </div>
                 </section>
@@ -762,94 +785,97 @@ export default function OBEPage(): JSX.Element {
                   style={{
                     position: 'fixed',
                     inset: 0,
-                    background: 'rgba(0,0,0,0.45)',
+                    background: 'rgba(0,0,0,0.5)',
+                    backdropFilter: 'blur(4px)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     zIndex: 50,
-                    padding: 16,
+                    padding: 20,
                   }}
                 >
                   <div
                     onClick={(e) => e.stopPropagation()}
                     style={{
-                      width: 'min(980px, 100%)',
+                      width: 'min(1000px, 100%)',
                       background: '#fff',
-                      borderRadius: 12,
-                      boxShadow: '0 12px 40px rgba(0,0,0,0.25)',
+                      borderRadius: 16,
+                      boxShadow: '0 20px 50px rgba(0,0,0,0.3)',
                       overflow: 'hidden',
-                      border: '1px solid #e5e7eb',
+                      border: '1px solid #e2e8f0',
                     }}
                   >
-                    <div style={{ padding: '14px 16px', borderBottom: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)' }}>
                       <div>
-                        <div style={{ fontWeight: 800, fontSize: 16 }}>Question Import</div>
-                        <div style={{ color: '#6b7280', fontSize: 12 }}>
+                        <div style={{ fontWeight: 700, fontSize: 20, color: '#0f172a' }}>📥 Question Import</div>
+                        <div style={{ color: '#64748b', fontSize: 14, marginTop: 4 }}>
                           Step {wizardStep} of 3 • {scanStatus === 'scanning' ? 'Scanning…' : scanStatus === 'error' ? 'Scan failed' : 'Ready'}
                         </div>
                       </div>
                       <button
                         onClick={closeWizard}
-                        style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff', cursor: 'pointer' }}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = '#fee2e2'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = '#fff'; }}
+                        style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid #e2e8f0', background: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: 14, color: '#64748b', transition: 'all 0.2s ease' }}
                       >
-                        Close
+                        ✕ Close
                       </button>
                     </div>
 
                     {/* sliding pages */}
-                    <div style={{ overflow: 'hidden' }}>
+                    <div style={{ overflow: 'hidden', background: '#fafbfc' }}>
                       <div
                         style={{
                           display: 'flex',
                           width: '300%',
                           transform: `translateX(-${(wizardStep - 1) * 33.3333333}%)`,
-                          transition: 'transform 240ms ease',
+                          transition: 'transform 360ms cubic-bezier(0.4, 0, 0.2, 1)',
                         }}
                       >
                         {/* Step 1: Preview */}
-                        <div style={{ width: '33.3333333%', padding: 16 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+                        <div style={{ width: '33.3333333%', padding: 24 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 16 }}>
                             <div>
-                              <div style={{ fontWeight: 700 }}>Preview</div>
-                              <div style={{ fontSize: 13, color: '#6b7280' }}>
+                              <div style={{ fontWeight: 700, fontSize: 18, color: '#0f172a' }}>🔍 Preview</div>
+                              <div style={{ fontSize: 13, color: '#64748b', marginTop: 2 }}>
                                 {uploadedDocxPath ? `Source: ${uploadedDocxPath}` : 'Source: (not available)'}
                               </div>
                             </div>
-                            <div style={{ fontSize: 13, color: '#374151' }}>
-                              Questions: <b>{visibleQuestions.length}</b>
+                            <div style={{ fontSize: 14, color: '#0f172a', background: '#eff6ff', padding: '6px 12px', borderRadius: 8, fontWeight: 600 }}>
+                              Questions: <b style={{ color: '#3b82f6' }}>{visibleQuestions.length}</b>
                             </div>
                           </div>
 
                           {scanMessage && (
-                            <div style={{ marginBottom: 10, fontSize: 13, color: scanStatus === 'error' ? '#b91c1c' : '#166534' }}>
+                            <div style={{ marginBottom: 12, fontSize: 14, color: scanStatus === 'error' ? '#dc2626' : '#16a34a', background: scanStatus === 'error' ? '#fef2f2' : '#f0fdf4', padding: '12px 16px', borderRadius: 10, border: `1px solid ${scanStatus === 'error' ? '#fecaca' : '#bbf7d0'}` }}>
                               {scanMessage}
                             </div>
                           )}
 
-                          <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, maxHeight: 360, overflow: 'auto' }}>
+                          <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, padding: 16, maxHeight: 420, overflow: 'auto', background: '#fff', boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
                             {scanStatus === 'scanning' && (
-                              <div style={{ color: '#6b7280' }}>Scanning your DOCX…</div>
+                              <div style={{ color: '#64748b', textAlign: 'center', padding: 40 }}>⏳ Scanning your DOCX…</div>
                             )}
                             {scanStatus !== 'scanning' && visibleQuestions.length === 0 && (
-                              <div style={{ color: '#6b7280' }}>No questions to preview yet.</div>
+                              <div style={{ color: '#94a3b8', textAlign: 'center', padding: 40 }}>📄 No questions to preview yet.</div>
                             )}
                             {visibleQuestions.map((q, idx) => (
-                              <div key={idx} style={{ padding: '10px 8px', borderBottom: '1px solid #f3f4f6' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
-                                  <div style={{ fontWeight: 700, color: '#111827' }}>Q{idx + 1}</div>
-                                  <div style={{ fontSize: 12, color: '#6b7280' }}>
+                              <div key={idx} style={{ padding: '14px 12px', borderBottom: idx < visibleQuestions.length - 1 ? '1px solid #f1f5f9' : 'none' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
+                                  <div style={{ fontWeight: 700, color: '#3b82f6', fontSize: 15, background: '#eff6ff', padding: '4px 10px', borderRadius: 6 }}>Q{idx + 1}</div>
+                                  <div style={{ fontSize: 12, color: '#64748b', background: '#f8fafc', padding: '4px 10px', borderRadius: 6 }}>
                                     Marks: {String((q as any)?.marks ?? '-')}{' '}
                                     • BTL: {String((q as any)?.btl ?? '-')}{' '}
                                     • CO: {String((q as any)?.course_outcomes ?? '-')}
                                   </div>
                                 </div>
-                                <div style={{ marginTop: 6, color: '#111827', whiteSpace: 'pre-wrap' }}>
+                                <div style={{ marginTop: 8, color: '#1e293b', whiteSpace: 'pre-wrap', fontSize: 14, lineHeight: 1.6 }}>
                                   {String((q as any)?.question_text ?? '').slice(0, 500)}
                                   {String((q as any)?.question_text ?? '').length > 500 ? '…' : ''}
                                 </div>
 
                                 {Array.isArray((q as any)?.images) && (q as any).images.length ? (
-                                  <div style={{ marginTop: 10, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                                  <div style={{ marginTop: 12, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
                                     {(q as any).images.slice(0, 4).map((img: any, i: number) => {
                                       const src = normalizeImageSrc(img);
                                       if (!src) return null;
@@ -859,7 +885,7 @@ export default function OBEPage(): JSX.Element {
                                           src={src}
                                           alt={`q${idx + 1}-img${i + 1}`}
                                           onClick={() => setLightboxSrc(src)}
-                                          style={{ maxHeight: 120, borderRadius: 8, border: '1px solid #eee', cursor: 'pointer', objectFit: 'contain', background: '#fff' }}
+                                          style={{ maxHeight: 140, borderRadius: 10, border: '2px solid #e2e8f0', cursor: 'pointer', objectFit: 'contain', background: '#fff', transition: 'all 0.2s ease', boxShadow: '0 2px 6px rgba(0,0,0,0.08)' }}
                                         />
                                       );
                                     })}
@@ -871,12 +897,12 @@ export default function OBEPage(): JSX.Element {
                         </div>
 
                         {/* Step 2: Exam details */}
-                        <div style={{ width: '33.3333333%', padding: 16 }}>
-                          <div style={{ fontWeight: 700, marginBottom: 10 }}>Save details</div>
+                        <div style={{ width: '33.3333333%', padding: 24 }}>
+                          <div style={{ fontWeight: 700, marginBottom: 16, fontSize: 18, color: '#0f172a' }}>📋 Save details</div>
                           {importError && (
-                            <div style={{ marginBottom: 10, fontSize: 13, color: '#b91c1c' }}>{importError}</div>
+                            <div style={{ marginBottom: 12, fontSize: 14, color: '#dc2626', background: '#fef2f2', padding: '12px 16px', borderRadius: 10, border: '1px solid #fecaca' }}>{importError}</div>
                           )}
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
                             <div>
                               <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Exam name</label>
                               <input
@@ -938,71 +964,70 @@ export default function OBEPage(): JSX.Element {
                         </div>
 
                         {/* Step 3: Confirmation */}
-                        <div style={{ width: '33.3333333%', padding: 16 }}>
-                          <div style={{ fontWeight: 700, marginBottom: 10 }}>Confirmation</div>
+                        <div style={{ width: '33.3333333%', padding: 24 }}>
+                          <div style={{ fontWeight: 700, marginBottom: 16, fontSize: 18, color: '#0f172a' }}>✔️ Confirmation</div>
 
-                          <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 12 }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 16 }}>
                             {/* Left column: Profile card and Course details */}
                             <div>
-                              <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, marginBottom: 12, background: '#fff' }}>
+                              <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, padding: 16, marginBottom: 16, background: '#fff', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
                                 <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                                  <div style={{ width: 64, height: 64, borderRadius: 8, background: '#f3f4f6', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, color: '#6b7280' }}>
-                                    {me?.username ? String(me.username).slice(0,1).toUpperCase() : 'U'}
+                                  <div style={{ width: 64, height: 64, borderRadius: 10, background: 'linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, color: '#3b82f6', fontSize: 24 }}>
+                                    {me?.username ? String(me.username).slice(0,1).toUpperCase() : '👤'}
                                   </div>
                                   <div>
-                                    <div style={{ fontSize: 16, fontWeight: 800, color: '#111827' }}>{me?.username || '—'}</div>
-                                    <div style={{ fontSize: 13, color: '#6b7280' }}>Faculty</div>
-                                    <div style={{ fontSize: 13, color: '#6b7280' }}>—</div>
+                                    <div style={{ fontSize: 16, fontWeight: 700, color: '#0f172a' }}>{me?.username || '—'}</div>
+                                    <div style={{ fontSize: 13, color: '#64748b' }}>Faculty</div>
                                   </div>
                                 </div>
-                                <div style={{ marginTop: 10, fontSize: 12, color: '#6b7280' }}>Faculty ID: <strong style={{ color: '#111827' }}>{facultyId ?? '—'}</strong></div>
+                                <div style={{ marginTop: 12, fontSize: 13, color: '#475569', background: '#f8fafc', padding: '8px 12px', borderRadius: 8 }}>Faculty ID: <strong style={{ color: '#0f172a' }}>{facultyId ?? '—'}</strong></div>
                               </div>
 
-                              <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, background: '#fff' }}>
-                                <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 8 }}>Course details</div>
-                                <div style={{ fontWeight: 700 }}>—</div>
-                                <div style={{ fontSize: 13, color: '#6b7280' }}>—</div>
-                                <div style={{ marginTop: 8, fontSize: 12, color: '#6b7280' }}>Assignments: <strong style={{ color: '#111827' }}>—</strong></div>
+                              <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, padding: 16, background: '#fff', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
+                                <div style={{ fontSize: 13, color: '#64748b', marginBottom: 10, fontWeight: 600 }}>📚 Course details</div>
+                                <div style={{ fontWeight: 700, color: '#0f172a' }}>—</div>
+                                <div style={{ fontSize: 13, color: '#64748b', marginTop: 2 }}>—</div>
+                                <div style={{ marginTop: 12, fontSize: 13, color: '#475569' }}>Assignments: <strong style={{ color: '#0f172a' }}>—</strong></div>
                               </div>
                             </div>
 
                             {/* Right column: Exam info + Questions preview */}
                             <div>
-                              <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, marginBottom: 12, background: '#fff' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                              <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, padding: 16, marginBottom: 16, background: '#fff', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
                                   <div>
-                                    <div style={{ fontSize: 12, color: '#6b7280' }}>Questions to import</div>
-                                    <div style={{ fontSize: 20, fontWeight: 900, color: '#111827' }}>{visibleQuestions.length}</div>
+                                    <div style={{ fontSize: 13, color: '#64748b', fontWeight: 600 }}>Questions to import</div>
+                                    <div style={{ fontSize: 28, fontWeight: 900, color: '#3b82f6', marginTop: 4 }}>{visibleQuestions.length}</div>
                                   </div>
                                   <div style={{ textAlign: 'right' }}>
-                                    <div style={{ fontSize: 12, color: '#6b7280' }}>Exam name</div>
-                                    <div style={{ fontWeight: 700 }}>{examName || '—'}</div>
-                                    <div style={{ marginTop: 6, fontSize: 12, color: '#6b7280' }}>Assessment</div>
-                                    <div style={{ fontWeight: 700 }}>{examAssessment || '—'}</div>
+                                    <div style={{ fontSize: 13, color: '#64748b', fontWeight: 600 }}>Exam name</div>
+                                    <div style={{ fontWeight: 700, color: '#0f172a', fontSize: 16, marginTop: 2 }}>{examName || '—'}</div>
+                                    <div style={{ marginTop: 8, fontSize: 13, color: '#64748b', fontWeight: 600 }}>Assessment</div>
+                                    <div style={{ fontWeight: 700, color: '#0f172a', marginTop: 2 }}>{examAssessment || '—'}</div>
                                   </div>
                                 </div>
 
-                                <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                                  <div><span style={{ color: '#6b7280', fontSize: 12 }}>Exam Type</span><div style={{ fontWeight: 700 }}>{examType || '—'}</div></div>
-                                  <div><span style={{ color: '#6b7280', fontSize: 12 }}>Exam date</span><div style={{ fontWeight: 700 }}>{examDate || '—'}</div></div>
-                                  <div style={{ gridColumn: '1 / -1' }}><span style={{ color: '#6b7280', fontSize: 12 }}>Sections</span><div style={{ fontWeight: 700, whiteSpace: 'pre-wrap' }}>{examSections || '—'}</div></div>
+                                <div style={{ marginTop: 16, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, background: '#f8fafc', padding: 12, borderRadius: 8 }}>
+                                  <div><span style={{ color: '#64748b', fontSize: 13, fontWeight: 600 }}>Exam Type</span><div style={{ fontWeight: 700, color: '#0f172a', marginTop: 4 }}>{examType || '—'}</div></div>
+                                  <div><span style={{ color: '#64748b', fontSize: 13, fontWeight: 600 }}>Exam date</span><div style={{ fontWeight: 700, color: '#0f172a', marginTop: 4 }}>{examDate || '—'}</div></div>
+                                  <div style={{ gridColumn: '1 / -1' }}><span style={{ color: '#64748b', fontSize: 13, fontWeight: 600 }}>Sections</span><div style={{ fontWeight: 700, color: '#0f172a', whiteSpace: 'pre-wrap', marginTop: 4 }}>{examSections || '—'}</div></div>
                                 </div>
                               </div>
 
-                              <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, background: '#fff' }}>
-                                <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 8 }}>Questions preview</div>
-                                <div style={{ maxHeight: 220, overflow: 'auto' }}>
+                              <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, padding: 16, background: '#fff', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
+                                <div style={{ fontSize: 14, color: '#64748b', marginBottom: 10, fontWeight: 600 }}>📝 Questions preview</div>
+                                <div style={{ maxHeight: 240, overflow: 'auto' }}>
                                   {visibleQuestions.slice(0, 10).map((q, i) => (
-                                    <div key={i} style={{ padding: '8px 6px', borderBottom: '1px solid #f3f4f6', display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-                                      <div style={{ fontWeight: 700, color: '#111827', width: 36 }}>{i+1}.</div>
+                                    <div key={i} style={{ padding: '10px 8px', borderBottom: i < Math.min(visibleQuestions.length, 10) - 1 ? '1px solid #f1f5f9' : 'none', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                                      <div style={{ fontWeight: 700, color: '#3b82f6', minWidth: 40, background: '#eff6ff', padding: '4px 8px', borderRadius: 6, textAlign: 'center' }}>{i+1}</div>
                                       <div style={{ flex: 1 }}>
-                                        <div style={{ color: '#111827' }}>{String(q.question_text).slice(0, 260)}</div>
+                                        <div style={{ color: '#1e293b', fontSize: 14, lineHeight: 1.5 }}>{String(q.question_text).slice(0, 260)}</div>
                                         {Array.isArray(q.images) && q.images.length ? (
-                                          <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                                          <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
                                             {q.images.slice(0,2).map((im: any, j: number) => {
                                               const src = normalizeImageSrc(im);
                                               if (!src) return null;
-                                              return <img key={j} src={src} style={{ width: 80, height: 60, objectFit: 'cover', borderRadius: 6, border: '1px solid #eee', cursor: 'pointer' }} onClick={() => setLightboxSrc(src)} />
+                                              return <img key={j} src={src} style={{ width: 90, height: 70, objectFit: 'cover', borderRadius: 8, border: '2px solid #e2e8f0', cursor: 'pointer', transition: 'all 0.2s ease' }} onClick={() => setLightboxSrc(src)} />
                                             })}
                                           </div>
                                         ) : null}
@@ -1015,11 +1040,11 @@ export default function OBEPage(): JSX.Element {
                           </div>
 
                           {importError && (
-                            <div style={{ marginTop: 10, fontSize: 13, color: '#b91c1c' }}>{importError}</div>
+                            <div style={{ marginTop: 16, fontSize: 14, color: '#dc2626', background: '#fef2f2', padding: '12px 16px', borderRadius: 10, border: '1px solid #fecaca' }}>❌ {importError}</div>
                           )}
                           {importResult && (
-                            <div style={{ marginTop: 10, fontSize: 13, color: '#166534' }}>
-                              Imported {importResult.inserted} question(s)
+                            <div style={{ marginTop: 16, fontSize: 14, color: '#16a34a', background: '#f0fdf4', padding: '12px 16px', borderRadius: 10, border: '1px solid #bbf7d0' }}>
+                              ✅ Imported {importResult.inserted} question(s)
                               {importResult.failed?.length ? `, failed ${importResult.failed.length}.` : '.'}
                             </div>
                           )}
@@ -1028,22 +1053,28 @@ export default function OBEPage(): JSX.Element {
                     </div>
 
                     {/* footer */}
-                    <div style={{ padding: '12px 16px', borderTop: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                    <div style={{ padding: '16px 24px', borderTop: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, background: '#fafbfc' }}>
                       <button
                         onClick={() => setWizardStep((s) => (s === 1 ? 1 : ((s - 1) as 1 | 2 | 3)))}
                         disabled={wizardStep === 1}
+                        onMouseEnter={(e) => { if (wizardStep !== 1) e.currentTarget.style.background = '#f8fafc'; }}
+                        onMouseLeave={(e) => { if (wizardStep !== 1) e.currentTarget.style.background = '#fff'; }}
                         style={{
-                          padding: '8px 12px',
-                          borderRadius: 8,
-                          border: '1px solid #e5e7eb',
-                          background: wizardStep === 1 ? '#f9fafb' : '#fff',
+                          padding: '10px 18px',
+                          borderRadius: 10,
+                          border: '1px solid #e2e8f0',
+                          background: wizardStep === 1 ? '#f1f5f9' : '#fff',
                           cursor: wizardStep === 1 ? 'not-allowed' : 'pointer',
+                          fontWeight: 600,
+                          fontSize: 14,
+                          color: wizardStep === 1 ? '#94a3b8' : '#475569',
+                          transition: 'all 0.2s ease'
                         }}
                       >
-                        Back
+                        ← Back
                       </button>
 
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                         {wizardStep < 3 ? (
                           <button
                             onClick={() => {
@@ -1065,25 +1096,32 @@ export default function OBEPage(): JSX.Element {
                               setWizardStep((s) => ((s + 1) as 1 | 2 | 3));
                             }}
                             disabled={wizardStep === 1 && scanStatus === 'scanning'}
-                            style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: '#2563eb', color: '#fff', fontWeight: 700, cursor: 'pointer' }}
+                            onMouseEnter={(e) => { if (!(wizardStep === 1 && scanStatus === 'scanning')) e.currentTarget.style.background = 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)'; }}
+                            onMouseLeave={(e) => { if (!(wizardStep === 1 && scanStatus === 'scanning')) e.currentTarget.style.background = 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)'; }}
+                            style={{ padding: '10px 24px', borderRadius: 10, border: 'none', background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: 15, boxShadow: '0 2px 8px rgba(37,99,235,0.25)', transition: 'all 0.2s ease' }}
                           >
-                            Next
+                            Next →
                           </button>
                         ) : (
                           <button
                             onClick={handleConfirmImport}
                             disabled={importingToBank || scanStatus === 'scanning' || visibleQuestions.length === 0}
+                            onMouseEnter={(e) => { if (!importingToBank && scanStatus !== 'scanning' && visibleQuestions.length > 0) e.currentTarget.style.background = 'linear-gradient(135deg, #15803d 0%, #166534 100%)'; }}
+                            onMouseLeave={(e) => { if (!importingToBank && scanStatus !== 'scanning' && visibleQuestions.length > 0) e.currentTarget.style.background = 'linear-gradient(135deg, #16a34a 0%, #15803d 100%)'; }}
                             style={{
-                              padding: '8px 14px',
-                              borderRadius: 8,
+                              padding: '10px 24px',
+                              borderRadius: 10,
                               border: 'none',
-                              background: importingToBank ? '#93c5fd' : '#16a34a',
+                              background: importingToBank ? '#cbd5e1' : 'linear-gradient(135deg, #16a34a 0%, #15803d 100%)',
                               color: '#fff',
                               fontWeight: 800,
+                              fontSize: 15,
                               cursor: importingToBank ? 'not-allowed' : 'pointer',
+                              boxShadow: importingToBank ? 'none' : '0 2px 8px rgba(22,163,74,0.25)',
+                              transition: 'all 0.2s ease'
                             }}
                           >
-                            {importingToBank ? 'Importing…' : 'Confirm & Import'}
+                            {importingToBank ? '⏳ Importing…' : '✔️ Confirm & Import'}
                           </button>
                         )}
                       </div>
@@ -1097,10 +1135,10 @@ export default function OBEPage(): JSX.Element {
                 <div
                   role="dialog"
                   onClick={() => { setLightboxSrc(null); }}
-                  style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 80 }}
+                  style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 80 }}
                 >
-                  <div onClick={(e) => e.stopPropagation()} style={{ maxWidth: '90%', maxHeight: '90%', padding: 12 }}>
-                    <img src={lightboxSrc} alt="preview" style={{ maxWidth: '100%', maxHeight: '100%', borderRadius: 8 }} />
+                  <div onClick={(e) => e.stopPropagation()} style={{ maxWidth: '95%', maxHeight: '95%', padding: 16, background: '#fff', borderRadius: 16, boxShadow: '0 20px 50px rgba(0,0,0,0.5)' }}>
+                    <img src={lightboxSrc} alt="preview" style={{ maxWidth: '100%', maxHeight: '100%', borderRadius: 12 }} />
                   </div>
                 </div>
               )}
@@ -1183,10 +1221,10 @@ export default function OBEPage(): JSX.Element {
               )}
               {/* transient import success popup */}
               {showImportPopup && (
-                <div style={{ position: 'fixed', left: 20, bottom: 20, zIndex: 120 }}>
-                  <div style={{ background: '#ecfdf5', color: '#065f46', border: '1px solid #bbf7d0', padding: '12px 16px', borderRadius: 10, boxShadow: '0 6px 20px rgba(0,0,0,0.12)' }}>
-                    <div style={{ fontWeight: 800 }}>Imported</div>
-                    <div style={{ fontSize: 13, color: '#065f46' }}>{importResult?.inserted ?? 0} question(s) imported successfully.</div>
+                <div style={{ position: 'fixed', left: 24, bottom: 24, zIndex: 120, animation: 'slideIn 0.3s ease' }}>
+                  <div style={{ background: 'linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)', color: '#065f46', border: '1px solid #6ee7b7', padding: '16px 20px', borderRadius: 12, boxShadow: '0 10px 30px rgba(0,0,0,0.15)' }}>
+                    <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 4 }}>✅ Imported</div>
+                    <div style={{ fontSize: 14, color: '#047857' }}>{importResult?.inserted ?? 0} question(s) imported successfully.</div>
                   </div>
                 </div>
               )}

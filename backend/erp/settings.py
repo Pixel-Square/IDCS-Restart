@@ -26,6 +26,7 @@ ALLOWED_HOSTS = (
         '192.168.40.253',
         'localhost',
         '127.0.0.1',
+        'localhost',
         '0.0.0.0',
         '.db.zynix.us',   # allow all subdomains
         '.idcs.zynix.us', # allow all subdomains

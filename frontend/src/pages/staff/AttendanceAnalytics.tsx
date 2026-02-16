@@ -14,7 +14,10 @@ import {
   Clock,
   RefreshCw,
   X,
-  Loader2
+  Loader2,
+  Lock,
+  Unlock,
+  ChevronDown
 } from 'lucide-react';
 import fetchWithAuth from '../../services/fetchAuth';
 
@@ -85,6 +88,34 @@ interface ClassReport {
   attendance_percentage: number;
 }
 
+interface PeriodStat {
+  session_id: number;
+  period_index: number;
+  period_label: string;
+  period_start: string;
+  period_end: string;
+  section_id: number;
+  section_name: string;
+  subject: string;
+  total_strength: number;
+  total_marked: number;
+  present: number;
+  absent: number;
+  leave: number;
+  late: number;
+  on_duty: number;
+  attendance_percentage: number;
+  is_locked: boolean;
+  marked_at: string | null;
+}
+
+interface TodayPeriodData {
+  date: string;
+  periods: PeriodStat[];
+  total_periods: number;
+  staff_name: string;
+}
+
 interface DailyTrend {
   day: string;
   total: number;
@@ -142,6 +173,11 @@ const AttendanceAnalytics: React.FC = () => {
   const [requestsLoading, setRequestsLoading] = useState(false);
   const [requests, setRequests] = useState<any[]>([]);
   const pendingCount = requests.filter(r => r.status === 'PENDING').length;
+  
+  // Today's period attendance
+  const [todayPeriods, setTodayPeriods] = useState<TodayPeriodData | null>(null);
+  const [periodLoading, setPeriodLoading] = useState(false);
+  const [showPeriodSection, setShowPeriodSection] = useState(true);
 
   // Auto-refresh requests when modal opens
   useEffect(() => {
@@ -215,6 +251,7 @@ const AttendanceAnalytics: React.FC = () => {
 
   useEffect(() => {
     loadFilters();
+    loadTodayPeriods();
     
     // Set default dates (today)
     const today = new Date();
@@ -222,6 +259,25 @@ const AttendanceAnalytics: React.FC = () => {
     setEndDate(isoToday);
     setStartDate(isoToday);
   }, []);
+
+  const loadTodayPeriods = async () => {
+    setPeriodLoading(true);
+    try {
+      const response = await fetchWithAuth('/api/academics/analytics/today-periods/');
+      const data = await response.json();
+      
+      if (response.ok) {
+        setTodayPeriods(data);
+      } else {
+        setTodayPeriods(null);
+      }
+    } catch (err: any) {
+      console.error('Failed to load today periods:', err);
+      setTodayPeriods(null);
+    } finally {
+      setPeriodLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (startDate && endDate) {
@@ -535,6 +591,140 @@ const AttendanceAnalytics: React.FC = () => {
                 </div>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Today's Period-wise Attendance Section */}
+      {!periodLoading && todayPeriods && todayPeriods.periods.length > 0 && (
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+          <div 
+            className="flex items-center justify-between p-4 bg-gradient-to-r from-indigo-50 to-blue-50 cursor-pointer hover:from-indigo-100 hover:to-blue-100 transition-colors"
+            onClick={() => setShowPeriodSection(!showPeriodSection)}
+          >
+            <div className="flex items-center gap-3">
+              <Clock className="w-5 h-5 text-indigo-600" />
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Today's Period Attendance</h2>
+                <p className="text-sm text-gray-600">
+                  {new Date(todayPeriods.date).toLocaleDateString('en-US', { 
+                    weekday: 'long', 
+                    year: 'numeric', 
+                    month: 'long', 
+                    day: 'numeric' 
+                  })} · {todayPeriods.total_periods} {todayPeriods.total_periods === 1 ? 'period' : 'periods'}
+                </p>
+              </div>
+            </div>
+            <ChevronDown className={`w-5 h-5 text-gray-600 transition-transform ${showPeriodSection ? 'rotate-180' : ''}`} />
+          </div>
+
+          {showPeriodSection && (
+            <div className="p-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {todayPeriods.periods.map((period) => (
+                  <div 
+                    key={period.session_id} 
+                    className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow bg-white"
+                  >
+                    {/* Period Header */}
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-semibold text-gray-900">
+                            {period.period_label || `Period ${period.period_index}`}
+                          </h3>
+                          {period.is_locked && (
+                            <div className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded-full flex items-center gap-1">
+                              <Lock className="w-3 h-3" />
+                              Locked
+                            </div>
+                          )}
+                        </div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          {period.period_start && period.period_end && (
+                            <span>{period.period_start} - {period.period_end}</span>
+                          )}
+                        </div>
+                      </div>
+                      <div className={`text-lg font-bold ${
+                        period.attendance_percentage >= 85 ? 'text-green-600' :
+                        period.attendance_percentage >= 75 ? 'text-yellow-600' : 'text-red-600'
+                      }`}>
+                        {period.attendance_percentage}%
+                      </div>
+                    </div>
+
+                    {/* Section and Subject */}
+                    <div className="mb-3 space-y-1">
+                      <div className="flex items-center gap-2">
+                        <Building2 className="w-4 h-4 text-gray-400" />
+                        <span className="text-sm font-medium text-gray-700">{period.section_name}</span>
+                      </div>
+                      {period.subject && (
+                        <div className="flex items-center gap-2">
+                          <GraduationCap className="w-4 h-4 text-gray-400" />
+                          <span className="text-xs text-gray-600">{period.subject}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Attendance Stats */}
+                    <div className="grid grid-cols-2 gap-2 mb-3">
+                      <div className="bg-gray-50 rounded-lg p-2">
+                        <div className="text-xs text-gray-500">Total Strength</div>
+                        <div className="text-lg font-semibold text-gray-900">{period.total_strength}</div>
+                      </div>
+                      <div className="bg-gray-50 rounded-lg p-2">
+                        <div className="text-xs text-gray-500">Marked</div>
+                        <div className="text-lg font-semibold text-gray-900">{period.total_marked}</div>
+                      </div>
+                    </div>
+
+                    {/* Status Breakdown */}
+                    <div className="grid grid-cols-4 gap-1 text-center text-xs">
+                      <div className="bg-green-50 rounded p-1.5">
+                        <div className="font-semibold text-green-700">{period.present}</div>
+                        <div className="text-green-600">Present</div>
+                      </div>
+                      <div className="bg-red-50 rounded p-1.5">
+                        <div className="font-semibold text-red-700">{period.absent}</div>
+                        <div className="text-red-600">Absent</div>
+                      </div>
+                      <div className="bg-blue-50 rounded p-1.5">
+                        <div className="font-semibold text-blue-700">{period.on_duty}</div>
+                        <div className="text-blue-600">OD</div>
+                      </div>
+                      <div className="bg-yellow-50 rounded p-1.5">
+                        <div className="font-semibold text-yellow-700">{period.late}</div>
+                        <div className="text-yellow-600">Late</div>
+                      </div>
+                    </div>
+
+                    {/* Marked Time */}
+                    {period.marked_at && (
+                      <div className="mt-3 pt-3 border-t border-gray-100">
+                        <div className="text-xs text-gray-500">
+                          Marked at {new Date(period.marked_at).toLocaleTimeString('en-US', { 
+                            hour: '2-digit', 
+                            minute: '2-digit' 
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {periodLoading && (
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+          <div className="flex items-center gap-3">
+            <Loader2 className="w-5 h-5 text-indigo-600 animate-spin" />
+            <p className="text-gray-600">Loading today's period attendance...</p>
           </div>
         </div>
       )}
