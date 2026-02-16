@@ -7751,7 +7751,7 @@ tinymce.dom.TreeWalker = function(start_node, root_node) {
  */
 (function(){
 
-var chunker = /((?:\((?:\([^()]+\)|[^()]+)+\)|\[(?:\[[^\[\]]*\]|['"][^'"]*['"]|[^\[\]'"]+)+\]|\\.|[^ >+~,(\[\\]+)+|[>+~])(\s*,\s*)?((?:.|\r|\n)*)/g,
+var chunker = /((?:\((?:\([^()]+\)|[^()]+)*\)|\[(?:\[[^\[\]]*\]|['"][^'"]*['"]|[^\s\[\]'!"]+|!)*\]|\\.|[^ >+~,(\\]+|[>+~]))(\s*,\s*)?((?:.|\r|\n)*)/g,
 	expando = "sizcache",
 	done = 0,
 	toString = Object.prototype.toString,
@@ -8119,7 +8119,7 @@ var Expr = Sizzle.selectors = {
 		TAG: /^((?:[\w\u00c0-\uFFFF\*\-]|\\.)+)/,
 		CHILD: /:(only|nth|last|first)-child(?:\(\s*(even|odd|(?:[+\-]?\d+|(?:[+\-]?\d*)?n\s*(?:[+\-]\s*\d+)?))\s*\))?/,
 		POS: /:(nth|eq|gt|lt|first|last|even|odd)(?:\((\d*)\))?(?=[^\-]|$)/,
-		PSEUDO: /:((?:[\w\u00c0-\uFFFF\-]|\\.)+)(?:\((['"]?)((?:\([^\)]+\)|[^\(\)]*)+)\2\))?/
+		PSEUDO: /:((?:[\w\u00c0-\uFFFF\-]|\\.)+)(?:\((['"]?)((?:\([^()]*\)|[^()])*)\2\))?/
 	},
 
 	leftMatch: {},
