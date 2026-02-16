@@ -20,6 +20,20 @@ class CdapRevision(models.Model):
     class Meta:
         db_table = 'cdap_revisions'
 
+
+class LcaRevision(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    subject_id = models.CharField(max_length=64, unique=True)
+    status = models.TextField(default='draft')
+    data = models.JSONField(default=dict)
+    created_by = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_by = models.IntegerField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'lca_revisions'
+
 class CdapActiveLearningAnalysisMapping(models.Model):
     id = models.IntegerField(primary_key=True)
     mapping = models.JSONField(default=dict)
@@ -85,6 +99,9 @@ class AssessmentDraft(models.Model):
         ('formative1', 'Formative1'),
         ('formative2', 'Formative2'),
         ('model', 'MODEL'),
+        ('cdap', 'CDAP'),
+        ('articulation', 'Articulation'),
+        ('lca', 'LCA'),
     )
 
     subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='obe_drafts')
@@ -591,24 +608,5 @@ class ClassTypeWeights(models.Model):
         db_table = 'obe_class_type_weights'
         verbose_name = 'Class Type Weights'
         verbose_name_plural = 'Class Type Weights'
-
-
-class InternalMarkMapping(models.Model):
-    """IQAC-managed internal mark mapping per Subject.
-
-    Stored as JSON so the frontend can define column headers, cycles and weights.
-    """
-
-    subject = models.OneToOneField(
-        'academics.Subject',
-        on_delete=models.CASCADE,
-        related_name='internal_mark_mapping',
-    )
-    mapping = models.JSONField(default=dict)
-    updated_by = models.IntegerField(null=True, blank=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        db_table = 'obe_internal_mark_mapping'
 
 

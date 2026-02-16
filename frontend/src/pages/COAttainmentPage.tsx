@@ -98,6 +98,24 @@ const MODEL_THEORY_CO5_MAX = MODEL_THEORY_QUESTIONS.reduce((sum, q, i) => sum + 
 
 const DEFAULT_THEORY_CO5_WEIGHTAGE = 10;
 
+// Helper function to determine maximum CO number for a given class type.
+// CO5 is present for:
+// - LAB (from MODEL lab sheet)
+// - THEORY (from MODEL theory sheet)
+// - TCPL/TCPR (from MODEL tcpl/tcpr sheet)
+function getMaxCONumber(classType: string | null, isLabCourse: boolean, enabledAssessments: string[]): number {
+  if (isLabCourse) return 5;
+  const ct = normalizeClassType(classType);
+  const modelEnabled = enabledAssessments.includes('model');
+  if (modelEnabled && (ct === 'THEORY' || ct === 'TCPL' || ct === 'TCPR')) return 5;
+  return 4;
+}
+
+// Helper to get active CO numbers as array
+function getActiveCONumbers(maxCONumber: number): number[] {
+  return Array.from({ length: maxCONumber }, (_, i) => i + 1);
+}
+
 const DEFAULT_WEIGHTS = { ssa1: 1.5, cia1: 3, formative1: 2.5 };
 
 // Class-type specific default weights (matches AcademicControllerWeightsPage.tsx)
@@ -355,7 +373,21 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
     [classType, isSpecialFromEnabledAssessments],
   );
   const isTcplCourse = useMemo(() => normalizeClassType(classType) === 'TCPL', [classType]);
-  const showTheoryCo5 = useMemo(() => normalizeClassType(classType) === 'THEORY', [classType]);
+
+  const showModelCo5 = useMemo(() => {
+    const ct = normalizeClassType(classType);
+    return (ct === 'THEORY' || ct === 'TCPL' || ct === 'TCPR') && Boolean(theoryEnabled.model);
+  }, [classType, theoryEnabled.model]);
+  
+  // Determine maximum CO number and active COs based on class type
+  const maxCONumber = useMemo(() => {
+    const enabled = Object.entries(theoryEnabled)
+      .filter(([_, v]) => v)
+      .map(([k]) => k);
+    return getMaxCONumber(classType, isLabCourse, enabled);
+  }, [classType, isLabCourse, theoryEnabled]);
+  
+  const activeCONumbers = useMemo(() => getActiveCONumbers(maxCONumber), [maxCONumber]);
 
   const [tas, setTas] = useState<TeachingAssignmentItem[]>([]);
   const [taError, setTaError] = useState<string | null>(null);
@@ -408,9 +440,9 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
 
   // When class type changes, reset CO5 weightage to the default for THEORY.
   useEffect(() => {
-    if (!showTheoryCo5) return;
+    if (!showModelCo5) return;
     setTheoryCo5Weightage(DEFAULT_THEORY_CO5_WEIGHTAGE);
-  }, [showTheoryCo5]);
+  }, [showModelCo5]);
   const [weightsSource, setWeightsSource] = useState<'default' | 'local' | 'server'>('default');
   const globalWeightsRef = React.useRef<Record<string, any> | null>(null);
   const fetchWeightsRef = React.useRef<((classType?: string | null) => Promise<void>) | null>(null);
@@ -418,6 +450,8 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
   const [lastWeightsFetchError, setLastWeightsFetchError] = useState<string | null>(null);
   const [remoteWeightsCount, setRemoteWeightsCount] = useState<number | null>(null);
   const [showRawMapping, setShowRawMapping] = useState(false);
+  const [hideCOColumns, setHideCOColumns] = useState(false);
+  const [cqiEntries, setCqiEntries] = useState<Record<number, string>>({});
 
   // determine if current user is IQAC by reading persisted roles (set by getMe)
   useEffect(() => {
@@ -1306,28 +1340,49 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
     const tcplLab1 = isTcpl ? readTcplLabPair(publishedTcplLab.lab1) : null;
     const tcplLab2 = isTcpl ? readTcplLabPair(publishedTcplLab.lab2) : null;
 
-    // MODEL (THEORY) sheet is stored locally by ModelEntry.tsx.
-    // We only use it to derive CO5 for THEORY.
-    const modelTheorySheet = (() => {
-      if (!showTheoryCo5) return null;
+    // MODEL sheets are stored locally by ModelEntry.tsx.
+    // - THEORY: model_theory_sheet_{courseId}_{taKey}
+    // - TCPL:  model_tcpl_sheet_{courseId}_{taKey}
+    // - TCPR:  model_tcpr_sheet_{courseId}_{taKey}
+    // Legacy:  model_sheet_{courseId}
+    const modelSheet = (() => {
+      if (!showModelCo5) return null;
       const taKey = String(selectedTaId ?? 'none');
-      const k1 = `model_theory_sheet_${courseId}_${taKey}`;
-      const k2 = `model_theory_sheet_${courseId}_none`;
-      const kLegacy = `model_sheet_${courseId}`;
-      const v1 = lsGet<any>(k1);
-      if (v1 && typeof v1 === 'object') return v1;
-      const v2 = lsGet<any>(k2);
-      if (v2 && typeof v2 === 'object') return v2;
-      const v3 = lsGet<any>(kLegacy);
-      if (v3 && typeof v3 === 'object') return v3;
+      const ct = normalizeClassType(classType);
+
+      const candidates: string[] = [];
+      if (ct === 'THEORY') {
+        candidates.push(`model_theory_sheet_${courseId}_${taKey}`);
+        candidates.push(`model_theory_sheet_${courseId}_none`);
+      } else if (ct === 'TCPL') {
+        candidates.push(`model_tcpl_sheet_${courseId}_${taKey}`);
+        candidates.push(`model_tcpl_sheet_${courseId}_none`);
+      } else if (ct === 'TCPR') {
+        candidates.push(`model_tcpr_sheet_${courseId}_${taKey}`);
+        candidates.push(`model_tcpr_sheet_${courseId}_none`);
+      }
+
+      candidates.push(`model_sheet_${courseId}`);
+
+      for (const k of candidates) {
+        const v = lsGet<any>(k);
+        if (v && typeof v === 'object') return v;
+      }
       return null;
     })();
 
-    const getModelTheoryCo5 = (s: Student): { mark: number | null; max: number } => {
-      const max = MODEL_THEORY_CO5_MAX;
-      if (!showTheoryCo5) return { mark: null, max };
-      const sheetState = modelTheorySheet && typeof modelTheorySheet === 'object' ? modelTheorySheet : null;
-      if (!sheetState) return { mark: null, max };
+    const getModelCo5 = (s: Student): { mark: number | null; max: number } => {
+      const ct = normalizeClassType(classType);
+      const sheetState = modelSheet && typeof modelSheet === 'object' ? modelSheet : null;
+
+      // Default max values if we can't load the sheet.
+      const defaultTheoryMax = MODEL_THEORY_CO5_MAX;
+      const defaultTcplMax = 0;
+      const maxFallback = ct === 'THEORY' ? defaultTheoryMax : defaultTcplMax;
+      if (!showModelCo5) return { mark: null, max: maxFallback };
+      if (!sheetState) return { mark: null, max: maxFallback };
+
+      let max = maxFallback;
 
       const rowKeyById = `id:${String(s.id)}`;
       const rowKeyByReg = s.reg_no ? `reg:${String(s.reg_no).trim()}` : '';
@@ -1340,14 +1395,55 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
 
       let hasAny = false;
       let co5 = 0;
-      for (let i = 0; i < MODEL_THEORY_QUESTIONS.length; i++) {
-        const def = MODEL_THEORY_QUESTIONS[i];
-        const raw = (q as any)[def.key];
-        const n = toNumOrNull(raw);
-        if (n == null) continue;
-        hasAny = true;
-        const mark = clamp(n, 0, def.max);
-        if (MODEL_THEORY_CO_ROW[i] === 5) co5 += mark;
+      max = 0;
+
+      if (ct === 'THEORY') {
+        max = MODEL_THEORY_CO5_MAX;
+        for (let i = 0; i < MODEL_THEORY_QUESTIONS.length; i++) {
+          const def = MODEL_THEORY_QUESTIONS[i];
+          const raw = (q as any)[def.key];
+          const n = toNumOrNull(raw);
+          if (n == null) continue;
+          hasAny = true;
+          const mark = clamp(n, 0, def.max);
+          if (MODEL_THEORY_CO_ROW[i] === 5) co5 += mark;
+        }
+      } else if (ct === 'TCPL' || ct === 'TCPR') {
+        // Mirror ModelEntry.tsx defaults so CO5 exists for TCPL/TCPR.
+        const isTcpr = ct === 'TCPR';
+        const count = isTcpr ? 12 : 15;
+        const twoMarkCount = isTcpr ? 8 : 10;
+        const baseCos = isTcpr
+          ? [1, 1, 2, 2, 3, 3, 4, 4, 1, 2, 3, 4]
+          : [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 1, 2, 3, 4, 5];
+
+        for (let i = 0; i < count; i++) {
+          const idx = i + 1;
+          const key = `q${idx}`;
+          const qMax = idx <= twoMarkCount ? 2 : 16;
+          const coNum = baseCos[i] ?? 1;
+          if (coNum === 5) max += qMax;
+
+          const raw = (q as any)[key];
+          const n = toNumOrNull(raw);
+          if (n == null) continue;
+          hasAny = true;
+          const mark = clamp(n, 0, qMax);
+          if (coNum === 5) co5 += mark;
+        }
+
+        const labRaw = toNumOrNull((row as any).lab);
+        if (labRaw != null) hasAny = true;
+        const labMark = labRaw == null ? null : clamp(labRaw, 0, 30);
+        if (isTcpr) {
+          // TCPR: REVIEW contributes only to CO5.
+          max += 30;
+          if (labMark != null) co5 += labMark;
+        } else {
+          // TCPL: LAB is split equally across all 5 COs.
+          max += 30 / 5;
+          if (labMark != null) co5 += labMark / 5;
+        }
       }
 
       if (!hasAny) {
@@ -1472,7 +1568,7 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
         }
       }
 
-      const model = showTheoryCo5 && theoryEnabled.model ? getModelTheoryCo5(s) : { mark: null, max: MODEL_THEORY_CO5_MAX };
+      const model = showModelCo5 ? getModelCo5(s) : { mark: null, max: 0 };
 
       out.set(s.id, {
         ssaCo1,
@@ -1493,7 +1589,7 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
     }
 
     return out;
-  }, [published, publishedLab, publishedTcplLab, students, maxes, cia1Questions, isLabCourse, classType, courseId, selectedTaId, showTheoryCo5, theoryEnabled.model]);
+  }, [published, publishedLab, publishedTcplLab, students, maxes, cia1Questions, isLabCourse, classType, courseId, selectedTaId, showModelCo5]);
 
   const tcplLabMaxes = useMemo(() => {
     if (!isTcplCourse) return null;
@@ -1526,11 +1622,11 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
     const co2 = (theoryEnabled.ssa1 ? maxes.ssa1.co2 : 0) + (theoryEnabled.cia1 ? maxes.cia1.co2 : 0) + (theoryEnabled.formative1 ? f1MaxCo2 : 0);
     const co3 = (theoryEnabled.ssa2 ? maxes.ssa2.co3 : 0) + (theoryEnabled.cia2 ? maxes.cia2.co3 : 0) + (theoryEnabled.formative2 ? f2MaxCo3 : 0);
     const co4 = (theoryEnabled.ssa2 ? maxes.ssa2.co4 : 0) + (theoryEnabled.cia2 ? maxes.cia2.co4 : 0) + (theoryEnabled.formative2 ? f2MaxCo4 : 0);
-    const co5 = showTheoryCo5 && theoryEnabled.model ? theoryCo5Weightage : 0;
+    const co5 = showModelCo5 ? theoryCo5Weightage : 0;
     const total = co1 + co2 + co3 + co4 + co5;
 
     return { f1MaxCo1, f1MaxCo2, f2MaxCo3, f2MaxCo4, co1, co2, co3, co4, co5, total };
-  }, [isTcplCourse, tcplLabMaxes, maxes, theoryEnabled, showTheoryCo5, theoryEnabled.model, theoryCo5Weightage]);
+  }, [isTcplCourse, tcplLabMaxes, maxes, theoryEnabled, showModelCo5, theoryCo5Weightage]);
 
   const computedRows = useMemo(() => {
     if (isLabCourse) {
@@ -1718,7 +1814,7 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
       const modelCo5Raw = typeof m?.modelCo5 === 'number' && Number.isFinite(m.modelCo5) ? (m.modelCo5 as number) : null;
       const modelCo5Max = typeof m?.modelCo5Max === 'number' && Number.isFinite(m.modelCo5Max) ? Math.max(0, m.modelCo5Max as number) : MODEL_THEORY_CO5_MAX;
       const co5 =
-        !showTheoryCo5 || !theoryEnabled.model || modelCo5Raw == null || !modelCo5Max || !co5MaxTotal
+        !showModelCo5 || modelCo5Raw == null || !modelCo5Max || !co5MaxTotal
           ? null
           : clamp((modelCo5Raw / modelCo5Max) * co5MaxTotal, 0, co5MaxTotal);
 
@@ -1735,7 +1831,7 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
         { enabled: co2MaxTotal > 0, v: co2 },
         { enabled: co3MaxTotal > 0, v: co3 },
         { enabled: co4MaxTotal > 0, v: co4 },
-        ...(showTheoryCo5 && theoryEnabled.model ? [{ enabled: co5MaxTotal > 0, v: co5 }] : []),
+        ...(showModelCo5 ? [{ enabled: co5MaxTotal > 0, v: co5 }] : []),
       ];
 
       let anyEnabled = false;
@@ -1773,7 +1869,7 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
         total,
       };
     });
-  }, [students, byStudentId, maxes, weights, theoryEnabled, showTheoryCo5, theoryCo5Weightage, theoryCoMaxTotals, isLabCourse, labCoMaxes, publishedLab]);
+  }, [students, byStudentId, maxes, weights, theoryEnabled, showModelCo5, theoryCo5Weightage, theoryCoMaxTotals, isLabCourse, labCoMaxes, publishedLab]);
 
   const summary = useMemo(() => {
     if (isLabCourse) {
@@ -1804,9 +1900,9 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
       co2Avg3pt: avg(co2Vals),
       co3Avg3pt: avg(co3Vals),
       co4Avg3pt: avg(co4Vals),
-      ...(showTheoryCo5 && theoryEnabled.model ? { co5Avg3pt: avg(co5Vals) } : {}),
+      ...(showModelCo5 ? { co5Avg3pt: avg(co5Vals) } : {}),
     };
-  }, [computedRows, students.length, isLabCourse, showTheoryCo5, theoryEnabled.model]);
+  }, [computedRows, students.length, isLabCourse, showModelCo5]);
 
   const labCoMax = useMemo(() => {
     // backward-compatible single value (used only if some UI still expects it)
@@ -1931,7 +2027,15 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
                 CO max values are pulled from published LAB sheets only.
                 {labCoMaxes ? (
                   <>
-                    &nbsp;CO1: <b>{labCoMaxes.co1}</b> | CO2: <b>{labCoMaxes.co2}</b> | CO3: <b>{labCoMaxes.co3}</b> | CO4: <b>{labCoMaxes.co4}</b> | CO5: <b>{labCoMaxes.co5}</b>
+                    {activeCONumbers.map((coNum, idx) => {
+                      const coKey = `co${coNum}` as keyof typeof labCoMaxes;
+                      return (
+                        <React.Fragment key={coNum}>
+                          {idx > 0 && ' | '}
+                          CO{coNum}: <b>{labCoMaxes[coKey]}</b>
+                        </React.Fragment>
+                      );
+                    })}
                   </>
                 ) : (
                   <> Each CO max is <b>{labCoMax}</b>.</>
@@ -1939,11 +2043,14 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
               </div>
               <div style={{ marginTop: 10, fontSize: 12, color: '#6b7280' }}>
                 Batch strength: <b>{summary.strength}</b>
-                &nbsp;|&nbsp; CO1 avg (3pt): <b>{(summary as any).co1Avg3pt ?? '-'}</b>
-                &nbsp;|&nbsp; CO2 avg (3pt): <b>{(summary as any).co2Avg3pt ?? '-'}</b>
-                &nbsp;|&nbsp; CO3 avg (3pt): <b>{(summary as any).co3Avg3pt ?? '-'}</b>
-                &nbsp;|&nbsp; CO4 avg (3pt): <b>{(summary as any).co4Avg3pt ?? '-'}</b>
-                &nbsp;|&nbsp; CO5 avg (3pt): <b>{(summary as any).co5Avg3pt ?? '-'}</b>
+                {activeCONumbers.map(coNum => {
+                  const avgKey = `co${coNum}Avg3pt` as keyof typeof summary;
+                  return (
+                    <React.Fragment key={coNum}>
+                      &nbsp;|&nbsp; CO{coNum} avg (3pt): <b>{(summary as any)[avgKey] ?? '-'}</b>
+                    </React.Fragment>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -1969,7 +2076,18 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
               </div>
 
               <div style={{ marginTop: 10, fontSize: 12, color: '#6b7280' }}>
-                CO1 total max: <b>{theoryCoMaxTotals.co1}</b> &nbsp;|&nbsp; CO2 total max: <b>{theoryCoMaxTotals.co2}</b>
+                {activeCONumbers
+                  .filter((coNum) => coNum <= 4 || showModelCo5)
+                  .map((coNum, idx) => {
+                    const coKey = `co${coNum}` as keyof typeof theoryCoMaxTotals;
+                    const maxVal = coNum === 5 ? theoryCo5Weightage : theoryCoMaxTotals[coKey];
+                    return (
+                      <React.Fragment key={coNum}>
+                        {idx > 0 && <>&nbsp;|&nbsp;</>}
+                        CO{coNum} total max: <b>{maxVal}</b>
+                      </React.Fragment>
+                    );
+                  })}
               </div>
             </div>
 
@@ -2112,7 +2230,7 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
                   style={inputStyle}
                 />
               </label>
-              {showTheoryCo5 && theoryEnabled.model && (
+              {showModelCo5 && (
                 <label style={{ display: 'grid', gap: 6, fontSize: 12 }}>
                   CO5 Weightage (MODEL)
                   <input
@@ -2140,6 +2258,24 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
         </div>
       )}
 
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
+        <button
+          onClick={() => setHideCOColumns(!hideCOColumns)}
+          style={{
+            padding: '8px 16px',
+            backgroundColor: hideCOColumns ? '#059669' : '#0ea5e9',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 8,
+            cursor: 'pointer',
+            fontWeight: 600,
+            fontSize: 13,
+          }}
+        >
+          {hideCOColumns ? 'Show CO Columns' : 'Hide CO Columns'}
+        </button>
+      </div>
+
       {loadingRoster ? (
         <div style={{ color: '#6b7280' }}>Loading roster…</div>
       ) : (
@@ -2152,11 +2288,14 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
                   <th rowSpan={2} style={thSticky}>Section</th>
                   <th rowSpan={2} style={thSticky}>Register No</th>
                   <th rowSpan={2} style={thSticky}>Name</th>
-                  <th colSpan={3} style={thGroup}>CO1</th>
-                  <th colSpan={3} style={thGroup}>CO2</th>
-                  <th colSpan={3} style={thGroup}>CO3</th>
-                  <th colSpan={3} style={thGroup}>CO4</th>
-                  <th colSpan={3} style={thGroup}>CO5</th>
+                  {!hideCOColumns && (
+                    <>
+                      {activeCONumbers.map(coNum => (
+                        <th key={`co${coNum}`} colSpan={3} style={thGroup}>CO{coNum}</th>
+                      ))}
+                    </>
+                  )}
+                  <th rowSpan={2} style={thSticky}>CQI Entry</th>
                   <th colSpan={2} style={thGroup}>BTL-1</th>
                   <th colSpan={2} style={thGroup}>BTL-2</th>
                   <th colSpan={2} style={thGroup}>BTL-3</th>
@@ -2166,21 +2305,21 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
                   <th rowSpan={2} style={thSticky}>Total / {round1(labCoMaxes?.total ?? labCoMax * 5)}</th>
                 </tr>
                 <tr>
-                  <th style={thSticky}>{labCoMaxes?.co1 ?? labCoMax}</th>
-                  <th style={thSticky}>%</th>
-                  <th style={thSticky}>3pt</th>
-                  <th style={thSticky}>{labCoMaxes?.co2 ?? labCoMax}</th>
-                  <th style={thSticky}>%</th>
-                  <th style={thSticky}>3pt</th>
-                  <th style={thSticky}>{labCoMaxes?.co3 ?? labCoMax}</th>
-                  <th style={thSticky}>%</th>
-                  <th style={thSticky}>3pt</th>
-                  <th style={thSticky}>{labCoMaxes?.co4 ?? labCoMax}</th>
-                  <th style={thSticky}>%</th>
-                  <th style={thSticky}>3pt</th>
-                  <th style={thSticky}>{labCoMaxes?.co5 ?? labCoMax}</th>
-                  <th style={thSticky}>%</th>
-                  <th style={thSticky}>3pt</th>
+                  {!hideCOColumns && (
+                    <>
+                      {activeCONumbers.map(coNum => {
+                        const coKey = `co${coNum}` as keyof typeof labCoMaxes;
+                        const maxVal = labCoMaxes?.[coKey] ?? labCoMax;
+                        return (
+                          <React.Fragment key={`co${coNum}-cells`}>
+                            <th style={thSticky}>{maxVal}</th>
+                            <th style={thSticky}>%</th>
+                            <th style={thSticky}>3pt</th>
+                          </React.Fragment>
+                        );
+                      })}
+                    </>
+                  )}
 
                   <th style={thSticky}>{labBtlMaxes[1]}</th>
                   <th style={thSticky}>%</th>
@@ -2204,25 +2343,39 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
                     <td style={td}>{r.reg_no}</td>
                     <td style={td}>{r.name}</td>
 
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co1 == null ? '' : round1(r.co1)}</td>
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co1Pct == null ? '' : r.co1Pct}</td>
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co1_3pt == null ? '' : r.co1_3pt}</td>
+                    {!hideCOColumns && (
+                      <>
+                        {activeCONumbers.map(coNum => {
+                          const coKey = `co${coNum}`;
+                          const coPctKey = `co${coNum}Pct`;
+                          const co3ptKey = `co${coNum}_3pt`;
+                          return (
+                            <React.Fragment key={`co${coNum}-row`}>
+                              <td style={{ ...td, textAlign: 'center' }}>{r[coKey] == null ? '' : round1(r[coKey])}</td>
+                              <td style={{ ...td, textAlign: 'center' }}>{r[coPctKey] == null ? '' : r[coPctKey]}</td>
+                              <td style={{ ...td, textAlign: 'center' }}>{r[co3ptKey] == null ? '' : r[co3ptKey]}</td>
+                            </React.Fragment>
+                          );
+                        })}
+                      </>
+                    )}
 
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co2 == null ? '' : round1(r.co2)}</td>
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co2Pct == null ? '' : r.co2Pct}</td>
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co2_3pt == null ? '' : r.co2_3pt}</td>
-
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co3 == null ? '' : round1(r.co3)}</td>
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co3Pct == null ? '' : r.co3Pct}</td>
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co3_3pt == null ? '' : r.co3_3pt}</td>
-
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co4 == null ? '' : round1(r.co4)}</td>
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co4Pct == null ? '' : r.co4Pct}</td>
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co4_3pt == null ? '' : r.co4_3pt}</td>
-
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co5 == null ? '' : round1(r.co5)}</td>
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co5Pct == null ? '' : r.co5Pct}</td>
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co5_3pt == null ? '' : r.co5_3pt}</td>
+                    <td style={{ ...td, textAlign: 'center' }}>
+                      <input
+                        type="text"
+                        value={cqiEntries[r.id] || ''}
+                        onChange={(e) => setCqiEntries({ ...cqiEntries, [r.id]: e.target.value })}
+                        style={{
+                          width: '100%',
+                          minWidth: 100,
+                          padding: '4px 6px',
+                          border: '1px solid #d1d5db',
+                          borderRadius: 4,
+                          fontSize: 12,
+                        }}
+                        placeholder="Enter CQI"
+                      />
+                    </td>
 
                     <td style={{ ...td, textAlign: 'center' }}>{r.btl1 == null ? '' : round1(r.btl1)}</td>
                     <td style={{ ...td, textAlign: 'center' }}>{r.btl1Pct == null ? '' : r.btl1Pct}</td>
@@ -2250,13 +2403,16 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
                   <th rowSpan={2} style={thSticky}>Section</th>
                   <th rowSpan={2} style={thSticky}>Register No</th>
                   <th rowSpan={2} style={thSticky}>Name</th>
-                  <th colSpan={3} style={thGroup}>CO1</th>
-                  <th colSpan={3} style={thGroup}>CO2</th>
-                  <th colSpan={3} style={thGroup}>CO3</th>
-                  <th colSpan={3} style={thGroup}>CO4</th>
-                  {showTheoryCo5 && theoryEnabled.model && (
-                    <th colSpan={3} style={thGroup}>CO5</th>
+                  {!hideCOColumns && (
+                    <>
+                      {activeCONumbers.map(coNum => {
+                        // For non-lab courses, CO5 is conditional on MODEL being enabled for this class type.
+                        if (coNum === 5 && !showModelCo5) return null;
+                        return <th key={`co${coNum}`} colSpan={3} style={thGroup}>CO{coNum}</th>;
+                      })}
+                    </>
                   )}
+                  <th rowSpan={2} style={thSticky}>CQI Entry</th>
                   <th
                     rowSpan={2}
                     style={thSticky}
@@ -2265,23 +2421,20 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
                   </th>
                 </tr>
                 <tr>
-                  <th style={thSticky}>{theoryCoMaxTotals.co1}</th>
-                  <th style={thSticky}>%</th>
-                  <th style={thSticky}>3pt</th>
-                  <th style={thSticky}>{theoryCoMaxTotals.co2}</th>
-                  <th style={thSticky}>%</th>
-                  <th style={thSticky}>3pt</th>
-                  <th style={thSticky}>{theoryCoMaxTotals.co3}</th>
-                  <th style={thSticky}>%</th>
-                  <th style={thSticky}>3pt</th>
-                  <th style={thSticky}>{theoryCoMaxTotals.co4}</th>
-                  <th style={thSticky}>%</th>
-                  <th style={thSticky}>3pt</th>
-                  {showTheoryCo5 && theoryEnabled.model && (
+                  {!hideCOColumns && (
                     <>
-                      <th style={thSticky}>{theoryCo5Weightage}</th>
-                      <th style={thSticky}>%</th>
-                      <th style={thSticky}>3pt</th>
+                      {activeCONumbers.map(coNum => {
+                        if (coNum === 5 && !showModelCo5) return null;
+                        const coKey = `co${coNum}` as keyof typeof theoryCoMaxTotals;
+                        const maxVal = coNum === 5 ? theoryCo5Weightage : theoryCoMaxTotals[coKey];
+                        return (
+                          <React.Fragment key={`co${coNum}-cells`}>
+                            <th style={thSticky}>{maxVal}</th>
+                            <th style={thSticky}>%</th>
+                            <th style={thSticky}>3pt</th>
+                          </React.Fragment>
+                        );
+                      })}
                     </>
                   )}
                 </tr>
@@ -2293,28 +2446,40 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
                     <td style={td}>{r.section ?? ''}</td>
                     <td style={td}>{r.reg_no}</td>
                     <td style={td}>{r.name}</td>
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co1 == null ? '' : round1(r.co1)}</td>
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co1Pct == null ? '' : r.co1Pct}</td>
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co1_3pt == null ? '' : r.co1_3pt}</td>
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co2 == null ? '' : round1(r.co2)}</td>
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co2Pct == null ? '' : r.co2Pct}</td>
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co2_3pt == null ? '' : r.co2_3pt}</td>
-
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co3 == null ? '' : round1(r.co3)}</td>
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co3Pct == null ? '' : r.co3Pct}</td>
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co3_3pt == null ? '' : r.co3_3pt}</td>
-
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co4 == null ? '' : round1(r.co4)}</td>
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co4Pct == null ? '' : r.co4Pct}</td>
-                    <td style={{ ...td, textAlign: 'center' }}>{r.co4_3pt == null ? '' : r.co4_3pt}</td>
-
-                    {showTheoryCo5 && theoryEnabled.model && (
+                    {!hideCOColumns && (
                       <>
-                        <td style={{ ...td, textAlign: 'center' }}>{r.co5 == null ? '' : round1(r.co5)}</td>
-                        <td style={{ ...td, textAlign: 'center' }}>{r.co5Pct == null ? '' : r.co5Pct}</td>
-                        <td style={{ ...td, textAlign: 'center' }}>{r.co5_3pt == null ? '' : r.co5_3pt}</td>
+                        {activeCONumbers.map(coNum => {
+                          if (coNum === 5 && !showModelCo5) return null;
+                          const coKey = `co${coNum}`;
+                          const coPctKey = `co${coNum}Pct`;
+                          const co3ptKey = `co${coNum}_3pt`;
+                          return (
+                            <React.Fragment key={`co${coNum}-row`}>
+                              <td style={{ ...td, textAlign: 'center' }}>{r[coKey] == null ? '' : round1(r[coKey])}</td>
+                              <td style={{ ...td, textAlign: 'center' }}>{r[coPctKey] == null ? '' : r[coPctKey]}</td>
+                              <td style={{ ...td, textAlign: 'center' }}>{r[co3ptKey] == null ? '' : r[co3ptKey]}</td>
+                            </React.Fragment>
+                          );
+                        })}
                       </>
                     )}
+
+                    <td style={{ ...td, textAlign: 'center' }}>
+                      <input
+                        type="text"
+                        value={cqiEntries[r.id] || ''}
+                        onChange={(e) => setCqiEntries({ ...cqiEntries, [r.id]: e.target.value })}
+                        style={{
+                          width: '100%',
+                          minWidth: 100,
+                          padding: '4px 6px',
+                          border: '1px solid #d1d5db',
+                          borderRadius: 4,
+                          fontSize: 12,
+                        }}
+                        placeholder="Enter CQI"
+                      />
+                    </td>
 
                     <td style={{ ...td, textAlign: 'center', fontWeight: 700 }}>{r.total == null ? '' : r.total}</td>
                   </tr>

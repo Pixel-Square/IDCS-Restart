@@ -257,7 +257,17 @@ function learnerCentricFromCourseLevel(level: CourseLevelCode): LearnerCentricCo
    };
 }
 
-export default function LCAPage({ courseId, courseCode: courseCodeProp, courseName: courseNameProp }: { courseId?: string; courseCode?: string | null; courseName?: string | null }): JSX.Element {
+export default function LCAPage({
+  courseId,
+  courseCode: courseCodeProp,
+  courseName: courseNameProp,
+  embedded,
+}: {
+  courseId?: string;
+  courseCode?: string | null;
+  courseName?: string | null;
+  embedded?: boolean;
+}): JSX.Element {
   const location = useLocation();
   const navigate = useNavigate();
   const isPbrRoute = (location.pathname || '').toLowerCase().includes('/lca/pbr');
@@ -357,10 +367,18 @@ export default function LCAPage({ courseId, courseCode: courseCodeProp, courseNa
     }
   };
 
-  if (isPbrRoute) {
+  const wrap = (inner: React.ReactNode) => {
+    if (embedded) return <>{inner}</>;
     return (
       <div style={styles.page}>
-        <div style={styles.card}>
+        <div style={styles.card}>{inner}</div>
+      </div>
+    );
+  };
+
+  if (isPbrRoute) {
+    return wrap(
+      <>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
             <div>
               <h2 style={styles.title}>Previous Batch Result (PBR)</h2>
@@ -456,14 +474,12 @@ export default function LCAPage({ courseId, courseCode: courseCodeProp, courseNa
               </tr>
             </tbody>
           </table>
-        </div>
-      </div>
+      </>
     );
   }
 
-  return (
-    <div style={styles.page}>
-      <div style={styles.card}>
+  return wrap(
+    <>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 18 }}>
           <div>
             <h2 style={styles.title}>Learner Centric Approach</h2>
@@ -754,7 +770,6 @@ export default function LCAPage({ courseId, courseCode: courseCodeProp, courseNa
             </tr>
           </tbody>
         </table>
-      </div>
-    </div>
+      </>
   );
 }

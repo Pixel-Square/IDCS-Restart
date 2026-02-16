@@ -1116,7 +1116,7 @@ def iqac_reset_assessment(request, assessment: str, subject_id: str):
         return auth
 
     assessment_key = str(assessment or '').strip().lower()
-    if assessment_key not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
+    if assessment_key not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model', 'cdap', 'articulation', 'lca'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
     subject = _get_subject(subject_id, request)
@@ -1598,7 +1598,7 @@ def assessment_draft(request, assessment: str, subject_id: str):
     if err:
         return err
 
-    if assessment not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
+    if assessment not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model', 'cdap', 'articulation', 'lca'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
     subject = _get_subject(subject_id, request)
@@ -3118,6 +3118,27 @@ def upload_cdap(request):
     auth = _require_permissions(request, {'obe.cdap.upload'})
     if auth:
         return auth
+
+    # Optional: enforce per-course lock if subject_id is provided (frontend sends it).
+    try:
+        subject_code = str((request.data or {}).get('subject_id') or '').strip()
+    except Exception:
+        subject_code = ''
+    if subject_code:
+        try:
+            subject = _get_subject(subject_code, request)
+            gate = _enforce_mark_entry_not_blocked(
+                request,
+                subject_code=subject_code,
+                subject_name=getattr(subject, 'name', '') or subject_code,
+                assessment='cdap',
+            )
+            if gate is not None:
+                return gate
+        except Exception:
+            # If subject can't be resolved, proceed with parse only.
+            pass
+
     if 'file' not in request.FILES:
         return Response({'detail': 'Missing file'}, status=status.HTTP_400_BAD_REQUEST)
     parsed = parse_cdap_excel(request.FILES['file'])
@@ -3225,6 +3246,22 @@ def cdap_revision(request, subject_id):
     if body is None:
         return Response({'detail': 'Invalid JSON'}, status=status.HTTP_400_BAD_REQUEST)
 
+    # Enforce lock after first save unless an IQAC approval window is active.
+    try:
+        subject = _get_subject(subject_id, request)
+        gate = _enforce_mark_entry_not_blocked(
+            request,
+            subject_code=str(subject_id),
+            subject_name=getattr(subject, 'name', '') or str(subject_id),
+            assessment='cdap',
+            teaching_assignment_id=_get_teaching_assignment_id_from_request(request, body),
+        )
+        if gate is not None:
+            return gate
+    except Exception:
+        # best-effort; do not block on subject resolution failures
+        pass
+
     defaults = {
         'rows': body.get('rows', []),
         'books': body.get('books', {}),
@@ -3242,6 +3279,18 @@ def cdap_revision(request, subject_id):
         obj = CdapRevision(subject_id=subject_id, created_by=getattr(request.user, 'id', None), **defaults)
         obj.save()
 
+    # Lock after save.
+    try:
+        _touch_lock_after_publish(
+            request,
+            subject_code=str(subject_id),
+            subject_name=str(subject_id),
+            assessment='cdap',
+            teaching_assignment_id=_get_teaching_assignment_id_from_request(request, body),
+        )
+    except Exception:
+        pass
+
     return Response({
         'subject_id': str(obj.subject_id),
         'status': obj.status,
@@ -3249,6 +3298,72 @@ def cdap_revision(request, subject_id):
         'books': obj.books,
         'active_learning': obj.active_learning,
     })
+
+
+@api_view(['GET', 'PUT'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def lca_revision(request, subject_id):
+    from .models import LcaRevision
+
+    required = {'obe.view'} if request.method == 'GET' else {'obe.cdap.upload'}
+    auth = _require_permissions(request, required)
+    if auth:
+        return auth
+
+    if request.method == 'GET':
+        rev = LcaRevision.objects.filter(subject_id=subject_id).first()
+        if not rev:
+            return Response({'subject_id': str(subject_id), 'status': 'draft', 'data': {}})
+        return Response({'subject_id': str(rev.subject_id), 'status': rev.status, 'data': rev.data})
+
+    body = request.data or {}
+    if body is None:
+        return Response({'detail': 'Invalid JSON'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Enforce lock unless an edit approval window exists.
+    try:
+        subject = _get_subject(subject_id, request)
+        gate = _enforce_mark_entry_not_blocked(
+            request,
+            subject_code=str(subject_id),
+            subject_name=getattr(subject, 'name', '') or str(subject_id),
+            assessment='lca',
+            teaching_assignment_id=_get_teaching_assignment_id_from_request(request, body),
+        )
+        if gate is not None:
+            return gate
+    except Exception:
+        pass
+
+    defaults = {
+        'data': body.get('data', {}),
+        'status': body.get('status', 'draft'),
+        'updated_by': getattr(request.user, 'id', None),
+    }
+
+    obj = LcaRevision.objects.filter(subject_id=subject_id).first()
+    if obj:
+        for k, v in defaults.items():
+            setattr(obj, k, v)
+        obj.save(update_fields=list(defaults.keys()) + ['updated_at'])
+    else:
+        obj = LcaRevision(subject_id=subject_id, created_by=getattr(request.user, 'id', None), **defaults)
+        obj.save()
+
+    # Lock after save.
+    try:
+        _touch_lock_after_publish(
+            request,
+            subject_code=str(subject_id),
+            subject_name=str(subject_id),
+            assessment='lca',
+            teaching_assignment_id=_get_teaching_assignment_id_from_request(request, body),
+        )
+    except Exception:
+        pass
+
+    return Response({'subject_id': str(obj.subject_id), 'status': obj.status, 'data': obj.data})
 
 
 @api_view(['GET', 'PUT'])
@@ -3439,7 +3554,7 @@ def publish_window(request, assessment: str, subject_id: str):
         return err
 
     assessment_key = str(assessment or '').strip().lower()
-    if assessment_key not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
+    if assessment_key not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model', 'cdap', 'articulation', 'lca'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
     subject_code = str(subject_id or '').strip()
@@ -3510,7 +3625,7 @@ def edit_window(request, assessment: str, subject_id: str):
         return err
 
     assessment_key = str(assessment or '').strip().lower()
-    if assessment_key not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
+    if assessment_key not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model', 'cdap', 'articulation', 'lca'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
     qp = getattr(request, 'query_params', {}) if hasattr(request, 'query_params') else request.GET
@@ -3944,7 +4059,7 @@ def due_schedule_delete(request):
     if not sem_id or not subject_code or not assessment:
         return Response({'detail': 'semester_id, subject_code, assessment are required.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    if assessment not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
+    if assessment not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model', 'cdap', 'articulation', 'lca'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
     from academics.models import Semester

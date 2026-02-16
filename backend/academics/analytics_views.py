@@ -495,3 +495,125 @@ class ClassAttendanceReportView(APIView):
             'late_list': late_list,
             'attendance_percentage': round(attendance_pct, 2)
         })
+
+
+class TodayPeriodAttendanceView(APIView):
+    """Return period-wise attendance stats for today for the current user (staff)."""
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        user = request.user
+        staff_profile = getattr(user, 'staff_profile', None)
+        if not staff_profile:
+            return Response({'detail': 'Staff profile not found'}, status=403)
+
+        # Get today's date or date from query param
+        date_str = request.query_params.get('date')
+        try:
+            if date_str:
+                target_date = date.fromisoformat(date_str)
+            else:
+                target_date = date.today()
+        except Exception:
+            target_date = date.today()
+
+        # Get all attendance sessions for this staff member today
+        from .models import TeachingAssignment
+        from timetable.models import TimetableAssignment
+        
+        # Find all timetable assignments for today where this staff teaches
+        day = target_date.isoweekday()
+        
+        # Get timetable assignments for this staff on this day
+        timetable_assignments = TimetableAssignment.objects.filter(
+            day=day,
+            staff=staff_profile
+        ).select_related('period', 'section', 'curriculum_row', 'subject_batch')
+        
+        # Also check teaching assignments (fallback when TimetableAssignment.staff is null)
+        teaching_assignments = TeachingAssignment.objects.filter(
+            staff=staff_profile,
+            is_active=True
+        ).select_related('section', 'subject')
+        
+        # Build list of sections where staff teaches
+        section_ids = set()
+        for ta in timetable_assignments:
+            if ta.section_id:
+                section_ids.add(ta.section_id)
+        for teach in teaching_assignments:
+            if teach.section_id:
+                section_ids.add(teach.section_id)
+        
+        # Get all attendance sessions for today for these sections
+        sessions = PeriodAttendanceSession.objects.filter(
+            date=target_date,
+            section_id__in=list(section_ids)
+        ).select_related('period', 'section', 'timetable_assignment', 'marked_by')
+        
+        # Filter to only sessions where this staff is the teacher
+        period_stats = []
+        
+        for session in sessions:
+            # Check if this session belongs to this staff
+            ta = session.timetable_assignment
+            if ta and ta.staff_id != staff_profile.id:
+                # Check if staff teaches this section through teaching assignment
+                is_teaching = teaching_assignments.filter(
+                    section_id=session.section_id
+                ).exists()
+                if not is_teaching:
+                    continue
+            
+            # Get attendance records for this session
+            records = PeriodAttendanceRecord.objects.filter(session=session)
+            
+            total_records = records.count()
+            present_count = records.filter(status__in=['P', 'OD', 'LATE']).count()
+            absent_count = records.filter(status='A').count()
+            leave_count = records.filter(status='LEAVE').count()
+            od_count = records.filter(status='OD').count()
+            late_count = records.filter(status='LATE').count()
+            
+            attendance_pct = (present_count / total_records * 100) if total_records > 0 else 0
+            
+            # Get section total strength
+            total_strength = StudentProfile.objects.filter(section_id=session.section_id).count()
+            
+            # Get subject info
+            subject_name = ''
+            if ta and ta.curriculum_row:
+                subject_name = f"{ta.curriculum_row.course_code} - {ta.curriculum_row.course_title}"
+            elif ta and ta.subject_batch:
+                subject_name = ta.subject_batch.name or 'Subject'
+            
+            period_stats.append({
+                'session_id': session.id,
+                'period_index': session.period.index if session.period else 0,
+                'period_label': session.period.label if session.period else '',
+                'period_start': str(session.period.start_time) if session.period and session.period.start_time else '',
+                'period_end': str(session.period.end_time) if session.period and session.period.end_time else '',
+                'section_id': session.section_id,
+                'section_name': session.section.name if session.section else '',
+                'subject': subject_name,
+                'total_strength': total_strength,
+                'total_marked': total_records,
+                'present': present_count,
+                'absent': absent_count,
+                'leave': leave_count,
+                'late': late_count,
+                'on_duty': od_count,
+                'attendance_percentage': round(attendance_pct, 2),
+                'is_locked': session.is_locked,
+                'marked_at': session.created_at.isoformat() if session.created_at else None
+            })
+        
+        # Sort by period index
+        period_stats.sort(key=lambda x: x['period_index'])
+        
+        return Response({
+            'date': target_date.isoformat(),
+            'periods': period_stats,
+            'total_periods': len(period_stats),
+            'staff_name': user.username if user else ''
+        })

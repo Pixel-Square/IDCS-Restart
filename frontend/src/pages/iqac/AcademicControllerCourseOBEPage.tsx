@@ -1,10 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 
-import CDAPPage from '../CDAPPage';
-import ArticulationMatrixPage from '../ArticulationMatrixPage';
 import LCAInstructionsPage from '../LCAInstructionsPage';
-import LCAPage from '../LCAPage';
 import COAttainmentPage from '../COAttainmentPage';
 import CQIPage from '../CQIPage';
 
@@ -15,7 +12,7 @@ import { fetchSpecialCourseEnabledAssessments } from '../../services/obe';
 import type { TeachingAssignmentItem } from '../../services/obe';
 import { normalizeClassType } from '../../constants/classTypes';
 
-type TabKey = 'cdap' | 'articulation' | 'marks' | 'lca_instructions' | 'lca' | 'co_attainment' | 'cqi';
+type TabKey = 'marks' | 'lca_instructions' | 'co_attainment' | 'cqi';
 
 function normalize(s: any) {
   return String(s || '').trim();
@@ -39,14 +36,21 @@ export default function AcademicControllerCourseOBEPage(): JSX.Element {
     if (!location?.pathname) return;
     const path = location.pathname.toLowerCase();
     if (path.includes('/lca/instructions') || path.includes('/lca_instructions')) setActiveTab('lca_instructions');
-    else if (path.includes('/lca')) setActiveTab('lca');
-    else if (path.includes('/cdap')) setActiveTab('cdap');
-    else if (path.includes('/articulation')) setActiveTab('articulation');
+    // legacy URLs: keep working but route through LCA Instructions
+    else if (path.includes('/lca') || path.includes('/cdap') || path.includes('/articulation')) setActiveTab('lca_instructions');
     else if (path.includes('/marks')) setActiveTab('marks');
     else if (path.includes('/co_attainment')) setActiveTab('co_attainment');
     else if (path.includes('/cqi')) setActiveTab('cqi');
     else setActiveTab('marks');
   }, [location]);
+
+  const lcaInitialTab = useMemo(() => {
+    const path = String(location?.pathname || '').toLowerCase();
+    if (path.includes('/cdap')) return 'cdap' as const;
+    if (path.includes('/articulation')) return 'articulation' as const;
+    if (path.includes('/lca') && !(path.includes('/lca/instructions') || path.includes('/lca_instructions'))) return 'lca' as const;
+    return 'instructions' as const;
+  }, [location?.pathname]);
 
   useEffect(() => {
     let mounted = true;
@@ -190,9 +194,6 @@ export default function AcademicControllerCourseOBEPage(): JSX.Element {
         <div className="obe-tab-nav" aria-label="OBE Tabs" style={{ padding: '0 18px' }}>
           {[
             { key: 'lca_instructions', label: 'LCA Instructions' },
-            { key: 'lca', label: 'LCA' },
-            { key: 'cdap', label: 'CDAP' },
-            { key: 'articulation', label: 'Articulation Matrix' },
             { key: 'marks', label: 'Mark Entry' },
             { key: 'co_attainment', label: 'CO ATTAINMENT' },
             { key: 'cqi', label: 'CQI' },
@@ -217,14 +218,21 @@ export default function AcademicControllerCourseOBEPage(): JSX.Element {
         </div>
 
         <div style={{ border: '1px solid #eee', borderRadius: 10, padding: 12, margin: 18 }}>
-          <fieldset disabled={true} style={{ border: 0, padding: 0, margin: 0 }}>
-            {activeTab === 'cdap' && <CDAPPage courseId={code} showHeader={false} showCourseInput={false} />}
-            {activeTab === 'articulation' && <ArticulationMatrixPage courseId={code} />}
-            {activeTab === 'lca_instructions' && <LCAInstructionsPage courseCode={code} courseName={mapping?.course_name || null} />}
-            {activeTab === 'lca' && <LCAPage courseId={code} />}
-            {activeTab === 'co_attainment' && <COAttainmentPage courseId={code} enabledAssessments={enabledAssessments} />}
-            {activeTab === 'cqi' && <CQIPage courseId={code} />}
-          </fieldset>
+          {activeTab === 'lca_instructions' && (
+            <LCAInstructionsPage
+              courseCode={code}
+              courseName={mapping?.course_name || null}
+              initialTab={lcaInitialTab}
+              viewerMode={true}
+            />
+          )}
+
+          {activeTab !== 'lca_instructions' ? (
+            <fieldset disabled={true} style={{ border: 0, padding: 0, margin: 0 }}>
+              {activeTab === 'co_attainment' && <COAttainmentPage courseId={code} enabledAssessments={enabledAssessments} />}
+              {activeTab === 'cqi' && <CQIPage courseId={code} />}
+            </fieldset>
+          ) : null}
 
           {activeTab === 'marks' ? (
             <div>
