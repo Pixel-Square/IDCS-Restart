@@ -29,7 +29,7 @@ from .views import (
     StaffPeriodsView,
     StudentAttendanceView,
 )
-from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView, ClassAttendanceReportView, TodayPeriodAttendanceView
+from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView, ClassAttendanceReportView, TodayPeriodAttendanceView, PeriodAttendanceReportView
 
 router = DefaultRouter()
 router.register(r'section-advisors', SectionAdvisorViewSet, basename='section-advisor')
@@ -82,4 +82,5 @@ urlpatterns = [
     path('analytics/filters/', AnalyticsFiltersView.as_view()),
     path('analytics/class-report/', ClassAttendanceReportView.as_view()),
     path('analytics/today-periods/', TodayPeriodAttendanceView.as_view()),
+    path('analytics/period-log/', PeriodAttendanceReportView.as_view()),
 ]

@@ -2597,13 +2597,20 @@ def cia1_marks(request, subject_id):
     """
     user = request.user
     staff_profile = getattr(user, 'staff_profile', None)
-    if not staff_profile:
+    role_names = {r.name.upper() for r in user.roles.all()}
+    try:
+        user_perms = {str(p or '').lower() for p in (get_user_permissions(user) or [])}
+    except Exception:
+        user_perms = set()
+
+    # Academic Controller (IQAC / OBE Master) needs to view/edit any staff's roster.
+    is_obe_master = ('obe.master.manage' in user_perms) or ('IQAC' in role_names) or getattr(user, 'is_superuser', False)
+    if not staff_profile and not is_obe_master and not getattr(user, 'is_staff', False):
         return Response({'detail': 'Faculty access only.'}, status=status.HTTP_403_FORBIDDEN)
 
     # Subject may not exist when teaching assignments reference curriculum rows only.
     subject = Subject.objects.filter(code=subject_id).first()
 
-    role_names = {r.name.upper() for r in user.roles.all()}
     try:
         tas = TeachingAssignment.objects.select_related('section', 'academic_year', 'curriculum_row').filter(is_active=True)
         if subject is not None:
@@ -2619,14 +2626,18 @@ def cia1_marks(request, subject_id):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
-    # Staff: only their teaching assignments; HOD/ADVISOR: within their department
+    # Staff: only their teaching assignments; HOD/ADVISOR: within their department.
+    # IQAC/OBE Master: do not restrict to staff-owned assignments (Academic Controller viewer).
     try:
-        if 'HOD' in role_names or 'ADVISOR' in role_names:
-            if getattr(staff_profile, 'department_id', None):
+        if is_obe_master:
+            pass
+        elif 'HOD' in role_names or 'ADVISOR' in role_names:
+            if staff_profile and getattr(staff_profile, 'department_id', None):
                 # Semester is canonical (no course FK). Department lives on Course -> Batch.
                 tas = tas.filter(section__batch__course__department=staff_profile.department)
         else:
-            tas = tas.filter(staff=staff_profile)
+            if staff_profile:
+                tas = tas.filter(staff=staff_profile)
     except (ValueError, FieldError) as e:
         return Response(
             {
@@ -2649,6 +2660,10 @@ def cia1_marks(request, subject_id):
     except Exception:
         ta_id = None
 
+    # For OBE Master/IQAC flows, require explicit TA id to scope the roster.
+    if is_obe_master and ta_id is None:
+        return Response({'detail': 'teaching_assignment_id is required for IQAC / OBE Master roster view.'}, status=status.HTTP_400_BAD_REQUEST)
+
     # Resolve roster sources:
     # - Normal TAs: section roster
     # - Elective TAs (often sectionless): elective-choices roster
@@ -2660,9 +2675,14 @@ def cia1_marks(request, subject_id):
         # fall back to the user's available TAs so the UI can still display a roster.
         selected_ta = tas.filter(id=ta_id).first()
         if selected_ta:
+            # Narrow `tas` so elective roster detection matches the selected TA only.
+            tas = tas.filter(id=selected_ta.id)
             section_ids = [selected_ta.section_id]
         else:
-            # Ignore the invalid/unowned TA id and use the user's own assignments instead.
+            # For OBE Master/IQAC, an invalid TA id should be a hard error (since they explicitly picked it).
+            if is_obe_master:
+                return Response({'detail': 'Teaching assignment not found for this course.'}, status=status.HTTP_404_NOT_FOUND)
+            # Otherwise ignore invalid/unowned TA id and use the user's own assignments instead.
             section_ids = list(tas.values_list('section_id', flat=True).distinct())
     else:
         section_ids = list(tas.values_list('section_id', flat=True).distinct())
@@ -2858,13 +2878,19 @@ def cia2_marks(request, subject_id):
     """
     user = request.user
     staff_profile = getattr(user, 'staff_profile', None)
-    if not staff_profile:
+    role_names = {r.name.upper() for r in user.roles.all()}
+    try:
+        user_perms = {str(p or '').lower() for p in (get_user_permissions(user) or [])}
+    except Exception:
+        user_perms = set()
+
+    is_obe_master = ('obe.master.manage' in user_perms) or ('IQAC' in role_names) or getattr(user, 'is_superuser', False)
+    if not staff_profile and not is_obe_master and not getattr(user, 'is_staff', False):
         return Response({'detail': 'Faculty access only.'}, status=status.HTTP_403_FORBIDDEN)
 
     # Subject may not exist when teaching assignments reference curriculum rows only.
     subject = Subject.objects.filter(code=subject_id).first()
 
-    role_names = {r.name.upper() for r in user.roles.all()}
     try:
         tas = TeachingAssignment.objects.select_related('section', 'academic_year', 'curriculum_row').filter(is_active=True)
         if subject is not None:
@@ -2880,13 +2906,17 @@ def cia2_marks(request, subject_id):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
-    # Staff: only their teaching assignments; HOD/ADVISOR: within their department
+    # Staff: only their teaching assignments; HOD/ADVISOR: within their department.
+    # IQAC/OBE Master: do not restrict to staff-owned assignments.
     try:
-        if 'HOD' in role_names or 'ADVISOR' in role_names:
-            if getattr(staff_profile, 'department_id', None):
+        if is_obe_master:
+            pass
+        elif 'HOD' in role_names or 'ADVISOR' in role_names:
+            if staff_profile and getattr(staff_profile, 'department_id', None):
                 tas = tas.filter(section__batch__course__department=staff_profile.department)
         else:
-            tas = tas.filter(staff=staff_profile)
+            if staff_profile:
+                tas = tas.filter(staff=staff_profile)
     except (ValueError, FieldError) as e:
         return Response(
             {
@@ -2909,14 +2939,20 @@ def cia2_marks(request, subject_id):
     except Exception:
         ta_id = None
 
+    if is_obe_master and ta_id is None:
+        return Response({'detail': 'teaching_assignment_id is required for IQAC / OBE Master roster view.'}, status=status.HTTP_400_BAD_REQUEST)
+
     selected_ta = None
     if ta_id is not None:
         # If the UI provided a TA id, prefer scoping to that TA when it belongs
         # to the filtered `tas` queryset. Fall back to user's TAs if not found.
         selected_ta = tas.filter(id=ta_id).first()
         if selected_ta:
+            tas = tas.filter(id=selected_ta.id)
             section_ids = [selected_ta.section_id]
         else:
+            if is_obe_master:
+                return Response({'detail': 'Teaching assignment not found for this course.'}, status=status.HTTP_404_NOT_FOUND)
             section_ids = list(tas.values_list('section_id', flat=True).distinct())
     else:
         section_ids = list(tas.values_list('section_id', flat=True).distinct())

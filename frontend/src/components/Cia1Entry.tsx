@@ -21,6 +21,7 @@ import { useEditWindow } from '../hooks/useEditWindow';
 import { useMarkTableLock } from '../hooks/useMarkTableLock';
 import PublishLockOverlay from './PublishLockOverlay';
 import { normalizeClassType } from '../constants/classTypes';
+import * as XLSX from 'xlsx';
 
 type Student = {
   id: number;
@@ -376,6 +377,9 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
     markManagerSnapshot: null,
     markManagerApprovalUntil: null,
   });
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState(false);
 
   const [markManagerModal, setMarkManagerModal] = useState<null | { mode: 'confirm' | 'request' }>(null);
   const [markManagerBusy, setMarkManagerBusy] = useState(false);
@@ -1396,6 +1400,161 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
     }
   };
 
+  const importFromExcel = async (file: File) => {
+    if (publishing || tableBlocked || importing) return;
+    setImporting(true);
+    try {
+      const data = await file.arrayBuffer();
+      const workbook = XLSX.read(data, { type: 'array' });
+      const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows: any[][] = XLSX.utils.sheet_to_json(firstSheet, { header: 1 });
+
+      if (rows.length < 2) {
+        throw new Error('Excel file is empty or has no data rows');
+      }
+
+      // Parse header row to find column indices
+      const headerRow = rows[0] as string[];
+      const regNoIdx = headerRow.findIndex((h) => String(h || '').toLowerCase().includes('register'));
+      const statusIdx = headerRow.findIndex((h) => String(h || '').toLowerCase().includes('status'));
+
+      if (regNoIdx === -1) {
+        throw new Error('Could not find "Register No" column in Excel file');
+      }
+
+      // Question columns are between student name and status
+      const qStartIdx = 2; // After Register No and Student Name
+      const qEndIdx = statusIdx !== -1 ? statusIdx : headerRow.length;
+
+      // Map question headers to question keys
+      const qColumnMap: Array<{ colIdx: number; qKey: string }> = [];
+      for (let i = qStartIdx; i < qEndIdx; i++) {
+        const header = String(headerRow[i] || '').trim();
+        if (!header) continue;
+
+        // Extract question label from header like "Q1 (2.00)" -> "Q1"
+        const match = header.match(/^([QqOo]\d+|[A-Za-z]\d*)/);
+        if (!match) continue;
+
+        const label = match[1].toUpperCase();
+        // Find matching question by label
+        const question = questions.find((q) => q.label.toUpperCase() === label || q.key.toUpperCase() === label.toUpperCase());
+        if (question) {
+          qColumnMap.push({ colIdx: i, qKey: question.key });
+        }
+      }
+
+      if (qColumnMap.length === 0) {
+        throw new Error('No matching question columns found in Excel file');
+      }
+
+      // Build a map from reg_no to student
+      const studentsByRegNo = new Map<string, Student>();
+      students.forEach((s) => {
+        const normalizedReg = String(s.reg_no || '').trim().toUpperCase();
+        if (normalizedReg) {
+          studentsByRegNo.set(normalizedReg, s);
+        }
+      });
+
+      // Process data rows
+      let importedCount = 0;
+      let skippedCount = 0;
+      const updatedRows: Record<string, Cia1RowState> = { ...sheet.rowsByStudentId };
+
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i];
+        if (!row || row.length === 0) continue;
+
+        const regNo = String(row[regNoIdx] || '').trim().toUpperCase();
+        if (!regNo) continue;
+
+        const student = studentsByRegNo.get(regNo);
+        if (!student) {
+          skippedCount++;
+          continue;
+        }
+
+        const key = String(student.id);
+        const existing = updatedRows[key] || {
+          studentId: student.id,
+          absent: false,
+          absentKind: undefined,
+          reg_no: student.reg_no,
+          q: Object.fromEntries(questions.map((q) => [q.key, ''])),
+        };
+
+        // Read marks for each question
+        const newQ = { ...existing.q };
+        let hasAnyMark = false;
+        for (const { colIdx, qKey } of qColumnMap) {
+          const cellValue = row[colIdx];
+          if (cellValue === null || cellValue === undefined || cellValue === '') {
+            newQ[qKey] = '';
+            continue;
+          }
+
+          const numValue = Number(cellValue);
+          if (!Number.isFinite(numValue)) {
+            newQ[qKey] = '';
+            continue;
+          }
+
+          const question = questions.find((q) => q.key === qKey);
+          const max = question?.max ?? totalsMax;
+          newQ[qKey] = clamp(numValue, 0, max);
+          hasAnyMark = true;
+        }
+
+        // Read status
+        let absent = existing.absent;
+        if (statusIdx !== -1) {
+          const statusValue = String(row[statusIdx] || '').trim().toLowerCase();
+          absent = statusValue === 'absent';
+        }
+
+        updatedRows[key] = {
+          ...existing,
+          q: newQ,
+          absent,
+        };
+
+        if (hasAnyMark || absent !== existing.absent) {
+          importedCount++;
+        }
+      }
+
+      // Update sheet
+      setSheet((prev) => ({
+        ...prev,
+        rowsByStudentId: updatedRows,
+      }));
+
+      alert(`Import successful!\nImported: ${importedCount} students\nSkipped: ${skippedCount} rows (no matching register number)`);
+    } catch (e: any) {
+      alert(`Failed to import Excel: ${e?.message || 'Unknown error'}`);
+      console.error('Import error:', e);
+    } finally {
+      setImporting(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      importFromExcel(file);
+    }
+  };
+
+  const triggerFileUpload = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+
   if (loading) return <div style={{ color: '#6b7280' }}>Loading {assessmentLabel} roster…</div>;
 
   const hasAbsentees = students.some((s) => Boolean(sheet.rowsByStudentId[String(s.id)]?.absent));
@@ -1584,6 +1743,16 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
           <button onClick={exportSheetExcel} className="obe-btn" disabled={students.length === 0}>
             Export Excel
           </button>
+          <button onClick={triggerFileUpload} className="obe-btn" disabled={importing || students.length === 0 || tableBlocked || globalLocked}>
+            {importing ? 'Importing…' : 'Import Excel'}
+          </button>
+          <input 
+            ref={fileInputRef}
+            type="file" 
+            accept=".xlsx,.xls" 
+            onChange={handleFileSelect}
+            style={{ display: 'none' }}
+          />
           <button
             onClick={publish}
             disabled={publishing || students.length === 0 || !publishAllowed || tableBlocked || globalLocked}

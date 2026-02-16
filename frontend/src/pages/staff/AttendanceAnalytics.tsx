@@ -88,6 +88,35 @@ interface ClassReport {
   attendance_percentage: number;
 }
 
+interface PeriodReport {
+  session_id: number;
+  date: string;
+  period_label: string;
+  period_start: string;
+  period_end: string;
+  subject: string;
+  section_id: number;
+  section_name: string;
+  batch_name: string;
+  department_name: string;
+  department_short: string;
+  total_strength: number;
+  total_marked: number;
+  present: number;
+  absent: number;
+  leave: number;
+  late: number;
+  on_duty: number;
+  absent_list: string[];
+  leave_list: string[];
+  od_list: string[];
+  late_list: string[];
+  attendance_percentage: number;
+  is_locked: boolean;
+  marked_by: string;
+  marked_at: string | null;
+}
+
 interface PeriodStat {
   session_id: number;
   period_index: number;
@@ -143,7 +172,7 @@ interface FiltersData {
   sections: Section[];
 }
 
-type ViewType = 'overview' | 'department' | 'class' | 'student';
+type ViewType = 'overview' | 'department' | 'class' | 'student' | 'period';
 
 const AttendanceAnalytics: React.FC = () => {
   const [viewType, setViewType] = useState<ViewType>('overview');
@@ -168,6 +197,9 @@ const AttendanceAnalytics: React.FC = () => {
   const [reportOpen, setReportOpen] = useState(false);
   const [reportLoading, setReportLoading] = useState(false);
   const [classReport, setClassReport] = useState<ClassReport | null>(null);
+  // Assigned timetable periods for the current staff (for 'By Period' view)
+  const [assignedPeriods, setAssignedPeriods] = useState<any[]>([]);
+  const [assignedLoading, setAssignedLoading] = useState(false);
   // Requests modal
   const [requestsOpen, setRequestsOpen] = useState(false);
   const [requestsLoading, setRequestsLoading] = useState(false);
@@ -178,6 +210,11 @@ const AttendanceAnalytics: React.FC = () => {
   const [todayPeriods, setTodayPeriods] = useState<TodayPeriodData | null>(null);
   const [periodLoading, setPeriodLoading] = useState(false);
   const [showPeriodSection, setShowPeriodSection] = useState(true);
+  // Period view / logs
+  const [periodReportOpen, setPeriodReportOpen] = useState(false);
+  const [periodReportLoading, setPeriodReportLoading] = useState(false);
+  const [periodLog, setPeriodLog] = useState<PeriodReport | null>(null);
+  const [selectedPeriod, setSelectedPeriod] = useState<PeriodStat | null>(null);
 
   // Auto-refresh requests when modal opens
   useEffect(() => {
@@ -249,10 +286,31 @@ const AttendanceAnalytics: React.FC = () => {
     }
   };
 
+  const fetchPeriodLog = async (sessionId: number, period?: PeriodStat) => {
+    setPeriodReportLoading(true);
+    setPeriodReportOpen(true);
+    setPeriodLog(null);
+    setSelectedPeriod(period || null);
+    try {
+      const params = new URLSearchParams({ session_id: String(sessionId) });
+      const resp = await fetchWithAuth(`/api/academics/analytics/period-log/?${params}`);
+      const data = await resp.json().catch(() => null);
+      if (resp.ok) {
+        setPeriodLog(data);
+      } else {
+        setPeriodLog(null);
+      }
+    } catch (err) {
+      setPeriodLog(null);
+    } finally {
+      setPeriodReportLoading(false);
+    }
+  };
+
   useEffect(() => {
     loadFilters();
     loadTodayPeriods();
-    
+    loadAssignedPeriods();
     // Set default dates (today)
     const today = new Date();
     const isoToday = today.toISOString().split('T')[0];
@@ -276,6 +334,25 @@ const AttendanceAnalytics: React.FC = () => {
       setTodayPeriods(null);
     } finally {
       setPeriodLoading(false);
+    }
+  };
+
+  const loadAssignedPeriods = async () => {
+    setAssignedLoading(true);
+    try {
+      const todayIso = new Date().toISOString().split('T')[0];
+      const resp = await fetchWithAuth(`/api/academics/staff/periods/?date=${todayIso}`);
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok) {
+        setAssignedPeriods(data.results || []);
+      } else {
+        setAssignedPeriods([]);
+      }
+    } catch (e) {
+      console.error('Failed to load assigned periods', e);
+      setAssignedPeriods([]);
+    } finally {
+      setAssignedLoading(false);
     }
   };
 
@@ -620,101 +697,64 @@ const AttendanceAnalytics: React.FC = () => {
           </div>
 
           {showPeriodSection && (
-            <div className="p-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {todayPeriods.periods.map((period) => (
-                  <div 
-                    key={period.session_id} 
-                    className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow bg-white"
-                  >
-                    {/* Period Header */}
-                    <div className="flex items-start justify-between mb-3">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2">
-                          <h3 className="font-semibold text-gray-900">
-                            {period.period_label || `Period ${period.period_index}`}
-                          </h3>
-                          {period.is_locked && (
-                            <div className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded-full flex items-center gap-1">
-                              <Lock className="w-3 h-3" />
-                              Locked
-                            </div>
-                          )}
+            <div className="p-6 overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Period</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Session</th>
+                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Locked</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Total</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Present</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Absent</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Leave</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">OD</th>
+                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Report</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {todayPeriods.periods.map((period) => (
+                    <tr key={period.session_id} className="hover:bg-gray-50">
+                      <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">
+                        {period.period_label || `Period ${period.period_index}`}
+                        <div className="text-xs text-gray-500">{period.period_start && period.period_end ? `${period.period_start} - ${period.period_end}` : ''}</div>
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">
+                        <div className="font-medium">{period.section_name}</div>
+                        {period.subject && <div className="text-xs text-gray-500">{period.subject}</div>}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-center text-sm">
+                        {period.is_locked ? (
+                          <div className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-red-100 text-red-700"><Lock className="w-3 h-3 mr-1"/>Locked</div>
+                        ) : (
+                          <div className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-green-50 text-green-700"><Unlock className="w-3 h-3 mr-1"/>Unlocked</div>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-right text-sm text-gray-900">{period.total_strength}</td>
+                      <td className="px-4 py-3 whitespace-nowrap text-right text-sm text-green-600 font-semibold">{period.present}</td>
+                      <td className="px-4 py-3 whitespace-nowrap text-right text-sm text-red-600 font-semibold">{period.absent}</td>
+                      <td className="px-4 py-3 whitespace-nowrap text-right text-sm text-gray-600">{period.leave}</td>
+                      <td className="px-4 py-3 whitespace-nowrap text-right text-sm text-gray-600">{period.on_duty}</td>
+                      <td className="px-4 py-3 whitespace-nowrap text-center">
+                        <div className="flex items-center justify-center gap-2">
+                          <button
+                            onClick={() => fetchPeriodLog(period.session_id, period)}
+                            className="px-2 py-1 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700"
+                          >
+                            Report
+                          </button>
+                          <button
+                            onClick={() => fetchClassReport(period.section_id)}
+                            className="px-2 py-1 text-xs bg-gray-100 rounded hover:bg-gray-200"
+                          >
+                            Class
+                          </button>
                         </div>
-                        <div className="text-xs text-gray-500 mt-1">
-                          {period.period_start && period.period_end && (
-                            <span>{period.period_start} - {period.period_end}</span>
-                          )}
-                        </div>
-                      </div>
-                      <div className={`text-lg font-bold ${
-                        period.attendance_percentage >= 85 ? 'text-green-600' :
-                        period.attendance_percentage >= 75 ? 'text-yellow-600' : 'text-red-600'
-                      }`}>
-                        {period.attendance_percentage}%
-                      </div>
-                    </div>
-
-                    {/* Section and Subject */}
-                    <div className="mb-3 space-y-1">
-                      <div className="flex items-center gap-2">
-                        <Building2 className="w-4 h-4 text-gray-400" />
-                        <span className="text-sm font-medium text-gray-700">{period.section_name}</span>
-                      </div>
-                      {period.subject && (
-                        <div className="flex items-center gap-2">
-                          <GraduationCap className="w-4 h-4 text-gray-400" />
-                          <span className="text-xs text-gray-600">{period.subject}</span>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Attendance Stats */}
-                    <div className="grid grid-cols-2 gap-2 mb-3">
-                      <div className="bg-gray-50 rounded-lg p-2">
-                        <div className="text-xs text-gray-500">Total Strength</div>
-                        <div className="text-lg font-semibold text-gray-900">{period.total_strength}</div>
-                      </div>
-                      <div className="bg-gray-50 rounded-lg p-2">
-                        <div className="text-xs text-gray-500">Marked</div>
-                        <div className="text-lg font-semibold text-gray-900">{period.total_marked}</div>
-                      </div>
-                    </div>
-
-                    {/* Status Breakdown */}
-                    <div className="grid grid-cols-4 gap-1 text-center text-xs">
-                      <div className="bg-green-50 rounded p-1.5">
-                        <div className="font-semibold text-green-700">{period.present}</div>
-                        <div className="text-green-600">Present</div>
-                      </div>
-                      <div className="bg-red-50 rounded p-1.5">
-                        <div className="font-semibold text-red-700">{period.absent}</div>
-                        <div className="text-red-600">Absent</div>
-                      </div>
-                      <div className="bg-blue-50 rounded p-1.5">
-                        <div className="font-semibold text-blue-700">{period.on_duty}</div>
-                        <div className="text-blue-600">OD</div>
-                      </div>
-                      <div className="bg-yellow-50 rounded p-1.5">
-                        <div className="font-semibold text-yellow-700">{period.late}</div>
-                        <div className="text-yellow-600">Late</div>
-                      </div>
-                    </div>
-
-                    {/* Marked Time */}
-                    {period.marked_at && (
-                      <div className="mt-3 pt-3 border-t border-gray-100">
-                        <div className="text-xs text-gray-500">
-                          Marked at {new Date(period.marked_at).toLocaleTimeString('en-US', { 
-                            hour: '2-digit', 
-                            minute: '2-digit' 
-                          })}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
@@ -875,6 +915,7 @@ const AttendanceAnalytics: React.FC = () => {
             <option value="department">By Department</option>
             <option value="class">By Class</option>
             <option value="student">By Student</option>
+            <option value="period">By Period</option>
           </select>
         </div>
 
@@ -926,6 +967,18 @@ const AttendanceAnalytics: React.FC = () => {
           >
             <Users className="w-4 h-4" />
             By Student
+          </button>
+
+          <button
+            onClick={() => setViewType('period')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
+              viewType === 'period'
+                ? 'bg-blue-600 text-white'
+                : 'text-gray-600 hover:bg-gray-100'
+            }`}
+          >
+            <Clock className="w-4 h-4" />
+            By Period
           </button>
         </div>
       </div>
@@ -1049,6 +1102,96 @@ const AttendanceAnalytics: React.FC = () => {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Period View (Assigned timetable for current staff) */}
+      {!loading && viewType === 'period' && (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-semibold">Assigned Periods (Today)</h2>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={loadAssignedPeriods}
+                className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                disabled={assignedLoading}
+              >
+                Refresh
+              </button>
+            </div>
+          </div>
+
+          {assignedLoading && (
+            <div className="py-6 flex items-center gap-3">
+              <Loader2 className="w-5 h-5 text-indigo-600 animate-spin" />
+              <div className="text-gray-600">Loading assigned periods...</div>
+            </div>
+          )}
+
+          {!assignedLoading && assignedPeriods.length === 0 && (
+            <div className="text-gray-600">No assigned periods found for today.</div>
+          )}
+
+          <div className="overflow-x-auto bg-white rounded-lg border border-gray-200">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Period</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Session</th>
+                  <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Locked</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Total</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Present</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Absent</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Leave</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">OD</th>
+                  <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Report</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {assignedPeriods.map((p: any) => (
+                  <tr key={`${p.id}-${p.period?.id || 'x'}`} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">
+                      {p.period?.label || `Period ${p.period?.index}`}
+                      <div className="text-xs text-gray-500">{p.period?.start_time && p.period?.end_time ? `${p.period.start_time} - ${p.period.end_time}` : ''}</div>
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">
+                      <div className="font-medium">{p.section_name}</div>
+                      {p.subject_display && <div className="text-xs text-gray-500">{p.subject_display}</div>}
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap text-center text-sm">
+                      {p.attendance_session_locked ? (
+                        <div className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-red-100 text-red-700"><Lock className="w-3 h-3 mr-1"/>Locked</div>
+                      ) : (
+                        <div className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-green-50 text-green-700"><Unlock className="w-3 h-3 mr-1"/>Unlocked</div>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap text-right text-sm text-gray-900">{p.total_strength ?? '-'}</td>
+                    <td className="px-4 py-3 whitespace-nowrap text-right text-sm text-green-600 font-semibold">{p.present ?? '-'}</td>
+                    <td className="px-4 py-3 whitespace-nowrap text-right text-sm text-red-600 font-semibold">{p.absent ?? '-'}</td>
+                    <td className="px-4 py-3 whitespace-nowrap text-right text-sm text-gray-600">{p.leave ?? '-'}</td>
+                    <td className="px-4 py-3 whitespace-nowrap text-right text-sm text-gray-600">{p.on_duty ?? '-'}</td>
+                    <td className="px-4 py-3 whitespace-nowrap text-center">
+                      <div className="flex items-center justify-center gap-2">
+                        <button
+                          onClick={() => p.attendance_session_id && fetchPeriodLog(p.attendance_session_id, p)}
+                          disabled={!p.attendance_session_id}
+                          className={`px-2 py-1 text-xs ${p.attendance_session_id ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-gray-100 text-gray-400 cursor-not-allowed'} rounded`}
+                        >
+                          Report
+                        </button>
+                        <button
+                          onClick={() => fetchClassReport(p.section_id || p.section?.id || p.section_id)}
+                          className="px-2 py-1 text-xs bg-gray-100 rounded hover:bg-gray-200"
+                        >
+                          Class
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
@@ -1450,6 +1593,171 @@ const AttendanceAnalytics: React.FC = () => {
               No data available for the selected period
             </div>
           )}
+        </div>
+      )}
+
+      {/* Period View */}
+      {!loading && viewType === 'period' && (
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+          <div className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Periods</h3>
+                <p className="text-sm text-gray-600">List of periods and their logs for {startDate || 'today'}</p>
+              </div>
+            </div>
+
+            {periodLoading && (
+              <div className="py-6 flex items-center gap-3">
+                <Loader2 className="w-5 h-5 text-indigo-600 animate-spin" />
+                <span className="text-gray-600">Loading periods...</span>
+              </div>
+            )}
+
+            {!periodLoading && todayPeriods && todayPeriods.periods.length > 0 && (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 p-2">
+                {todayPeriods.periods.map((period) => (
+                  <div key={period.session_id} className="border border-gray-200 rounded-lg p-4 bg-white hover:shadow-md transition-shadow">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-sm font-semibold">{period.period_label}</div>
+                        <div className="text-xs text-gray-500">{period.period_start} — {period.period_end}</div>
+                        <div className="mt-2 text-sm text-blue-700 bg-blue-50 inline-block px-2 py-1 rounded">{period.section_name}</div>
+                        <div className="text-xs text-gray-500 mt-1">{period.subject}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-green-600 font-semibold">{period.present}</div>
+                        <div className="text-xs text-gray-500">Present</div>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 flex items-center gap-2">
+                      <button onClick={() => fetchPeriodLog(period.session_id, period)} className="flex-1 px-3 py-2 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700">View Log</button>
+                      <button onClick={() => fetchClassReport(period.section_id)} className="px-3 py-2 text-sm bg-gray-100 rounded">Class Report</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {!periodLoading && (!todayPeriods || todayPeriods.periods.length === 0) && (
+              <div className="py-12 text-center text-gray-500">No periods found for the selected date.</div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Period Log Modal */}
+      {periodReportOpen && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-lg w-11/12 max-w-2xl p-6 max-h-[90vh] overflow-y-auto">
+            {periodReportLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600"></div>
+              </div>
+            ) : periodLog ? (
+              <div>
+                <div className="flex justify-between items-start mb-4">
+                  <div>
+                    <h3 className="text-lg font-semibold">Period Attendance Report</h3>
+                    <p className="text-sm text-gray-600">
+                      {periodLog.period_label} ({periodLog.period_start} — {periodLog.period_end}) — {periodLog.subject}
+                    </p>
+                    <p className="text-sm text-gray-600">
+                      {periodLog.department_short} / {periodLog.batch_name} / {periodLog.section_name} — {new Date(periodLog.date).toLocaleDateString()}
+                    </p>
+                  </div>
+                  <button onClick={() => { setPeriodReportOpen(false); setPeriodLog(null); }} className="text-gray-500 hover:text-gray-700">
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 mb-4">
+                  <div className="p-3 bg-gray-50 rounded text-sm">
+                    <div className="text-xs text-gray-500">Total Strength</div>
+                    <div className="text-lg font-bold">{periodLog.total_strength}</div>
+                  </div>
+                  <div className="p-3 bg-gray-50 rounded text-sm">
+                    <div className="text-xs text-gray-500">Total Marked</div>
+                    <div className="text-lg font-bold">{periodLog.total_marked}</div>
+                  </div>
+                  <div className="p-3 bg-gray-50 rounded text-sm">
+                    <div className="text-xs text-gray-500">Attendance %</div>
+                    <div className="text-lg font-bold">{periodLog.attendance_percentage}%</div>
+                  </div>
+                  <div className="p-3 bg-gray-50 rounded text-sm flex items-center justify-between">
+                    <div>
+                      <div className="text-xs text-gray-500">Status</div>
+                      <div className="text-sm font-semibold flex items-center gap-1 mt-1">
+                        {periodLog.is_locked ? (
+                          <>
+                            <Lock className="w-4 h-4 text-red-600" />
+                            <span className="text-red-600">Locked</span>
+                          </>
+                        ) : (
+                          <>
+                            <Unlock className="w-4 h-4 text-green-600" />
+                            <span className="text-green-600">Unlocked</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="p-3 bg-green-50 rounded text-sm">
+                    <div className="text-xs text-gray-500">Present</div>
+                    <div className="text-lg font-bold text-green-600">{periodLog.present}</div>
+                  </div>
+                  <div className="p-3 bg-red-50 rounded text-sm">
+                    <div className="text-xs text-gray-500">Absent</div>
+                    <div className="text-lg font-bold text-red-600">{periodLog.absent}</div>
+                  </div>
+                  <div className="p-3 bg-yellow-50 rounded text-sm">
+                    <div className="text-xs text-gray-500">Leave</div>
+                    <div className="text-lg font-bold">{periodLog.leave}</div>
+                  </div>
+                  <div className="p-3 bg-gray-50 rounded text-sm">
+                    <div className="text-xs text-gray-500">OD</div>
+                    <div className="text-lg font-bold">{periodLog.on_duty}</div>
+                  </div>
+                  <div className="p-3 bg-gray-50 rounded text-sm col-span-2">
+                    <div className="text-xs text-gray-500">Late</div>
+                    <div className="text-lg font-bold">{periodLog.late}</div>
+                  </div>
+                </div>
+
+                <div className="mb-4">
+                  <h4 className="text-sm font-semibold mb-2">Students (last 3 digits)</h4>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <div className="text-xs text-gray-500">Absent</div>
+                      <div className="font-mono">{(periodLog.absent_list && periodLog.absent_list.length) ? periodLog.absent_list.join(', ') : '—'}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500">Leave</div>
+                      <div className="font-mono">{(periodLog.leave_list && periodLog.leave_list.length) ? periodLog.leave_list.join(', ') : '—'}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500">OD</div>
+                      <div className="font-mono">{(periodLog.od_list && periodLog.od_list.length) ? periodLog.od_list.join(', ') : '—'}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500">Late</div>
+                      <div className="font-mono">{(periodLog.late_list && periodLog.late_list.length) ? periodLog.late_list.join(', ') : '—'}</div>
+                    </div>
+                  </div>
+                </div>
+
+                {periodLog.marked_by && (
+                  <div className="text-xs text-gray-500 border-t pt-3">
+                    <p>Marked by: <span className="font-semibold">{periodLog.marked_by}</span></p>
+                    {periodLog.marked_at && <p>Marked at: {new Date(periodLog.marked_at).toLocaleString()}</p>}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="text-sm text-gray-500">No report available for this period.</div>
+            )}
+          </div>
         </div>
       )}
     </div>
