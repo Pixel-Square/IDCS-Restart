@@ -13,6 +13,7 @@ export type TeachingAssignmentRosterResponse = {
     subject_id: number;
     subject_code: string;
     subject_name: string;
+    class_type?: string | null;
     section_id: number;
     section_name: string;
     academic_year: string;

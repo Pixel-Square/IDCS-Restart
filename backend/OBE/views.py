@@ -276,7 +276,8 @@ def _get_cia_questions_for_export(*, subject, assessment_key: str, class_type: s
         pass
 
     # 5) Last resort: match the common CIA sheet shown in the user's template.
-    return [{'key': f"q{i + 1}", 'label': f"Q{i + 1}", 'max': float(mx)} for i, mx in enumerate([2, 2, 2, 2, 2, 2, 16, 16, 8, 8])]
+    # Return 9 questions ending with Q9=16; QP2 Excel split will convert Q9 into Q9+Q10 (8+8) later.
+    return [{'key': f"q{i + 1}", 'label': f"Q{i + 1}", 'max': float(mx)} for i, mx in enumerate([2, 2, 2, 2, 2, 2, 16, 16, 16])]
 
 
 def _get_cia_sheet_rows_for_export(*, subject, assessment_key: str) -> dict:
@@ -356,12 +357,64 @@ def cia_export_template_xlsx(request, assessment: str, subject_id: str):
     class_type = str(getattr(row, 'class_type', '') or '').strip().upper() if row else ''
     qp_type = str(getattr(row, 'question_paper_type', '') or '').strip().upper() if row else ''
 
+    # Allow caller to specify QP type explicitly (useful for IQAC flows where curriculum row
+    # resolution is not reliable, but the UI knows the question paper type).
+    try:
+        req_qp = None
+        if hasattr(request, 'query_params'):
+            req_qp = request.query_params.get('question_paper_type')
+        if req_qp is None:
+            req_qp = request.GET.get('question_paper_type')
+        if req_qp:
+            qp_type = str(req_qp).strip().upper()
+    except Exception:
+        pass
+
     q_defs = _get_cia_questions_for_export(subject=subject, assessment_key=assessment_key, class_type=class_type, question_paper_type=qp_type)
     rows_by_student_id = _get_cia_sheet_rows_for_export(subject=subject, assessment_key=assessment_key)
 
+    # QP2-specific Excel-only tweak:
+    # Split the last question (typically Q9 out of 16) into two columns Q9 and Q10
+    # each out of 8. This does NOT change the UI/table or persisted keys; it only
+    # affects the downloaded template.
+    qp2_excel_split = str(qp_type or '').strip().upper() == 'QP2'
+
     q_headers = []
     q_keys: list[str] = []
-    for i, q in enumerate(q_defs):
+
+    def _split_qp2_defs(defs: list[dict]) -> list[dict]:
+        if not qp2_excel_split:
+            return defs
+        if not isinstance(defs, list) or not defs:
+            return defs
+
+        # Prefer splitting the question with key 'q9', else split the last question.
+        split_idx = None
+        for i, d in enumerate(defs):
+            k = str((d or {}).get('key') or '').strip().lower()
+            if k == 'q9':
+                split_idx = i
+                break
+        if split_idx is None:
+            split_idx = len(defs) - 1
+
+        base = defs[split_idx] or {}
+        try:
+            mx = float(base.get('max') or 0)
+        except Exception:
+            mx = 0.0
+
+        # Requirement: for QP2, split 16 -> 8 and 8.
+        half = 8.0 if abs(mx - 16.0) < 1e-6 else (mx / 2.0 if mx else 0.0)
+
+        left = {**base, 'key': 'q9', 'label': 'Q9', 'max': half}
+        right = {**base, 'key': 'q10', 'label': 'Q10', 'max': half}
+
+        return list(defs[:split_idx]) + [left, right] + list(defs[split_idx + 1 :])
+
+    q_defs_for_excel = _split_qp2_defs(list(q_defs or []))
+
+    for i, q in enumerate(q_defs_for_excel):
         key = str((q or {}).get('key') or f"q{i + 1}").strip() or f"q{i + 1}"
         label = str((q or {}).get('label') or f"Q{i + 1}").strip() or f"Q{i + 1}"
         try:
@@ -443,7 +496,45 @@ def cia_export_template_xlsx(request, assessment: str, subject_id: str):
         q_map = row_obj.get('q') if isinstance(row_obj.get('q'), dict) else {}
 
         q_vals = []
+        # QP2 Excel split: extract q9 total once before the loop.
+        # When exporting existing marks, split q9 into q9 (max 8) and q10 (max 8).
+        q9_total = None
+        if qp2_excel_split:
+            try:
+                q9_raw = q_map.get('q9')
+                if q9_raw not in (None, ''):
+                    q9_total = float(q9_raw)
+            except Exception:
+                q9_total = None
+
+        q9_half = None
+        if qp2_excel_split and q9_total is not None:
+            try:
+                # Requirement: split equally (e.g., 16->8+8, 12->6+6, 10->5+5).
+                q9_half = float(q9_total) / 2.0
+                # Cap each column by its max (normally 8).
+                q9_half = max(0.0, min(8.0, q9_half))
+                # Keep the sheet neat.
+                q9_half = round(q9_half, 2)
+            except Exception:
+                q9_half = None
+
         for k in q_keys:
+            lk = str(k or '').strip().lower()
+            # QP2: split q9 value across q9 and q10 columns
+            if qp2_excel_split and lk == 'q10':
+                if q9_half is None:
+                    q_vals.append('')
+                else:
+                    q_vals.append(_cell_value(q9_half))
+                continue
+            if qp2_excel_split and lk == 'q9':
+                if q9_half is None:
+                    q_vals.append('')
+                else:
+                    q_vals.append(_cell_value(q9_half))
+                continue
+            # All other questions: use normal value
             q_vals.append(_cell_value(q_map.get(k)))
 
         status_val = 'absent' if absent else 'present'
@@ -1184,6 +1275,17 @@ def iqac_reset_assessment(request, assessment: str, subject_id: str):
             deleted['lock'] = int(ObeMarkTableLock.objects.filter(teaching_assignment=ta, assessment=assessment_key).delete()[0] or 0)
         except Exception:
             deleted['lock'] = 0
+
+        # Create notification for staff
+        try:
+            from .models import IqacResetNotification
+            IqacResetNotification.objects.create(
+                teaching_assignment=ta,
+                assessment=assessment_key,
+                reset_by=request.user if hasattr(request, 'user') else None
+            )
+        except Exception:
+            pass
 
     return Response({'status': 'reset', 'assessment': assessment_key, 'subject_code': subject.code, 'deleted': deleted})
 
@@ -5168,3 +5270,80 @@ def edit_request_reject(request, req_id: int):
             pass
 
     return Response({'status': 'rejected', 'scope': row.scope})
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def get_reset_notifications(request):
+    """Get unread reset notifications for the authenticated staff member.
+    
+    Query params:
+    - teaching_assignment_id (optional): filter for specific teaching assignment
+    """
+    user = getattr(request, 'user', None)
+    staff_profile = getattr(user, 'staff_profile', None)
+    if staff_profile is None:
+        return Response({'notifications': []})
+
+    from .models import IqacResetNotification
+    from academics.models import TeachingAssignment
+
+    ta_id = request.query_params.get('teaching_assignment_id')
+    
+    qs = IqacResetNotification.objects.filter(
+        teaching_assignment__staff=staff_profile,
+        teaching_assignment__is_active=True,
+        is_read=False
+    ).select_related('teaching_assignment__subject', 'teaching_assignment__section', 'reset_by')
+
+    if ta_id:
+        try:
+            qs = qs.filter(teaching_assignment_id=int(ta_id))
+        except (ValueError, TypeError):
+            pass
+
+    notifications = []
+    for n in qs:
+        ta = n.teaching_assignment
+        notifications.append({
+            'id': n.id,
+            'teaching_assignment_id': ta.id,
+            'subject_code': ta.subject.code if ta.subject else '',
+            'subject_name': ta.subject.name if ta.subject else '',
+            'section_name': getattr(ta.section, 'name', '') if ta.section else '',
+            'assessment': n.assessment,
+            'reset_at': n.reset_at.isoformat() if n.reset_at else None,
+            'reset_by': getattr(n.reset_by, 'username', None) if n.reset_by else None,
+        })
+
+    return Response({'notifications': notifications})
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def dismiss_reset_notifications(request):
+    """Mark reset notifications as read.
+    
+    Body:
+    - notification_ids: list of notification IDs to mark as read
+    """
+    user = getattr(request, 'user', None)
+    staff_profile = getattr(user, 'staff_profile', None)
+    if staff_profile is None:
+        return Response({'detail': 'Not a staff member.'}, status=status.HTTP_403_FORBIDDEN)
+
+    notification_ids = request.data.get('notification_ids', [])
+    if not isinstance(notification_ids, list):
+        return Response({'detail': 'notification_ids must be a list.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    from .models import IqacResetNotification
+
+    updated = IqacResetNotification.objects.filter(
+        id__in=notification_ids,
+        teaching_assignment__staff=staff_profile,
+        is_read=False
+    ).update(is_read=True, read_at=timezone.now())
+
+    return Response({'status': 'ok', 'marked_read': updated})

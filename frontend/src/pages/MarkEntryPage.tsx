@@ -24,27 +24,25 @@ export default function MarkEntryPage({ courseId, classType, questionPaperType, 
     <div style={{
       minHeight: '100vh',
       background: 'linear-gradient(135deg, #ecfdf5 0%, #ffffff 60%)',
-      padding: '24px'
+      padding: '0'
     }}>
       <div style={{
-        maxWidth: 1280,
-        margin: '0 auto',
         background: '#ffffff',
-        borderRadius: 12,
-        boxShadow: '0 8px 20px rgba(2,6,23,0.06)'
+        minHeight: '100vh',
+        display: 'flex',
+        flexDirection: 'column'
       }}>
         <div style={{
           background: 'linear-gradient(135deg, #10b981, #059669)',
           color: '#ffffff',
           padding: '20px 24px',
-          borderTopLeftRadius: 12,
-          borderTopRightRadius: 12
+          flexShrink: 0
         }}>
           <div style={{ fontSize: 24, fontWeight: 800 }}>Mark Entry</div>
           <div style={{ fontSize: 14, opacity: 0.9 }}> {subject ? `Course: ${subject}` : 'No course selected'} </div>
         </div>
 
-        <div style={{ padding: '20px 24px' }}>
+        <div style={{ padding: '20px 24px', flex: 1 }}>
           {!courseId && (
             <div className="obe-card" style={{ marginBottom: 12 }}>
               <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#065f46', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Course ID</label>

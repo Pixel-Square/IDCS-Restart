@@ -236,8 +236,12 @@ export default function LabEntry({
     options: { poll: false },
   });
 
-  const isPublished = Boolean(publishedViewSnapshot) || Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published);
-  const entryOpen = !isPublished ? true : Boolean(markLock?.entry_open);
+  // Published state should come from the DB lock row, not from the published snapshot
+  // (the snapshot endpoint can return empty objects even when not published).
+  const isPublished = Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published);
+  // Authoritative: backend computes `entry_open` from mark_entry_blocked + mark_manager_locked/unlock windows.
+  // If we don't have a lock row yet, treat entry as open (table is hidden until Mark Manager is confirmed anyway).
+  const entryOpen = markLock?.exists ? Boolean(markLock?.entry_open) : true;
   const publishedEditLocked = Boolean(isPublished && !entryOpen);
 
   const globalLocked = Boolean(publishWindow?.global_override_active && publishWindow?.global_is_open === false);
@@ -434,7 +438,9 @@ export default function LabEntry({
   useEffect(() => {
     if (!subjectId) return;
 
-    if (isPublished && markLock?.exists) {
+    // Source of truth: if a DB lock row exists, mirror its state.
+    // This ensures "Save & Lock" persists immediately and across reloads.
+    if (markLock?.exists) {
       const nextLocked = Boolean(markLock?.mark_manager_locked);
       if (Boolean(draft.sheet.markManagerLocked) !== nextLocked) {
         setDraft((p) => ({
@@ -450,7 +456,8 @@ export default function LabEntry({
 
     if (allowedByApproval && approvalUntil) {
       const lastApprovalUntil = draft.sheet.markManagerApprovalUntil ? String(draft.sheet.markManagerApprovalUntil) : null;
-      if (Boolean(draft.sheet.markManagerLocked) && lastApprovalUntil !== approvalUntil) {
+      // New approval window: unlock so user can edit Mark Manager.
+      if (lastApprovalUntil !== approvalUntil) {
         setDraft((p) => ({
           ...p,
           sheet: { ...p.sheet, markManagerLocked: false, markManagerApprovalUntil: approvalUntil },
@@ -458,19 +465,8 @@ export default function LabEntry({
       }
       return;
     }
-
-    // If no approval is active, ensure the sheet starts editable by default.
-    // (markManagerLocked === true means the sheet is confirmed/locked and
-    // should block edits; default should be editable until user clicks Save.)
-    if (Boolean(draft.sheet.markManagerLocked)) {
-      setDraft((p) => ({
-        ...p,
-        sheet: { ...p.sheet, markManagerLocked: false },
-      }));
-    }
   }, [
     subjectId,
-    isPublished,
     markLock?.exists,
     markLock?.mark_manager_locked,
     markManagerEditWindow?.allowed_by_approval,
@@ -519,7 +515,13 @@ export default function LabEntry({
 
   const markManagerLocked = Boolean(draft.sheet.markManagerLocked);
   const ciaExamEnabled = draft.sheet.ciaExamEnabled !== false;
-  const tableBlocked = isPublished ? !entryOpen : markManagerLocked;
+  
+  // Table visibility and blocking logic:
+  // - BEFORE Mark Manager confirm: table is HIDDEN
+  // - AFTER Mark Manager confirm: table is VISIBLE
+  // - Table editability is driven by backend `entry_open` (blocks after publish unless IQAC unblocks)
+  const tableVisible = markManagerLocked; // Only show table after Mark Manager is confirmed
+  const tableBlocked = Boolean(globalLocked || (markLock?.exists ? !Boolean(markLock?.entry_open) : false));
 
   function setCoEnabled(which: 'A' | 'B', enabled: boolean) {
     setDraft((p) => {
@@ -920,40 +922,57 @@ export default function LabEntry({
   const maxExpMax = Math.max(expMaxA, expMaxB, DEFAULT_EXPERIMENT_MAX);
 
   const cellTh: React.CSSProperties = {
-    border: '1px solid #111',
-    padding: '6px 6px',
-    background: '#ecfdf5',
-    color: '#065f46',
+    border: '1px solid #dee2e6',
+    padding: '10px 4px',
     textAlign: 'center',
     fontWeight: 700,
-    fontSize: 12,
+    fontSize: 'clamp(10px, 0.9vw, 12px)',
     whiteSpace: 'nowrap',
+    letterSpacing: '0.8px',
+    textTransform: 'uppercase',
+    background: 'linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%)',
+    color: '#0d47a1',
+    overflow: 'hidden',
   };
 
   const cellTd: React.CSSProperties = {
-    border: '1px solid #111',
-    padding: '6px 6px',
-    fontSize: 12,
+    border: '1px solid #dee2e6',
+    padding: '4px',
+    fontSize: 'clamp(9px, 0.85vw, 11px)',
     whiteSpace: 'nowrap',
+    background: '#ffffff',
+    textAlign: 'center',
+    color: '#212529',
+    fontWeight: 500,
   };
 
   const inputStyle: React.CSSProperties = {
     width: '100%',
-    border: 'none',
+    border: '1px solid #90caf9',
     outline: 'none',
-    background: 'transparent',
-    fontSize: 12,
-    textAlign: 'right',
+    background: '#ffffff',
+    fontSize: 'clamp(9px, 0.85vw, 10px)',
+    textAlign: 'center',
+    padding: '4px',
+    borderRadius: '4px',
+    fontWeight: 600,
+    color: '#212529',
+    boxShadow: 'inset 0 1px 2px rgba(0, 0, 0, 0.05)',
+    transition: 'all 0.2s ease',
   };
 
   const cardStyle: React.CSSProperties = {
-    border: '1px solid #e5e7eb',
-    borderRadius: 12,
-    background: '#fff',
-    padding: 12,
+    border: '1px solid #dee2e6',
+    borderRadius: 8,
+    background: '#f8f9fa',
+    padding: '16px',
+    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.08)',
+    maxWidth: '100%',
+    overflowX: 'auto',
+    position: 'relative',
   };
 
-  const minTableWidth = Math.max(920, 360 + (totalExpCols + visibleBtlIndices.length * 2 + (ciaExamEnabled ? 1 : 0)) * 80);
+  const minTableWidth = '100%';
 
   const coEnableStyle: React.CSSProperties = {
     display: 'flex',
@@ -1017,12 +1036,162 @@ export default function LabEntry({
           border-radius: 50%;
           animation: markManagerDust 2s ease-out forwards;
         }
+        
+        /* Premium Table Styles */
+        .premium-table {
+          border-collapse: separate;
+          border-spacing: 0;
+          width: 100%;
+          background: #ffffff;
+          table-layout: auto;
+          border: 1px solid #dee2e6;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        
+        .premium-table tbody tr {
+          background: #ffffff;
+        }
+        
+        .premium-table tbody tr:hover {
+          background: #f8f9fa;
+        }
+        
+        .premium-table tbody tr:nth-child(even) {
+          background: #fafbfc;
+        }
+        
+        .premium-table input:focus {
+          border-color: #1976d2;
+          box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.1), inset 0 1px 2px rgba(0, 0, 0, 0.05);
+          background: #ffffff;
+        }
+        
+        .premium-table input:hover:not(:disabled) {
+          border-color: #42a5f5;
+          box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.05);
+        }
+        
+        .premium-table input:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+          background: #e0e0e0;
+        }
+        
+        .premium-table thead tr:first-child th {
+          background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+          color: #0d47a1;
+          font-size: clamp(11px, 1vw, 13px);
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: 1px;
+          padding: 12px 4px;
+          border-bottom: 2px solid #90caf9;
+        }
+        
+        .premium-table thead tr:not(:first-child) th {
+          background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+          color: #0d47a1;
+        }
+        
+        .premium-btl-select {
+          background: #e3f2fd;
+          border-radius: 4px;
+          font-weight: 600;
+          border: 1px solid #90caf9;
+          color: #0d47a1;
+          padding: 4px 8px;
+          font-size: clamp(9px, 0.85vw, 10px);
+          transition: all 0.2s ease;
+        }
+        
+        .premium-btl-select:hover {
+          background: #bbdefb;
+          border-color: #1976d2;
+        }
+        
+        /* Maintain sticky column backgrounds on hover */
+        .premium-table tbody tr:hover td:nth-child(1),
+        .premium-table tbody tr:hover td:nth-child(2),
+        .premium-table tbody tr:hover td:nth-child(3) {
+          background: #e8eaed !important;
+        }
+        
+        /* Sticky S.No column */
+        .premium-table tbody td:nth-child(1),
+        .premium-table thead th:nth-child(1) {
+          position: sticky;
+          left: 0;
+          z-index: 10;
+          background: #f1f3f4;
+          border-right: 2px solid #dee2e6;
+        }
+        
+        /* Sticky Register column */
+        .premium-table tbody td:nth-child(2),
+        .premium-table thead th:nth-child(2) {
+          position: sticky;
+          left: 30px;
+          z-index: 10;
+          background: #f1f3f4;
+          white-space: nowrap;
+          padding: 4px 6px;
+          border-right: 2px solid #dee2e6;
+        }
+        
+        /* Sticky Name column - full width, one line */
+        .premium-table tbody td:nth-child(3),
+        .premium-table thead th:nth-child(3) {
+          position: sticky;
+          left: 100px;
+          z-index: 10;
+          background: #f1f3f4;
+          text-align: left;
+          padding: 4px 8px;
+          white-space: nowrap;
+          border-right: 2px solid #dee2e6;
+          width: auto;
+          min-width: max-content; /* Let the column expand to fit the longest name */
+          overflow: visible; /* Allow content to be visible */
+        }
+        
+        /* Header sticky columns use gradient */
+        .premium-table thead th:nth-child(1),
+        .premium-table thead th:nth-child(2),
+        .premium-table thead th:nth-child(3) {
+          background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%) !important;
+        }
+        
+        /* Enhanced number inputs */
+        .premium-table input[type="number"] {
+          font-variant-numeric: tabular-nums;
+          letter-spacing: 0.5px;
+          -moz-appearance: textfield;
+        }
+        
+        /* Remove increment/decrement spinners */
+        .premium-table input[type="number"]::-webkit-outer-spin-button,
+        .premium-table input[type="number"]::-webkit-inner-spin-button {
+          -webkit-appearance: none;
+          margin: 0;
+        }
+        
+        /* Percentage cells */
+        .premium-table td[style*="font-variant"] {
+          font-variant-numeric: tabular-nums;
+        }
+
+        @media (max-width: 1400px) {
+          .premium-table {
+            font-size: 11px;
+          }
+        }
       `}</style>
 
       <div
         style={{
           margin: '0 0 10px 0',
-          maxWidth: Math.min(minTableWidth, 1100),
+          maxWidth: '100%',
           width: '100%',
           boxSizing: 'border-box',
           overflow: 'hidden',
@@ -1058,21 +1227,30 @@ export default function LabEntry({
             </>
           ) : null}
 
-          <div style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <ClipboardList size={18} color={markManagerLocked ? '#6b7280' : '#9a3412'} />
-              <div style={{ fontWeight: 950, color: '#111827' }}>Mark Manager</div>
+              <ClipboardList size={20} color={markManagerLocked ? '#6b7280' : '#9a3412'} />
+              <div style={{ fontWeight: 950, color: '#111827', fontSize: 14 }}>Mark Manager</div>
+              {markManagerLocked && (
+                <span style={{ fontSize: 11, color: '#fff', background: '#dc2626', padding: '2px 8px', borderRadius: 6, fontWeight: 700 }}>
+                  LOCKED
+                </span>
+              )}
+              {!markManagerLocked && (
+                <span style={{ fontSize: 11, color: '#fff', background: '#16a34a', padding: '2px 8px', borderRadius: 6, fontWeight: 700 }}>
+                  EDITABLE
+                </span>
+              )}
             </div>
 
-            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-              <button
-                onClick={() => setMarkManagerModal({ mode: markManagerLocked ? 'request' : 'confirm' })}
-                className="obe-btn obe-btn-success"
-                disabled={!subjectId || markManagerBusy}
-              >
-                {markManagerLocked ? 'Edit' : 'Save'}
-              </button>
-            </div>
+            <button
+              onClick={() => setMarkManagerModal({ mode: markManagerLocked ? 'request' : 'confirm' })}
+              className="obe-btn obe-btn-success"
+              disabled={!subjectId || markManagerBusy}
+              style={{ minWidth: 100 }}
+            >
+              {markManagerBusy ? 'Saving...' : markManagerLocked ? 'Request Edit' : 'Save & Lock'}
+            </button>
           </div>
 
           <div style={{ width: '100%', display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 8 }}>
@@ -1113,39 +1291,43 @@ export default function LabEntry({
         {markManagerError ? <div style={{ marginTop: 8, fontSize: 12, color: '#991b1b' }}>{markManagerError}</div> : null}
       </div>
 
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
-        <button
-          onClick={saveNow}
-          className="obe-btn obe-btn-success"
-          disabled={savingDraft || !subjectId || tableBlocked}
-          style={tableBlocked ? { opacity: 0.6, cursor: 'not-allowed' } : undefined}
-          title={tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : undefined}
-        >
-          {savingDraft ? 'Saving…' : 'Save Draft'}
-        </button>
-        <button
-          onClick={resetSheet}
-          className="obe-btn obe-btn-danger"
-          disabled={!subjectId || tableBlocked}
-          style={tableBlocked ? { opacity: 0.6, cursor: 'not-allowed' } : undefined}
-          title={tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : undefined}
-        >
-          Reset
-        </button>
-        <button
-          onClick={publish}
-          className="obe-btn obe-btn-primary"
-          disabled={!subjectId || publishing || tableBlocked || globalLocked || !publishAllowed}
-          style={tableBlocked ? { opacity: 0.6, cursor: 'not-allowed' } : undefined}
-          title={tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : !publishAllowed ? 'Publish window closed' : globalLocked ? 'Publishing locked' : 'Publish'}
-        >
-          {publishing ? 'Publishing…' : 'Publish'}
-        </button>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12, padding: 12, background: '#f9fafb', borderRadius: 10, border: '1px solid #e5e7eb' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button
+            onClick={saveNow}
+            className="obe-btn obe-btn-success"
+            disabled={savingDraft || !subjectId || !tableVisible || tableBlocked}
+            style={!tableVisible || tableBlocked ? { opacity: 0.6, cursor: 'not-allowed' } : undefined}
+            title={!tableVisible ? 'Save & Lock Mark Manager first to enable table' : tableBlocked ? 'Table locked after publish' : 'Save current draft'}
+          >
+            {savingDraft ? 'Saving…' : 'Save Draft'}
+          </button>
+          <button
+            onClick={resetSheet}
+            className="obe-btn obe-btn-danger"
+            disabled={!subjectId || !tableVisible || tableBlocked}
+            style={!tableVisible || tableBlocked ? { opacity: 0.6, cursor: 'not-allowed' } : undefined}
+            title={!tableVisible ? 'Save & Lock Mark Manager first to enable table' : tableBlocked ? 'Table locked after publish' : 'Clear all marks'}
+          >
+            Reset All
+          </button>
+          <button
+            onClick={publish}
+            className="obe-btn obe-btn-primary"
+            disabled={!subjectId || publishing || !tableVisible || tableBlocked || globalLocked || !publishAllowed}
+            style={!tableVisible || tableBlocked ? { opacity: 0.6, cursor: 'not-allowed' } : undefined}
+            title={!tableVisible ? 'Save & Lock Mark Manager first' : tableBlocked ? 'Table locked after publish' : !publishAllowed ? 'Publish window closed' : globalLocked ? 'Publishing locked by IQAC' : 'Publish marks'}
+          >
+            {publishing ? 'Publishing…' : 'Publish'}
+          </button>
+        </div>
 
         <div style={{ flex: 1 }} />
-        {savedAt ? <div style={{ fontSize: 12, color: '#6b7280' }}>Saved: {savedAt}</div> : null}
-        {publishedAt ? <div style={{ fontSize: 12, color: '#6b7280' }}>Published: {publishedAt}</div> : null}
-        {remainingSeconds != null && !publishAllowed ? <div style={{ fontSize: 12, color: '#6b7280' }}>Opens in: {formatRemaining(remainingSeconds)}</div> : null}
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12, color: '#6b7280', alignItems: 'center' }}>
+          {savedAt ? <div title="Last saved">💾 {savedAt}</div> : null}
+          {publishedAt ? <div title="Published">✅ {publishedAt}</div> : null}
+          {remainingSeconds != null && !publishAllowed ? <div title="Publish window opens in">⏰ {formatRemaining(remainingSeconds)}</div> : null}
+        </div>
       </div>
 
       {error && <div style={{ marginBottom: 10, color: '#b91c1c' }}>{error}</div>}
@@ -1153,12 +1335,26 @@ export default function LabEntry({
         <div style={{ color: '#6b7280' }}>Loading roster…</div>
       ) : students.length === 0 ? (
         <div style={{ color: '#6b7280' }}>Select a Teaching Assignment to load students.</div>
+      ) : !tableVisible ? (
+        <div style={{ 
+          padding: '40px 20px', 
+          textAlign: 'center', 
+          background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
+          borderRadius: 16,
+          border: '2px dashed #f59e0b',
+        }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: '#92400e', marginBottom: 8 }}>
+            📋 Mark Manager Configuration Required
+          </div>
+          <div style={{ fontSize: 14, color: '#78350f' }}>
+            Please configure and lock the Mark Manager above to enable the table.
+          </div>
+        </div>
       ) : (
         <div style={cardStyle}>
           <PublishLockOverlay locked={globalLocked}>
-            <div style={{ position: 'relative' }}>
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ borderCollapse: 'collapse', minWidth: minTableWidth, width: '100%' }}>
+            <div style={{ overflowX: 'auto', borderRadius: 12, maxWidth: '100%' }}>
+              <table className="premium-table" style={{ minWidth: minTableWidth, width: '100%', tableLayout: 'auto' }}>
             <thead>
               <tr>
                 <th style={cellTh} colSpan={headerCols}>
@@ -1256,13 +1452,14 @@ export default function LabEntry({
                         <th key={`btla_${i}`} style={cellTh}>
                           <div style={{ position: 'relative', display: 'grid', placeItems: 'center' }} title={`BTL: ${v}`}>
                             <div
+                              className="premium-btl-select"
                               style={{
                                 width: '100%',
-                                padding: '4px 6px',
-                                background: '#fff',
+                                padding: '6px 8px',
                                 textAlign: 'center',
                                 userSelect: 'none',
                                 fontWeight: 800,
+                                color: '#0f172a',
                               }}
                             >
                               {v}
@@ -1300,13 +1497,14 @@ export default function LabEntry({
                         <th key={`btlb_${i}`} style={cellTh}>
                           <div style={{ position: 'relative', display: 'grid', placeItems: 'center' }} title={`BTL: ${v}`}>
                             <div
+                              className="premium-btl-select"
                               style={{
                                 width: '100%',
-                                padding: '4px 6px',
-                                background: '#fff',
+                                padding: '6px 8px',
                                 textAlign: 'center',
                                 userSelect: 'none',
                                 fontWeight: 800,
+                                color: '#0f172a',
                               }}
                             >
                               {v}
@@ -1400,12 +1598,12 @@ export default function LabEntry({
 
                     return (
                       <tr key={s.id}>
-                        <td style={{ ...cellTd, textAlign: 'center', width: 42, minWidth: 42 }}>{idx + 1}</td>
-                        <td style={cellTd}>{s.reg_no}</td>
-                        <td style={cellTd}>{s.name}</td>
+                        <td style={{ ...cellTd, width: '30px', minWidth: '30px', fontWeight: 700 }}>{idx + 1}</td>
+                        <td style={{ ...cellTd, width: '70px', minWidth: '70px', fontWeight: 600 }}>{s.reg_no.slice(-8)}</td>
+                        <td style={{ ...cellTd, fontWeight: 600, whiteSpace: 'nowrap' }}>{s.name}</td>
 
                         {Array.from({ length: visibleExpCountA }, (_, i) => (
-                          <td key={`ma${s.id}_${i}`} style={{ ...cellTd, width: 78, minWidth: 78, background: '#fff7ed' }}>
+                          <td key={`ma${s.id}_${i}`} style={{ ...cellTd, padding: '2px' }}>
                             <input
                               type="number"
                               value={marksA[i]}
@@ -1413,13 +1611,13 @@ export default function LabEntry({
                               style={inputStyle}
                               min={0}
                                 max={expMaxA}
-                                disabled={tableBlocked}
+                                disabled={!tableVisible || tableBlocked}
                             />
                           </td>
                         ))}
 
                         {Array.from({ length: visibleExpCountB }, (_, i) => (
-                          <td key={`mb${s.id}_${i}`} style={{ ...cellTd, width: 78, minWidth: 78, background: '#fff7ed' }}>
+                          <td key={`mb${s.id}_${i}`} style={{ ...cellTd, padding: '2px' }}>
                             <input
                               type="number"
                               value={marksB[i]}
@@ -1427,14 +1625,14 @@ export default function LabEntry({
                               style={inputStyle}
                               min={0}
                                 max={expMaxB}
-                                disabled={tableBlocked}
+                                disabled={!tableVisible || tableBlocked}
                             />
                           </td>
                         ))}
 
-                        <td style={{ ...cellTd, textAlign: 'right', fontWeight: 800 }}>{avgTotal == null ? '' : avgTotal.toFixed(1)}</td>
+                        <td style={{ ...cellTd, fontWeight: 700, fontSize: 'clamp(10px, 0.9vw, 11px)' }}>{avgTotal == null ? '' : avgTotal.toFixed(1)}</td>
                         {ciaExamEnabled ? (
-                          <td style={{ ...cellTd, width: 90, minWidth: 90, background: '#fff7ed' }}>
+                          <td style={{ ...cellTd, padding: '2px' }}>
                             <input
                               type="number"
                               value={(row as any)?.ciaExam ?? ''}
@@ -1442,21 +1640,21 @@ export default function LabEntry({
                               style={inputStyle}
                               min={0}
                               max={Math.max(expMaxA, expMaxB, DEFAULT_CIA_EXAM_MAX)}
-                              disabled={tableBlocked}
+                              disabled={!tableVisible || tableBlocked}
                             />
                           </td>
                         ) : null}
-                        <td style={{ ...cellTd, textAlign: 'right' }}>{coAMarkNum == null ? '' : coAMarkNum.toFixed(1)}</td>
-                        <td style={{ ...cellTd, textAlign: 'right' }}>{pct(coAMarkNum, coMaxA)}</td>
-                        <td style={{ ...cellTd, textAlign: 'right' }}>{coBMarkNum == null ? '' : coBMarkNum.toFixed(1)}</td>
-                        <td style={{ ...cellTd, textAlign: 'right' }}>{pct(coBMarkNum, coMaxB)}</td>
+                        <td style={{ ...cellTd, width: '28px', fontSize: '10px', padding: '2px', fontWeight: 600, color: '#5f6368' }}>{coAMarkNum == null ? '' : coAMarkNum.toFixed(1)}</td>
+                        <td style={{ ...cellTd, width: '25px', fontSize: '10px', padding: '2px', fontWeight: 600, color: '#5f6368' }}>{pct(coAMarkNum, coMaxA)}</td>
+                        <td style={{ ...cellTd, width: '28px', fontSize: '10px', padding: '2px', fontWeight: 600, color: '#5f6368' }}>{coBMarkNum == null ? '' : coBMarkNum.toFixed(1)}</td>
+                        <td style={{ ...cellTd, width: '25px', fontSize: '10px', padding: '2px', fontWeight: 600, color: '#5f6368' }}>{pct(coBMarkNum, coMaxB)}</td>
                         {visibleBtlIndices.map((n) => {
                           const m = btlAvgByIndex[n] ?? null;
                           const maxExpMax = Math.max(expMaxA, expMaxB, DEFAULT_EXPERIMENT_MAX);
                           return (
                             <React.Fragment key={`btlcell_${s.id}_${n}`}>
-                              <td style={{ ...cellTd, textAlign: 'right' }}>{m == null ? '' : m.toFixed(1)}</td>
-                              <td style={{ ...cellTd, textAlign: 'right' }}>{pct(m, maxExpMax)}</td>
+                              <td style={{ ...cellTd, width: '28px', fontSize: '10px', padding: '2px', fontWeight: 600, color: '#5f6368' }}>{m == null ? '' : m.toFixed(1)}</td>
+                              <td style={{ ...cellTd, width: '25px', fontSize: '10px', padding: '2px', fontWeight: 600, color: '#5f6368' }}>{pct(m, maxExpMax)}</td>
                             </React.Fragment>
                           );
                         })}
@@ -1477,19 +1675,6 @@ export default function LabEntry({
                 </table>
               </div>
 
-              {/* Blue overlay when blocked by Mark Manager (after Save/confirmation) */}
-              {markManagerLocked ? (
-                <div
-                  style={{
-                    position: 'absolute',
-                    inset: 0,
-                    zIndex: 30,
-                    // Do not block interaction with header controls like BTL selection.
-                    pointerEvents: 'none',
-                    background: 'linear-gradient(180deg, rgba(72, 113, 195, 0.18) 0%, rgba(51, 55, 64, 0.22) 100%)',
-                  }}
-                />
-              ) : null}
 
               {/* Green overlay when blocked after Publish */}
               {publishedEditLocked ? (
@@ -1566,7 +1751,6 @@ export default function LabEntry({
                   </div>
                 </div>
               ) : null}
-            </div>
           </PublishLockOverlay>
         </div>
       )}
@@ -1694,44 +1878,48 @@ export default function LabEntry({
 
             {markManagerModal.mode === 'confirm' ? (
               <>
-                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10 }}>
-                  Confirm the selected COs and settings. After confirming, Mark Manager will be locked.
+                <div style={{ background: '#fffbeb', border: '1px solid #fbbf24', borderRadius: 8, padding: 12, marginBottom: 12 }}>
+                  <div style={{ fontWeight: 700, color: '#92400e', marginBottom: 4 }}>⚠️ Important</div>
+                  <div style={{ fontSize: 12, color: '#78350f', lineHeight: 1.5 }}>
+                    After confirming, Mark Manager will be <strong>locked</strong>. You'll need IQAC approval to change CO selection, experiment count, or max marks.
+                  </div>
                 </div>
+                <div style={{ fontSize: 13, color: '#374151', marginBottom: 8, fontWeight: 600 }}>Review your settings:</div>
                 <div style={{ overflowX: 'auto', border: '1px solid #e5e7eb', borderRadius: 12 }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
                       <tr style={{ background: '#f9fafb' }}>
-                        <th style={{ textAlign: 'left', padding: 10, fontSize: 12, borderBottom: '1px solid #e5e7eb' }}>Item</th>
-                        <th style={{ textAlign: 'right', padding: 10, fontSize: 12, borderBottom: '1px solid #e5e7eb' }}>Experiments</th>
-                        <th style={{ textAlign: 'right', padding: 10, fontSize: 12, borderBottom: '1px solid #e5e7eb' }}>Max marks</th>
+                        <th style={{ textAlign: 'left', padding: 10, fontSize: 12, borderBottom: '1px solid #e5e7eb', fontWeight: 700 }}>Item</th>
+                        <th style={{ textAlign: 'right', padding: 10, fontSize: 12, borderBottom: '1px solid #e5e7eb', fontWeight: 700 }}>Experiments</th>
+                        <th style={{ textAlign: 'right', padding: 10, fontSize: 12, borderBottom: '1px solid #e5e7eb', fontWeight: 700 }}>Max marks</th>
                       </tr>
                     </thead>
                     <tbody>
                       {coAEnabled ? (
                         <tr>
-                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>CO-{coA}</td>
-                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{visibleExpCountA}</td>
-                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{expMaxA}</td>
+                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 800 }}>CO-{coA}</td>
+                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right', fontWeight: 600 }}>{visibleExpCountA}</td>
+                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right', fontWeight: 600 }}>{expMaxA}</td>
                         </tr>
                       ) : null}
                       {coBEnabled ? (
                         <tr>
-                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>CO-{coB}</td>
-                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{visibleExpCountB}</td>
-                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{expMaxB}</td>
+                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 800 }}>CO-{coB}</td>
+                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right', fontWeight: 600 }}>{visibleExpCountB}</td>
+                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right', fontWeight: 600 }}>{expMaxB}</td>
                         </tr>
                       ) : null}
                       {!coAEnabled && !coBEnabled ? (
                         <tr>
-                          <td colSpan={3} style={{ padding: 10, color: '#6b7280' }}>
-                            No COs selected.
+                          <td colSpan={3} style={{ padding: 10, color: '#dc2626', fontWeight: 600 }}>
+                            ⚠️ No COs selected
                           </td>
                         </tr>
                       ) : null}
                       <tr>
-                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>CIA Exam</td>
-                        <td colSpan={2} style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>
-                          {ciaExamEnabled ? 'Enabled' : 'Disabled'}
+                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 800 }}>CIA Exam</td>
+                        <td colSpan={2} style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right', fontWeight: 600 }}>
+                          {ciaExamEnabled ? '✅ Enabled' : '❌ Disabled'}
                         </td>
                       </tr>
                     </tbody>
@@ -1761,6 +1949,7 @@ export default function LabEntry({
 
                   setMarkManagerBusy(true);
                   setMarkManagerError(null);
+                  setMarkManagerAnimating(true);
                   try {
                     const snapshot = markManagerSnapshotOf(draft.sheet);
                     const approvalUntil = markManagerEditWindow?.approval_until
@@ -1777,30 +1966,37 @@ export default function LabEntry({
                       },
                     };
 
-                    setDraft(nextDraft);
-                    setMarkManagerModal(null);
-                    setMarkManagerAnimating(true);
-
+                    // Save draft first
                     await saveDraft(assessmentKey, String(subjectId), nextDraft);
                     setSavedAt(new Date().toLocaleString());
 
-                    // Persist Mark Manager confirmation to server lock row so the
-                    // Mark Manager snapshot is updated and visible across tabs.
-                    try {
-                      await confirmMarkManagerLock(assessmentKey as any, String(subjectId), teachingAssignmentId);
-                      refreshMarkLock({ silent: true });
-                    } catch (err) {
-                      console.warn('confirmMarkManagerLock failed', err);
-                    }
+                    // Persist Mark Manager confirmation to server lock row
+                    await confirmMarkManagerLock(assessmentKey as any, String(subjectId), teachingAssignmentId);
+
+                    // CRITICAL: Refresh lock status IMMEDIATELY to update UI
+                    await refreshMarkLock({ silent: false });
+                    
+                    // Update local draft state after successful confirmation
+                    setDraft(nextDraft);
+                    setMarkManagerModal(null);
+                    
+                    // Success feedback
+                    alert('✅ Mark Manager saved and locked successfully! You can now proceed with mark entry.');
+                    setTimeout(() => setMarkManagerAnimating(false), 1500);
                   } catch (e: any) {
                     setMarkManagerError(e?.message || 'Save failed');
+                    setMarkManagerAnimating(false);
+                    // Revert lock state on error
+                    setDraft((p) => ({
+                      ...p,
+                      sheet: { ...p.sheet, markManagerLocked: false },
+                    }));
                   } finally {
                     setMarkManagerBusy(false);
-                    setTimeout(() => setMarkManagerAnimating(false), 2000);
                   }
                 }}
               >
-                {markManagerModal.mode === 'confirm' ? 'Confirm' : 'Send Request'}
+                {markManagerBusy ? 'Saving...' : markManagerModal.mode === 'confirm' ? '🔒 Confirm & Lock' : '📧 Send Request'}
               </button>
             </div>
           </div>

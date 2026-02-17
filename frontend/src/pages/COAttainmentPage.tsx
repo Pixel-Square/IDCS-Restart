@@ -674,6 +674,15 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
     (async () => {
       try {
         const ta = (tas || []).find((t) => t.id === selectedTaId) || null;
+
+        // Prefer class_type directly from teaching assignment payload (works even when
+        // the user cannot access curriculum department rows for another department).
+        const taClassType = (ta as any)?.class_type ?? null;
+        if (taClassType) {
+          if (!mounted) return;
+          setClassType(taClassType);
+          return;
+        }
         
         // Check if this is an elective TA first
         const electiveSubjectId = (ta as any)?.elective_subject_id;

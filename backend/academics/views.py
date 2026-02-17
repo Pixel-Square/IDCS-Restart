@@ -164,15 +164,18 @@ class TeachingAssignmentStudentsView(APIView):
         subject_code = None
         subject_name = None
         subject_id = getattr(ta, 'subject_id', None)
+        class_type = None
         try:
             if (not subject_code or not subject_name) and getattr(ta, 'elective_subject', None):
                 es = ta.elective_subject
                 subject_code = subject_code or getattr(es, 'course_code', None)
                 subject_name = subject_name or getattr(es, 'course_name', None)
+                class_type = class_type or getattr(es, 'class_type', None)
             if getattr(ta, 'curriculum_row', None):
                 cr = ta.curriculum_row
                 subject_code = getattr(cr, 'course_code', None) or getattr(getattr(cr, 'master', None), 'course_code', None)
                 subject_name = getattr(cr, 'course_name', None) or getattr(getattr(cr, 'master', None), 'course_name', None)
+                class_type = class_type or getattr(cr, 'class_type', None) or getattr(getattr(cr, 'master', None), 'class_type', None)
             if (not subject_code or not subject_name) and getattr(ta, 'subject', None):
                 subject_code = subject_code or getattr(ta.subject, 'code', None)
                 subject_name = subject_name or getattr(ta.subject, 'name', None)
@@ -250,6 +253,7 @@ class TeachingAssignmentStudentsView(APIView):
                 'subject_id': subject_id,
                 'subject_code': subject_code,
                 'subject_name': subject_name,
+                'class_type': class_type,
                 'section_id': getattr(ta, 'section_id', None),
                 'section_name': section_name,
                 'academic_year': getattr(getattr(ta, 'academic_year', None), 'name', None),

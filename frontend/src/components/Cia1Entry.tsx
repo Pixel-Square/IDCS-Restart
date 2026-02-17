@@ -229,8 +229,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
     const v = String(normalizeClassType(classType) || '').trim().toUpperCase();
     if (!v) return '';
     // IQAC QP patterns are keyed by coarse class_type: THEORY/TCPR/TCPL/LAB.
-    // Some parts of the system may pass THEORY1/THEORY2/THEORY3; normalize those back to THEORY.
-    if (v.startsWith('THEORY')) return 'THEORY';
+    if (v === 'THEORY') return 'THEORY';
     return v;
   }, [classType]);
 
@@ -1378,6 +1377,8 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
     try {
       const qs = new URLSearchParams();
       if (teachingAssignmentId) qs.set('teaching_assignment_id', String(teachingAssignmentId));
+      // Ensure backend can generate QP-specific template even when curriculum lookup is missing.
+      if (qpTypeKey) qs.set('question_paper_type', String(qpTypeKey));
       const DEFAULT_API_BASE = 'https://db.zynix.us';
       const runtimeApiBase = (import.meta as any).env?.VITE_API_BASE || (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://localhost:8000' : DEFAULT_API_BASE);
       const url = `${runtimeApiBase}/api/obe/cia-export-template/${encodeURIComponent(assessmentKey)}/${encodeURIComponent(subjectId)}${qs.toString() ? `?${qs.toString()}` : ''}`;
@@ -1427,7 +1428,8 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       const qEndIdx = statusIdx !== -1 ? statusIdx : headerRow.length;
 
       // Map question headers to question keys
-      const qColumnMap: Array<{ colIdx: number; qKey: string }> = [];
+      // For QP2 Excel-only split: Q10 should be merged back into q9.
+      const qColumnMap: Array<{ colIdx: number; qKey: string; mode: 'set' | 'sum' }> = [];
       for (let i = qStartIdx; i < qEndIdx; i++) {
         const header = String(headerRow[i] || '').trim();
         if (!header) continue;
@@ -1437,10 +1439,21 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         if (!match) continue;
 
         const label = match[1].toUpperCase();
+
+        // QP2: template has Q9 (8) and Q10 (8) but UI has only Q9 (16).
+        if (qpTypeKey === 'QP2' && label === 'Q10') {
+          qColumnMap.push({ colIdx: i, qKey: 'q9', mode: 'sum' });
+          continue;
+        }
+        if (qpTypeKey === 'QP2' && label === 'Q9') {
+          qColumnMap.push({ colIdx: i, qKey: 'q9', mode: 'set' });
+          continue;
+        }
+
         // Find matching question by label
         const question = questions.find((q) => q.label.toUpperCase() === label || q.key.toUpperCase() === label.toUpperCase());
         if (question) {
-          qColumnMap.push({ colIdx: i, qKey: question.key });
+          qColumnMap.push({ colIdx: i, qKey: question.key, mode: 'set' });
         }
       }
 
@@ -1487,22 +1500,41 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         // Read marks for each question
         const newQ = { ...existing.q };
         let hasAnyMark = false;
-        for (const { colIdx, qKey } of qColumnMap) {
+
+        // For merge cases (QP2 Q9+Q10), accumulate before writing.
+        const sumBuffer: Record<string, number> = {};
+
+        for (const { colIdx, qKey, mode } of qColumnMap) {
           const cellValue = row[colIdx];
           if (cellValue === null || cellValue === undefined || cellValue === '') {
-            newQ[qKey] = '';
+            if (mode === 'set') newQ[qKey] = '';
             continue;
           }
 
           const numValue = Number(cellValue);
           if (!Number.isFinite(numValue)) {
-            newQ[qKey] = '';
+            if (mode === 'set') newQ[qKey] = '';
+            continue;
+          }
+
+          if (mode === 'sum') {
+            sumBuffer[qKey] = (sumBuffer[qKey] ?? 0) + numValue;
             continue;
           }
 
           const question = questions.find((q) => q.key === qKey);
           const max = question?.max ?? totalsMax;
           newQ[qKey] = clamp(numValue, 0, max);
+          hasAnyMark = true;
+        }
+
+        // Apply sums (QP2: add Q10 into q9)
+        for (const [qKey, addValue] of Object.entries(sumBuffer)) {
+          const base = Number(newQ[qKey] === '' ? 0 : newQ[qKey] || 0);
+          const question = questions.find((q) => q.key === qKey);
+          const max = question?.max ?? totalsMax;
+          const merged = clamp(base + addValue, 0, max);
+          newQ[qKey] = merged;
           hasAnyMark = true;
         }
 

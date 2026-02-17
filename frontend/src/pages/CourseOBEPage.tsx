@@ -60,6 +60,7 @@ export default function CourseOBEPage(): JSX.Element {
   const courseId = decodeURIComponent(code);
   const [courseName, setCourseName] = React.useState<string | null>(null);
   const [courseClassType, setCourseClassType] = React.useState<string | null>(null);
+  const [classTypeLockedFromTA, setClassTypeLockedFromTA] = React.useState(false);
   const [courseQpType, setCourseQpType] = React.useState<string>(() => {
     try {
       const stored = localStorage.getItem(`obe_course_qp_${courseId}`);
@@ -75,10 +76,34 @@ export default function CourseOBEPage(): JSX.Element {
     let mounted = true;
     (async () => {
       try {
+        // reset TA lock on course change
+        if (mounted) setClassTypeLockedFromTA(false);
         const list = await fetchMyTeachingAssignments();
         if (!mounted) return;
-        const found = list.find((a) => String(a.subject_code) === String(courseId));
-        if (found) setCourseName(found.subject_name || null);
+        const matches = (list || []).filter((a) => String(a.subject_code) === String(courseId));
+        const any = matches[0] || null;
+        if (any) setCourseName(any.subject_name || null);
+
+        // Prefer the TA the user selected in Mark Entry (section-specific)
+        let storedTaId: number | null = null;
+        try {
+          const raw = localStorage.getItem(`markEntry_selectedTa_${courseId}`);
+          const n = raw == null ? NaN : Number(raw);
+          storedTaId = Number.isFinite(n) ? n : null;
+        } catch {
+          storedTaId = null;
+        }
+
+        const picked =
+          (storedTaId != null && matches.find((m) => Number(m.id) === Number(storedTaId))) ||
+          matches.find((m) => String((m as any)?.class_type || '').trim()) ||
+          any;
+
+        const taCt = String((picked as any)?.class_type || '').trim();
+        if (taCt) {
+          setCourseClassType(taCt);
+          setClassTypeLockedFromTA(true);
+        }
       } catch {
         // ignore
       }
@@ -110,10 +135,10 @@ export default function CourseOBEPage(): JSX.Element {
           matches.find((m) => String((m as any)?.class_type || '').trim()) ||
           matches[0];
 
-        if (pick && (pick as any).class_type) {
+        if (!classTypeLockedFromTA && pick && (pick as any).class_type) {
           const ct = String((pick as any).class_type || '').trim();
           setCourseClassType(ct || null);
-        } else {
+        } else if (!classTypeLockedFromTA) {
           // If we couldn't find class_type on the curriculum row, check elective subjects
           try {
             const electives = await fetchElectives();
@@ -242,8 +267,8 @@ export default function CourseOBEPage(): JSX.Element {
               { key: 'lca_instructions', label: '📚 LCA Instructions', icon: '📚' },
               { key: 'marks', label: '✍️ Mark Entry', icon: '✍️' },
               { key: 'co_attainment', label: '📊 CO Attainment', icon: '📊' },
-              { key: 'internal_mark', label: '📈 Internal Mark', icon: '📈' },
               { key: 'cqi', label: '🎯 CQI', icon: '🎯' },
+              { key: 'internal_mark', label: '📈 Internal Mark', icon: '📈' },
             ].map((t) => {
               const isActive = activeTab === (t.key as TabKey);
               return (

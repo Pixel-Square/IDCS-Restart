@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import * as XLSX from 'xlsx';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
 import fetchWithAuth from '../services/fetchAuth';
@@ -76,6 +77,13 @@ function toNumOrEmpty(v: any): number | '' {
   if (v === '' || v == null) return '';
   const n = Number(v);
   return Number.isFinite(n) ? n : '';
+}
+
+function readFiniteNumber(value: any): number | null {
+  if (value === '' || value == null) return null;
+  if (typeof value === 'string' && value.trim() === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 }
 
 function pct(mark: number, max: number) {
@@ -187,6 +195,9 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
   const [inlineViewOnly, setInlineViewOnly] = useState(false);
+
+  const excelFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [excelBusy, setExcelBusy] = useState(false);
 
   const {
     data: publishWindow,
@@ -1098,6 +1109,126 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
     downloadCsv(`${subjectId}_${assessmentKey.toUpperCase()}_sheet.csv`, out);
   };
 
+  function normalizeHeaderCell(v: any): string {
+    return String(v ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, ' ');
+  }
+
+  const exportSheetExcel = () => {
+    if (!subjectId) return;
+    if (!students.length) return;
+
+    const partHeader = (label: string) => `${label} (${Number(MAX_PART).toFixed(2)})`;
+
+    const header = ['Register No', 'Student Name', partHeader('Skill 1'), partHeader('Skill 2'), partHeader('Attitude 1'), partHeader('Attitude 2'), 'Status'];
+
+    const data = students.map((s) => {
+      const row = sheet.rowsByStudentId[String(s.id)] as F1RowState | undefined;
+      return [s.reg_no, s.name, row?.skill1 ?? '', row?.skill2 ?? '', row?.att1 ?? '', row?.att2 ?? '', 'present'];
+    });
+
+    const ws = XLSX.utils.aoa_to_sheet([header, ...data]);
+    ws['!freeze'] = { xSplit: 0, ySplit: 1 } as any;
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, assessmentLabel);
+    XLSX.writeFile(wb, `${subjectId}_${assessmentKey.toUpperCase()}_template.xlsx`);
+  };
+
+  const triggerExcelImport = () => {
+    if (tableBlocked || publishedEditLocked) return;
+    excelFileInputRef.current?.click();
+  };
+
+  const importFromExcel = async (file: File) => {
+    if (!subjectId) return;
+    if (tableBlocked || publishedEditLocked) return;
+
+    setExcelBusy(true);
+    try {
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: 'array' });
+      const firstName = workbook.SheetNames?.[0];
+      if (!firstName) throw new Error('No sheet found in the Excel file.');
+      const sheet0 = workbook.Sheets[firstName];
+      const rows: any[][] = XLSX.utils.sheet_to_json(sheet0, { header: 1 });
+      if (!rows.length) throw new Error('Excel sheet is empty.');
+
+      const headerRow = (rows[0] || []).map(normalizeHeaderCell);
+      const findCol = (pred: (h: string) => boolean) => headerRow.findIndex((h) => pred(h));
+
+      const regCol = findCol((h) => h === 'register no' || h === 'reg no' || h.includes('register'));
+      const skill1Col = findCol((h) => h.startsWith('skill 1') || h.startsWith('skill1'));
+      const skill2Col = findCol((h) => h.startsWith('skill 2') || h.startsWith('skill2'));
+      const att1Col = findCol((h) => h.startsWith('attitude 1') || h.startsWith('att1') || h.startsWith('attitude1'));
+      const att2Col = findCol((h) => h.startsWith('attitude 2') || h.startsWith('att2') || h.startsWith('attitude2'));
+      const statusCol = findCol((h) => h === 'status' || h.includes('status'));
+
+      if (regCol < 0) throw new Error('Could not find “Register No” column.');
+
+      const regToStudentId = new Map<string, number>();
+      for (const s of students) {
+        const full = String(s.reg_no || '').trim();
+        if (full) regToStudentId.set(full, s.id);
+        const short = shortenRegisterNo(full);
+        if (short) regToStudentId.set(short, s.id);
+      }
+
+      const normalizePart = (n: number | null): number | '' => {
+        if (n == null) return '';
+        if (!Number.isFinite(n)) return '';
+        if (n <= 0) return '';
+        return clamp(Number(n), 1, MAX_PART);
+      };
+
+      setSheet((prev) => {
+        const nextRowsByStudentId: Record<string, F1RowState> = { ...prev.rowsByStudentId };
+
+        for (let i = 1; i < rows.length; i++) {
+          const row = rows[i] || [];
+          const reg = String(row[regCol] ?? '').trim();
+          if (!reg) continue;
+          const studentId = regToStudentId.get(reg);
+          if (!studentId) continue;
+
+          const statusRaw = statusCol >= 0 ? String(row[statusCol] ?? '') : '';
+          const status = statusRaw.trim().toLowerCase();
+          const isAbsent = status === 'absent' || status === 'ab' || status === 'a';
+
+          const existing = nextRowsByStudentId[String(studentId)] || ({ studentId, skill1: '', skill2: '', att1: '', att2: '' } as F1RowState);
+
+          if (isAbsent) {
+            nextRowsByStudentId[String(studentId)] = { ...existing, skill1: '', skill2: '', att1: '', att2: '' };
+            continue;
+          }
+
+          const skill1 = skill1Col >= 0 ? normalizePart(readFiniteNumber(row[skill1Col])) : existing.skill1;
+          const skill2 = skill2Col >= 0 ? normalizePart(readFiniteNumber(row[skill2Col])) : existing.skill2;
+          const att1 = att1Col >= 0 ? normalizePart(readFiniteNumber(row[att1Col])) : existing.att1;
+          const att2 = att2Col >= 0 ? normalizePart(readFiniteNumber(row[att2Col])) : existing.att2;
+
+          nextRowsByStudentId[String(studentId)] = { ...existing, studentId, skill1, skill2, att1, att2 };
+        }
+
+        return { ...prev, rowsByStudentId: nextRowsByStudentId };
+      });
+    } finally {
+      setExcelBusy(false);
+    }
+  };
+
+  const handleExcelFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      await importFromExcel(file);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to import Excel');
+    }
+  };
+
   if (!subjectId) {
     return <div style={{ color: '#6b7280' }}>Select a course to start {assessmentLabel} entry.</div>;
   }
@@ -1185,6 +1316,23 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
           <button onClick={exportSheetCsv} style={{ padding: '6px 10px' }} disabled={students.length === 0}>
             Export CSV
           </button>
+          <button onClick={exportSheetExcel} style={{ padding: '6px 10px' }} disabled={students.length === 0}>
+            Export Excel
+          </button>
+          <button
+            onClick={triggerExcelImport}
+            style={{ padding: '6px 10px' }}
+            disabled={students.length === 0 || tableBlocked || publishedEditLocked || excelBusy}
+          >
+            {excelBusy ? 'Importing…' : 'Import Excel'}
+          </button>
+          <input
+            ref={excelFileInputRef}
+            type="file"
+            accept=".xlsx,.xls"
+            style={{ display: 'none' }}
+            onChange={handleExcelFileSelect}
+          />
           {savedAt && <div style={{ fontSize: 12, color: '#6b7280', alignSelf: 'center' }}>Draft: {savedAt}</div>}
           {publishedAt && <div style={{ fontSize: 12, color: '#16a34a', alignSelf: 'center' }}>Published: {publishedAt}</div>}
         </div>

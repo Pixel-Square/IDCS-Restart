@@ -319,6 +319,14 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
     (async () => {
       try {
         const ta = (tas || []).find((t) => t.id === selectedTaId) || null;
+
+        // Prefer TA-provided class_type (works for cross-department assignments)
+        const taCt = String((ta as any)?.class_type || '').trim();
+        if (taCt) {
+          if (mounted) setClassType(taCt);
+          return;
+        }
+
         const curriculumRowId = (ta as any)?.curriculum_row_id;
         if (!curriculumRowId) {
           if (mounted) setClassType(null);

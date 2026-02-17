@@ -15,3 +15,11 @@ export function lsSet(key: string, value: any) {
     // ignore
   }
 }
+
+export function lsRemove(key: string) {
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // ignore
+  }
+}

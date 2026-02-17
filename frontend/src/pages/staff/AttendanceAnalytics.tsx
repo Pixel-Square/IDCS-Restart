@@ -697,64 +697,101 @@ const AttendanceAnalytics: React.FC = () => {
           </div>
 
           {showPeriodSection && (
-            <div className="p-6 overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Period</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Session</th>
-                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Locked</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Total</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Present</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Absent</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Leave</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">OD</th>
-                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Report</th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {todayPeriods.periods.map((period) => (
-                    <tr key={period.session_id} className="hover:bg-gray-50">
-                      <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">
-                        {period.period_label || `Period ${period.period_index}`}
-                        <div className="text-xs text-gray-500">{period.period_start && period.period_end ? `${period.period_start} - ${period.period_end}` : ''}</div>
-                      </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">
-                        <div className="font-medium">{period.section_name}</div>
-                        {period.subject && <div className="text-xs text-gray-500">{period.subject}</div>}
-                      </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-center text-sm">
-                        {period.is_locked ? (
-                          <div className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-red-100 text-red-700"><Lock className="w-3 h-3 mr-1"/>Locked</div>
-                        ) : (
-                          <div className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-green-50 text-green-700"><Unlock className="w-3 h-3 mr-1"/>Unlocked</div>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-right text-sm text-gray-900">{period.total_strength}</td>
-                      <td className="px-4 py-3 whitespace-nowrap text-right text-sm text-green-600 font-semibold">{period.present}</td>
-                      <td className="px-4 py-3 whitespace-nowrap text-right text-sm text-red-600 font-semibold">{period.absent}</td>
-                      <td className="px-4 py-3 whitespace-nowrap text-right text-sm text-gray-600">{period.leave}</td>
-                      <td className="px-4 py-3 whitespace-nowrap text-right text-sm text-gray-600">{period.on_duty}</td>
-                      <td className="px-4 py-3 whitespace-nowrap text-center">
-                        <div className="flex items-center justify-center gap-2">
-                          <button
-                            onClick={() => fetchPeriodLog(period.session_id, period)}
-                            className="px-2 py-1 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700"
-                          >
-                            Report
-                          </button>
-                          <button
-                            onClick={() => fetchClassReport(period.section_id)}
-                            className="px-2 py-1 text-xs bg-gray-100 rounded hover:bg-gray-200"
-                          >
-                            Class
-                          </button>
+            <div className="p-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {todayPeriods.periods.map((period) => (
+                  <div 
+                    key={period.session_id} 
+                    className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow bg-white"
+                  >
+                    {/* Period Header */}
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-semibold text-gray-900">
+                            {period.period_label || `Period ${period.period_index}`}
+                          </h3>
+                          {period.is_locked && (
+                            <div className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded-full flex items-center gap-1">
+                              <Lock className="w-3 h-3" />
+                              Locked
+                            </div>
+                          )}
                         </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                        <div className="text-xs text-gray-500 mt-1">
+                          {period.period_start && period.period_end && (
+                            <span>{period.period_start} - {period.period_end}</span>
+                          )}
+                        </div>
+                      </div>
+                      <div className={`text-lg font-bold ${
+                        period.attendance_percentage >= 85 ? 'text-green-600' :
+                        period.attendance_percentage >= 75 ? 'text-yellow-600' : 'text-red-600'
+                      }`}>
+                        {period.attendance_percentage}%
+                      </div>
+                    </div>
+
+                    {/* Section and Subject */}
+                    <div className="mb-3 space-y-1">
+                      <div className="flex items-center gap-2">
+                        <Building2 className="w-4 h-4 text-gray-400" />
+                        <span className="text-sm font-medium text-gray-700">{period.section_name}</span>
+                      </div>
+                      {period.subject && (
+                        <div className="flex items-center gap-2">
+                          <GraduationCap className="w-4 h-4 text-gray-400" />
+                          <span className="text-xs text-gray-600">{period.subject}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Attendance Stats */}
+                    <div className="grid grid-cols-2 gap-2 mb-3">
+                      <div className="bg-gray-50 rounded-lg p-2">
+                        <div className="text-xs text-gray-500">Total Strength</div>
+                        <div className="text-lg font-semibold text-gray-900">{period.total_strength}</div>
+                      </div>
+                      <div className="bg-gray-50 rounded-lg p-2">
+                        <div className="text-xs text-gray-500">Marked</div>
+                        <div className="text-lg font-semibold text-gray-900">{period.total_marked}</div>
+                      </div>
+                    </div>
+
+                    {/* Status Breakdown */}
+                    <div className="grid grid-cols-4 gap-1 text-center text-xs">
+                      <div className="bg-green-50 rounded p-1.5">
+                        <div className="font-semibold text-green-700">{period.present}</div>
+                        <div className="text-green-600">Present</div>
+                      </div>
+                      <div className="bg-red-50 rounded p-1.5">
+                        <div className="font-semibold text-red-700">{period.absent}</div>
+                        <div className="text-red-600">Absent</div>
+                      </div>
+                      <div className="bg-blue-50 rounded p-1.5">
+                        <div className="font-semibold text-blue-700">{period.on_duty}</div>
+                        <div className="text-blue-600">OD</div>
+                      </div>
+                      <div className="bg-yellow-50 rounded p-1.5">
+                        <div className="font-semibold text-yellow-700">{period.late}</div>
+                        <div className="text-yellow-600">Late</div>
+                      </div>
+                    </div>
+
+                    {/* Marked Time */}
+                    {period.marked_at && (
+                      <div className="mt-3 pt-3 border-t border-gray-100">
+                        <div className="text-xs text-gray-500">
+                          Marked at {new Date(period.marked_at).toLocaleTimeString('en-US', { 
+                            hour: '2-digit', 
+                            minute: '2-digit' 
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>
@@ -1132,65 +1169,37 @@ const AttendanceAnalytics: React.FC = () => {
             <div className="text-gray-600">No assigned periods found for today.</div>
           )}
 
-          <div className="overflow-x-auto bg-white rounded-lg border border-gray-200">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Period</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Session</th>
-                  <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Locked</th>
-                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Total</th>
-                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Present</th>
-                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Absent</th>
-                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Leave</th>
-                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">OD</th>
-                  <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Report</th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {assignedPeriods.map((p: any) => (
-                  <tr key={`${p.id}-${p.period?.id || 'x'}`} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">
-                      {p.period?.label || `Period ${p.period?.index}`}
-                      <div className="text-xs text-gray-500">{p.period?.start_time && p.period?.end_time ? `${p.period.start_time} - ${p.period.end_time}` : ''}</div>
-                    </td>
-                    <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">
-                      <div className="font-medium">{p.section_name}</div>
-                      {p.subject_display && <div className="text-xs text-gray-500">{p.subject_display}</div>}
-                    </td>
-                    <td className="px-4 py-3 whitespace-nowrap text-center text-sm">
-                      {p.attendance_session_locked ? (
-                        <div className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-red-100 text-red-700"><Lock className="w-3 h-3 mr-1"/>Locked</div>
-                      ) : (
-                        <div className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-green-50 text-green-700"><Unlock className="w-3 h-3 mr-1"/>Unlocked</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {assignedPeriods.map((p: any) => (
+              <div key={`${p.id}-${p.period?.id || 'x'}`} className="border border-gray-200 rounded-lg p-4 bg-white hover:shadow-md transition-shadow">
+                <div className="flex items-start justify-between mb-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-semibold text-gray-900">{p.period?.label || `Period ${p.period?.index}`}</h3>
+                      {p.attendance_session_locked && (
+                        <div className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded-full">Locked</div>
                       )}
-                    </td>
-                    <td className="px-4 py-3 whitespace-nowrap text-right text-sm text-gray-900">{p.total_strength ?? '-'}</td>
-                    <td className="px-4 py-3 whitespace-nowrap text-right text-sm text-green-600 font-semibold">{p.present ?? '-'}</td>
-                    <td className="px-4 py-3 whitespace-nowrap text-right text-sm text-red-600 font-semibold">{p.absent ?? '-'}</td>
-                    <td className="px-4 py-3 whitespace-nowrap text-right text-sm text-gray-600">{p.leave ?? '-'}</td>
-                    <td className="px-4 py-3 whitespace-nowrap text-right text-sm text-gray-600">{p.on_duty ?? '-'}</td>
-                    <td className="px-4 py-3 whitespace-nowrap text-center">
-                      <div className="flex items-center justify-center gap-2">
-                        <button
-                          onClick={() => p.attendance_session_id && fetchPeriodLog(p.attendance_session_id, p)}
-                          disabled={!p.attendance_session_id}
-                          className={`px-2 py-1 text-xs ${p.attendance_session_id ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-gray-100 text-gray-400 cursor-not-allowed'} rounded`}
-                        >
-                          Report
-                        </button>
-                        <button
-                          onClick={() => fetchClassReport(p.section_id || p.section?.id || p.section_id)}
-                          className="px-2 py-1 text-xs bg-gray-100 rounded hover:bg-gray-200"
-                        >
-                          Class
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">{p.period?.start_time && p.period?.end_time ? `${p.period.start_time} - ${p.period.end_time}` : ''}</div>
+                  </div>
+                  <div className="text-sm text-gray-500">{p.unlock_request_status ? p.unlock_request_status : ''}</div>
+                </div>
+
+                <div className="mb-3">
+                  <div className="text-sm font-medium text-gray-700">{p.section_name}</div>
+                  {p.subject_display && (
+                    <div className="text-xs text-gray-500">{p.subject_display}</div>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 text-sm text-gray-600">
+                  <div className="px-2 py-1 bg-gray-50 rounded">Session: {p.attendance_session_id ? 'Exists' : 'Not marked'}</div>
+                  {p.attendance_session_id && (
+                    <div className="px-2 py-1 bg-gray-50 rounded">Locked: {p.attendance_session_locked ? 'Yes' : 'No'}</div>
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}

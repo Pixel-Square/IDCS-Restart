@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { fetchIQACCourseTeachingMap, IQACTeachingMapRow } from '../../services/academics';
+import { fetchDeptRows, DeptRow } from '../../services/curriculum';
+import { iqacResetAssessment, DraftAssessmentKey } from '../../services/obe';
 
 export default function AcademicControllerCoursePage(): JSX.Element {
   const { courseCode } = useParams<{ courseCode: string }>();
@@ -8,6 +10,7 @@ export default function AcademicControllerCoursePage(): JSX.Element {
 
   const code = useMemo(() => decodeURIComponent(String(courseCode || '')).trim(), [courseCode]);
   const [rows, setRows] = useState<IQACTeachingMapRow[]>([]);
+  const [deptRows, setDeptRows] = useState<DeptRow[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -16,9 +19,10 @@ export default function AcademicControllerCoursePage(): JSX.Element {
     (async () => {
       if (!code) return;
       try {
-        const r = await fetchIQACCourseTeachingMap(code);
+        const [r, drows] = await Promise.all([fetchIQACCourseTeachingMap(code), fetchDeptRows()]);
         if (!mounted) return;
         setRows(Array.isArray(r) ? r : []);
+        setDeptRows(Array.isArray(drows) ? drows : []);
         setError(null);
       } catch (e: any) {
         if (!mounted) return;
@@ -64,6 +68,36 @@ export default function AcademicControllerCoursePage(): JSX.Element {
     return groups;
   }, [rows]);
 
+  async function resetCourseForTeachingAssignment(teachingAssignmentId: number) {
+    if (!teachingAssignmentId) return;
+    const ok = window.confirm('Resetting this course will delete all entered exam data for this teaching assignment. This cannot be undone. Proceed?');
+    if (!ok) return;
+    const assessments: DraftAssessmentKey[] = ['ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'];
+    try {
+      // sequentially reset each assessment; ignore errors for individual ones but surface at end
+      for (const a of assessments) {
+        try {
+          // subject id here is the course code
+          await iqacResetAssessment(a, code, teachingAssignmentId);
+        } catch (e) {
+          // continue resetting others
+          // eslint-disable-next-line no-console
+          console.warn('reset assessment failed', a, e);
+        }
+      }
+      // reload rows
+      setLoading(true);
+      const r = await fetchIQACCourseTeachingMap(code);
+      setRows(Array.isArray(r) ? r : []);
+      setError(null);
+      window.alert('Reset completed.');
+    } catch (e: any) {
+      window.alert('Reset failed: ' + (e?.message || String(e)));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
     <main style={{ padding: 18, minHeight: '100vh', fontFamily: 'Arial, sans-serif' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
@@ -104,7 +138,15 @@ export default function AcademicControllerCoursePage(): JSX.Element {
                     key={String(r.teaching_assignment_id)}
                     style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 10, background: '#fff', display: 'flex', flexDirection: 'column', gap: 8 }}
                   >
-                    <div style={{ color: '#111827', fontWeight: 800 }}>{r.staff?.name || r.staff?.username || '—'}</div>
+                      <div style={{ color: '#111827', fontWeight: 800 }}>{r.staff?.name || r.staff?.username || '—'}</div>
+                      <div style={{ fontSize: 12, color: '#6b7280' }}>
+                        {r.section_name ? `Section: ${r.section_name}` : ''}
+                        {r.academic_year ? `  •  AY: ${r.academic_year}` : ''}
+                        {(() => {
+                          const dept = (deptRows || []).find((d) => String(d?.course_code || '').trim().toUpperCase() === code.toUpperCase());
+                          return dept ? `  •  Dept: ${dept.department?.name || dept.department?.code || ''}  •  Sem: ${dept.semester || '—'}` : '';
+                        })()}
+                      </div>
                     <div style={{ marginTop: 2, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                       <button
                         className="obe-btn obe-btn-primary"
@@ -117,6 +159,9 @@ export default function AcademicControllerCoursePage(): JSX.Element {
                         onClick={() => navigate(`/iqac/academic-controller/course/${encodeURIComponent(code)}/obe/${encodeURIComponent(String(r.teaching_assignment_id))}/marks`)}
                       >
                         Open OBE (view-only)
+                      </button>
+                      <button className="obe-btn" onClick={() => resetCourseForTeachingAssignment(Number(r.teaching_assignment_id))}>
+                        Reset Course
                       </button>
                     </div>
                   </div>

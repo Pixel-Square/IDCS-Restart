@@ -25,6 +25,7 @@ class AcademicYearSerializer(serializers.ModelSerializer):
 class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
     subject_code = serializers.SerializerMethodField(read_only=True)
     subject_name = serializers.SerializerMethodField(read_only=True)
+    class_type = serializers.SerializerMethodField(read_only=True)
     section_name = serializers.CharField(source='section.name', read_only=True)
     section_id = serializers.IntegerField(source='section.id', read_only=True)
     elective_subject_id = serializers.SerializerMethodField(read_only=True)
@@ -36,7 +37,7 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
     class Meta:
         model = TeachingAssignment
         # removed curriculum_row and academic_year as requested; include batch & semester
-        fields = ('id', 'subject_code', 'subject_name', 'section_name', 'section_id', 'elective_subject_id', 'elective_subject_name', 'curriculum_row_id', 'batch', 'semester')
+        fields = ('id', 'subject_code', 'subject_name', 'class_type', 'section_name', 'section_id', 'elective_subject_id', 'elective_subject_name', 'curriculum_row_id', 'batch', 'semester')
 
     def _curriculum_row_for_obj(self, obj):
         # helper: try to find a matching CurriculumDepartment row for the assignment
@@ -115,6 +116,30 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
                 return getattr(row, 'course_name', None)
         except Exception:
             pass
+        return None
+
+    def get_class_type(self, obj):
+        """Return class_type based on the assignment's section department curriculum row.
+
+        This is intentionally computed server-side so cross-department staff
+        (assigned to another department's section) still get the correct class_type
+        without needing direct access to curriculum department endpoints.
+        """
+        try:
+            # Elective assignments store class_type on ElectiveSubject
+            if getattr(obj, 'elective_subject', None):
+                ct = getattr(obj.elective_subject, 'class_type', None)
+                if ct:
+                    return ct
+
+            row = getattr(obj, 'curriculum_row', None) or self._curriculum_row_for_obj(obj)
+            if row:
+                ct = getattr(row, 'class_type', None) or getattr(getattr(row, 'master', None), 'class_type', None)
+                if ct:
+                    return ct
+        except Exception:
+            return None
+
         return None
 
     def get_batch(self, obj):

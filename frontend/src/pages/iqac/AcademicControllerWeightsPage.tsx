@@ -5,7 +5,7 @@ import { lsGet, lsSet } from '../../utils/localStorage';
 
 const DEFAULT_INTERNAL_MARK_WEIGHTS = [1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 2.0, 2.0, 2.0, 2.0, 4.0];
 
-const INTERNAL_MARK_TABLE_CLASS_TYPES = ['THEORY1', 'THEORY2', 'THEORY3', 'TCPR', 'TCPL', 'LAB', 'AUDIT', 'PRACTICAL', 'SPECIAL'] as const;
+const INTERNAL_MARK_TABLE_CLASS_TYPES = ['THEORY', 'TCPR', 'TCPL', 'LAB', 'AUDIT', 'PRACTICAL', 'SPECIAL'] as const;
 
 const THEORY_INTERNAL_SCHEMA = {
   groupHeaders: ['CO1', 'CO2', 'CO3', 'CO4', 'ME'] as const,
@@ -53,9 +53,9 @@ const INTERNAL_INPUT_WIDTH = 64;
 
 function displayClassTypeName(ct: string): string {
   const s = normalizeClassType(ct);
-  if (s === 'THEORY1') return 'Theory A';
-  if (s === 'THEORY2') return 'Theory B';
-  if (s === 'THEORY3') return 'Theory C';
+  if (s === 'THEORY') return 'Theory';
+  if (s === 'TCPL') return 'TCPL';
+  if (s === 'TCPR') return 'TCPR';
   if (!s) return '';
   return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
 }
@@ -96,7 +96,7 @@ function normalizeInternalWeightsLen17(
 
 function buildTheoryEnabledState(src: Record<string, WeightsRow>): TheoryEnabledState {
   const out: TheoryEnabledState = {};
-  for (const k of ['THEORY1', 'THEORY2', 'THEORY3']) {
+  for (const k of ['THEORY', 'TCPR', 'TCPL']) {
     // Default locked/dim until the user explicitly enables editing.
     out[k] = new Array(17).fill(false);
   }
@@ -119,25 +119,58 @@ export default function AcademicControllerWeightsPage() {
         const out: Record<string, WeightsRow> = {};
         for (const ct of CLASS_TYPES) {
           const k = normalizeClassType(String(ct));
+          // defaults for TCPR/TCPL as requested; others keep previous defaults
+          let ssaDef: number | string = 1.5;
+          let ciaDef: number | string = 3;
+          let formDef: number | string = 2.5;
+          if (k === 'TCPL') {
+            ssaDef = 1;
+            ciaDef = 3.25;
+            formDef = 3.5; // Lab
+          } else if (k === 'TCPR') {
+            ssaDef = 1;
+            ciaDef = 3.25;
+            formDef = 4.0; // Review
+          } else if (k === 'LAB') {
+            ssaDef = 1;
+            ciaDef = 1;
+            formDef = 1;
+          }
+
+          // build internal weights: for theory-like classes we use a 17-value pattern
+          let internalWeights: Array<number | string> = [...DEFAULT_INTERNAL_MARK_WEIGHTS];
+          if (k === 'THEORY') {
+            internalWeights = [...DEFAULT_INTERNAL_MARK_WEIGHTS];
+          } else if (k === 'TCPL') {
+            // CO1..CO4 => SSA/CIA/FA repeated, ME COs => 3,3,3,3,7
+            internalWeights = [];
+            for (let i = 0; i < 4; i++) internalWeights.push(ssaDef, ciaDef, formDef);
+            internalWeights.push(3.0, 3.0, 3.0, 3.0, 7.0);
+          } else if (k === 'TCPR') {
+            // CO1..CO4 => SSA/CIA/FA repeated, ME COs => 3,3,3,3,10
+            internalWeights = [];
+            for (let i = 0; i < 4; i++) internalWeights.push(ssaDef, ciaDef, formDef);
+            internalWeights.push(3.0, 3.0, 3.0, 3.0, 10.0);
+          }
+
           out[k] = {
-            ssa1: k === 'TCPR' ? 2 : k === 'TCPL' || k === 'LAB' ? 1 : 1.5,
-            cia1: k === 'TCPR' ? 2.5 : k === 'TCPL' ? 2 : k === 'LAB' ? 1 : 3,
-            formative1: k === 'TCPR' ? 2 : k === 'TCPL' ? 3 : k === 'LAB' ? 1 : 2.5,
+            ssa1: ssaDef,
+            cia1: ciaDef,
+            formative1: formDef,
+            internal_mark_weights: internalWeights,
+          };
+        }
+
+        // Ensure single THEORY key exists (server or CLASS_TYPES may provide it)
+        if (!out['THEORY']) {
+          out['THEORY'] = {
+            ssa1: 1.5,
+            cia1: 3,
+            formative1: 2.5,
             internal_mark_weights: [...DEFAULT_INTERNAL_MARK_WEIGHTS],
           };
         }
 
-        // Extra theory variants (used only for internal mark weightage UI)
-        for (const k of ['THEORY1', 'THEORY2', 'THEORY3']) {
-          if (!out[k]) {
-            out[k] = {
-              ssa1: out['THEORY']?.ssa1 ?? 1.5,
-              cia1: out['THEORY']?.cia1 ?? 3,
-              formative1: out['THEORY']?.formative1 ?? 2.5,
-              internal_mark_weights: [...DEFAULT_INTERNAL_MARK_WEIGHTS],
-            };
-          }
-        }
         return out;
       };
 
@@ -145,14 +178,12 @@ export default function AcademicControllerWeightsPage() {
         const defaults = buildDefaults();
         if (!src || typeof src !== 'object') return defaults;
         const out: Record<string, WeightsRow> = { ...defaults };
-        const all = Array.from(new Set<string>([...CLASS_TYPES.map((ct) => normalizeClassType(String(ct))), 'THEORY1', 'THEORY2', 'THEORY3']));
+        const all = Array.from(new Set<string>([...CLASS_TYPES.map((ct) => normalizeClassType(String(ct))), 'THEORY']));
 
-        // If server has only THEORY, seed THEORY1/2/3 from THEORY
+        // Prefer explicit single THEORY key only
         const theorySeed = src['THEORY'] ?? src['Theory'] ?? src['theory'] ?? null;
         if (theorySeed && typeof theorySeed === 'object') {
-          for (const tk of ['THEORY1', 'THEORY2', 'THEORY3']) {
-            if (src[tk] == null) src[tk] = theorySeed;
-          }
+          src['THEORY'] = theorySeed;
         }
 
         for (const k of all) {
@@ -243,7 +274,7 @@ export default function AcademicControllerWeightsPage() {
     try {
       // normalize keys to use the canonical form (uppercase)
       const normalized: Record<string, any> = {};
-      const keysToSave = Array.from(new Set<string>([...CLASS_TYPES.map((ct) => normalizeClassType(String(ct))), 'THEORY1', 'THEORY2', 'THEORY3']));
+      const keysToSave = Array.from(new Set<string>([...CLASS_TYPES.map((ct) => normalizeClassType(String(ct))), 'THEORY']));
 
       for (const k of keysToSave) {
         const w = (weights[k] ?? weights[k.toLowerCase()] ?? weights[k.toUpperCase()] ?? {}) as any;
@@ -262,9 +293,9 @@ export default function AcademicControllerWeightsPage() {
         };
       }
 
-      // Backward compatibility: keep THEORY in sync with THEORY1 (so existing pages that use THEORY continue to work).
-      if (normalized.THEORY1) {
-        normalized.THEORY = { ...normalized.THEORY, ...normalized.THEORY1 };
+      // Ensure single THEORY key exists
+      if (!normalized.THEORY) {
+        normalized.THEORY = normalized.THEORY || null;
       }
 
       // Try saving to backend; if it fails, persist to localStorage as fallback
@@ -348,7 +379,7 @@ export default function AcademicControllerWeightsPage() {
               const row = weights[key];
               const arr = normalizeInternalWeightsLen17(Array.isArray(row?.internal_mark_weights) ? row.internal_mark_weights : DEFAULT_INTERNAL_MARK_WEIGHTS, row);
 
-              const isTheoryVariant = key === 'THEORY1' || key === 'THEORY2' || key === 'THEORY3';
+              const isTheoryVariant = key === 'THEORY' || key === 'TCPR' || key === 'TCPL';
               if (isTheoryVariant) {
                 const enabledArr = Array.isArray(theoryEnabled[key]) ? theoryEnabled[key] : new Array(17).fill(true);
                 const inputStyle = (enabled: boolean): React.CSSProperties => ({

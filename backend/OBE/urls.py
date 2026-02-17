@@ -88,6 +88,8 @@ urlpatterns = [
 
     # IQAC tools
     path('iqac/reset/<str:assessment>/<str:subject_id>', views.iqac_reset_assessment),
+    path('iqac/reset-notifications', views.get_reset_notifications),
+    path('iqac/reset-notifications/dismiss', views.dismiss_reset_notifications),
     path('iqac/class-type-weights', views.class_type_weights_list),
     path('iqac/class-type-weights/save', views.class_type_weights_upsert),
     path('iqac/internal-mark-mapping/<str:subject_id>', views.internal_mark_mapping_get),

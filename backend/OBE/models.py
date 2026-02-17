@@ -610,3 +610,22 @@ class ClassTypeWeights(models.Model):
         verbose_name_plural = 'Class Type Weights'
 
 
+class IqacResetNotification(models.Model):
+    """Notification created when IQAC resets a course assessment.
+    
+    Staff sees this notification once when opening the course/exam page.
+    After dismissal (is_read=True), won't show again until the next reset.
+    """
+    teaching_assignment = models.ForeignKey('academics.TeachingAssignment', on_delete=models.CASCADE, related_name='reset_notifications')
+    assessment = models.CharField(max_length=50)
+    reset_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='iqac_resets')
+    reset_at = models.DateTimeField(auto_now_add=True)
+    is_read = models.BooleanField(default=False)
+    read_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'obe_iqac_reset_notifications'
+        ordering = ['-reset_at']
+        indexes = [
+            models.Index(fields=['teaching_assignment', 'is_read']),
+        ]

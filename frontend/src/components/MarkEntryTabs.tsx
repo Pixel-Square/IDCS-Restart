@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { lsGet, lsSet } from '../utils/localStorage';
+import { lsGet, lsRemove, lsSet } from '../utils/localStorage';
 import { normalizeClassType } from '../constants/classTypes';
 import Cia1Entry from './Cia1Entry';
 import Cia2Entry from './Cia2Entry';
@@ -15,8 +15,13 @@ import { DraftAssessmentKey, fetchMyTeachingAssignments, iqacResetAssessment, Te
 import * as OBE from '../services/obe';
 import FacultyAssessmentPanel from './FacultyAssessmentPanel';
 import fetchWithAuth from '../services/fetchAuth';
+import { fetchTeachingAssignmentRoster } from '../services/roster';
+import IqacResetNotificationAlert from './IqacResetNotificationAlert';
+import CQIEditor from '../pages/staff/CQIEditor';
+import CQIEntry from '../pages/staff/CQIEntry';
 
-type TabKey = 'dashboard' | 'ssa1' | 'review1' | 'ssa2' | 'review2' | 'formative1' | 'formative2' | 'cia1' | 'cia2' | 'model';
+type TabKey = 'dashboard' | 'ssa1' | 'review1' | 'ssa2' | 'review2' | 'formative1' | 'formative2' | 'cia1' | 'cia2' | 'model' | 'cqi';
+type CQIOption = 'cia1_co1_co2' | 'cia2_co3_co4' | 'model_co3_co4_co5' | 'model_co5';
 
 type MarkRow = { studentId: string; mark: number };
 
@@ -111,6 +116,22 @@ function getVisibleTabs(classType: string | null | undefined, enabledAssessments
 
 function storageKey(subjectId: string, tab: TabKey) {
   return `marks_${subjectId}_${tab}`;
+}
+
+function clearLocalDraftCache(subjectId: string, assessment: string) {
+  const a = String(assessment || '').trim().toLowerCase();
+
+  // Generic fallback (used by simpler entry tables)
+  lsRemove(`marks_${subjectId}_${a}`);
+
+  // Sheet-style caches
+  if (a === 'ssa1') lsRemove(`ssa1_sheet_${subjectId}`);
+  if (a === 'ssa2') lsRemove(`ssa2_sheet_${subjectId}`);
+  if (a === 'formative1') lsRemove(`formative1_sheet_${subjectId}`);
+  if (a === 'formative2') lsRemove(`formative2_sheet_${subjectId}`);
+  if (a === 'cia1') lsRemove(`cia1_sheet_${subjectId}`);
+  if (a === 'cia2') lsRemove(`cia2_sheet_${subjectId}`);
+  if (a === 'model') lsRemove(`model_sheet_${subjectId}`);
 }
 
 function downloadCsv(filename: string, rows: MarkRow[]) {
@@ -268,12 +289,62 @@ export default function MarkEntryTabs({
   const [showFacultyPanel, setShowFacultyPanel] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [showCQIEditor, setShowCQIEditor] = useState(false);
+  const [cqiConfigs, setCqiConfigs] = useState<CQIOption[]>([]);
+  const [selectedCqiInfo, setSelectedCqiInfo] = useState<{ assessment: string; cos: string[]; label: string } | null>(null);
 
-  const isSpecial = useMemo(() => normalizeClassType(classType) === 'SPECIAL', [classType]);
+  const selectedTa = useMemo(() => {
+    if (selectedTaId == null) return null;
+    return (tas || []).find((t) => t.id === selectedTaId) || null;
+  }, [tas, selectedTaId]);
+
+  const [taDerivedClassType, setTaDerivedClassType] = useState<string | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      setTaDerivedClassType(null);
+      if (selectedTaId == null) return;
+
+      // If TA list already has class_type, no need to fetch.
+      const direct = String((selectedTa as any)?.class_type || '').trim();
+      if (direct) return;
+
+      // If parent already provided classType, don't force extra calls.
+      const propCt = String(classType || '').trim();
+      if (propCt) return;
+
+      try {
+        const roster = await fetchTeachingAssignmentRoster(Number(selectedTaId));
+        if (!mounted) return;
+        const ct = String((roster as any)?.teaching_assignment?.class_type || '').trim();
+        setTaDerivedClassType(ct || null);
+      } catch {
+        if (!mounted) return;
+        setTaDerivedClassType(null);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [selectedTaId, selectedTa, classType]);
+
+  const effectiveClassType = useMemo(() => {
+    const taCt = String((selectedTa as any)?.class_type || '').trim();
+    if (taCt) return taCt;
+    const derived = String(taDerivedClassType || '').trim();
+    if (derived) return derived;
+    const propCt = String(classType || '').trim();
+    return propCt || null;
+  }, [selectedTa, taDerivedClassType, classType]);
+
+  const normalizedEffectiveClassType = useMemo(() => normalizeClassType(effectiveClassType), [effectiveClassType]);
+
+  const isSpecial = useMemo(() => normalizedEffectiveClassType === 'SPECIAL', [normalizedEffectiveClassType]);
 
   // If faculty has set enabled assessments for the selected TA, prefer that.
   const effectiveEnabled = facultyEnabledAssessments === undefined ? enabledAssessments : facultyEnabledAssessments;
-  const visibleTabs = useMemo(() => getVisibleTabs(classType, effectiveEnabled), [classType, enabledAssessments, facultyEnabledAssessments]);
+  const visibleTabs = useMemo(() => getVisibleTabs(effectiveClassType, effectiveEnabled), [effectiveClassType, enabledAssessments, facultyEnabledAssessments]);
 
   useEffect(() => {
     if (!subjectId) return;
@@ -284,6 +355,8 @@ export default function MarkEntryTabs({
   useEffect(() => {
     // If class type changes or user navigates to a course with different visible tabs,
     // ensure the active tab is still valid.
+    // Allow 'cqi' as a special valid tab even though it's not in visibleTabs
+    if (active === 'cqi') return;
     if (!visibleTabs.some((t) => t.key === active)) setActive('dashboard');
   }, [visibleTabs, active]);
 
@@ -385,6 +458,49 @@ export default function MarkEntryTabs({
     lsSet(`markEntry_activeTab_${subjectId}`, active);
   }, [subjectId, active]);
 
+  // Load CQI configuration from localStorage
+  useEffect(() => {
+    if (!subjectId) return;
+    const stored = lsGet<CQIOption[]>(`cqi_config_${subjectId}`);
+    if (stored && Array.isArray(stored)) setCqiConfigs(stored);
+  }, [subjectId]);
+
+  // Save CQI configuration to localStorage
+  const handleCQISave = (selectedOptions: CQIOption[]) => {
+    setCqiConfigs(selectedOptions);
+    if (subjectId) {
+      if (selectedOptions.length > 0) {
+        lsSet(`cqi_config_${subjectId}`, selectedOptions);
+      } else {
+        lsRemove(`cqi_config_${subjectId}`);
+      }
+    }
+  };
+
+  // Get CQI info (assessment and COs) from configurations
+  const cqiInfos = useMemo(() => {
+    if (!cqiConfigs || cqiConfigs.length === 0) return [];
+    
+    const configMap = {
+      'cia1_co1_co2': { assessment: 'cia1', cos: ['CO1', 'CO2'], label: 'CIA 1' },
+      'cia2_co3_co4': { assessment: 'cia2', cos: ['CO3', 'CO4'], label: 'CIA 2' },
+      'model_co3_co4_co5': { assessment: 'model', cos: ['CO3', 'CO4', 'CO5'], label: 'MODEL' },
+      'model_co5': { assessment: 'model', cos: ['CO5'], label: 'MODEL' },
+    };
+    
+    return cqiConfigs.map(config => configMap[config]).filter(Boolean);
+  }, [cqiConfigs]);
+
+  // Auto-select first CQI info if none selected
+  useEffect(() => {
+    if (cqiInfos.length > 0 && !selectedCqiInfo) {
+      setSelectedCqiInfo(cqiInfos[0]);
+    } else if (cqiInfos.length === 0 && selectedCqiInfo) {
+      setSelectedCqiInfo(null);
+      if (active === 'cqi') setActive('dashboard');
+    }
+  }, [cqiInfos, selectedCqiInfo, active]);
+
   const counts = useMemo(() => {
     if (!subjectId) return {} as Record<TabKey, number>;
     const map: Record<string, number> = {};
@@ -436,10 +552,13 @@ export default function MarkEntryTabs({
       map[t.key] = Array.isArray(rows) ? rows.length : 0;
     }
     return map as Record<TabKey, number>;
-  }, [subjectId, active, visibleTabs]);
+  }, [subjectId, active, visibleTabs, refreshKey]);
 
   return (
     <div>
+      {/* Show reset notification if faculty opens a course that was reset by IQAC */}
+      {selectedTaId != null && <IqacResetNotificationAlert teachingAssignmentId={selectedTaId} />}
+      
       <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 12 }}>
         <div style={{ minWidth: 260 }}>
           <div style={{ fontSize: 12, color: '#6b7280' }}>Teaching Assignment (Section)</div>
@@ -470,6 +589,13 @@ export default function MarkEntryTabs({
               Show exams
             </button>
           ) : null}
+          <button 
+            className="obe-btn obe-btn-primary" 
+            onClick={() => setShowCQIEditor(true)}
+            title="Configure when to show CQI button"
+          >
+            CQI Editor
+          </button>
         </div>
       </div>
 
@@ -499,6 +625,10 @@ export default function MarkEntryTabs({
               try {
                 setResetting(true);
                 await iqacResetAssessment(assessment as DraftAssessmentKey, String(subjectId), Number(selectedTaId));
+
+                // Clear local cached drafts so UI doesn't keep showing old marks
+                clearLocalDraftCache(String(subjectId), String(assessment));
+
                 setRefreshKey((k) => k + 1);
                 alert('Reset completed.');
               } catch (e: any) {
@@ -513,10 +643,57 @@ export default function MarkEntryTabs({
         </div>
       ) : null}
 
-      <div className="obe-sidebar-nav" aria-label="Mark Entry sub-tabs">
-        {visibleTabs.map((t) => (
-          <TabButton key={t.key} active={active === t.key} label={t.label} onClick={() => setActive(t.key)} />
-        ))}
+      <div style={{ 
+        background: 'linear-gradient(135deg, #f8fafc 0%, #e0f2fe 100%)',
+        borderRadius: 12,
+        padding: '16px',
+        marginBottom: 20,
+        border: '1px solid #cbd5e1',
+        boxShadow: '0 2px 8px rgba(2,6,23,0.04), inset 0 1px 0 rgba(255,255,255,0.5)'
+      }}>
+        <div style={{ 
+          fontSize: 12, 
+          fontWeight: 700, 
+          color: '#64748b', 
+          textTransform: 'uppercase', 
+          letterSpacing: '0.05em',
+          marginBottom: 12
+        }}>
+          Assessment Exams
+        </div>
+        <div className="obe-sidebar-nav" aria-label="Mark Entry sub-tabs" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {visibleTabs.map((t) => (
+            <React.Fragment key={t.key}>
+              <TabButton active={active === t.key} label={t.label} onClick={() => setActive(t.key)} />
+              {cqiInfos
+                .filter(info => info && info.assessment === t.key)
+                .map((info, idx) => {
+                  const isThisCqiActive = active === 'cqi' && 
+                    selectedCqiInfo?.assessment === info.assessment && 
+                    JSON.stringify(selectedCqiInfo?.cos) === JSON.stringify(info.cos);
+                  
+                  return (
+                    <button
+                      key={`cqi-${t.key}-${idx}`}
+                      onClick={() => {
+                        setSelectedCqiInfo(info);
+                        setActive('cqi');
+                      }}
+                      className={`obe-sidebar-btn ${isThisCqiActive ? 'active' : ''}`}
+                      style={{
+                        backgroundColor: isThisCqiActive ? '#10b981' : '#d1fae5',
+                        color: isThisCqiActive ? 'white' : '#065f46',
+                        borderColor: '#10b981',
+                      }}
+                      title={`CQI for ${info.cos.join(', ')}`}
+                    >
+                      CQI {info.cos.length > 1 ? `(${info.cos.join(', ')})` : `(${info.cos[0]})`}
+                    </button>
+                  );
+                })}
+            </React.Fragment>
+          ))}
+        </div>
       </div>
 
       {active === 'dashboard' && (
@@ -559,9 +736,9 @@ export default function MarkEntryTabs({
           <h3 style={{ margin: '0 0 6px 0' }}>{visibleTabs.find((t) => t.key === active)?.label}</h3>
           <div style={{ color: '#6b7280', marginBottom: 12, fontSize: 14 }}>
             {active === 'formative1' 
-              ? (normalizeClassType(classType) === 'TCPL' ? 'Enter and manage LAB-1 marks (experiments + totals).' : 'Enter and manage Formative-1 assessment marks with BTL mapping.')
+              ? (normalizedEffectiveClassType === 'TCPL' ? 'Enter and manage LAB-1 marks (experiments + totals).' : 'Enter and manage Formative-1 assessment marks with BTL mapping.')
               : active === 'formative2'
-                ? (normalizeClassType(classType) === 'TCPL' ? 'Enter and manage LAB-2 marks (experiments + totals).' : 'Enter and manage Formative-2 assessment marks with BTL mapping.')
+                ? (normalizedEffectiveClassType === 'TCPL' ? 'Enter and manage LAB-2 marks (experiments + totals).' : 'Enter and manage Formative-2 assessment marks with BTL mapping.')
               : active === 'ssa1'
                 ? 'SSA1 sheet-style entry (CO + BTL attainment) matching the Excel layout.'
               : active === 'review1'
@@ -571,20 +748,20 @@ export default function MarkEntryTabs({
               : active === 'review2'
                 ? 'Review 2 sheet-style entry (CO + BTL attainment) matching the Excel layout.'
               : active === 'cia1'
-                ? (normalizeClassType(classType) === 'LAB'
+                ? (normalizedEffectiveClassType === 'LAB'
                     ? 'CIA 1 LAB entry (CO-1/CO-2 experiments + CIA exam)'
-                    : normalizeClassType(classType) === 'PRACTICAL'
+                    : normalizedEffectiveClassType === 'PRACTICAL'
                       ? 'CIA 1 Review (Practical) - enter review marks for practical content.'
                       : 'CIA 1 sheet-style entry (Q-wise + CO + BTL) matching the Excel layout.')
               : active === 'cia2'
-                ? (normalizeClassType(classType) === 'LAB' ? 'CIA 2 LAB entry (CO-3/CO-4 experiments + CIA exam).' : 'CIA 2 sheet-style entry (Q-wise + CO + BTL) matching the Excel layout.')
+                ? (normalizedEffectiveClassType === 'LAB' ? 'CIA 2 LAB entry (CO-3/CO-4 experiments + CIA exam).' : 'CIA 2 sheet-style entry (Q-wise + CO + BTL) matching the Excel layout.')
               : active === 'model'
-                ? (normalizeClassType(classType) === 'LAB' ? 'MODEL LAB entry (CO-5 experiments + CIA exam).' : 'MODEL blank table template (same layout style as CIA sheets).')
+                ? (normalizedEffectiveClassType === 'LAB' ? 'MODEL LAB entry (CO-5 experiments + CIA exam).' : 'MODEL blank table template (same layout style as CIA sheets).')
                 : 'Enter and save marks locally for this assessment.'}
           </div>
           <fieldset disabled={Boolean(viewerMode)} style={{ border: 0, padding: 0, margin: 0 }}>
             {active === 'formative1' ? (
-              normalizeClassType(classType) === 'TCPL' ? (
+              normalizedEffectiveClassType === 'TCPL' ? (
                 <LabEntry
                   subjectId={subjectId}
                   teachingAssignmentId={selectedTaId ?? undefined}
@@ -597,7 +774,7 @@ export default function MarkEntryTabs({
                 <Formative1List subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
               )
             ) : active === 'formative2' ? (
-              normalizeClassType(classType) === 'TCPL' ? (
+              normalizedEffectiveClassType === 'TCPL' ? (
                 <LabEntry
                   subjectId={subjectId}
                   teachingAssignmentId={selectedTaId ?? undefined}
@@ -634,7 +811,7 @@ export default function MarkEntryTabs({
                 label="Review 2"
               />
             ) : active === 'cia1' ? (
-              normalizeClassType(classType) === 'LAB' ? (
+              normalizedEffectiveClassType === 'LAB' ? (
                 <LabCourseMarksEntry
                   subjectId={subjectId}
                   teachingAssignmentId={selectedTaId ?? undefined}
@@ -644,18 +821,18 @@ export default function MarkEntryTabs({
                   coB={2}
                   viewerMode={Boolean(viewerMode)}
                 />
-              ) : normalizeClassType(classType) === 'PRACTICAL' ? (
+              ) : normalizedEffectiveClassType === 'PRACTICAL' ? (
                 <ReviewEntry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} assessmentKey="cia1" viewerMode={Boolean(viewerMode)} />
               ) : (
                 <Cia1Entry
                   subjectId={subjectId}
                   teachingAssignmentId={selectedTaId ?? undefined}
-                  classType={classType ?? null}
+                  classType={effectiveClassType ?? null}
                   questionPaperType={questionPaperType ?? null}
                 />
               )
             ) : active === 'cia2' ? (
-              normalizeClassType(classType) === 'LAB' ? (
+              normalizedEffectiveClassType === 'LAB' ? (
                 <LabCourseMarksEntry
                   subjectId={subjectId}
                   teachingAssignmentId={selectedTaId ?? undefined}
@@ -665,18 +842,18 @@ export default function MarkEntryTabs({
                   coB={4}
                   viewerMode={Boolean(viewerMode)}
                 />
-              ) : normalizeClassType(classType) === 'PRACTICAL' ? (
+              ) : normalizedEffectiveClassType === 'PRACTICAL' ? (
                 <ReviewEntry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} assessmentKey="cia2" viewerMode={Boolean(viewerMode)} />
               ) : (
                 <Cia2Entry
                   subjectId={subjectId}
                   teachingAssignmentId={selectedTaId ?? undefined}
-                  classType={classType ?? null}
+                  classType={effectiveClassType ?? null}
                   questionPaperType={questionPaperType ?? null}
                 />
               )
             ) : active === 'model' ? (
-              normalizeClassType(classType) === 'LAB' ? (
+              normalizedEffectiveClassType === 'LAB' ? (
                 <LabCourseMarksEntry
                   subjectId={subjectId}
                   teachingAssignmentId={selectedTaId ?? undefined}
@@ -686,22 +863,36 @@ export default function MarkEntryTabs({
                   coB={null}
                   viewerMode={Boolean(viewerMode)}
                 />
-              ) : normalizeClassType(classType) === 'PRACTICAL' ? (
+              ) : normalizedEffectiveClassType === 'PRACTICAL' ? (
                 <ReviewEntry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} assessmentKey="model" viewerMode={Boolean(viewerMode)} />
               ) : (
                 <ModelEntry
                   subjectId={subjectId}
                   teachingAssignmentId={selectedTaId ?? undefined}
-                  classType={classType ?? null}
+                  classType={effectiveClassType ?? null}
                   questionPaperType={questionPaperType ?? null}
                 />
               )
+            ) : active === 'cqi' ? (
+              <CQIEntry
+                subjectId={subjectId}
+                teachingAssignmentId={selectedTaId ?? undefined}
+                assessmentType={selectedCqiInfo?.assessment as 'cia1' | 'cia2' | 'model' | undefined}
+                cos={selectedCqiInfo?.cos}
+              />
             ) : (
               <MarkEntryTable subjectId={subjectId} tab={active as Exclude<TabKey, 'dashboard'>} />
             )}
           </fieldset>
         </div>
       )}
+
+      <CQIEditor
+        isOpen={showCQIEditor}
+        onClose={() => setShowCQIEditor(false)}
+        onSave={handleCQISave}
+        currentSelection={cqiConfigs}
+      />
     </div>
   );
 }

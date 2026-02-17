@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import * as XLSX from 'xlsx';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
 import fetchWithAuth from '../services/fetchAuth';
@@ -170,6 +171,9 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId, label, asse
   };
 
   const BTL_MAX_WHEN_VISIBLE = isReview ? 30 : DEFAULT_BTL_MAX_WHEN_VISIBLE;
+
+  const excelFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [excelBusy, setExcelBusy] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -849,6 +853,118 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId, label, asse
     downloadCsv(`${subjectId}_${safeFilePart(displayLabel) || 'SSA1'}_sheet.csv`, out);
   };
 
+  const exportSheetExcel = () => {
+    if (!sheet.rows.length) return;
+
+    const q1Max = Number.isFinite(Number(CO_MAX.co1)) ? Number(CO_MAX.co1) : 0;
+    const q2Max = Number.isFinite(Number(CO_MAX.co2)) ? Number(CO_MAX.co2) : 0;
+
+    const header = ['Register No', 'Student Name', `Q1 (${q1Max.toFixed(2)})`, `Q2 (${q2Max.toFixed(2)})`, 'Status'];
+    const data = sheet.rows.map((r) => [r.registerNo, r.name, '', '', 'present']);
+
+    const ws = XLSX.utils.aoa_to_sheet([header, ...data]);
+    ws['!freeze'] = { xSplit: 0, ySplit: 1 } as any;
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, displayLabel || 'SSA1');
+
+    const filename = `${subjectId}_${safeFilePart(displayLabel) || 'SSA1'}_template.xlsx`;
+    XLSX.writeFile(wb, filename);
+  };
+
+  function normalizeHeaderCell(v: any): string {
+    return String(v ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, ' ');
+  }
+
+  const triggerExcelImport = () => {
+    if (tableBlocked) return;
+    excelFileInputRef.current?.click();
+  };
+
+  const importFromExcel = async (file: File) => {
+    if (!file) return;
+    setExcelBusy(true);
+
+    try {
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: 'array' });
+      const firstName = workbook.SheetNames?.[0];
+      if (!firstName) throw new Error('No sheet found in the Excel file.');
+      const sheet0 = workbook.Sheets[firstName];
+      const rows: any[][] = XLSX.utils.sheet_to_json(sheet0, { header: 1 });
+      if (!rows.length) throw new Error('Excel sheet is empty.');
+
+      const headerRow = (rows[0] || []).map(normalizeHeaderCell);
+
+      const findCol = (pred: (h: string) => boolean) => headerRow.findIndex((h) => pred(h));
+
+      const regCol = findCol((h) => h === 'register no' || h === 'reg no' || h.includes('register'));
+      const q1Col = findCol((h) => h.startsWith('q1'));
+      const q2Col = findCol((h) => h.startsWith('q2'));
+      const totalCol = findCol((h) => h === 'total' || h.includes('total'));
+      const statusCol = findCol((h) => h === 'status' || h.includes('status'));
+
+      if (regCol < 0) throw new Error('Could not find “Register No” column.');
+
+      const q1Max = Number.isFinite(Number(CO_MAX.co1)) ? Number(CO_MAX.co1) : 0;
+      const q2Max = Number.isFinite(Number(CO_MAX.co2)) ? Number(CO_MAX.co2) : 0;
+
+      const regToIdx = new Map<string, number>();
+      sheet.rows.forEach((r, idx) => {
+        const full = String(r.registerNo || '').trim();
+        if (full) regToIdx.set(full, idx);
+        const short = shortenRegisterNo(full);
+        if (short) regToIdx.set(short, idx);
+      });
+
+      setSheet((prev) => {
+        const nextRows = prev.rows.slice();
+        for (let i = 1; i < rows.length; i++) {
+          const row = rows[i] || [];
+          const reg = String(row[regCol] ?? '').trim();
+          if (!reg) continue;
+          const idx = regToIdx.get(reg);
+          if (idx == null) continue;
+
+          const statusRaw = statusCol >= 0 ? String(row[statusCol] ?? '') : '';
+          const status = statusRaw.trim().toLowerCase();
+          const isAbsent = status === 'absent' || status === 'ab' || status === 'a';
+
+          const q1 = q1Col >= 0 ? readFiniteNumber(row[q1Col]) : null;
+          const q2 = q2Col >= 0 ? readFiniteNumber(row[q2Col]) : null;
+          const totalX = totalCol >= 0 ? readFiniteNumber(row[totalCol]) : null;
+
+          const q1Clamped = q1 == null ? 0 : clamp(q1, 0, q1Max);
+          const q2Clamped = q2 == null ? 0 : clamp(q2, 0, q2Max);
+
+          const computedTotal = totalX != null ? totalX : q1Clamped + q2Clamped;
+          const finalTotal = isAbsent ? 0 : clamp(computedTotal, 0, MAX_ASMT1);
+
+          nextRows[idx] = {
+            ...nextRows[idx],
+            total: round1(finalTotal),
+          };
+        }
+        return { ...prev, rows: nextRows };
+      });
+    } finally {
+      setExcelBusy(false);
+    }
+  };
+
+  const handleExcelFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      await importFromExcel(file);
+    } catch (err: any) {
+      alert(err?.message || 'Failed to import Excel');
+    }
+  };
+
   const cellTh: React.CSSProperties = {
     border: '1px solid #111',
     padding: '6px 6px',
@@ -928,6 +1044,19 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId, label, asse
           <button onClick={exportSheetCsv} className="obe-btn obe-btn-secondary" disabled={!sheet.rows.length}>
             Export CSV
           </button>
+          <button onClick={exportSheetExcel} className="obe-btn obe-btn-secondary" disabled={!sheet.rows.length}>
+            Export Excel
+          </button>
+          <button onClick={triggerExcelImport} className="obe-btn obe-btn-secondary" disabled={!sheet.rows.length || tableBlocked || excelBusy}>
+            {excelBusy ? 'Importing…' : 'Import Excel'}
+          </button>
+          <input
+            ref={excelFileInputRef}
+            type="file"
+            accept=".xlsx,.xls"
+            style={{ display: 'none' }}
+            onChange={handleExcelFileSelect}
+          />
         </div>
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>

@@ -1,12 +1,17 @@
 export type TeachingAssignmentItem = {
   id: number;
-  subject_id: number;
+  subject_id?: number;
   subject_code: string;
   subject_name: string;
-  section_id: number;
-  section_name: string;
-  academic_year: string;
+  class_type?: string | null;
+  curriculum_row_id?: number | null;
+  elective_subject_id?: number | null;
+  elective_subject_name?: string | null;
+  section_id?: number | null;
+  section_name?: string | null;
+  academic_year?: string;
   semester?: number | null;
+  batch?: any;
 };
 
 // Safe fetch for teaching assignments: use axios apiClient so automatic refresh runs
@@ -56,6 +61,31 @@ export async function iqacResetAssessment(assessment: DraftAssessmentKey, subjec
   const res = await apiClient.post(url, { teaching_assignment_id: teachingAssignmentId });
   return res.data;
 }
+
+export type ResetNotification = {
+  id: number;
+  teaching_assignment_id: number;
+  subject_code: string;
+  subject_name: string;
+  section_name: string;
+  assessment: string;
+  reset_at: string | null;
+  reset_by: string | null;
+};
+
+export async function fetchResetNotifications(teachingAssignmentId?: number): Promise<ResetNotification[]> {
+  const url = `${apiBase()}/api/obe/iqac/reset-notifications`;
+  const params = teachingAssignmentId ? { teaching_assignment_id: teachingAssignmentId } : {};
+  const res = await apiClient.get(url, { params });
+  return res.data?.notifications || [];
+}
+
+export async function dismissResetNotifications(notificationIds: number[]): Promise<any> {
+  const url = `${apiBase()}/api/obe/iqac/reset-notifications/dismiss`;
+  const res = await apiClient.post(url, { notification_ids: notificationIds });
+  return res.data;
+}
+
 
 async function tryRefreshAccess(): Promise<string | null> {
   try {
