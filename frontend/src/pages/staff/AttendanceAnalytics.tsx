@@ -272,6 +272,10 @@ const AttendanceAnalytics: React.FC = () => {
     try {
       const todayIso = new Date().toISOString().split('T')[0];
       const params = new URLSearchParams({ section_id: String(sectionId), date: todayIso });
+      // If a period is currently selected in the UI, include it so the backend returns period-specific report
+      if (selectedPeriod && (selectedPeriod as any).period_index) {
+        params.append('period_index', String((selectedPeriod as any).period_index));
+      }
       const resp = await fetchWithAuth(`/api/academics/analytics/class-report/?${params}`);
       const data = await resp.json();
       if (resp.ok) {
@@ -325,7 +329,52 @@ const AttendanceAnalytics: React.FC = () => {
       const data = await response.json();
       
       if (response.ok) {
-        setTodayPeriods(data);
+        // Filter the returned periods to only include those assigned to current staff
+        try {
+          const todayIso = new Date().toISOString().split('T')[0];
+          const respAssigned = await fetchWithAuth(`/api/academics/staff/periods/?date=${todayIso}`)
+          const assigned = respAssigned.ok ? (await respAssigned.json()).results || [] : []
+
+          // build lookup of assigned section_ids and session_ids by period index
+          const assignedSectionMap: Record<number, Set<number>> = {}
+          const assignedSessionIds = new Set<number>()
+          for (const a of assigned) {
+            const pidx = a.period?.index || (a.period && a.period.index) || null
+            if (pidx !== null) {
+              assignedSectionMap[pidx] = assignedSectionMap[pidx] || new Set()
+              if (a.section_id) assignedSectionMap[pidx].add(a.section_id)
+            }
+            if (a.attendance_session_id) assignedSessionIds.add(a.attendance_session_id)
+          }
+
+          // retain only periods where at least one involved section/session is assigned to staff
+          const filtered = { ...data };
+          if (Array.isArray(data.periods)) {
+            filtered.periods = data.periods.filter((pr: any) => {
+              const pidx = pr.period_index || pr.period?.index || null
+              // if this period has explicit session_ids, check for intersection
+              if (pr.session_ids && Array.isArray(pr.session_ids) && pr.session_ids.length) {
+                for (const sid of pr.session_ids) if (assignedSessionIds.has(sid)) return true
+              }
+              // if this period aggregates multiple sections, check intersection with assigned sections
+              const prSectionIds: number[] = pr.sections && Array.isArray(pr.sections) ? pr.sections : (pr.section_id ? [pr.section_id] : [])
+              if (pidx !== null && assignedSectionMap[pidx]) {
+                for (const sid of prSectionIds) if (assignedSectionMap[pidx].has(sid)) return true
+              }
+              // fallback: if section_names exist, try matching by name against assigned section names
+              if (pr.section_names && Array.isArray(pr.section_names) && assigned.length) {
+                const names = new Set((assigned.map((x:any)=>String(x.section_name || '').trim()) || []))
+                for (const nm of pr.section_names) if (names.has(String(nm).trim())) return true
+              }
+              return false
+            })
+          }
+
+          setTodayPeriods(filtered)
+        } catch (err) {
+          // if assigned fetch fails, fall back to raw data
+          setTodayPeriods(data)
+        }
       } else {
         setTodayPeriods(null);
       }
@@ -713,14 +762,14 @@ const AttendanceAnalytics: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {todayPeriods.periods.map((period) => (
-                    <tr key={period.session_id} className="hover:bg-gray-50">
+                  {todayPeriods.periods.map((period: any) => (
+                    <tr key={period.group_key || period.session_id || `${period.period_index}_${period.section_id}` } className="hover:bg-gray-50">
                       <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">
                         {period.period_label || `Period ${period.period_index}`}
                         <div className="text-xs text-gray-500">{period.period_start && period.period_end ? `${period.period_start} - ${period.period_end}` : ''}</div>
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">
-                        <div className="font-medium">{period.section_name}</div>
+                        <div className="font-medium">{period.section_names && period.section_names.length ? period.section_names.join(' + ') : period.section_name}</div>
                         {period.subject && <div className="text-xs text-gray-500">{period.subject}</div>}
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-center text-sm">
@@ -738,13 +787,19 @@ const AttendanceAnalytics: React.FC = () => {
                       <td className="px-4 py-3 whitespace-nowrap text-center">
                         <div className="flex items-center justify-center gap-2">
                           <button
-                            onClick={() => fetchPeriodLog(period.session_id, period)}
+                            onClick={() => {
+                              const sid = period.session_id || (period.session_ids && period.session_ids.length ? period.session_ids[0] : null)
+                              if (sid) fetchPeriodLog(sid, period)
+                            }}
                             className="px-2 py-1 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700"
                           >
                             Report
                           </button>
                           <button
-                            onClick={() => fetchClassReport(period.section_id)}
+                            onClick={() => {
+                              const sec = period.section_id || (period.sections && period.sections.length ? period.sections[0] : (period.section_ids && period.section_ids.length ? period.section_ids[0] : null))
+                              if (sec) fetchClassReport(sec)
+                            }}
                             className="px-2 py-1 text-xs bg-gray-100 rounded hover:bg-gray-200"
                           >
                             Class
@@ -1596,56 +1651,7 @@ const AttendanceAnalytics: React.FC = () => {
         </div>
       )}
 
-      {/* Period View */}
-      {!loading && viewType === 'period' && (
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-          <div className="p-6">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900">Periods</h3>
-                <p className="text-sm text-gray-600">List of periods and their logs for {startDate || 'today'}</p>
-              </div>
-            </div>
-
-            {periodLoading && (
-              <div className="py-6 flex items-center gap-3">
-                <Loader2 className="w-5 h-5 text-indigo-600 animate-spin" />
-                <span className="text-gray-600">Loading periods...</span>
-              </div>
-            )}
-
-            {!periodLoading && todayPeriods && todayPeriods.periods.length > 0 && (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 p-2">
-                {todayPeriods.periods.map((period) => (
-                  <div key={period.session_id} className="border border-gray-200 rounded-lg p-4 bg-white hover:shadow-md transition-shadow">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="text-sm font-semibold">{period.period_label}</div>
-                        <div className="text-xs text-gray-500">{period.period_start} — {period.period_end}</div>
-                        <div className="mt-2 text-sm text-blue-700 bg-blue-50 inline-block px-2 py-1 rounded">{period.section_name}</div>
-                        <div className="text-xs text-gray-500 mt-1">{period.subject}</div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-green-600 font-semibold">{period.present}</div>
-                        <div className="text-xs text-gray-500">Present</div>
-                      </div>
-                    </div>
-
-                    <div className="mt-3 flex items-center gap-2">
-                      <button onClick={() => fetchPeriodLog(period.session_id, period)} className="flex-1 px-3 py-2 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700">View Log</button>
-                      <button onClick={() => fetchClassReport(period.section_id)} className="px-3 py-2 text-sm bg-gray-100 rounded">Class Report</button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {!periodLoading && (!todayPeriods || todayPeriods.periods.length === 0) && (
-              <div className="py-12 text-center text-gray-500">No periods found for the selected date.</div>
-            )}
-          </div>
-        </div>
-      )}
+      {/* Period View removed per request */}
 
       {/* Period Log Modal */}
       {periodReportOpen && (

@@ -2531,24 +2531,56 @@ class StaffPeriodsView(APIView):
                     include = True
                 else:
                     # fallback: if timetable assignment has no explicit staff, resolve via TeachingAssignment
-                    if not getattr(a, 'staff', None) and getattr(a, 'curriculum_row', None):
+                    if not getattr(a, 'staff', None):
                         from .models import TeachingAssignment as _TA
-                        # Match teaching assignments where staff is assigned to the same curriculum_row
-                        # or to an elective sub-option whose parent is the curriculum_row.
+
                         ta_qs = _TA.objects.filter(is_active=True, staff=staff_profile)
-                        ta_qs = ta_qs.filter(
-                            (
-                                Q(curriculum_row=a.curriculum_row)
-                            )
-                            |
-                            (
-                                Q(elective_subject__parent=a.curriculum_row)
-                            )
-                        )
+
+                        # Prefer matching by explicit curriculum_row when present, then subject_batch, then subject_text
+                        matched = False
+                        try:
+                            if getattr(a, 'curriculum_row', None):
+                                cr = a.curriculum_row
+                                q_cr = ta_qs.filter(
+                                    Q(curriculum_row=cr) | Q(elective_subject__parent=cr) | Q(elective_subject__course_code__iexact=(getattr(cr, 'course_code', None) or ''))
+                                )
+                                matched = q_cr.exists()
+                                if matched:
+                                    ta_qs = q_cr
+
+                            if not matched and getattr(a, 'subject_batch', None) and getattr(a.subject_batch, 'curriculum_row', None):
+                                cr = a.subject_batch.curriculum_row
+                                q_sb = ta_qs.filter(
+                                    Q(curriculum_row=cr) | Q(elective_subject__parent=cr) | Q(elective_subject__course_code__iexact=(getattr(cr, 'course_code', None) or ''))
+                                )
+                                matched = q_sb.exists()
+                                if matched:
+                                    ta_qs = q_sb
+
+                            if not matched and getattr(a, 'subject_text', None):
+                                txt = (a.subject_text or '').strip()
+                                ltxt = txt.lower()
+                                import re
+                                norm = re.sub(r'[^a-z0-9]', '', ltxt)
+                                q_text = ta_qs.filter(
+                                    Q(elective_subject__course_code__iexact=ltxt) |
+                                    Q(elective_subject__course_code__iexact=norm) |
+                                    Q(elective_subject__course_name__icontains=txt) |
+                                    Q(curriculum_row__course_code__iexact=ltxt) |
+                                    Q(subject__code__iexact=ltxt) |
+                                    Q(subject__name__icontains=txt)
+                                )
+                                matched = q_text.exists()
+                                if matched:
+                                    ta_qs = q_text
+                        except Exception:
+                            matched = False
+
                         # Section-scoped or department-wide (section is null) assignments are allowed
-                        ta_qs = ta_qs.filter(Q(section=a.section) | Q(section__isnull=True))
-                        if ta_qs.exists():
-                            include = True
+                        if matched:
+                            ta_scope_qs = ta_qs.filter(Q(section=a.section) | Q(section__isnull=True))
+                            if ta_scope_qs.exists():
+                                include = True
             except Exception:
                 include = False
 
@@ -2600,6 +2632,41 @@ class StaffPeriodsView(APIView):
                 resolved_subject_display = None
                 resolved_elective_id = None
 
+            # compute section strength and any existing attendance counts if session exists
+            try:
+                from .models import PeriodAttendanceRecord
+                from .models import PeriodAttendanceSession as _PAS
+                from .models import StudentProfile as _SP
+            except Exception:
+                PeriodAttendanceRecord = None
+                _PAS = None
+                _SP = None
+
+            total_strength = None
+            present_count = None
+            absent_count = None
+            leave_count = None
+            od_count = None
+            late_count = None
+
+            try:
+                # always compute section strength for display
+                from .models import StudentProfile as SP
+                total_strength = SP.objects.filter(section_id=a.section_id).count()
+            except Exception:
+                total_strength = None
+
+            if session:
+                try:
+                    records_q = PeriodAttendanceRecord.objects.filter(session=session)
+                    present_count = records_q.filter(status__in=['P', 'OD', 'LATE']).count()
+                    absent_count = records_q.filter(status='A').count()
+                    leave_count = records_q.filter(status='LEAVE').count()
+                    od_count = records_q.filter(status='OD').count()
+                    late_count = records_q.filter(status='LATE').count()
+                except Exception:
+                    present_count = absent_count = leave_count = od_count = late_count = None
+
             results.append({
                 'id': a.id,
                 'section_id': a.section_id,
@@ -2615,6 +2682,11 @@ class StaffPeriodsView(APIView):
                 # include latest unlock request status (if any) so frontend can show pending/approved/rejected
                 'unlock_request_status': unlock_status,
                 'unlock_request_id': unlock_id,
+                'total_strength': total_strength,
+                'present': present_count,
+                'absent': absent_count,
+                'leave': leave_count,
+                'on_duty': od_count,
             })
         # Also include any SpecialTimetableEntry items for this date where the current
         # staff is the assigned staff or is mapped via a TeachingAssignment for the

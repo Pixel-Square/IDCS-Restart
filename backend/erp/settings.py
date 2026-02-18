@@ -86,16 +86,32 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'erp.wsgi.application'
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('DB_NAME'),
-        'USER': os.getenv('DB_USER'),
-        'PASSWORD': os.getenv('DB_PASS'),
-        'HOST': os.getenv('DB_HOST'),
-        'PORT': os.getenv('DB_PORT', '5432'),
+DB_NAME = os.getenv('DB_NAME')
+DB_USER = os.getenv('DB_USER')
+DB_PASS = os.getenv('DB_PASS')
+DB_HOST = os.getenv('DB_HOST')
+DB_PORT = os.getenv('DB_PORT', '5432')
+# Prefer PostgreSQL only when DB env vars are explicitly provided.
+# This makes local development easy: leave DB_* unset to use SQLite.
+if DB_NAME:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': DB_NAME,
+            'USER': DB_USER,
+            'PASSWORD': DB_PASS,
+            'HOST': DB_HOST,
+            'PORT': DB_PORT,
+        }
     }
-}
+else:
+    # Fall back to SQLite for local development
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
 
 # Django cache config using Redis (used by sessions, caching, etc.)
 CACHES = {
@@ -156,10 +172,17 @@ SIMPLE_JWT = {
 # Wildcard '*' is invalid with `Access-Control-Allow-Credentials: true`.
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = [
+    # Local dev origins (common ports) so frontend at localhost can call API
+    'http://localhost',
+    'http://localhost:3000',
     'http://localhost:81',
+    'http://localhost:8000',
     'http://127.0.0.1:3000',
+    'http://127.0.0.1:8000',
+    # Production/front-end hosts
     'https://idcs.zynix.us',
-    "http://192.168.40.253:81",
+    'https://db.zynix.us',
+    'http://192.168.40.253:81',
 ]
 # Allow browser to include credentials (cookies or HTTP auth) in cross-origin requests
 CORS_ALLOW_CREDENTIALS = True
