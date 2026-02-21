@@ -500,8 +500,14 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
   useEffect(() => {
     const handler = (ev: Event) => {
       try {
-        const subjectId = (ev as any)?.detail?.subjectId;
-        if (subjectId && String(subjectId) === String(courseId)) loadPublished();
+        const detail = (ev as any)?.detail || {};
+        const subjectId = detail.subjectId;
+        const assessment = detail.assessment;
+        if (!subjectId || String(subjectId) !== String(courseId)) return;
+        // Only reload when the published assessment is relevant to this page
+        // (SSA1, Formative1, CIA1). If assessment is absent, fall back to reload.
+        if (assessment && !['ssa1', 'formative1', 'cia1'].includes(String(assessment))) return;
+        loadPublished();
       } catch {
         // ignore
       }
@@ -925,11 +931,16 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
                 style={{ padding: '10px 12px', borderRadius: 12, border: '1px solid #e2e8f0', minWidth: 320, background: '#fff' }}
               >
                 <option value="">Select…</option>
-                {tas.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.section_name} ({t.academic_year})
-                  </option>
-                ))}
+                {tas.map((t) => {
+                  const dept = (t as any).department;
+                  const deptLabel = dept?.short_name || dept?.code || dept?.name || (t as any).department_name || '';
+                  const sem = (t as any).semester;
+                  return (
+                    <option key={t.id} value={t.id}>
+                      {t.section_name} {sem ? `· Sem ${sem}` : ''} {t.academic_year ? `· ${t.academic_year}` : ''} {deptLabel ? `· ${deptLabel}` : ''}
+                    </option>
+                  );
+                })}
               </select>
             </div>
 

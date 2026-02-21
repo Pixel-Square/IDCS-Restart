@@ -42,6 +42,9 @@ urlpatterns = [
     path('cia2-published-sheet/<str:subject_id>', views.cia2_published_sheet),
     path('cia2-publish-sheet/<str:subject_id>', views.cia2_publish_sheet),
 
+    path('model-published-sheet/<str:subject_id>', views.model_published_sheet),
+    path('model-publish-sheet/<str:subject_id>', views.model_publish_sheet),
+
     # CIA protected Excel template
     path('cia-export-template/<str:assessment>/<str:subject_id>', views.cia_export_template_xlsx),
 
@@ -62,14 +65,23 @@ urlpatterns = [
     path('due-schedules', views.due_schedules),
     path('due-schedule-upsert', views.due_schedule_upsert),
     path('due-schedule-bulk-upsert', views.due_schedule_bulk_upsert),
+    path('due-schedule-bulk-delete', views.due_schedule_bulk_delete),
     path('due-schedule-delete', views.due_schedule_delete),
+
+    path('assessment-controls', views.assessment_controls),
+    path('assessment-controls/', views.assessment_controls),
+    path('assessment-controls/bulk-set', views.assessment_controls_bulk_set),
+    path('assessment-controls/bulk-set/', views.assessment_controls_bulk_set),
 
     # Semester helpers (OBE Master)
     path('semesters', views.obe_semesters),
 
     path('global-publish-controls', views.global_publish_controls),
+    path('global-publish-controls/', views.global_publish_controls),
     path('global-publish-controls/bulk-set', views.global_publish_controls_bulk_set),
+    path('global-publish-controls/bulk-set/', views.global_publish_controls_bulk_set),
     path('global-publish-controls/bulk-reset', views.global_publish_controls_bulk_reset),
+    path('global-publish-controls/bulk-reset/', views.global_publish_controls_bulk_reset),
 
     path('publish-request', views.publish_request_create),
     path('publish-requests/pending', views.publish_requests_pending),
@@ -98,4 +110,7 @@ urlpatterns = [
     # IQAC QP Pattern config
     path('iqac/qp-pattern', views.qp_pattern_get),
     path('iqac/qp-pattern/save', views.qp_pattern_upsert),
+    # IQAC CQI global configuration
+    path('iqac/cqi-config', views.iqac_cqi_get),
+    path('iqac/cqi-config/save', views.iqac_cqi_upsert),
 ]

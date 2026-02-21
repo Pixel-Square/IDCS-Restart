@@ -83,6 +83,8 @@ export default function CDAPUploader({ subjectId, onUpload }: { subjectId?: stri
       setMessage(e?.message || 'Upload failed. Please try again.');
     }
 
+  }
+
   function extractCell(row: any, keys: string[]) {
     for (const k of keys) {
       if (row == null) continue;
@@ -141,7 +143,6 @@ export default function CDAPUploader({ subjectId, onUpload }: { subjectId?: stri
     setTimeout(() => {
       w.print();
     }, 300);
-  }
   }
 
   return (

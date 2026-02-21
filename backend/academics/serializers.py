@@ -26,18 +26,121 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
     subject_code = serializers.SerializerMethodField(read_only=True)
     subject_name = serializers.SerializerMethodField(read_only=True)
     class_type = serializers.SerializerMethodField(read_only=True)
-    section_name = serializers.CharField(source='section.name', read_only=True)
+    section_name = serializers.SerializerMethodField(read_only=True)
     section_id = serializers.IntegerField(source='section.id', read_only=True)
     elective_subject_id = serializers.SerializerMethodField(read_only=True)
     elective_subject_name = serializers.SerializerMethodField(read_only=True)
     curriculum_row_id = serializers.SerializerMethodField(read_only=True)
     batch = serializers.SerializerMethodField(read_only=True)
     semester = serializers.SerializerMethodField(read_only=True)
+    academic_year = serializers.SerializerMethodField(read_only=True)
+    department = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = TeachingAssignment
-        # removed curriculum_row and academic_year as requested; include batch & semester
-        fields = ('id', 'subject_code', 'subject_name', 'class_type', 'section_name', 'section_id', 'elective_subject_id', 'elective_subject_name', 'curriculum_row_id', 'batch', 'semester')
+        fields = (
+            'id',
+            'subject_code',
+            'subject_name',
+            'class_type',
+            'section_name',
+            'section_id',
+            'elective_subject_id',
+            'elective_subject_name',
+            'curriculum_row_id',
+            'batch',
+            'semester',
+            'academic_year',
+            'department',
+        )
+
+    def get_academic_year(self, obj):
+        try:
+            return getattr(getattr(obj, 'academic_year', None), 'name', None)
+        except Exception:
+            return None
+
+    def get_section_name(self, obj):
+        try:
+            sec = getattr(obj, 'section', None)
+            if sec is not None:
+                return getattr(sec, 'name', None)
+        except Exception:
+            pass
+
+        # Fallback for elective assignments: derive a representative section
+        try:
+            if getattr(obj, 'elective_subject', None):
+                from curriculum.models import ElectiveChoice
+                qs = ElectiveChoice.objects.filter(is_active=True, elective_subject_id=getattr(obj, 'elective_subject_id', None)).select_related('student__section')
+                # Try with academic year first, fall back to without
+                if getattr(obj, 'academic_year_id', None):
+                    qs_ay = qs.filter(academic_year_id=getattr(obj, 'academic_year_id', None))
+                    if qs_ay.exists():
+                        qs = qs_ay
+                first = qs.first()
+                if first and getattr(getattr(first, 'student', None), 'section', None):
+                    return str(getattr(first.student.section, 'name', None))
+        except Exception:
+            pass
+
+        # Fallback: try to infer from curriculum_row -> department's first section (best-effort)
+        try:
+            row = getattr(obj, 'curriculum_row', None)
+            if row is not None:
+                # find a section for the same department and academic year
+                from academics.models import Section
+                sec_qs = Section.objects.filter(batch__course__department_id=getattr(getattr(row, 'department', None), 'id', None)).order_by('name')
+                sec = sec_qs.first()
+                if sec:
+                    return getattr(sec, 'name', None)
+        except Exception:
+            pass
+
+        # Final fallback: use department short_name or name if available
+        try:
+            dept = self.get_department(obj)
+            if dept:
+                return dept.get('short_name') or dept.get('name')
+        except Exception:
+            pass
+
+        return None
+
+    def get_department(self, obj):
+        try:
+            dept = None
+
+            # Prefer section -> batch -> course -> department (most assignments)
+            try:
+                dept = obj.section.batch.course.department
+            except Exception:
+                dept = None
+
+            # Department-wide / elective teaching assignments may not have a section.
+            if not dept:
+                try:
+                    dept = getattr(getattr(obj, 'elective_subject', None), 'department', None)
+                except Exception:
+                    dept = None
+
+            # Fallback: curriculum row's department (department-wide curricula)
+            if not dept:
+                try:
+                    dept = getattr(getattr(obj, 'curriculum_row', None), 'department', None)
+                except Exception:
+                    dept = None
+
+            if not dept:
+                return None
+            return {
+                'id': dept.id,
+                'code': getattr(dept, 'code', None),
+                'name': getattr(dept, 'name', None),
+                'short_name': getattr(dept, 'short_name', None),
+            }
+        except Exception:
+            return None
 
     def _curriculum_row_for_obj(self, obj):
         # helper: try to find a matching CurriculumDepartment row for the assignment
@@ -150,13 +253,25 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
 
     def get_semester(self, obj):
         try:
-            sem = getattr(obj.section, 'semester', None)
-            if sem is None:
-                return None
-            # return numeric semester value for simpler consumption
-            return getattr(sem, 'number', str(sem))
+            sem = getattr(getattr(obj, 'section', None), 'semester', None)
+            if sem:
+                return getattr(sem, 'number', str(sem))
         except Exception:
-            return None
+            pass
+        # Fallback: curriculum_row.semester or elective_subject.semester
+        try:
+            sem = getattr(getattr(obj, 'curriculum_row', None), 'semester', None)
+            if sem:
+                return getattr(sem, 'number', str(sem))
+        except Exception:
+            pass
+        try:
+            sem = getattr(getattr(obj, 'elective_subject', None), 'semester', None)
+            if sem:
+                return getattr(sem, 'number', str(sem))
+        except Exception:
+            pass
+        return None
 
     def get_curriculum_row_id(self, obj):
         try:
@@ -194,13 +309,15 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
     staff_details = serializers.SerializerMethodField(read_only=True)
     section_details = serializers.SerializerMethodField(read_only=True)
     curriculum_row_details = serializers.SerializerMethodField(read_only=True)
+    elective_subject_details = serializers.SerializerMethodField(read_only=True)
+    elective_subject_id = serializers.SerializerMethodField(read_only=True)
     section_name = serializers.CharField(source='section.name', read_only=True)
     custom_subject = serializers.CharField(allow_null=True, required=False)
 
     class Meta:
         model = TeachingAssignment
 
-        fields = ('id', 'staff_id', 'section_id', 'academic_year', 'subject', 'curriculum_row_id', 'elective_subject_id', 'custom_subject', 'is_active', 'staff_details', 'section_details', 'curriculum_row_details', 'section_name', 'enabled_assessments')
+        fields = ('id', 'staff_id', 'section_id', 'academic_year', 'subject', 'curriculum_row_id', 'elective_subject_id', 'custom_subject', 'is_active', 'staff_details', 'section_details', 'curriculum_row_details', 'section_name', 'enabled_assessments', 'elective_subject_details')
         enabled_assessments = serializers.ListField(child=serializers.CharField(), required=False, allow_empty=True)
 
     def get_subject(self, obj):
@@ -221,6 +338,13 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
         except Exception:
             pass
         return None
+
+    def get_elective_subject_id(self, obj):
+        try:
+            es = getattr(obj, 'elective_subject', None)
+            return getattr(es, 'id', None)
+        except Exception:
+            return None
 
     def get_staff_details(self, obj):
         try:
@@ -246,12 +370,27 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
             semester_info = None
             if semester:
                 semester_info = getattr(semester, 'number', getattr(semester, 'name', str(semester)))
+
+            dept = None
+            try:
+                dept = section.batch.course.department
+            except Exception:
+                dept = None
+            dept_info = None
+            if dept:
+                dept_info = {
+                    'id': dept.id,
+                    'code': getattr(dept, 'code', None),
+                    'name': getattr(dept, 'name', None),
+                    'short_name': getattr(dept, 'short_name', None),
+                }
                 
             return {
                 'id': section.id, 
                 'name': getattr(section, 'name', None), 
                 'batch': batch_info,
-                'semester': semester_info
+                'semester': semester_info,
+                'department': dept_info,
             }
         except Exception:
             return None
@@ -306,7 +445,8 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
                     if staff_profile:
                         hod_depts = list(DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True).values_list('department_id', flat=True))
                         parent_dept_id = getattr(getattr(es, 'parent', None), 'department_id', None)
-                        if parent_dept_id and parent_dept_id in hod_depts:
+                        elect_dept_id = getattr(es, 'department_id', None)
+                        if (parent_dept_id and parent_dept_id in hod_depts) or (elect_dept_id and elect_dept_id in hod_depts):
                             return attrs
                     raise ValidationError('You do not have permission to assign this elective subject')
         except ValidationError:
@@ -401,6 +541,24 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
                 pass
 
         return super().create(validated_data)
+
+    def get_elective_subject_details(self, obj):
+        try:
+            es = getattr(obj, 'elective_subject', None)
+            if not es:
+                return None
+            dept = getattr(es, 'department', None)
+            parent = getattr(es, 'parent', None)
+            return {
+                'id': getattr(es, 'id', None),
+                'course_code': getattr(es, 'course_code', None),
+                'course_name': getattr(es, 'course_name', None),
+                'department_id': getattr(dept, 'id', None),
+                'department_display': str(dept) if dept else None,
+                'parent_id': getattr(parent, 'id', None),
+            }
+        except Exception:
+            return None
 
 
 
@@ -745,6 +903,7 @@ class BulkRecordSerializer(serializers.Serializer):
 class BulkPeriodAttendanceSerializer(serializers.Serializer):
     section_id = serializers.IntegerField(write_only=True)
     period_id = serializers.IntegerField(write_only=True)
+    teaching_assignment_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
     date = serializers.DateField()
     records = BulkRecordSerializer(many=True)
 
@@ -756,13 +915,14 @@ class BulkPeriodAttendanceSerializer(serializers.Serializer):
 class PeriodAttendanceSessionSerializer(serializers.ModelSerializer):
     section_id = serializers.PrimaryKeyRelatedField(queryset=Section.objects.all(), source='section', write_only=True)
     period_id = serializers.PrimaryKeyRelatedField(queryset=TimetableSlot.objects.all(), source='period', write_only=True)
+    teaching_assignment_id = serializers.PrimaryKeyRelatedField(queryset=TeachingAssignment.objects.all(), source='teaching_assignment', write_only=True, required=False, allow_null=True)
     section = serializers.SerializerMethodField(read_only=True)
     period = serializers.SerializerMethodField(read_only=True)
     records = PeriodAttendanceRecordSerializer(many=True, read_only=True)
 
     class Meta:
         model = PeriodAttendanceSession
-        fields = ('id', 'section', 'section_id', 'period', 'period_id', 'date', 'timetable_assignment', 'created_by', 'is_locked', 'created_at', 'records')
+        fields = ('id', 'section', 'section_id', 'period', 'period_id', 'date', 'timetable_assignment', 'teaching_assignment', 'teaching_assignment_id', 'created_by', 'is_locked', 'created_at', 'records')
         read_only_fields = ('created_by', 'created_at')
 
     # no custom __init__ required; queryset for `period_id` is statically provided above

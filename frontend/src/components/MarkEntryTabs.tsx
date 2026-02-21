@@ -9,19 +9,34 @@ import LabEntry from './LabEntry';
 import LabCourseMarksEntry from './LabCourseMarksEntry';
 import ModelEntry from './ModelEntry';
 import ReviewEntry from './ReviewEntry';
+import Review1Entry from './Review1Entry';
+import Review2Entry from './Review2Entry';
 import Ssa1Entry from './Ssa1Entry';
 import Ssa2Entry from './Ssa2Entry';
-import { DraftAssessmentKey, fetchMyTeachingAssignments, iqacResetAssessment, TeachingAssignmentItem } from '../services/obe';
+import CQIEntry from '../pages/staff/CQIEntry';
+import DashboardWidgets from './DashboardWidgets';
+import { DraftAssessmentKey, DueAssessmentKey, fetchMyTeachingAssignments, fetchPublishWindow, iqacResetAssessment, TeachingAssignmentItem } from '../services/obe';
 import * as OBE from '../services/obe';
 import FacultyAssessmentPanel from './FacultyAssessmentPanel';
 import fetchWithAuth from '../services/fetchAuth';
 import { fetchTeachingAssignmentRoster } from '../services/roster';
 import IqacResetNotificationAlert from './IqacResetNotificationAlert';
-import CQIEditor from '../pages/staff/CQIEditor';
-import CQIEntry from '../pages/staff/CQIEntry';
 
-type TabKey = 'dashboard' | 'ssa1' | 'review1' | 'ssa2' | 'review2' | 'formative1' | 'formative2' | 'cia1' | 'cia2' | 'model' | 'cqi';
-type CQIOption = 'cia1_co1_co2' | 'cia2_co3_co4' | 'model_co3_co4_co5' | 'model_co5';
+type BaseTabKey = 'dashboard' | 'ssa1' | 'review1' | 'ssa2' | 'review2' | 'formative1' | 'formative2' | 'cia1' | 'cia2' | 'model';
+type CqiTabKey = `cqi_${number}`;
+type TabKey = BaseTabKey | CqiTabKey;
+
+type CqiPlacement = {
+  showAfter: 'cia1' | 'cia2' | 'model';
+  assessmentType: 'cia1' | 'cia2' | 'model';
+  cos: string[];
+};
+
+type TabDef = {
+  key: TabKey;
+  label: string;
+  cqi?: CqiPlacement;
+};
 
 type MarkRow = { studentId: string; mark: number };
 
@@ -36,7 +51,21 @@ type Props = {
   viewerMode?: boolean;
 };
 
-const BASE_TABS: { key: TabKey; label: string }[] = [
+function tabToAssessmentKey(tab: TabKey): DueAssessmentKey | null {
+  if (String(tab).startsWith('cqi_')) return null;
+  if (tab === 'ssa1') return 'ssa1';
+  if (tab === 'review1') return 'review1';
+  if (tab === 'ssa2') return 'ssa2';
+  if (tab === 'review2') return 'review2';
+  if (tab === 'formative1') return 'formative1';
+  if (tab === 'formative2') return 'formative2';
+  if (tab === 'cia1') return 'cia1';
+  if (tab === 'cia2') return 'cia2';
+  if (tab === 'model') return 'model';
+  return null;
+}
+
+const BASE_TABS: Array<{ key: BaseTabKey; label: string }> = [
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'ssa1', label: 'SSA1' },
   { key: 'formative1', label: 'Formative 1' },
@@ -47,18 +76,28 @@ const BASE_TABS: { key: TabKey; label: string }[] = [
   { key: 'model', label: 'MODEL' },
 ];
 
+function parseCqiOption(optionId: string): CqiPlacement | null {
+  const id = String(optionId || '').trim().toLowerCase();
+  if (id === 'cia1_co1_co2') return { showAfter: 'cia1', assessmentType: 'cia1', cos: ['CO1', 'CO2'] };
+  if (id === 'cia2_co3_co4') return { showAfter: 'cia2', assessmentType: 'cia2', cos: ['CO3', 'CO4'] };
+  if (id === 'model_co1_co2_co3_co4_co5') return { showAfter: 'model', assessmentType: 'model', cos: ['CO1', 'CO2', 'CO3', 'CO4', 'CO5'] };
+  if (id === 'model_co3_co4_co5') return { showAfter: 'model', assessmentType: 'model', cos: ['CO3', 'CO4', 'CO5'] };
+  if (id === 'model_co5') return { showAfter: 'model', assessmentType: 'model', cos: ['CO5'] };
+  return null;
+}
+
 function normalizeEnabledAssessments(enabledAssessments: string[] | null | undefined): Set<string> {
   const arr = Array.isArray(enabledAssessments) ? enabledAssessments : [];
   return new Set(arr.map((x) => String(x || '').trim().toLowerCase()).filter(Boolean));
 }
 
-function getVisibleTabs(classType: string | null | undefined, enabledAssessments?: string[] | null): Array<{ key: TabKey; label: string }> {
+function getVisibleTabs(classType: string | null | undefined, enabledAssessments?: string[] | null): TabDef[] {
   const ct = normalizeClassType(classType);
   const enabled = normalizeEnabledAssessments(enabledAssessments);
 
   // SPECIAL: show only explicitly enabled assessments (+ dashboard)
   if (ct === 'SPECIAL') {
-    const allowedKeys = new Set<TabKey>(['dashboard']);
+    const allowedKeys = new Set<BaseTabKey>(['dashboard']);
     // Only these six are supported for SPECIAL, per requirement
     (['ssa1', 'ssa2', 'formative1', 'formative2', 'cia1', 'cia2'] as const).forEach((k) => {
       if (enabled.has(k)) allowedKeys.add(k);
@@ -74,6 +113,16 @@ function getVisibleTabs(classType: string | null | undefined, enabledAssessments
       if (t.key === 'model') return { ...t, label: 'MODEL Review' };
       return t;
     });
+  }
+
+  // PROJECT: show only Review 1, Review 2 and MODEL Review (plus dashboard)
+  if (ct === 'PROJECT') {
+    return [
+      { key: 'dashboard', label: 'Dashboard' },
+      { key: 'review1', label: 'Review 1' },
+      { key: 'review2', label: 'Review 2' },
+      { key: 'model', label: 'MODEL Review' },
+    ];
   }
 
   // TCPR: show SSA1/SSA2 AND separate Review 1/Review 2 pages; hide Formatives.
@@ -114,7 +163,7 @@ function getVisibleTabs(classType: string | null | undefined, enabledAssessments
   return BASE_TABS;
 }
 
-function storageKey(subjectId: string, tab: TabKey) {
+function storageKey(subjectId: string, tab: BaseTabKey) {
   return `marks_${subjectId}_${tab}`;
 }
 
@@ -126,7 +175,9 @@ function clearLocalDraftCache(subjectId: string, assessment: string) {
 
   // Sheet-style caches
   if (a === 'ssa1') lsRemove(`ssa1_sheet_${subjectId}`);
+  if (a === 'review1') lsRemove(`review1_sheet_${subjectId}`);
   if (a === 'ssa2') lsRemove(`ssa2_sheet_${subjectId}`);
+  if (a === 'review2') lsRemove(`review2_sheet_${subjectId}`);
   if (a === 'formative1') lsRemove(`formative1_sheet_${subjectId}`);
   if (a === 'formative2') lsRemove(`formative2_sheet_${subjectId}`);
   if (a === 'cia1') lsRemove(`cia1_sheet_${subjectId}`);
@@ -167,12 +218,37 @@ function TabButton({
   );
 }
 
+// Extended tab button to support CQI floating variant
+function TabButtonExtended({
+  active,
+  label,
+  onClick,
+  isCqi,
+  uniqueId,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+  isCqi?: boolean;
+  uniqueId?: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`obe-sidebar-btn ${active ? 'active' : ''} ${isCqi ? 'cqi-floating-btn' : ''}`}
+      {...(uniqueId ? { 'data-cqi-id': uniqueId } as any : {})}
+    >
+      {label}
+    </button>
+  );
+}
+
 function MarkEntryTable({
   subjectId,
   tab,
 }: {
   subjectId: string;
-  tab: Exclude<TabKey, 'dashboard'>;
+  tab: Exclude<BaseTabKey, 'dashboard'>;
 }) {
   const key = useMemo(() => storageKey(subjectId, tab), [subjectId, tab]);
   const [marks, setMarks] = useState<MarkRow[]>([]);
@@ -289,9 +365,46 @@ export default function MarkEntryTabs({
   const [showFacultyPanel, setShowFacultyPanel] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
-  const [showCQIEditor, setShowCQIEditor] = useState(false);
-  const [cqiConfigs, setCqiConfigs] = useState<CQIOption[]>([]);
-  const [selectedCqiInfo, setSelectedCqiInfo] = useState<{ assessment: string; cos: string[]; label: string } | null>(null);
+  const [cqiConfig, setCqiConfig] = useState<{ options: string[]; divider: number; multiplier: number } | null>(null);
+
+  const activeAssessmentKey = useMemo(() => tabToAssessmentKey(active), [active]);
+  const [activeGate, setActiveGate] = useState<{ loading: boolean; enabled: boolean; open: boolean; error: string | null }>({
+    loading: false,
+    enabled: true,
+    open: true,
+    error: null,
+  });
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      if (!activeAssessmentKey) {
+        if (!mounted) return;
+        setActiveGate({ loading: false, enabled: true, open: true, error: null });
+        return;
+      }
+
+      if (!mounted) return;
+      setActiveGate({ loading: true, enabled: true, open: true, error: null });
+      try {
+        const resp = await fetchPublishWindow(activeAssessmentKey, String(subjectId || ''), selectedTaId ?? undefined);
+        if (!mounted) return;
+        const enabled = resp?.assessment_enabled ?? true;
+        const open = resp?.assessment_open ?? true;
+        setActiveGate({ loading: false, enabled: Boolean(enabled), open: Boolean(open), error: null });
+      } catch (e: any) {
+        if (!mounted) return;
+        // Fail-open for network hiccups.
+        setActiveGate({ loading: false, enabled: true, open: true, error: e?.message || 'Failed to check exam availability' });
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [activeAssessmentKey, subjectId, selectedTaId]);
+
+  const activeEnabled = activeAssessmentKey ? Boolean(activeGate.enabled) : true;
+  const activeForcedViewerMode = Boolean(viewerMode) || (activeAssessmentKey ? !Boolean(activeGate.open) : false);
 
   const selectedTa = useMemo(() => {
     if (selectedTaId == null) return null;
@@ -299,29 +412,48 @@ export default function MarkEntryTabs({
   }, [tas, selectedTaId]);
 
   const [taDerivedClassType, setTaDerivedClassType] = useState<string | null>(null);
+  const [taDerivedMeta, setTaDerivedMeta] = useState<any | null>(null);
 
   useEffect(() => {
     let mounted = true;
     (async () => {
       setTaDerivedClassType(null);
+      setTaDerivedMeta(null);
       if (selectedTaId == null) return;
 
-      // If TA list already has class_type, no need to fetch.
-      const direct = String((selectedTa as any)?.class_type || '').trim();
-      if (direct) return;
+      const taObj = (selectedTa as any) || null;
+      const directCt = String(taObj?.class_type || '').trim();
+      const hasYear = Boolean(String(taObj?.academic_year || '').trim());
+      const hasSem = typeof taObj?.semester !== 'undefined' && taObj?.semester != null;
+      const hasDept = Boolean(taObj?.department || taObj?.department_name);
+      const hasSection = Boolean(String(taObj?.section_name || '').trim());
+
+      // If TA list already contains everything we need, avoid extra calls.
+      if (directCt && hasYear && hasSem && hasDept && hasSection) {
+        setTaDerivedClassType(directCt);
+        return;
+      }
 
       // If parent already provided classType, don't force extra calls.
       const propCt = String(classType || '').trim();
-      if (propCt) return;
+      // Note: still fetch roster meta if TA lacks year/sem/dept info.
 
       try {
         const roster = await fetchTeachingAssignmentRoster(Number(selectedTaId));
         if (!mounted) return;
-        const ct = String((roster as any)?.teaching_assignment?.class_type || '').trim();
-        setTaDerivedClassType(ct || null);
+        const taInfo = (roster as any)?.teaching_assignment || {};
+        const ct = String(taInfo?.class_type || '').trim();
+        setTaDerivedClassType(ct || directCt || propCt || null);
+        setTaDerivedMeta({
+          academic_year: taInfo?.academic_year || taInfo?.academic_year_name || taInfo?.year || null,
+          semester: typeof taInfo?.semester !== 'undefined' ? taInfo?.semester : null,
+          department: taInfo?.department || taInfo?.department_name || null,
+          section_name: taInfo?.section_name || taInfo?.section || null,
+        });
       } catch {
         if (!mounted) return;
-        setTaDerivedClassType(null);
+        setTaDerivedClassType(directCt || propCt || null);
+        setTaDerivedMeta(null);
       }
     })();
     return () => {
@@ -340,23 +472,82 @@ export default function MarkEntryTabs({
 
   const normalizedEffectiveClassType = useMemo(() => normalizeClassType(effectiveClassType), [effectiveClassType]);
 
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const cfg = await OBE.fetchIqacCqiConfig();
+        if (!mounted) return;
+        const rawOpts = Array.isArray(cfg?.options) ? cfg.options : [];
+        const optIds = rawOpts
+          .map((o: any) => {
+            if (typeof o === 'string') return String(o || '');
+            if (o && typeof o === 'object' && (o as any).id) return String((o as any).id || '');
+            return '';
+          })
+          .map((s: string) => s.trim())
+          .filter(Boolean);
+        setCqiConfig({
+          options: optIds,
+          divider: Number.isFinite(Number(cfg?.divider)) ? Number(cfg.divider) : 2,
+          multiplier: Number.isFinite(Number(cfg?.multiplier)) ? Number(cfg.multiplier) : 0.15,
+        });
+      } catch {
+        if (!mounted) return;
+        setCqiConfig(null);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const isSpecial = useMemo(() => normalizedEffectiveClassType === 'SPECIAL', [normalizedEffectiveClassType]);
 
   // If faculty has set enabled assessments for the selected TA, prefer that.
   const effectiveEnabled = facultyEnabledAssessments === undefined ? enabledAssessments : facultyEnabledAssessments;
-  const visibleTabs = useMemo(() => getVisibleTabs(effectiveClassType, effectiveEnabled), [effectiveClassType, enabledAssessments, facultyEnabledAssessments]);
+  const baseVisibleTabs = useMemo(() => getVisibleTabs(effectiveClassType, effectiveEnabled), [effectiveClassType, enabledAssessments, facultyEnabledAssessments]);
+
+  const cqiPlacements = useMemo(() => {
+    const options = Array.isArray(cqiConfig?.options) ? cqiConfig.options : [];
+    return options
+      .map((raw) => parseCqiOption(raw))
+      .filter((x): x is CqiPlacement => Boolean(x));
+  }, [cqiConfig]);
+
+  const visibleTabs = useMemo(() => {
+    const out: TabDef[] = [...baseVisibleTabs];
+    if (!cqiPlacements.length) return out;
+
+    cqiPlacements.forEach((placement, idxPlacement) => {
+      const cqiLabel = `CQI (${placement.assessmentType.toUpperCase()} ${placement.cos.join(', ')})`;
+      const cqiTab: TabDef = {
+        key: `cqi_${idxPlacement}`,
+        label: cqiLabel,
+        cqi: placement,
+      };
+      const idx = out.findIndex((t) => t.key === placement.showAfter);
+      if (idx >= 0) {
+        let insertAt = idx + 1;
+        while (insertAt < out.length && String(out[insertAt]?.key || '').startsWith('cqi_') && out[insertAt]?.cqi?.showAfter === placement.showAfter) {
+          insertAt += 1;
+        }
+        out.splice(insertAt, 0, cqiTab);
+      }
+      else out.push(cqiTab);
+    });
+    return out;
+  }, [baseVisibleTabs, cqiPlacements]);
 
   useEffect(() => {
     if (!subjectId) return;
-    const stored = lsGet<TabKey>(`markEntry_activeTab_${subjectId}`);
-    if (stored && visibleTabs.some((t) => t.key === stored)) setActive(stored);
+    const stored = lsGet<string>(`markEntry_activeTab_${subjectId}`);
+    if (stored && visibleTabs.some((t) => t.key === (stored as TabKey))) setActive(stored as TabKey);
   }, [subjectId]);
 
   useEffect(() => {
     // If class type changes or user navigates to a course with different visible tabs,
     // ensure the active tab is still valid.
-    // Allow 'cqi' as a special valid tab even though it's not in visibleTabs
-    if (active === 'cqi') return;
     if (!visibleTabs.some((t) => t.key === active)) setActive('dashboard');
   }, [visibleTabs, active]);
 
@@ -457,65 +648,35 @@ export default function MarkEntryTabs({
     if (!subjectId) return;
     lsSet(`markEntry_activeTab_${subjectId}`, active);
   }, [subjectId, active]);
-
-  // Load CQI configuration from localStorage
-  useEffect(() => {
-    if (!subjectId) return;
-    const stored = lsGet<CQIOption[]>(`cqi_config_${subjectId}`);
-    if (stored && Array.isArray(stored)) setCqiConfigs(stored);
-  }, [subjectId]);
-
-  // Save CQI configuration to localStorage
-  const handleCQISave = (selectedOptions: CQIOption[]) => {
-    setCqiConfigs(selectedOptions);
-    if (subjectId) {
-      if (selectedOptions.length > 0) {
-        lsSet(`cqi_config_${subjectId}`, selectedOptions);
-      } else {
-        lsRemove(`cqi_config_${subjectId}`);
-      }
-    }
-  };
-
-  // Get CQI info (assessment and COs) from configurations
-  const cqiInfos = useMemo(() => {
-    if (!cqiConfigs || cqiConfigs.length === 0) return [];
-    
-    const configMap = {
-      'cia1_co1_co2': { assessment: 'cia1', cos: ['CO1', 'CO2'], label: 'CIA 1' },
-      'cia2_co3_co4': { assessment: 'cia2', cos: ['CO3', 'CO4'], label: 'CIA 2' },
-      'model_co3_co4_co5': { assessment: 'model', cos: ['CO3', 'CO4', 'CO5'], label: 'MODEL' },
-      'model_co5': { assessment: 'model', cos: ['CO5'], label: 'MODEL' },
-    };
-    
-    return cqiConfigs.map(config => configMap[config]).filter(Boolean);
-  }, [cqiConfigs]);
-
-  // Auto-select first CQI info if none selected
-  useEffect(() => {
-    if (cqiInfos.length > 0 && !selectedCqiInfo) {
-      setSelectedCqiInfo(cqiInfos[0]);
-    } else if (cqiInfos.length === 0 && selectedCqiInfo) {
-      setSelectedCqiInfo(null);
-      if (active === 'cqi') setActive('dashboard');
-    }
-  }, [cqiInfos, selectedCqiInfo, active]);
+  
 
   const counts = useMemo(() => {
-    if (!subjectId) return {} as Record<TabKey, number>;
+    if (!subjectId) return {} as Record<string, number>;
     const map: Record<string, number> = {};
     for (const t of visibleTabs) {
-      if (t.key === 'dashboard') continue;
+      if (t.key === 'dashboard' || String(t.key).startsWith('cqi_')) continue;
       if (t.key === 'ssa1') {
         const ssa1 = lsGet<{ rows?: unknown }>(`ssa1_sheet_${subjectId}`);
         const ssa1Rows = (ssa1 as any)?.rows;
         map[t.key] = Array.isArray(ssa1Rows) ? ssa1Rows.length : 0;
         continue;
       }
+      if (t.key === 'review1') {
+        const review1 = lsGet<{ rows?: unknown }>(`review1_sheet_${subjectId}`);
+        const review1Rows = (review1 as any)?.rows;
+        map[t.key] = Array.isArray(review1Rows) ? review1Rows.length : 0;
+        continue;
+      }
       if (t.key === 'ssa2') {
         const ssa2 = lsGet<{ rows?: unknown }>(`ssa2_sheet_${subjectId}`);
         const ssa2Rows = (ssa2 as any)?.rows;
         map[t.key] = Array.isArray(ssa2Rows) ? ssa2Rows.length : 0;
+        continue;
+      }
+      if (t.key === 'review2') {
+        const review2 = lsGet<{ rows?: unknown }>(`review2_sheet_${subjectId}`);
+        const review2Rows = (review2 as any)?.rows;
+        map[t.key] = Array.isArray(review2Rows) ? review2Rows.length : 0;
         continue;
       }
       if (t.key === 'formative1') {
@@ -548,10 +709,10 @@ export default function MarkEntryTabs({
         map[t.key] = rowsByStudentId && typeof rowsByStudentId === 'object' ? Object.keys(rowsByStudentId).length : 0;
         continue;
       }
-      const rows = lsGet<MarkRow[]>(storageKey(subjectId, t.key)) || [];
+      const rows = lsGet<MarkRow[]>(storageKey(subjectId, t.key as BaseTabKey)) || [];
       map[t.key] = Array.isArray(rows) ? rows.length : 0;
     }
-    return map as Record<TabKey, number>;
+    return map;
   }, [subjectId, active, visibleTabs, refreshKey]);
 
   return (
@@ -562,22 +723,34 @@ export default function MarkEntryTabs({
       <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 12 }}>
         <div style={{ minWidth: 260 }}>
           <div style={{ fontSize: 12, color: '#6b7280' }}>Teaching Assignment (Section)</div>
-          <select
-            value={selectedTaId ?? ''}
-            onChange={(e) => setSelectedTaId(e.target.value ? Number(e.target.value) : null)}
-            className="obe-input"
-            disabled={tas.length === 0 || typeof fixedTeachingAssignmentId === 'number'}
-          >
-            {tas.length === 0 ? (
-              <option value="">No teaching assignments</option>
-            ) : (
-              tas.map((ta) => (
-                <option key={ta.id} value={ta.id}>
-                  {ta.section_name} — {ta.academic_year}
-                </option>
-              ))
-            )}
-          </select>
+          {tas.length === 0 ? (
+            <div className="obe-input">No teaching assignments</div>
+          ) : (
+            <div style={{ padding: '8px 10px', borderRadius: 6, background: '#fff', border: '1px solid #e5e7eb' }}>
+                <div style={{ fontSize: 14, fontWeight: 600 }}>{(selectedTa || tas[0])?.section_name || taDerivedMeta?.section_name || '—'}</div>
+                <div style={{ fontSize: 12, color: '#6b7280' }}>
+                  {(() => {
+                    const currentTa = (selectedTa || tas[0] || {}) as any;
+                    const academicYear = currentTa.academic_year || taDerivedMeta?.academic_year || currentTa.academic_year_name || currentTa.year || '';
+                    const sem = typeof currentTa.semester !== 'undefined' && currentTa.semester != null ? currentTa.semester : (typeof taDerivedMeta?.semester !== 'undefined' ? taDerivedMeta?.semester : (tas[0] as any)?.semester);
+                    const deptObj =
+                      currentTa.department ||
+                      currentTa.section_details?.department ||
+                      currentTa.section_details?.batch?.course?.department ||
+                      taDerivedMeta?.department ||
+                      (currentTa.department_name ? { name: currentTa.department_name } : null) ||
+                      (tas[0] as any)?.department ||
+                      (tas[0] as any)?.section_details?.department;
+                    const deptLabel = deptObj?.short_name || deptObj?.code || deptObj?.name || currentTa.department_name || '';
+                    const parts: string[] = [];
+                    parts.push(academicYear || '');
+                    if (typeof sem !== 'undefined' && sem != null) parts.push(`Sem ${sem}`);
+                    if (deptLabel) parts.push(deptLabel);
+                    return parts.filter(Boolean).join(' · ');
+                  })()}
+                </div>
+            </div>
+          )}
           {taError && <div style={{ marginTop: 6, fontSize: 12, color: '#b91c1c' }}>{taError}</div>}
         </div>
         <div style={{ fontSize: 12, color: '#6b7280', alignSelf: 'center' }}>
@@ -589,13 +762,6 @@ export default function MarkEntryTabs({
               Show exams
             </button>
           ) : null}
-          <button 
-            className="obe-btn obe-btn-primary" 
-            onClick={() => setShowCQIEditor(true)}
-            title="Configure when to show CQI button"
-          >
-            CQI Editor
-          </button>
         </div>
       </div>
 
@@ -613,18 +779,18 @@ export default function MarkEntryTabs({
       ) : null}
 
       {/* IQAC reset (per assessment) */}
-      {Boolean(iqacResetEnabled) && active !== 'dashboard' && selectedTaId != null ? (
+      {Boolean(iqacResetEnabled) && Boolean(activeAssessmentKey) && selectedTaId != null ? (
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
           <button
             className="obe-btn obe-btn-danger"
             disabled={resetting}
             onClick={async () => {
-              const assessment = active as Exclude<TabKey, 'dashboard'>;
+              const assessment = activeAssessmentKey as DraftAssessmentKey;
               const ok = window.confirm(`Reset ${assessment.toUpperCase()} for this section? This clears draft + published data for that exam.`);
               if (!ok) return;
               try {
                 setResetting(true);
-                await iqacResetAssessment(assessment as DraftAssessmentKey, String(subjectId), Number(selectedTaId));
+                await iqacResetAssessment(assessment, String(subjectId), Number(selectedTaId));
 
                 // Clear local cached drafts so UI doesn't keep showing old marks
                 clearLocalDraftCache(String(subjectId), String(assessment));
@@ -662,35 +828,19 @@ export default function MarkEntryTabs({
           Assessment Exams
         </div>
         <div className="obe-sidebar-nav" aria-label="Mark Entry sub-tabs" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          {visibleTabs.map((t) => (
+          {visibleTabs.map((t, idx) => (
             <React.Fragment key={t.key}>
-              <TabButton active={active === t.key} label={t.label} onClick={() => setActive(t.key)} />
-              {cqiInfos
-                .filter(info => info && info.assessment === t.key)
-                .map((info, idx) => {
-                  const isThisCqiActive = active === 'cqi' && 
-                    selectedCqiInfo?.assessment === info.assessment && 
-                    JSON.stringify(selectedCqiInfo?.cos) === JSON.stringify(info.cos);
-                  
-                  return (
-                    <button
-                      key={`cqi-${t.key}-${idx}`}
-                      onClick={() => {
-                        setSelectedCqiInfo(info);
-                        setActive('cqi');
-                      }}
-                      className={`obe-sidebar-btn ${isThisCqiActive ? 'active' : ''}`}
-                      style={{
-                        backgroundColor: isThisCqiActive ? '#10b981' : '#d1fae5',
-                        color: isThisCqiActive ? 'white' : '#065f46',
-                        borderColor: '#10b981',
-                      }}
-                      title={`CQI for ${info.cos.join(', ')}`}
-                    >
-                      CQI {info.cos.length > 1 ? `(${info.cos.join(', ')})` : `(${info.cos[0]})`}
-                    </button>
-                  );
-                })}
+              {t.cqi ? (
+                <TabButtonExtended
+                  active={active === t.key}
+                  label={t.label}
+                  onClick={() => setActive(t.key)}
+                  isCqi
+                  uniqueId={String(t.key)}
+                />
+              ) : (
+                <TabButton active={active === t.key} label={t.label} onClick={() => setActive(t.key)} />
+              )}
             </React.Fragment>
           ))}
         </div>
@@ -716,17 +866,14 @@ export default function MarkEntryTabs({
               >
                 <div style={{ fontWeight: 700, color: '#0f172a' }}>{t.label}</div>
                 <div style={{ marginTop: 6, fontSize: 13, color: '#6b7280' }}>
-                  Rows saved: {counts[t.key] ?? 0}
+                  Rows saved: {String(t.key).startsWith('cqi_') ? '—' : (counts[t.key] ?? 0)}
                 </div>
-                <button
-                  onClick={() => setActive(t.key)}
-                  className="obe-btn obe-btn-primary"
-                  style={{ marginTop: 10 }}
-                >
-                  Open
-                </button>
+                {/* Open button removed per dashboard design update */}
               </div>
             ))}
+          </div>
+          <div style={{ marginTop: 14 }}>
+            <DashboardWidgets subjectId={subjectId} />
           </div>
         </div>
       )}
@@ -734,6 +881,10 @@ export default function MarkEntryTabs({
       {active !== 'dashboard' && (
         <div key={`${active}_${refreshKey}`}>
           <h3 style={{ margin: '0 0 6px 0' }}>{visibleTabs.find((t) => t.key === active)?.label}</h3>
+          {(() => {
+            const activeTabDef = visibleTabs.find((t) => t.key === active) || null;
+            const activeCqi = activeTabDef?.cqi || null;
+            return (
           <div style={{ color: '#6b7280', marginBottom: 12, fontSize: 14 }}>
             {active === 'formative1' 
               ? (normalizedEffectiveClassType === 'TCPL' ? 'Enter and manage LAB-1 marks (experiments + totals).' : 'Enter and manage Formative-1 assessment marks with BTL mapping.')
@@ -757,142 +908,195 @@ export default function MarkEntryTabs({
                 ? (normalizedEffectiveClassType === 'LAB' ? 'CIA 2 LAB entry (CO-3/CO-4 experiments + CIA exam).' : 'CIA 2 sheet-style entry (Q-wise + CO + BTL) matching the Excel layout.')
               : active === 'model'
                 ? (normalizedEffectiveClassType === 'LAB' ? 'MODEL LAB entry (CO-5 experiments + CIA exam).' : 'MODEL blank table template (same layout style as CIA sheets).')
+                : String(active).startsWith('cqi_')
+                  ? `CQI view for ${(activeCqi?.assessmentType || 'assessment').toUpperCase()} (${(activeCqi?.cos || []).join(', ')})`
                 : 'Enter and save marks locally for this assessment.'}
           </div>
-          <fieldset disabled={Boolean(viewerMode)} style={{ border: 0, padding: 0, margin: 0 }}>
-            {active === 'formative1' ? (
-              normalizedEffectiveClassType === 'TCPL' ? (
-                <LabEntry
-                  subjectId={subjectId}
-                  teachingAssignmentId={selectedTaId ?? undefined}
-                  assessmentKey="formative1"
-                  label="LAB 1"
-                  coA={1}
-                  coB={2}
-                />
-              ) : (
-                <Formative1List subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
-              )
-            ) : active === 'formative2' ? (
-              normalizedEffectiveClassType === 'TCPL' ? (
-                <LabEntry
-                  subjectId={subjectId}
-                  teachingAssignmentId={selectedTaId ?? undefined}
-                  assessmentKey="formative2"
-                  label="LAB 2"
-                  coA={3}
-                  coB={4}
-                />
-              ) : (
-                <Formative2List subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
-              )
-            ) : active === 'ssa1' ? (
-              <Ssa1Entry
-                subjectId={subjectId}
-                teachingAssignmentId={selectedTaId ?? undefined}
-              />
-            ) : active === 'review1' ? (
-              <Ssa1Entry
-                subjectId={subjectId}
-                teachingAssignmentId={selectedTaId ?? undefined}
-                assessmentKey="review1"
-                label="Review 1"
-              />
-            ) : active === 'ssa2' ? (
-              <Ssa2Entry
-                subjectId={subjectId}
-                teachingAssignmentId={selectedTaId ?? undefined}
-              />
-            ) : active === 'review2' ? (
-              <Ssa2Entry
-                subjectId={subjectId}
-                teachingAssignmentId={selectedTaId ?? undefined}
-                assessmentKey="review2"
-                label="Review 2"
-              />
-            ) : active === 'cia1' ? (
-              normalizedEffectiveClassType === 'LAB' ? (
-                <LabCourseMarksEntry
-                  subjectId={subjectId}
-                  teachingAssignmentId={selectedTaId ?? undefined}
-                  assessmentKey="cia1"
-                  label="CIA 1 LAB"
-                  coA={1}
-                  coB={2}
-                  viewerMode={Boolean(viewerMode)}
-                />
-              ) : normalizedEffectiveClassType === 'PRACTICAL' ? (
-                <ReviewEntry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} assessmentKey="cia1" viewerMode={Boolean(viewerMode)} />
-              ) : (
-                <Cia1Entry
-                  subjectId={subjectId}
-                  teachingAssignmentId={selectedTaId ?? undefined}
-                  classType={effectiveClassType ?? null}
-                  questionPaperType={questionPaperType ?? null}
-                />
-              )
-            ) : active === 'cia2' ? (
-              normalizedEffectiveClassType === 'LAB' ? (
-                <LabCourseMarksEntry
-                  subjectId={subjectId}
-                  teachingAssignmentId={selectedTaId ?? undefined}
-                  assessmentKey="cia2"
-                  label="CIA 2 LAB"
-                  coA={3}
-                  coB={4}
-                  viewerMode={Boolean(viewerMode)}
-                />
-              ) : normalizedEffectiveClassType === 'PRACTICAL' ? (
-                <ReviewEntry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} assessmentKey="cia2" viewerMode={Boolean(viewerMode)} />
-              ) : (
-                <Cia2Entry
-                  subjectId={subjectId}
-                  teachingAssignmentId={selectedTaId ?? undefined}
-                  classType={effectiveClassType ?? null}
-                  questionPaperType={questionPaperType ?? null}
-                />
-              )
-            ) : active === 'model' ? (
-              normalizedEffectiveClassType === 'LAB' ? (
-                <LabCourseMarksEntry
-                  subjectId={subjectId}
-                  teachingAssignmentId={selectedTaId ?? undefined}
-                  assessmentKey="model"
-                  label="MODEL LAB"
-                  coA={5}
-                  coB={null}
-                  viewerMode={Boolean(viewerMode)}
-                />
-              ) : normalizedEffectiveClassType === 'PRACTICAL' ? (
-                <ReviewEntry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} assessmentKey="model" viewerMode={Boolean(viewerMode)} />
-              ) : (
-                <ModelEntry
-                  subjectId={subjectId}
-                  teachingAssignmentId={selectedTaId ?? undefined}
-                  classType={effectiveClassType ?? null}
-                  questionPaperType={questionPaperType ?? null}
-                />
-              )
-            ) : active === 'cqi' ? (
-              <CQIEntry
-                subjectId={subjectId}
-                teachingAssignmentId={selectedTaId ?? undefined}
-                assessmentType={selectedCqiInfo?.assessment as 'cia1' | 'cia2' | 'model' | undefined}
-                cos={selectedCqiInfo?.cos}
-              />
-            ) : (
-              <MarkEntryTable subjectId={subjectId} tab={active as Exclude<TabKey, 'dashboard'>} />
-            )}
-          </fieldset>
+            );
+          })()}
+          {activeGate.loading && activeAssessmentKey ? (
+            <div style={{ padding: '10px 0', color: '#6b7280', fontSize: 13 }}>Checking availability…</div>
+          ) : !activeEnabled && activeAssessmentKey ? (
+            <div
+              style={{
+                background: '#fff7ed',
+                border: '1px solid #fdba7433',
+                color: '#9a3412',
+                padding: 12,
+                borderRadius: 12,
+                fontWeight: 800,
+              }}
+            >
+              This exam is disabled by IQAC. Please contact IQAC to enable it.
+            </div>
+          ) : (
+            <fieldset disabled={Boolean(activeForcedViewerMode)} style={{ border: 0, padding: 0, margin: 0 }}>
+              {(() => {
+                const activeTabDef = visibleTabs.find((t) => t.key === active) || null;
+                const activeCqi = activeTabDef?.cqi || null;
+
+                // Use an explicit switch/if-chain to avoid deeply nested ternaries.
+                if (active === 'formative1') {
+                  return normalizedEffectiveClassType === 'TCPL' ? (
+                    <LabEntry
+                      subjectId={subjectId}
+                      teachingAssignmentId={selectedTaId ?? undefined}
+                      assessmentKey="formative1"
+                      label="LAB 1"
+                      coA={1}
+                      coB={2}
+                    />
+                  ) : (
+                    <Formative1List subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
+                  );
+                }
+
+                if (active === 'formative2') {
+                  return normalizedEffectiveClassType === 'TCPL' ? (
+                    <LabEntry
+                      subjectId={subjectId}
+                      teachingAssignmentId={selectedTaId ?? undefined}
+                      assessmentKey="formative2"
+                      label="LAB 2"
+                      coA={2}
+                      coB={3}
+                    />
+                  ) : (
+                    <Formative2List subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
+                  );
+                }
+
+                if (active === 'ssa1') return <Ssa1Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />;
+                if (active === 'review1') return <Review1Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />;
+                if (active === 'ssa2') return <Ssa2Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />;
+                if (active === 'review2') return <Review2Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />;
+
+                if (active === 'cia1') {
+                  if (normalizedEffectiveClassType === 'LAB') {
+                    return (
+                      <LabCourseMarksEntry
+                        subjectId={subjectId}
+                        teachingAssignmentId={selectedTaId ?? undefined}
+                        assessmentKey="cia1"
+                        label="CIA 1 LAB"
+                        coA={1}
+                        coB={2}
+                        viewerMode={Boolean(activeForcedViewerMode)}
+                      />
+                    );
+                  }
+                  if (normalizedEffectiveClassType === 'PRACTICAL' || normalizedEffectiveClassType === 'PROJECT') {
+                    return (
+                      <ReviewEntry
+                        subjectId={subjectId}
+                        teachingAssignmentId={selectedTaId ?? undefined}
+                        assessmentKey="cia1"
+                        viewerMode={Boolean(activeForcedViewerMode)}
+                      />
+                    );
+                  }
+                  return (
+                    <Cia1Entry
+                      subjectId={subjectId}
+                      teachingAssignmentId={selectedTaId ?? undefined}
+                      classType={effectiveClassType ?? null}
+                      questionPaperType={questionPaperType ?? null}
+                    />
+                  );
+                }
+
+                if (active === 'cia2') {
+                  if (normalizedEffectiveClassType === 'LAB') {
+                    return (
+                      <LabCourseMarksEntry
+                        subjectId={subjectId}
+                        teachingAssignmentId={selectedTaId ?? undefined}
+                        assessmentKey="cia2"
+                        label="CIA 2 LAB"
+                        coA={3}
+                        coB={4}
+                        viewerMode={Boolean(activeForcedViewerMode)}
+                      />
+                    );
+                  }
+                  if (normalizedEffectiveClassType === 'PRACTICAL' || normalizedEffectiveClassType === 'PROJECT') {
+                    return (
+                      <ReviewEntry
+                        subjectId={subjectId}
+                        teachingAssignmentId={selectedTaId ?? undefined}
+                        assessmentKey="cia2"
+                        viewerMode={Boolean(activeForcedViewerMode)}
+                      />
+                    );
+                  }
+                  return (
+                    <Cia2Entry
+                      subjectId={subjectId}
+                      teachingAssignmentId={selectedTaId ?? undefined}
+                      classType={effectiveClassType ?? null}
+                      questionPaperType={questionPaperType ?? null}
+                    />
+                  );
+                }
+
+                if (active === 'model') {
+                  if (normalizedEffectiveClassType === 'LAB') {
+                    return (
+                      <LabCourseMarksEntry
+                        subjectId={subjectId}
+                        teachingAssignmentId={selectedTaId ?? undefined}
+                        assessmentKey="model"
+                        label="MODEL LAB"
+                        coA={5}
+                        coB={null}
+                        viewerMode={Boolean(activeForcedViewerMode)}
+                      />
+                    );
+                  }
+                  if (normalizedEffectiveClassType === 'PRACTICAL' || normalizedEffectiveClassType === 'PROJECT') {
+                    return (
+                      <ReviewEntry
+                        subjectId={subjectId}
+                        teachingAssignmentId={selectedTaId ?? undefined}
+                        assessmentKey="model"
+                        viewerMode={Boolean(activeForcedViewerMode)}
+                      />
+                    );
+                  }
+                  return (
+                    <ModelEntry
+                      subjectId={subjectId}
+                      teachingAssignmentId={selectedTaId ?? undefined}
+                      classType={effectiveClassType ?? null}
+                      questionPaperType={questionPaperType ?? null}
+                    />
+                  );
+                }
+
+                if (String(active).startsWith('cqi_')) {
+                  return (
+                    <CQIEntry
+                      subjectId={subjectId}
+                      teachingAssignmentId={selectedTaId ?? undefined}
+                      classType={effectiveClassType ?? null}
+                      enabledAssessments={effectiveEnabled ?? null}
+                      assessmentType={activeCqi?.assessmentType || 'model'}
+                      cos={activeCqi?.cos || ['CO1', 'CO2', 'CO3', 'CO4', 'CO5']}
+                      cqiDivider={Number(cqiConfig?.divider) || 2}
+                      cqiMultiplier={Number(cqiConfig?.multiplier) || 0.15}
+                    />
+                  );
+                }
+
+                // Default: generic mark entry table
+                return <MarkEntryTable subjectId={subjectId} tab={active as Exclude<BaseTabKey, 'dashboard'>} />;
+              })()}
+            </fieldset>
+          )}
         </div>
       )}
 
-      <CQIEditor
-        isOpen={showCQIEditor}
-        onClose={() => setShowCQIEditor(false)}
-        onSave={handleCQISave}
-        currentSelection={cqiConfigs}
-      />
+      {/* CQI entry available as a tab */}
     </div>
   );
 }

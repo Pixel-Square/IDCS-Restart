@@ -40,7 +40,7 @@ export default function PublishLockOverlay({ locked, title, subtitle, children }
 
   return (
     <div style={{ position: 'relative' }}>
-      <div style={{ pointerEvents: 'none', userSelect: 'none' }}>{children}</div>
+      <div>{children}</div>
       <div
         style={{
           position: 'absolute',
@@ -49,8 +49,9 @@ export default function PublishLockOverlay({ locked, title, subtitle, children }
           alignItems: 'center',
           justifyContent: 'center',
           padding: 16,
-          background: 'rgba(255, 255, 255, 0.75)',
-          backdropFilter: 'blur(2px)',
+          background: 'transparent',
+          backdropFilter: 'none',
+          pointerEvents: 'none',
         }}
       >
         <div

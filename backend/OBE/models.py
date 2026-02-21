@@ -54,6 +54,23 @@ class ObeAssessmentMasterConfig(models.Model):
         db_table = 'obe_assessment_master_config'
 
 
+class ObeCqiConfig(models.Model):
+    """Global CQI configuration managed by IQAC.
+
+    Stores selected CQI options (list), divider and multiplier used by CQI calculations.
+    """
+
+    # Singleton pattern: there should normally be only one row; use get_or_create(id=1)
+    options = models.JSONField(default=list)
+    divider = models.FloatField(default=2.0)
+    multiplier = models.FloatField(default=0.15)
+    updated_by = models.IntegerField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'obe_cqi_config'
+
+
 class InternalMarkMapping(models.Model):
         """IQAC-managed internal mark mapping per Subject.
 
@@ -237,6 +254,18 @@ class Cia2PublishedSheet(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
+class ModelPublishedSheet(models.Model):
+    """Published MODEL sheet snapshot (question-wise / full sheet) used for viewing and CO calculations.
+
+    Stored separately from LabPublishedSheet so THEORY MODEL snapshots mirror CIA snapshots.
+    """
+
+    subject = models.OneToOneField('academics.Subject', on_delete=models.CASCADE, related_name='model_published_sheet')
+    data = models.JSONField(default=dict)
+    updated_by = models.IntegerField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
 class LabPublishedSheet(models.Model):
     """Published Lab sheet snapshot (experiment-wise) used for CO attainment calculations."""
 
@@ -298,6 +327,49 @@ class ObeDueSchedule(models.Model):
 
     def __str__(self) -> str:
         return f"{self.academic_year_id}:{self.subject_code}:{self.assessment} due {self.due_at}"  # pragma: no cover
+
+
+class ObeAssessmentControl(models.Model):
+    """Assessment enable + edit control per Semester + Subject + Assessment.
+
+    This is used by IQAC to:
+    - Enable/disable an assessment (drives whether faculty can even open the page)
+    - Set editable/read-only mode (without relying on global publish overrides)
+
+    Kept separate from ObeDueSchedule so enabling does not require a due_at.
+    """
+
+    ASSESSMENT_CHOICES = AssessmentDraft.ASSESSMENT_CHOICES
+
+    semester = models.ForeignKey('academics.Semester', on_delete=models.PROTECT, null=True, blank=True, related_name='obe_assessment_controls')
+
+    # Backward compatibility: optionally scoped to AcademicYear.
+    academic_year = models.ForeignKey('academics.AcademicYear', on_delete=models.SET_NULL, null=True, blank=True, related_name='obe_assessment_controls')
+
+    subject_code = models.CharField(max_length=64, db_index=True)
+    subject_name = models.CharField(max_length=255, blank=True, default='')
+    assessment = models.CharField(max_length=20, choices=ASSESSMENT_CHOICES)
+
+    is_enabled = models.BooleanField(default=True)
+    is_open = models.BooleanField(default=True)
+
+    created_by = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_by = models.IntegerField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            UniqueConstraint(fields=['semester', 'subject_code', 'assessment'], name='unique_obe_assessment_control_semester'),
+        ]
+        indexes = [
+            models.Index(fields=['semester', 'assessment']),
+            models.Index(fields=['academic_year', 'assessment']),
+            models.Index(fields=['subject_code', 'assessment']),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.semester_id}:{self.subject_code}:{self.assessment} enabled={self.is_enabled} open={self.is_open}"  # pragma: no cover
 
 
 class ObePublishRequest(models.Model):
@@ -415,6 +487,44 @@ class ObeEditRequest(models.Model):
         self.reviewed_by = reviewer
         self.reviewed_at = now
         self.approved_until = None
+
+
+class ObeEditNotificationLog(models.Model):
+    CHANNEL_EMAIL = 'EMAIL'
+    CHANNEL_WHATSAPP = 'WHATSAPP'
+    CHANNEL_CHOICES = (
+        (CHANNEL_EMAIL, 'Email'),
+        (CHANNEL_WHATSAPP, 'WhatsApp'),
+    )
+
+    STATUS_SUCCESS = 'SUCCESS'
+    STATUS_FAILED = 'FAILED'
+    STATUS_SKIPPED = 'SKIPPED'
+    STATUS_CHOICES = (
+        (STATUS_SUCCESS, 'Success'),
+        (STATUS_FAILED, 'Failed'),
+        (STATUS_SKIPPED, 'Skipped'),
+    )
+
+    edit_request = models.ForeignKey('ObeEditRequest', on_delete=models.CASCADE, related_name='notification_logs')
+    channel = models.CharField(max_length=16, choices=CHANNEL_CHOICES, db_index=True)
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, db_index=True)
+    recipient = models.CharField(max_length=255, blank=True, default='')
+    message = models.TextField(blank=True, default='')
+    response_status_code = models.IntegerField(null=True, blank=True)
+    response_body = models.TextField(blank=True, default='')
+    error = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['edit_request', 'channel', 'created_at'], name='obe_editnotif_req_chan_idx'),
+            models.Index(fields=['channel', 'status', 'created_at'], name='obe_editnotif_chan_stat_idx'),
+        ]
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"ObeEditNotificationLog(req={self.edit_request_id}, channel={self.channel}, status={self.status})"
 
 
 class ObeGlobalPublishControl(models.Model):

@@ -33,7 +33,8 @@ npm run dev
 
 Notes:
 - The backend `AUTH_USER_MODEL` is `accounts.User` and includes a `role` FK. Role mappings are in `RoleMap`.
-- The frontend expects the backend API base as `VITE_API_BASE` env var; defaults to `http://localhost:8000`.
+- The frontend uses `VITE_API_BASE` as the backend API base. If not set, it defaults to same-origin (and uses `http://localhost:8000` when running on localhost).
+    - For Vite dev setups where Django runs on another port, either set `VITE_API_BASE` or use the Vite `/api` proxy (see `frontend/vite.config.ts`, configurable via `VITE_DEV_API_PROXY_TARGET`).
 
 
 from applications.models import Application

@@ -1021,12 +1021,154 @@ class TeachingAssignmentAdmin(admin.ModelAdmin):
     list_filter = ('academic_year', 'is_active', 'section__batch__course__department')
     raw_id_fields = ('staff', 'curriculum_row', 'section', 'academic_year')
 
+    class TeachingAssignmentForm(forms.ModelForm):
+        class Meta:
+            model = TeachingAssignment
+            fields = '__all__'
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            try:
+                from curriculum.models import ElectiveSubject
+
+                class ElectiveChoiceField(forms.ModelChoiceField):
+                    def label_from_instance(self, obj):
+                        try:
+                            parent = getattr(obj, 'parent', None)
+                            dept = getattr(obj, 'department', None)
+                            label_parts = []
+                            # elective option code/name
+                            opt = (getattr(obj, 'course_code', None) or getattr(obj, 'course_name', None) or str(obj.pk))
+                            label_parts.append(opt)
+                            # parent curriculum row (if present)
+                            if parent is not None:
+                                ptxt = (getattr(parent, 'course_code', None) or getattr(parent, 'course_name', None))
+                                if ptxt:
+                                    label_parts.append(f"(Parent: {ptxt})")
+                            # department
+                            if dept is not None:
+                                dtxt = getattr(dept, 'code', None) or getattr(dept, 'name', None)
+                                if dtxt:
+                                    label_parts.append(f"[{dtxt}]")
+                            return ' '.join(label_parts)
+                        except Exception:
+                            return str(obj)
+
+                self.fields['elective_subject'] = ElectiveChoiceField(
+                    queryset=ElectiveSubject.objects.select_related('parent', 'department').all().order_by('department__code', 'parent__course_code', 'course_code'),
+                    required=False,
+                )
+            except Exception:
+                # If elective model is unavailable, leave default field
+                pass
+
+        def clean(self):
+            cleaned = super().clean()
+            elective = cleaned.get('elective_subject')
+            section = cleaned.get('section')
+            if elective and section:
+                try:
+                    sec_dept = getattr(getattr(section, 'batch', None), 'course', None)
+                    sec_dept = getattr(sec_dept, 'department', None)
+                except Exception:
+                    sec_dept = None
+
+                # resolve elective's department
+                try:
+                    elect_dept = getattr(elective, 'department', None)
+                except Exception:
+                    elect_dept = None
+
+                # If elective's department doesn't match the section's department, try to find an option for the section's dept
+                if sec_dept and elect_dept and sec_dept.pk != elect_dept.pk:
+                    try:
+                        from curriculum.models import ElectiveSubject
+                        parent = getattr(elective, 'parent', None)
+                        if parent is not None:
+                            alt = ElectiveSubject.objects.filter(parent=parent, department=sec_dept).first()
+                            if alt:
+                                cleaned['elective_subject'] = alt
+                                return cleaned
+                    except Exception:
+                        pass
+
+                    # no matching elective found; raise validation error to avoid cross-dept assignment
+                    raise ValidationError({'elective_subject': 'Selected elective does not belong to the same department as the chosen section. Choose an elective option for the section\'s department.'})
+
+            return cleaned
+
+    form = TeachingAssignmentForm
+
+    def get_form(self, request, obj=None, **kwargs):
+        # Obtain default form
+        form = super().get_form(request, obj, **kwargs)
+        try:
+            from curriculum.models import ElectiveSubject
+            # Superusers see all elective options
+            if request.user.is_superuser:
+                qs = ElectiveSubject.objects.select_related('parent', 'department').all().order_by('department__code', 'parent__course_code', 'course_code')
+            else:
+                staff_profile = getattr(request.user, 'staff_profile', None)
+                dept_ids = []
+                if staff_profile is not None:
+                    # Departments where the staff has DepartmentRole (e.g. HOD) and is active
+                    from .models import DepartmentRole
+                    roles = DepartmentRole.objects.filter(staff=staff_profile, is_active=True).select_related('department')
+                    for r in roles:
+                        if getattr(r, 'department', None):
+                            dept_ids.append(r.department.pk)
+                    # fallback to staff_profile.department if set
+                    sp_dept = getattr(staff_profile, 'department', None)
+                    if sp_dept is not None and sp_dept.pk not in dept_ids:
+                        dept_ids.append(sp_dept.pk)
+
+                if dept_ids:
+                    qs = ElectiveSubject.objects.select_related('parent', 'department').filter(department__pk__in=dept_ids).order_by('department__code', 'parent__course_code', 'course_code')
+                else:
+                    # no known department context: restrict nothing but keep ordering
+                    qs = ElectiveSubject.objects.select_related('parent', 'department').all().order_by('department__code', 'parent__course_code', 'course_code')
+
+            if 'elective_subject' in form.base_fields:
+                form.base_fields['elective_subject'].queryset = qs
+        except Exception:
+            pass
+        return form
+
     def subject_display(self, obj):
         try:
             # Prefer elective_subject when present
             if getattr(obj, 'elective_subject', None):
                 es = obj.elective_subject
-                return f"{getattr(es, 'course_code', '')} - {getattr(es, 'course_name', '')}".strip(' -')
+                # If this elective option has a parent curriculum row, show parent + dept and list all options
+                parent = getattr(es, 'parent', None)
+                dept = getattr(es, 'department', None)
+                parts = []
+                if parent:
+                    parts.append(f"Parent: {getattr(parent, 'course_code', '') or getattr(parent, 'course_name', '')}".strip())
+                if dept:
+                    # show department code if available, else name
+                    parts.append(f"Dept: {getattr(dept, 'code', None) or getattr(dept, 'name', '')}")
+
+                # list all elective options belonging to the parent (show code or name)
+                try:
+                    options = []
+                    if parent is not None:
+                        opts_qs = getattr(parent, 'elective_options', None)
+                        if opts_qs is None:
+                            from curriculum.models import ElectiveSubject
+                            opts_qs = ElectiveSubject.objects.filter(parent=parent)
+                        for o in opts_qs.all():
+                            options.append(getattr(o, 'course_code', None) or getattr(o, 'course_name', None) or str(o.pk))
+                    else:
+                        # fallback to showing the single elective option
+                        options.append(getattr(es, 'course_code', None) or getattr(es, 'course_name', None) or str(es.pk))
+                    if options:
+                        parts.append('Options: ' + ', '.join(options))
+                except Exception:
+                    # best-effort; ignore option listing failures
+                    parts.append(f"Option: {getattr(es, 'course_code', '') or getattr(es, 'course_name', '')}".strip())
+
+                return ' | '.join([p for p in parts if p])
 
             from curriculum.models import CurriculumDepartment
             # prefer explicit curriculum_row if set
@@ -1108,9 +1250,9 @@ class PeriodAttendanceRecordInline(admin.TabularInline):
 
 @admin.register(PeriodAttendanceSession)
 class PeriodAttendanceSessionAdmin(admin.ModelAdmin):
-    list_display = ('section', 'period', 'date', 'timetable_assignment', 'created_by', 'is_locked', 'created_at')
+    list_display = ('section', 'period', 'date', 'teaching_assignment', 'timetable_assignment', 'created_by', 'is_locked', 'created_at')
     list_filter = ('date', 'is_locked')
-    raw_id_fields = ('section', 'period', 'timetable_assignment', 'created_by')
+    raw_id_fields = ('section', 'period', 'teaching_assignment', 'timetable_assignment', 'created_by')
     inlines = (PeriodAttendanceRecordInline,)
 
 

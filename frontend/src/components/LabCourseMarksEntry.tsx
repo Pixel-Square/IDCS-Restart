@@ -13,6 +13,7 @@ import PublishLockOverlay from './PublishLockOverlay';
 const lockPanelGif = new URL('https://static.vecteezy.com/system/resources/thumbnails/014/585/778/small/gold-locked-padlock-png.png', import.meta.url).href;
 import { fetchDeptRows, fetchMasters } from '../services/curriculum';
 import { isLabClassType, normalizeClassType } from '../constants/classTypes';
+import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
 
 const LAB_CO_MAX_OVERRIDE = { co1: 42, co2: 42, co3: 58, co4: 42, co5: 42 };
 
@@ -101,6 +102,10 @@ function clampInt(n: number, min: number, max: number) {
 
 }
 
+function round1(n: number) {
+  return Math.round(n * 10) / 10;
+}
+
 function compareStudentName(a: { name?: string; reg_no?: string }, b: { name?: string; reg_no?: string }) {
   const an = String(a?.name || '').trim().toLowerCase();
   const bn = String(b?.name || '').trim().toLowerCase();
@@ -187,10 +192,12 @@ export default function LabCourseMarksEntry({
   autoSaveDraft,
   autoSaveDelayMs,
   viewerMode,
+  floatPanelOnTable,
 }: Props) {
   const [students, setStudents] = useState<Student[]>([]);
   const [loadingRoster, setLoadingRoster] = useState(false);
   const [rosterError, setRosterError] = useState<string | null>(null);
+  const [taMeta, setTaMeta] = useState<{ courseName?: string; courseCode?: string; className?: string } | null>(null);
 
   const [savingDraft, setSavingDraft] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
@@ -603,6 +610,11 @@ export default function LabCourseMarksEntry({
 
         if (!studentsList) {
           const res = await fetchTeachingAssignmentRoster(teachingAssignmentId);
+          setTaMeta({
+            courseName: String((res as any)?.teaching_assignment?.subject_name || ''),
+            courseCode: String((res as any)?.teaching_assignment?.subject_code || subjectId || ''),
+            className: String((res as any)?.teaching_assignment?.section_name || ''),
+          });
           const roster = (res?.students || []) as any[];
           studentsList = roster.map((s: any) => ({ id: Number(s.id), reg_no: String(s.reg_no ?? ''), name: String(s.name ?? ''), section: s.section ?? null }));
         }
@@ -2042,7 +2054,7 @@ export default function LabCourseMarksEntry({
     transform: 'translateX(-50%)',
     zIndex: 40,
     width: 160,
-    background: 'rgba(255,255,255,0.98)',
+    background: '#fff',
     border: '1px solid #e5e7eb',
     padding: 10,
     borderRadius: 12,
@@ -2052,6 +2064,58 @@ export default function LabCourseMarksEntry({
     alignItems: 'center',
     boxShadow: '0 6px 18px rgba(17,24,39,0.06)',
     filter: 'none',
+  };
+
+  const downloadTotals = async () => {
+    if (!subjectId) return;
+
+    const enabledCos = Object.entries((draft.sheet as any)?.coConfigs || {})
+      .filter(([, v]: any) => Boolean(v?.enabled))
+      .map(([k]) => String(k));
+
+    const rows = students.map((s, idx) => {
+      const row = draft.sheet.rowsByStudentId?.[String(s.id)];
+      const marksByCoRaw = (row as any)?.marksByCo;
+
+      const allMarks: number[] = [];
+      for (const coNum of enabledCos) {
+        const cfg = (draft.sheet as any)?.coConfigs?.[coNum];
+        const expCount = clampInt(Number(cfg?.expCount ?? 0), 0, 12);
+        const byCo = marksByCoRaw && typeof marksByCoRaw === 'object' ? (marksByCoRaw as any)[String(coNum)] : undefined;
+        const fallback = Number(coNum) === coANum ? (row as any)?.marksA : Number(coNum) === Number(coBNumRaw) ? (row as any)?.marksB : undefined;
+        const marks = normalizeMarksArray(byCo ?? fallback, expCount);
+        for (const m of marks) {
+          if (typeof m === 'number' && Number.isFinite(m)) allMarks.push(m);
+        }
+      }
+
+      const avg = avgMarks(allMarks as any);
+      const ciaExamNum =
+        ciaExamEnabled && typeof (row as any)?.ciaExam === 'number' && Number.isFinite((row as any).ciaExam)
+          ? Number((row as any).ciaExam)
+          : null;
+
+      const hasAnyMarks = avg != null || (ciaExamEnabled && ciaExamNum != null);
+      const effectiveAbsent = Boolean(absentUiEnabled && (row as any)?.absent && !hasAnyMarks);
+      const total = effectiveAbsent ? 'ABSENT' : avg == null && ciaExamNum == null ? '' : round1((avg ?? 0) + (ciaExamNum ?? 0));
+
+      return {
+        sno: idx + 1,
+        regNo: String((s as any).reg_no || ''),
+        name: String((s as any).name || ''),
+        total,
+      };
+    });
+
+    await downloadTotalsWithPrompt({
+      filenameBase: `${String(subjectId)}_${label}`,
+      meta: {
+        courseName: taMeta?.courseName || '',
+        courseCode: taMeta?.courseCode || String(subjectId),
+        className: taMeta?.className || '',
+      },
+      rows,
+    });
   };
 
   return (
@@ -2178,7 +2242,15 @@ export default function LabCourseMarksEntry({
             </label>
           </div>
 
-          <div style={{ width: '100%', display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 8 }}>
+          <div
+            style={{
+              width: '100%',
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+              gap: 10,
+              marginTop: 8,
+            }}
+          >
             {allowedCoNumbers.map((n) => {
               const cfg = coConfigs[String(n)];
               const checked = Boolean(cfg?.enabled);
@@ -2186,7 +2258,20 @@ export default function LabCourseMarksEntry({
               const expCount = clampInt(Number(cfg?.expCount ?? DEFAULT_EXPERIMENTS), 0, 12);
               const expMax = clampInt(Number(cfg?.expMax ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
               return (
-                <div key={`cfg_${n}`} style={{ width: 160, display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 10px', border: '1px solid #e5e7eb', borderRadius: 12, background: '#fff' }}>
+                <div
+                  key={`cfg_${n}`}
+                  style={{
+                    width: '100%',
+                    minWidth: 0,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 6,
+                    padding: '10px 10px',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: 12,
+                    background: '#fff',
+                  }}
+                >
                   <div style={{ fontSize: 12, fontWeight: 950 }}>CO-{n}</div>
                   <div style={{ fontSize: 11, color: '#6b7280' }}>No. of {itemLabelN.toLowerCase()}</div>
                   <input type="number" className="obe-input" value={expCount} onChange={(e) => setCoExpCount(n, Number(e.target.value))} min={0} max={12} disabled={markManagerLocked} />
@@ -2210,6 +2295,9 @@ export default function LabCourseMarksEntry({
           title={tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : undefined}
         >
           {savingDraft ? 'Saving…' : 'Save Draft'}
+        </button>
+        <button onClick={downloadTotals} className="obe-btn obe-btn-secondary" disabled={!subjectId || students.length === 0}>
+          Download
         </button>
         <button
           onClick={resetSheet}
@@ -2252,20 +2340,20 @@ export default function LabCourseMarksEntry({
       ) : null}
 
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
-        <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: '8px 12px', background: '#fff' }}>
+        <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12, background: '#fff' }}>
           <div style={{ fontSize: 12, color: '#6b7280' }}>Term</div>
           <div style={{ fontWeight: 700 }}>{draft.sheet.termLabel || '—'}</div>
         </div>
-        <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: '8px 12px', background: '#fff' }}>
+        <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12, background: '#fff' }}>
           <div style={{ fontSize: 12, color: '#6b7280' }}>Batch</div>
           <div style={{ fontWeight: 700 }}>{draft.sheet.batchLabel || '—'}</div>
         </div>
-        <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: '8px 12px', background: '#fff' }}>
+        <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12, background: '#fff' }}>
           <div style={{ fontSize: 12, color: '#6b7280' }}>Saved</div>
           <div style={{ fontWeight: 700 }}>{savedAt || '—'}</div>
           {savedBy ? <div style={{ fontSize: 12, color: '#6b7280' }}>by <span style={{ color: '#0369a1', fontWeight: 700 }}>{savedBy}</span></div> : null}
         </div>
-        <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: '8px 12px', background: '#fff' }}>
+        <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12, background: '#fff' }}>
           <div style={{ fontSize: 12, color: '#6b7280' }}>Published</div>
           <div style={{ fontWeight: 700 }}>{publishedAt || '—'}</div>
         </div>
@@ -2276,7 +2364,7 @@ export default function LabCourseMarksEntry({
           <div
             className="obe-table-wrapper"
             style={{
-              overflowX: 'hidden',
+              overflowX: 'auto',
               position: 'relative',
               filter: tableBlocked ? 'grayscale(5%)' : undefined,
               opacity: tableBlocked ? 0.78 : 1,
@@ -2285,8 +2373,8 @@ export default function LabCourseMarksEntry({
             {/* When the mark manager is not confirmed (editable), block the table view and show only a preview */}
             {/** tableBlocked: true when mark manager is editable and needs confirmation to unlock full table **/}
             {/* compute below */}
-            <table className="obe-table" style={{ width: '100%', minWidth: 0, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
-              {renderColGroup(headerCols, absentUiEnabled)}
+            <table className="obe-table" style={{ width: '100%', minWidth: minTableWidth, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+              {renderColGroup(headerCols, absentUiEnabled, restColWidths)}
               <thead>
                 <tr>
                   <th style={cellTh} colSpan={headerCols}>
@@ -2603,7 +2691,23 @@ export default function LabCourseMarksEntry({
                               <input
                                 type="number"
                                 value={marks[i] ?? ''}
-                                onChange={(e) => setCoMark(s.id, m.coNumber, i, e.target.value === '' ? '' : Number(e.target.value))}
+                                onChange={(e) => {
+                                  const raw = e.target.value;
+                                  if (raw === '') {
+                                    e.currentTarget.setCustomValidity('');
+                                    return setCoMark(s.id, m.coNumber, i, '');
+                                  }
+                                  const next = Number(raw);
+                                  if (!Number.isFinite(next)) return;
+                                  if (next > m.expMax) {
+                                    e.currentTarget.setCustomValidity(`Max mark is ${m.expMax}`);
+                                    e.currentTarget.reportValidity();
+                                    window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                                    return;
+                                  }
+                                  e.currentTarget.setCustomValidity('');
+                                  setCoMark(s.id, m.coNumber, i, next);
+                                }}
                                 style={inputStyle}
                                 min={0}
                                 max={m.expMax}
@@ -2620,7 +2724,23 @@ export default function LabCourseMarksEntry({
                           <input
                             type="number"
                             value={(row as any)?.ciaExam ?? ''}
-                            onChange={(e) => setCiaExam(s.id, e.target.value === '' ? '' : Number(e.target.value))}
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              if (raw === '') {
+                                e.currentTarget.setCustomValidity('');
+                                return setCiaExam(s.id, '');
+                              }
+                              const next = Number(raw);
+                              if (!Number.isFinite(next)) return;
+                              if (next > DEFAULT_CIA_EXAM_MAX) {
+                                e.currentTarget.setCustomValidity(`Max mark is ${DEFAULT_CIA_EXAM_MAX}`);
+                                e.currentTarget.reportValidity();
+                                window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                                return;
+                              }
+                              e.currentTarget.setCustomValidity('');
+                              setCiaExam(s.id, next);
+                            }}
                             style={inputStyle}
                             min={0}
                             max={DEFAULT_CIA_EXAM_MAX}
@@ -3186,13 +3306,13 @@ export default function LabCourseMarksEntry({
               </div>
             ) : null}
 
-            <div style={{ overflowX: 'hidden', border: '1px solid #e5e7eb', borderRadius: 12, position: 'relative' }}>
+            <div style={{ overflowX: 'auto', border: '1px solid #e5e7eb', borderRadius: 12, position: 'relative' }}>
               {(() => {
                 // View table never shows AB column, so compute the exact column count.
                 const viewHeaderCols = 3 + experimentsCols + 1 + (ciaExamEnabled ? 1 : 0) + coAttainmentCols + visibleBtlIndices.length * 2;
                 return (
-                  <table className="obe-table" style={{ width: '100%', minWidth: 0, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
-                    {renderColGroup(viewHeaderCols, false)}
+                  <table className="obe-table" style={{ width: '100%', minWidth: minViewTableWidth, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+                    {renderColGroup(viewHeaderCols, false, restColWidths)}
                 <thead>
                   <tr>
                     <th style={cellTh} colSpan={viewHeaderCols}>

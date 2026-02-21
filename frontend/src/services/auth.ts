@@ -1,6 +1,20 @@
 import axios, { AxiosHeaders } from 'axios'
 
-const BASE = `${import.meta.env.VITE_API_BASE || 'https://db.zynix.us'}/api/accounts/`
+function apiBase() {
+  const fromEnv = import.meta.env.VITE_API_BASE
+  if (fromEnv) return String(fromEnv).replace(/\/+$/, '')
+
+  // Default to same-origin so `/api/...` works behind nginx/proxy setups.
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    const host = String(window.location.hostname || '').trim().toLowerCase()
+    if (host === 'localhost' || host === '127.0.0.1') return 'http://localhost:8000'
+    return String(window.location.origin).replace(/\/+$/, '')
+  }
+
+  return 'https://db.zynix.us'
+}
+
+const BASE = `${apiBase()}/api/accounts/`
 
 // Create an axios instance used across the app so we can centrally handle
 // automatic access-token refresh on 401 responses.

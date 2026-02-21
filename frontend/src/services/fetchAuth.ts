@@ -70,10 +70,30 @@ export async function fetchWithAuth(input: RequestInfo | URL, init: RequestInit 
 
   const res = await fetch(finalInput, { ...init, headers })
 
-  // Debug: log 400 errors
+  // Debug: log 400/401/403 errors with response body and request details
   if (res.status === 400) {
     const text = await res.text()
     console.error('400 Bad Request:', { url: finalInput, token, response: text })
+  }
+  if (res.status === 401 || res.status === 403) {
+    let text = ''
+    try {
+      text = await res.text()
+    } catch (e) {
+      /* ignore */
+    }
+    const respHeaders: Record<string, string> = {}
+    try {
+      res.headers.forEach((v, k) => { respHeaders[k] = v })
+    } catch (_) {}
+    console.error('Auth error from fetchWithAuth', {
+      url: String(finalInput),
+      status: res.status,
+      requestHeaders: headers,
+      responseHeaders: respHeaders,
+      token,
+      responseText: text,
+    })
   }
 
   // If not a 401 or retry is disabled, return the response as-is

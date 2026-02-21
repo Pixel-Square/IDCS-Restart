@@ -50,10 +50,18 @@ class StaffProfileInline(admin.StackedInline):
 @admin.register(User)
 class UserAdmin(DjangoUserAdmin):
     # inherit Django's user add/change forms which correctly handle password hashing
-    list_display = ('username', 'email', 'is_staff', 'get_roles', 'get_profile_status')
+    list_display = ('username', 'email', 'mobile_no', 'is_staff', 'get_roles', 'get_profile_status')
     inlines = (StudentProfileInline, StaffProfileInline)
     actions = ('deactivate_users', 'delete_and_purge_users')
     change_list_template = 'admin/accounts/user/change_list.html'
+
+    fieldsets = DjangoUserAdmin.fieldsets + (
+        ('Contact', {'fields': ('mobile_no',)}),
+    )
+
+    add_fieldsets = DjangoUserAdmin.add_fieldsets + (
+        ('Contact', {'fields': ('mobile_no',)}),
+    )
 
     def changelist_view(self, request, extra_context=None):
         """Render the changelist using our custom template when available.

@@ -7,9 +7,11 @@ import {
   fetchPublishedFormative,
   fetchPublishedFormative1,
   fetchPublishedLabSheet,
+  fetchPublishedModelSheet,
   fetchPublishedSsa1,
   fetchPublishedSsa2,
   fetchDraft,
+  fetchMarkTableLockStatus,
   TeachingAssignmentItem,
 } from '../services/obe';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
@@ -351,6 +353,10 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
     const arr = Array.isArray(enabledAssessments) ? enabledAssessments : [];
     return new Set(arr.map((x) => String(x || '').trim().toLowerCase()).filter(Boolean));
   }, [enabledAssessments]);
+
+  const modelEnabled = useMemo(() => enabledSet.has('model'), [enabledSet]);
+  const [modelLock, setModelLock] = useState<any>(null);
+  const [modelLockError, setModelLockError] = useState<string | null>(null);
   const isSpecialCourse = useMemo(
     () => isSpecialFromEnabledAssessments || isSpecialClassType(classType),
     [isSpecialFromEnabledAssessments, classType],
@@ -392,6 +398,32 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
   const [tas, setTas] = useState<TeachingAssignmentItem[]>([]);
   const [taError, setTaError] = useState<string | null>(null);
   const [selectedTaId, setSelectedTaId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!courseId || selectedTaId == null || !modelEnabled) {
+      setModelLock(null);
+      setModelLockError(null);
+      return;
+    }
+
+    let mounted = true;
+    (async () => {
+      try {
+        const lock = await fetchMarkTableLockStatus('model', String(courseId), Number(selectedTaId));
+        if (!mounted) return;
+        setModelLock(lock);
+        setModelLockError(null);
+      } catch (e: any) {
+        if (!mounted) return;
+        setModelLock(null);
+        setModelLockError(e?.message || 'Failed to fetch MODEL publish status');
+      }
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, [courseId, selectedTaId, modelEnabled]);
 
   const [loadingRoster, setLoadingRoster] = useState(false);
   const [rosterError, setRosterError] = useState<string | null>(null);
@@ -438,11 +470,15 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
 
   const [theoryCo5Weightage, setTheoryCo5Weightage] = useState<number>(DEFAULT_THEORY_CO5_WEIGHTAGE);
 
+  const modelPublished = Boolean(modelEnabled && modelLock && (modelLock as any).is_published);
+  const effectiveTheoryCo5Weightage = modelPublished ? 30 : theoryCo5Weightage;
+
   // When class type changes, reset CO5 weightage to the default for THEORY.
   useEffect(() => {
     if (!showModelCo5) return;
-    setTheoryCo5Weightage(DEFAULT_THEORY_CO5_WEIGHTAGE);
-  }, [showModelCo5]);
+    // Once MODEL is published, CO5 max becomes fixed at 30.
+    setTheoryCo5Weightage(modelPublished ? 30 : DEFAULT_THEORY_CO5_WEIGHTAGE);
+  }, [showModelCo5, modelPublished]);
   const [weightsSource, setWeightsSource] = useState<'default' | 'local' | 'server'>('default');
   const globalWeightsRef = React.useRef<Record<string, any> | null>(null);
   const fetchWeightsRef = React.useRef<((classType?: string | null) => Promise<void>) | null>(null);
@@ -974,7 +1010,7 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
           setPublishedFetchErrors((p) => ({ ...p, lab_cia2: String(e?.message || e) }));
         }
         try {
-          modelRes = await fetchPublishedLabSheet('model', courseId, taId);
+          modelRes = await fetchPublishedModelSheet(courseId, taId);
         } catch (e: any) {
           setPublishedFetchErrors((p) => ({ ...p, lab_model: String(e?.message || e) }));
         }
@@ -1212,8 +1248,14 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
   useEffect(() => {
     const handler = (ev: Event) => {
       try {
-        const subjectId = (ev as any)?.detail?.subjectId;
-        if (subjectId && String(subjectId) === String(courseId)) loadPublished();
+        const detail = (ev as any)?.detail || {};
+        const subjectId = detail.subjectId;
+        const assessment = detail.assessment;
+        if (!subjectId || String(subjectId) !== String(courseId)) return;
+        // Only reload when the published assessment is relevant to this page
+        // (SSA1, Formative1, CIA1). If assessment is absent, fall back to reload.
+        if (assessment && !['ssa1', 'formative1', 'cia1'].includes(String(assessment))) return;
+        loadPublished();
       } catch {
         // ignore
       }
@@ -2012,11 +2054,16 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
                 style={{ padding: '10px 12px', borderRadius: 10, border: '1px solid #e5e7eb', minWidth: 320 }}
               >
                 <option value="">Select…</option>
-                {tas.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.section_name} ({t.academic_year})
-                  </option>
-                ))}
+                {tas.map((t) => {
+                  const dept = (t as any).department;
+                  const deptLabel = dept?.short_name || dept?.code || dept?.name || (t as any).department_name || '';
+                  const sem = (t as any).semester;
+                  return (
+                    <option key={t.id} value={t.id}>
+                      {t.section_name} {sem ? `· Sem ${sem}` : ''} {t.academic_year ? `· ${t.academic_year}` : ''} {deptLabel ? `· ${deptLabel}` : ''}
+                    </option>
+                  );
+                })}
               </select>
             </div>
           </div>

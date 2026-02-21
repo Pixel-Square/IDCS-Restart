@@ -11,6 +11,7 @@ import { useEditWindow } from '../hooks/useEditWindow';
 import { useMarkTableLock } from '../hooks/useMarkTableLock';
 import { formatRemaining, usePublishWindow } from '../hooks/usePublishWindow';
 import PublishLockOverlay from './PublishLockOverlay';
+import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
 
 const DEFAULT_API_BASE = 'https://db.zynix.us';
 const API_BASE = import.meta.env.VITE_API_BASE || (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://localhost:8000' : DEFAULT_API_BASE);
@@ -875,10 +876,10 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
           const existing = merged[sid];
           merged[sid] = {
             studentId: s.id,
-            skill1: typeof existing?.skill1 === 'number' ? clamp(Number(existing?.skill1), 1, MAX_PART) : '',
-            skill2: typeof existing?.skill2 === 'number' ? clamp(Number(existing?.skill2), 1, MAX_PART) : '',
-            att1: typeof existing?.att1 === 'number' ? clamp(Number(existing?.att1), 1, MAX_PART) : '',
-            att2: typeof existing?.att2 === 'number' ? clamp(Number(existing?.att2), 1, MAX_PART) : '',
+            skill1: typeof existing?.skill1 === 'number' ? clamp(Number(existing?.skill1), 0, MAX_PART) : '',
+            skill2: typeof existing?.skill2 === 'number' ? clamp(Number(existing?.skill2), 0, MAX_PART) : '',
+            att1: typeof existing?.att1 === 'number' ? clamp(Number(existing?.att1), 0, MAX_PART) : '',
+            att2: typeof existing?.att2 === 'number' ? clamp(Number(existing?.att2), 0, MAX_PART) : '',
           };
         }
 
@@ -909,7 +910,10 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
 
       const normalize = (v: number | '' | undefined) => {
         if (v === '' || v == null) return '';
-        const n = clamp(Number(v), 1, MAX_PART);
+        // Accept 0 and whole numbers up to MAX_PART
+        const nRaw = Number(v);
+        const nInt = Number.isFinite(nRaw) ? Math.round(nRaw) : NaN;
+        const n = clamp(nInt, 0, MAX_PART);
         return Number.isFinite(n) ? n : '';
       };
 
@@ -1053,10 +1057,10 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
         att2: '',
       } as F1RowState;
 
-      const skill1 = typeof row.skill1 === 'number' ? clamp(Number(row.skill1), 1, MAX_PART) : null;
-      const skill2 = typeof row.skill2 === 'number' ? clamp(Number(row.skill2), 1, MAX_PART) : null;
-      const att1 = typeof row.att1 === 'number' ? clamp(Number(row.att1), 1, MAX_PART) : null;
-      const att2 = typeof row.att2 === 'number' ? clamp(Number(row.att2), 1, MAX_PART) : null;
+      const skill1 = typeof row.skill1 === 'number' ? clamp(Number(row.skill1), 0, MAX_PART) : null;
+      const skill2 = typeof row.skill2 === 'number' ? clamp(Number(row.skill2), 0, MAX_PART) : null;
+      const att1 = typeof row.att1 === 'number' ? clamp(Number(row.att1), 0, MAX_PART) : null;
+      const att2 = typeof row.att2 === 'number' ? clamp(Number(row.att2), 0, MAX_PART) : null;
 
       const total = skill1 != null && skill2 != null && att1 != null && att2 != null ? clamp(skill1 + skill2 + att1 + att2, 0, MAX_TOTAL) : '';
       const co1 = skill1 != null && att1 != null ? clamp(skill1 + att1, 0, MAX_CO) : '';
@@ -1109,6 +1113,40 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
     downloadCsv(`${subjectId}_${assessmentKey.toUpperCase()}_sheet.csv`, out);
   };
 
+  const downloadTotals = async () => {
+    if (!subjectId) return;
+
+    const rows = students.map((s, i) => {
+      const row =
+        sheet.rowsByStudentId[String(s.id)] ||
+        ({ studentId: s.id, skill1: '', skill2: '', att1: '', att2: '' } as F1RowState);
+
+      const skill1 = typeof row.skill1 === 'number' ? clamp(Number(row.skill1), 0, MAX_PART) : null;
+      const skill2 = typeof row.skill2 === 'number' ? clamp(Number(row.skill2), 0, MAX_PART) : null;
+      const att1 = typeof row.att1 === 'number' ? clamp(Number(row.att1), 0, MAX_PART) : null;
+      const att2 = typeof row.att2 === 'number' ? clamp(Number(row.att2), 0, MAX_PART) : null;
+
+      const total = skill1 != null && skill2 != null && att1 != null && att2 != null ? clamp(skill1 + skill2 + att1 + att2, 0, MAX_TOTAL) : '';
+
+      return {
+        sno: i + 1,
+        regNo: String(s.reg_no || ''),
+        name: String(s.name || ''),
+        total: total === '' ? '' : total,
+      };
+    });
+
+    await downloadTotalsWithPrompt({
+      filenameBase: `${subjectId}_${assessmentLabel}`,
+      meta: {
+        courseName: String(subjectData?.subject_name || ''),
+        courseCode: String(subjectId || ''),
+        className: String(subjectData?.section || ''),
+      },
+      rows,
+    });
+  };
+
   function normalizeHeaderCell(v: any): string {
     return String(v ?? '')
       .trim()
@@ -1133,7 +1171,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
     ws['!freeze'] = { xSplit: 0, ySplit: 1 } as any;
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, assessmentLabel);
-    XLSX.writeFile(wb, `${subjectId}_${assessmentKey.toUpperCase()}_template.xlsx`);
+    (XLSX as any).writeFile(wb, `${subjectId}_${assessmentKey.toUpperCase()}_template.xlsx`);
   };
 
   const triggerExcelImport = () => {
@@ -1280,59 +1318,34 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
         </div>
       )}
 
-      <div className="obe-card"
-        style={{
-          display: 'flex',
-          gap: 12,
-          justifyContent: 'space-between',
-          alignItems: 'flex-end',
-          flexWrap: 'wrap',
-          marginBottom: 10,
-        }}
-      >
-        <div>
-          <div style={{ fontWeight: 800, fontSize: 16 }}>{assessmentLabel} Sheet</div>
-          <div style={{ color: '#6b7280', fontSize: 13 }}>
-            Excel-like layout (Skill + Attitude → Total + CO). Subject: <b>{subjectId}</b>
-          </div>
-          {subjectData && (
-            <div style={{ color: '#6b7280', fontSize: 12, marginTop: 4 }}>
-              {String(subjectData.department || '')} • Year {String(subjectData.year || '')} • Section {String(subjectData.section || '')}
-            </div>
-          )}
-        </div>
-
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 10 }}>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button onClick={saveDraftToDb} className="obe-btn" disabled={savingDraft || students.length === 0}>
-            {savingDraft ? 'Saving…' : 'Save Draft'}
-          </button>
-          <button
-            onClick={publish}
-            disabled={publishing || students.length === 0 || !publishAllowed}
-            className="obe-btn obe-btn-primary"
-          >
-            {publishing ? 'Publishing…' : 'Publish'}
-          </button>
-          <button onClick={exportSheetCsv} style={{ padding: '6px 10px' }} disabled={students.length === 0}>
+          <button onClick={exportSheetCsv} className="obe-btn obe-btn-secondary" disabled={students.length === 0}>
             Export CSV
           </button>
-          <button onClick={exportSheetExcel} style={{ padding: '6px 10px' }} disabled={students.length === 0}>
+          <button onClick={exportSheetExcel} className="obe-btn obe-btn-secondary" disabled={students.length === 0}>
             Export Excel
           </button>
           <button
             onClick={triggerExcelImport}
-            style={{ padding: '6px 10px' }}
+            className="obe-btn obe-btn-secondary"
             disabled={students.length === 0 || tableBlocked || publishedEditLocked || excelBusy}
           >
             {excelBusy ? 'Importing…' : 'Import Excel'}
           </button>
-          <input
-            ref={excelFileInputRef}
-            type="file"
-            accept=".xlsx,.xls"
-            style={{ display: 'none' }}
-            onChange={handleExcelFileSelect}
-          />
+          <input ref={excelFileInputRef} type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={handleExcelFileSelect} />
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <button onClick={downloadTotals} className="obe-btn obe-btn-secondary" disabled={students.length === 0}>
+            Download
+          </button>
+          <button onClick={saveDraftToDb} className="obe-btn obe-btn-success" disabled={savingDraft || students.length === 0}>
+            {savingDraft ? 'Saving…' : 'Save Draft'}
+          </button>
+          <button onClick={publish} disabled={publishing || students.length === 0 || !publishAllowed} className="obe-btn obe-btn-primary">
+            {publishing ? 'Publishing…' : 'Publish'}
+          </button>
           {savedAt && <div style={{ fontSize: 12, color: '#6b7280', alignSelf: 'center' }}>Draft: {savedAt}</div>}
           {publishedAt && <div style={{ fontSize: 12, color: '#16a34a', alignSelf: 'center' }}>Published: {publishedAt}</div>}
         </div>
@@ -1749,10 +1762,10 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                   {students.map((s, i) => {
                     const row = sheet.rowsByStudentId[String(s.id)] || ({ studentId: s.id, skill1: '', skill2: '', att1: '', att2: '' } as F1RowState);
 
-                    const skill1 = typeof row.skill1 === 'number' ? clamp(Number(row.skill1), 1, MAX_PART) : '';
-                    const skill2 = typeof row.skill2 === 'number' ? clamp(Number(row.skill2), 1, MAX_PART) : '';
-                    const att1 = typeof row.att1 === 'number' ? clamp(Number(row.att1), 1, MAX_PART) : '';
-                    const att2 = typeof row.att2 === 'number' ? clamp(Number(row.att2), 1, MAX_PART) : '';
+                    const skill1 = typeof row.skill1 === 'number' ? clamp(Number(row.skill1), 0, MAX_PART) : '';
+                    const skill2 = typeof row.skill2 === 'number' ? clamp(Number(row.skill2), 0, MAX_PART) : '';
+                    const att1 = typeof row.att1 === 'number' ? clamp(Number(row.att1), 0, MAX_PART) : '';
+                    const att2 = typeof row.att2 === 'number' ? clamp(Number(row.att2), 0, MAX_PART) : '';
 
                     const total = skill1 !== '' && skill2 !== '' && att1 !== '' && att2 !== '' ? clamp((skill1 as number) + (skill2 as number) + (att1 as number) + (att2 as number), 0, MAX_TOTAL) : '';
                     const co1 = skill1 !== '' && att1 !== '' ? clamp((skill1 as number) + (att1 as number), 0, MAX_CO) : '';
@@ -1787,44 +1800,108 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                           <input
                             style={inputStyle}
                             type="number"
-                            min={1}
+                            min={0}
                             max={MAX_PART}
                             value={row.skill1 === '' ? '' : row.skill1}
                             disabled={lockedInputs}
-                            onChange={(e) => updateMark(s.id, { skill1: e.target.value === '' ? '' : Number(e.target.value) })}
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              if (raw === '') {
+                                e.currentTarget.setCustomValidity('');
+                                return updateMark(s.id, { skill1: '' });
+                              }
+                              const next = Number(raw);
+                              if (!Number.isFinite(next)) return;
+                              if (next > MAX_PART) {
+                                e.currentTarget.setCustomValidity(`Max mark is ${MAX_PART}`);
+                                e.currentTarget.reportValidity();
+                                window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                                return;
+                              }
+                              e.currentTarget.setCustomValidity('');
+                              updateMark(s.id, { skill1: next });
+                            }}
                           />
                         </td>
                         <td style={cellTd}>
                           <input
                             style={inputStyle}
                             type="number"
-                            min={1}
+                            min={0}
                             max={MAX_PART}
                             value={row.skill2 === '' ? '' : row.skill2}
                             disabled={lockedInputs}
-                            onChange={(e) => updateMark(s.id, { skill2: e.target.value === '' ? '' : Number(e.target.value) })}
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              if (raw === '') {
+                                e.currentTarget.setCustomValidity('');
+                                return updateMark(s.id, { skill2: '' });
+                              }
+                              const next = Number(raw);
+                              if (!Number.isFinite(next)) return;
+                              if (next > MAX_PART) {
+                                e.currentTarget.setCustomValidity(`Max mark is ${MAX_PART}`);
+                                e.currentTarget.reportValidity();
+                                window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                                return;
+                              }
+                              e.currentTarget.setCustomValidity('');
+                              updateMark(s.id, { skill2: next });
+                            }}
                           />
                         </td>
                         <td style={cellTd}>
                           <input
                             style={inputStyle}
                             type="number"
-                            min={1}
+                            min={0}
                             max={MAX_PART}
                             value={row.att1 === '' ? '' : row.att1}
                             disabled={lockedInputs}
-                            onChange={(e) => updateMark(s.id, { att1: e.target.value === '' ? '' : Number(e.target.value) })}
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              if (raw === '') {
+                                e.currentTarget.setCustomValidity('');
+                                return updateMark(s.id, { att1: '' });
+                              }
+                              const next = Number(raw);
+                              if (!Number.isFinite(next)) return;
+                              if (next > MAX_PART) {
+                                e.currentTarget.setCustomValidity(`Max mark is ${MAX_PART}`);
+                                e.currentTarget.reportValidity();
+                                window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                                return;
+                              }
+                              e.currentTarget.setCustomValidity('');
+                              updateMark(s.id, { att1: next });
+                            }}
                           />
                         </td>
                         <td style={cellTd}>
                           <input
                             style={inputStyle}
                             type="number"
-                            min={1}
+                            min={0}
                             max={MAX_PART}
                             value={row.att2 === '' ? '' : row.att2}
                             disabled={lockedInputs}
-                            onChange={(e) => updateMark(s.id, { att2: e.target.value === '' ? '' : Number(e.target.value) })}
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              if (raw === '') {
+                                e.currentTarget.setCustomValidity('');
+                                return updateMark(s.id, { att2: '' });
+                              }
+                              const next = Number(raw);
+                              if (!Number.isFinite(next)) return;
+                              if (next > MAX_PART) {
+                                e.currentTarget.setCustomValidity(`Max mark is ${MAX_PART}`);
+                                e.currentTarget.reportValidity();
+                                window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                                return;
+                              }
+                              e.currentTarget.setCustomValidity('');
+                              updateMark(s.id, { att2: next });
+                            }}
                           />
                         </td>
 
@@ -1913,7 +1990,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                       transform: 'translateX(-50%)',
                       zIndex: 40,
                       width: 280,
-                      background: 'rgba(255,255,255,0.98)',
+                      background: '#fff',
                       border: '1px solid #e5e7eb',
                       padding: 12,
                       borderRadius: 12,
@@ -1956,11 +2033,11 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                     style={{
                       position: 'absolute',
                       left: '50%',
-                      top: 16,
-                      transform: 'translateX(-50%)',
+                      top: '50%',
+                      transform: 'translate(-50%, -50%)',
                       zIndex: 40,
                       width: 320,
-                      background: 'rgba(255,255,255,0.98)',
+                      background: '#fff',
                       border: '1px solid #e5e7eb',
                       padding: 12,
                       borderRadius: 12,

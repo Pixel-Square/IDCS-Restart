@@ -922,54 +922,42 @@ export default function LabEntry({
   const maxExpMax = Math.max(expMaxA, expMaxB, DEFAULT_EXPERIMENT_MAX);
 
   const cellTh: React.CSSProperties = {
-    border: '1px solid #dee2e6',
-    padding: '10px 4px',
+    border: '1px solid #111',
+    padding: '4px 4px',
+    background: '#ecfdf5',
+    color: '#065f46',
     textAlign: 'center',
     fontWeight: 700,
-    fontSize: 'clamp(10px, 0.9vw, 12px)',
+    fontSize: 11,
     whiteSpace: 'nowrap',
-    letterSpacing: '0.8px',
-    textTransform: 'uppercase',
-    background: 'linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%)',
-    color: '#0d47a1',
     overflow: 'hidden',
+    textOverflow: 'ellipsis',
   };
 
   const cellTd: React.CSSProperties = {
-    border: '1px solid #dee2e6',
-    padding: '4px',
-    fontSize: 'clamp(9px, 0.85vw, 11px)',
+    border: '1px solid #111',
+    padding: '4px 4px',
+    fontSize: 11,
     whiteSpace: 'nowrap',
-    background: '#ffffff',
-    textAlign: 'center',
-    color: '#212529',
-    fontWeight: 500,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
   };
 
   const inputStyle: React.CSSProperties = {
     width: '100%',
-    border: '1px solid #90caf9',
+    border: 'none',
     outline: 'none',
-    background: '#ffffff',
-    fontSize: 'clamp(9px, 0.85vw, 10px)',
+    background: 'transparent',
+    fontSize: 11,
     textAlign: 'center',
-    padding: '4px',
-    borderRadius: '4px',
-    fontWeight: 600,
-    color: '#212529',
-    boxShadow: 'inset 0 1px 2px rgba(0, 0, 0, 0.05)',
-    transition: 'all 0.2s ease',
   };
 
   const cardStyle: React.CSSProperties = {
-    border: '1px solid #dee2e6',
-    borderRadius: 8,
-    background: '#f8f9fa',
-    padding: '16px',
-    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.08)',
-    maxWidth: '100%',
-    overflowX: 'auto',
     position: 'relative',
+    border: '1px solid #e5e7eb',
+    borderRadius: 12,
+    padding: 12,
+    background: '#fff',
   };
 
   const minTableWidth = '100%';
@@ -993,11 +981,12 @@ export default function LabEntry({
 
   const floatingPanelStyle: React.CSSProperties = {
     position: 'absolute',
-    left: '40%',
-    top: 18,
+    left: '50%',
+    top: '50%',
+    transform: 'translate(-50%, -50%)',
     zIndex: 40,
-    width: 160,
-    background: 'rgba(255,255,255,0.98)',
+    width: 360,
+    background: '#fff',
     border: '1px solid #e5e7eb',
     padding: 10,
     borderRadius: 12,
@@ -1035,156 +1024,6 @@ export default function LabEntry({
           background: #d1d5db;
           border-radius: 50%;
           animation: markManagerDust 2s ease-out forwards;
-        }
-        
-        /* Premium Table Styles */
-        .premium-table {
-          border-collapse: separate;
-          border-spacing: 0;
-          width: 100%;
-          background: #ffffff;
-          table-layout: auto;
-          border: 1px solid #dee2e6;
-          border-radius: 8px;
-          overflow: hidden;
-        }
-        
-        .premium-table tbody tr {
-          background: #ffffff;
-        }
-        
-        .premium-table tbody tr:hover {
-          background: #f8f9fa;
-        }
-        
-        .premium-table tbody tr:nth-child(even) {
-          background: #fafbfc;
-        }
-        
-        .premium-table input:focus {
-          border-color: #1976d2;
-          box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.1), inset 0 1px 2px rgba(0, 0, 0, 0.05);
-          background: #ffffff;
-        }
-        
-        .premium-table input:hover:not(:disabled) {
-          border-color: #42a5f5;
-          box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.05);
-        }
-        
-        .premium-table input:disabled {
-          opacity: 0.5;
-          cursor: not-allowed;
-          background: #e0e0e0;
-        }
-        
-        .premium-table thead tr:first-child th {
-          background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
-          color: #0d47a1;
-          font-size: clamp(11px, 1vw, 13px);
-          font-weight: 700;
-          text-transform: uppercase;
-          letter-spacing: 1px;
-          padding: 12px 4px;
-          border-bottom: 2px solid #90caf9;
-        }
-        
-        .premium-table thead tr:not(:first-child) th {
-          background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
-          color: #0d47a1;
-        }
-        
-        .premium-btl-select {
-          background: #e3f2fd;
-          border-radius: 4px;
-          font-weight: 600;
-          border: 1px solid #90caf9;
-          color: #0d47a1;
-          padding: 4px 8px;
-          font-size: clamp(9px, 0.85vw, 10px);
-          transition: all 0.2s ease;
-        }
-        
-        .premium-btl-select:hover {
-          background: #bbdefb;
-          border-color: #1976d2;
-        }
-        
-        /* Maintain sticky column backgrounds on hover */
-        .premium-table tbody tr:hover td:nth-child(1),
-        .premium-table tbody tr:hover td:nth-child(2),
-        .premium-table tbody tr:hover td:nth-child(3) {
-          background: #e8eaed !important;
-        }
-        
-        /* Sticky S.No column */
-        .premium-table tbody td:nth-child(1),
-        .premium-table thead th:nth-child(1) {
-          position: sticky;
-          left: 0;
-          z-index: 10;
-          background: #f1f3f4;
-          border-right: 2px solid #dee2e6;
-        }
-        
-        /* Sticky Register column */
-        .premium-table tbody td:nth-child(2),
-        .premium-table thead th:nth-child(2) {
-          position: sticky;
-          left: 30px;
-          z-index: 10;
-          background: #f1f3f4;
-          white-space: nowrap;
-          padding: 4px 6px;
-          border-right: 2px solid #dee2e6;
-        }
-        
-        /* Sticky Name column - full width, one line */
-        .premium-table tbody td:nth-child(3),
-        .premium-table thead th:nth-child(3) {
-          position: sticky;
-          left: 100px;
-          z-index: 10;
-          background: #f1f3f4;
-          text-align: left;
-          padding: 4px 8px;
-          white-space: nowrap;
-          border-right: 2px solid #dee2e6;
-          width: auto;
-          min-width: max-content; /* Let the column expand to fit the longest name */
-          overflow: visible; /* Allow content to be visible */
-        }
-        
-        /* Header sticky columns use gradient */
-        .premium-table thead th:nth-child(1),
-        .premium-table thead th:nth-child(2),
-        .premium-table thead th:nth-child(3) {
-          background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%) !important;
-        }
-        
-        /* Enhanced number inputs */
-        .premium-table input[type="number"] {
-          font-variant-numeric: tabular-nums;
-          letter-spacing: 0.5px;
-          -moz-appearance: textfield;
-        }
-        
-        /* Remove increment/decrement spinners */
-        .premium-table input[type="number"]::-webkit-outer-spin-button,
-        .premium-table input[type="number"]::-webkit-inner-spin-button {
-          -webkit-appearance: none;
-          margin: 0;
-        }
-        
-        /* Percentage cells */
-        .premium-table td[style*="font-variant"] {
-          font-variant-numeric: tabular-nums;
-        }
-
-        @media (max-width: 1400px) {
-          .premium-table {
-            font-size: 11px;
-          }
         }
       `}</style>
 
@@ -1291,7 +1130,7 @@ export default function LabEntry({
         {markManagerError ? <div style={{ marginTop: 8, fontSize: 12, color: '#991b1b' }}>{markManagerError}</div> : null}
       </div>
 
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12, padding: 12, background: '#f9fafb', borderRadius: 10, border: '1px solid #e5e7eb' }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <button
             onClick={saveNow}
@@ -1337,24 +1176,24 @@ export default function LabEntry({
         <div style={{ color: '#6b7280' }}>Select a Teaching Assignment to load students.</div>
       ) : !tableVisible ? (
         <div style={{ 
-          padding: '40px 20px', 
+          padding: '20px', 
           textAlign: 'center', 
-          background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
-          borderRadius: 16,
-          border: '2px dashed #f59e0b',
+          background: '#fff7ed',
+          borderRadius: 12,
+          border: '1px solid #fcd34d',
         }}>
-          <div style={{ fontSize: 18, fontWeight: 700, color: '#92400e', marginBottom: 8 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: '#92400e', marginBottom: 8 }}>
             📋 Mark Manager Configuration Required
           </div>
-          <div style={{ fontSize: 14, color: '#78350f' }}>
+          <div style={{ fontSize: 12, color: '#78350f' }}>
             Please configure and lock the Mark Manager above to enable the table.
           </div>
         </div>
       ) : (
         <div style={cardStyle}>
           <PublishLockOverlay locked={globalLocked}>
-            <div style={{ overflowX: 'auto', borderRadius: 12, maxWidth: '100%' }}>
-              <table className="premium-table" style={{ minWidth: minTableWidth, width: '100%', tableLayout: 'auto' }}>
+            <div className="obe-table-wrapper" style={{ overflowX: 'auto' }}>
+              <table className="obe-table" style={{ minWidth: minTableWidth, width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
                 <th style={cellTh} colSpan={headerCols}>
@@ -1452,14 +1291,16 @@ export default function LabEntry({
                         <th key={`btla_${i}`} style={cellTh}>
                           <div style={{ position: 'relative', display: 'grid', placeItems: 'center' }} title={`BTL: ${v}`}>
                             <div
-                              className="premium-btl-select"
                               style={{
                                 width: '100%',
-                                padding: '6px 8px',
+                                padding: '2px 4px',
                                 textAlign: 'center',
                                 userSelect: 'none',
                                 fontWeight: 800,
+                                fontSize: 11,
                                 color: '#0f172a',
+                                background: '#ecfdf5',
+                                borderRadius: 4,
                               }}
                             >
                               {v}
@@ -1497,14 +1338,16 @@ export default function LabEntry({
                         <th key={`btlb_${i}`} style={cellTh}>
                           <div style={{ position: 'relative', display: 'grid', placeItems: 'center' }} title={`BTL: ${v}`}>
                             <div
-                              className="premium-btl-select"
                               style={{
                                 width: '100%',
-                                padding: '6px 8px',
+                                padding: '2px 4px',
                                 textAlign: 'center',
                                 userSelect: 'none',
                                 fontWeight: 800,
+                                fontSize: 11,
                                 color: '#0f172a',
+                                background: '#ecfdf5',
+                                borderRadius: 4,
                               }}
                             >
                               {v}
@@ -1607,7 +1450,23 @@ export default function LabEntry({
                             <input
                               type="number"
                               value={marksA[i]}
-                              onChange={(e) => setMark(s.id, 'A', i, e.target.value === '' ? '' : Number(e.target.value))}
+                              onChange={(e) => {
+                                const raw = e.target.value;
+                                if (raw === '') {
+                                  e.currentTarget.setCustomValidity('');
+                                  return setMark(s.id, 'A', i, '');
+                                }
+                                const next = Number(raw);
+                                if (!Number.isFinite(next)) return;
+                                if (next > expMaxA) {
+                                  e.currentTarget.setCustomValidity(`Max mark is ${expMaxA}`);
+                                  e.currentTarget.reportValidity();
+                                  window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                                  return;
+                                }
+                                e.currentTarget.setCustomValidity('');
+                                setMark(s.id, 'A', i, next);
+                              }}
                               style={inputStyle}
                               min={0}
                                 max={expMaxA}
@@ -1621,7 +1480,23 @@ export default function LabEntry({
                             <input
                               type="number"
                               value={marksB[i]}
-                              onChange={(e) => setMark(s.id, 'B', i, e.target.value === '' ? '' : Number(e.target.value))}
+                              onChange={(e) => {
+                                const raw = e.target.value;
+                                if (raw === '') {
+                                  e.currentTarget.setCustomValidity('');
+                                  return setMark(s.id, 'B', i, '');
+                                }
+                                const next = Number(raw);
+                                if (!Number.isFinite(next)) return;
+                                if (next > expMaxB) {
+                                  e.currentTarget.setCustomValidity(`Max mark is ${expMaxB}`);
+                                  e.currentTarget.reportValidity();
+                                  window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                                  return;
+                                }
+                                e.currentTarget.setCustomValidity('');
+                                setMark(s.id, 'B', i, next);
+                              }}
                               style={inputStyle}
                               min={0}
                                 max={expMaxB}
@@ -1636,7 +1511,25 @@ export default function LabEntry({
                             <input
                               type="number"
                               value={(row as any)?.ciaExam ?? ''}
-                              onChange={(e) => setCiaExam(s.id, e.target.value === '' ? '' : Number(e.target.value))}
+                              onChange={(e) => {
+                                const raw = e.target.value;
+                                const max = Math.max(expMaxA, expMaxB, DEFAULT_CIA_EXAM_MAX);
+
+                                if (raw === '') {
+                                  e.currentTarget.setCustomValidity('');
+                                  return setCiaExam(s.id, '');
+                                }
+                                const next = Number(raw);
+                                if (!Number.isFinite(next)) return;
+                                if (next > max) {
+                                  e.currentTarget.setCustomValidity(`Max mark is ${max}`);
+                                  e.currentTarget.reportValidity();
+                                  window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                                  return;
+                                }
+                                e.currentTarget.setCustomValidity('');
+                                setCiaExam(s.id, next);
+                              }}
                               style={inputStyle}
                               min={0}
                               max={Math.max(expMaxA, expMaxB, DEFAULT_CIA_EXAM_MAX)}

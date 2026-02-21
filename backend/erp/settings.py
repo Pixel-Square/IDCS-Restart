@@ -86,16 +86,41 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'erp.wsgi.application'
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('DB_NAME'),
-        'USER': os.getenv('DB_USER'),
-        'PASSWORD': os.getenv('DB_PASS'),
-        'HOST': os.getenv('DB_HOST'),
-        'PORT': os.getenv('DB_PORT', '5432'),
+DB_NAME = os.getenv('DB_NAME')
+DB_USER = os.getenv('DB_USER')
+DB_PASS = os.getenv('DB_PASS')
+DB_HOST = os.getenv('DB_HOST')
+DB_PORT = os.getenv('DB_PORT', '5432')
+# Prefer PostgreSQL only when DB env vars are explicitly provided.
+# This makes local development easy: leave DB_* unset to use SQLite.
+if DB_NAME:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': DB_NAME,
+            'USER': DB_USER,
+            'PASSWORD': DB_PASS,
+            'HOST': DB_HOST,
+            'PORT': DB_PORT,
+            # Prevent "cursor ... does not exist" errors when running behind
+            # PgBouncer in transaction pooling mode (named/server-side cursors
+            # are not compatible with transaction pooling).
+            'DISABLE_SERVER_SIDE_CURSORS': True,
+            # Keep default short-lived connections unless explicitly overridden.
+            'CONN_MAX_AGE': int(os.getenv('DB_CONN_MAX_AGE', '0')),
+            'OPTIONS': {
+                'server_side_binding': False,
+            },
+        }
     }
-}
+else:
+    # Fall back to SQLite for local development
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
 
 # Django cache config using Redis (used by sessions, caching, etc.)
 CACHES = {
@@ -156,10 +181,19 @@ SIMPLE_JWT = {
 # Wildcard '*' is invalid with `Access-Control-Allow-Credentials: true`.
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = [
+    # Local dev origins (common ports) so frontend at localhost can call API
+    'http://localhost',
+    'http://localhost:3000',
+    'http://localhost:82',
     'http://localhost:81',
+    'http://localhost:8000',
     'http://127.0.0.1:3000',
+    'http://127.0.0.1:82',
+    'http://127.0.0.1:8000',
+    # Production/front-end hosts
     'https://idcs.zynix.us',
-    "http://192.168.40.253:81",
+    'https://db.zynix.us',
+    'http://192.168.40.253:81',
 ]
 # Allow browser to include credentials (cookies or HTTP auth) in cross-origin requests
 CORS_ALLOW_CREDENTIALS = True
@@ -170,7 +204,12 @@ csrf_env = os.getenv('CSRF_TRUSTED_ORIGINS', '')
 CSRF_TRUSTED_ORIGINS = [h.strip() for h in csrf_env.split(',') if h.strip()]
 # In DEBUG add localhost aliases for convenience
 if DEBUG:
-    CSRF_TRUSTED_ORIGINS += ['http://localhost', 'http://127.0.0.1']
+    CSRF_TRUSTED_ORIGINS += [
+        'http://localhost',
+        'http://127.0.0.1',
+        'http://localhost:82',
+        'http://127.0.0.1:82',
+    ]
 # Always allow the production dashboard hostname if not already present
 if 'https://db.zynix.us' not in CSRF_TRUSTED_ORIGINS:
     CSRF_TRUSTED_ORIGINS.append('https://db.zynix.us')
@@ -183,3 +222,28 @@ if 'https://idcs.zynix.us' not in CSRF_TRUSTED_ORIGINS:
 # (aside from existing permission checks). Example: 'iqac.user@example.com'
 OBE_PUBLISH_ALLOWED_USERNAME = os.getenv('OBE_PUBLISH_ALLOWED_USERNAME', '')
 # ...existing code...
+
+# OBE edit-request approval notifications
+# Email notification uses Django SMTP settings.
+OBE_EDIT_NOTIFICATION_EMAIL_ENABLED = os.getenv('OBE_EDIT_NOTIFICATION_EMAIL_ENABLED', '1') == '1'
+OBE_NOTIFICATION_EMAIL_TIMEOUT = int(os.getenv('OBE_NOTIFICATION_EMAIL_TIMEOUT', '10'))
+
+# WhatsApp notification uses local Node.js whatsapp-web.js microservice.
+OBE_EDIT_NOTIFICATION_WHATSAPP_ENABLED = os.getenv('OBE_EDIT_NOTIFICATION_WHATSAPP_ENABLED', '1') == '1'
+OBE_WHATSAPP_API_URL = os.getenv('OBE_WHATSAPP_API_URL', 'http://127.0.0.1:3000/send-whatsapp')
+OBE_WHATSAPP_API_KEY = os.getenv('OBE_WHATSAPP_API_KEY', 'IQAC_SECRET_123')
+OBE_WHATSAPP_TIMEOUT_SECONDS = float(os.getenv('OBE_WHATSAPP_TIMEOUT_SECONDS', '8'))
+OBE_WHATSAPP_DEFAULT_COUNTRY_CODE = os.getenv('OBE_WHATSAPP_DEFAULT_COUNTRY_CODE', '91')
+OBE_WHATSAPP_ALLOW_NON_LOCAL_URL = os.getenv('OBE_WHATSAPP_ALLOW_NON_LOCAL_URL', '0') == '1'
+
+# --- Email (Linux local relay) configuration ---
+# Use Django SMTP backend with the local MTA (Postfix/Sendmail) listening on localhost:25.
+EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', 'django.core.mail.backends.smtp.EmailBackend')
+EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
+EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', 'rohit08sk@gmail.com')
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', 'inilmwzhzuhzajvc')
+EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', '1') == '1'
+EMAIL_USE_SSL = os.getenv('EMAIL_USE_SSL', '0') == '1'
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'rohit08sk@gmail.com')
+

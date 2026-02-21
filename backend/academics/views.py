@@ -7,6 +7,7 @@ from rest_framework.views import APIView
 from rest_framework.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404
 from django.db.models import Q
+from django.db import models
 from django.db import transaction
 import logging
 from django.http import Http404
@@ -101,10 +102,15 @@ class MyTeachingAssignmentsView(APIView):
             'subject',
             'curriculum_row',
             'curriculum_row__master',
+            'curriculum_row__department',
+            'curriculum_row__semester',
             'section',
             'academic_year',
             'section__semester',
             'section__batch__course__department',
+            'elective_subject',
+            'elective_subject__department',
+            'elective_subject__semester',
         ).filter(is_active=True)
 
         staff_profile = getattr(user, 'staff_profile', None)
@@ -128,7 +134,19 @@ class TeachingAssignmentStudentsView(APIView):
 
     def get(self, request, ta_id):
         try:
-            ta = TeachingAssignment.objects.select_related('section', 'academic_year', 'subject', 'curriculum_row').get(pk=ta_id, is_active=True)
+            ta = TeachingAssignment.objects.select_related(
+                'section',
+                'section__semester',
+                'section__batch__course__department',
+                'academic_year',
+                'subject',
+                'curriculum_row',
+                'curriculum_row__department',
+                'curriculum_row__semester',
+                'elective_subject',
+                'elective_subject__department',
+                'elective_subject__semester',
+            ).get(pk=ta_id, is_active=True)
         except TeachingAssignment.DoesNotExist:
             raise Http404('Teaching assignment not found')
 
@@ -208,8 +226,11 @@ class TeachingAssignmentStudentsView(APIView):
                     .exclude(student__isnull=True)
                     .select_related('student__user', 'student__section')
                 )
+                # Try with academic year first, fall back to without if no results
                 if getattr(ta, 'academic_year_id', None):
-                    eqs = eqs.filter(academic_year_id=ta.academic_year_id)
+                    eqs_ay = eqs.filter(academic_year_id=ta.academic_year_id)
+                    if eqs_ay.exists():
+                        eqs = eqs_ay
                 for c in eqs:
                     sp = getattr(c, 'student', None)
                     if not sp:
@@ -247,6 +268,53 @@ class TeachingAssignmentStudentsView(APIView):
                     'section': section_name,
                 })
 
+        def _resolve_dept(ta_obj):
+            dept = None
+            try:
+                dept = ta_obj.section.batch.course.department
+            except Exception:
+                dept = None
+            if not dept:
+                try:
+                    dept = getattr(getattr(ta_obj, 'elective_subject', None), 'department', None)
+                except Exception:
+                    dept = None
+            if not dept:
+                try:
+                    dept = getattr(getattr(ta_obj, 'curriculum_row', None), 'department', None)
+                except Exception:
+                    dept = None
+            if not dept:
+                return None
+            return {
+                'id': getattr(dept, 'id', None),
+                'code': getattr(dept, 'code', None),
+                'name': getattr(dept, 'name', None),
+                'short_name': getattr(dept, 'short_name', None),
+            }
+
+        def _resolve_semester(ta_obj):
+            # Prefer section.semester, fall back to curriculum_row.semester or elective_subject.semester
+            try:
+                sem = getattr(getattr(ta_obj, 'section', None), 'semester', None)
+                if sem:
+                    return getattr(sem, 'number', None)
+            except Exception:
+                pass
+            try:
+                sem = getattr(getattr(ta_obj, 'curriculum_row', None), 'semester', None)
+                if sem:
+                    return getattr(sem, 'number', None)
+            except Exception:
+                pass
+            try:
+                sem = getattr(getattr(ta_obj, 'elective_subject', None), 'semester', None)
+                if sem:
+                    return getattr(sem, 'number', None)
+            except Exception:
+                pass
+            return None
+
         return Response({
             'teaching_assignment': {
                 'id': ta.id,
@@ -257,6 +325,8 @@ class TeachingAssignmentStudentsView(APIView):
                 'section_id': getattr(ta, 'section_id', None),
                 'section_name': section_name,
                 'academic_year': getattr(getattr(ta, 'academic_year', None), 'name', None),
+                'semester': _resolve_semester(ta),
+                'department': _resolve_dept(ta),
             },
             'students': students,
         })
@@ -532,19 +602,18 @@ class MentorUnmapView(APIView):
         if not (user.is_superuser or 'academics.assign_mentor' in perms):
             return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
 
-        student_ids = request.data.get('student_ids') or request.data.get('student_id')
         mentor_id = request.data.get('mentor_id')
+        student_ids = request.data.get('student_ids') or request.data.get('student_id')
         if not student_ids:
             return Response({'detail': 'student_ids required'}, status=status.HTTP_400_BAD_REQUEST)
         if isinstance(student_ids, int):
             student_ids = [student_ids]
 
         try:
-            with transaction.atomic():
-                q = StudentMentorMap.objects.filter(student_id__in=[int(s) for s in student_ids], is_active=True)
-                if mentor_id:
-                    q = q.filter(mentor_id=int(mentor_id))
-                updated = q.update(is_active=False)
+            q = StudentMentorMap.objects.filter(student_id__in=[int(s) for s in student_ids], is_active=True)
+            if mentor_id:
+                q = q.filter(mentor_id=int(mentor_id))
+            updated = q.update(is_active=False)
         except Exception as e:
             return Response({'detail': 'Failed to unmap', 'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -638,6 +707,8 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
                     dept_q = (
                         Q(section__batch__course__department_id__in=allowed_depts)
                         | Q(curriculum_row__department_id__in=allowed_depts)
+                        # match elective options by their explicit department OR their parent's department
+                        | Q(elective_subject__department_id__in=allowed_depts)
                         | Q(elective_subject__parent__department_id__in=allowed_depts)
                     )
                     # apply department filter only to elective assignments part
@@ -1908,7 +1979,7 @@ class SubjectBatchViewSet(viewsets.ModelViewSet):
 
 
 class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
-    queryset = PeriodAttendanceSession.objects.select_related('section', 'period', 'timetable_assignment').prefetch_related('records')
+    queryset = PeriodAttendanceSession.objects.select_related('section', 'period', 'timetable_assignment', 'teaching_assignment').prefetch_related('records')
     serializer_class = PeriodAttendanceSessionSerializer
     permission_classes = (IsAuthenticated,)
 
@@ -1954,6 +2025,7 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
             day = None
 
         ta = None
+        teach_assign = None
         try:
             from timetable.models import TimetableAssignment
             if section and period and day:
@@ -1967,15 +2039,43 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                         ta_match_qs = ta_match_qs.filter((Q(curriculum_row=assign.curriculum_row) | Q(elective_subject__parent=assign.curriculum_row))).filter(Q(section=section) | Q(section__isnull=True))
                         if ta_match_qs.exists():
                             ta = assign
+                            teach_assign = ta_match_qs.order_by(
+                                models.Case(
+                                    models.When(section=section, then=models.Value(0)),
+                                    default=models.Value(1),
+                                    output_field=models.IntegerField(),
+                                ),
+                                'id',
+                            ).first()
         except Exception:
             ta = None
+            teach_assign = None
+
+        # If teaching_assignment wasn't resolved above, try resolving from timetable assignment.
+        if teach_assign is None and staff_profile:
+            try:
+                from .models import TeachingAssignment as _TA
+                ta_qs = _TA.objects.filter(is_active=True, staff=staff_profile).filter(Q(section=section) | Q(section__isnull=True))
+                cr = getattr(getattr(ta, 'curriculum_row', None), 'pk', None) if ta is not None else None
+                if cr:
+                    ta_qs = ta_qs.filter(Q(curriculum_row_id=cr) | Q(elective_subject__parent_id=cr))
+                teach_assign = ta_qs.order_by(
+                    models.Case(
+                        models.When(section=section, then=models.Value(0)),
+                        default=models.Value(1),
+                        output_field=models.IntegerField(),
+                    ),
+                    'id',
+                ).first()
+            except Exception:
+                teach_assign = None
 
         perms = get_user_permissions(user)
         if not (ta or 'academics.mark_attendance' in perms or user.is_superuser):
             raise PermissionDenied('You are not assigned to this period and cannot mark attendance')
 
-        if ta:
-            serializer.save(timetable_assignment=ta, created_by=staff_profile)
+        if ta or teach_assign:
+            serializer.save(timetable_assignment=ta, teaching_assignment=teach_assign, created_by=staff_profile)
         else:
             serializer.save(created_by=staff_profile)
 
@@ -1986,6 +2086,7 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
         data = ser.validated_data
         section_id = data.get('section_id')
         period_id = data.get('period_id')
+        teaching_assignment_id = data.get('teaching_assignment_id')
         date = data.get('date')
         records = data.get('records') or []
 
@@ -1999,6 +2100,7 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
             day = None
 
         ta = None
+        teach_assign = None
         try:
             from timetable.models import TimetableAssignment, TimetableSlot
             from .models import Section as _Section
@@ -2014,11 +2116,55 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                         ta_match_qs = ta_match_qs.filter((Q(curriculum_row=assign.curriculum_row) | Q(elective_subject__parent=assign.curriculum_row))).filter(Q(section=section) | Q(section__isnull=True))
                         if ta_match_qs.exists():
                             ta = assign
+                            teach_assign = ta_match_qs.order_by(
+                                models.Case(
+                                    models.When(section=section, then=models.Value(0)),
+                                    default=models.Value(1),
+                                    output_field=models.IntegerField(),
+                                ),
+                                'id',
+                            ).first()
         except Exception:
             ta = None
+            teach_assign = None
+
+        # If client provided a teaching_assignment_id, it takes precedence (subject-wise identity).
+        if teaching_assignment_id is not None and staff_profile:
+            try:
+                from .models import TeachingAssignment as _TA
+                ta_obj = _TA.objects.filter(pk=int(teaching_assignment_id), is_active=True, staff=staff_profile).first()
+                if not ta_obj:
+                    raise PermissionDenied('Invalid teaching_assignment_id for current staff')
+                # Allow section-scoped or department-wide assignments; reject mismatched section.
+                if section is not None and getattr(ta_obj, 'section_id', None) not in (None, getattr(section, 'id', None)):
+                    raise PermissionDenied('teaching_assignment_id does not match section')
+                teach_assign = ta_obj
+            except PermissionDenied:
+                raise
+            except Exception:
+                raise PermissionDenied('Invalid teaching_assignment_id')
+
+        # Resolve a specific TeachingAssignment (subject option) for this staff.
+        if teach_assign is None and staff_profile:
+            try:
+                from .models import TeachingAssignment as _TA
+                ta_qs = _TA.objects.filter(is_active=True, staff=staff_profile).filter(Q(section=section) | Q(section__isnull=True))
+                cr_id = getattr(ta, 'curriculum_row_id', None) if ta is not None else None
+                if cr_id:
+                    ta_qs = ta_qs.filter(Q(curriculum_row_id=cr_id) | Q(elective_subject__parent_id=cr_id))
+                teach_assign = ta_qs.order_by(
+                    models.Case(
+                        models.When(section=section, then=models.Value(0)),
+                        default=models.Value(1),
+                        output_field=models.IntegerField(),
+                    ),
+                    'id',
+                ).first()
+            except Exception:
+                teach_assign = None
 
         perms = get_user_permissions(user)
-        if not (ta or 'academics.mark_attendance' in perms or user.is_superuser):
+        if not (ta or teach_assign or 'academics.mark_attendance' in perms or user.is_superuser):
             raise PermissionDenied('You are not allowed to mark attendance for this period')
 
         with transaction.atomic():
@@ -2032,13 +2178,31 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                     SpecialTimetableEntry.objects.get_or_create(timetable=special_tt, date=date, period=period, defaults={'staff': staff_profile, 'curriculum_row': getattr(ta, 'curriculum_row', None) if ta is not None else None, 'subject_batch': getattr(ta, 'subject_batch', None) if ta is not None else None, 'subject_text': getattr(ta, 'subject_text', None) if ta is not None else None, 'is_active': True})
             except Exception:
                 pass
+            # IMPORTANT: session must be subject-wise. Use resolved teaching_assignment
+            # (staff+subject, including elective options) to prevent overwrites.
+            lookup = {'section': section, 'period': period, 'date': date, 'teaching_assignment': teach_assign}
+            if teach_assign is None:
+                # When teaching_assignment cannot be resolved (common for electives with no-staff
+                # timetable entries), use created_by as discriminator to avoid cross-staff session sharing.
+                lookup['created_by'] = staff_profile
+                # Also include timetable_assignment for metadata, but not as unique key.
             session, created = PeriodAttendanceSession.objects.get_or_create(
-                section=section, period=period, date=date,
-                defaults={'timetable_assignment': ta, 'created_by': staff_profile}
+                **lookup,
+                defaults={'created_by': staff_profile, 'timetable_assignment': ta, 'teaching_assignment': teach_assign}
             )
-            if ta and session.timetable_assignment is None:
+            # Keep metadata up to date
+            dirty_fields = []
+            if staff_profile and session.created_by_id is None:
+                session.created_by = staff_profile
+                dirty_fields.append('created_by')
+            if ta is not None and session.timetable_assignment_id != getattr(ta, 'id', None):
                 session.timetable_assignment = ta
-                session.save()
+                dirty_fields.append('timetable_assignment')
+            if teach_assign is not None and session.teaching_assignment_id != getattr(teach_assign, 'id', None):
+                session.teaching_assignment = teach_assign
+                dirty_fields.append('teaching_assignment')
+            if dirty_fields:
+                session.save(update_fields=dirty_fields)
 
             out = []
             # If timetable assignment has a subject_batch defined, use that student list
@@ -2052,7 +2216,13 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
             # use ElectiveChoice mappings to determine students for this elective.
             if students_source is None:
                 try:
-                    if ta and not getattr(ta, 'subject_batch', None):
+                    # Prefer the resolved teaching assignment (especially when provided by client)
+                    if teach_assign and getattr(teach_assign, 'elective_subject', None):
+                        from curriculum.models import ElectiveChoice
+                        es = teach_assign.elective_subject
+                        choices = ElectiveChoice.objects.filter(elective_subject=es, is_active=True).select_related('student')
+                        students_source = [getattr(c, 'student') for c in choices if getattr(c, 'student', None) is not None]
+                    elif ta and not getattr(ta, 'subject_batch', None):
                         from .models import TeachingAssignment as _TA
                         # find teaching assignment with elective_subject for this staff matching the curriculum_row parent
                         ta_match = _TA.objects.filter(is_active=True, staff=staff_profile, elective_subject__isnull=False).filter(
@@ -2216,6 +2386,9 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                                 match_exists = False
                             if match_exists:
                                 allow = True
+                                # Store the assignment on the attendance session so records don't collide
+                                # with other subjects/staff for the same (section, period, date).
+                                ta = assign
                             logger.warning('assign exists id=%s ta_match_exists=%s', getattr(assign, 'id', None), match_exists)
                         else:
                             # No timetable assignment for this specific day; try any day for this section+period
@@ -2231,6 +2404,8 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                                     allow = True
                                     # use assign_any as assign so later elective resolution can use curriculum_row
                                     assign = assign_any
+                                    # Store the assignment on the attendance session to keep subject-wise separation
+                                    ta = assign_any
                                 logger.warning('assign_any exists id=%s ta_match_exists=%s', getattr(assign_any, 'id', None), match_exists)
                             else:
                                 logger.warning('no timetable assign for section=%s period=%s day=%s', getattr(section_obj,'id',None), getattr(period_obj,'id',None), dow)
@@ -2238,6 +2413,37 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                 if not allow:
                     logger.debug('Not allowed to mark for section=%s period=%s on dow=%s', getattr(section_obj,'id',None), getattr(period_obj,'id',None), dow)
                     continue
+
+                # Resolve a specific teaching assignment (subject option) for this staff/slot.
+                teach_assign = None
+                try:
+                    from academics.models import TeachingAssignment as _TA
+                    cr_id = None
+                    if special_entry and getattr(special_entry, 'curriculum_row_id', None):
+                        cr_id = getattr(special_entry, 'curriculum_row_id', None)
+                    elif ta is not None and getattr(ta, 'curriculum_row_id', None):
+                        cr_id = getattr(ta, 'curriculum_row_id', None)
+                    else:
+                        try:
+                            cr_id = getattr(assign, 'curriculum_row_id', None)
+                        except Exception:
+                            cr_id = None
+
+                    ta_qs = _TA.objects.filter(is_active=True, staff=staff_profile).filter(
+                        Q(section=section_obj) | Q(section__isnull=True)
+                    )
+                    if cr_id:
+                        ta_qs = ta_qs.filter(Q(curriculum_row_id=cr_id) | Q(elective_subject__parent_id=cr_id))
+                    teach_assign = ta_qs.order_by(
+                        models.Case(
+                            models.When(section=section_obj, then=models.Value(0)),
+                            default=models.Value(1),
+                            output_field=models.IntegerField(),
+                        ),
+                        'id',
+                    ).first()
+                except Exception:
+                    teach_assign = None
 
                 # optionally create special timetable entries for this date/period
                 try:
@@ -2250,14 +2456,30 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                     pass
 
                 # create/get session and mark records
+                # IMPORTANT: session must be subject-wise. Prefer teaching_assignment identity.
+                lookup = {'section': section_obj, 'period': period_obj, 'date': day, 'teaching_assignment': teach_assign}
+                if teach_assign is None:
+                    # When teaching_assignment cannot be resolved, use created_by as discriminator.
+                    lookup['created_by'] = staff_profile
                 session, created = PeriodAttendanceSession.objects.get_or_create(
-                    section=section_obj, period=period_obj, date=day,
-                    defaults={'timetable_assignment': ta, 'created_by': staff_profile}
+                    **lookup,
+                    defaults={'created_by': staff_profile, 'timetable_assignment': ta, 'teaching_assignment': teach_assign}
                 )
-                logger.warning('get_or_create session returned id=%s created=%s timetable_assignment_on_session=%s', getattr(session, 'id', None), created, getattr(session, 'timetable_assignment_id', None))
-                if ta and session.timetable_assignment is None:
+                logger.warning('get_or_create session returned id=%s created=%s timetable_assignment_on_session=%s teaching_assignment_on_session=%s', getattr(session, 'id', None), created, getattr(session, 'timetable_assignment_id', None), getattr(session, 'teaching_assignment_id', None))
+
+                # Keep metadata up to date
+                dirty_fields = []
+                if session.created_by_id is None:
+                    session.created_by = staff_profile
+                    dirty_fields.append('created_by')
+                if ta is not None and session.timetable_assignment_id != getattr(ta, 'id', None):
                     session.timetable_assignment = ta
-                    session.save()
+                    dirty_fields.append('timetable_assignment')
+                if teach_assign is not None and session.teaching_assignment_id != getattr(teach_assign, 'id', None):
+                    session.teaching_assignment = teach_assign
+                    dirty_fields.append('teaching_assignment')
+                if dirty_fields:
+                    session.save(update_fields=dirty_fields)
 
                 # determine students for this assignment if student_ids not provided
                 if students:
@@ -2530,31 +2752,85 @@ class StaffPeriodsView(APIView):
         results = []
         for a in qs:
             include = False
+
+            # Reset per-assignment resolved fields (avoid leaking values across loop iterations)
+            resolved_subject_display = None
+            resolved_elective_id = None
+            resolved_elective_name = None
+            teach_assign = None
             try:
+                # Include explicit assignments only when timetable.staff matches.
                 if getattr(a, 'staff', None) and getattr(a.staff, 'id', None) == getattr(staff_profile, 'id', None):
                     include = True
-                else:
-                    # fallback: if timetable assignment has no explicit staff, resolve via TeachingAssignment
-                    if not getattr(a, 'staff', None) and getattr(a, 'curriculum_row', None):
-                        from .models import TeachingAssignment as _TA
-                        # Match teaching assignments where staff is assigned to the same curriculum_row
-                        # or to an elective sub-option whose parent is the curriculum_row.
-                        ta_qs = _TA.objects.filter(is_active=True, staff=staff_profile)
-                        ta_qs = ta_qs.filter(
-                            (
-                                Q(curriculum_row=a.curriculum_row)
-                            )
-                            |
-                            (
-                                Q(elective_subject__parent=a.curriculum_row)
-                            )
-                        )
-                        # Section-scoped or department-wide (section is null) assignments are allowed
-                        ta_qs = ta_qs.filter(Q(section=a.section) | Q(section__isnull=True))
-                        if ta_qs.exists():
-                            include = True
+
+                # Resolve a TeachingAssignment for this staff+slot. This is required to correctly
+                # identify elective sub-options (and therefore the correct attendance session).
+                from .models import TeachingAssignment as _TA
+                ta_qs = _TA.objects.filter(is_active=True, staff=staff_profile)
+
+                # Section-scoped or department-wide (section is null) assignments are allowed
+                ta_qs = ta_qs.filter(Q(section=a.section) | Q(section__isnull=True))
+
+                # Prefer matching by explicit curriculum_row when present, then subject_batch, then subject_text
+                base_cr = getattr(a, 'curriculum_row', None)
+                if base_cr is None and getattr(a, 'subject_batch', None) is not None:
+                    base_cr = getattr(a.subject_batch, 'curriculum_row', None)
+
+                matched = False
+                if base_cr is not None:
+                    q_cr = ta_qs.filter(
+                        Q(curriculum_row=base_cr) |
+                        Q(elective_subject__parent=base_cr) |
+                        Q(elective_subject__course_code__iexact=(getattr(base_cr, 'course_code', None) or ''))
+                    )
+                    if q_cr.exists():
+                        ta_qs = q_cr
+                        matched = True
+
+                if (not matched) and getattr(a, 'subject_text', None):
+                    txt = (a.subject_text or '').strip()
+                    ltxt = txt.lower()
+                    import re
+                    norm = re.sub(r'[^a-z0-9]', '', ltxt)
+                    q_text = ta_qs.filter(
+                        Q(elective_subject__course_code__iexact=ltxt) |
+                        Q(elective_subject__course_code__iexact=norm) |
+                        Q(elective_subject__course_name__icontains=txt) |
+                        Q(curriculum_row__course_code__iexact=ltxt) |
+                        Q(subject__code__iexact=ltxt) |
+                        Q(subject__name__icontains=txt)
+                    )
+                    if q_text.exists():
+                        ta_qs = q_text
+                        matched = True
+
+                if matched:
+                    teach_assign = ta_qs.order_by(
+                        models.Case(
+                            models.When(section=a.section, then=models.Value(0)),
+                            default=models.Value(1),
+                            output_field=models.IntegerField(),
+                        ),
+                        'id',
+                    ).first()
+
+                    # Only include fallback TA-resolved entries when timetable.staff is null.
+                    if not include and not getattr(a, 'staff', None) and teach_assign is not None:
+                        include = True
             except Exception:
                 include = False
+
+            # If there already exists a session for this section/period/date that
+            # is tied to this staff (either via teaching_assignment.staff or created_by),
+            # include this assignment so the staff can view/take that session.
+            try:
+                from .models import PeriodAttendanceSession as _PAS
+                sess_q = _PAS.objects.filter(section=a.section, period=a.period, date=date)
+                if staff_profile is not None:
+                    if sess_q.filter(teaching_assignment__staff=staff_profile).exists() or sess_q.filter(created_by=staff_profile).exists():
+                        include = True
+            except Exception:
+                pass
 
             if not include:
                 continue
@@ -2571,8 +2847,32 @@ class StaffPeriodsView(APIView):
             except Exception:
                 pass
 
-            # find existing session for this section/period/date (if any)
-            session = PeriodAttendanceSession.objects.filter(section=a.section, period=a.period, date=date).first()
+            # Resolve elective display/name from the TeachingAssignment if present
+            try:
+                if teach_assign is not None and getattr(teach_assign, 'elective_subject', None) is not None:
+                    es = teach_assign.elective_subject
+                    resolved_subject_display = (getattr(es, 'course_code', None) or getattr(es, 'course_name', None))
+                    resolved_elective_id = getattr(es, 'id', None)
+                    resolved_elective_name = getattr(es, 'course_name', None) or resolved_subject_display
+            except Exception:
+                resolved_subject_display = None
+                resolved_elective_id = None
+                resolved_elective_name = None
+
+            # find existing session for this section/period/date (+ teaching_assignment when available)
+            sess_qs = PeriodAttendanceSession.objects.filter(section=a.section, period=a.period, date=date)
+            if teach_assign is not None:
+                sess_qs = sess_qs.filter(teaching_assignment=teach_assign)
+            else:
+                # When teaching_assignment is NULL (electives with no TA configured), MUST filter by created_by
+                # to avoid showing another staff's session for the same period.
+                sess_qs = sess_qs.filter(teaching_assignment__isnull=True)
+                if staff_profile is not None:
+                    sess_qs = sess_qs.filter(created_by=staff_profile)
+                else:
+                    # No staff context: can't determine ownership; skip showing any session
+                    sess_qs = sess_qs.none()
+            session = sess_qs.order_by('-id').first()
             # determine latest unlock request status for this session (if any)
             unlock_status = None
             unlock_id = None
@@ -2585,24 +2885,42 @@ class StaffPeriodsView(APIView):
             except Exception:
                 unlock_status = None
                 unlock_id = None
-            # attempt to resolve if staff is assigned to an elective sub-option for this curriculum_row
-            resolved_subject_display = None
+
+
+            # compute section strength and any existing attendance counts if session exists
             try:
-                if not getattr(a, 'staff', None) and getattr(a, 'curriculum_row', None):
-                    from .models import TeachingAssignment as _TA
-                    ta_qs = _TA.objects.filter(is_active=True, staff=staff_profile).filter(
-                        (Q(curriculum_row=a.curriculum_row) | Q(elective_subject__parent=a.curriculum_row))
-                    ).filter(Q(section=a.section) | Q(section__isnull=True))
-                    ta_obj = ta_qs.first()
-                    if ta_obj and getattr(ta_obj, 'elective_subject', None):
-                        es = ta_obj.elective_subject
-                        resolved_subject_display = (getattr(es, 'course_code', None) or getattr(es, 'course_name', None))
-                        resolved_elective_id = getattr(es, 'id', None)
-                    else:
-                        resolved_elective_id = None
+                from .models import PeriodAttendanceRecord
+                from .models import PeriodAttendanceSession as _PAS
+                from .models import StudentProfile as _SP
             except Exception:
-                resolved_subject_display = None
-                resolved_elective_id = None
+                PeriodAttendanceRecord = None
+                _PAS = None
+                _SP = None
+
+            total_strength = None
+            present_count = None
+            absent_count = None
+            leave_count = None
+            od_count = None
+            late_count = None
+
+            try:
+                # always compute section strength for display
+                from .models import StudentProfile as SP
+                total_strength = SP.objects.filter(section_id=a.section_id).count()
+            except Exception:
+                total_strength = None
+
+            if session:
+                try:
+                    records_q = PeriodAttendanceRecord.objects.filter(session=session)
+                    present_count = records_q.filter(status__in=['P', 'OD', 'LATE']).count()
+                    absent_count = records_q.filter(status='A').count()
+                    leave_count = records_q.filter(status='LEAVE').count()
+                    od_count = records_q.filter(status='OD').count()
+                    late_count = records_q.filter(status='LATE').count()
+                except Exception:
+                    present_count = absent_count = leave_count = od_count = late_count = None
 
             results.append({
                 'id': a.id,
@@ -2612,13 +2930,20 @@ class StaffPeriodsView(APIView):
                 # provide a reliable subject display: prefer curriculum_row code/name, then subject_text
                 'subject_id': getattr(getattr(a, 'curriculum_row', None), 'id', None),
                 'subject_display': resolved_subject_display or (getattr(getattr(a, 'curriculum_row', None), 'course_code', None) or getattr(getattr(a, 'curriculum_row', None), 'course_name', None) or getattr(a, 'subject_text', None) or None),
-                'elective_subject_id': resolved_elective_id if 'resolved_elective_id' in locals() else None,
+                'teaching_assignment_id': getattr(teach_assign, 'id', None),
+                'elective_subject_id': resolved_elective_id,
+                'elective_subject_name': resolved_elective_name,
                 'subject_batch_id': getattr(a, 'subject_batch_id', None),
                 'attendance_session_id': getattr(session, 'id', None),
                 'attendance_session_locked': getattr(session, 'is_locked', False) if session else False,
                 # include latest unlock request status (if any) so frontend can show pending/approved/rejected
                 'unlock_request_status': unlock_status,
                 'unlock_request_id': unlock_id,
+                'total_strength': total_strength,
+                'present': present_count,
+                'absent': absent_count,
+                'leave': leave_count,
+                'on_duty': od_count,
             })
         # Also include any SpecialTimetableEntry items for this date where the current
         # staff is the assigned staff or is mapped via a TeachingAssignment for the
@@ -2648,8 +2973,39 @@ class StaffPeriodsView(APIView):
                 if not include:
                     continue
 
-                # find existing session for this special entry's section/period/date
-                sess = _PAS.objects.filter(section=se.timetable.section, period=se.period, date=date).first()
+                # resolve teaching assignment for this staff+special slot
+                teach_assign = None
+                elective_name = None
+                try:
+                    from .models import TeachingAssignment as _TA
+                    ta_qs = _TA.objects.filter(is_active=True, staff=staff_profile).filter(Q(section=se.timetable.section) | Q(section__isnull=True))
+                    base_cr = getattr(se, 'curriculum_row', None)
+                    if base_cr is None and getattr(se, 'subject_batch', None) is not None:
+                        base_cr = getattr(se.subject_batch, 'curriculum_row', None)
+                    if base_cr is not None:
+                        ta_qs = ta_qs.filter(Q(curriculum_row=base_cr) | Q(elective_subject__parent=base_cr))
+                    teach_assign = ta_qs.order_by(
+                        models.Case(
+                            models.When(section=se.timetable.section, then=models.Value(0)),
+                            default=models.Value(1),
+                            output_field=models.IntegerField(),
+                        ),
+                        'id',
+                    ).first()
+                except Exception:
+                    teach_assign = None
+
+                # find existing session for this special entry's section/period/date (+ teaching_assignment when available)
+                sess_qs = _PAS.objects.filter(section=se.timetable.section, period=se.period, date=date)
+                if teach_assign is not None:
+                    sess_qs = sess_qs.filter(teaching_assignment=teach_assign)
+                else:
+                    sess_qs = sess_qs.filter(teaching_assignment__isnull=True)
+                    if staff_profile is not None:
+                        sess_qs = sess_qs.filter(created_by=staff_profile)
+                    else:
+                        sess_qs = sess_qs.none()
+                sess = sess_qs.order_by('-id').first()
                 subj_disp = None
                 subj_id = None
                 elective_id = None
@@ -2659,14 +3015,11 @@ class StaffPeriodsView(APIView):
                     try:
                         # if this staff is mapped to a sub-elective for this curriculum_row,
                         # prefer that sub-elective's display
-                        from academics.models import TeachingAssignment as _TA
-                        ta_obj = _TA.objects.filter(staff=staff_profile, is_active=True).filter(
-                            Q(curriculum_row=se.curriculum_row) | Q(elective_subject__parent=se.curriculum_row)
-                        ).select_related('elective_subject').first()
-                        if ta_obj and getattr(ta_obj, 'elective_subject', None):
-                            es = ta_obj.elective_subject
+                        if teach_assign and getattr(teach_assign, 'elective_subject', None):
+                            es = teach_assign.elective_subject
                             subj_disp = (getattr(es, 'course_code', None) or getattr(es, 'course_name', None))
                             elective_id = getattr(es, 'id', None)
+                            elective_name = getattr(es, 'course_name', None) or subj_disp
                     except Exception:
                         pass
                 else:
@@ -2692,7 +3045,9 @@ class StaffPeriodsView(APIView):
                     'period': {'id': se.period.id, 'index': se.period.index, 'label': se.period.label, 'start_time': getattr(se.period, 'start_time', None), 'end_time': getattr(se.period, 'end_time', None)},
                     'subject_id': subj_id,
                     'subject_display': subj_disp,
+                    'teaching_assignment_id': getattr(teach_assign, 'id', None),
                     'elective_subject_id': elective_id,
+                    'elective_subject_name': elective_name,
                     'subject_batch_id': getattr(se, 'subject_batch_id', None),
                     'attendance_session_id': getattr(sess, 'id', None),
                     'attendance_session_locked': getattr(sess, 'is_locked', False) if sess else False,

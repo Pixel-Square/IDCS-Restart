@@ -1,0 +1,20 @@
+/* Simple centered dashboard card with background image */
+
+html,body{height:100%;margin:0;font-family:Inter,Segoe UI,Helvetica,Arial,sans-serif}
+/* Use a local SVG background so static serving works reliably */
+.bg{position:fixed;inset:0;background-image:url("/static/images/bg.6152bfa3ab7d.svg");background-size:cover;background-position:center;filter:brightness(0.6);z-index:0}
+.center{position:relative;z-index:1;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+.card{width:380px;max-width:92%;background:rgba(0,0,0,0.35);backdrop-filter:blur(6px);border-radius:12px;padding:30px 24px;color:#fff;text-align:center;box-shadow:0 12px 34px rgba(0,0,0,0.55);border:1px solid rgba(255,255,255,0.06)}
+.logo{width:120px;margin:0 auto 14px;display:block}
+h1{margin:6px 0 4px;font-size:22px}
+.subtitle{margin:0 0 18px;color:rgba(255,255,255,0.9);font-size:14px}
+.actions{display:flex;gap:12px;justify-content:center;align-items:center}
+.btn{display:inline-block;padding:10px 14px;border-radius:8px;text-decoration:none;color:#fff;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.08);transition:transform .12s ease,box-shadow .12s ease}
+.btn:hover{transform:translateY(-3px);box-shadow:0 10px 26px rgba(0,0,0,0.45)}
+.btn.primary{background:linear-gradient(90deg,#2b8cff,#6c5cff);box-shadow:0 8px 18px rgba(43,140,255,0.18)}
+
+@media (max-width:640px){
+	.actions{flex-direction:column}
+	.btn{width:100%}
+}
+

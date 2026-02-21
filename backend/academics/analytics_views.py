@@ -73,11 +73,15 @@ class AttendanceAnalyticsView(APIView):
         ).select_related('student', 'session__section', 'session__section__batch', 'session__section__batch__course', 'session__section__batch__course__department')
         
         # Apply permission-based filtering
-        # Only consider Period 1 across the day for all analytics (show period 1 counts only)
+        # Note: do not force only Period 1 here — allow analytics across periods
+        # If a caller needs period-specific data they can pass a `period_index` query param
+        period_index = request.query_params.get('period_index')
         try:
-            sessions_qs = sessions_qs.filter(period__index=1)
-            records_qs = records_qs.filter(session__period__index=1)
+            if period_index:
+                sessions_qs = sessions_qs.filter(period__index=int(period_index))
+                records_qs = records_qs.filter(session__period__index=int(period_index))
         except Exception:
+            # ignore any parse/filter errors and continue without period filtering
             pass
         if not can_view_all:
             if can_view_department and staff_profile:
@@ -430,12 +434,18 @@ class ClassAttendanceReportView(APIView):
         if allowed_section_ids is not None and int(section_id) not in allowed_section_ids:
             return Response({'detail': 'Permission denied for this section'}, status=403)
 
-        # Build records for the given section/date (Period 1 only)
-        recs = PeriodAttendanceRecord.objects.filter(
+        # Build records for the given section/date. Allow optional `period_index` param.
+        period_index = request.query_params.get('period_index')
+        recs_q = PeriodAttendanceRecord.objects.filter(
             session__section_id=int(section_id),
-            session__date=target_date,
-            session__period__index=1
+            session__date=target_date
         ).select_related('student').order_by('-id')
+        if period_index:
+            try:
+                recs_q = recs_q.filter(session__period__index=int(period_index))
+            except Exception:
+                pass
+        recs = recs_q
 
         # total strength: count students in the section
         total_strength = StudentProfile.objects.filter(section_id=int(section_id)).count()
@@ -471,104 +481,147 @@ class ClassAttendanceReportView(APIView):
         # section display + batch/department
         section_obj = Section.objects.filter(pk=int(section_id)).select_related('batch', 'batch__course', 'batch__course__department').first()
         section_name = section_obj.name if section_obj else ''
-        batch_name = getattr(getattr(section_obj, 'batch', None), 'name', '') if section_obj else ''
-        dept = getattr(getattr(getattr(section_obj, 'batch', None), 'course', None), 'department', None) if section_obj else None
-        department_name = getattr(dept, 'name', '') if dept else ''
-        department_short = getattr(dept, 'short_name', '') if dept else ''
+        # Group sessions by a canonical group key so multi-section assignments
+        # for the same subject/parent curriculum_row/subject_batch appear as a
+        # single aggregated card.
+        groups = {}
+        import re
+        from .models import TeachingAssignment as _TA
 
-        return Response({
-            'date': target_date.isoformat(),
-            'section_id': int(section_id),
-            'section_name': section_name,
-            'batch_name': batch_name,
-            'department_name': department_name,
-            'department_short': department_short,
-            'total_strength': total_strength,
-            'present': present_count,
-            'absent': absent_count,
-            'leave': leave_count,
-            'late': late_count,
-            'on_duty': od_count,
-            'absent_list': absent_list,
-            'leave_list': leave_list,
-            'od_list': od_list,
-            'late_list': late_list,
-            'attendance_percentage': round(attendance_pct, 2)
-        })
+        for session in sessions:
+            ta = session.timetable_assignment
+            # ensure the staff is responsible for this session
+            if ta and ta.staff_id and ta.staff_id != staff_profile.id:
+                is_teaching = teaching_assignments.filter(section_id=session.section_id).exists()
+                if not is_teaching:
+                    continue
 
+            period_idx = getattr(session.period, 'index', 0) if session.period else 0
 
-class TodayPeriodAttendanceView(APIView):
-    """Return period-wise attendance stats for today for the current user (staff)."""
-    permission_classes = (IsAuthenticated,)
+            # determine canonical group id
+            group_id = None
+            group_type = None
 
-    def get(self, request):
-        try:
-            user = request.user
-            staff_profile = getattr(user, 'staff_profile', None)
-            if not staff_profile:
-                return Response({'detail': 'Staff profile not found'}, status=403)
+            if ta and getattr(ta, 'curriculum_row', None):
+                group_type = 'curr'
+                group_id = ta.curriculum_row_id
+            elif ta and getattr(ta, 'subject_batch', None):
+                group_type = 'batch'
+                group_id = ta.subject_batch_id
+            elif ta and getattr(ta, 'subject_text', None):
+                raw = (ta.subject_text or '').strip()
+                subj_code = re.sub(r'[^A-Za-z0-9]', '', raw).lower()
+                if subj_code:
+                    group_type = 'subj'
+                    group_id = subj_code
+            else:
+                # fallback: try to resolve via TeachingAssignment mappings
+                ta_match = _TA.objects.filter(staff=staff_profile, is_active=True).filter(
+                    Q(section_id=session.section_id) | Q(section__isnull=True)
+                ).filter(
+                    Q(curriculum_row__isnull=False) | Q(elective_subject__isnull=False) | Q(subject__isnull=False)
+                ).first()
+                if ta_match:
+                    if getattr(ta_match, 'curriculum_row', None):
+                        group_type = 'curr'
+                        group_id = ta_match.curriculum_row_id
+                    elif getattr(ta_match, 'elective_subject', None):
+                        # prefer parent curriculum_row for elective
+                        parent_id = getattr(ta_match.elective_subject, 'parent_id', None)
+                        if parent_id:
+                            group_type = 'elective_parent'
+                            group_id = parent_id
+                        else:
+                            group_type = 'elective'
+                            group_id = ta_match.elective_subject_id
+                    elif getattr(ta_match, 'subject', None) and getattr(ta_match.subject, 'code', None):
+                        group_type = 'subj'
+                        group_id = re.sub(r'[^A-Za-z0-9]', '', getattr(ta_match.subject, 'code', '')).lower()
 
-            # Get today's date or date from query param
-            date_str = request.query_params.get('date')
-            try:
-                if date_str:
-                    target_date = date.fromisoformat(date_str)
+            if group_type is None:
+                group_type = 'section'
+                group_id = session.section_id
+
+            key = (period_idx, group_type, group_id)
+            groups.setdefault(key, []).append(session)
+
+            # Build period_stats from grouped sessions
+            for key, sess_list in groups.items():
+                period_idx, gtype, gid = key
+                sess_ids = [s.id for s in sess_list]
+                records = PeriodAttendanceRecord.objects.filter(session_id__in=sess_ids)
+
+                # determine involved sections
+                section_ids = list({s.section_id for s in sess_list})
+
+                if gtype in ('curr', 'elective_parent', 'batch', 'subj', 'elective'):
+                    total_strength = StudentProfile.objects.filter(section_id__in=section_ids).count()
                 else:
-                    target_date = date.today()
-            except Exception:
-                target_date = date.today()
+                    total_strength = StudentProfile.objects.filter(section_id=section_ids[0]).count() if section_ids else 0
 
-            # Get all attendance sessions for this staff member today
-            from .models import TeachingAssignment
-            from timetable.models import TimetableAssignment
-            
-            # Find all timetable assignments for today where this staff teaches
-            day = target_date.isoweekday()
-            
-            # Get timetable assignments for this staff on this day
-            timetable_assignments = TimetableAssignment.objects.filter(
-                day=day,
-                staff=staff_profile
-            ).select_related('period', 'section', 'curriculum_row', 'subject_batch')
-            
-            # Also check teaching assignments (fallback when TimetableAssignment.staff is null)
-            teaching_assignments = TeachingAssignment.objects.filter(
-                staff=staff_profile,
-                is_active=True
-            ).select_related('section', 'subject')
-            
-            # Build list of sections where staff teaches
-            section_ids = set()
-            for ta in timetable_assignments:
-                if ta.section_id:
-                    section_ids.add(ta.section_id)
-            for teach in teaching_assignments:
-                if teach.section_id:
-                    section_ids.add(teach.section_id)
-            
-            # Get all attendance sessions for today for these sections
-            sessions = PeriodAttendanceSession.objects.filter(
-                date=target_date,
-                section_id__in=list(section_ids)
-            ).select_related('period', 'section', 'timetable_assignment', 'marked_by')
-            
-            # Filter to only sessions where this staff is the teacher
-            period_stats = []
-            
-            for session in sessions:
-                # Check if this session belongs to this staff
-                ta = session.timetable_assignment
-                if ta and ta.staff_id != staff_profile.id:
-                    # Check if staff teaches this section through teaching assignment
-                    is_teaching = teaching_assignments.filter(
-                        section_id=session.section_id
-                    ).exists()
-                    if not is_teaching:
-                        continue
-                
-                # Get attendance records for this session
-                records = PeriodAttendanceRecord.objects.filter(session=session)
-                
+                total_records = records.count()
+                present_count = records.filter(status__in=['P', 'OD', 'LATE']).count()
+                absent_count = records.filter(status='A').count()
+                leave_count = records.filter(status='LEAVE').count()
+                od_count = records.filter(status='OD').count()
+                late_count = records.filter(status='LATE').count()
+                attendance_pct = (present_count / total_records * 100) if total_records > 0 else 0
+
+                # subject display name: try curriculum_row -> subject_batch -> subject_text
+                subject_name = ''
+                try:
+                    if gtype in ('curr', 'elective_parent'):
+                        from curriculum.models import CurriculumDepartment
+                        parent = CurriculumDepartment.objects.filter(pk=gid).first()
+                        if parent:
+                            code = getattr(parent, 'course_code', '') or ''
+                            name = getattr(parent, 'course_name', '') or ''
+                            subject_name = f"{code} - {name}".strip(' -')
+                    elif gtype == 'batch':
+                        # use first session's timetable_assignment subject_batch name
+                        ta0 = sess_list[0].timetable_assignment
+                        subject_name = getattr(getattr(ta0, 'subject_batch', None), 'name', '') if ta0 else ''
+                    elif gtype in ('subj', 'elective'):
+                        # show normalized subject code
+                        subject_name = str(gid).upper()
+                    else:
+                        ta0 = sess_list[0].timetable_assignment
+                        if ta0 and getattr(ta0, 'curriculum_row', None):
+                            code = getattr(ta0.curriculum_row, 'course_code', '') or ''
+                            name = getattr(ta0.curriculum_row, 'course_name', '') or ''
+                            subject_name = f"{code} - {name}".strip(' -')
+                        elif ta0 and getattr(ta0, 'subject_text', None):
+                            subject_name = ta0.subject_text
+                except Exception:
+                    subject_name = ''
+
+                # Build card
+                period_stats.append({
+                    'session_id': None if len(sess_list) > 1 else sess_list[0].id,
+                    'period_index': period_idx,
+                    'period_label': getattr(sess_list[0].period, 'label', '') if sess_list and getattr(sess_list[0], 'period', None) else '',
+                    'period_start': str(getattr(sess_list[0].period, 'start_time', '')) if sess_list and getattr(sess_list[0], 'period', None) else '',
+                    'period_end': str(getattr(sess_list[0].period, 'end_time', '')) if sess_list and getattr(sess_list[0], 'period', None) else '',
+                    'section_id': None if len(section_ids) > 1 else (section_ids[0] if section_ids else None),
+                    'section_name': '' if len(section_ids) > 1 else (getattr(sess_list[0].section, 'name', '') if sess_list and getattr(sess_list[0], 'section', None) else ''),
+                    'sections': section_ids if len(section_ids) > 1 else None,
+                    'section_names': [getattr(s.section, 'name', '') for s in sess_list] if len(section_ids) > 1 else None,
+                    'session_ids': sess_ids,
+                    'group_key': f"{gtype}:{gid}",
+                    'subject': subject_name,
+                    'total_strength': total_strength,
+                    'total_marked': total_records,
+                    'present': present_count,
+                    'absent': absent_count,
+                    'leave': leave_count,
+                    'late': late_count,
+                    'on_duty': od_count,
+                    'attendance_percentage': round(attendance_pct, 2),
+                    'is_locked': any(getattr(s, 'is_locked', False) for s in sess_list),
+                    'marked_at': min((getattr(s, 'created_at') for s in sess_list if getattr(s, 'created_at', None)), default=None).isoformat() if any(getattr(s, 'created_at', None) for s in sess_list) else None,
+                    'marked_by': getattr(getattr(sess_list[0], 'created_by', None), 'user', None).username if getattr(sess_list[0], 'created_by', None) and getattr(getattr(sess_list[0], 'created_by', None), 'user', None) else ''
+                })
+
                 total_records = records.count()
                 present_count = records.filter(status__in=['P', 'OD', 'LATE']).count()
                 absent_count = records.filter(status='A').count()
@@ -577,10 +630,11 @@ class TodayPeriodAttendanceView(APIView):
                 late_count = records.filter(status='LATE').count()
                 
                 attendance_pct = (present_count / total_records * 100) if total_records > 0 else 0
-                
-                # Get section total strength
-                total_strength = StudentProfile.objects.filter(section_id=session.section_id).count()
-                
+
+                # `total_strength` was computed above for aggregated keys
+                # (curr, batch, elective_parent). For single-session keys the
+                # default was already set above; do not overwrite it here.
+
                 # Get subject info - defensive attribute access
                 subject_name = ''
                 try:
@@ -590,18 +644,38 @@ class TodayPeriodAttendanceView(APIView):
                         subject_name = f"{code} - {name}".strip(' -') if code or name else ''
                     elif ta and getattr(ta, 'subject_batch', None):
                         subject_name = getattr(ta.subject_batch, 'name', '') or 'Subject'
+                    # If we deduped by elective_parent, prefer showing the parent curriculum row
+                    # course code/name if available.
+                    if key[0] == 'elective_parent':
+                        try:
+                            from curriculum.models import CurriculumDepartment
+                            parent = CurriculumDepartment.objects.filter(pk=key[2]).first()
+                            if parent:
+                                code = getattr(parent, 'course_code', '') or ''
+                                name = getattr(parent, 'course_name', '') or ''
+                                subject_name = f"{code} - {name}".strip(' -') if code or name else subject_name
+                        except Exception:
+                            pass
                 except Exception:
                     subject_name = ''
                 
                 try:
+                    # determine aggregated sections for this card (if any)
+                    aggregated_sections = None
+                    if key[0] in ('curr', 'elective_parent'):
+                        aggregated_sections = list(section_ids_for_curr) if 'section_ids_for_curr' in locals() else None
+                    elif key[0] == 'batch':
+                        aggregated_sections = list(section_ids_for_batch) if 'section_ids_for_batch' in locals() else None
+
                     period_stats.append({
                         'session_id': session.id,
                         'period_index': getattr(session.period, 'index', 0) if session.period else 0,
                         'period_label': getattr(session.period, 'label', '') if session.period else '',
                         'period_start': str(getattr(session.period, 'start_time', '')) if session.period and getattr(session.period, 'start_time', None) else '',
                         'period_end': str(getattr(session.period, 'end_time', '')) if session.period and getattr(session.period, 'end_time', None) else '',
-                        'section_id': session.section_id,
-                        'section_name': getattr(session.section, 'name', '') if session.section else '',
+                        'section_id': None if aggregated_sections else session.section_id,
+                        'section_name': '' if aggregated_sections else (getattr(session.section, 'name', '') if session.section else ''),
+                        'sections': aggregated_sections,
                         'subject': subject_name,
                         'total_strength': total_strength,
                         'total_marked': total_records,
@@ -612,7 +686,9 @@ class TodayPeriodAttendanceView(APIView):
                         'on_duty': od_count,
                         'attendance_percentage': round(attendance_pct, 2),
                         'is_locked': getattr(session, 'is_locked', False),
-                        'marked_at': session.created_at.isoformat() if getattr(session, 'created_at', None) else None
+                        'marked_at': session.created_at.isoformat() if getattr(session, 'created_at', None) else None,
+                        # `PeriodAttendanceSession` uses `created_by` (StaffProfile). Use that for marked_by display.
+                        'marked_by': getattr(getattr(session, 'created_by', None), 'user', None).username if getattr(session, 'created_by', None) and getattr(getattr(session, 'created_by', None), 'user', None) else ''
                     })
                 except Exception as e:
                     # Log but don't crash if one session fails
@@ -629,10 +705,125 @@ class TodayPeriodAttendanceView(APIView):
                 'total_periods': len(period_stats),
                 'staff_name': user.username if user else ''
             })
-        except Exception as e:
-            import logging
-            logging.exception("TodayPeriodAttendanceView error")
-            return Response({'detail': str(e)}, status=500)
+
+
+class TodayPeriodAttendanceView(APIView):
+    """Return period-wise attendance cards for the given date (defaults to today)."""
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        user = request.user
+        perms = get_user_permissions(user)
+        staff_profile = getattr(user, 'staff_profile', None)
+
+        # permission: allow if user can view class or department or all
+        can_view_all = 'analytics.view_all_analytics' in perms or user.is_superuser
+        can_view_department = 'analytics.view_department_analytics' in perms or can_view_all
+        can_view_class = 'analytics.view_class_analytics' in perms or can_view_department
+        if not (can_view_all or can_view_department or can_view_class):
+            raise PermissionDenied('You do not have permission to view analytics')
+
+        date_str = request.query_params.get('date')
+        try:
+            target_date = date.fromisoformat(date_str) if date_str else date.today()
+        except Exception:
+            target_date = date.today()
+
+        # base sessions for the date
+        sessions_q = PeriodAttendanceSession.objects.filter(date=target_date).select_related(
+            'period', 'section', 'section__batch', 'section__batch__course', 'section__batch__course__department',
+            'timetable_assignment', 'timetable_assignment__curriculum_row', 'timetable_assignment__subject_batch',
+            'teaching_assignment', 'teaching_assignment__curriculum_row', 'teaching_assignment__elective_subject', 'teaching_assignment__elective_subject__parent',
+            'teaching_assignment__subject'
+        ).order_by('period__index')
+
+        # apply permission scoping
+        if not can_view_all:
+            if can_view_department and staff_profile:
+                from .models import TeachingAssignment
+                dept_roles = DepartmentRole.objects.filter(staff=staff_profile, is_active=True)
+                dept_ids = [dr.department_id for dr in dept_roles if dr.department_id]
+                teaching_depts = TeachingAssignment.objects.filter(staff=staff_profile, is_active=True).values_list('section__batch__course__department_id', flat=True).distinct()
+                dept_ids.extend(list(teaching_depts))
+                dept_ids = list(set(filter(None, dept_ids)))
+                if dept_ids:
+                    sessions_q = sessions_q.filter(section__batch__course__department_id__in=dept_ids)
+                else:
+                    sessions_q = sessions_q.none()
+            elif can_view_class and staff_profile:
+                from .models import SectionAdvisor
+                advisor_sections = SectionAdvisor.objects.filter(advisor=staff_profile, is_active=True).values_list('section_id', flat=True)
+                if advisor_sections:
+                    sessions_q = sessions_q.filter(section_id__in=advisor_sections)
+                else:
+                    sessions_q = sessions_q.none()
+
+        period_stats = []
+        for session in sessions_q:
+            try:
+                recs = PeriodAttendanceRecord.objects.filter(session=session)
+                total_strength = StudentProfile.objects.filter(section_id=session.section_id).count() if session.section_id else 0
+                total_records = recs.count()
+                present_count = recs.filter(status__in=['P', 'OD', 'LATE']).count()
+                absent_count = recs.filter(status='A').count()
+                leave_count = recs.filter(status='LEAVE').count()
+                od_count = recs.filter(status='OD').count()
+                late_count = recs.filter(status='LATE').count()
+                attendance_pct = (present_count / total_strength * 100) if total_strength > 0 else 0
+
+                # subject display
+                subject_name = ''
+                ta = getattr(session, 'timetable_assignment', None)
+                teach = getattr(session, 'teaching_assignment', None)
+                try:
+                    if teach and getattr(teach, 'elective_subject', None):
+                        es = teach.elective_subject
+                        code = getattr(es, 'course_code', '') or ''
+                        name = getattr(es, 'course_name', '') or ''
+                        subject_name = f"{code} - {name}".strip(' -') if code or name else str(es)
+                    elif teach and getattr(teach, 'curriculum_row', None):
+                        cr = teach.curriculum_row
+                        code = getattr(cr, 'course_code', '') or ''
+                        name = getattr(cr, 'course_name', '') or ''
+                        subject_name = f"{code} - {name}".strip(' -') if code or name else ''
+                    elif ta and getattr(ta, 'curriculum_row', None):
+                        code = getattr(ta.curriculum_row, 'course_code', '') or ''
+                        name = getattr(ta.curriculum_row, 'course_name', '') or ''
+                        subject_name = f"{code} - {name}".strip(' -') if code or name else ''
+                    elif ta and getattr(ta, 'subject_batch', None):
+                        subject_name = getattr(ta.subject_batch, 'name', '') or 'Subject'
+                    elif ta and getattr(ta, 'subject_text', None):
+                        subject_name = ta.subject_text
+                except Exception:
+                    subject_name = ''
+
+                period_stats.append({
+                    'session_id': session.id,
+                    'period_index': getattr(session.period, 'index', 0) if session.period else 0,
+                    'period_label': getattr(session.period, 'label', '') if session.period else '',
+                    'period_start': str(getattr(session.period, 'start_time', '')) if session.period and getattr(session.period, 'start_time', None) else '',
+                    'period_end': str(getattr(session.period, 'end_time', '')) if session.period and getattr(session.period, 'end_time', None) else '',
+                    'section_id': session.section_id,
+                    'section_name': getattr(session.section, 'name', '') if session.section else '',
+                    'subject': subject_name,
+                    'total_strength': total_strength,
+                    'total_marked': total_records,
+                    'present': present_count,
+                    'absent': absent_count,
+                    'leave': leave_count,
+                    'late': late_count,
+                    'on_duty': od_count,
+                    'attendance_percentage': round(attendance_pct, 2),
+                    'is_locked': getattr(session, 'is_locked', False),
+                    'marked_at': session.created_at.isoformat() if getattr(session, 'created_at', None) else None,
+                    'marked_by': getattr(getattr(session, 'created_by', None), 'user', None).username if getattr(session, 'created_by', None) and getattr(getattr(session, 'created_by', None), 'user', None) else ''
+                })
+            except Exception:
+                # don't let one session break the whole response
+                continue
+
+        period_stats.sort(key=lambda x: x['period_index'])
+        return Response({'date': target_date.isoformat(), 'periods': period_stats, 'total_periods': len(period_stats), 'staff_name': user.username if user else ''})
 
 
 class PeriodAttendanceReportView(APIView):
@@ -660,7 +851,7 @@ class PeriodAttendanceReportView(APIView):
                 'period', 'section', 'section__batch', 'section__batch__course',
                 'section__batch__course__department', 'timetable_assignment',
                 'timetable_assignment__curriculum_row', 'timetable_assignment__subject_batch',
-                'marked_by'
+                'created_by'
             ).get(pk=int(session_id))
         except PeriodAttendanceSession.DoesNotExist:
             return Response({'detail': 'Session not found'}, status=404)
@@ -772,6 +963,121 @@ class PeriodAttendanceReportView(APIView):
             'late_list': late_list,
             'attendance_percentage': round(attendance_pct, 2),
             'is_locked': getattr(session, 'is_locked', False),
-            'marked_by': getattr(getattr(session, 'marked_by', None), 'user', {}).username if getattr(session, 'marked_by', None) and getattr(getattr(session, 'marked_by', None), 'user', None) else '',
+            'marked_by': getattr(getattr(session, 'created_by', None), 'user', None).username if getattr(session, 'created_by', None) and getattr(getattr(session, 'created_by', None), 'user', None) else '',
             'marked_at': session.created_at.isoformat() if getattr(session, 'created_at', None) else None
         })
+
+
+class OverallSectionView(APIView):
+    """Return overall section-level attendance summary for the given date (defaults to today).
+
+    Permissioning mirrors other analytics endpoints: users with
+    'analytics.view_all_analytics' can view all, 'analytics.view_department_analytics'
+    can view their departments, and 'analytics.view_class_analytics' can view advisor sections.
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        user = request.user
+        perms = get_user_permissions(user)
+        staff_profile = getattr(user, 'staff_profile', None)
+
+        can_view_all = 'analytics.view_all_analytics' in perms or user.is_superuser
+        can_view_department = 'analytics.view_department_analytics' in perms or can_view_all
+        can_view_class = 'analytics.view_class_analytics' in perms or can_view_department
+        if not (can_view_all or can_view_department or can_view_class):
+            raise PermissionDenied('You do not have permission to view analytics')
+
+        date_str = request.query_params.get('date')
+        try:
+            target_date = date.fromisoformat(date_str) if date_str else date.today()
+        except Exception:
+            target_date = date.today()
+
+        # base sessions for the date
+        sessions_q = PeriodAttendanceSession.objects.filter(date=target_date).select_related(
+            'period', 'section', 'section__batch', 'section__batch__course', 'section__batch__course__department'
+        )
+
+        # apply permission scoping
+        if not can_view_all:
+            if can_view_department and staff_profile:
+                from .models import TeachingAssignment
+                dept_roles = DepartmentRole.objects.filter(staff=staff_profile, is_active=True)
+                dept_ids = [dr.department_id for dr in dept_roles if dr.department_id]
+                teaching_depts = TeachingAssignment.objects.filter(staff=staff_profile, is_active=True).values_list('section__batch__course__department_id', flat=True).distinct()
+                dept_ids.extend(list(teaching_depts))
+                dept_ids = list(set(filter(None, dept_ids)))
+                if dept_ids:
+                    sessions_q = sessions_q.filter(section__batch__course__department_id__in=dept_ids)
+                else:
+                    sessions_q = sessions_q.none()
+            elif can_view_class and staff_profile:
+                from .models import SectionAdvisor
+                advisor_sections = SectionAdvisor.objects.filter(advisor=staff_profile, is_active=True).values_list('section_id', flat=True)
+                if advisor_sections:
+                    sessions_q = sessions_q.filter(section_id__in=advisor_sections)
+                else:
+                    sessions_q = sessions_q.none()
+
+        # aggregate per-section stats
+        section_map = {}
+        for session in sessions_q:
+            sec_id = session.section_id
+            sec_name = getattr(session.section, 'name', '') if session.section else ''
+            if sec_id not in section_map:
+                section_map[sec_id] = {
+                        'section_id': sec_id,
+                            'section_name': sec_name,
+                            'department_name': getattr(getattr(getattr(session.section, 'batch', None), 'course', None), 'department', None) and getattr(getattr(getattr(session.section, 'batch', None), 'course', None), 'department', None).name or '',
+                            'department_short': getattr(getattr(getattr(session.section, 'batch', None), 'course', None), 'department', None) and getattr(getattr(getattr(session.section, 'batch', None), 'course', None), 'department', None).short_name or '',
+                    'total_strength': 0,
+                    'total_marked': 0,
+                    'present': 0,
+                    'absent': 0,
+                    'on_duty': 0,
+                    'is_locked': False,
+                    'marked_at': None,
+                }
+            try:
+                recs = PeriodAttendanceRecord.objects.filter(session=session)
+                total_strength = StudentProfile.objects.filter(section_id=session.section_id).count() if session.section_id else 0
+                total_records = recs.count()
+                present_count = recs.filter(status__in=['P', 'OD', 'LATE']).count()
+                absent_count = recs.filter(status='A').count()
+                od_count = recs.filter(status='OD').count()
+
+                entry = section_map[sec_id]
+                # For sections with multiple sessions, sum counts
+                entry['total_strength'] = max(entry['total_strength'], total_strength)
+                entry['total_marked'] += total_records
+                entry['present'] += present_count
+                entry['absent'] += absent_count
+                entry['on_duty'] += od_count
+                entry['is_locked'] = entry['is_locked'] or getattr(session, 'is_locked', False)
+                if getattr(session, 'created_at', None):
+                    if not entry['marked_at']:
+                        entry['marked_at'] = session.created_at.isoformat()
+                    else:
+                        # keep earliest
+                        try:
+                            if session.created_at.isoformat() < entry['marked_at']:
+                                entry['marked_at'] = session.created_at.isoformat()
+                        except Exception:
+                            pass
+            except Exception:
+                continue
+
+        # finalize attendance_percentage
+        result = []
+        for sec in section_map.values():
+            total_marked = sec.get('total_marked', 0)
+            present = sec.get('present', 0)
+            attendance_pct = (present / sec['total_strength'] * 100) if sec['total_strength'] > 0 else 0
+            sec['attendance_percentage'] = round(attendance_pct, 2)
+            result.append(sec)
+
+        # sort by section name
+        result.sort(key=lambda x: (x['section_name'] or ''))
+
+        return Response({'date': target_date.isoformat(), 'sections': result, 'total_sections': len(result)})

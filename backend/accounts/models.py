@@ -37,6 +37,14 @@ class User(AbstractUser):
         related_name='users'
     )
 
+    mobile_no = models.CharField(
+        'Mobile no',
+        max_length=32,
+        blank=True,
+        default='',
+        help_text='Optional mobile number (leave empty if unknown).',
+    )
+
     def __str__(self):
         return self.username
 

@@ -182,7 +182,19 @@ export default function App() {
               } />
 
               <Route path="/staff/analytics" element={
-                <ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={['analytics.view_all_analytics', 'analytics.view_department_analytics', 'analytics.view_class_analytics']} element={<AttendanceAnalytics />} />
+                <ProtectedRoute
+                  user={user}
+                  requiredProfile={'STAFF'}
+                  requiredPermissions={[
+                    'academics.view_all_attendance',
+                    'academics.view_attendance_overall',
+                    'academics.view_all_departments',
+                    'academics.view_department_attendance',
+                    'academics.view_class_attendance',
+                    'academics.view_section_attendance',
+                  ]}
+                  element={<AttendanceAnalytics />}
+                />
               } />
               <Route path="/staff/mentees" element={
                 <ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={['academics.view_mentees']} element={<MyMentees />} />

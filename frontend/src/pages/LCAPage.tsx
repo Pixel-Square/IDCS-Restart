@@ -85,7 +85,7 @@ const styles: { [k: string]: React.CSSProperties } = {
   title: { margin: 0, color: '#0b4a6f', fontSize: 22, fontWeight: 700 },
   subtitle: { marginTop: 6, color: '#3d5566', fontSize: 13 },
   sectionTitle: { margin: '0 0 10px 0', color: '#0b3b57', fontSize: 16 },
-  table: { width: '100%', borderCollapse: 'collapse', marginTop: 8 },
+  table: { width: '100%', borderCollapse: 'collapse', marginTop: 8, tableLayout: 'fixed' as React.CSSProperties['tableLayout'] },
   th: {
     background: '#f3f8ff',
     color: '#0b4a6f',
@@ -105,6 +105,7 @@ const styles: { [k: string]: React.CSSProperties } = {
     textAlign: 'left',
     fontSize: 13,
     whiteSpace: 'nowrap',
+    minWidth: 220,
   },
   td: {
     padding: '8px 10px',
@@ -119,6 +120,7 @@ const styles: { [k: string]: React.CSSProperties } = {
     color: '#234451',
     fontSize: 13,
     textAlign: 'left',
+    minWidth: 220,
   },
   cellYellow: { background: '#fef9c3' },
   cellGreen: { background: '#ecfdf3' },
@@ -327,12 +329,16 @@ export default function LCAPage({
   const [pbrCay2, setPbrCay2] = useState<PbrSummary | null>(null);
   const [pbrError, setPbrError] = useState<string | null>(null);
   const [pbrBusy, setPbrBusy] = useState<'cay1' | 'cay2' | null>(null);
+  // Manual course level to use when Excel files are not provided
+  const [pbrManualCourseLevel, setPbrManualCourseLevel] = useState<CourseLevelCode>('-');
 
   const pbrCourseLevel: CourseLevelCode = useMemo(() => {
+    // Preference: CAY-2 > CAY-1 > manual selection (used when excels are not available)
     if (pbrCay2) return pbrCay2.courseLevel;
     if (pbrCay1) return pbrCay1.courseLevel;
+    if (pbrManualCourseLevel && pbrManualCourseLevel !== '-') return pbrManualCourseLevel;
     return '-';
-  }, [pbrCay1, pbrCay2]);
+  }, [pbrCay1, pbrCay2, pbrManualCourseLevel]);
 
   const pbrLearnerCentricLevelCode: LearnerCentricCode = useMemo(
     () => learnerCentricFromCourseLevel(pbrCourseLevel),
@@ -390,6 +396,48 @@ export default function LCAPage({
           </div>
 
           <div style={{ height: 14 }} />
+
+          {/* Manual course level selection - used when Excel files are not provided */}
+          <div style={{ marginBottom: 8, display: 'flex', gap: 12, alignItems: 'center' }}>
+            <div style={{ color: '#0b4a6f', fontWeight: 700 }}>Fallback course level (if no Excel):</div>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <input
+                type="radio"
+                name="pbrManual"
+                value="HC"
+                checked={pbrManualCourseLevel === 'HC'}
+                onChange={() => setPbrManualCourseLevel('HC')}
+              />
+              HARD COURSE (HC)
+            </label>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <input
+                type="radio"
+                name="pbrManual"
+                value="MC"
+                checked={pbrManualCourseLevel === 'MC'}
+                onChange={() => setPbrManualCourseLevel('MC')}
+              />
+              MEDIUM COURSE (MC)
+            </label>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <input
+                type="radio"
+                name="pbrManual"
+                value="EC"
+                checked={pbrManualCourseLevel === 'EC'}
+                onChange={() => setPbrManualCourseLevel('EC')}
+              />
+              EASY COURSE (EC)
+            </label>
+            <button
+              type="button"
+              onClick={() => setPbrManualCourseLevel('-')}
+              style={{ marginLeft: 8, ...styles.btn, padding: '6px 8px' }}
+            >
+              Clear
+            </button>
+          </div>
 
           <table style={styles.table}>
             <tbody>
@@ -547,27 +595,31 @@ export default function LCAPage({
         <div style={styles.sectionTitle}>STEP 1: Identifying Learner profile</div>
 
         {/* 1.1 CURRENT GPA PROFILE */}
-        <table style={styles.table}>
+          <table style={styles.table}>
+            <colgroup>
+              <col style={{ width: 220 }} />
+              <col style={{ width: 200 }} />
+              <col style={{ width: 200 }} />
+              <col style={{ width: 200 }} />
+              <col style={{ width: 100 }} />
+              <col style={{ width: 60 }} />
+            </colgroup>
           <thead>
             <tr>
-              <th style={styles.thLeft} colSpan={5}>1.1 CURRENT GPA PROFILE (CGP)</th>
-              <th style={styles.th}>LEVEL</th>
+              <th style={styles.thLeft} colSpan={4}>1.1 CURRENT GPA PROFILE (CGP)</th>
+              <th style={styles.th} rowSpan={3} colSpan={2}>LEVEL</th>
             </tr>
             <tr>
               <th style={styles.thLeft}>Current batch mean GPA</th>
               <th style={styles.th}>1</th>
               <th style={styles.th}>2</th>
               <th style={styles.th}>3</th>
-              <th style={styles.th}> </th>
-              <th style={styles.th}> </th>
             </tr>
             <tr>
               <th style={styles.thLeft}>GPA</th>
               <th style={styles.th}>0 - 5</th>
               <th style={styles.th}>5 - 7.5</th>
               <th style={styles.th}>&gt; 7.5</th>
-              <th style={styles.th}> </th>
-              <th style={styles.th}> </th>
             </tr>
           </thead>
           <tbody>
@@ -582,8 +634,7 @@ export default function LCAPage({
               <td style={{ ...styles.td, ...styles.cellYellow }}>
                 <NumberInput value={currentGpaCounts.band3} onChange={(v) => setCurrentGpaCounts((p) => ({ ...p, band3: v }))} />
               </td>
-              <td style={styles.td}> </td>
-              <td style={{ ...styles.td, fontWeight: 800, color: '#0b4a6f' }}>{cgpLevel}</td>
+              <td style={{ ...styles.td, fontWeight: 800, color: '#0b4a6f' }} colSpan={2}>{cgpLevel}</td>
             </tr>
           </tbody>
         </table>
@@ -592,6 +643,14 @@ export default function LCAPage({
 
         {/* 1.2 PREREQUISITE PROFILE */}
         <table style={styles.table}>
+          <colgroup>
+            <col style={{ width: 220 }} />
+            <col style={{ width: 200 }} />
+            <col style={{ width: 200 }} />
+            <col style={{ width: 200 }} />
+            <col style={{ width: 100 }} />
+            <col style={{ width: 60 }} />
+          </colgroup>
           <thead>
             <tr>
               <th style={styles.thLeft} colSpan={4}>1.2 PRE REQUISITE PROFILE (PRP)</th>
@@ -682,7 +741,7 @@ export default function LCAPage({
                   +
                 </button>
                 <span style={{ marginLeft: 10, fontSize: 13, color: '#557085' }}>
-                  Add next prerequisite (no limit)
+                  Add next prerequisite
                 </span>
               </td>
             </tr>

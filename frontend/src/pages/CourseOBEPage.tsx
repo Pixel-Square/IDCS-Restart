@@ -264,7 +264,7 @@ export default function CourseOBEPage(): JSX.Element {
 
           <div style={{ display: 'flex', gap: 6, marginBottom: 24, background: '#fff', padding: '8px', borderRadius: 12, boxShadow: '0 1px 3px rgba(0,0,0,0.06)', flexWrap: 'wrap' }} aria-label="OBE Tabs">
             {[
-              { key: 'lca_instructions', label: '📚 LCA Instructions', icon: '📚' },
+              { key: 'lca_instructions', label: '📚 Learner Centric Approach', icon: '📚' },
               { key: 'marks', label: '✍️ Mark Entry', icon: '✍️' },
               { key: 'co_attainment', label: '📊 CO Attainment', icon: '📊' },
               { key: 'cqi', label: '🎯 CQI', icon: '🎯' },

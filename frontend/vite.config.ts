@@ -7,6 +7,15 @@ export default defineConfig({
     host: true,
     allowedHosts: ['db.zynix.us', "idcs.zynix.us"],
      port: 80,
+    // Dev convenience: when the frontend is served by Vite (often :80) and the
+    // Django API is on a different port (often :8000), proxy `/api/...` so
+    // same-origin API calls don't 404 with HTML.
+    proxy: {
+      '/api': {
+        target: process.env.VITE_DEV_API_PROXY_TARGET || 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
+    },
     // Reduce watcher pressure by ignoring heavyweight folders
     watch: {
       // ignore large folders to save inotify watchers

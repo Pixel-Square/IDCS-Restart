@@ -4,8 +4,9 @@ import OBEDueDatesPage from '../OBEDueDatesPage';
 import AcademicControllerCoursesPage from './AcademicControllerCoursesPage';
 import AcademicControllerQPPage from './AcademicControllerQPPage';
 import AcademicControllerWeightsPage from './AcademicControllerWeightsPage';
+import AcademicControllerCQIPage from './AcademicControllerCQIPage';
 
-type TabKey = 'dashboard' | 'due_dates' | 'courses' | 'weights' | 'qp';
+type TabKey = 'dashboard' | 'due_dates' | 'courses' | 'weights' | 'qp' | 'cqi';
 
 export default function AcademicControllerPage(): JSX.Element {
   const location = useLocation();
@@ -27,6 +28,7 @@ export default function AcademicControllerPage(): JSX.Element {
     { key: 'due_dates', label: 'OBE Due Dates' },
     { key: 'courses', label: 'Courses' },
     { key: 'qp', label: 'QP' },
+    { key: 'cqi', label: 'CQI Editor' },
   ];
 
   return (
@@ -66,6 +68,7 @@ export default function AcademicControllerPage(): JSX.Element {
         {tab === 'due_dates' && <OBEDueDatesPage />}
         {tab === 'courses' && <AcademicControllerCoursesPage />}
         {tab === 'qp' && <AcademicControllerQPPage />}
+        {tab === 'cqi' && <AcademicControllerCQIPage />}
       </div>
     </main>
   );

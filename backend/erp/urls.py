@@ -6,10 +6,12 @@ import sys
 import erp.admin_customization
 from erp import admin_views
 from django.conf.urls.static import static
-from django.views.generic import TemplateView
+from django.views.generic import RedirectView
+from django.http import HttpResponse
 
 urlpatterns = [
-    path('', TemplateView.as_view(template_name='db_dashboard.html'), name='db-dashboard'),
+    path('', RedirectView.as_view(url='/admin/', permanent=False), name='db-dashboard'),
+    path('favicon.ico', lambda request: HttpResponse(status=204), name='favicon'),
     path('grappelli/', include('grappelli.urls')),
     path('admin/', admin.site.urls),
     path('api/accounts/', include('accounts.urls')),

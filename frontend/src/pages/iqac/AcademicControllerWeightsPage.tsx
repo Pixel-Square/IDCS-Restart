@@ -7,37 +7,6 @@ const DEFAULT_INTERNAL_MARK_WEIGHTS = [1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 1.5, 3.0, 2
 
 const INTERNAL_MARK_TABLE_CLASS_TYPES = ['THEORY', 'TCPR', 'TCPL', 'LAB', 'AUDIT', 'PRACTICAL', 'SPECIAL'] as const;
 
-const THEORY_INTERNAL_SCHEMA = {
-  groupHeaders: ['CO1', 'CO2', 'CO3', 'CO4', 'ME'] as const,
-  // 3*4 + 5 = 17
-  subHeaders: [
-    ['SSA', 'CIA', 'FA'],
-    ['SSA', 'CIA', 'FA'],
-    ['SSA', 'CIA', 'FA'],
-    ['SSA', 'CIA', 'FA'],
-    ['CO1', 'CO2', 'CO3', 'CO4', 'CO5'],
-  ] as const,
-} as const;
-
-const INTERNAL_MARK_LABELS: string[] = [
-  'CO1-SSA',
-  'CO1-CIA',
-  'CO1-FA',
-  'CO2-SSA',
-  'CO2-CIA',
-  'CO2-FA',
-  'CO3-SSA',
-  'CO3-CIA',
-  'CO3-FA',
-  'CO4-SSA',
-  'CO4-CIA',
-  'CO4-FA',
-  'ME-CO1',
-  'ME-CO2',
-  'ME-CO3',
-  'ME-CO4',
-  'ME-CO5',
-];
 
 type WeightsRow = {
   ssa1: number | string;
@@ -45,8 +14,6 @@ type WeightsRow = {
   formative1: number | string;
   internal_mark_weights: Array<number | string>;
 };
-
-type TheoryEnabledState = Record<string, boolean[]>;
 
 const INTERNAL_CELL_PADDING = 6;
 const INTERNAL_INPUT_WIDTH = 64;
@@ -94,13 +61,57 @@ function normalizeInternalWeightsLen17(
   return next;
 }
 
-function buildTheoryEnabledState(src: Record<string, WeightsRow>): TheoryEnabledState {
-  const out: TheoryEnabledState = {};
-  for (const k of ['THEORY', 'TCPR', 'TCPL']) {
-    // Default locked/dim until the user explicitly enables editing.
-    out[k] = new Array(17).fill(false);
+type InternalWeightsCol = { label: string; index: number };
+type InternalWeightsGroup = { header: string; cols: InternalWeightsCol[] };
+
+function buildInternalWeightsGroups(classType: string): InternalWeightsGroup[] {
+  const k = normalizeClassType(classType);
+
+  // Lab-like classes use CIA1/CIA2 + MODEL only.
+  if (k === 'LAB' || k === 'PRACTICAL') {
+    return [
+      { header: 'CO1', cols: [{ label: 'CIA 1', index: 1 }] },
+      { header: 'CO2', cols: [{ label: 'CIA 1', index: 4 }] },
+      { header: 'CO3', cols: [{ label: 'CIA 2', index: 7 }] },
+      { header: 'CO4', cols: [{ label: 'CIA 2', index: 10 }] },
+      { header: 'ME', cols: [{ label: 'MODEL', index: 16 }] },
+    ];
   }
-  return out;
+
+  const thirdLabelForCo = (coNum: 1 | 2 | 3 | 4) => {
+    if (k === 'TCPR') return (coNum === 1 || coNum === 2) ? 'Review 1' : 'Review 2';
+    if (k === 'TCPL') return (coNum === 1 || coNum === 2) ? 'LAB 1' : 'LAB 2';
+    return (coNum === 1 || coNum === 2) ? 'Formative 1' : 'Formative 2';
+  };
+
+  const ciaLabelForCo = (coNum: 1 | 2 | 3 | 4) => (coNum === 1 || coNum === 2 ? 'CIA 1' : 'CIA 2');
+  const ssaLabelForCo = (coNum: 1 | 2 | 3 | 4) => (coNum === 1 || coNum === 2 ? 'SSA 1' : 'SSA 2');
+
+  const coGroup = (coNum: 1 | 2 | 3 | 4, baseIndex: number): InternalWeightsGroup => ({
+    header: `CO${coNum}`,
+    cols: [
+      { label: ssaLabelForCo(coNum), index: baseIndex },
+      { label: ciaLabelForCo(coNum), index: baseIndex + 1 },
+      { label: thirdLabelForCo(coNum), index: baseIndex + 2 },
+    ],
+  });
+
+  return [
+    coGroup(1, 0),
+    coGroup(2, 3),
+    coGroup(3, 6),
+    coGroup(4, 9),
+    {
+      header: 'ME',
+      cols: [
+        { label: 'CO1', index: 12 },
+        { label: 'CO2', index: 13 },
+        { label: 'CO3', index: 14 },
+        { label: 'CO4', index: 15 },
+        { label: 'CO5', index: 16 },
+      ],
+    },
+  ];
 }
 
 export default function AcademicControllerWeightsPage() {
@@ -109,7 +120,6 @@ export default function AcademicControllerWeightsPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [theoryEnabled, setTheoryEnabled] = useState<TheoryEnabledState>({});
 
   useEffect(() => {
     setLoading(true);
@@ -211,7 +221,6 @@ export default function AcademicControllerWeightsPage() {
         const remote = await svc.fetchClassTypeWeights();
         const applied = applyAny(remote);
         setWeights(applied);
-        setTheoryEnabled(buildTheoryEnabledState(applied));
         return;
       } catch {
         // ignore
@@ -221,11 +230,9 @@ export default function AcademicControllerWeightsPage() {
         const saved = lsGet<any>('iqac_class_type_weights');
         const applied = applyAny(saved);
         setWeights(applied);
-        setTheoryEnabled(buildTheoryEnabledState(applied));
       } catch {
         const applied = buildDefaults();
         setWeights(applied);
-        setTheoryEnabled(buildTheoryEnabledState(applied));
       } finally {
         setLoading(false);
       }
@@ -255,15 +262,6 @@ export default function AcademicControllerWeightsPage() {
           internal_mark_weights: next,
         },
       };
-    });
-  };
-
-  const toggleTheoryCol = (theoryKey: string, index: number, checked: boolean) => {
-    setTheoryEnabled((prev) => {
-      const cur = Array.isArray(prev[theoryKey]) ? [...prev[theoryKey]] : new Array(17).fill(true);
-      while (cur.length < 17) cur.push(true);
-      cur[index] = checked;
-      return { ...prev, [theoryKey]: cur.slice(0, 17) };
     });
   };
 
@@ -360,8 +358,11 @@ export default function AcademicControllerWeightsPage() {
                         <input type="number" step="0.1" value={weights[key]?.cia1 ?? ''} onChange={(e) => handleChange(key, 'cia1', e.target.value)} required />
                       </td>
                       <td style={{ border: '1px solid #ccc', padding: 8 }}>
-                        <input type="number" step="0.1" value={weights[key]?.formative1 ?? ''} onChange={(e) => handleChange(key, 'formative1', e.target.value)} required />
-                      </td>
+                            <input type="number" step="0.1" value={weights[key]?.formative1 ?? ''} onChange={(e) => handleChange(key, 'formative1', e.target.value)} required />
+                            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
+                              {key === 'TCPL' ? 'Lab' : key === 'TCPR' ? 'Review' : 'Formative'}
+                            </div>
+                          </td>
                     </tr>
                   );
                 })}
@@ -371,112 +372,48 @@ export default function AcademicControllerWeightsPage() {
 
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontWeight: 800, marginBottom: 6 }}>Internal Mark Weightage</div>
-            <div style={{ color: '#6b7280', fontSize: 13 }}>This 17-value row controls the INTERNAL MARK table calculation by class type.</div>
+            <div style={{ color: '#6b7280', fontSize: 13 }}>Inputs are mapped exactly to class-type exam assignments used in Internal Mark calculation.</div>
           </div>
           <div style={{ marginBottom: 24 }}>
             {INTERNAL_MARK_TABLE_CLASS_TYPES.map((ct) => {
               const key = normalizeClassType(String(ct));
               const row = weights[key];
               const arr = normalizeInternalWeightsLen17(Array.isArray(row?.internal_mark_weights) ? row.internal_mark_weights : DEFAULT_INTERNAL_MARK_WEIGHTS, row);
-
-              const isTheoryVariant = key === 'THEORY' || key === 'TCPR' || key === 'TCPL';
-              if (isTheoryVariant) {
-                const enabledArr = Array.isArray(theoryEnabled[key]) ? theoryEnabled[key] : new Array(17).fill(true);
-                const inputStyle = (enabled: boolean): React.CSSProperties => ({
-                  width: INTERNAL_INPUT_WIDTH,
-                  opacity: enabled ? 1 : 0.45,
-                  pointerEvents: enabled ? 'auto' : 'none',
-                });
-
-                // Map UI cells to 17 indexes (CO1..CO4 => SSA/CIA/FA, ME => CO1..CO5)
-                const idxMap: number[][] = [
-                  [0, 1, 2],
-                  [3, 4, 5],
-                  [6, 7, 8],
-                  [9, 10, 11],
-                  [12, 13, 14, 15, 16],
-                ];
-
-                return (
-                  <div key={key} style={{ marginBottom: 18, overflowX: 'auto' }}>
-                    <div style={{ fontWeight: 800, marginBottom: 8 }}>{displayClassTypeName(key)}</div>
-                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                      <thead>
-                        <tr>
-                          {THEORY_INTERNAL_SCHEMA.groupHeaders.map((g, gi) => (
-                            <th
-                              key={g}
-                              colSpan={THEORY_INTERNAL_SCHEMA.subHeaders[gi].length}
-                              style={{ border: '1px solid #ccc', padding: INTERNAL_CELL_PADDING, textAlign: 'center', whiteSpace: 'nowrap', fontSize: 13 }}
-                            >
-                              {g}
-                            </th>
-                          ))}
-                        </tr>
-                        <tr>
-                          {THEORY_INTERNAL_SCHEMA.subHeaders.flat().map((sub, flatIdx) => {
-                            const enabled = Boolean(enabledArr[flatIdx] ?? true);
-                            return (
-                              <th key={`${sub}_${flatIdx}`} style={{ border: '1px solid #ccc', padding: INTERNAL_CELL_PADDING, textAlign: 'center', whiteSpace: 'nowrap', fontSize: 12 }}>
-                                <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', userSelect: 'none' }}>
-                                  <input
-                                    type="checkbox"
-                                    checked={enabled}
-                                    onChange={(e) => toggleTheoryCol(key, flatIdx, e.target.checked)}
-                                    style={{ transform: 'scale(0.9)' }}
-                                  />
-                                  {sub}
-                                </label>
-                              </th>
-                            );
-                          })}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr>
-                          {idxMap.flat().map((idx) => {
-                            const enabled = Boolean(enabledArr[idx] ?? true);
-                            return (
-                              <td key={idx} style={{ border: '1px solid #ccc', padding: INTERNAL_CELL_PADDING, textAlign: 'center' }}>
-                                <input
-                                  type="number"
-                                  step="0.1"
-                                  value={(arr as any)[idx] ?? ''}
-                                  onChange={(e) => handleInternalWeightChange(key, idx, e.target.value)}
-                                  disabled={!enabled}
-                                  style={inputStyle(enabled)}
-                                />
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                );
-              }
-
-              // Non-theory: keep the 13-value schema, but split into separate tables per class type
+              const groups = buildInternalWeightsGroups(key);
+              const cols = groups.flatMap((g) => g.cols);
               return (
                 <div key={key} style={{ marginBottom: 18, overflowX: 'auto' }}>
                   <div style={{ fontWeight: 800, marginBottom: 8 }}>{displayClassTypeName(key)}</div>
                   <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
                       <tr>
-                        {INTERNAL_MARK_LABELS.map((lab) => (
-                          <th key={lab} style={{ border: '1px solid #ccc', padding: INTERNAL_CELL_PADDING, whiteSpace: 'nowrap', fontSize: 12 }}>{lab}</th>
+                        {groups.map((g) => (
+                          <th
+                            key={g.header}
+                            colSpan={g.cols.length}
+                            style={{ border: '1px solid #ccc', padding: INTERNAL_CELL_PADDING, textAlign: 'center', whiteSpace: 'nowrap', fontSize: 13 }}
+                          >
+                            {g.header}
+                          </th>
+                        ))}
+                      </tr>
+                      <tr>
+                        {cols.map((c) => (
+                          <th key={`${c.label}_${c.index}`} style={{ border: '1px solid #ccc', padding: INTERNAL_CELL_PADDING, textAlign: 'center', whiteSpace: 'nowrap', fontSize: 12 }}>
+                            {c.label}
+                          </th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
                       <tr>
-                        {INTERNAL_MARK_LABELS.map((_, idx) => (
-                          <td key={idx} style={{ border: '1px solid #ccc', padding: INTERNAL_CELL_PADDING }}>
+                        {cols.map((c) => (
+                          <td key={c.index} style={{ border: '1px solid #ccc', padding: INTERNAL_CELL_PADDING, textAlign: 'center' }}>
                             <input
                               type="number"
                               step="0.1"
-                              value={(arr as any)[idx] ?? ''}
-                              onChange={(e) => handleInternalWeightChange(key, idx, e.target.value)}
+                              value={(arr as any)[c.index] ?? ''}
+                              onChange={(e) => handleInternalWeightChange(key, c.index, e.target.value)}
                               required
                               style={{ width: INTERNAL_INPUT_WIDTH }}
                             />

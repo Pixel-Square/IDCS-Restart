@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import * as XLSX from 'xlsx';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { normalizeClassType } from '../constants/classTypes';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
@@ -48,6 +49,47 @@ const DEFAULT_MODEL_QUESTIONS: QuestionDef[] = [
   { key: 'q8', label: 'Q8', max: 16 },
   { key: 'q9', label: 'Q9', max: 16 },
 ];
+
+function safeFilePart(raw: string) {
+  return String(raw || '')
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9_-]/g, '')
+    .slice(0, 48);
+}
+
+function downloadCsv(filename: string, rows: Array<Record<string, string | number>>) {
+  if (!rows.length) return;
+  const headers = Object.keys(rows[0]);
+  const csv = [headers.join(',')]
+    .concat(
+      rows.map((r) =>
+        headers
+          .map((h) => {
+            const v = r[h];
+            const s = String(v ?? '').replace(/\n/g, ' ');
+            return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s;
+          })
+          .join(','),
+      ),
+    )
+    .join('\n');
+
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function normalizeHeaderCell(v: any): string {
+  return String(v ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
 
 export default function ModelEntry({ subjectId, classType, teachingAssignmentId, questionPaperType }: Props) {
   const visibleBtls = useMemo(() => [1, 2, 3, 4, 5, 6] as const, []);
@@ -117,6 +159,8 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   const [editRequestBusy, setEditRequestBusy] = useState(false);
 
   const [lockedViewOpen, setLockedViewOpen] = useState(false);
+  const excelFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [excelBusy, setExcelBusy] = useState(false);
 
   const normalizedClassType = useMemo(() => normalizeClassType(classType), [classType]);
   const isTheory = normalizedClassType === 'THEORY';
@@ -152,11 +196,17 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   });
 
   const isPublished = Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published) || Boolean(publishedViewSnapshot);
-  const entryOpen =
-    !isPublished ? true : Boolean(markLock?.entry_open) || Boolean(markEntryEditWindow?.allowed_by_approval);
-  const publishedEditLocked = Boolean(isPublished && !entryOpen);
+  const approvalOpen = Boolean(markEntryEditWindow?.allowed_by_approval);
+  const entryOpen = !isPublished ? true : approvalOpen;
+  const publishedEditLocked = Boolean(isPublished && !approvalOpen);
 
   const globalLocked = Boolean(publishWindow?.global_override_active && publishWindow?.global_is_open === false);
+
+  // Table blocked semantics: mirror other sheets
+  // - If globally locked, table blocked
+  // - If published, table blocked when entry is not open
+  // - If not published, table is not blocked (no mark-manager on model)
+  const tableBlocked = Boolean(globalLocked || (isPublished ? !entryOpen : false));
 
   useEffect(() => {
     // Reset the locked-view toggle when switching subjects or when editing becomes open.
@@ -491,6 +541,17 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
 
   const publish = async () => {
     if (!subjectId) return;
+
+    // After publish, primary action becomes edit request.
+    if (isPublished) {
+      if (publishedEditLocked) {
+        setPublishedEditModalOpen(true);
+        return;
+      }
+      setActionError('Editing is already open for this published sheet.');
+      return;
+    }
+
     if (globalLocked) {
       setActionError('Publishing is locked by IQAC.');
       return;
@@ -500,16 +561,10 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
       return;
     }
 
-    // If already published and locked, use the Publish action as an entry point to request edits.
-    if (isPublished && publishedEditLocked) {
-      setPublishedEditModalOpen(true);
-      return;
-    }
-
     setPublishing(true);
     setActionError(null);
     try {
-      await OBE.publishLabSheet('model', subjectId, buildPayload(), teachingAssignmentId);
+      await OBE.publishModelSheet(subjectId, buildPayload(), teachingAssignmentId);
       setPublishedAt(new Date().toLocaleString());
       await refreshPublishedSnapshot(false);
       refreshPublishWindow({ silent: true });
@@ -576,7 +631,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     if (showLoading) setPublishedViewLoading(true);
     setPublishedViewError(null);
     try {
-      const resp = await OBE.fetchPublishedLabSheet('model', String(subjectId), teachingAssignmentId);
+      const resp = await OBE.fetchPublishedModelSheet(String(subjectId), teachingAssignmentId);
       const data = (resp as any)?.data ?? null;
       const looksLikeModelPayload = Boolean(
         data &&
@@ -898,6 +953,16 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     });
   };
 
+  const setActiveSheetWhole = (next: TcplSheetState) => {
+    if (isTcplLike) {
+      setTcplSheet(next);
+      lsSet(tcplSheetStorageKey, next);
+      return;
+    }
+    setTheorySheet(next);
+    lsSet(theorySheetStorageKey, next);
+  };
+
   // Auto-save to backend (debounced) when there is typing/activity.
   // No background timer runs when the sheet is idle.
   useEffect(() => {
@@ -945,6 +1010,162 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     const v = Math.round((n + Number.EPSILON) * 10) / 10;
     const s = v.toFixed(1);
     return s.endsWith('.0') ? s.slice(0, -2) : s;
+  };
+
+  const getQuestionDefsForSheet = () => (isTcplLike ? tcplQuestions : theoryQuestions);
+
+  const exportSheetCsv = () => {
+    const defs = getQuestionDefsForSheet();
+    const rows = (students || []).map((s, idx) => {
+      const rowKey = getRowKey(s as any, idx);
+      const row = (activeSheet || {})[rowKey] || {};
+      const qObj = (row as any).q && typeof (row as any).q === 'object' ? (row as any).q : {};
+      const out: Record<string, string | number> = {
+        sno: idx + 1,
+        registerNo: String((s as any).reg_no || ''),
+        name: String((s as any).name || ''),
+        absent: (row as any).absent ? 'YES' : '',
+        absentKind: (row as any).absent ? normalizeAbsenceKind((row as any).absentKind) : '',
+      };
+      defs.forEach((q) => {
+        const raw = (qObj as any)[q.key];
+        const n = Number(raw);
+        out[q.label] = Number.isFinite(n) ? Math.max(0, Math.min(q.max, n)) : '';
+      });
+      if (isTcplLike) {
+        const lv = Number((row as any).lab);
+        out[tcplLabLabel] = Number.isFinite(lv) ? Math.max(0, Math.min(tcplLabMax, lv)) : '';
+      }
+      return out;
+    });
+
+    const suffix = isTcplLike ? String(normalizedClassType || 'TCPL') : 'THEORY';
+    downloadCsv(`${safeFilePart(subjectId)}_MODEL_${safeFilePart(suffix)}.csv`, rows);
+  };
+
+  const exportSheetExcel = () => {
+    const defs = getQuestionDefsForSheet();
+    if (!students.length) return;
+
+    const header = ['Register No', 'Student Name', ...defs.map((q) => `${q.label} (${q.max})`)];
+    if (isTcplLike) header.push(`${tcplLabLabel} (${tcplLabMax})`);
+    header.push('Status', 'Absence Kind');
+
+    const data = students.map((s) => {
+      const base = [String((s as any).reg_no || ''), String((s as any).name || '')];
+      const marks = defs.map(() => '');
+      if (isTcplLike) return [...base, ...marks, '', 'present', 'AL'];
+      return [...base, ...marks, 'present', 'AL'];
+    });
+
+    const ws = XLSX.utils.aoa_to_sheet([header, ...data]);
+    ws['!freeze'] = { xSplit: 0, ySplit: 1 } as any;
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'MODEL');
+
+    const suffix = isTcplLike ? String(normalizedClassType || 'TCPL') : 'THEORY';
+    const filename = `${safeFilePart(subjectId)}_MODEL_${safeFilePart(suffix)}_template.xlsx`;
+    (XLSX as any).writeFile(wb, filename);
+  };
+
+  const triggerExcelImport = () => {
+    if (publishedEditLocked) return;
+    excelFileInputRef.current?.click();
+  };
+
+  const importFromExcel = async (file: File) => {
+    if (!file) return;
+    setExcelBusy(true);
+    try {
+      const defs = getQuestionDefsForSheet();
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: 'array' });
+      const firstName = workbook.SheetNames?.[0];
+      if (!firstName) throw new Error('No sheet found in the Excel file.');
+      const sheet0 = workbook.Sheets[firstName];
+      const rows: any[][] = XLSX.utils.sheet_to_json(sheet0, { header: 1 });
+      if (!rows.length) throw new Error('Excel sheet is empty.');
+
+      const headerRow = (rows[0] || []).map(normalizeHeaderCell);
+      const findCol = (pred: (h: string) => boolean) => headerRow.findIndex((h) => pred(h));
+
+      const regCol = findCol((h) => h === 'register no' || h === 'reg no' || h.includes('register'));
+      const statusCol = findCol((h) => h === 'status' || h.includes('status'));
+      const kindCol = findCol((h) => h === 'absence kind' || h === 'absent kind' || h === 'kind');
+      if (regCol < 0) throw new Error('Could not find Register No column.');
+
+      const qCols = defs.map((q) => {
+        const key = String(q.label || '').toLowerCase();
+        const idx = findCol((h) => h === key || h.startsWith(key));
+        return { q, col: idx };
+      });
+
+      const labCol = isTcplLike
+        ? findCol((h) => h === String(tcplLabLabel || '').toLowerCase() || h.startsWith(String(tcplLabLabel || '').toLowerCase()))
+        : -1;
+
+      const regToKey = new Map<string, string>();
+      students.forEach((s, idx) => {
+        const reg = String((s as any).reg_no || '').trim();
+        if (!reg) return;
+        regToKey.set(reg, getRowKey(s as any, idx));
+      });
+
+      const nextSheet: TcplSheetState = { ...(activeSheet || {}) };
+
+      for (let i = 1; i < rows.length; i++) {
+        const rowArr = rows[i] || [];
+        const reg = String(rowArr[regCol] ?? '').trim();
+        if (!reg) continue;
+        const rowKey = regToKey.get(reg);
+        if (!rowKey) continue;
+
+        const prev = (nextSheet[rowKey] || {}) as TcplRowEntry;
+        const qObj: Record<string, CellNumber> = { ...((prev as any).q || {}) };
+
+        qCols.forEach(({ q, col }) => {
+          if (col < 0) return;
+          const raw = rowArr[col];
+          const n = Number(raw);
+          qObj[q.key] = Number.isFinite(n) ? Math.max(0, Math.min(q.max, n)) : '';
+        });
+
+        const status = statusCol >= 0 ? String(rowArr[statusCol] ?? '').trim().toLowerCase() : '';
+        const absent = status === 'absent' || status === 'ab' || status === 'a';
+
+        const kindRaw = kindCol >= 0 ? rowArr[kindCol] : 'AL';
+        const absentKind = normalizeAbsenceKind(kindRaw);
+
+        const updated: TcplRowEntry = {
+          ...prev,
+          q: qObj,
+          absent,
+          absentKind,
+        };
+
+        if (isTcplLike && labCol >= 0) {
+          const lv = Number(rowArr[labCol]);
+          updated.lab = Number.isFinite(lv) ? Math.max(0, Math.min(tcplLabMax, lv)) : '';
+        }
+
+        nextSheet[rowKey] = updated;
+      }
+
+      setActiveSheetWhole(nextSheet);
+    } finally {
+      setExcelBusy(false);
+    }
+  };
+
+  const handleExcelFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      await importFromExcel(file);
+    } catch (err: any) {
+      alert(err?.message || 'Failed to import Excel');
+    }
   };
 
   const tcplCoTheoryMaxRow = useMemo(() => {
@@ -1136,22 +1357,40 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
         <button onClick={saveLocal} className="obe-btn" disabled={!subjectId || publishedEditLocked}>
           Save
         </button>
+        <button onClick={exportSheetCsv} className="obe-btn obe-btn-secondary" disabled={!students.length}>
+          Export CSV
+        </button>
+        <button onClick={exportSheetExcel} className="obe-btn obe-btn-secondary" disabled={!students.length}>
+          Export Excel
+        </button>
+        <button onClick={triggerExcelImport} className="obe-btn obe-btn-secondary" disabled={!students.length || publishedEditLocked || excelBusy}>
+          {excelBusy ? 'Importing…' : 'Import Excel'}
+        </button>
+        <input
+          ref={excelFileInputRef}
+          type="file"
+          accept=".xlsx,.xls"
+          style={{ display: 'none' }}
+          onChange={handleExcelFileSelect}
+        />
         <button onClick={refreshAll} className="obe-btn" disabled={refreshing || !subjectId}>
           {refreshing ? 'Refreshing…' : 'Refresh'}
         </button>
         <button
           onClick={publish}
           className="obe-btn obe-btn-primary"
-          disabled={publishing || !publishAllowed || !subjectId || (isPublished && publishedEditLocked)}
+          disabled={publishing || students.length === 0 || !publishAllowed || tableBlocked || globalLocked}
           title={
-            isPublished && publishedEditLocked
-              ? 'Published and locked (use View/Edit on the lock panel).'
+            students.length === 0
+              ? 'No students in roster'
               : !publishAllowed
-                ? 'Publish window is closed.'
-                : undefined
+              ? 'Publish window is closed.'
+              : globalLocked
+              ? 'Publishing locked by IQAC'
+              : undefined
           }
         >
-          {publishing ? 'Publishing…' : 'Publish'}
+          {publishing ? 'Publishing…' : isPublished ? 'Edit Request' : 'Publish'}
         </button>
       </div>
 
@@ -1350,10 +1589,10 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
             style={{
               position: 'absolute',
               left: '50%',
-              transform: 'translateX(-50%)',
-              top: 12,
+              top: '50%',
+              transform: 'translate(-50%, -50%)',
               zIndex: 40,
-              background: 'rgba(255,255,255,0.98)',
+              background: '#fff',
               border: '1px solid #e5e7eb',
               padding: '10px 14px',
               borderRadius: 999,

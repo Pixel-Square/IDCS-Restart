@@ -11,6 +11,7 @@ export type TeachingAssignmentItem = {
   section_name?: string | null;
   academic_year?: string;
   semester?: number | null;
+  department?: { id: number; code?: string | null; name?: string | null; short_name?: string | null } | null;
   batch?: any;
 };
 
@@ -48,7 +49,17 @@ export type DraftAssessmentKey = 'ssa1' | 'review1' | 'ssa2' | 'review2' | 'cia1
 export type DueAssessmentKey = DraftAssessmentKey;
 
 function apiBase() {
-  return import.meta.env.VITE_API_BASE || 'https://db.zynix.us';
+  const fromEnv = import.meta.env.VITE_API_BASE;
+  if (fromEnv) return String(fromEnv).replace(/\/+$/, '');
+
+  // Default to same-origin so `/api/...` works behind nginx/proxy setups.
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    const host = String(window.location.hostname || '').trim().toLowerCase();
+    if (host === 'localhost' || host === '127.0.0.1') return 'http://localhost:8000';
+    return String(window.location.origin).replace(/\/+$/, '');
+  }
+
+  return 'https://db.zynix.us';
 }
 
 function authHeader(): Record<string, string> {
@@ -89,7 +100,7 @@ export async function dismissResetNotifications(notificationIds: number[]): Prom
 
 async function tryRefreshAccess(): Promise<string | null> {
   try {
-    const base = import.meta.env.VITE_API_BASE || 'https://db.zynix.us';
+    const base = apiBase();
     const refresh = localStorage.getItem('refresh');
     if (!refresh) return null;
     const res = await axios.post(`${base}/api/accounts/token/refresh/`, { refresh });
@@ -128,6 +139,9 @@ async function fetchWithAuth(input: RequestInfo, init?: RequestInit): Promise<Re
 export type PublishWindowResponse = {
   assessment: DueAssessmentKey;
   subject_code: string;
+  assessment_control_active?: boolean;
+  assessment_enabled?: boolean;
+  assessment_open?: boolean;
   publish_allowed: boolean;
   allowed_by_due: boolean;
   allowed_by_approval: boolean;
@@ -404,6 +418,57 @@ export type DueScheduleRow = {
   updated_at: string | null;
 };
 
+export type AssessmentControlRow = {
+  id: number;
+  semester: { id: number; number: number | null } | null;
+  subject_code: string;
+  subject_name: string;
+  assessment: DueAssessmentKey;
+  is_enabled: boolean;
+  is_open: boolean;
+  updated_at: string | null;
+  updated_by: number | null;
+};
+
+export async function fetchAssessmentControls(semesterIds: number[]): Promise<{ results: AssessmentControlRow[] }> {
+  const qp = semesterIds?.length ? `?semester_ids=${encodeURIComponent(semesterIds.join(','))}` : '';
+  const url = `${apiBase()}/api/obe/assessment-controls${qp}`;
+  const res = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', ...authHeader() } });
+  if (!res.ok) {
+    if (res.status === 404) {
+      throw new Error(
+        `Assessment controls endpoint not found (404).\n\nURL requested:\n${url}\n\nThis usually means your frontend is calling an older backend that does not include /api/obe/assessment-controls.\n- Deploy/restart the updated backend OR\n- Set VITE_API_BASE to the backend instance that has the new endpoints.`
+      );
+    }
+    await parseError(res, 'Assessment controls fetch failed');
+  }
+  return res.json();
+}
+
+export async function bulkSetAssessmentControls(payload: {
+  semester_id: number;
+  subject_codes: string[];
+  assessments: DueAssessmentKey[];
+  is_enabled?: boolean;
+  is_open?: boolean;
+}): Promise<{ status: string; updated: number }> {
+  const url = `${apiBase()}/api/obe/assessment-controls/bulk-set`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    if (res.status === 404) {
+      throw new Error(
+        `Assessment controls bulk-set endpoint not found (404).\n\nURL requested:\n${url}\n\nYour backend is missing /api/obe/assessment-controls/bulk-set. Deploy/restart the updated backend or point VITE_API_BASE to the correct server.`
+      );
+    }
+    await parseError(res, 'Bulk set assessment controls failed');
+  }
+  return res.json();
+}
+
 export async function fetchDueSchedules(semesterIds: number[]): Promise<{ results: DueScheduleRow[] }> {
   const qp = semesterIds?.length ? `?semester_ids=${encodeURIComponent(semesterIds.join(','))}` : '';
   const url = `${apiBase()}/api/obe/due-schedules${qp}`;
@@ -412,7 +477,14 @@ export async function fetchDueSchedules(semesterIds: number[]): Promise<{ result
   return res.json();
 }
 
-export async function fetchDueScheduleSubjects(semesterIds: number[]): Promise<{ subjects_by_semester: Record<string, Array<{ subject_code: string; subject_name: string }>> }> {
+export type DueScheduleSubject = {
+  subject_code: string;
+  subject_name: string;
+  class_type?: string;
+  enabled_assessments?: string[];
+};
+
+export async function fetchDueScheduleSubjects(semesterIds: number[]): Promise<{ subjects_by_semester: Record<string, DueScheduleSubject[]> }> {
   const qp = `?semester_ids=${encodeURIComponent(semesterIds.join(','))}`;
   const url = `${apiBase()}/api/obe/due-schedule-subjects${qp}`;
   const res = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', ...authHeader() } });
@@ -439,6 +511,17 @@ export async function bulkUpsertDueSchedule(payload: { semester_id: number; subj
     body: JSON.stringify(payload),
   });
   if (!res.ok) await parseError(res, 'Due schedule bulk save failed');
+  return res.json();
+}
+
+export async function bulkDeleteDueSchedule(payload: { semester_id: number; subject_codes: string[]; assessments: DueAssessmentKey[] }): Promise<{ status: string; deleted: number }> {
+  const url = `${apiBase()}/api/obe/due-schedule-bulk-delete`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) await parseError(res, 'Due schedule bulk delete failed');
   return res.json();
 }
 
@@ -547,6 +630,34 @@ export async function upsertIqacQpPattern(payload: { class_type: string; questio
     updated_at: data?.updated_at ?? null,
     updated_by: typeof data?.updated_by === 'number' ? data.updated_by : null,
   };
+}
+
+export type IqacCqiConfig = { options: any[]; divider: number; multiplier: number; updated_at?: string | null; updated_by?: number | null };
+
+export async function fetchIqacCqiConfig(): Promise<IqacCqiConfig> {
+  const url = `${apiBase()}/api/obe/iqac/cqi-config`;
+  const res = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', ...authHeader() } });
+  if (!res.ok) await parseError(res, 'CQI config fetch failed');
+  const data = await res.json();
+  return {
+    options: Array.isArray(data?.options) ? data.options : [],
+    divider: Number.isFinite(Number(data?.divider)) ? Number(data?.divider) : 2.0,
+    multiplier: Number.isFinite(Number(data?.multiplier)) ? Number(data?.multiplier) : 0.15,
+    updated_at: data?.updated_at ?? null,
+    updated_by: typeof data?.updated_by === 'number' ? data.updated_by : null,
+  };
+}
+
+export async function upsertIqacCqiConfig(payload: { options: any[]; divider: number; multiplier: number }): Promise<{ status: string } | any> {
+  const url = `${apiBase()}/api/obe/iqac/cqi-config/save`;
+  const body = {
+    options: Array.isArray(payload.options) ? payload.options : [],
+    divider: Number.isFinite(Number(payload.divider)) ? Number(payload.divider) : 2.0,
+    multiplier: Number.isFinite(Number(payload.multiplier)) ? Number(payload.multiplier) : 0.15,
+  };
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeader() }, body: JSON.stringify(body) });
+  if (!res.ok) await parseError(res, 'CQI config save failed');
+  return res.json();
 }
 
 export async function deleteDueSchedule(payload: { semester_id: number; subject_code: string; assessment: DueAssessmentKey }): Promise<{ status: string; deleted: number }> {
@@ -1030,6 +1141,40 @@ export async function publishCia1Sheet(subjectId: string, data: any, teachingAss
     body: JSON.stringify({ data }),
   });
   if (!res.ok) await parseError(res, 'CIA1 publish failed');
+  return res.json();
+}
+
+export type PublishedModelSheetResponse = {
+  subject: { code: string; name: string };
+  data: any | null;
+};
+
+export async function fetchPublishedModelSheet(subjectId: string, teachingAssignmentId?: number): Promise<PublishedModelSheetResponse> {
+  const qp = teachingAssignmentId ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
+  const url = `${apiBase()}/api/obe/model-published-sheet/${encodeURIComponent(subjectId)}${qp}`;
+  try {
+    const res = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', ...authHeader() } });
+    if (res.ok) return res.json();
+    // If the model-specific endpoint is missing return 404, fall back to lab endpoint for 'model'
+    if (res.status === 404) {
+      const lab = await fetchPublishedLabSheet('model', subjectId, teachingAssignmentId);
+      return { subject: lab.subject, data: lab.data } as PublishedModelSheetResponse;
+    }
+    await parseError(res, 'MODEL published sheet fetch failed');
+  } catch (err) {
+    throw err;
+  }
+}
+
+export async function publishModelSheet(subjectId: string, data: any, teachingAssignmentId?: number): Promise<{ status: string }> {
+  const qp = teachingAssignmentId ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
+  const url = `${apiBase()}/api/obe/model-publish-sheet/${encodeURIComponent(subjectId)}${qp}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify({ data }),
+  });
+  if (!res.ok) await parseError(res, 'MODEL publish failed');
   return res.json();
 }
 

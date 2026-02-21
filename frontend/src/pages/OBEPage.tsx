@@ -10,9 +10,23 @@ import '../styles/obe-theme.css';
 import { getMe } from '../services/auth';
 import { fetchMyTeachingAssignments, TeachingAssignmentItem } from '../services/obe';
 
-const PRIMARY_API_BASE = import.meta.env.VITE_API_BASE || 'https://db.zynix.us';
+function apiBase() {
+  const fromEnv = import.meta.env.VITE_API_BASE;
+  if (fromEnv) return String(fromEnv).replace(/\/+$/, '');
+
+  // Default to same-origin so `/api/...` works behind nginx/proxy setups.
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    const host = String(window.location.hostname || '').trim().toLowerCase();
+    if (host === 'localhost' || host === '127.0.0.1') return 'http://localhost:8000';
+    return String(window.location.origin).replace(/\/+$/, '');
+  }
+
+  return 'https://db.zynix.us';
+}
+
+const API_BASE = apiBase();
+const PRIMARY_API_BASE = API_BASE;
 const FALLBACK_API_BASE = 'http://localhost:8000';
-const API_BASE = import.meta.env.VITE_API_BASE || 'https://db.zynix.us';
 
 async function fetchWithFallback(url, options) {
   try {

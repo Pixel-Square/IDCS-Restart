@@ -810,6 +810,7 @@ class PeriodAttendanceSession(models.Model):
     period = models.ForeignKey('timetable.TimetableSlot', on_delete=models.PROTECT, related_name='attendance_sessions')
     date = models.DateField(default=timezone.now)
     timetable_assignment = models.ForeignKey('timetable.TimetableAssignment', on_delete=models.SET_NULL, null=True, blank=True, related_name='attendance_sessions')
+    teaching_assignment = models.ForeignKey('academics.TeachingAssignment', on_delete=models.SET_NULL, null=True, blank=True, related_name='period_attendance_sessions')
     created_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
     is_locked = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -817,7 +818,9 @@ class PeriodAttendanceSession(models.Model):
     class Meta:
         verbose_name = 'Period Attendance Session'
         verbose_name_plural = 'Period Attendance Sessions'
-        unique_together = (('section', 'period', 'date', 'timetable_assignment'),)
+        # A single (section, period, date) can have multiple subjects (especially electives).
+        # Use the resolved TeachingAssignment (staff+subject) to prevent overwrites.
+        unique_together = (('section', 'period', 'date', 'teaching_assignment'),)
 
     def __str__(self):
         return f"PeriodAttendance {self.section} | {self.period} @ {self.date}"

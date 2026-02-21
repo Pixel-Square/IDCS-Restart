@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { User, BookOpen, Save, Edit, X } from 'lucide-react'
+import { User, BookOpen, Save, Edit, X, Trash2 } from 'lucide-react'
 import fetchWithAuth from '../../services/fetchAuth'
 
 type Section = { id: number; name: string; batch: string; batch_regulation?: { id: number; code: string; name?: string } | null; department_id?: number; semester?: number; department?: { id: number; code?: string } }
@@ -49,6 +49,7 @@ export default function TeachingAssignmentsPage(){
   const [sections, setSections] = useState<Section[]>([])
   const [staff, setStaff] = useState<Staff[]>([])
   const [departments, setDepartments] = useState<{ id: number; name?: string; code?: string; short_name?: string }[]>([])
+  const [userDepartments, setUserDepartments] = useState<{ id: number; name?: string; code?: string; short_name?: string }[]>([])
   const [selectedDept, setSelectedDept] = useState<number | null>(null)
   const [selectedElectiveDept, setSelectedElectiveDept] = useState<number | null>(null)
   const [curriculum, setCurriculum] = useState<CurriculumRow[]>([])
@@ -72,7 +73,18 @@ export default function TeachingAssignmentsPage(){
       const sres = await fetchWithAuth('/api/academics/my-students/?page_size=0')
       const staffEndpoint = (canViewElectives || canAssignElectives) ? '/api/academics/hod-staff/?page_size=0' : '/api/academics/advisor-staff/?page_size=0'
       // fetch staff list optionally filtered by selected department
-      const staffRes = await fetchWithAuth(selectedDept && staffEndpoint.includes('hod-staff') ? `${staffEndpoint}&department=${selectedDept}` : staffEndpoint)
+      let staffRes = await fetchWithAuth(selectedDept && staffEndpoint.includes('hod-staff') ? `${staffEndpoint}&department=${selectedDept}` : staffEndpoint)
+      // If hod-staff is forbidden for this token, gracefully fall back to advisor-staff
+      if (staffRes.status === 403 && staffEndpoint.includes('hod-staff')) {
+        console.warn('hod-staff returned 403 — falling back to advisor-staff endpoint')
+        const fallbackUrl = selectedDept ? `/api/academics/advisor-staff/?page_size=0&department=${selectedDept}` : '/api/academics/advisor-staff/?page_size=0'
+        try {
+          const fb = await fetchWithAuth(fallbackUrl)
+          if (fb.ok) staffRes = fb
+        } catch (e) {
+          console.error('fallback to advisor-staff failed', e)
+        }
+      }
       const curRes = await fetchWithAuth('/api/curriculum/department/?page_size=0')
       const electRes = await fetchWithAuth('/api/curriculum/elective/?page_size=0')
       const taRes = await fetchWithAuth('/api/academics/teaching-assignments/?page_size=0')
@@ -93,16 +105,32 @@ export default function TeachingAssignmentsPage(){
         const rows = (d.results || d); 
         setCurriculum(rows); 
         setElectiveParents(rows.filter((r:any)=> r.is_elective));
-        
-        // Extract unique departments from curriculum data (already filtered by backend based on user's department roles)
+
+        // Derive departments visible to this user from curriculum rows (user-mapped departments)
         const deptMap = new Map();
         rows.forEach((r: any) => {
           if (r.department && r.department.id) {
             deptMap.set(r.department.id, r.department);
           }
         });
-        if (deptMap.size > 0) {
-          setDepartments(Array.from(deptMap.values()));
+        if (deptMap.size > 0) setUserDepartments(Array.from(deptMap.values()));
+
+        // Prefer fetching the canonical departments list from the academics API (for the top filter).
+        try {
+          const depsRes = await fetchWithAuth('/api/academics/departments/?page_size=0')
+          if (depsRes.ok) {
+            const depsJson = await safeJson(depsRes)
+            const deps = depsJson.results || depsJson
+            if (Array.isArray(deps) && deps.length > 0) {
+              setDepartments(deps)
+            }
+          } else {
+            // fallback: use the curriculum-derived set for top filter too
+            if (deptMap.size > 0) setDepartments(Array.from(deptMap.values()));
+          }
+        } catch (e) {
+          // fallback to curriculum-derived departments on error
+          if (deptMap.size > 0) setDepartments(Array.from(deptMap.values()));
         }
       }
       if (electRes.ok){ const d = await safeJson(electRes); setElectiveOptions(d.results || d) }
@@ -118,8 +146,18 @@ export default function TeachingAssignmentsPage(){
         const staffEndpoint = (canViewElectives || canAssignElectives) ? '/api/academics/hod-staff/?page_size=0' : '/api/academics/advisor-staff/?page_size=0'
         const url = selectedDept && staffEndpoint.includes('hod-staff') ? `${staffEndpoint}&department=${selectedDept}` : staffEndpoint
         const res = await fetchWithAuth(url)
-        if(!res.ok) return
-        const data = await res.json()
+        let finalRes = res
+        if (res.status === 403 && staffEndpoint.includes('hod-staff')) {
+          console.warn('hod-staff returned 403 in loadStaff — trying advisor-staff')
+          const fallbackUrl = selectedDept ? `/api/academics/advisor-staff/?page_size=0&department=${selectedDept}` : '/api/academics/advisor-staff/?page_size=0'
+          try {
+            const fb = await fetchWithAuth(fallbackUrl)
+            if (fb.ok) finalRes = fb
+            else if (fb.status !== 200) return
+          } catch (e) { console.error('fallback failed', e); return }
+        }
+        if(!finalRes.ok) return
+        const data = await finalRes.json()
         let staffList = data.results || data
         // if backend didn't filter and we're on advisor endpoint, filter client-side
         if(!staffEndpoint.includes('hod-staff') && selectedDept){
@@ -175,32 +213,13 @@ export default function TeachingAssignmentsPage(){
 
   // Helper functions for elective assignment management
   const findExistingElectiveAssignment = (electiveId: number) => {
-    // First find the elective option to get its details
-    const electiveOption = electiveOptions.find((opt: any) => opt.id === electiveId);
-    if (!electiveOption) return null;
-    
+    // Prefer exact matching by elective_subject id exposed by the API.
     return assignments.find(a => {
-      // Check various elective assignment structures
-      const electiveMatches = 
-        (a as any).elective_subject === electiveId || 
-        (a as any).elective_subject_id === electiveId ||
-        ((a as any).elective_subject && (a as any).elective_subject.id === electiveId) ||
-        // Check if the subject field contains the elective course code or name
-        (a.subject && (
-          a.subject.includes(electiveOption.course_code) ||
-          a.subject.includes(electiveOption.course_name)
-        )) ||
-        // Also check curriculum row assignments that match elective
-        (a.curriculum_row_details && (
-          a.curriculum_row_details.course_code === electiveOption.course_code ||
-          a.curriculum_row_details.course_name === electiveOption.course_name
-        )) ||
-        (a.curriculum_row && (
-          a.curriculum_row.course_code === electiveOption.course_code ||
-          a.curriculum_row.course_name === electiveOption.course_name
-        ));
-      
-      return electiveMatches;
+      const aElectiveId = (a as any).elective_subject_id
+        || ((a as any).elective_subject && (a as any).elective_subject.id)
+        || ((a as any).elective_subject_details && (a as any).elective_subject_details.id)
+        || (a as any).elective_subject;
+      return Number(aElectiveId) === Number(electiveId);
     });
   }
 
@@ -309,7 +328,11 @@ export default function TeachingAssignmentsPage(){
                     className="px-4 py-2 border border-gray-300 rounded-lg bg-white text-gray-700 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   >
                     <option value="">All Departments</option>
-                    {departments.map(d => <option key={d.id} value={d.id}>{d.short_name || d.code || d.name || `Dept ${d.id}`}</option>)}
+                    {departments.map(d => (
+                      <option key={d.id} value={d.id}>
+                        {d.short_name || d.code || d.name || `Dept ${d.id}`}
+                      </option>
+                    ))}
                   </select>
                 </div>
               )}
@@ -421,13 +444,16 @@ export default function TeachingAssignmentsPage(){
                                   <td className="px-4 py-3 text-center">
                                     <div className="flex items-center justify-center gap-2">
                                       {!editing ? (
-                                        <button 
-                                          onClick={() => startEditing(section.id, subject.id)}
-                                          className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors border border-blue-300"
-                                          title="Edit Assignment"
-                                        >
-                                          <Edit className="h-4 w-4" />
-                                        </button>
+                                        <>
+                                          <button 
+                                            onClick={() => startEditing(section.id, subject.id)}
+                                            className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors border border-blue-300"
+                                            title="Edit Assignment"
+                                          >
+                                            <Edit className="h-4 w-4" />
+                                          </button>
+                                          {/* external delete removed; deletion available inside edit toolbar */}
+                                        </>
                                       ) : (
                                         <>
                                           <button 
@@ -491,6 +517,21 @@ export default function TeachingAssignmentsPage(){
                                           >
                                             <X className="h-4 w-4" />
                                           </button>
+                                          {existingAssignment && (
+                                            <button
+                                              onClick={async () => {
+                                                if (!confirm('Delete teaching assignment for this subject/section?')) return
+                                                try {
+                                                  const res = await fetchWithAuth(`/api/academics/teaching-assignments/${existingAssignment.id}/`, { method: 'DELETE' })
+                                                  if (!res.ok) { const txt = await res.text().catch(()=>null); alert('Failed: ' + (txt || res.status)) } else { alert('Deleted'); cancelEditing(section.id, subject.id); fetchData() }
+                                                } catch (e) { console.error(e); alert('Failed to delete') }
+                                              }}
+                                              className="p-2 text-red-700 hover:bg-red-50 rounded-lg transition-colors border border-red-300"
+                                              title="Delete Assignment"
+                                            >
+                                              <Trash2 className="h-4 w-4" />
+                                            </button>
+                                          )}
                                         </>
                                       )}
                                     </div>
@@ -515,7 +556,7 @@ export default function TeachingAssignmentsPage(){
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Elective Subject Assignments</h3>
           
           {/* Department Filter Buttons */}
-          {departments.length > 1 && (
+          {userDepartments.length > 1 && (
             <div className="mb-6">
               <h4 className="text-sm font-medium text-gray-700 mb-3">Filter by Department</h4>
               <div className="flex flex-wrap gap-2">
@@ -529,7 +570,7 @@ export default function TeachingAssignmentsPage(){
                 >
                   All Departments
                 </button>
-                {departments.map(d => (
+                {userDepartments.map(d => (
                   <button
                     key={d.id}
                     onClick={() => setSelectedElectiveDept(d.id)}
@@ -596,13 +637,16 @@ export default function TeachingAssignmentsPage(){
                           </div>
                           <div className="flex items-center gap-2">
                             {!editingElective ? (
-                              <button 
-                                onClick={() => startEditingElective(opt.id)}
-                                className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors border border-blue-300"
-                                title="Edit Assignment"
-                              >
-                                <Edit className="h-4 w-4" />
-                              </button>
+                              <>
+                                <button 
+                                  onClick={() => startEditingElective(opt.id)}
+                                  className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors border border-blue-300"
+                                  title="Edit Assignment"
+                                >
+                                  <Edit className="h-4 w-4" />
+                                </button>
+                                {/* external delete removed; deletion available inside edit toolbar */}
+                              </>
                             ) : (
                               <>
                                 <button 
@@ -629,13 +673,28 @@ export default function TeachingAssignmentsPage(){
                                 >
                                   <Save className="h-4 w-4" />
                                 </button>
-                                <button 
-                                  onClick={() => cancelEditingElective(opt.id)}
-                                  className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors border border-red-300"
-                                  title="Cancel"
-                                >
-                                  <X className="h-4 w-4" />
-                                </button>
+                                    <button 
+                                      onClick={() => cancelEditingElective(opt.id)}
+                                      className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors border border-red-300"
+                                      title="Cancel"
+                                    >
+                                      <X className="h-4 w-4" />
+                                    </button>
+                                    {existingElectiveAssignment && (
+                                      <button
+                                        onClick={async () => {
+                                          if (!confirm('Delete elective teaching assignment for this option?')) return
+                                          try {
+                                            const res = await fetchWithAuth(`/api/academics/teaching-assignments/${existingElectiveAssignment.id}/`, { method: 'DELETE' })
+                                            if (!res.ok) { const txt = await res.text().catch(()=>null); alert('Failed: ' + (txt || res.status)) } else { alert('Deleted'); cancelEditingElective(opt.id); fetchData() }
+                                          } catch (e) { console.error(e); alert('Failed to delete') }
+                                        }}
+                                        className="p-2 text-red-700 hover:bg-red-50 rounded-lg transition-colors border border-red-300"
+                                        title="Delete Assignment"
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                      </button>
+                                    )}
                               </>
                             )}
                           </div>

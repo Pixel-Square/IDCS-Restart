@@ -17,6 +17,8 @@ export type TeachingAssignmentRosterResponse = {
     section_id: number;
     section_name: string;
     academic_year: string;
+    semester?: number | null;
+    department?: { id: number; code?: string | null; name?: string | null; short_name?: string | null } | null;
   };
   students: TeachingAssignmentRosterStudent[];
 };

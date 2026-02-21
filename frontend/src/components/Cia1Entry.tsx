@@ -22,6 +22,7 @@ import { useMarkTableLock } from '../hooks/useMarkTableLock';
 import PublishLockOverlay from './PublishLockOverlay';
 import { normalizeClassType } from '../constants/classTypes';
 import * as XLSX from 'xlsx';
+import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
 
 type Student = {
   id: number;
@@ -224,6 +225,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   const [masterCfg, setMasterCfg] = useState<any>(null);
   const [masterCfgWarning, setMasterCfgWarning] = useState<string | null>(null);
   const [iqacPattern, setIqacPattern] = useState<{ marks: number[]; cos?: Array<number | string> } | null>(null);
+  const [subjectPayload, setSubjectPayload] = useState<any>(null);
 
   const classTypeKey = useMemo(() => {
     const v = String(normalizeClassType(classType) || '').trim().toUpperCase();
@@ -733,6 +735,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         });
 
         setStudents(roster);
+        setSubjectPayload((data as any)?.subject || null);
         const apiMarks = data.marks || {};
         const totals: Record<number, number | null> = {};
         for (const [k, v] of Object.entries(apiMarks)) {
@@ -1401,6 +1404,40 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
     }
   };
 
+  const downloadTotals = async () => {
+    const rows = students.map((s, i) => {
+      const row = sheet.rowsByStudentId[String(s.id)] || {
+        studentId: s.id,
+        absent: false,
+        absentKind: undefined,
+        q: Object.fromEntries(questions.map((q) => [q.key, ''])),
+      };
+
+      const entered = hasAnyEnteredMarks(row as any);
+      const effectiveAbsent = Boolean((row as any).absent && !entered);
+      if (effectiveAbsent) {
+        return { sno: i + 1, regNo: String(s.reg_no || ''), name: String(s.name || ''), total: 'ABSENT' };
+      }
+
+      const qMarks = Object.fromEntries(questions.map((q) => [q.key, clamp(Number((row as any).q?.[q.key] || 0), 0, q.max)]));
+      const total = questions.reduce((sum, q) => sum + Number((qMarks as any)[q.key] || 0), 0);
+      return { sno: i + 1, regNo: String(s.reg_no || ''), name: String(s.name || ''), total };
+    });
+
+    const courseName = String((subjectPayload as any)?.name || '').trim();
+    const courseCode = String((subjectPayload as any)?.code || subjectId || '').trim();
+
+    await downloadTotalsWithPrompt({
+      filenameBase: `${subjectId}_${assessmentLabel}`,
+      meta: {
+        courseName,
+        courseCode,
+        className: String((subjectPayload as any)?.className || ''),
+      },
+      rows,
+    });
+  };
+
   const importFromExcel = async (file: File) => {
     if (publishing || tableBlocked || importing) return;
     setImporting(true);
@@ -1703,26 +1740,10 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         </div>
       )}
 
-      <div className="obe-card"
-        style={{
-          display: 'flex',
-          gap: 12,
-          justifyContent: 'space-between',
-          alignItems: 'flex-end',
-          flexWrap: 'wrap',
-          marginBottom: 10,
-        }}
-      >
-        <div>
-          <div style={{ fontWeight: 800, fontSize: 16 }}>{assessmentLabel} Sheet</div>
-          <div style={{ color: '#6b7280', fontSize: 13 }}>
-            Excel-like layout (Q-wise + CO + BTL). Subject: <b>{subjectId}</b>
-          </div>
-        </div>
-
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 10 }}>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button
-            className="obe-btn"
+            className="obe-btn obe-btn-secondary"
             disabled={!hasAbsentees}
             onClick={() => {
               if (showAbsenteesOnly) return;
@@ -1766,25 +1787,25 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
               </span>
             ) : null}
           </button>
-          <button onClick={saveDraftToDb} className="obe-btn" disabled={saving || students.length === 0 || tableBlocked || globalLocked}>
-            {saving ? 'Saving…' : 'Save Draft'}
-          </button>
-          <button onClick={exportSheetCsv} className="obe-btn" disabled={students.length === 0}>
+          <button onClick={exportSheetCsv} className="obe-btn obe-btn-secondary" disabled={students.length === 0}>
             Export CSV
           </button>
-          <button onClick={exportSheetExcel} className="obe-btn" disabled={students.length === 0}>
+          <button onClick={exportSheetExcel} className="obe-btn obe-btn-secondary" disabled={students.length === 0}>
             Export Excel
           </button>
-          <button onClick={triggerFileUpload} className="obe-btn" disabled={importing || students.length === 0 || tableBlocked || globalLocked}>
+          <button onClick={triggerFileUpload} className="obe-btn obe-btn-secondary" disabled={importing || students.length === 0 || tableBlocked || globalLocked}>
             {importing ? 'Importing…' : 'Import Excel'}
           </button>
-          <input 
-            ref={fileInputRef}
-            type="file" 
-            accept=".xlsx,.xls" 
-            onChange={handleFileSelect}
-            style={{ display: 'none' }}
-          />
+          <input ref={fileInputRef} type="file" accept=".xlsx,.xls" onChange={handleFileSelect} style={{ display: 'none' }} />
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <button onClick={downloadTotals} className="obe-btn obe-btn-secondary" disabled={students.length === 0}>
+            Download
+          </button>
+          <button onClick={saveDraftToDb} className="obe-btn obe-btn-success" disabled={saving || students.length === 0 || tableBlocked || globalLocked}>
+            {saving ? 'Saving…' : 'Save Draft'}
+          </button>
           <button
             onClick={publish}
             disabled={publishing || students.length === 0 || !publishAllowed || tableBlocked || globalLocked}
@@ -1792,16 +1813,8 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
           >
             {publishing ? 'Publishing…' : 'Publish'}
           </button>
-          {savedAt && (
-            <div style={{ fontSize: 12, color: '#6b7280', alignSelf: 'center' }}>
-              Saved: {savedAt}
-            </div>
-          )}
-          {publishedAt && (
-            <div style={{ fontSize: 12, color: '#16a34a', alignSelf: 'center' }}>
-              Published: {publishedAt}
-            </div>
-          )}
+          {savedAt && <div style={{ fontSize: 12, color: '#6b7280', alignSelf: 'center' }}>Saved: {savedAt}</div>}
+          {publishedAt && <div style={{ fontSize: 12, color: '#16a34a', alignSelf: 'center' }}>Published: {publishedAt}</div>}
         </div>
       </div>
 
@@ -2146,8 +2159,27 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                           min={0}
                           max={q.max}
                           disabled={lockedInputs || (row.absent && !canEditAbsent)}
-                          value={row.q?.[q.key] === '' || row.q?.[q.key] == null ? '' : clamp(Number(row.q?.[q.key] || 0), 0, q.max)}
-                          onChange={(e) => setQuestionMark(s.id, q.key, e.target.value === '' ? '' : Number(e.target.value))}
+                          value={row.q?.[q.key] === '' || row.q?.[q.key] == null ? '' : Number(row.q?.[q.key] || 0)}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            if (raw === '') {
+                              e.currentTarget.setCustomValidity('');
+                              return setQuestionMark(s.id, q.key, '');
+                            }
+
+                            const next = Number(raw);
+                            if (!Number.isFinite(next)) return;
+
+                            if (next > q.max) {
+                              e.currentTarget.setCustomValidity(`Max mark is ${q.max}`);
+                              e.currentTarget.reportValidity();
+                              window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                              return;
+                            }
+
+                            e.currentTarget.setCustomValidity('');
+                            setQuestionMark(s.id, q.key, next);
+                          }}
                         />
                       </td>
                     ))}
@@ -2201,7 +2233,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                   transform: 'translateX(-50%)',
                   zIndex: 40,
                   width: 320,
-                  background: 'rgba(255,255,255,0.98)',
+                  background: '#fff',
                   border: '1px solid #e5e7eb',
                   padding: 12,
                   borderRadius: 12,
