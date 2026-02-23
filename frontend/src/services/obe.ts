@@ -693,6 +693,43 @@ export async function createEditRequest(payload: {
   return res.json();
 }
 
+export type CreatedEditRequestResponse = {
+  id: number;
+  status?: string;
+  scope?: string;
+  created_at?: string | null;
+  routed_to?: 'HOD' | 'IQAC' | string;
+  routing_warning?: string | null;
+  department?: { id?: number | null; code?: string | null; name?: string | null; short_name?: string | null } | null;
+  hod?: { id?: number | null; username?: string | null; name?: string | null } | null;
+};
+
+export function formatEditRequestSentMessage(created: any): string {
+  const c = (created || {}) as CreatedEditRequestResponse;
+  const idPart = `Edit request ID: ${typeof c.id === 'number' ? c.id : '—'}`;
+
+  const routedRaw = String(c.routed_to || 'IQAC').trim().toUpperCase();
+  const routed = routedRaw === 'HOD' ? 'HOD' : 'IQAC';
+
+  if (routed === 'HOD') {
+    const deptName = String(c.department?.short_name || c.department?.name || c.department?.code || '').trim();
+    const hodName = String(c.hod?.name || c.hod?.username || '').trim();
+    const target = deptName && hodName ? `Sent to: ${deptName} HOD, ${hodName}` : 'Sent to: HOD';
+    return `${idPart}\n${target}`;
+  }
+
+  const warn = String(c.routing_warning || '').trim();
+  return warn ? `${idPart}\nSent to: IQAC\nNote: ${warn}` : `${idPart}\nSent to: IQAC`;
+}
+
+export function formatApiErrorMessage(err: any, fallback = 'Request failed'): string {
+  const msg = String(err?.message || '').trim();
+  if (msg) return msg;
+  const detail = String(err?.response?.data?.detail || '').trim();
+  if (detail) return detail;
+  return fallback;
+}
+
 export type MyLatestEditRequestItem = {
   id: number;
   status: 'PENDING' | 'APPROVED' | 'REJECTED' | string;

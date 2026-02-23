@@ -6,7 +6,20 @@ import fetchWithAuth from '../services/fetchAuth';
 import { fetchMyTeachingAssignments } from '../services/obe';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
 import { fetchMasters } from '../services/curriculum';
-import { createPublishRequest, fetchDraft, publishFormative, saveDraft, fetchPublishedFormative, createEditRequest, confirmMarkManagerLock, fetchEditWindow, fetchMyLatestEditRequest, fetchMarkTableLockStatus } from '../services/obe';
+import {
+  confirmMarkManagerLock,
+  createEditRequest,
+  createPublishRequest,
+  fetchDraft,
+  fetchEditWindow,
+  fetchMarkTableLockStatus,
+  fetchMyLatestEditRequest,
+  fetchPublishedFormative,
+  formatApiErrorMessage,
+  formatEditRequestSentMessage,
+  publishFormative,
+  saveDraft,
+} from '../services/obe';
 import { ensureMobileVerified } from '../services/auth';
 import { useEditWindow } from '../hooks/useEditWindow';
 import { useMarkTableLock } from '../hooks/useMarkTableLock';
@@ -15,6 +28,7 @@ import { useEditRequestPending } from '../hooks/useEditRequestPending';
 import { useLockBodyScroll } from '../hooks/useLockBodyScroll';
 import PublishLockOverlay from './PublishLockOverlay';
 import AssessmentContainer from './AssessmentContainer';
+import { ModalPortal } from './ModalPortal';
 import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
 
 const DEFAULT_API_BASE = 'https://db.krgi.co.in';
@@ -432,7 +446,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
     }
 
     if (markEntryReqPending) {
-      alert('Edit request is pending. Please wait for IQAC approval.');
+      alert('Edit request is pending. Please wait for approval.');
       return;
     }
 
@@ -453,7 +467,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
         reason,
         teaching_assignment_id: teachingAssignmentId,
       });
-      alert('Edit request sent to IQAC. Waiting for approval...');
+      alert(formatEditRequestSentMessage(created));
       setPublishedEditModalOpen(false);
       setEditRequestReason('');
       setMarkEntryReqPendingUntilMs(Date.now() + 24 * 60 * 60 * 1000);
@@ -528,7 +542,8 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
         alert('Edit request still pending. Please try again later.');
       })();
     } catch (e: any) {
-      alert(e?.message || 'Request failed');
+      const msg = formatApiErrorMessage(e, 'Request failed');
+      alert(`Edit request failed: ${msg}`);
     } finally {
       setEditRequestBusy(false);
     }
@@ -645,7 +660,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
     const baselineApprovalUntil = markManagerEditWindow?.approval_until ? String(markManagerEditWindow.approval_until) : null;
     try {
       const created = await createEditRequest({ assessment: assessmentKey, subject_code: String(subjectId), scope: 'MARK_MANAGER', reason: `Request mark-manager edit for ${subjectId}`, teaching_assignment_id: teachingAssignmentId });
-      alert('Edit request sent to IQAC. Waiting for approval...');
+      alert(formatEditRequestSentMessage(created));
 
       const createdId = Number(created?.id);
       const startedAtMs = startedAt.getTime();
@@ -711,7 +726,8 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
         alert('Edit request still pending. Please try again later.');
       })();
     } catch (e: any) {
-      alert(e?.message || 'Request failed');
+      const msg = formatApiErrorMessage(e, 'Request failed');
+      alert(`Edit request failed: ${msg}`);
     } finally {
       setMarkManagerBusy(false);
     }
@@ -1025,7 +1041,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
     // If already published and locked, use Publish button as the entry-point to request edits.
     if (isPublished && publishedEditLocked) {
       if (markEntryReqPending) {
-        setError('Edit request is pending. Please wait for IQAC approval.');
+        setError('Edit request is pending. Please wait for approval.');
         return;
       }
 
@@ -2225,16 +2241,29 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
       )}
 
       {markManagerModal && !skipMarkManager ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 9999 }}
-          onClick={() => {
-            if (markManagerBusy) return;
-            setMarkManagerModal(null);
-          }}
-        >
-          <div style={{ width: 'min(640px,96vw)', background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: 14 }} onClick={(e) => e.stopPropagation()}>
+        <ModalPortal>
+          <div
+            role="dialog"
+            aria-modal="true"
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0,0,0,0.35)',
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'center',
+              overflowY: 'auto',
+              padding: 16,
+              paddingTop: 40,
+              paddingBottom: 40,
+              zIndex: 9999,
+            }}
+            onClick={() => {
+              if (markManagerBusy) return;
+              setMarkManagerModal(null);
+            }}
+          >
+            <div style={{ width: 'min(640px,96vw)', background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: 14 }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
               <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>{markManagerModal.mode === 'confirm' ? `Confirmation - ${assessmentLabel}` : `Request Edit - ${assessmentLabel}`}</div>
               <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>{String(subjectId || '')}</div>
@@ -2326,18 +2355,32 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                 {markManagerModal.mode === 'confirm' ? 'Confirm' : 'Send Request'}
               </button>
             </div>
+            </div>
           </div>
-        </div>
+        </ModalPortal>
       ) : null}
 
       {viewMarksModalOpen ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 60, overflowY: 'auto' }}
-          onClick={() => setViewMarksModalOpen(false)}
-        >
-          <div style={{ width: 'min(1100px, 96vw)', maxHeight: '90vh', overflowY: 'auto', background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: 14 }} onClick={(e) => e.stopPropagation()}>
+        <ModalPortal>
+          <div
+            role="dialog"
+            aria-modal="true"
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0,0,0,0.35)',
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'center',
+              overflowY: 'auto',
+              padding: 16,
+              paddingTop: 40,
+              paddingBottom: 40,
+              zIndex: 60,
+            }}
+            onClick={() => setViewMarksModalOpen(false)}
+          >
+            <div style={{ width: 'min(1100px, 96vw)', maxHeight: '90vh', overflowY: 'auto', overflowX: 'hidden', background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: 14 }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, position: 'relative' }}>
               <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>View Only</div>
               <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280', marginRight: 36 }}>{assessmentLabel} • {String(subjectId || '')}</div>
@@ -2522,32 +2565,47 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                 Close
               </button>
             </div>
+            </div>
           </div>
-        </div>
+        </ModalPortal>
       ) : null}
 
       {publishedEditModalOpen ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 60 }}
-          onClick={() => {
-            if (editRequestBusy) return;
-            setPublishedEditModalOpen(false);
-          }}
-        >
+        <ModalPortal>
           <div
+            role="dialog"
+            aria-modal="true"
             style={{
-              width: 'min(560px, 96vw)',
-              maxHeight: 'min(86vh, 740px)',
-              overflow: 'auto',
-              background: '#fff',
-              borderRadius: 14,
-              border: '1px solid #e5e7eb',
-              padding: 14,
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0,0,0,0.35)',
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'center',
+              overflowY: 'auto',
+              padding: 16,
+              paddingTop: 40,
+              paddingBottom: 40,
+              zIndex: 60,
             }}
-            onClick={(e) => e.stopPropagation()}
+            onClick={() => {
+              if (editRequestBusy) return;
+              setPublishedEditModalOpen(false);
+            }}
           >
+            <div
+              style={{
+                width: 'min(560px, 96vw)',
+                maxHeight: 'min(86vh, 740px)',
+                overflowY: 'auto',
+                overflowX: 'hidden',
+                background: '#fff',
+                borderRadius: 14,
+                border: '1px solid #e5e7eb',
+                padding: 14,
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
               <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>Request Edit Access</div>
               <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>{assessmentLabel} • {String(subjectId || '')}</div>
@@ -2587,8 +2645,9 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                 {editRequestBusy ? 'Requesting…' : markEntryReqPending ? 'Request Pending' : 'Send Request'}
               </button>
             </div>
+            </div>
           </div>
-        </div>
+        </ModalPortal>
       ) : null}
 
       {key && (

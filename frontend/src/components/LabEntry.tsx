@@ -4,7 +4,17 @@ import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster } from '../services/roster';
 import fetchWithAuth from '../services/fetchAuth';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
-import { confirmMarkManagerLock, createEditRequest, createPublishRequest, fetchDraft, fetchPublishedLabSheet, publishLabSheet, saveDraft } from '../services/obe';
+import {
+  confirmMarkManagerLock,
+  createEditRequest,
+  createPublishRequest,
+  fetchDraft,
+  fetchPublishedLabSheet,
+  formatApiErrorMessage,
+  formatEditRequestSentMessage,
+  publishLabSheet,
+  saveDraft,
+} from '../services/obe';
 import { ensureMobileVerified } from '../services/auth';
 import { useEditWindow } from '../hooks/useEditWindow';
 import { formatRemaining, usePublishWindow } from '../hooks/usePublishWindow';
@@ -13,6 +23,7 @@ import { useEditRequestPending } from '../hooks/useEditRequestPending';
 import { useLockBodyScroll } from '../hooks/useLockBodyScroll';
 import PublishLockOverlay from './PublishLockOverlay';
 import AssessmentContainer from './AssessmentContainer';
+import { ModalPortal } from './ModalPortal';
 
 // Vite-friendly asset URL for lock GIF used in the floating panel
 const lockPanelGif = new URL('https://static.vecteezy.com/system/resources/thumbnails/014/585/778/small/gold-locked-padlock-png.png', import.meta.url).href;
@@ -720,17 +731,18 @@ export default function LabEntry({
     setMarkManagerBusy(true);
     setMarkManagerError(null);
     try {
-      await createEditRequest({
+      const created = await createEditRequest({
         assessment: assessmentKey as any,
         subject_code: String(subjectId),
         scope: 'MARK_MANAGER',
         reason: `Edit request: Mark Manager changes for ${label}`,
         teaching_assignment_id: teachingAssignmentId,
       });
-      alert('Edit request sent to IQAC.');
+      alert(formatEditRequestSentMessage(created));
     } catch (e: any) {
-      setMarkManagerError(e?.message || 'Request failed');
-      alert(e?.message || 'Request failed');
+      const msg = formatApiErrorMessage(e, 'Request failed');
+      setMarkManagerError(msg);
+      alert(`Edit request failed: ${msg}`);
     } finally {
       setMarkManagerBusy(false);
     }
@@ -933,7 +945,7 @@ export default function LabEntry({
     // If already published and locked, use Publish as the entry-point to request edits.
     if (isPublished && publishedEditLocked) {
       if (markEntryReqPending) {
-        alert('Edit request is pending. Please wait for IQAC approval.');
+        alert('Edit request is pending. Please wait for approval.');
         return;
       }
 
@@ -1264,7 +1276,7 @@ export default function LabEntry({
             </label>
             <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontWeight: 800, fontSize: 12, color: '#111827' }}>
               <input type="checkbox" checked={ciaExamEnabled} disabled={markManagerLocked} onChange={(e) => setCiaExamEnabled(e.target.checked)} style={bigCheckboxStyle} />
-              CAA Exam
+              CIA Exam
             </label>
           </div>
 
@@ -1445,7 +1457,7 @@ export default function LabEntry({
 
                 <th style={cellTh} colSpan={Math.max(1, totalExpCols)}>Experiments</th>
                 <th style={cellTh} rowSpan={5}>Total (Avg)</th>
-                {ciaExamEnabled ? <th style={cellTh} colSpan={Math.max(caaCoNumbers.length, 1)}>CAA EXAM</th> : null}
+                {ciaExamEnabled ? <th style={cellTh} colSpan={Math.max(caaCoNumbers.length, 1)}>CIA EXAM</th> : null}
                 <th style={cellTh} colSpan={4}>CO ATTAINMENT</th>
                 {visibleBtlIndices.length ? <th style={cellTh} colSpan={visibleBtlIndices.length * 2}>BTL ATTAINMENT</th> : null}
               </tr>
@@ -1545,39 +1557,25 @@ export default function LabEntry({
                   <>
                     {Array.from({ length: visibleExpCountA }, (_, i) => {
                       const v = normalizeBtlArray((draft.sheet as any).btlsA, expCountA)[i] ?? 1;
+                      const editable = !(publishedEditLocked || globalLocked);
                       return (
                         <th key={`btla_${i}`} style={cellTh}>
-                          <div style={{ position: 'relative', display: 'grid', placeItems: 'center' }} title={`BTL: ${v}`}>
-                            <div
-                              style={{
-                                width: '100%',
-                                padding: '2px 4px',
-                                textAlign: 'center',
-                                userSelect: 'none',
-                                fontWeight: 800,
-                                fontSize: 11,
-                                color: '#0f172a',
-                                background: '#ecfdf5',
-                                borderRadius: 4,
-                              }}
-                            >
-                              {v}
-                            </div>
+                          {editable ? (
                             <select
                               aria-label={`BTL for CO${coA} E${i + 1}`}
                               value={v}
                               onChange={(e) => setBtl('A', i, Number(e.target.value) as 1 | 2 | 3 | 4 | 5 | 6)}
-                              disabled={publishedEditLocked || globalLocked}
                               style={{
-                                position: 'absolute',
-                                inset: 0,
                                 width: '100%',
-                                height: '100%',
-                                opacity: 0,
-                                cursor: markManagerLocked ? 'not-allowed' : 'pointer',
-                                appearance: 'none',
-                                WebkitAppearance: 'none',
-                                MozAppearance: 'none',
+                                minWidth: 38,
+                                padding: '2px 2px',
+                                fontWeight: 800,
+                                fontSize: 11,
+                                textAlign: 'center',
+                                border: '1px solid #d1d5db',
+                                borderRadius: 4,
+                                background: '#fff',
+                                cursor: 'pointer',
                               }}
                             >
                               {[1, 2, 3, 4, 5, 6].map((n) => (
@@ -1586,45 +1584,33 @@ export default function LabEntry({
                                 </option>
                               ))}
                             </select>
-                          </div>
+                          ) : (
+                            <span style={{ fontWeight: 800 }}>{v}</span>
+                          )}
                         </th>
                       );
                     })}
                     {Array.from({ length: visibleExpCountB }, (_, i) => {
                       const v = normalizeBtlArray((draft.sheet as any).btlsB, expCountB)[i] ?? 1;
+                      const editable = !(publishedEditLocked || globalLocked);
                       return (
                         <th key={`btlb_${i}`} style={cellTh}>
-                          <div style={{ position: 'relative', display: 'grid', placeItems: 'center' }} title={`BTL: ${v}`}>
-                            <div
-                              style={{
-                                width: '100%',
-                                padding: '2px 4px',
-                                textAlign: 'center',
-                                userSelect: 'none',
-                                fontWeight: 800,
-                                fontSize: 11,
-                                color: '#0f172a',
-                                background: '#ecfdf5',
-                                borderRadius: 4,
-                              }}
-                            >
-                              {v}
-                            </div>
+                          {editable ? (
                             <select
                               aria-label={`BTL for CO${coB} E${i + 1}`}
                               value={v}
                               onChange={(e) => setBtl('B', i, Number(e.target.value) as 1 | 2 | 3 | 4 | 5 | 6)}
-                              disabled={publishedEditLocked || globalLocked}
                               style={{
-                                position: 'absolute',
-                                inset: 0,
                                 width: '100%',
-                                height: '100%',
-                                opacity: 0,
-                                cursor: markManagerLocked ? 'not-allowed' : 'pointer',
-                                appearance: 'none',
-                                WebkitAppearance: 'none',
-                                MozAppearance: 'none',
+                                minWidth: 38,
+                                padding: '2px 2px',
+                                fontWeight: 800,
+                                fontSize: 11,
+                                textAlign: 'center',
+                                border: '1px solid #d1d5db',
+                                borderRadius: 4,
+                                background: '#fff',
+                                cursor: 'pointer',
                               }}
                             >
                               {[1, 2, 3, 4, 5, 6].map((n) => (
@@ -1633,7 +1619,9 @@ export default function LabEntry({
                                 </option>
                               ))}
                             </select>
-                          </div>
+                          ) : (
+                            <span style={{ fontWeight: 800 }}>{v}</span>
+                          )}
                         </th>
                       );
                     })}
@@ -1893,7 +1881,7 @@ export default function LabEntry({
                       disabled={markEntryReqPending}
                       onClick={async () => {
                         if (markEntryReqPending) {
-                          alert('Edit request is pending. Please wait for IQAC approval.');
+                          alert('Edit request is pending. Please wait for approval.');
                           return;
                         }
                         const mobileOk = await ensureMobileVerified();
@@ -1947,42 +1935,48 @@ export default function LabEntry({
             </div>
 
       {publishedEditModalOpen ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.35)',
-            display: 'grid',
-            placeItems: 'center',
-            padding: 16,
-            zIndex: 60,
-          }}
-          onClick={() => {
-            if (editRequestBusy) return;
-            setPublishedEditModalOpen(false);
-          }}
-        >
+        <ModalPortal>
           <div
+            role="dialog"
+            aria-modal="true"
             style={{
-              width: 'min(560px, 96vw)',
-              maxHeight: 'min(86vh, 740px)',
-              overflow: 'auto',
-              background: '#fff',
-              borderRadius: 14,
-              border: '1px solid #e5e7eb',
-              padding: 14,
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0,0,0,0.35)',
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'center',
+              overflowY: 'auto',
+              padding: 16,
+              paddingTop: 40,
+              paddingBottom: 40,
+              zIndex: 60,
             }}
-            onClick={(e) => e.stopPropagation()}
+            onClick={() => {
+              if (editRequestBusy) return;
+              setPublishedEditModalOpen(false);
+            }}
           >
+            <div
+              style={{
+                width: 'min(560px, 96vw)',
+                maxHeight: 'min(86vh, 740px)',
+                overflowY: 'auto',
+                overflowX: 'hidden',
+                background: '#fff',
+                borderRadius: 14,
+                border: '1px solid #e5e7eb',
+                padding: 14,
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
               <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>Request Edit Access</div>
               <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>{String(assessmentKey).toUpperCase()} LAB</div>
             </div>
 
             <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10, lineHeight: 1.35 }}>
-              This will send a request to IQAC. Once approved, mark entry will open for editing until the approval expires.
+              This will send a request to your Department HOD first (if configured). After HOD approval, it will be forwarded to IQAC. If no HOD is configured, it will be sent directly to IQAC. Once IQAC approves, mark entry will open for editing until the approval expires.
               {markEntryReqPendingUntilMs ? (
                 <div style={{ marginTop: 6 }}>
                   <strong>Request window:</strong> 24 hours
@@ -2050,14 +2044,14 @@ export default function LabEntry({
                   setEditRequestBusy(true);
                   setEditRequestError(null);
                   try {
-                    await createEditRequest({
+                    const created = await createEditRequest({
                       assessment: assessmentKey as any,
                       subject_code: String(subjectId),
                       scope: 'MARK_ENTRY',
                       reason,
                       teaching_assignment_id: teachingAssignmentId,
                     });
-                    alert('Edit request sent to IQAC.');
+                    alert(formatEditRequestSentMessage(created));
                     setPublishedEditModalOpen(false);
                     setEditRequestReason('');
                     setMarkEntryReqPendingUntilMs(Date.now() + 24 * 60 * 60 * 1000);
@@ -2068,8 +2062,9 @@ export default function LabEntry({
                     }
                     refreshMarkLock({ silent: true });
                   } catch (e: any) {
-                    setEditRequestError(e?.message || 'Request failed');
-                    alert(e?.message || 'Request failed');
+                    const msg = formatApiErrorMessage(e, 'Request failed');
+                    setEditRequestError(msg);
+                    alert(`Edit request failed: ${msg}`);
                   } finally {
                     setEditRequestBusy(false);
                   }
@@ -2078,37 +2073,43 @@ export default function LabEntry({
                 {editRequestBusy ? 'Requesting…' : markEntryReqPending ? 'Request Pending' : 'Send Request'}
               </button>
             </div>
+            </div>
           </div>
-        </div>
+        </ModalPortal>
       ) : null}
       {markManagerModal ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.35)',
-            display: 'grid',
-            placeItems: 'center',
-            padding: 16,
-            zIndex: 9999,
-          }}
-          onClick={() => {
-            if (markManagerBusy) return;
-            setMarkManagerModal(null);
-          }}
-        >
+        <ModalPortal>
           <div
+            role="dialog"
+            aria-modal="true"
             style={{
-              width: 'min(760px, 96vw)',
-              background: '#fff',
-              borderRadius: 14,
-              border: '1px solid #e5e7eb',
-              padding: 14,
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0,0,0,0.35)',
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'center',
+              overflowY: 'auto',
+              padding: 16,
+              paddingTop: 40,
+              paddingBottom: 40,
+              zIndex: 9999,
             }}
-            onClick={(e) => e.stopPropagation()}
+            onClick={() => {
+              if (markManagerBusy) return;
+              setMarkManagerModal(null);
+            }}
           >
+            <div
+              style={{
+                width: 'min(760px, 96vw)',
+                background: '#fff',
+                borderRadius: 14,
+                border: '1px solid #e5e7eb',
+                padding: 14,
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
               <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>
                 {markManagerModal.mode === 'confirm' ? `Confirmation - ${label}` : `Request Edit - ${label}`}
@@ -2157,7 +2158,7 @@ export default function LabEntry({
                         </tr>
                       ) : null}
                       <tr>
-                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 800 }}>CAA Exam</td>
+                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 800 }}>CIA Exam</td>
                         <td colSpan={2} style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right', fontWeight: 600 }}>
                           {ciaExamEnabled ? '✅ Enabled' : '❌ Disabled'}
                         </td>
@@ -2168,7 +2169,7 @@ export default function LabEntry({
               </>
             ) : (
               <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10 }}>
-                This will send an edit request to IQAC. Mark Manager will remain locked until IQAC approves.
+                This will send an edit request to your Department HOD first (if configured). After HOD approval, it will be forwarded to IQAC. If no HOD is configured, it will be sent directly to IQAC. Mark Manager will remain locked until IQAC approves.
               </div>
             )}
 
@@ -2239,8 +2240,9 @@ export default function LabEntry({
                 {markManagerBusy ? 'Saving...' : markManagerModal.mode === 'confirm' ? '🔒 Confirm & Lock' : '📧 Send Request'}
               </button>
             </div>
+            </div>
           </div>
-        </div>
+        </ModalPortal>
       ) : null}
 
       {viewMarksModalOpen ? (
@@ -2353,7 +2355,7 @@ export default function LabEntry({
                         <th style={cellTh} rowSpan={5}>Name of the Students</th>
                         <th style={cellTh} colSpan={Math.max(1, viewTotalExp)}>Experiments</th>
                         <th style={cellTh} rowSpan={5}>Total (Avg)</th>
-                        {viewCiaEnabled ? <th style={cellTh} colSpan={Math.max(viewCaaCoNumbers.length, 1)}>CAA EXAM</th> : null}
+                        {viewCiaEnabled ? <th style={cellTh} colSpan={Math.max(viewCaaCoNumbers.length, 1)}>CIA EXAM</th> : null}
                         <th style={cellTh} colSpan={4}>CO ATTAINMENT</th>
                         {viewBtls.length ? <th style={cellTh} colSpan={viewBtls.length * 2}>BTL ATTAINMENT</th> : null}
                       </tr>

@@ -4,7 +4,21 @@ import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
 import fetchWithAuth from '../services/fetchAuth';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
-import { createPublishRequest, createEditRequest, confirmMarkManagerLock, fetchDraft, fetchMyTeachingAssignments, fetchPublishedReview1, fetchPublishedSsa1, publishReview1, publishSsa1, PublishedSsa1Response, saveDraft } from '../services/obe';
+import {
+  confirmMarkManagerLock,
+  createEditRequest,
+  createPublishRequest,
+  fetchDraft,
+  fetchMyTeachingAssignments,
+  fetchPublishedReview1,
+  fetchPublishedSsa1,
+  formatApiErrorMessage,
+  formatEditRequestSentMessage,
+  publishReview1,
+  publishSsa1,
+  PublishedSsa1Response,
+  saveDraft,
+} from '../services/obe';
 import { ensureMobileVerified } from '../services/auth';
 import { formatRemaining, usePublishWindow } from '../hooks/usePublishWindow';
 import { useEditWindow } from '../hooks/useEditWindow';
@@ -13,6 +27,7 @@ import { useEditRequestPending } from '../hooks/useEditRequestPending';
 import { useLockBodyScroll } from '../hooks/useLockBodyScroll';
 import PublishLockOverlay from './PublishLockOverlay';
 import AssessmentContainer from './AssessmentContainer';
+import { ModalPortal } from './ModalPortal';
 import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
 
 type Props = { subjectId: string; teachingAssignmentId?: number; label?: string; assessmentKey?: 'ssa1' | 'review1' };
@@ -802,11 +817,12 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
     setMarkManagerBusy(true);
     setMarkManagerError(null);
     try {
-      await createEditRequest({ assessment: assessmentKey, subject_code: String(subjectId), scope: 'MARK_MANAGER', reason: `Edit request: Mark Manager changes for ${displayLabel} ${subjectId}`, teaching_assignment_id: teachingAssignmentId });
-      alert('Edit request sent to IQAC.');
+      const created = await createEditRequest({ assessment: assessmentKey, subject_code: String(subjectId), scope: 'MARK_MANAGER', reason: `Edit request: Mark Manager changes for ${displayLabel} ${subjectId}`, teaching_assignment_id: teachingAssignmentId });
+      alert(formatEditRequestSentMessage(created));
     } catch (e: any) {
-      setMarkManagerError(e?.message || 'Request failed');
-      alert(e?.message || 'Request failed');
+      const msg = formatApiErrorMessage(e, 'Request failed');
+      setMarkManagerError(msg);
+      alert(`Edit request failed: ${msg}`);
     } finally {
       setMarkManagerBusy(false);
     }
@@ -823,7 +839,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
     }
 
     if (markEntryReqPending) {
-      alert('Edit request is pending. Please wait for IQAC approval.');
+      alert('Edit request is pending. Please wait for approval.');
       return;
     }
 
@@ -836,14 +852,14 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
     setEditRequestBusy(true);
     setEditRequestError(null);
     try {
-      await createEditRequest({
+      const created = await createEditRequest({
         assessment: assessmentKey,
         subject_code: String(subjectId),
         scope: 'MARK_ENTRY',
         reason,
         teaching_assignment_id: teachingAssignmentId,
       });
-      alert('Edit request sent to IQAC.');
+      alert(formatEditRequestSentMessage(created));
       setPublishedEditModalOpen(false);
       setEditRequestReason('');
       setMarkEntryReqPendingUntilMs(Date.now() + 24 * 60 * 60 * 1000);
@@ -855,8 +871,9 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
       refreshMarkLock({ silent: true });
       refreshPublishWindow();
     } catch (e: any) {
-      setEditRequestError(e?.message || 'Request failed');
-      alert(e?.message || 'Request failed');
+      const msg = formatApiErrorMessage(e, 'Request failed');
+      setEditRequestError(msg);
+      alert(`Edit request failed: ${msg}`);
     } finally {
       setEditRequestBusy(false);
     }
@@ -1175,7 +1192,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
   const publishButtonIsRequestEdit = Boolean(isPublished && publishedEditLocked);
   const openEditRequestModal = async () => {
     if (markEntryReqPending) {
-      alert('Edit request is pending. Please wait for IQAC approval.');
+      alert('Edit request is pending. Please wait for approval.');
       return;
     }
     const mobileOk = await ensureMobileVerified();
@@ -1355,8 +1372,26 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
           </div>
         ) : null}
       {viewMarksModalOpen ? (
-        <div role="dialog" aria-modal="true" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 70 }} onClick={() => setViewMarksModalOpen(false)}>
-          <div style={{ width: 'min(1100px, 96vw)', maxHeight: 'min(80vh, 900px)', overflow: 'auto', background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: 14 }} onClick={(e) => e.stopPropagation()}>
+        <ModalPortal>
+          <div
+            role="dialog"
+            aria-modal="true"
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0,0,0,0.35)',
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'center',
+              overflowY: 'auto',
+              padding: 16,
+              paddingTop: 40,
+              paddingBottom: 40,
+              zIndex: 70,
+            }}
+            onClick={() => setViewMarksModalOpen(false)}
+          >
+            <div style={{ width: 'min(1100px, 96vw)', maxHeight: 'min(80vh, 900px)', overflowY: 'auto', overflowX: 'hidden', background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: 14 }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
               <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>View Published {displayLabel}</div>
               <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>{displayLabel}</div>
@@ -1506,8 +1541,9 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
               <button className="obe-btn" onClick={() => setViewMarksModalOpen(false)}>Close</button>
             </div>
+            </div>
           </div>
-        </div>
+        </ModalPortal>
       ) : null}
 
       {(rosterError || saveError) && (
@@ -1775,27 +1811,41 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
       </div>
 
       {publishedEditModalOpen ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 80 }}
-          onClick={() => {
-            if (editRequestBusy) return;
-            setPublishedEditModalOpen(false);
-          }}
-        >
+        <ModalPortal>
           <div
+            role="dialog"
+            aria-modal="true"
             style={{
-              width: 'min(560px, 96vw)',
-              maxHeight: 'min(86vh, 740px)',
-              overflow: 'auto',
-              background: '#fff',
-              borderRadius: 14,
-              border: '1px solid #e5e7eb',
-              padding: 14,
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0,0,0,0.35)',
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'center',
+              overflowY: 'auto',
+              padding: 16,
+              paddingTop: 40,
+              paddingBottom: 40,
+              zIndex: 80,
             }}
-            onClick={(e) => e.stopPropagation()}
+            onClick={() => {
+              if (editRequestBusy) return;
+              setPublishedEditModalOpen(false);
+            }}
           >
+            <div
+              style={{
+                width: 'min(560px, 96vw)',
+                maxHeight: 'min(86vh, 740px)',
+                overflowY: 'auto',
+                overflowX: 'hidden',
+                background: '#fff',
+                borderRadius: 14,
+                border: '1px solid #e5e7eb',
+                padding: 14,
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
               <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>Request Edit Access</div>
               <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>{displayLabel} • {String(subjectId || '')}</div>
@@ -1832,8 +1882,9 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                 {editRequestBusy ? 'Requesting…' : markEntryReqPending ? 'Request Pending' : 'Send Request'}
               </button>
             </div>
+            </div>
           </div>
-        </div>
+        </ModalPortal>
       ) : null}
 
       <style>{`
@@ -1906,8 +1957,29 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
 
       {/* Mark Manager modal */}
       {markManagerModal ? (
-        <div role="dialog" aria-modal="true" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 9999 }} onClick={() => { if (markManagerBusy) return; setMarkManagerModal(null); }}>
-          <div style={{ width: 'min(640px,96vw)', background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: 14 }} onClick={(e) => e.stopPropagation()}>
+        <ModalPortal>
+          <div
+            role="dialog"
+            aria-modal="true"
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0,0,0,0.35)',
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'center',
+              overflowY: 'auto',
+              padding: 16,
+              paddingTop: 40,
+              paddingBottom: 40,
+              zIndex: 9999,
+            }}
+            onClick={() => {
+              if (markManagerBusy) return;
+              setMarkManagerModal(null);
+            }}
+          >
+            <div style={{ width: 'min(640px,96vw)', background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: 14 }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
               <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>{markManagerModal.mode === 'confirm' ? `Confirmation - ${displayLabel}` : `Request Edit - ${displayLabel}`}</div>
               <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>{displayLabel}</div>
@@ -1983,8 +2055,9 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                 await confirmMarkManager();
               }}>{markManagerModal.mode === 'confirm' ? 'Confirm' : 'Send Request'}</button>
             </div>
+            </div>
           </div>
-        </div>
+        </ModalPortal>
         ) : null}
       </AssessmentContainer>
     </>

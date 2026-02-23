@@ -278,3 +278,57 @@ def notify_edit_request_approved(edit_request) -> None:
 
     whatsapp_outcome = _send_whatsapp(edit_request, message)
     _log_notification(edit_request, ObeEditNotificationLog.CHANNEL_WHATSAPP, whatsapp_outcome)
+
+
+def _build_created_message(edit_request, routed_to: str, department: dict | None = None, hod_name: str | None = None, routing_warning: str | None = None) -> str:
+    subject_code = str(getattr(edit_request, 'subject_code', '') or '').strip() or '-'
+    subject_name = str(getattr(edit_request, 'subject_name', '') or '').strip() or '-'
+    assessment = str(getattr(edit_request, 'assessment', '') or '').strip().upper() or '-'
+    scope = str(getattr(edit_request, 'scope', '') or '').strip().replace('_', ' ').title() or '-'
+
+    if routed_to == 'HOD':
+        dept_txt = '-'
+        if isinstance(department, dict):
+            dept_txt = str(department.get('short_name') or department.get('name') or department.get('code') or '-').strip()
+        elif department is not None:
+            dept_txt = str(getattr(department, 'short_name', '') or getattr(department, 'name', '') or getattr(department, 'code', '') or '-').strip()
+
+        hod_txt = str(hod_name or '-')
+        return (
+            f'OBE Notice: Edit request created.\n'
+            f'Request ID: {getattr(edit_request, "id", "-")}\n'
+            f'Subject: {subject_code} - {subject_name}\n'
+            f'Assessment: {assessment}\n'
+            f'Scope: {scope}\n'
+            f'Sent to: {dept_txt} HOD, {hod_txt}\n'
+            'Please wait for HOD approval.'
+        )
+
+    # Default / routed to IQAC
+    note = f"Note: {routing_warning}" if routing_warning else ''
+    return (
+        f'OBE Notice: Edit request created.\n'
+        f'Request ID: {getattr(edit_request, "id", "-")}\n'
+        f'Subject: {subject_code} - {subject_name}\n'
+        f'Assessment: {assessment}\n'
+        f'Scope: {scope}\n'
+        f'Sent to: IQAC\n'
+        f'{note}'
+    )
+
+
+def notify_edit_request_created(edit_request, routed_to: str, department: dict | None = None, hod_name: str | None = None, routing_warning: str | None = None) -> None:
+    """Send notifications when an edit-request is created/routed.
+
+    This will send both email and WhatsApp (subject to settings) and persist logs.
+    """
+    try:
+        message = _build_created_message(edit_request, routed_to, department=department, hod_name=hod_name, routing_warning=routing_warning)
+
+        email_outcome = _send_email(edit_request, message)
+        _log_notification(edit_request, ObeEditNotificationLog.CHANNEL_EMAIL, email_outcome)
+
+        whatsapp_outcome = _send_whatsapp(edit_request, message)
+        _log_notification(edit_request, ObeEditNotificationLog.CHANNEL_WHATSAPP, whatsapp_outcome)
+    except Exception:
+        logger.exception('Failed to notify edit_request created for edit_request=%s', getattr(edit_request, 'id', None))

@@ -532,6 +532,7 @@ export default function OBEDueDatesPage(): JSX.Element {
   const toggleAssessment = useCallback(
     async (key: DueAssessmentKey) => {
       const willEnable = !selectedAssessments.includes(key);
+      const prevSelected = selectedAssessments;
 
       // optimistic UI
       setSelectedAssessments((prev) => (willEnable ? [...prev, key] : prev.filter((x) => x !== key)));
@@ -560,14 +561,20 @@ export default function OBEDueDatesPage(): JSX.Element {
           });
         }
 
-        // Refresh control rows so status/lever stays correct
-        const resp = await fetchAssessmentControls([selectedSemesterId]);
-        setAssessmentControlsForSelected(Array.isArray((resp as any)?.results) ? (resp as any).results : []);
+        // Refresh server state so the UI matches what will survive a full page reload.
+        const [controlsResp, schedulesResp] = await Promise.all([
+          fetchAssessmentControls([selectedSemesterId]),
+          fetchDueSchedules([selectedSemesterId]),
+        ]);
+        setAssessmentControlsForSelected(Array.isArray((controlsResp as any)?.results) ? (controlsResp as any).results : []);
+        setDueSchedulesForSelected(Array.isArray((schedulesResp as any)?.results) ? (schedulesResp as any).results : []);
 
         setMessage(
           `SEM ${selectedSemNumber} • ${CLASS_TYPE_LABEL[selectedClassType]}: ${assessmentDisplayLabel(selectedClassType, key)} ${willEnable ? 'enabled' : 'disabled'}.`
         );
       } catch (e: any) {
+        // Revert optimistic UI change so it doesn't look enabled when the save failed.
+        setSelectedAssessments(prevSelected);
         setError(e?.message || 'Update failed');
       } finally {
         setLoading(false);

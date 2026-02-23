@@ -4,7 +4,19 @@ import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster } from '../services/roster';
 import fetchWithAuth from '../services/fetchAuth';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
-import { confirmMarkManagerLock, createEditRequest, createPublishRequest, fetchDraft, fetchEditWindow, fetchMyLatestEditRequest, fetchPublishedLabSheet, publishLabSheet, saveDraft } from '../services/obe';
+import {
+  confirmMarkManagerLock,
+  createEditRequest,
+  createPublishRequest,
+  fetchDraft,
+  fetchEditWindow,
+  fetchMyLatestEditRequest,
+  fetchPublishedLabSheet,
+  formatApiErrorMessage,
+  formatEditRequestSentMessage,
+  publishLabSheet,
+  saveDraft,
+} from '../services/obe';
 import { useEditWindow } from '../hooks/useEditWindow';
 import { useEditRequestPending } from '../hooks/useEditRequestPending';
 import { useLockBodyScroll } from '../hooks/useLockBodyScroll';
@@ -13,6 +25,7 @@ import { useMarkTableLock } from '../hooks/useMarkTableLock';
 import { usePublishWindow } from '../hooks/usePublishWindow';
 import PublishLockOverlay from './PublishLockOverlay';
 import AssessmentContainer from './AssessmentContainer';
+import { ModalPortal } from './ModalPortal';
 // Vite-friendly asset URL for lock GIF used in the floating panel
 const lockPanelGif = new URL('https://static.vecteezy.com/system/resources/thumbnails/014/585/778/small/gold-locked-padlock-png.png', import.meta.url).href;
 import { fetchDeptRows, fetchMasters } from '../services/curriculum';
@@ -44,7 +57,7 @@ type LabRowState = {
   // Backward compatible with existing marksA/marksB.
   marksByCo?: Record<string, Array<number | ''>>;
   ciaExam?: number | '';
-  // TCPL/Review profile: per-CO CAA exam raw marks
+  // TCPL/Review profile: per-CO CIA exam raw marks
   caaExamByCo?: Record<string, number | ''>;
   ciaExamByCo?: Record<string, number | ''>;
 };
@@ -1340,7 +1353,7 @@ export default function LabCourseMarksEntry({
         reason: `Edit request: Mark Manager changes for ${label}`,
         teaching_assignment_id: teachingAssignmentId,
       });
-      alert('Edit request sent to IQAC. Waiting for approval...');
+      alert(formatEditRequestSentMessage(created));
 
       const createdId = Number((created as any)?.id);
       const minReviewMs = startedAt.getTime() - 2000;
@@ -1390,8 +1403,9 @@ export default function LabCourseMarksEntry({
         alert('Edit request still pending. Please try again later.');
       })();
     } catch (e: any) {
-      setMarkManagerError(e?.message || 'Request failed');
-      alert(e?.message || 'Request failed');
+      const msg = formatApiErrorMessage(e, 'Request failed');
+      setMarkManagerError(msg);
+      alert(`Edit request failed: ${msg}`);
     } finally {
       setMarkManagerBusy(false);
     }
@@ -2050,7 +2064,7 @@ export default function LabCourseMarksEntry({
     // If already published and locked, use Publish as the entry-point to request edits.
     if (isPublished && publishedEditLocked && !viewerMode) {
       if (markEntryReqPending) {
-        alert('Edit request is pending. Please wait for IQAC approval.');
+        alert('Edit request is pending. Please wait for approval.');
         return;
       }
 
@@ -2213,7 +2227,7 @@ export default function LabCourseMarksEntry({
         reason,
         teaching_assignment_id: teachingAssignmentId,
       });
-      alert('Edit request sent to IQAC. Waiting for approval...');
+      alert(formatEditRequestSentMessage(created));
       setPublishedEditModalOpen(false);
       setEditRequestReason('');
 
@@ -2279,7 +2293,8 @@ export default function LabCourseMarksEntry({
         alert('Edit request still pending. Please try again later.');
       })();
     } catch (e: any) {
-      alert(e?.message || 'Request failed');
+      const msg = formatApiErrorMessage(e, 'Request failed');
+      alert(`Edit request failed: ${msg}`);
     } finally {
       setEditRequestBusy(false);
     }
@@ -2844,7 +2859,7 @@ export default function LabCourseMarksEntry({
                   ) : ciaExamEnabled ? (
                     usesLegacyTcplProfile ? (
                       <th style={cellTh} colSpan={Math.max(tcplReviewCaaCols, 1)}>
-                        CAA EXAM
+                        CIA EXAM
                       </th>
                     ) : (
                       <th
@@ -3034,22 +3049,7 @@ export default function LabCourseMarksEntry({
                               const v = (m.btl?.[i] ?? 1) as BtlLevel;
                               const display = v === '' ? '-' : String(v);
                               const editable = !viewerMode && !tableBlocked && !publishedEditLocked && !globalLocked;
-                              return (
-                                <div style={{ position: 'relative', display: 'grid', placeItems: 'center', minWidth: 44 }} title={`BTL: ${display}`}>
-                              <div
-                                style={{
-                                  width: '100%',
-                                  padding: '4px 6px',
-                                  background: '#fff',
-                                  textAlign: 'center',
-                                  userSelect: 'none',
-                                  fontWeight: 800,
-                                  cursor: editable ? 'pointer' : 'default',
-                                }}
-                              >
-                                {display}
-                              </div>
-                              {editable ? (
+                              return editable ? (
                                 <select
                                   aria-label={`BTL for ${itemLabel1} ${i + 1} (CO-${m.coNumber})`}
                                   value={v}
@@ -3059,15 +3059,16 @@ export default function LabCourseMarksEntry({
                                     setCoBtl(m.coNumber, i, next);
                                   }}
                                   style={{
-                                    position: 'absolute',
-                                    inset: 0,
                                     width: '100%',
-                                    height: '100%',
-                                    opacity: 0,
+                                    minWidth: 44,
+                                    padding: '4px 2px',
+                                    fontWeight: 800,
+                                    fontSize: 11,
+                                    textAlign: 'center',
+                                    border: '1px solid #d1d5db',
+                                    borderRadius: 4,
+                                    background: '#fff',
                                     cursor: 'pointer',
-                                    appearance: 'none',
-                                    WebkitAppearance: 'none',
-                                    MozAppearance: 'none',
                                   }}
                                 >
                                   <option value="">-</option>
@@ -3077,8 +3078,8 @@ export default function LabCourseMarksEntry({
                                     </option>
                                   ))}
                                 </select>
-                              ) : null}
-                            </div>
+                              ) : (
+                                <span style={{ fontWeight: 800 }}>{display}</span>
                               );
                             })()}
                           </th>
@@ -3465,33 +3466,41 @@ export default function LabCourseMarksEntry({
       </div>
 
       {markManagerModal ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.35)',
-            display: 'grid',
-            placeItems: 'center',
-            padding: 16,
-            zIndex: 50,
-          }}
-          onClick={() => {
-            if (markManagerBusy) return;
-            setMarkManagerModal(null);
-          }}
-        >
+        <ModalPortal>
           <div
+            role="dialog"
+            aria-modal="true"
             style={{
-              width: 'min(760px, 96vw)',
-              background: '#fff',
-              borderRadius: 14,
-              border: '1px solid #e5e7eb',
-              padding: 14,
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0,0,0,0.35)',
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'center',
+              overflowY: 'auto',
+              padding: 16,
+              paddingTop: 40,
+              paddingBottom: 40,
+              zIndex: 50,
             }}
-            onClick={(e) => e.stopPropagation()}
+            onClick={() => {
+              if (markManagerBusy) return;
+              setMarkManagerModal(null);
+            }}
           >
+            <div
+              style={{
+                width: 'min(760px, 96vw)',
+                maxHeight: '90vh',
+                overflowY: 'auto',
+                overflowX: 'hidden',
+                background: '#fff',
+                borderRadius: 14,
+                border: '1px solid #e5e7eb',
+                padding: 14,
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
               <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>
                 {markManagerModal.mode === 'confirm' ? `Confirmation - ${label}` : `Request Edit - ${label}`}
@@ -3609,21 +3618,35 @@ export default function LabCourseMarksEntry({
                 {markManagerModal.mode === 'confirm' ? 'Confirm' : 'Send Request'}
               </button>
             </div>
+            </div>
           </div>
-        </div>
+        </ModalPortal>
       ) : null}
 
       {pendingCoDiff && pendingCoDiff.visible ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 90 }}
-          onClick={() => {
-            if (markManagerBusy) return;
-            setPendingCoDiff(null);
-          }}
-        >
-          <div style={{ width: 'min(640px, 96vw)', background: '#fff', borderRadius: 12, padding: 14, border: '1px solid #e5e7eb' }} onClick={(e) => e.stopPropagation()}>
+        <ModalPortal>
+          <div
+            role="dialog"
+            aria-modal="true"
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0,0,0,0.35)',
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'center',
+              overflowY: 'auto',
+              padding: 16,
+              paddingTop: 40,
+              paddingBottom: 40,
+              zIndex: 90,
+            }}
+            onClick={() => {
+              if (markManagerBusy) return;
+              setPendingCoDiff(null);
+            }}
+          >
+            <div style={{ width: 'min(640px, 96vw)', background: '#fff', borderRadius: 12, padding: 14, border: '1px solid #e5e7eb' }} onClick={(e) => e.stopPropagation()}>
             <div style={{ fontWeight: 900, marginBottom: 8 }}>Mark Manager conflict with published marks</div>
             <div style={{ color: '#374151', marginBottom: 12 }}>
               The selected CO settings differ from the published mark sheet. {pendingCoDiff.affected} student rows contain marks that may be lost.
@@ -3693,24 +3716,38 @@ export default function LabCourseMarksEntry({
                 Reset & Continue
               </button>
             </div>
+            </div>
           </div>
-        </div>
+        </ModalPortal>
       ) : null}
 
       {pendingMarkManagerReset && pendingMarkManagerReset.visible ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 95 }}
-          onClick={() => {
-            if (markManagerBusy) return;
-            setPendingMarkManagerReset(null);
-          }}
-        >
+        <ModalPortal>
           <div
-            style={{ width: 'min(660px, 96vw)', background: '#fff', borderRadius: 12, padding: 14, border: '1px solid #e5e7eb' }}
-            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0,0,0,0.35)',
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'center',
+              overflowY: 'auto',
+              padding: 16,
+              paddingTop: 40,
+              paddingBottom: 40,
+              zIndex: 95,
+            }}
+            onClick={() => {
+              if (markManagerBusy) return;
+              setPendingMarkManagerReset(null);
+            }}
           >
+            <div
+              style={{ width: 'min(660px, 96vw)', background: '#fff', borderRadius: 12, padding: 14, border: '1px solid #e5e7eb' }}
+              onClick={(e) => e.stopPropagation()}
+            >
             <div style={{ fontWeight: 900, marginBottom: 8 }}>
               {pendingMarkManagerReset.removed.length === 1
                 ? `Shall I reset the CO${pendingMarkManagerReset.removed[0]} column?`
@@ -3751,40 +3788,47 @@ export default function LabCourseMarksEntry({
                 Reset full data
               </button>
             </div>
+            </div>
           </div>
-        </div>
+        </ModalPortal>
       ) : null}
 
       {publishedEditModalOpen ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.35)',
-            display: 'grid',
-            placeItems: 'center',
-            padding: 16,
-            zIndex: 60,
-          }}
-          onClick={() => {
-            if (editRequestBusy) return;
-            setPublishedEditModalOpen(false);
-          }}
-        >
+        <ModalPortal>
           <div
+            role="dialog"
+            aria-modal="true"
             style={{
-              width: 'min(560px, 96vw)',
-              maxHeight: 'min(86vh, 740px)',
-              overflow: 'auto',
-              background: '#fff',
-              borderRadius: 14,
-              border: '1px solid #e5e7eb',
-              padding: 14,
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0,0,0,0.35)',
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'center',
+              overflowY: 'auto',
+              padding: 16,
+              paddingTop: 40,
+              paddingBottom: 40,
+              zIndex: 60,
             }}
-            onClick={(e) => e.stopPropagation()}
+            onClick={() => {
+              if (editRequestBusy) return;
+              setPublishedEditModalOpen(false);
+            }}
           >
+            <div
+              style={{
+                width: 'min(560px, 96vw)',
+                maxHeight: 'min(86vh, 740px)',
+                overflowY: 'auto',
+                overflowX: 'hidden',
+                background: '#fff',
+                borderRadius: 14,
+                border: '1px solid #e5e7eb',
+                padding: 14,
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
               <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>Request Edit Access</div>
               <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>{String(assessmentKey).toUpperCase()} LAB</div>
@@ -3832,37 +3876,44 @@ export default function LabCourseMarksEntry({
                 {editRequestBusy ? 'Requesting…' : markEntryReqPending ? 'Request Pending' : 'Send Request'}
               </button>
             </div>
+            </div>
           </div>
-        </div>
+        </ModalPortal>
       ) : null}
 
       {viewMarksModalOpen ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.35)',
-            display: 'grid',
-            placeItems: 'center',
-            padding: 16,
-            zIndex: 70,
-          }}
-          onClick={() => setViewMarksModalOpen(false)}
-        >
+        <ModalPortal>
           <div
+            role="dialog"
+            aria-modal="true"
             style={{
-              width: 'min(1100px, 96vw)',
-              maxHeight: 'min(80vh, 900px)',
-              overflow: 'auto',
-              background: '#fff',
-              borderRadius: 14,
-              border: '1px solid #e5e7eb',
-              padding: 14,
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0,0,0,0.35)',
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'center',
+              overflowY: 'auto',
+              padding: 16,
+              paddingTop: 40,
+              paddingBottom: 40,
+              zIndex: 70,
             }}
-            onClick={(e) => e.stopPropagation()}
+            onClick={() => setViewMarksModalOpen(false)}
           >
+            <div
+              style={{
+                width: 'min(1100px, 96vw)',
+                maxHeight: 'min(80vh, 900px)',
+                overflowY: 'auto',
+                overflowX: 'hidden',
+                background: '#fff',
+                borderRadius: 14,
+                border: '1px solid #e5e7eb',
+                padding: 14,
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, position: 'relative' }}>
               <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>View Only</div>
               <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280', marginRight: 36 }}>{label} • {String(subjectId || '')}</div>
@@ -3931,7 +3982,7 @@ export default function LabCourseMarksEntry({
                     ) : ciaExamEnabled ? (
                       usesLegacyTcplProfile ? (
                         <th style={cellTh} colSpan={Math.max(tcplReviewCaaCols, 1)}>
-                          CAA EXAM
+                          CIA EXAM
                         </th>
                       ) : (
                         <th
@@ -4251,8 +4302,9 @@ export default function LabCourseMarksEntry({
                 Close
               </button>
             </div>
+            </div>
           </div>
-        </div>
+        </ModalPortal>
       ) : null}
     </AssessmentContainer>
   );

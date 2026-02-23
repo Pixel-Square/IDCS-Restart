@@ -6,7 +6,7 @@ import {
   saveCdapRevision,
   subscribeToGlobalAnalysisMapping,
 } from '../services/cdapDb';
-import { createEditRequest } from '../services/obe';
+import { createEditRequest, formatApiErrorMessage, formatEditRequestSentMessage } from '../services/obe';
 import { useEditWindow } from '../hooks/useEditWindow';
 import { ZoomIn, ZoomOut } from 'lucide-react';
 
@@ -411,18 +411,20 @@ export default function CDAPEditor({
     setRequestEditBusy(true);
     setRequestEditError(null);
     try {
-      await createEditRequest({
+      const created = await createEditRequest({
         assessment: 'cdap',
         subject_code: subjectId,
         scope: 'MARK_ENTRY',
         reason,
         teaching_assignment_id: teachingAssignmentId,
       });
-      alert('Edit request sent to IQAC.');
+      alert(formatEditRequestSentMessage(created));
       setRequestEditOpen(false);
       // Stay on page; IQAC will review in their requests queue.
     } catch (e: any) {
-      setRequestEditError(e?.message || 'Failed to request edit');
+      const msg = formatApiErrorMessage(e, 'Failed to request edit');
+      setRequestEditError(msg);
+      alert(`Edit request failed: ${msg}`);
     } finally {
       setRequestEditBusy(false);
       refreshEditWindow();

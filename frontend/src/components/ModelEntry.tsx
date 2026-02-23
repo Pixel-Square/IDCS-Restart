@@ -11,6 +11,7 @@ import { useMarkTableLock } from '../hooks/useMarkTableLock';
 import { useEditWindow } from '../hooks/useEditWindow';
 import { useEditRequestPending } from '../hooks/useEditRequestPending';
 import { useLockBodyScroll } from '../hooks/useLockBodyScroll';
+import { ModalPortal } from './ModalPortal';
 
 type Props = {
   subjectId: string;
@@ -576,7 +577,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     if (isPublished) {
       if (publishedEditLocked) {
         if (markEntryReqPending) {
-          setActionError('Edit request is pending. Please wait for IQAC approval.');
+          setActionError('Edit request is pending. Please wait for approval.');
           return;
         }
 
@@ -655,7 +656,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     }
 
     if (markEntryReqPending) {
-      setActionError('Edit request is pending. Please wait for IQAC approval.');
+      setActionError('Edit request is pending. Please wait for approval.');
       return;
     }
 
@@ -668,14 +669,14 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     setEditRequestBusy(true);
     setActionError(null);
     try {
-      await OBE.createEditRequest({
+      const created = await OBE.createEditRequest({
         assessment: 'model',
         subject_code: String(subjectId),
         scope: 'MARK_ENTRY',
         reason,
         teaching_assignment_id: teachingAssignmentId,
       });
-      alert('Edit request sent to IQAC. Waiting for approval...');
+      alert(OBE.formatEditRequestSentMessage(created));
       setPublishedEditModalOpen(false);
       setEditRequestReason('');
       setMarkEntryReqPendingUntilMs(Date.now() + 24 * 60 * 60 * 1000);
@@ -687,7 +688,9 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
       refreshMarkLock({ silent: true });
       refreshMarkEntryEditWindow({ silent: true });
     } catch (e: any) {
-      setActionError(e?.message || 'Failed to request edit');
+      const msg = OBE.formatApiErrorMessage(e, 'Failed to request edit');
+      setActionError(msg);
+      alert(`Edit request failed: ${msg}`);
     } finally {
       setEditRequestBusy(false);
     }
@@ -1547,25 +1550,39 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
       ) : null}
 
       {publishedEditModalOpen ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 80 }}
-          onClick={() => setPublishedEditModalOpen(false)}
-        >
+        <ModalPortal>
           <div
+            role="dialog"
+            aria-modal="true"
             style={{
-              width: 'min(520px, 96vw)',
-              maxHeight: 'min(86vh, 740px)',
-              overflow: 'auto',
-              background: '#fff',
-              borderRadius: 16,
-              border: '1px solid #e5e7eb',
-              padding: 14,
-              boxShadow: '0 12px 30px rgba(0,0,0,0.18)',
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0,0,0,0.35)',
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'center',
+              overflowY: 'auto',
+              padding: 16,
+              paddingTop: 40,
+              paddingBottom: 40,
+              zIndex: 80,
             }}
-            onClick={(e) => e.stopPropagation()}
+            onClick={() => setPublishedEditModalOpen(false)}
           >
+            <div
+              style={{
+                width: 'min(520px, 96vw)',
+                maxHeight: 'min(86vh, 740px)',
+                overflowY: 'auto',
+                overflowX: 'hidden',
+                background: '#fff',
+                borderRadius: 16,
+                border: '1px solid #e5e7eb',
+                padding: 14,
+                boxShadow: '0 12px 30px rgba(0,0,0,0.18)',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
             <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>Request Edit Access</div>
             <div style={{ fontSize: 12, color: '#6b7280', marginTop: 6, lineHeight: 1.35 }}>
               This will send a request to IQAC. Once approved, mark entry will open for editing until the approval expires.
@@ -1594,8 +1611,9 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                 {editRequestBusy ? 'Sending…' : markEntryReqPending ? 'Request Pending' : 'Send Request'}
               </button>
             </div>
+            </div>
           </div>
-        </div>
+        </ModalPortal>
       ) : null}
 
 
@@ -1750,7 +1768,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                 disabled={!subjectId || markEntryReqPending}
                 onClick={async () => {
                   if (markEntryReqPending) {
-                    alert('Edit request is pending. Please wait for IQAC approval.');
+                    alert('Edit request is pending. Please wait for approval.');
                     return;
                   }
                   const mobileOk = await ensureMobileVerified();

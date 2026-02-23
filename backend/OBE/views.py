@@ -1514,6 +1514,7 @@ def _get_due_schedule_for_request(request, subject_code: str, assessment: str, t
     ctrl_active = False
     ctrl_enabled = None
     ctrl_open = None
+    ctrl_query_failed = False
     if semester is not None:
         try:
             ctrl = ObeAssessmentControl.objects.filter(
@@ -1523,6 +1524,7 @@ def _get_due_schedule_for_request(request, subject_code: str, assessment: str, t
             ).order_by('-updated_at').first()
         except OperationalError:
             ctrl = None
+            ctrl_query_failed = True
 
     # Backward compatibility: older controls could be stored against AcademicYear only.
     if ctrl is None and academic_year is not None:
@@ -1535,15 +1537,26 @@ def _get_due_schedule_for_request(request, subject_code: str, assessment: str, t
             ).order_by('-updated_at').first()
         except OperationalError:
             ctrl = None
+            ctrl_query_failed = True
 
     if ctrl is not None:
         ctrl_active = True
         ctrl_enabled = bool(getattr(ctrl, 'is_enabled', True))
         ctrl_open = bool(getattr(ctrl, 'is_open', True))
 
-    # If no explicit control exists yet, infer enabled from whether a due schedule exists.
-    assessment_enabled = bool(ctrl_enabled) if ctrl_active else bool(schedule is not None)
-    assessment_open = bool(ctrl_open) if ctrl_active else True
+    # If the controls storage is unavailable (e.g., migrations not applied), fail-open.
+    # If no explicit control row exists, default to ENABLED so faculty can always
+    # access exams until IQAC explicitly disables them.
+    if (not ctrl_active) and ctrl_query_failed:
+        assessment_enabled = True
+        assessment_open = True
+    elif ctrl_active:
+        assessment_enabled = bool(ctrl_enabled)
+        assessment_open = bool(ctrl_open)
+    else:
+        # No control row exists yet → default to enabled & open.
+        assessment_enabled = True
+        assessment_open = True
 
     allowed_by_due = True
     remaining_seconds = None
@@ -1675,7 +1688,19 @@ def assessment_controls(request):
 
     from .models import ObeAssessmentControl
 
-    qs = ObeAssessmentControl.objects.select_related('semester').filter(semester_id__in=sem_ids).order_by('semester_id', 'subject_code', 'assessment')
+    try:
+        qs = ObeAssessmentControl.objects.select_related('semester').filter(semester_id__in=sem_ids).order_by('semester_id', 'subject_code', 'assessment')
+    except OperationalError:
+        return Response(
+            {
+                'detail': 'Assessment controls are not available on this server (database table missing).',
+                'how_to_fix': [
+                    'Run backend migrations (includes OBE migration 0035_obeassessmentcontrol).',
+                    'Restart the backend after migrating.',
+                ],
+            },
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
     out = []
     for r in qs:
         out.append(
@@ -1748,29 +1773,41 @@ def assessment_controls_bulk_set(request):
     updated = 0
     req_user_id = getattr(getattr(request, 'user', None), 'id', None)
 
-    for code in [str(s).strip() for s in subject_codes]:
-        if not code:
-            continue
-        subj = Subject.objects.filter(code=code).first()
-        name = getattr(subj, 'name', '') if subj else ''
-        for a in norm_assessments:
-            defaults = {
-                'subject_name': name,
-                'updated_by': req_user_id,
-                'created_by': req_user_id,
-            }
-            if has_is_enabled:
-                defaults['is_enabled'] = bool(body.get('is_enabled'))
-            if has_is_open:
-                defaults['is_open'] = bool(body.get('is_open'))
+    try:
+        for code in [str(s).strip() for s in subject_codes]:
+            if not code:
+                continue
+            subj = Subject.objects.filter(code=code).first()
+            name = getattr(subj, 'name', '') if subj else ''
+            for a in norm_assessments:
+                defaults = {
+                    'subject_name': name,
+                    'updated_by': req_user_id,
+                    'created_by': req_user_id,
+                }
+                if has_is_enabled:
+                    defaults['is_enabled'] = bool(body.get('is_enabled'))
+                if has_is_open:
+                    defaults['is_open'] = bool(body.get('is_open'))
 
-            ObeAssessmentControl.objects.update_or_create(
-                semester=sem,
-                subject_code=code,
-                assessment=a,
-                defaults=defaults,
-            )
-            updated += 1
+                ObeAssessmentControl.objects.update_or_create(
+                    semester=sem,
+                    subject_code=code,
+                    assessment=a,
+                    defaults=defaults,
+                )
+                updated += 1
+    except OperationalError:
+        return Response(
+            {
+                'detail': 'Failed to save assessment controls (database table missing).',
+                'how_to_fix': [
+                    'Run backend migrations (includes OBE migration 0035_obeassessmentcontrol).',
+                    'Restart the backend after migrating.',
+                ],
+            },
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
 
     return Response({'status': 'ok', 'updated': int(updated)})
 
@@ -5187,7 +5224,43 @@ def edit_request_create(request):
     # Primary: academics.DepartmentRole (department + academic_year).
     # Fallbacks: RoleAssignment('HOD') and accounts.Role('HOD') for staff in same department.
     hod_user = None
-    dept = getattr(staff_profile, 'current_department', None)
+    # IMPORTANT: for labs/special/cross-department assignments, the HOD should be the
+    # department that owns the course/section (teaching assignment), not necessarily
+    # the staff member's home department.
+    dept = None
+    try:
+        cr = getattr(ta, 'curriculum_row', None)
+        dept = getattr(cr, 'department', None) if cr is not None else None
+    except Exception:
+        dept = None
+    if dept is None:
+        try:
+            subj = getattr(ta, 'subject', None)
+            course = getattr(subj, 'course', None) if subj is not None else None
+            dept = getattr(course, 'department', None) if course is not None else None
+        except Exception:
+            dept = None
+    if dept is None:
+        try:
+            sec = getattr(ta, 'section', None)
+            batch = getattr(sec, 'batch', None) if sec is not None else None
+            course = getattr(batch, 'course', None) if batch is not None else None
+            dept = getattr(course, 'department', None) if course is not None else None
+        except Exception:
+            dept = None
+    if dept is None:
+        dept = getattr(staff_profile, 'current_department', None) or getattr(staff_profile, 'department', None)
+    if dept is None:
+        return Response(
+            {
+                'detail': 'Unable to resolve your department for HOD routing.',
+                'how_to_fix': [
+                    'Ensure this staff has an active department assignment (or department set) in Academics.',
+                    'Then re-try submitting the edit request.',
+                ],
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     try:
         from academics.models import DepartmentRole
 
@@ -5204,6 +5277,22 @@ def edit_request_create(request):
             )
             if hod_role is not None:
                 hod_user = getattr(getattr(hod_role, 'staff', None), 'user', None)
+
+        # Backward-compat / convenience: if a HOD is configured for the department
+        # but not explicitly mapped for this academic year, pick the latest active HOD.
+        if hod_user is None and dept is not None:
+            hod_role_any = (
+                DepartmentRole.objects.filter(
+                    department=dept,
+                    role='HOD',
+                    is_active=True,
+                )
+                .select_related('staff__user', 'academic_year')
+                .order_by('-academic_year_id', '-id')
+                .first()
+            )
+            if hod_role_any is not None:
+                hod_user = getattr(getattr(hod_role_any, 'staff', None), 'user', None)
     except Exception:
         hod_user = None
 
@@ -5232,6 +5321,16 @@ def edit_request_create(request):
                 hod_user = getattr(getattr(ra, 'staff', None), 'user', None)
         except Exception:
             hod_user = None
+
+    routing_warning = None
+    if hod_user is None:
+        dept_name = (
+            str(getattr(dept, 'short_name', '') or '').strip()
+            or str(getattr(dept, 'name', '') or '').strip()
+            or str(getattr(dept, 'code', '') or '').strip()
+            or 'your department'
+        )
+        routing_warning = f'No active HOD configured for {dept_name}. Request will be sent directly to IQAC.'
 
     if hod_user is None and dept is not None:
         try:
@@ -5294,7 +5393,61 @@ def edit_request_create(request):
             hod_approved=(False if hod_user is not None else True),
         )
 
-    return Response({'id': req.id, 'status': req.status, 'scope': req.scope, 'created_at': req.created_at.isoformat() if req.created_at else None})
+    routed_to = 'HOD' if getattr(req, 'hod_user_id', None) is not None and not bool(getattr(req, 'hod_approved', True)) else 'IQAC'
+
+    hod_u = getattr(req, 'hod_user', None)
+    hod_name = (
+        ' '.join([
+            str(getattr(hod_u, 'first_name', '') or '').strip(),
+            str(getattr(hod_u, 'last_name', '') or '').strip(),
+        ]).strip()
+        if hod_u
+        else ''
+    )
+    if not hod_name:
+        hod_name = str(getattr(hod_u, 'username', '') or '').strip() if hod_u else ''
+
+    # Build department/hod payload (re-used for response and notifications)
+    department_payload = (
+        {
+            'id': getattr(dept, 'id', None),
+            'code': getattr(dept, 'code', None),
+            'name': getattr(dept, 'name', None),
+            'short_name': getattr(dept, 'short_name', None),
+        }
+        if dept is not None
+        else None
+    )
+    hod_payload = (
+        {
+            'id': getattr(hod_u, 'id', None),
+            'username': getattr(hod_u, 'username', None),
+            'name': hod_name or None,
+        }
+        if getattr(req, 'hod_user_id', None) is not None
+        else None
+    )
+
+    # Send creation notifications (email/WhatsApp) so staff gets immediate routing info.
+    try:
+        from .services.edit_request_notifications import notify_edit_request_created
+
+        notify_edit_request_created(req, routed_to, department=department_payload, hod_name=hod_name, routing_warning=routing_warning)
+    except Exception:
+        logger.exception('Failed to send edit-request created notification for req=%s', getattr(req, 'id', None))
+
+    return Response(
+        {
+            'id': req.id,
+            'status': req.status,
+            'scope': req.scope,
+            'created_at': req.created_at.isoformat() if req.created_at else None,
+            'routed_to': routed_to,
+            'routing_warning': routing_warning,
+            'department': department_payload,
+            'hod': hod_payload,
+        }
+    )
 
 
 @api_view(['GET'])

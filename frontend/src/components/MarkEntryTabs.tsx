@@ -487,8 +487,8 @@ export default function MarkEntryTabs({
     return propCt || null;
   }, [selectedTa, taDerivedClassType, classType]);
 
-  // Tab visibility: treat QP2 as TCPR subtype when class type is missing/THOERY.
-  // This matches the product behavior where QP2 drives TCPR-style assessments.
+  // Tab visibility: only treat QP2 as TCPR subtype when class type is missing.
+  // If class type is explicitly THEORY, keep formative tabs (SSA/Formative/CIA).
   const effectiveClassTypeForTabs = useMemo(() => {
     const ct = normalizeClassType(effectiveClassType);
     // Some data sources may contain variants like "TC PR", "TC-PR" or "TCPR - ...".
@@ -496,7 +496,7 @@ export default function MarkEntryTabs({
     if (ctKey.includes('TCPR')) return 'TCPR';
     if (ctKey.includes('TCPL')) return 'TCPL';
     const qp = String(questionPaperType || '').trim().toUpperCase();
-    if (qp === 'QP2' && (!ct || ct === 'THEORY')) return 'TCPR';
+    if (qp === 'QP2' && !ct) return 'TCPR';
     return effectiveClassType;
   }, [effectiveClassType, questionPaperType]);
 
