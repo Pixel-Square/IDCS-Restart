@@ -48,6 +48,7 @@ def resolve_dashboard_capabilities(user) -> Dict:
             'curriculum_master': False,
             'department_curriculum': False,
             'student_curriculum_view': False,
+            'hod_obe_requests': False,
         }
         return {
             'profile_type': None,
@@ -64,6 +65,26 @@ def resolve_dashboard_capabilities(user) -> Dict:
 
     roles_qs = user.roles.all()
     role_names = [r.name for r in roles_qs]
+
+    # Department roles (HOD/AHOD) are modeled in academics.DepartmentRole,
+    # not necessarily as accounts.Role. Expose them as effective roles so the
+    # frontend can show HOD pages in the sidebar.
+    dept_role_names = set()
+    try:
+        staff_profile = getattr(user, 'staff_profile', None)
+        if staff_profile is not None:
+            from academics.models import DepartmentRole
+
+            dept_roles = DepartmentRole.objects.filter(staff=staff_profile, is_active=True).values_list('role', flat=True)
+            for r in dept_roles:
+                if r:
+                    dept_role_names.add(str(r).upper())
+    except Exception:
+        dept_role_names = set()
+
+    for r in sorted(dept_role_names):
+        if r not in {str(x).upper() for x in role_names}:
+            role_names.append(r)
 
     Permission = models.Permission
     perms_qs = Permission.objects.filter(permission_roles__role__in=roles_qs).distinct()
@@ -129,16 +150,17 @@ def resolve_dashboard_capabilities(user) -> Dict:
         'can_view_my_students': 'academics.view_my_students' in lower_perms,
     }
 
-    hod_role_present = any(r.upper() == 'HOD' for r in role_names)
+    hod_role_present = any(str(r).upper() == 'HOD' for r in role_names)
     entry_points = {
         'curriculum_master': bool(flags.get('can_edit_curriculum_master') or flags.get('can_view_curriculum_master')),
         'department_curriculum': bool(flags.get('can_fill_department_curriculum') or flags.get('can_approve_department_curriculum')),
         'student_curriculum_view': bool(flags.get('is_student')),
         'timetable_templates': bool(flags.get('can_manage_timetable_templates') or user.is_staff),
-        'timetable_assignments': bool(flags.get('can_assign_timetable') or any(r.upper() == 'HOD' for r in role_names)),
+        'timetable_assignments': bool(flags.get('can_assign_timetable') or any(str(r).upper() == 'HOD' for r in role_names)),
         'hod_advisors': bool(flags.get('can_assign_advisor') or hod_role_present),
         'hod_teaching': bool(flags.get('can_assign_teaching') or hod_role_present),
-        'advisor_students': bool(flags.get('can_view_my_students') or any(r.upper() == 'ADVISOR' for r in role_names)),
+        'advisor_students': bool(flags.get('can_view_my_students') or any(str(r).upper() == 'ADVISOR' for r in role_names)),
+        'hod_obe_requests': bool(hod_role_present),
     }
 
     return {

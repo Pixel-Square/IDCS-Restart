@@ -2,6 +2,7 @@ import logging
 import re
 import urllib.parse
 import urllib.request
+import time
 from dataclasses import dataclass
 from django.conf import settings
 
@@ -171,14 +172,34 @@ def send_sms(to_number: str, message: str) -> SmsSendResult:
             'message': str(message).strip(),
         }
 
-        try:
+        def _post_once():
             import requests
 
             timeout = float(getattr(settings, 'OBE_WHATSAPP_TIMEOUT_SECONDS', 8.0) or 8.0)
-            response = requests.post(endpoint, json=payload, timeout=timeout)
-            if 200 <= int(getattr(response, 'status_code', 0) or 0) < 300:
+            return requests.post(endpoint, json=payload, timeout=timeout)
+
+        try:
+            response = _post_once()
+            status_code = int(getattr(response, 'status_code', 0) or 0)
+            response_text = str(getattr(response, 'text', '') or '')
+            if 200 <= status_code < 300:
                 return SmsSendResult(ok=True, message='Sent via WhatsApp')
-            return SmsSendResult(ok=False, message=f'WhatsApp HTTP {getattr(response, "status_code", "?")}: {response.text!r}')
+
+            # whatsapp-web.js + Puppeteer can intermittently fail with detached-frame errors;
+            # retry once for transient provider faults.
+            transient = status_code >= 500 or 'detached frame' in response_text.lower() or 'execution context was destroyed' in response_text.lower()
+            if transient:
+                try:
+                    time.sleep(0.7)
+                except Exception:
+                    pass
+                retry = _post_once()
+                retry_status = int(getattr(retry, 'status_code', 0) or 0)
+                if 200 <= retry_status < 300:
+                    return SmsSendResult(ok=True, message='Sent via WhatsApp')
+                return SmsSendResult(ok=False, message=f'WhatsApp HTTP {retry_status}: {getattr(retry, "text", "")!r}')
+
+            return SmsSendResult(ok=False, message=f'WhatsApp HTTP {status_code}: {response_text!r}')
         except Exception as e:
             log.exception('SMS(whatsapp) failed')
             return SmsSendResult(ok=False, message=str(e))

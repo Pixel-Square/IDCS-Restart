@@ -65,7 +65,25 @@ class MeSerializer(serializers.Serializer):
     college = serializers.SerializerMethodField()
 
     def get_roles(self, obj):
-        return [r.name for r in obj.roles.all()]
+        roles = [r.name for r in obj.roles.all()]
+
+        # Add DepartmentRole-based roles (HOD/AHOD) as effective roles.
+        try:
+            staff_profile = getattr(obj, 'staff_profile', None)
+            if staff_profile is not None:
+                from academics.models import DepartmentRole
+
+                dept_roles = DepartmentRole.objects.filter(staff=staff_profile, is_active=True).values_list('role', flat=True)
+                existing = {str(r).upper() for r in roles}
+                for r in dept_roles:
+                    ru = str(r).upper()
+                    if ru and ru not in existing:
+                        roles.append(ru)
+                        existing.add(ru)
+        except Exception:
+            pass
+
+        return roles
 
     def get_permissions(self, obj):
         from .utils import get_user_permissions

@@ -134,8 +134,8 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // HOD pages: require HOD role or explicit permission
   if (entry.hod_advisors && (rolesUpper.includes('HOD') || permsLower.includes('academics.assign_advisor'))) items.push({ key: 'hod_advisors', label: 'Advisor Assign', to: '/hod/advisors' });
   if (entry.hod_teaching && (rolesUpper.includes('ADVISOR') || permsLower.includes('academics.assign_teaching'))) items.push({ key: 'hod_teaching', label: 'Teaching Assign', to: '/advisor/teaching' });
-  const canHod = rolesUpper.includes('HOD') || Boolean(entry.hod_advisors) || permsLower.includes('academics.assign_advisor');
-  if (canHod) items.push({ key: 'hod_obe_requests', label: 'HOD: OBE Requests', to: '/hod/obe-requests' });
+  const canHodObeRequests = Boolean((entry as any)?.hod_obe_requests) || rolesUpper.includes('HOD');
+  if (canHodObeRequests) items.push({ key: 'hod_obe_requests', label: 'HOD: OBE Requests', to: '/hod/obe-requests' });
 
   // Advisor pages: require ADVISOR role or explicit permission
   if (entry.advisor_students && (rolesUpper.includes('ADVISOR') || permsLower.includes('academics.view_my_students'))) items.push({ key: 'advisor_students', label: 'My Students', to: '/advisor/students' });

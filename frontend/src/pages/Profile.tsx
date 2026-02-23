@@ -148,7 +148,10 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
         setOtpInfo('OTP sent.');
       }
     } catch (e: any) {
-      const msg = String(e?.response?.data?.detail || e?.message || e || 'Failed to send OTP');
+      const statusCode = Number(e?.response?.status || 0);
+      const msg = statusCode === 401
+        ? 'Session expired. Please login again and retry OTP request.'
+        : String(e?.response?.data?.detail || e?.message || e || 'Failed to send OTP');
       setOtpError(msg);
     } finally {
       setOtpBusy(false);
@@ -195,7 +198,10 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
       setOtpExpiresAtMs(null);
       setOtpSecondsLeft(0);
     } catch (e: any) {
-      const msg = String(e?.response?.data?.detail || e?.message || e || 'OTP verification failed');
+      const statusCode = Number(e?.response?.status || 0);
+      const msg = statusCode === 401
+        ? 'Session expired. Please login again and retry OTP verification.'
+        : String(e?.response?.data?.detail || e?.message || e || 'OTP verification failed');
       setOtpError(msg);
     } finally {
       setOtpBusy(false);

@@ -5184,11 +5184,13 @@ def edit_request_create(request):
     from .models import ObeEditRequest
 
     # Resolve department HOD for this staff member + academic year.
+    # Primary: academics.DepartmentRole (department + academic_year).
+    # Fallbacks: RoleAssignment('HOD') and accounts.Role('HOD') for staff in same department.
     hod_user = None
+    dept = getattr(staff_profile, 'current_department', None)
     try:
         from academics.models import DepartmentRole
 
-        dept = getattr(staff_profile, 'current_department', None)
         if dept is not None and academic_year is not None:
             hod_role = (
                 DepartmentRole.objects.filter(
@@ -5204,6 +5206,53 @@ def edit_request_create(request):
                 hod_user = getattr(getattr(hod_role, 'staff', None), 'user', None)
     except Exception:
         hod_user = None
+
+    if hod_user is None and dept is not None:
+        try:
+            from academics.models import StaffProfile, RoleAssignment
+            from django.db.models import Q
+
+            dept_staff_qs = StaffProfile.objects.filter(
+                Q(department=dept)
+                | Q(department_assignments__department=dept, department_assignments__end_date__isnull=True)
+            ).select_related('user').distinct()
+
+            # Prefer explicit time-bound RoleAssignment first.
+            ra = (
+                RoleAssignment.objects.filter(
+                    staff__in=dept_staff_qs,
+                    role_name__iexact='HOD',
+                    end_date__isnull=True,
+                )
+                .select_related('staff__user')
+                .order_by('-start_date')
+                .first()
+            )
+            if ra is not None:
+                hod_user = getattr(getattr(ra, 'staff', None), 'user', None)
+        except Exception:
+            hod_user = None
+
+    if hod_user is None and dept is not None:
+        try:
+            from academics.models import StaffProfile
+            from django.db.models import Q
+
+            dept_staff_qs = StaffProfile.objects.filter(
+                Q(department=dept)
+                | Q(department_assignments__department=dept, department_assignments__end_date__isnull=True)
+            ).select_related('user').distinct()
+
+            sp_hod = (
+                dept_staff_qs.filter(user__roles__name__iexact='HOD')
+                .exclude(user=request.user)
+                .order_by('id')
+                .first()
+            )
+            if sp_hod is not None:
+                hod_user = getattr(sp_hod, 'user', None)
+        except Exception:
+            hod_user = None
 
     existing = ObeEditRequest.objects.filter(
         staff_user=request.user,
@@ -5507,14 +5556,7 @@ def edit_requests_hod_pending(request):
     if staff_profile is None:
         return Response({'detail': 'Not a staff member.'}, status=status.HTTP_403_FORBIDDEN)
 
-    try:
-        from academics.models import DepartmentRole
-
-        is_hod = DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True).exists()
-        if not is_hod:
-            return Response({'detail': 'HOD access required.'}, status=status.HTTP_403_FORBIDDEN)
-    except Exception:
-        return Response({'detail': 'HOD access required.'}, status=status.HTTP_403_FORBIDDEN)
+    # Authorization is assignment-based: a user can only see rows where hod_user=request.user.
 
     from .models import ObeEditRequest
 
@@ -5598,14 +5640,7 @@ def edit_requests_hod_pending_count(request):
     if staff_profile is None:
         return Response({'pending': 0})
 
-    try:
-        from academics.models import DepartmentRole
-
-        is_hod = DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True).exists()
-        if not is_hod:
-            return Response({'pending': 0})
-    except Exception:
-        return Response({'pending': 0})
+    # Authorization is assignment-based: count is scoped to hod_user=request.user.
 
     from .models import ObeEditRequest
     qp = getattr(request, 'query_params', {}) if hasattr(request, 'query_params') else request.GET
@@ -5627,14 +5662,7 @@ def edit_request_hod_approve(request, req_id: int):
     if staff_profile is None:
         return Response({'detail': 'Not a staff member.'}, status=status.HTTP_403_FORBIDDEN)
 
-    try:
-        from academics.models import DepartmentRole
-
-        is_hod = DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True).exists()
-        if not is_hod:
-            return Response({'detail': 'HOD access required.'}, status=status.HTTP_403_FORBIDDEN)
-    except Exception:
-        return Response({'detail': 'HOD access required.'}, status=status.HTTP_403_FORBIDDEN)
+    # Authorization is enforced by assignment check below (row.hod_user == request.user).
 
     from .models import ObeEditRequest
     row = ObeEditRequest.objects.filter(id=req_id).first()
@@ -5667,14 +5695,7 @@ def edit_request_hod_reject(request, req_id: int):
     if staff_profile is None:
         return Response({'detail': 'Not a staff member.'}, status=status.HTTP_403_FORBIDDEN)
 
-    try:
-        from academics.models import DepartmentRole
-
-        is_hod = DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True).exists()
-        if not is_hod:
-            return Response({'detail': 'HOD access required.'}, status=status.HTTP_403_FORBIDDEN)
-    except Exception:
-        return Response({'detail': 'HOD access required.'}, status=status.HTTP_403_FORBIDDEN)
+    # Authorization is enforced by assignment check below (row.hod_user == request.user).
 
     from .models import ObeEditRequest
     row = ObeEditRequest.objects.filter(id=req_id).first()
