@@ -933,11 +933,29 @@ export default function MarkEntryTabs({
                     ? 'CIA 1 LAB entry (CO-1/CO-2 experiments + CIA exam)'
                     : normalizedEffectiveClassType === 'PRACTICAL'
                       ? 'CIA 1 Review (Practical) - enter review marks for practical content.'
+                      : normalizedEffectiveClassType === 'TCPR'
+                        ? 'CIA 1 Review (TCPR) - enter review marks for TCPR content.'
                       : 'CIA 1 sheet-style entry (Q-wise + CO + BTL) matching the Excel layout.')
               : active === 'cia2'
-                ? (normalizedEffectiveClassType === 'LAB' ? 'CIA 2 LAB entry (CO-3/CO-4/CO-5 experiments + CIA exam).' : 'CIA 2 sheet-style entry (Q-wise + CO + BTL) matching the Excel layout.')
+                ? (
+                    normalizedEffectiveClassType === 'LAB'
+                      ? 'CIA 2 LAB entry (CO-3/CO-4/CO-5 experiments + CIA exam).'
+                      : normalizedEffectiveClassType === 'PRACTICAL'
+                        ? 'CIA 2 Review (Practical) - enter review marks for practical content.'
+                        : normalizedEffectiveClassType === 'TCPR'
+                          ? 'CIA 2 Review (TCPR) - enter review marks for TCPR content.'
+                          : 'CIA 2 sheet-style entry (Q-wise + CO + BTL) matching the Excel layout.'
+                  )
               : active === 'model'
-                ? (normalizedEffectiveClassType === 'LAB' ? 'MODEL LAB entry (CO-5 experiments + CIA exam).' : 'MODEL blank table template (same layout style as CIA sheets).')
+                ? (
+                    normalizedEffectiveClassType === 'LAB'
+                      ? 'MODEL LAB entry (CO-5 experiments + CIA exam).'
+                      : normalizedEffectiveClassType === 'PRACTICAL'
+                        ? 'MODEL Review (Practical) - enter review marks for practical content.'
+                        : normalizedEffectiveClassType === 'TCPR'
+                          ? 'MODEL Review (TCPR) - enter review marks for TCPR content.'
+                          : 'MODEL blank table template (same layout style as CIA sheets).'
+                  )
                 : String(active).startsWith('cqi_')
                   ? `CQI view for ${(activeCqi?.assessmentType || 'assessment').toUpperCase()} (${(activeCqi?.cos || []).join(', ')})`
                 : 'Enter and save marks locally for this assessment.'}

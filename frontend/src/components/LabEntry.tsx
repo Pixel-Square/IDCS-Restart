@@ -39,8 +39,16 @@ type LabRowState = {
   studentId: number;
   marksA: Array<number | ''>;
   marksB: Array<number | ''>;
+  marksByCo?: Record<string, Array<number | ''>>;
   ciaExam?: number | '';
   caaExamByCo?: Record<string, number | ''>;
+};
+
+type CoConfig = {
+  enabled: boolean;
+  expCount: number;
+  expMax: number;
+  btl: Array<1 | 2 | 3 | 4 | 5 | 6>;
 };
 
 type LabSheet = {
@@ -55,6 +63,7 @@ type LabSheet = {
   expMaxB?: number;
   btlsA: Array<1 | 2 | 3 | 4 | 5 | 6>;
   btlsB: Array<1 | 2 | 3 | 4 | 5 | 6>;
+  coConfigs?: Record<string, CoConfig>;
   rowsByStudentId: Record<string, LabRowState>;
 
   // Mark Manager lock state
@@ -67,6 +76,13 @@ type LabDraftPayload = {
   sheet: LabSheet;
 };
 
+type CoMeta = {
+  coNumber: number;
+  expCount: number;
+  expMax: number;
+  btl: Array<1 | 2 | 3 | 4 | 5 | 6>;
+};
+
 type Props = {
   subjectId?: string | null;
   teachingAssignmentId?: number;
@@ -74,6 +90,7 @@ type Props = {
   label: string;
   coA: number;
   coB: number;
+  allCos?: number[];
   showCia1Embed?: boolean;
   cia1Embed?: React.ReactNode;
 };
@@ -81,10 +98,10 @@ type Props = {
 const DEFAULT_EXPERIMENTS = 5;
 const DEFAULT_EXPERIMENT_MAX = 25;
 const DEFAULT_CIA_EXAM_MAX = 30;
-const LAB_REVIEW_EXPERIMENT_WEIGHT: Record<number, number> = { 1: 9, 2: 9, 3: 4.5 };
-const LAB_REVIEW_CAA_WEIGHT: Record<number, number> = { 1: 3, 2: 3, 3: 1.5 };
-const LAB_REVIEW_CAA_RAW_MAX: Record<number, number> = { 1: 20, 2: 20, 3: 10 };
-const LAB_REVIEW_CO_MAX: Record<number, number> = { 1: 12, 2: 12, 3: 6 };
+const LAB_REVIEW_EXPERIMENT_WEIGHT: Record<number, number> = { 1: 9, 2: 9, 3: 4.5, 4: 9, 5: 9 };
+const LAB_REVIEW_CAA_WEIGHT: Record<number, number> = { 1: 3, 2: 3, 3: 1.5, 4: 3, 5: 3 };
+const LAB_REVIEW_CAA_RAW_MAX: Record<number, number> = { 1: 20, 2: 20, 3: 10, 4: 20, 5: 20 };
+const LAB_REVIEW_CO_MAX: Record<number, number> = { 1: 12, 2: 12, 3: 6, 4: 12, 5: 12 };
 
 function compareRegNo(aRaw: unknown, bRaw: unknown): number {
   const aStr = String(aRaw ?? '').trim();
@@ -196,6 +213,59 @@ function pct(mark: number | null, max: number): string {
   return `${Number.isFinite(p) ? p.toFixed(0) : 0}`;
 }
 
+function buildCoConfigs(sheet: LabSheet, allCos: number[], coA: number, coB: number): Record<string, CoConfig> {
+  const existing = (sheet.coConfigs && typeof sheet.coConfigs === 'object') ? sheet.coConfigs as Record<string, any> : {};
+  const out: Record<string, CoConfig> = {};
+  for (const n of allCos) {
+    const k = String(n);
+    const cur = existing[k];
+    if (cur && typeof cur === 'object' && 'enabled' in cur) {
+      const expCount = clampInt(Number(cur.expCount ?? DEFAULT_EXPERIMENTS), 0, 12);
+      out[k] = {
+        enabled: Boolean(cur.enabled),
+        expCount,
+        expMax: clampInt(Number(cur.expMax ?? DEFAULT_EXPERIMENT_MAX), 0, 100),
+        btl: normalizeBtlArray(cur.btl, expCount),
+      };
+    } else if (n === coA) {
+      const expCount = clampInt(Number((sheet as any).expCountA ?? DEFAULT_EXPERIMENTS), 0, 12);
+      out[k] = {
+        enabled: Boolean((sheet as any).coAEnabled ?? true),
+        expCount,
+        expMax: clampInt(Number((sheet as any).expMaxA ?? DEFAULT_EXPERIMENT_MAX), 0, 100),
+        btl: normalizeBtlArray((sheet as any).btlsA, expCount),
+      };
+    } else if (n === coB) {
+      const expCount = clampInt(Number((sheet as any).expCountB ?? DEFAULT_EXPERIMENTS), 0, 12);
+      out[k] = {
+        enabled: Boolean((sheet as any).coBEnabled ?? true),
+        expCount,
+        expMax: clampInt(Number((sheet as any).expMaxB ?? DEFAULT_EXPERIMENT_MAX), 0, 100),
+        btl: normalizeBtlArray((sheet as any).btlsB, expCount),
+      };
+    } else {
+      out[k] = {
+        enabled: false,
+        expCount: DEFAULT_EXPERIMENTS,
+        expMax: DEFAULT_EXPERIMENT_MAX,
+        btl: Array.from({ length: DEFAULT_EXPERIMENTS }, () => 1 as const),
+      };
+    }
+  }
+  return out;
+}
+
+function getRowMarksForCo(row: any, coNumber: number, expCount: number, coA: number, coB: number): Array<number | ''> {
+  const marksByCo = row?.marksByCo;
+  if (marksByCo && typeof marksByCo === 'object') {
+    const byCo = (marksByCo as any)[String(coNumber)];
+    if (Array.isArray(byCo)) return normalizeMarksArray(byCo, expCount);
+  }
+  if (coNumber === coA) return normalizeMarksArray(row?.marksA, expCount);
+  if (coNumber === coB) return normalizeMarksArray(row?.marksB, expCount);
+  return Array.from({ length: expCount }, () => '' as const);
+}
+
 export default function LabEntry({
   subjectId,
   teachingAssignmentId,
@@ -203,9 +273,19 @@ export default function LabEntry({
   label,
   coA,
   coB,
+  allCos,
   showCia1Embed,
   cia1Embed,
 }: Props) {
+  const reviewFixedTable = assessmentKey === 'review1' || assessmentKey === 'review2';
+
+  // `selectableCosArr` controls what we render in Mark Manager.
+  // For Review 1/Review 2, we want CO1..CO5 checkboxes visible.
+  const selectableCosArr = useMemo(() => (allCos && allCos.length > 0 ? allCos : [coA, coB]), [allCos, coA, coB]);
+
+  // `tableCosArr` controls what the table is allowed to render.
+  // Per requirement: Review pages should NOT change the table layout.
+  const tableCosArr = useMemo(() => (reviewFixedTable ? [coA, coB] : selectableCosArr), [reviewFixedTable, selectableCosArr, coA, coB]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [students, setStudents] = useState<Student[]>([]);
@@ -573,36 +653,46 @@ export default function LabEntry({
     };
   }, [assessmentKey, subjectId, draft]);
 
-  const expCountA = clampInt(Number(draft.sheet.expCountA ?? DEFAULT_EXPERIMENTS), 0, 12);
-  const expCountB = clampInt(Number(draft.sheet.expCountB ?? DEFAULT_EXPERIMENTS), 0, 12);
-  const coAEnabled = Boolean(draft.sheet.coAEnabled);
-  const coBEnabled = Boolean(draft.sheet.coBEnabled);
+  const coConfigs = useMemo(() => buildCoConfigs(draft.sheet, selectableCosArr, coA, coB), [draft.sheet, selectableCosArr, coA, coB]);
 
-  const visibleExpCountA = coAEnabled ? expCountA : 0;
-  const visibleExpCountB = coBEnabled ? expCountB : 0;
-  const totalExpCols = visibleExpCountA + visibleExpCountB;
-  const visibleCoNumbers = useMemo(() => {
-    const out: number[] = [];
-    if (coAEnabled) out.push(coA);
-    if (coBEnabled) out.push(coB);
-    return out;
-  }, [coAEnabled, coBEnabled, coA, coB]);
+  const enabledCoMetas: CoMeta[] = useMemo(() => {
+    return tableCosArr
+      .filter((n) => coConfigs[String(n)]?.enabled)
+      .map((n) => {
+        const cfg = coConfigs[String(n)]!;
+        return { coNumber: n, expCount: cfg.expCount, expMax: cfg.expMax, btl: cfg.btl };
+      });
+  }, [coConfigs, tableCosArr]);
+
+  const totalExpCols = useMemo(() => enabledCoMetas.reduce((sum, m) => sum + m.expCount, 0), [enabledCoMetas]);
+  const hasEnabledCos = enabledCoMetas.length > 0;
   const ciaExamEnabled = draft.sheet.ciaExamEnabled !== false;
-  const caaCoNumbers = useMemo(
-    () => visibleCoNumbers.filter((n) => Number.isFinite(Number(LAB_REVIEW_CAA_RAW_MAX[n]))),
-    [visibleCoNumbers],
-  );
-  const examCols = ciaExamEnabled ? Math.max(caaCoNumbers.length, 1) : 0;
 
   const visibleBtlIndices = useMemo(() => {
     if (totalExpCols === 0) return [] as number[];
-    const btlsA = normalizeBtlArray((draft.sheet as any).btlsA, expCountA).slice(0, visibleExpCountA);
-    const btlsB = normalizeBtlArray((draft.sheet as any).btlsB, expCountB).slice(0, visibleExpCountB);
     const set = new Set<number>();
-    for (const v of btlsA) set.add(v);
-    for (const v of btlsB) set.add(v);
+    for (const m of enabledCoMetas) {
+      for (const v of m.btl.slice(0, m.expCount)) set.add(v);
+    }
     return [1, 2, 3, 4, 5, 6].filter((n) => set.has(n));
-  }, [draft.sheet, expCountA, expCountB, totalExpCols, visibleExpCountA, visibleExpCountB]);
+  }, [enabledCoMetas, totalExpCols]);
+
+  const coAttainmentCols = hasEnabledCos ? enabledCoMetas.length * 2 : 2;
+  const maxExpMax = useMemo(() => enabledCoMetas.reduce((mx, m) => Math.max(mx, m.expMax), DEFAULT_EXPERIMENT_MAX), [enabledCoMetas]);
+
+  // Back-compat A/B variables used by the legacy Review table layout.
+  const coAConfig = coConfigs[String(coA)];
+  const coBConfig = coConfigs[String(coB)];
+  const coAEnabled = Boolean(coAConfig?.enabled);
+  const coBEnabled = Boolean(coBConfig?.enabled);
+  const expCountA = clampInt(Number(coAConfig?.expCount ?? DEFAULT_EXPERIMENTS), 0, 12);
+  const expCountB = clampInt(Number(coBConfig?.expCount ?? DEFAULT_EXPERIMENTS), 0, 12);
+  const expMaxA = clampInt(Number(coAConfig?.expMax ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
+  const expMaxB = clampInt(Number(coBConfig?.expMax ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
+  const visibleExpCountA = coAEnabled ? expCountA : 0;
+  const visibleExpCountB = coBEnabled ? expCountB : 0;
+  const coMaxA = Number(LAB_REVIEW_CO_MAX[coA] ?? 0);
+  const coMaxB = Number(LAB_REVIEW_CO_MAX[coB] ?? 0);
 
   const markManagerLocked = Boolean(draft.sheet.markManagerLocked);
   
@@ -613,92 +703,63 @@ export default function LabEntry({
   const tableVisible = markManagerLocked; // Only show table after Mark Manager is confirmed
   const tableBlocked = Boolean(globalLocked || (markLock?.exists ? !Boolean(markLock?.entry_open) : false));
 
-  function setCoEnabled(which: 'A' | 'B', enabled: boolean) {
+  function setCoEnabled(coNumber: number, enabled: boolean) {
     setDraft((p) => {
       if (Boolean(p.sheet.markManagerLocked)) return p;
-      return {
-        ...p,
-        sheet: {
-          ...p.sheet,
-          coAEnabled: which === 'A' ? enabled : p.sheet.coAEnabled,
-          coBEnabled: which === 'B' ? enabled : p.sheet.coBEnabled,
-        },
-      };
+      const cfgs = buildCoConfigs(p.sheet, selectableCosArr, coA, coB);
+      cfgs[String(coNumber)] = { ...cfgs[String(coNumber)], enabled };
+      return { ...p, sheet: { ...p.sheet, coConfigs: cfgs } };
     });
   }
 
-  function setExpMax(which: 'A' | 'B', v: number) {
+  function setExpMax(coNumber: number, v: number) {
     const next = clampInt(Number(v), 0, 100);
     setDraft((p) => {
       if (Boolean(p.sheet.markManagerLocked)) return p;
-      return {
-        ...p,
-        sheet: {
-          ...p.sheet,
-          expMaxA: which === 'A' ? next : p.sheet.expMaxA,
-          expMaxB: which === 'B' ? next : p.sheet.expMaxB,
-        },
-      };
+      const cfgs = buildCoConfigs(p.sheet, selectableCosArr, coA, coB);
+      cfgs[String(coNumber)] = { ...cfgs[String(coNumber)], expMax: next };
+      return { ...p, sheet: { ...p.sheet, coConfigs: cfgs } };
     });
   }
 
-  function setExpCount(which: 'A' | 'B', n: number) {
+  function setExpCount(coNumber: number, n: number) {
     const next = clampInt(n, 0, 12);
     setDraft((p) => {
       if (Boolean(p.sheet.markManagerLocked)) return p;
+      const cfgs = buildCoConfigs(p.sheet, selectableCosArr, coA, coB);
+      const old = cfgs[String(coNumber)];
+      cfgs[String(coNumber)] = {
+        ...old,
+        expCount: next,
+        btl: normalizeBtlArray(old.btl, next),
+      };
+      // Resize per-CO marks arrays
       const rowsByStudentId: Record<string, LabRowState> = { ...(p.sheet.rowsByStudentId || {}) };
       for (const k of Object.keys(rowsByStudentId)) {
         const row = rowsByStudentId[k];
-        if (which === 'A') {
-          const marksA = normalizeMarksArray((row as any)?.marksA, next);
-          rowsByStudentId[k] = { ...row, marksA };
-        } else {
-          const marksB = normalizeMarksArray((row as any)?.marksB, next);
-          rowsByStudentId[k] = { ...row, marksB };
-        }
+        const mbc = (row as any).marksByCo && typeof (row as any).marksByCo === 'object' ? { ...(row as any).marksByCo } : {};
+        mbc[String(coNumber)] = normalizeMarksArray(mbc[String(coNumber)], next);
+        rowsByStudentId[k] = { ...row, marksByCo: mbc } as LabRowState;
       }
+      return { ...p, sheet: { ...p.sheet, coConfigs: cfgs, rowsByStudentId } };
+    });
+  }
 
-      const expCountA2 = which === 'A' ? next : clampInt(Number(p.sheet.expCountA ?? DEFAULT_EXPERIMENTS), 0, 12);
-      const expCountB2 = which === 'B' ? next : clampInt(Number(p.sheet.expCountB ?? DEFAULT_EXPERIMENTS), 0, 12);
-      const btlsA = normalizeBtlArray((p.sheet as any).btlsA, expCountA2);
-      const btlsB = normalizeBtlArray((p.sheet as any).btlsB, expCountB2);
-
-      return {
-        ...p,
-        sheet: {
-          ...p.sheet,
-          expCountA: which === 'A' ? next : p.sheet.expCountA,
-          expCountB: which === 'B' ? next : p.sheet.expCountB,
-          btlsA,
-          btlsB,
-          rowsByStudentId,
-        },
-      };
+  function setCoBtl(coNumber: number, expIndex: number, value: 1 | 2 | 3 | 4 | 5 | 6) {
+    setDraft((p) => {
+      if (publishedEditLocked || globalLocked) return p;
+      const cfgs = buildCoConfigs(p.sheet, selectableCosArr, coA, coB);
+      const old = cfgs[String(coNumber)];
+      const btl = [...old.btl];
+      btl[expIndex] = value;
+      cfgs[String(coNumber)] = { ...old, btl };
+      return { ...p, sheet: { ...p.sheet, coConfigs: cfgs } };
     });
   }
 
   function setBtl(which: 'A' | 'B', expIndex: number, value: 1 | 2 | 3 | 4 | 5 | 6) {
-    setDraft((p) => {
-      // Allow BTL mapping edits (LAB needs BTL selection to stay usable).
-      // Still respect publish/global locks.
-      if (publishedEditLocked || globalLocked) return p;
-      const expCountA = clampInt(Number(p.sheet.expCountA ?? DEFAULT_EXPERIMENTS), 0, 12);
-      const expCountB = clampInt(Number(p.sheet.expCountB ?? DEFAULT_EXPERIMENTS), 0, 12);
-      const btlsA = normalizeBtlArray((p.sheet as any).btlsA, expCountA);
-      const btlsB = normalizeBtlArray((p.sheet as any).btlsB, expCountB);
-
-      if (which === 'A') btlsA[expIndex] = value;
-      else btlsB[expIndex] = value;
-
-      return {
-        ...p,
-        sheet: {
-          ...p.sheet,
-          btlsA,
-          btlsB,
-        },
-      };
-    });
+    const coNumber = which === 'A' ? coA : coB;
+    setCoBtl(coNumber, expIndex, value);
   }
 
   function setCiaExamEnabled(enabled: boolean) {
@@ -709,21 +770,14 @@ export default function LabEntry({
   }
 
   function markManagerSnapshotOf(sheet: LabSheet): string {
-    const expCountA2 = clampInt(Number(sheet.expCountA ?? DEFAULT_EXPERIMENTS), 0, 12);
-    const expCountB2 = clampInt(Number(sheet.expCountB ?? DEFAULT_EXPERIMENTS), 0, 12);
-    const btlsA2 = normalizeBtlArray((sheet as any).btlsA, expCountA2).slice(0, expCountA2);
-    const btlsB2 = normalizeBtlArray((sheet as any).btlsB, expCountB2).slice(0, expCountB2);
-    return JSON.stringify({
-      coAEnabled: Boolean(sheet.coAEnabled),
-      coBEnabled: Boolean(sheet.coBEnabled),
-      ciaExamEnabled: Boolean((sheet as any).ciaExamEnabled ?? true),
-      expCountA: expCountA2,
-      expMaxA: clampInt(Number((sheet as any).expMaxA ?? DEFAULT_EXPERIMENT_MAX), 0, 100),
-      expCountB: expCountB2,
-      expMaxB: clampInt(Number((sheet as any).expMaxB ?? DEFAULT_EXPERIMENT_MAX), 0, 100),
-      btlsA: btlsA2,
-      btlsB: btlsB2,
-    });
+    const cfgs = buildCoConfigs(sheet, selectableCosArr, coA, coB);
+    const enabled = selectableCosArr
+      .filter((n) => cfgs[String(n)]?.enabled)
+      .map((n) => {
+        const c = cfgs[String(n)];
+        return { co: n, expCount: c.expCount, expMax: c.expMax };
+      });
+    return JSON.stringify({ enabled, ciaExamEnabled: Boolean((sheet as any).ciaExamEnabled ?? true) });
   }
 
   async function requestMarkManagerEdit() {
@@ -748,36 +802,25 @@ export default function LabEntry({
     }
   }
 
-  function setMark(studentId: number, which: 'A' | 'B', expIndex: number, value: number | '') {
+  function setMark(studentId: number, coNumber: number, expIndex: number, value: number | '') {
     setDraft((p) => {
       const k = String(studentId);
-      const expCountA2 = clampInt(Number(p.sheet.expCountA ?? DEFAULT_EXPERIMENTS), 0, 12);
-      const expCountB2 = clampInt(Number(p.sheet.expCountB ?? DEFAULT_EXPERIMENTS), 0, 12);
-      const maxA = clampInt(Number(p.sheet.expMaxA ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
-      const maxB = clampInt(Number(p.sheet.expMaxB ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
+      const cfgs = buildCoConfigs(p.sheet, selectableCosArr, coA, coB);
+      const cfg = cfgs[String(coNumber)];
+      const maxMark = cfg ? cfg.expMax : DEFAULT_EXPERIMENT_MAX;
+      const expCount = cfg ? cfg.expCount : DEFAULT_EXPERIMENTS;
       const existing = p.sheet.rowsByStudentId?.[k];
-      const baseMarksA = existing
-        ? normalizeMarksArray((existing as any).marksA, expCountA2)
-        : (Array.from({ length: expCountA2 }, () => '' as const) as Array<number | ''>);
-      const baseMarksB = existing
-        ? normalizeMarksArray((existing as any).marksB, expCountB2)
-        : (Array.from({ length: expCountB2 }, () => '' as const) as Array<number | ''>);
+      const mbc = (existing as any)?.marksByCo && typeof (existing as any).marksByCo === 'object'
+        ? { ...(existing as any).marksByCo }
+        : {};
+      const coMarks = [...normalizeMarksArray(mbc[String(coNumber)] ?? getRowMarksForCo(existing, coNumber, expCount, coA, coB), expCount)];
 
-      const marksA = [...baseMarksA];
-      const marksB = [...baseMarksB];
-      if (which === 'A') {
-        if (value === '' || value == null) marksA[expIndex] = '';
-        else {
-          const n = Number(value);
-          marksA[expIndex] = Number.isFinite(n) ? Math.max(0, Math.min(maxA, Math.trunc(n))) : '';
-        }
-      } else {
-        if (value === '' || value == null) marksB[expIndex] = '';
-        else {
-          const n = Number(value);
-          marksB[expIndex] = Number.isFinite(n) ? Math.max(0, Math.min(maxB, Math.trunc(n))) : '';
-        }
+      if (value === '' || value == null) coMarks[expIndex] = '';
+      else {
+        const n = Number(value);
+        coMarks[expIndex] = Number.isFinite(n) ? Math.max(0, Math.min(maxMark, Math.trunc(n))) : '';
       }
+      mbc[String(coNumber)] = coMarks;
 
       return {
         ...p,
@@ -786,13 +829,8 @@ export default function LabEntry({
           rowsByStudentId: {
             ...p.sheet.rowsByStudentId,
             [k]: {
-              ...(existing || { studentId }),
-              marksA,
-              marksB,
-              ciaExam:
-                existing && (typeof (existing as any).ciaExam === 'number' || (existing as any).ciaExam === '')
-                  ? ((existing as any).ciaExam as number | '')
-                  : ('' as const),
+              ...(existing || { studentId, marksA: [], marksB: [] }),
+              marksByCo: mbc,
             },
           },
         },
@@ -803,24 +841,13 @@ export default function LabEntry({
   function setCiaExam(studentId: number, value: number | '') {
     setDraft((p) => {
       const k = String(studentId);
-      const expCountA2 = clampInt(Number(p.sheet.expCountA ?? DEFAULT_EXPERIMENTS), 0, 12);
-      const expCountB2 = clampInt(Number(p.sheet.expCountB ?? DEFAULT_EXPERIMENTS), 0, 12);
-      const maxA = clampInt(Number(p.sheet.expMaxA ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
-      const maxB = clampInt(Number(p.sheet.expMaxB ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
       const existing = p.sheet.rowsByStudentId?.[k];
-      const marksA = existing
-        ? normalizeMarksArray((existing as any).marksA, expCountA2)
-        : (Array.from({ length: expCountA2 }, () => '' as const) as Array<number | ''>);
-      const marksB = existing
-        ? normalizeMarksArray((existing as any).marksB, expCountB2)
-        : (Array.from({ length: expCountB2 }, () => '' as const) as Array<number | ''>);
 
       let ciaVal: number | '' = '';
       if (value === '' || value == null) ciaVal = '';
       else {
         const n = Number(value);
-        // CIA exam max might differ; clamp to the larger of A/B max to be safe
-        const ciaMax = Math.max(maxA, maxB, DEFAULT_CIA_EXAM_MAX);
+        const ciaMax = DEFAULT_CIA_EXAM_MAX;
         ciaVal = Number.isFinite(n) ? Math.max(0, Math.min(ciaMax, Math.trunc(n))) : '';
       }
 
@@ -830,7 +857,7 @@ export default function LabEntry({
           ...p.sheet,
           rowsByStudentId: {
             ...p.sheet.rowsByStudentId,
-            [k]: { ...(existing || { studentId }), marksA, marksB, ciaExam: ciaVal },
+            [k]: { ...(existing || { studentId, marksA: [], marksB: [] }), ciaExam: ciaVal },
           },
         },
       };
@@ -1082,14 +1109,8 @@ export default function LabEntry({
     refreshPublishedSnapshot(true);
   }, [viewMarksModalOpen, subjectId, assessmentKey]);
 
-  // identity + experiments + total + CAA split + CO attainment + BTL
-  const headerCols = 3 + totalExpCols + 1 + examCols + 4 + visibleBtlIndices.length * 2;
-
-  const expMaxA = clampInt(Number(draft.sheet.expMaxA ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
-  const expMaxB = clampInt(Number(draft.sheet.expMaxB ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
-  const coMaxA = Number(LAB_REVIEW_CO_MAX[coA] || 0);
-  const coMaxB = Number(LAB_REVIEW_CO_MAX[coB] || 0);
-  const maxExpMax = Math.max(expMaxA, expMaxB, DEFAULT_EXPERIMENT_MAX);
+  // identity + experiments + total + CIA exam + CO attainment + BTL
+  const headerCols = 3 + Math.max(totalExpCols, 1) + 1 + coAttainmentCols + visibleBtlIndices.length * 2;
 
   const cellTh: React.CSSProperties = {
     border: '1px solid #111',
@@ -1266,14 +1287,16 @@ export default function LabEntry({
           </div>
 
           <div style={{ width: '100%', display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 8 }}>
-            <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontWeight: 800, fontSize: 12, color: '#111827' }}>
-              <input type="checkbox" checked={coAEnabled} disabled={markManagerLocked} onChange={(e) => setCoEnabled('A', e.target.checked)} style={bigCheckboxStyle} />
-              CO-{coA}
-            </label>
-            <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontWeight: 800, fontSize: 12, color: '#111827' }}>
-              <input type="checkbox" checked={coBEnabled} disabled={markManagerLocked} onChange={(e) => setCoEnabled('B', e.target.checked)} style={bigCheckboxStyle} />
-              CO-{coB}
-            </label>
+            {selectableCosArr.map((coNum) => {
+              const cfg = coConfigs[String(coNum)];
+              const disabled = markManagerLocked || (reviewFixedTable && coNum !== coA && coNum !== coB);
+              return (
+                <label key={coNum} style={{ display: 'flex', gap: 6, alignItems: 'center', fontWeight: 800, fontSize: 12, color: '#111827' }}>
+                  <input type="checkbox" checked={cfg?.enabled || false} disabled={disabled} onChange={(e) => setCoEnabled(coNum, e.target.checked)} style={bigCheckboxStyle} />
+                  CO-{coNum}
+                </label>
+              );
+            })}
             <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontWeight: 800, fontSize: 12, color: '#111827' }}>
               <input type="checkbox" checked={ciaExamEnabled} disabled={markManagerLocked} onChange={(e) => setCiaExamEnabled(e.target.checked)} style={bigCheckboxStyle} />
               CIA Exam
@@ -1289,22 +1312,14 @@ export default function LabEntry({
               marginTop: 8,
             }}
           >
-            {coAEnabled ? (
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 11, color: '#6b7280' }}>No. of experiments (CO-{coA})</div>
-                <input type="number" className="obe-input" value={expCountA} onChange={(e) => setExpCount('A', Number(e.target.value))} min={0} max={12} disabled={markManagerLocked} />
+            {enabledCoMetas.map((m) => (
+              <div key={m.coNumber} style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 11, color: '#6b7280' }}>No. of experiments (CO-{m.coNumber})</div>
+                <input type="number" className="obe-input" value={m.expCount} onChange={(e) => setExpCount(m.coNumber, Number(e.target.value))} min={0} max={12} disabled={markManagerLocked} />
                 <div style={{ fontSize: 11, color: '#6b7280', marginTop: 6 }}>Max marks (per experiment)</div>
-                <input type="number" className="obe-input" value={draft.sheet.expMaxA ?? DEFAULT_EXPERIMENT_MAX} onChange={(e) => setExpMax('A', Number(e.target.value))} min={0} max={100} disabled={markManagerLocked} />
+                <input type="number" className="obe-input" value={m.expMax} onChange={(e) => setExpMax(m.coNumber, Number(e.target.value))} min={0} max={100} disabled={markManagerLocked} />
               </div>
-            ) : null}
-            {coBEnabled ? (
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 11, color: '#6b7280' }}>No. of experiments (CO-{coB})</div>
-                <input type="number" className="obe-input" value={expCountB} onChange={(e) => setExpCount('B', Number(e.target.value))} min={0} max={12} disabled={markManagerLocked} />
-                <div style={{ fontSize: 11, color: '#6b7280', marginTop: 6 }}>Max marks (per experiment)</div>
-                <input type="number" className="obe-input" value={draft.sheet.expMaxB ?? DEFAULT_EXPERIMENT_MAX} onChange={(e) => setExpMax('B', Number(e.target.value))} min={0} max={100} disabled={markManagerLocked} />
-              </div>
-            ) : null}
+            ))}
           </div>
         </div>
 
@@ -1456,39 +1471,31 @@ export default function LabEntry({
                 <th style={cellTh} rowSpan={5}>Name of the Students</th>
 
                 <th style={cellTh} colSpan={Math.max(1, totalExpCols)}>Experiments</th>
-                <th style={cellTh} rowSpan={5}>Total (Avg)</th>
-                {ciaExamEnabled ? <th style={cellTh} colSpan={Math.max(caaCoNumbers.length, 1)}>CIA EXAM</th> : null}
-                <th style={cellTh} colSpan={4}>CO ATTAINMENT</th>
+                <th style={cellTh} rowSpan={5}>
+                  <div>Total</div>
+                  <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 900 }}>{ciaExamEnabled ? 'CIA exam' : 'Avg'}</div>
+                </th>
+                <th style={cellTh} colSpan={coAttainmentCols}>CO ATTAINMENT</th>
                 {visibleBtlIndices.length ? <th style={cellTh} colSpan={visibleBtlIndices.length * 2}>BTL ATTAINMENT</th> : null}
               </tr>
 
-              {/* CO mapping numbers row: 11111 / 22222 (or 33333 / 44444 for LAB2) */}
+              {/* CO mapping numbers row */}
               <tr>
                 {totalExpCols === 0 ? (
                   <th style={cellTh}>—</th>
                 ) : (
                   <>
-                    {Array.from({ length: visibleExpCountA }, (_, i) => (
-                      <th key={`coa_${i}`} style={cellTh}>{coA}</th>
-                    ))}
-                    {Array.from({ length: visibleExpCountB }, (_, i) => (
-                      <th key={`cob_${i}`} style={cellTh}>{coB}</th>
-                    ))}
+                    {enabledCoMetas.map((m) =>
+                      Array.from({ length: m.expCount }, (_, i) => (
+                        <th key={`co${m.coNumber}_${i}`} style={cellTh}>{m.coNumber}</th>
+                      ))
+                    )}
                   </>
                 )}
 
-                {ciaExamEnabled ? (
-                  caaCoNumbers.length ? (
-                    caaCoNumbers.map((coNum) => (
-                      <th key={`caa_hdr_${coNum}`} style={cellTh}>CO-{coNum}</th>
-                    ))
-                  ) : (
-                    <th style={cellTh}>—</th>
-                  )
-                ) : null}
-
-                <th style={cellTh} colSpan={2}>CO-{coA}</th>
-                <th style={cellTh} colSpan={2}>CO-{coB}</th>
+                {enabledCoMetas.map((m) => (
+                  <th key={`coatt_hdr_${m.coNumber}`} style={cellTh} colSpan={2}>CO-{m.coNumber}</th>
+                ))}
                 {visibleBtlIndices.map((n) => (
                   <th key={`btl_${n}`} style={cellTh} colSpan={2}>
                     BTL-{n}
@@ -1502,29 +1509,22 @@ export default function LabEntry({
                   <th style={cellTh}>—</th>
                 ) : (
                   <>
-                    {Array.from({ length: visibleExpCountA }, (_, i) => (
-                      <th key={`max_a_${i}`} style={cellTh}>{expMaxA}</th>
-                    ))}
-                    {Array.from({ length: visibleExpCountB }, (_, i) => (
-                      <th key={`max_b_${i}`} style={cellTh}>{expMaxB}</th>
-                    ))}
+                    {enabledCoMetas.map((m) =>
+                      Array.from({ length: m.expCount }, (_, i) => (
+                        <th key={`max_${m.coNumber}_${i}`} style={cellTh}>{m.expMax}</th>
+                      ))
+                    )}
                   </>
                 )}
 
-                {ciaExamEnabled ? (
-                  caaCoNumbers.length ? (
-                    caaCoNumbers.map((coNum) => (
-                      <th key={`caa_max_${coNum}`} style={cellTh}>{LAB_REVIEW_CAA_RAW_MAX[coNum] ?? 0}</th>
-                    ))
-                  ) : (
-                    <th style={cellTh}>—</th>
-                  )
-                ) : null}
-
-                <th style={cellTh}>{coMaxA}</th>
-                <th style={cellTh}>%</th>
-                <th style={cellTh}>{coMaxB}</th>
-                <th style={cellTh}>%</th>
+                {enabledCoMetas.map((m) => (
+                  <React.Fragment key={`comax_${m.coNumber}`}>
+                    <th style={cellTh}>
+                      {(m.expMax + (ciaExamEnabled && enabledCoMetas.length ? DEFAULT_CIA_EXAM_MAX / enabledCoMetas.length : 0)).toFixed(0)}
+                    </th>
+                    <th style={cellTh}>%</th>
+                  </React.Fragment>
+                ))}
                 {visibleBtlIndices.map((n) => (
                   <React.Fragment key={`btlmax_${n}`}>
                     <th style={cellTh}>{maxExpMax}</th>
@@ -1539,95 +1539,62 @@ export default function LabEntry({
                   <th style={cellTh}>No experiments</th>
                 ) : (
                   <>
-                    {Array.from({ length: visibleExpCountA }, (_, i) => (
-                      <th key={`ea_${i}`} style={cellTh}>E{i + 1}</th>
-                    ))}
-                    {Array.from({ length: visibleExpCountB }, (_, i) => (
-                      <th key={`eb_${i}`} style={cellTh}>E{i + 1}</th>
-                    ))}
+                    {enabledCoMetas.map((m) =>
+                      Array.from({ length: m.expCount }, (_, i) => (
+                        <th key={`e_${m.coNumber}_${i}`} style={cellTh}>E{i + 1}</th>
+                      ))
+                    )}
                   </>
                 )}
-                <th style={cellTh} colSpan={4 + visibleBtlIndices.length * 2 + examCols} />
+                <th style={cellTh} colSpan={coAttainmentCols + visibleBtlIndices.length * 2} />
               </tr>
 
+              {/* BTL row per experiment */}
               <tr>
                 {totalExpCols === 0 ? (
                   <th style={cellTh}>—</th>
                 ) : (
                   <>
-                    {Array.from({ length: visibleExpCountA }, (_, i) => {
-                      const v = normalizeBtlArray((draft.sheet as any).btlsA, expCountA)[i] ?? 1;
-                      const editable = !(publishedEditLocked || globalLocked);
-                      return (
-                        <th key={`btla_${i}`} style={cellTh}>
-                          {editable ? (
-                            <select
-                              aria-label={`BTL for CO${coA} E${i + 1}`}
-                              value={v}
-                              onChange={(e) => setBtl('A', i, Number(e.target.value) as 1 | 2 | 3 | 4 | 5 | 6)}
-                              style={{
-                                width: '100%',
-                                minWidth: 38,
-                                padding: '2px 2px',
-                                fontWeight: 800,
-                                fontSize: 11,
-                                textAlign: 'center',
-                                border: '1px solid #d1d5db',
-                                borderRadius: 4,
-                                background: '#fff',
-                                cursor: 'pointer',
-                              }}
-                            >
-                              {[1, 2, 3, 4, 5, 6].map((n) => (
-                                <option key={n} value={n}>
-                                  {n}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            <span style={{ fontWeight: 800 }}>{v}</span>
-                          )}
-                        </th>
-                      );
-                    })}
-                    {Array.from({ length: visibleExpCountB }, (_, i) => {
-                      const v = normalizeBtlArray((draft.sheet as any).btlsB, expCountB)[i] ?? 1;
-                      const editable = !(publishedEditLocked || globalLocked);
-                      return (
-                        <th key={`btlb_${i}`} style={cellTh}>
-                          {editable ? (
-                            <select
-                              aria-label={`BTL for CO${coB} E${i + 1}`}
-                              value={v}
-                              onChange={(e) => setBtl('B', i, Number(e.target.value) as 1 | 2 | 3 | 4 | 5 | 6)}
-                              style={{
-                                width: '100%',
-                                minWidth: 38,
-                                padding: '2px 2px',
-                                fontWeight: 800,
-                                fontSize: 11,
-                                textAlign: 'center',
-                                border: '1px solid #d1d5db',
-                                borderRadius: 4,
-                                background: '#fff',
-                                cursor: 'pointer',
-                              }}
-                            >
-                              {[1, 2, 3, 4, 5, 6].map((n) => (
-                                <option key={n} value={n}>
-                                  {n}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            <span style={{ fontWeight: 800 }}>{v}</span>
-                          )}
-                        </th>
-                      );
-                    })}
+                    {enabledCoMetas.map((m) =>
+                      Array.from({ length: m.expCount }, (_, i) => {
+                        const v = m.btl[i] ?? 1;
+                        const editable = !(publishedEditLocked || globalLocked);
+                        return (
+                          <th key={`btl_${m.coNumber}_${i}`} style={cellTh}>
+                            {editable ? (
+                              <select
+                                aria-label={`BTL for CO${m.coNumber} E${i + 1}`}
+                                value={v}
+                                onChange={(e) => setCoBtl(m.coNumber, i, Number(e.target.value) as 1 | 2 | 3 | 4 | 5 | 6)}
+                                style={{
+                                  width: '100%',
+                                  minWidth: 38,
+                                  padding: '2px 2px',
+                                  fontWeight: 800,
+                                  fontSize: 11,
+                                  textAlign: 'center',
+                                  border: '1px solid #d1d5db',
+                                  borderRadius: 4,
+                                  background: '#fff',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                {[1, 2, 3, 4, 5, 6].map((n) => (
+                                  <option key={n} value={n}>
+                                    {n}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <span style={{ fontWeight: 800 }}>{v}</span>
+                            )}
+                          </th>
+                        );
+                      })
+                    )}
                   </>
                 )}
-                <th style={cellTh} colSpan={4 + visibleBtlIndices.length * 2 + examCols} />
+                <th style={cellTh} colSpan={coAttainmentCols + visibleBtlIndices.length * 2} />
               </tr>
             </thead>
 
@@ -1642,55 +1609,42 @@ export default function LabEntry({
                 <>
                   {students.map((s, idx) => {
                     const row = draft.sheet.rowsByStudentId?.[String(s.id)];
-                    const marksA = normalizeMarksArray((row as any)?.marksA, expCountA);
-                    const marksB = normalizeMarksArray((row as any)?.marksB, expCountB);
-                    const caaByCo = normalizeCaaByCo((row as any)?.caaExamByCo);
+                    const rawCia = (row as any)?.ciaExam;
+                    const ciaRaw = rawCia === '' || rawCia == null ? 0 : Number(rawCia);
+                    const ciaValue = rawCia === '' || rawCia == null ? '' : (Number.isFinite(ciaRaw) ? ciaRaw : '');
+                    const ciaShare = ciaExamEnabled && enabledCoMetas.length ? (Number.isFinite(ciaRaw) ? ciaRaw : 0) / enabledCoMetas.length : 0;
 
-                    const visibleMarksA = marksA.slice(0, visibleExpCountA);
-                    const visibleMarksB = marksB.slice(0, visibleExpCountB);
-                    const allVisibleMarks = visibleMarksA.concat(visibleMarksB);
+                    // Per-CO marks and attainment using enabledCoMetas
+                    const perCo: Array<{
+                      coNumber: number;
+                      marks: Array<number | ''>;
+                      visibleMarks: Array<number | ''>;
+                      btls: number[];
+                      coMark: number | null;
+                      coMax: number;
+                    }> = enabledCoMetas.map((m) => {
+                      const marks = getRowMarksForCo(row as any, m.coNumber, m.expCount, coA, coB);
+                      const visibleMarks = marks.slice(0, m.expCount);
+                      const btls = m.btl.slice(0, m.expCount);
+                      const expAvg = avgMarks(visibleMarks);
+                      const hasAny = (expAvg != null && expAvg > 0) || (ciaExamEnabled && ciaRaw > 0);
+                      const coMark = hasAny ? (Number(expAvg ?? 0) + ciaShare) : null;
+                      const coMax = m.expMax + (ciaExamEnabled && enabledCoMetas.length ? DEFAULT_CIA_EXAM_MAX / enabledCoMetas.length : 0);
+                      return { coNumber: m.coNumber, marks, visibleMarks, btls, coMark, coMax };
+                    });
 
-                    const visibleBtlsA = normalizeBtlArray((draft.sheet as any).btlsA, expCountA).slice(0, visibleExpCountA);
-                    const visibleBtlsB = normalizeBtlArray((draft.sheet as any).btlsB, expCountB).slice(0, visibleExpCountB);
-
+                    const allVisibleMarks = perCo.flatMap((c) => c.visibleMarks);
                     const avgTotal = avgMarks(allVisibleMarks);
-                    const expTotalA = sumMarks(visibleMarksA);
-                    const expTotalB = sumMarks(visibleMarksB);
-                    const expMaxTotalA = visibleExpCountA * expMaxA;
-                    const expMaxTotalB = visibleExpCountB * expMaxB;
-
-                    const expWeightA = Number(LAB_REVIEW_EXPERIMENT_WEIGHT[coA] || 0);
-                    const expWeightB = Number(LAB_REVIEW_EXPERIMENT_WEIGHT[coB] || 0);
-                    const coAExpNorm = expMaxTotalA > 0 ? (expTotalA / expMaxTotalA) * expWeightA : 0;
-                    const coBExpNorm = expMaxTotalB > 0 ? (expTotalB / expMaxTotalB) * expWeightB : 0;
-
-                    const caaRawA = typeof caaByCo[String(coA)] === 'number' ? Number(caaByCo[String(coA)]) : 0;
-                    const caaRawB = typeof caaByCo[String(coB)] === 'number' ? Number(caaByCo[String(coB)]) : 0;
-                    const caaRawMaxA = Number(LAB_REVIEW_CAA_RAW_MAX[coA] || 0);
-                    const caaRawMaxB = Number(LAB_REVIEW_CAA_RAW_MAX[coB] || 0);
-                    const caaWeightA = Number(LAB_REVIEW_CAA_WEIGHT[coA] || 0);
-                    const caaWeightB = Number(LAB_REVIEW_CAA_WEIGHT[coB] || 0);
-                    const coACaaNorm = ciaExamEnabled && caaRawMaxA > 0 ? (caaRawA / caaRawMaxA) * caaWeightA : 0;
-                    const coBCaaNorm = ciaExamEnabled && caaRawMaxB > 0 ? (caaRawB / caaRawMaxB) * caaWeightB : 0;
-
-                    const hasAnyA = expTotalA > 0 || caaRawA > 0;
-                    const hasAnyB = expTotalB > 0 || caaRawB > 0;
-                    const coAMarkNum = hasAnyA ? coAExpNorm + coACaaNorm : null;
-                    const coBMarkNum = hasAnyB ? coBExpNorm + coBCaaNorm : null;
 
                     const btlAvgByIndex: Record<number, number | null> = {};
                     for (const n of visibleBtlIndices) {
                       const marks: number[] = [];
-                      for (let i = 0; i < visibleMarksA.length; i++) {
-                        if (visibleBtlsA[i] === n) {
-                          const v = visibleMarksA[i];
-                          if (typeof v === 'number' && Number.isFinite(v)) marks.push(v);
-                        }
-                      }
-                      for (let i = 0; i < visibleMarksB.length; i++) {
-                        if (visibleBtlsB[i] === n) {
-                          const v = visibleMarksB[i];
-                          if (typeof v === 'number' && Number.isFinite(v)) marks.push(v);
+                      for (const c of perCo) {
+                        for (let i = 0; i < c.visibleMarks.length; i++) {
+                          if (c.btls[i] === n) {
+                            const v = c.visibleMarks[i];
+                            if (typeof v === 'number' && Number.isFinite(v)) marks.push(v);
+                          }
                         }
                       }
                       btlAvgByIndex[n] = marks.length ? marks.reduce((a, b) => a + b, 0) / marks.length : null;
@@ -1702,113 +1656,80 @@ export default function LabEntry({
                         <td style={{ ...cellTd, width: '70px', minWidth: '70px', fontWeight: 600 }}>{String(s.reg_no || '').slice(-8)}</td>
                         <td style={{ ...cellTd, fontWeight: 600, whiteSpace: 'nowrap' }}>{String(s.name || '')}</td>
 
-                        {Array.from({ length: visibleExpCountA }, (_, i) => (
-                          <td key={`ma${s.id}_${i}`} style={{ ...cellTd, padding: '2px' }}>
-                            <input
-                              type="number"
-                              value={marksA[i]}
-                              onChange={(e) => {
-                                const raw = e.target.value;
-                                if (raw === '') {
-                                  e.currentTarget.setCustomValidity('');
-                                  return setMark(s.id, 'A', i, '');
-                                }
-                                const next = Number(raw);
-                                if (!Number.isFinite(next)) return;
-                                if (next > expMaxA) {
-                                  e.currentTarget.setCustomValidity(`Max mark is ${expMaxA}`);
-                                  e.currentTarget.reportValidity();
-                                  window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
-                                  return;
-                                }
-                                e.currentTarget.setCustomValidity('');
-                                setMark(s.id, 'A', i, next);
-                              }}
-                              style={inputStyle}
-                              min={0}
-                                max={expMaxA}
-                                disabled={!tableVisible || tableBlocked}
-                            />
-                          </td>
-                        ))}
-
-                        {Array.from({ length: visibleExpCountB }, (_, i) => (
-                          <td key={`mb${s.id}_${i}`} style={{ ...cellTd, padding: '2px' }}>
-                            <input
-                              type="number"
-                              value={marksB[i]}
-                              onChange={(e) => {
-                                const raw = e.target.value;
-                                if (raw === '') {
-                                  e.currentTarget.setCustomValidity('');
-                                  return setMark(s.id, 'B', i, '');
-                                }
-                                const next = Number(raw);
-                                if (!Number.isFinite(next)) return;
-                                if (next > expMaxB) {
-                                  e.currentTarget.setCustomValidity(`Max mark is ${expMaxB}`);
-                                  e.currentTarget.reportValidity();
-                                  window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
-                                  return;
-                                }
-                                e.currentTarget.setCustomValidity('');
-                                setMark(s.id, 'B', i, next);
-                              }}
-                              style={inputStyle}
-                              min={0}
-                                max={expMaxB}
-                                disabled={!tableVisible || tableBlocked}
-                            />
-                          </td>
-                        ))}
-
-                        <td style={{ ...cellTd, fontWeight: 700, fontSize: 'clamp(10px, 0.9vw, 11px)' }}>{avgTotal == null ? '' : avgTotal.toFixed(1)}</td>
-                        {ciaExamEnabled ? (
-                          caaCoNumbers.length ? (
-                            caaCoNumbers.map((coNum) => {
-                              const maxRaw = Number(LAB_REVIEW_CAA_RAW_MAX[coNum] || 0);
-                              const value = caaByCo[String(coNum)] ?? '';
-                              return (
-                                <td key={`caa_${s.id}_${coNum}`} style={{ ...cellTd, padding: '2px' }}>
-                                  <input
-                                    type="number"
-                                    value={value}
-                                    onChange={(e) => {
-                                      const raw = e.target.value;
-                                      if (raw === '') {
-                                        e.currentTarget.setCustomValidity('');
-                                        return setCaaExamByCo(s.id, coNum, '');
-                                      }
-                                      const next = Number(raw);
-                                      if (!Number.isFinite(next)) return;
-                                      if (next > maxRaw) {
-                                        e.currentTarget.setCustomValidity(`Max mark is ${maxRaw}`);
-                                        e.currentTarget.reportValidity();
-                                        window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
-                                        return;
-                                      }
+                        {perCo.map((c) =>
+                          Array.from({ length: c.visibleMarks.length }, (_, i) => {
+                            const meta = enabledCoMetas.find((m) => m.coNumber === c.coNumber)!;
+                            return (
+                              <td key={`m${s.id}_co${c.coNumber}_${i}`} style={{ ...cellTd, padding: '2px' }}>
+                                <input
+                                  type="number"
+                                  value={c.marks[i]}
+                                  onChange={(e) => {
+                                    const raw = e.target.value;
+                                    if (raw === '') {
                                       e.currentTarget.setCustomValidity('');
-                                      setCaaExamByCo(s.id, coNum, next);
-                                    }}
-                                    style={inputStyle}
-                                    min={0}
-                                    max={maxRaw}
-                                    disabled={!tableVisible || tableBlocked}
-                                  />
-                                </td>
-                              );
-                            })
+                                      return setMark(s.id, c.coNumber, i, '');
+                                    }
+                                    const next = Number(raw);
+                                    if (!Number.isFinite(next)) return;
+                                    if (next > meta.expMax) {
+                                      e.currentTarget.setCustomValidity(`Max mark is ${meta.expMax}`);
+                                      e.currentTarget.reportValidity();
+                                      window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                                      return;
+                                    }
+                                    e.currentTarget.setCustomValidity('');
+                                    setMark(s.id, c.coNumber, i, next);
+                                  }}
+                                  style={inputStyle}
+                                  min={0}
+                                  max={meta.expMax}
+                                  disabled={!tableVisible || tableBlocked}
+                                />
+                              </td>
+                            );
+                          })
+                        )}
+
+                        <td style={{ ...cellTd, padding: ciaExamEnabled ? '2px' : undefined, fontWeight: ciaExamEnabled ? 600 : 700, fontSize: 'clamp(10px, 0.9vw, 11px)' }}>
+                          {ciaExamEnabled ? (
+                            <input
+                              type="number"
+                              value={ciaValue}
+                              onChange={(e) => {
+                                const raw = e.target.value;
+                                if (raw === '') {
+                                  e.currentTarget.setCustomValidity('');
+                                  return setCiaExam(s.id, '');
+                                }
+                                const next = Number(raw);
+                                if (!Number.isFinite(next)) return;
+                                if (next > DEFAULT_CIA_EXAM_MAX) {
+                                  e.currentTarget.setCustomValidity(`Max mark is ${DEFAULT_CIA_EXAM_MAX}`);
+                                  e.currentTarget.reportValidity();
+                                  window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                                  return;
+                                }
+                                e.currentTarget.setCustomValidity('');
+                                setCiaExam(s.id, next);
+                              }}
+                              style={inputStyle}
+                              min={0}
+                              max={DEFAULT_CIA_EXAM_MAX}
+                              disabled={!tableVisible || tableBlocked}
+                            />
                           ) : (
-                            <td style={{ ...cellTd, textAlign: 'center', color: '#6b7280' }}>—</td>
-                          )
-                        ) : null}
-                        <td style={{ ...cellTd, width: '28px', fontSize: '10px', padding: '2px', fontWeight: 600, color: '#5f6368' }}>{coAMarkNum == null ? '' : coAMarkNum.toFixed(1)}</td>
-                        <td style={{ ...cellTd, width: '25px', fontSize: '10px', padding: '2px', fontWeight: 600, color: '#5f6368' }}>{pct(coAMarkNum, coMaxA)}</td>
-                        <td style={{ ...cellTd, width: '28px', fontSize: '10px', padding: '2px', fontWeight: 600, color: '#5f6368' }}>{coBMarkNum == null ? '' : coBMarkNum.toFixed(1)}</td>
-                        <td style={{ ...cellTd, width: '25px', fontSize: '10px', padding: '2px', fontWeight: 600, color: '#5f6368' }}>{pct(coBMarkNum, coMaxB)}</td>
+                            avgTotal == null ? '' : avgTotal.toFixed(1)
+                          )}
+                        </td>
+                        {perCo.map((c) => (
+                          <React.Fragment key={`coatt_${s.id}_${c.coNumber}`}>
+                            <td style={{ ...cellTd, width: '28px', fontSize: '10px', padding: '2px', fontWeight: 600, color: '#5f6368' }}>{c.coMark == null ? '' : c.coMark.toFixed(1)}</td>
+                            <td style={{ ...cellTd, width: '25px', fontSize: '10px', padding: '2px', fontWeight: 600, color: '#5f6368' }}>{pct(c.coMark, c.coMax)}</td>
+                          </React.Fragment>
+                        ))}
                         {visibleBtlIndices.map((n) => {
                           const m = btlAvgByIndex[n] ?? null;
-                          const maxExpMax = Math.max(expMaxA, expMaxB, DEFAULT_EXPERIMENT_MAX);
                           return (
                             <React.Fragment key={`btlcell_${s.id}_${n}`}>
                               <td style={{ ...cellTd, width: '28px', fontSize: '10px', padding: '2px', fontWeight: 600, color: '#5f6368' }}>{m == null ? '' : m.toFixed(1)}</td>
@@ -1976,7 +1897,7 @@ export default function LabEntry({
             </div>
 
             <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10, lineHeight: 1.35 }}>
-              This will send a request to your Department HOD first (if configured). After HOD approval, it will be forwarded to IQAC. If no HOD is configured, it will be sent directly to IQAC. Once IQAC approves, mark entry will open for editing until the approval expires.
+              This will send a request to IQAC. Once approved, mark entry will open for editing until the approval expires.
               {markEntryReqPendingUntilMs ? (
                 <div style={{ marginTop: 6 }}>
                   <strong>Request window:</strong> 24 hours
@@ -2136,27 +2057,21 @@ export default function LabEntry({
                       </tr>
                     </thead>
                     <tbody>
-                      {coAEnabled ? (
-                        <tr>
-                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 800 }}>CO-{coA}</td>
-                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right', fontWeight: 600 }}>{visibleExpCountA}</td>
-                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right', fontWeight: 600 }}>{expMaxA}</td>
-                        </tr>
-                      ) : null}
-                      {coBEnabled ? (
-                        <tr>
-                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 800 }}>CO-{coB}</td>
-                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right', fontWeight: 600 }}>{visibleExpCountB}</td>
-                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right', fontWeight: 600 }}>{expMaxB}</td>
-                        </tr>
-                      ) : null}
-                      {!coAEnabled && !coBEnabled ? (
+                      {enabledCoMetas.length > 0 ? (
+                        enabledCoMetas.map((m) => (
+                          <tr key={m.coNumber}>
+                            <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 800 }}>CO-{m.coNumber}</td>
+                            <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right', fontWeight: 600 }}>{m.expCount}</td>
+                            <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right', fontWeight: 600 }}>{m.expMax}</td>
+                          </tr>
+                        ))
+                      ) : (
                         <tr>
                           <td colSpan={3} style={{ padding: 10, color: '#dc2626', fontWeight: 600 }}>
                             ⚠️ No COs selected
                           </td>
                         </tr>
-                      ) : null}
+                      )}
                       <tr>
                         <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 800 }}>CIA Exam</td>
                         <td colSpan={2} style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right', fontWeight: 600 }}>
@@ -2169,7 +2084,7 @@ export default function LabEntry({
               </>
             ) : (
               <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10 }}>
-                This will send an edit request to your Department HOD first (if configured). After HOD approval, it will be forwarded to IQAC. If no HOD is configured, it will be sent directly to IQAC. Mark Manager will remain locked until IQAC approves.
+                This will send an edit request to IQAC. Mark Manager will remain locked until IQAC approves.
               </div>
             )}
 
@@ -2301,31 +2216,26 @@ export default function LabEntry({
               const viewSheet = (publishedViewSnapshot && (publishedViewSnapshot as any).sheet) ? (publishedViewSnapshot as any).sheet : draft.sheet;
               const viewCiaEnabled = (viewSheet as any).ciaExamEnabled !== false;
 
-              const viewExpA = clampInt(Number((viewSheet as any).expCountA ?? DEFAULT_EXPERIMENTS), 0, 12);
-              const viewExpB = clampInt(Number((viewSheet as any).expCountB ?? DEFAULT_EXPERIMENTS), 0, 12);
-              const viewCoAEnabled = Boolean((viewSheet as any).coAEnabled);
-              const viewCoBEnabled = Boolean((viewSheet as any).coBEnabled);
-              const viewVisibleExpA = viewCoAEnabled ? viewExpA : 0;
-              const viewVisibleExpB = viewCoBEnabled ? viewExpB : 0;
-              const viewTotalExp = viewVisibleExpA + viewVisibleExpB;
+              const viewCoConfigs = buildCoConfigs(viewSheet as any, selectableCosArr, coA, coB);
+              const viewEnabledMetas: CoMeta[] = selectableCosArr
+                .filter((n) => viewCoConfigs[String(n)]?.enabled)
+                .map((n) => {
+                  const c = viewCoConfigs[String(n)];
+                  return { coNumber: n, expCount: c.expCount, expMax: c.expMax, btl: c.btl };
+                });
 
-              const viewVisibleBtlsA = normalizeBtlArray((viewSheet as any).btlsA, viewExpA).slice(0, viewVisibleExpA);
-              const viewVisibleBtlsB = normalizeBtlArray((viewSheet as any).btlsB, viewExpB).slice(0, viewVisibleExpB);
+              const viewTotalExp = viewEnabledMetas.reduce((s, m) => s + m.expCount, 0);
+
               const btlSet = new Set<number>();
-              for (const v of viewVisibleBtlsA) btlSet.add(v);
-              for (const v of viewVisibleBtlsB) btlSet.add(v);
+              for (const m of viewEnabledMetas) {
+                for (const v of m.btl.slice(0, m.expCount)) btlSet.add(v);
+              }
               const viewBtls = [1, 2, 3, 4, 5, 6].filter((n) => btlSet.has(n));
 
-              const viewExpMaxA = clampInt(Number((viewSheet as any).expMaxA ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
-              const viewExpMaxB = clampInt(Number((viewSheet as any).expMaxB ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
-              const viewCoMaxA = Number(LAB_REVIEW_CO_MAX[coA] || 0);
-              const viewCoMaxB = Number(LAB_REVIEW_CO_MAX[coB] || 0);
-              const viewMaxExp = Math.max(viewExpMaxA, viewExpMaxB, DEFAULT_EXPERIMENT_MAX);
-              const viewVisibleCoNumbers = [viewCoAEnabled ? coA : null, viewCoBEnabled ? coB : null].filter((v): v is number => typeof v === 'number');
-              const viewCaaCoNumbers = viewVisibleCoNumbers.filter((n) => Number.isFinite(Number(LAB_REVIEW_CAA_RAW_MAX[n])));
-              const viewExamCols = viewCiaEnabled ? Math.max(viewCaaCoNumbers.length, 1) : 0;
-              const viewHeaderCols = 3 + viewTotalExp + 1 + viewExamCols + 4 + viewBtls.length * 2;
-              const viewMinWidth = Math.max(920, 360 + (viewTotalExp + viewBtls.length * 2 + viewExamCols) * 80);
+              const viewMaxExp = viewEnabledMetas.reduce((mx, m) => Math.max(mx, m.expMax), DEFAULT_EXPERIMENT_MAX);
+              const viewCoAttCols = viewEnabledMetas.length * 2;
+              const viewHeaderCols = 3 + Math.max(viewTotalExp, 1) + 1 + viewCoAttCols + viewBtls.length * 2;
+              const viewMinWidth = Math.max(920, 360 + (viewTotalExp + viewBtls.length * 2) * 80);
 
               return (
                 <div
@@ -2354,9 +2264,11 @@ export default function LabEntry({
                         <th style={cellTh} rowSpan={5}>Register No.</th>
                         <th style={cellTh} rowSpan={5}>Name of the Students</th>
                         <th style={cellTh} colSpan={Math.max(1, viewTotalExp)}>Experiments</th>
-                        <th style={cellTh} rowSpan={5}>Total (Avg)</th>
-                        {viewCiaEnabled ? <th style={cellTh} colSpan={Math.max(viewCaaCoNumbers.length, 1)}>CIA EXAM</th> : null}
-                        <th style={cellTh} colSpan={4}>CO ATTAINMENT</th>
+                        <th style={cellTh} rowSpan={5}>
+                          <div>Total</div>
+                          <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 900 }}>{viewCiaEnabled ? 'CIA exam' : 'Avg'}</div>
+                        </th>
+                        <th style={cellTh} colSpan={viewCoAttCols}>CO ATTAINMENT</th>
                         {viewBtls.length ? <th style={cellTh} colSpan={viewBtls.length * 2}>BTL ATTAINMENT</th> : null}
                       </tr>
                       <tr>
@@ -2364,25 +2276,16 @@ export default function LabEntry({
                           <th style={cellTh}>—</th>
                         ) : (
                           <>
-                            {Array.from({ length: viewVisibleExpA }, (_, i) => (
-                              <th key={`v_coa_${i}`} style={cellTh}>{coA}</th>
-                            ))}
-                            {Array.from({ length: viewVisibleExpB }, (_, i) => (
-                              <th key={`v_cob_${i}`} style={cellTh}>{coB}</th>
-                            ))}
+                            {viewEnabledMetas.map((m) =>
+                              Array.from({ length: m.expCount }, (_, i) => (
+                                <th key={`v_co${m.coNumber}_${i}`} style={cellTh}>{m.coNumber}</th>
+                              ))
+                            )}
                           </>
                         )}
-                        {viewCiaEnabled ? (
-                          viewCaaCoNumbers.length ? (
-                            viewCaaCoNumbers.map((coNum) => (
-                              <th key={`v_caa_${coNum}`} style={cellTh}>CO-{coNum}</th>
-                            ))
-                          ) : (
-                            <th style={cellTh}>—</th>
-                          )
-                        ) : null}
-                        <th style={cellTh} colSpan={2}>CO-{coA}</th>
-                        <th style={cellTh} colSpan={2}>CO-{coB}</th>
+                        {viewEnabledMetas.map((m) => (
+                          <th key={`v_coatt_hdr_${m.coNumber}`} style={cellTh} colSpan={2}>CO-{m.coNumber}</th>
+                        ))}
                         {viewBtls.map((n) => (
                           <th key={`v_btl_${n}`} style={cellTh} colSpan={2}>BTL-{n}</th>
                         ))}
@@ -2392,24 +2295,21 @@ export default function LabEntry({
                           <th style={cellTh}>—</th>
                         ) : (
                           <>
-                            {Array.from({ length: viewTotalExp }, (_, i) => (
-                              <th key={`v_max_${i}`} style={cellTh}>{viewMaxExp}</th>
-                            ))}
+                            {viewEnabledMetas.map((m) =>
+                              Array.from({ length: m.expCount }, (_, i) => (
+                                <th key={`v_max_${m.coNumber}_${i}`} style={cellTh}>{m.expMax}</th>
+                              ))
+                            )}
                           </>
                         )}
-                        {viewCiaEnabled ? (
-                          viewCaaCoNumbers.length ? (
-                            viewCaaCoNumbers.map((coNum) => (
-                              <th key={`v_caa_max_${coNum}`} style={cellTh}>{LAB_REVIEW_CAA_RAW_MAX[coNum] ?? 0}</th>
-                            ))
-                          ) : (
-                            <th style={cellTh}>—</th>
-                          )
-                        ) : null}
-                        <th style={cellTh}>{viewCoMaxA}</th>
-                        <th style={cellTh}>%</th>
-                        <th style={cellTh}>{viewCoMaxB}</th>
-                        <th style={cellTh}>%</th>
+                        {viewEnabledMetas.map((m) => (
+                          <React.Fragment key={`v_comax_${m.coNumber}`}>
+                            <th style={cellTh}>
+                              {(m.expMax + (viewCiaEnabled && viewEnabledMetas.length ? DEFAULT_CIA_EXAM_MAX / viewEnabledMetas.length : 0)).toFixed(0)}
+                            </th>
+                            <th style={cellTh}>%</th>
+                          </React.Fragment>
+                        ))}
                         {viewBtls.map((n) => (
                           <React.Fragment key={`v_btlmax_${n}`}>
                             <th style={cellTh}>{viewMaxExp}</th>
@@ -2422,72 +2322,60 @@ export default function LabEntry({
                           <th style={cellTh}>No experiments</th>
                         ) : (
                           <>
-                            {Array.from({ length: viewVisibleExpA }, (_, i) => (
-                              <th key={`v_ea_${i}`} style={cellTh}>E{i + 1}</th>
-                            ))}
-                            {Array.from({ length: viewVisibleExpB }, (_, i) => (
-                              <th key={`v_eb_${i}`} style={cellTh}>E{i + 1}</th>
-                            ))}
+                            {viewEnabledMetas.map((m) =>
+                              Array.from({ length: m.expCount }, (_, i) => (
+                                <th key={`v_e_${m.coNumber}_${i}`} style={cellTh}>E{i + 1}</th>
+                              ))
+                            )}
                           </>
                         )}
-                        <th style={cellTh} colSpan={4 + viewBtls.length * 2 + viewExamCols} />
+                        <th style={cellTh} colSpan={viewCoAttCols + viewBtls.length * 2} />
                       </tr>
                       <tr>
                         {viewTotalExp === 0 ? (
                           <th style={cellTh}>BTL</th>
                         ) : (
                           <>
-                            {Array.from({ length: viewVisibleExpA }, (_, i) => (
-                              <th key={`v_btla_${i}`} style={cellTh}>{viewVisibleBtlsA[i] ?? 1}</th>
-                            ))}
-                            {Array.from({ length: viewVisibleExpB }, (_, i) => (
-                              <th key={`v_btlb_${i}`} style={cellTh}>{viewVisibleBtlsB[i] ?? 1}</th>
-                            ))}
+                            {viewEnabledMetas.map((m) =>
+                              Array.from({ length: m.expCount }, (_, i) => (
+                                <th key={`v_btl_${m.coNumber}_${i}`} style={cellTh}>{m.btl[i] ?? 1}</th>
+                              ))
+                            )}
                           </>
                         )}
-                        <th style={cellTh} colSpan={4 + viewBtls.length * 2 + viewExamCols} />
+                        <th style={cellTh} colSpan={viewCoAttCols + viewBtls.length * 2} />
                       </tr>
                     </thead>
                     <tbody>
                       {students.map((s, idx) => {
                         const row = (viewSheet as any)?.rowsByStudentId?.[String(s.id)];
-                        const marksA = normalizeMarksArray((row as any)?.marksA, viewExpA).slice(0, viewVisibleExpA);
-                        const marksB = normalizeMarksArray((row as any)?.marksB, viewExpB).slice(0, viewVisibleExpB);
-                        const allVisible = marksA.concat(marksB);
+                        const rawCia = (row as any)?.ciaExam;
+                        const ciaRaw = rawCia === '' || rawCia == null ? 0 : Number(rawCia);
+                        const ciaShare = viewCiaEnabled && viewEnabledMetas.length ? (Number.isFinite(ciaRaw) ? ciaRaw : 0) / viewEnabledMetas.length : 0;
+
+                        const perCo = viewEnabledMetas.map((m) => {
+                          const marks = getRowMarksForCo(row as any, m.coNumber, m.expCount, coA, coB);
+                          const visibleMarks = marks.slice(0, m.expCount);
+                          const btls = m.btl.slice(0, m.expCount);
+                          const expAvg = avgMarks(visibleMarks);
+                          const hasAny = (expAvg != null && expAvg > 0) || (viewCiaEnabled && ciaRaw > 0);
+                          const coMark = hasAny ? (Number(expAvg ?? 0) + ciaShare) : null;
+                          const coMax = m.expMax + (viewCiaEnabled && viewEnabledMetas.length ? DEFAULT_CIA_EXAM_MAX / viewEnabledMetas.length : 0);
+                          return { coNumber: m.coNumber, marks, visibleMarks, btls, coMark, coMax };
+                        });
+
+                        const allVisible = perCo.flatMap((c) => c.visibleMarks);
                         const avgTotal = avgMarks(allVisible);
-                        const caaByCo = normalizeCaaByCo((row as any)?.caaExamByCo);
-                        const expTotalA = sumMarks(marksA);
-                        const expTotalB = sumMarks(marksB);
-                        const expMaxTotalA = viewVisibleExpA * viewExpMaxA;
-                        const expMaxTotalB = viewVisibleExpB * viewExpMaxB;
-                        const expWeightA = Number(LAB_REVIEW_EXPERIMENT_WEIGHT[coA] || 0);
-                        const expWeightB = Number(LAB_REVIEW_EXPERIMENT_WEIGHT[coB] || 0);
-                        const coAExpNorm = expMaxTotalA > 0 ? (expTotalA / expMaxTotalA) * expWeightA : 0;
-                        const coBExpNorm = expMaxTotalB > 0 ? (expTotalB / expMaxTotalB) * expWeightB : 0;
-                        const caaRawA = typeof caaByCo[String(coA)] === 'number' ? Number(caaByCo[String(coA)]) : 0;
-                        const caaRawB = typeof caaByCo[String(coB)] === 'number' ? Number(caaByCo[String(coB)]) : 0;
-                        const caaRawMaxA = Number(LAB_REVIEW_CAA_RAW_MAX[coA] || 0);
-                        const caaRawMaxB = Number(LAB_REVIEW_CAA_RAW_MAX[coB] || 0);
-                        const caaWeightA = Number(LAB_REVIEW_CAA_WEIGHT[coA] || 0);
-                        const caaWeightB = Number(LAB_REVIEW_CAA_WEIGHT[coB] || 0);
-                        const coACaaNorm = viewCiaEnabled && caaRawMaxA > 0 ? (caaRawA / caaRawMaxA) * caaWeightA : 0;
-                        const coBCaaNorm = viewCiaEnabled && caaRawMaxB > 0 ? (caaRawB / caaRawMaxB) * caaWeightB : 0;
-                        const coAMarkNum = expTotalA > 0 || caaRawA > 0 ? coAExpNorm + coACaaNorm : null;
-                        const coBMarkNum = expTotalB > 0 || caaRawB > 0 ? coBExpNorm + coBCaaNorm : null;
 
                         const btlAvgByIndex: Record<number, number | null> = {};
                         for (const n of viewBtls) {
                           const marks: number[] = [];
-                          for (let i = 0; i < marksA.length; i++) {
-                            if (viewVisibleBtlsA[i] === n) {
-                              const v = marksA[i];
-                              if (typeof v === 'number' && Number.isFinite(v)) marks.push(v);
-                            }
-                          }
-                          for (let i = 0; i < marksB.length; i++) {
-                            if (viewVisibleBtlsB[i] === n) {
-                              const v = marksB[i];
-                              if (typeof v === 'number' && Number.isFinite(v)) marks.push(v);
+                          for (const c of perCo) {
+                            for (let i = 0; i < c.visibleMarks.length; i++) {
+                              if (c.btls[i] === n) {
+                                const v = c.visibleMarks[i];
+                                if (typeof v === 'number' && Number.isFinite(v)) marks.push(v);
+                              }
                             }
                           }
                           btlAvgByIndex[n] = marks.length ? marks.reduce((a, b) => a + b, 0) / marks.length : null;
@@ -2503,36 +2391,26 @@ export default function LabEntry({
                               <td style={{ ...cellTd, textAlign: 'center', color: '#6b7280' }}>—</td>
                             ) : (
                               <>
-                                {Array.from({ length: viewVisibleExpA }, (_, i) => (
-                                  <td key={`v_ma_${s.id}_${i}`} style={{ ...cellTd, width: 78, minWidth: 78, background: '#fff7ed', textAlign: 'center', fontWeight: 800 }}>
-                                    {marksA[i] ?? ''}
-                                  </td>
-                                ))}
-                                {Array.from({ length: viewVisibleExpB }, (_, i) => (
-                                  <td key={`v_mb_${s.id}_${i}`} style={{ ...cellTd, width: 78, minWidth: 78, background: '#fff7ed', textAlign: 'center', fontWeight: 800 }}>
-                                    {marksB[i] ?? ''}
-                                  </td>
-                                ))}
+                                {perCo.map((c) =>
+                                  c.visibleMarks.map((v, i) => (
+                                    <td key={`v_m_${s.id}_co${c.coNumber}_${i}`} style={{ ...cellTd, width: 78, minWidth: 78, background: '#fff7ed', textAlign: 'center', fontWeight: 800 }}>
+                                      {v ?? ''}
+                                    </td>
+                                  ))
+                                )}
                               </>
                             )}
 
-                            <td style={{ ...cellTd, textAlign: 'right', fontWeight: 800 }}>{avgTotal == null ? '' : avgTotal.toFixed(1)}</td>
-                            {viewCiaEnabled ? (
-                              viewCaaCoNumbers.length ? (
-                                viewCaaCoNumbers.map((coNum) => (
-                                  <td key={`v_caa_cell_${s.id}_${coNum}`} style={{ ...cellTd, width: 90, minWidth: 90, background: '#fff7ed', textAlign: 'center', fontWeight: 800 }}>
-                                    {caaByCo[String(coNum)] ?? ''}
-                                  </td>
-                                ))
-                              ) : (
-                                <td style={{ ...cellTd, textAlign: 'center', color: '#6b7280' }}>—</td>
-                              )
-                            ) : null}
+                            <td style={{ ...cellTd, textAlign: viewCiaEnabled ? 'center' : 'right', fontWeight: 800, background: viewCiaEnabled ? '#fff7ed' : undefined }}>
+                              {viewCiaEnabled ? (Number.isFinite(ciaRaw) ? ciaRaw : '') : (avgTotal == null ? '' : avgTotal.toFixed(1))}
+                            </td>
 
-                            <td style={{ ...cellTd, textAlign: 'right' }}>{coAMarkNum == null ? '' : coAMarkNum.toFixed(1)}</td>
-                            <td style={{ ...cellTd, textAlign: 'right' }}>{pct(coAMarkNum, viewCoMaxA)}</td>
-                            <td style={{ ...cellTd, textAlign: 'right' }}>{coBMarkNum == null ? '' : coBMarkNum.toFixed(1)}</td>
-                            <td style={{ ...cellTd, textAlign: 'right' }}>{pct(coBMarkNum, viewCoMaxB)}</td>
+                            {perCo.map((c) => (
+                              <React.Fragment key={`v_coatt_${s.id}_${c.coNumber}`}>
+                                <td style={{ ...cellTd, textAlign: 'right' }}>{c.coMark == null ? '' : c.coMark.toFixed(1)}</td>
+                                <td style={{ ...cellTd, textAlign: 'right' }}>{pct(c.coMark, c.coMax)}</td>
+                              </React.Fragment>
+                            ))}
 
                             {viewBtls.map((n) => {
                               const m = btlAvgByIndex[n] ?? null;

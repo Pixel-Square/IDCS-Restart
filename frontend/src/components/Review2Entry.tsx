@@ -14,8 +14,9 @@ export default function Review2Entry({ subjectId, teachingAssignmentId, label }:
       teachingAssignmentId={teachingAssignmentId}
       assessmentKey="review2"
       label={label || 'Review 2'}
-      coA={2}
-      coB={3}
+      coA={3}
+      coB={4}
+      allCos={[1, 2, 3, 4, 5]}
     />
   );
 }

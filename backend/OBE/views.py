@@ -5224,32 +5224,7 @@ def edit_request_create(request):
     # Primary: academics.DepartmentRole (department + academic_year).
     # Fallbacks: RoleAssignment('HOD') and accounts.Role('HOD') for staff in same department.
     hod_user = None
-    # IMPORTANT: for labs/special/cross-department assignments, the HOD should be the
-    # department that owns the course/section (teaching assignment), not necessarily
-    # the staff member's home department.
-    dept = None
-    try:
-        cr = getattr(ta, 'curriculum_row', None)
-        dept = getattr(cr, 'department', None) if cr is not None else None
-    except Exception:
-        dept = None
-    if dept is None:
-        try:
-            subj = getattr(ta, 'subject', None)
-            course = getattr(subj, 'course', None) if subj is not None else None
-            dept = getattr(course, 'department', None) if course is not None else None
-        except Exception:
-            dept = None
-    if dept is None:
-        try:
-            sec = getattr(ta, 'section', None)
-            batch = getattr(sec, 'batch', None) if sec is not None else None
-            course = getattr(batch, 'course', None) if batch is not None else None
-            dept = getattr(course, 'department', None) if course is not None else None
-        except Exception:
-            dept = None
-    if dept is None:
-        dept = getattr(staff_profile, 'current_department', None) or getattr(staff_profile, 'department', None)
+    dept = getattr(staff_profile, 'current_department', None) or getattr(staff_profile, 'department', None)
     if dept is None:
         return Response(
             {
@@ -5407,35 +5382,6 @@ def edit_request_create(request):
     if not hod_name:
         hod_name = str(getattr(hod_u, 'username', '') or '').strip() if hod_u else ''
 
-    # Build department/hod payload (re-used for response and notifications)
-    department_payload = (
-        {
-            'id': getattr(dept, 'id', None),
-            'code': getattr(dept, 'code', None),
-            'name': getattr(dept, 'name', None),
-            'short_name': getattr(dept, 'short_name', None),
-        }
-        if dept is not None
-        else None
-    )
-    hod_payload = (
-        {
-            'id': getattr(hod_u, 'id', None),
-            'username': getattr(hod_u, 'username', None),
-            'name': hod_name or None,
-        }
-        if getattr(req, 'hod_user_id', None) is not None
-        else None
-    )
-
-    # Send creation notifications (email/WhatsApp) so staff gets immediate routing info.
-    try:
-        from .services.edit_request_notifications import notify_edit_request_created
-
-        notify_edit_request_created(req, routed_to, department=department_payload, hod_name=hod_name, routing_warning=routing_warning)
-    except Exception:
-        logger.exception('Failed to send edit-request created notification for req=%s', getattr(req, 'id', None))
-
     return Response(
         {
             'id': req.id,
@@ -5444,8 +5390,25 @@ def edit_request_create(request):
             'created_at': req.created_at.isoformat() if req.created_at else None,
             'routed_to': routed_to,
             'routing_warning': routing_warning,
-            'department': department_payload,
-            'hod': hod_payload,
+            'department': (
+                {
+                    'id': getattr(dept, 'id', None),
+                    'code': getattr(dept, 'code', None),
+                    'name': getattr(dept, 'name', None),
+                    'short_name': getattr(dept, 'short_name', None),
+                }
+                if dept is not None
+                else None
+            ),
+            'hod': (
+                {
+                    'id': getattr(hod_u, 'id', None),
+                    'username': getattr(hod_u, 'username', None),
+                    'name': hod_name or None,
+                }
+                if getattr(req, 'hod_user_id', None) is not None
+                else None
+            ),
         }
     )
 

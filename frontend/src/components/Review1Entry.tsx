@@ -16,6 +16,7 @@ export default function Review1Entry({ subjectId, teachingAssignmentId, label }:
       label={label || 'Review 1'}
       coA={1}
       coB={2}
+      allCos={[1, 2, 3, 4, 5]}
     />
   );
 }

@@ -72,6 +72,7 @@ type LabSheet = {
   coAEnabled: boolean;
   coBEnabled: boolean;
   ciaExamEnabled?: boolean;
+  ciaExamMax?: number;
   expCountA: number;
   expCountB: number;
   btlA: BtlLevel[];
@@ -413,6 +414,7 @@ export default function LabCourseMarksEntry({
       coAEnabled: true,
       coBEnabled: Boolean(coB),
       ciaExamEnabled: ciaAvailable ? true : false,
+      ciaExamMax: DEFAULT_CIA_EXAM_MAX,
       expCountA: DEFAULT_EXPERIMENTS,
       expCountB: Boolean(coB) ? DEFAULT_EXPERIMENTS : 0,
       expMaxA: DEFAULT_EXPERIMENT_MAX,
@@ -470,12 +472,13 @@ export default function LabCourseMarksEntry({
   const [classType, setClassType] = useState<string | null>(null);
   const normalizedClassType = useMemo(() => normalizeClassType(classType), [classType]);
   const isLabCourse = useMemo(() => isLabClassType(classType), [classType]);
+  const isTcpr = normalizedClassType === 'TCPR';
   const isTcplOrReviewBased = useMemo(
     () => normalizedClassType === 'LAB' || normalizedClassType === 'TCPL' || normalizedClassType === 'TCPR' || normalizedClassType === 'PRACTICAL' || normalizedClassType === 'PROJECT',
     [normalizedClassType],
   );
   const isStrictLabMode = normalizedClassType === 'LAB';
-  const usesLegacyTcplProfile = isTcplOrReviewBased && !isStrictLabMode;
+  const usesLegacyTcplProfile = isTcplOrReviewBased && !isStrictLabMode && !isTcpr;
 
   // Load master config for term label
   useEffect(() => {
@@ -551,6 +554,7 @@ export default function LabCourseMarksEntry({
           const coAEnabledRaw = Boolean((d.sheet as any).coAEnabled ?? true);
           const coBEnabledRaw = Boolean((d.sheet as any).coBEnabled ?? Boolean(coBNum));
           const ciaExamEnabled = ciaAvailable ? Boolean((d.sheet as any).ciaExamEnabled ?? true) : false;
+          const ciaExamMax = clampInt(Number((d.sheet as any).ciaExamMax ?? DEFAULT_CIA_EXAM_MAX), 0, 100);
           const expCountA = clampInt(Number((d.sheet as any).expCountA ?? DEFAULT_EXPERIMENTS), 0, 12);
           const expCountB = clampInt(Number((d.sheet as any).expCountB ?? (coBEnabledRaw ? DEFAULT_EXPERIMENTS : 0)), 0, 12);
           const expMaxA = Number.isFinite(Number((d.sheet as any).expMaxA)) ? Number((d.sheet as any).expMaxA) : DEFAULT_EXPERIMENT_MAX;
@@ -598,6 +602,14 @@ export default function LabCourseMarksEntry({
               const row: any = row0 && typeof row0 === 'object' ? row0 : {};
               const marksByCo = row?.marksByCo && typeof row.marksByCo === 'object' ? { ...row.marksByCo } : {};
 
+              const rawCia = (row as any)?.ciaExam;
+              const normalizedCia =
+                rawCia === '' || rawCia == null
+                  ? ''
+                  : Number.isFinite(Number(rawCia))
+                    ? clampNumber(Number(rawCia), 0, ciaExamMax)
+                    : '';
+
               const legacyA = normalizeMarksArray(row?.marksA, expCountA);
               const legacyB = normalizeMarksArray(row?.marksB, expCountB);
               const byA = normalizeMarksArray(marksByCo[keyA], expCountA);
@@ -623,6 +635,7 @@ export default function LabCourseMarksEntry({
                 marksA: nextA,
                 marksB: nextB,
                 marksByCo,
+                ciaExam: normalizedCia,
                 caaExamByCo: normalizeCaaByCo((row as any)?.caaExamByCo),
                 ciaExamByCo: normalizeCoNumberMarks((row as any)?.ciaExamByCo),
               } as LabRowState;
@@ -644,6 +657,7 @@ export default function LabCourseMarksEntry({
               coAEnabled,
               coBEnabled,
               ciaExamEnabled,
+              ciaExamMax,
               expCountA,
               expCountB,
               expMaxA,
@@ -703,6 +717,7 @@ export default function LabCourseMarksEntry({
               coAEnabled: true,
               coBEnabled: Boolean(bNum),
               ciaExamEnabled: ciaAvailable ? true : false,
+              ciaExamMax: DEFAULT_CIA_EXAM_MAX,
               expCountA,
               expCountB,
               expMaxA,
@@ -893,6 +908,10 @@ export default function LabCourseMarksEntry({
   const coConfigs = useMemo(() => ensureCoConfigs(draft.sheet), [draft.sheet]);
   const markManagerLocked = Boolean(draft.sheet.markManagerLocked);
   const ciaExamEnabled = ciaAvailable ? draft.sheet.ciaExamEnabled !== false : false;
+  const ciaExamMaxEffective = useMemo(() => {
+    if (!isTcpr) return DEFAULT_CIA_EXAM_MAX;
+    return clampInt(Number((draft.sheet as any).ciaExamMax ?? DEFAULT_CIA_EXAM_MAX), 0, 100);
+  }, [isTcpr, (draft.sheet as any).ciaExamMax]);
   const markManagerCurrentSnapshot = useMemo(() => markManagerSnapshotOf(coConfigs, ciaExamEnabled), [coConfigs, ciaExamEnabled]);
 
   // DB controls post-publish; local confirmation controls pre-publish.
@@ -1025,7 +1044,7 @@ export default function LabCourseMarksEntry({
       const perExpMaxes = Array.from({ length: clampInt(Number(m.expCount ?? 0), 0, 12) }).map(() => clampInt(Number(m.expMax ?? DEFAULT_EXPERIMENT_MAX), 0, 100));
       const avgExpMax = perExpMaxes.length ? perExpMaxes.reduce((a, b) => a + b, 0) / perExpMaxes.length : 0;
       const coBase = isLabCourse && Number.isFinite(Number(labOverrideVal)) ? Number(labOverrideVal) : avgExpMax;
-      const coMax = Math.round((coBase + (ciaExamEnabled ? DEFAULT_CIA_EXAM_MAX / 2 : 0)) || 0);
+        const coMax = Math.round((coBase + (ciaExamEnabled ? ciaExamMaxEffective / 2 : 0)) || 0);
       return { coNumber: m.coNumber, mark, coMax };
     });
 
@@ -1245,6 +1264,26 @@ export default function LabCourseMarksEntry({
       if (!ciaAvailable) return p;
       if (Boolean(p.sheet.markManagerLocked)) return p;
       return { ...p, sheet: { ...p.sheet, ciaExamEnabled: Boolean(enabled) } };
+    });
+  }
+
+  function setCiaExamMax(v: number) {
+    if (!isTcpr) return;
+    setDraft((p) => {
+      if (!ciaAvailable) return p;
+      if (Boolean(p.sheet.markManagerLocked)) return p;
+
+      const nextMax = clampInt(Number(v), 0, 100);
+      const rowsByStudentId: Record<string, LabRowState> = { ...(p.sheet.rowsByStudentId || {}) };
+      for (const [sid, row0] of Object.entries(rowsByStudentId)) {
+        const row: any = row0 && typeof row0 === 'object' ? row0 : {};
+        const raw = row?.ciaExam;
+        if (typeof raw === 'number' && Number.isFinite(raw)) {
+          rowsByStudentId[sid] = { ...row, ciaExam: clampNumber(raw, 0, nextMax) };
+        }
+      }
+
+      return { ...p, sheet: { ...p.sheet, ciaExamMax: nextMax, rowsByStudentId } };
     });
   }
 
@@ -1884,7 +1923,8 @@ export default function LabCourseMarksEntry({
         if (absent && !canEditAbsent) return p;
       }
       if (isStrictLabMode) return p;
-      const nextValue = value === '' ? '' : clampInt(Number(value), 0, DEFAULT_CIA_EXAM_MAX);
+      const max = isTcpr ? clampInt(Number((p.sheet as any).ciaExamMax ?? DEFAULT_CIA_EXAM_MAX), 0, 100) : DEFAULT_CIA_EXAM_MAX;
+      const nextValue = value === '' ? '' : clampInt(Number(value), 0, max);
       return {
         ...p,
         sheet: {
@@ -2634,6 +2674,34 @@ export default function LabCourseMarksEntry({
               marginTop: 8,
             }}
           >
+            {isTcpr && ciaAvailable && ciaExamEnabled ? (
+              <div
+                key="cfg_cia_exam"
+                style={{
+                  width: '100%',
+                  minWidth: 0,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 6,
+                  padding: '10px 10px',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 12,
+                  background: '#fff',
+                }}
+              >
+                <div style={{ fontSize: 12, fontWeight: 950 }}>CIA Exam</div>
+                <div style={{ fontSize: 11, color: '#6b7280' }}>Max marks</div>
+                <input
+                  type="number"
+                  className="obe-input"
+                  value={ciaExamMaxEffective}
+                  onChange={(e) => setCiaExamMax(Number(e.target.value))}
+                  min={0}
+                  max={100}
+                  disabled={markManagerLocked}
+                />
+              </div>
+            ) : null}
             {allowedCoNumbers.map((n) => {
               const cfg = coConfigs[String(n)];
               const checked = Boolean(cfg?.enabled);
@@ -2868,15 +2936,16 @@ export default function LabCourseMarksEntry({
                           width: COL_CIA_W,
                           minWidth: COL_CIA_W,
                           maxWidth: COL_CIA_W,
-                          whiteSpace: 'pre-line',
                           overflow: 'visible',
                           textOverflow: 'clip',
-                          lineHeight: 1.05,
                         }}
                         rowSpan={5}
                         title="CIA Exam"
                       >
-                        {'CIA\nEXAM'}
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, lineHeight: 1.05 }}>
+                          <div style={{ whiteSpace: 'pre-line' }}>{'CIA\nEXAM'}</div>
+                          {isTcpr ? <div style={{ fontSize: 12, fontWeight: 900 }}>{ciaExamMaxEffective}</div> : null}
+                        </div>
                       </th>
                     )
                   ) : null}
@@ -2997,7 +3066,7 @@ export default function LabCourseMarksEntry({
                             const coBase = isLabCourse && Number.isFinite(Number(labOverrideVal)) ? Number(labOverrideVal) : avgExpMax;
                             return usesLegacyTcplProfile && profileCoMax > 0
                               ? profileCoMax
-                              : Math.round((coBase + (ciaExamEnabled ? DEFAULT_CIA_EXAM_MAX / 2 : 0)) || 0);
+                              : Math.round((coBase + (ciaExamEnabled ? ciaExamMaxEffective / 2 : 0)) || 0);
                           })();
                       return (
                         <React.Fragment key={`comax_${m.coNumber}`}>
@@ -3287,8 +3356,8 @@ export default function LabCourseMarksEntry({
                                 }
                                 const next = Number(raw);
                                 if (!Number.isFinite(next)) return;
-                                if (next > DEFAULT_CIA_EXAM_MAX) {
-                                  e.currentTarget.setCustomValidity(`Max mark is ${DEFAULT_CIA_EXAM_MAX}`);
+                                if (next > ciaExamMaxEffective) {
+                                  e.currentTarget.setCustomValidity(`Max mark is ${ciaExamMaxEffective}`);
                                   e.currentTarget.reportValidity();
                                   window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
                                   return;
@@ -3298,7 +3367,7 @@ export default function LabCourseMarksEntry({
                               }}
                               style={inputStyle}
                               min={0}
-                              max={DEFAULT_CIA_EXAM_MAX}
+                              max={ciaExamMaxEffective}
                               disabled={tableBlocked}
                             />
                           </td>
@@ -3991,15 +4060,16 @@ export default function LabCourseMarksEntry({
                             width: COL_CIA_W,
                             minWidth: COL_CIA_W,
                             maxWidth: COL_CIA_W,
-                            whiteSpace: 'pre-line',
                             overflow: 'visible',
                             textOverflow: 'clip',
-                            lineHeight: 1.05,
                           }}
                           rowSpan={5}
                           title="CIA Exam"
                         >
-                          {'CIA\nEXAM'}
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, lineHeight: 1.05 }}>
+                            <div style={{ whiteSpace: 'pre-line' }}>{'CIA\nEXAM'}</div>
+                            {isTcpr ? <div style={{ fontSize: 12, fontWeight: 900 }}>{ciaExamMaxEffective}</div> : null}
+                          </div>
                         </th>
                       )
                     ) : null}
@@ -4114,7 +4184,7 @@ export default function LabCourseMarksEntry({
                             )
                           : (() => {
                               const profileCoMax = Number(TCPL_REVIEW_CO_MAX[m.coNumber] || 0);
-                              return usesLegacyTcplProfile && profileCoMax > 0 ? profileCoMax : m.expMax + (ciaExamEnabled ? DEFAULT_CIA_EXAM_MAX / 2 : 0);
+                              return usesLegacyTcplProfile && profileCoMax > 0 ? profileCoMax : m.expMax + (ciaExamEnabled ? ciaExamMaxEffective / 2 : 0);
                             })();
                         return (
                           <React.Fragment key={`comax_view_${m.coNumber}`}>
