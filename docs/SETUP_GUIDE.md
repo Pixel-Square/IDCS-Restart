@@ -92,6 +92,43 @@ The backend exposes the following authentication endpoints:
 
 Already configured in `backend/.env`. Uses SQLite by default.
 
+#### SMS / OTP (mobile verification)
+
+Mobile OTP verification uses an SMS sender backend.
+
+- Default (dev): `SMS_BACKEND=console` which **logs** the SMS content in backend logs (no real SMS is sent).
+- Production: choose one backend:
+   - `SMS_BACKEND=http_get` + `SMS_GATEWAY_URL` (traditional SMS gateway)
+   - `SMS_BACKEND=whatsapp` + WhatsApp microservice settings (recommended when you already run the whatsapp-web.js service)
+
+Add to `backend/.env`:
+
+```env
+# Option A: SMS gateway (HTTP GET)
+SMS_BACKEND=http_get
+SMS_GATEWAY_URL=https://your-sms-provider.example/send?to={to}&message={message}
+
+# Option B: WhatsApp (uses local whatsapp-web.js microservice)
+# SMS_BACKEND=whatsapp
+# OBE_WHATSAPP_API_URL=http://127.0.0.1:3000/send-whatsapp
+# OBE_WHATSAPP_API_KEY=change-me
+```
+
+Notes:
+- `SMS_GATEWAY_URL` must contain both `{to}` and `{message}` placeholders.
+- The backend must be allowed to make outbound HTTP(S) requests to the SMS provider.
+
+WhatsApp backend notes:
+- The backend will POST JSON to `OBE_WHATSAPP_API_URL` with keys: `api_key`, `to`, `message`.
+- The `to` number is normalized to digits-only with country code (e.g. `91XXXXXXXXXX`).
+- Quick test (replace values):
+
+```bash
+curl -sS 'http://127.0.0.1:3000/send-whatsapp' \
+   -H 'Content-Type: application/json' \
+   -d '{"api_key":"change-me","to":"91XXXXXXXXXX","message":"Test from IDCS"}'
+```
+
 ### Frontend (.env)
 
 Already configured in `frontend/.env`:

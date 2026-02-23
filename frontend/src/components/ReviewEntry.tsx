@@ -27,11 +27,12 @@ export default function ReviewEntry({ subjectId, teachingAssignmentId, assessmen
       label={config.label}
       coA={config.coA}
       coB={config.coB}
+      initialEnabledCos={[1, 2, 3, 4, 5]}
       viewerMode={Boolean(viewerMode)}
       itemLabel="Content"
       itemLabelPlural="Content"
-      itemAbbrev="C"
-      ciaExamAvailable={false}
+      itemAbbrev="Con"
+      ciaExamAvailable={true}
       absentEnabled={true}
       autoSaveDraft={true}
     />

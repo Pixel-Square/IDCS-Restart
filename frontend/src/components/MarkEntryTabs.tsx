@@ -9,6 +9,7 @@ import LabEntry from './LabEntry';
 import LabCourseMarksEntry from './LabCourseMarksEntry';
 import ModelEntry from './ModelEntry';
 import ReviewEntry from './ReviewEntry';
+import ReviewCourseMarkEntery from './ReviewCourseMarkEntery';
 import Review1Entry from './Review1Entry';
 import Review2Entry from './Review2Entry';
 import Ssa1Entry from './Ssa1Entry';
@@ -358,6 +359,22 @@ export default function MarkEntryTabs({
   viewerMode,
 }: Props) {
   const [active, setActive] = useState<TabKey>('dashboard');
+
+  // Dispatch a custom event before switching tabs so child components can auto-save
+  const switchTab = React.useCallback((nextTab: TabKey) => {
+    if (nextTab === active) return;
+    // Fire a synchronous event so each entry component can save draft before unmount
+    try {
+      window.dispatchEvent(new CustomEvent('obe:before-tab-switch', { detail: { from: active, to: nextTab } }));
+    } catch {
+      // ignore
+    }
+    setActive(nextTab);
+    if (subjectId) {
+      lsSet(`markEntry_activeTab_${subjectId}`, nextTab);
+    }
+  }, [active, subjectId]);
+
   const [tas, setTas] = useState<TeachingAssignmentItem[]>([]);
   const [taError, setTaError] = useState<string | null>(null);
   const [selectedTaId, setSelectedTaId] = useState<number | null>(null);
@@ -470,7 +487,20 @@ export default function MarkEntryTabs({
     return propCt || null;
   }, [selectedTa, taDerivedClassType, classType]);
 
-  const normalizedEffectiveClassType = useMemo(() => normalizeClassType(effectiveClassType), [effectiveClassType]);
+  // Tab visibility: treat QP2 as TCPR subtype when class type is missing/THOERY.
+  // This matches the product behavior where QP2 drives TCPR-style assessments.
+  const effectiveClassTypeForTabs = useMemo(() => {
+    const ct = normalizeClassType(effectiveClassType);
+    // Some data sources may contain variants like "TC PR", "TC-PR" or "TCPR - ...".
+    const ctKey = ct.replace(/[^A-Z0-9]/g, '');
+    if (ctKey.includes('TCPR')) return 'TCPR';
+    if (ctKey.includes('TCPL')) return 'TCPL';
+    const qp = String(questionPaperType || '').trim().toUpperCase();
+    if (qp === 'QP2' && (!ct || ct === 'THEORY')) return 'TCPR';
+    return effectiveClassType;
+  }, [effectiveClassType, questionPaperType]);
+
+  const normalizedEffectiveClassType = useMemo(() => normalizeClassType(effectiveClassTypeForTabs), [effectiveClassTypeForTabs]);
 
   useEffect(() => {
     let mounted = true;
@@ -506,7 +536,7 @@ export default function MarkEntryTabs({
 
   // If faculty has set enabled assessments for the selected TA, prefer that.
   const effectiveEnabled = facultyEnabledAssessments === undefined ? enabledAssessments : facultyEnabledAssessments;
-  const baseVisibleTabs = useMemo(() => getVisibleTabs(effectiveClassType, effectiveEnabled), [effectiveClassType, enabledAssessments, facultyEnabledAssessments]);
+  const baseVisibleTabs = useMemo(() => getVisibleTabs(effectiveClassTypeForTabs, effectiveEnabled), [effectiveClassTypeForTabs, enabledAssessments, facultyEnabledAssessments]);
 
   const cqiPlacements = useMemo(() => {
     const options = Array.isArray(cqiConfig?.options) ? cqiConfig.options : [];
@@ -834,12 +864,12 @@ export default function MarkEntryTabs({
                 <TabButtonExtended
                   active={active === t.key}
                   label={t.label}
-                  onClick={() => setActive(t.key)}
+                  onClick={() => switchTab(t.key)}
                   isCqi
                   uniqueId={String(t.key)}
                 />
               ) : (
-                <TabButton active={active === t.key} label={t.label} onClick={() => setActive(t.key)} />
+                <TabButton active={active === t.key} label={t.label} onClick={() => switchTab(t.key)} />
               )}
             </React.Fragment>
           ))}
@@ -905,7 +935,7 @@ export default function MarkEntryTabs({
                       ? 'CIA 1 Review (Practical) - enter review marks for practical content.'
                       : 'CIA 1 sheet-style entry (Q-wise + CO + BTL) matching the Excel layout.')
               : active === 'cia2'
-                ? (normalizedEffectiveClassType === 'LAB' ? 'CIA 2 LAB entry (CO-3/CO-4 experiments + CIA exam).' : 'CIA 2 sheet-style entry (Q-wise + CO + BTL) matching the Excel layout.')
+                ? (normalizedEffectiveClassType === 'LAB' ? 'CIA 2 LAB entry (CO-3/CO-4/CO-5 experiments + CIA exam).' : 'CIA 2 sheet-style entry (Q-wise + CO + BTL) matching the Excel layout.')
               : active === 'model'
                 ? (normalizedEffectiveClassType === 'LAB' ? 'MODEL LAB entry (CO-5 experiments + CIA exam).' : 'MODEL blank table template (same layout style as CIA sheets).')
                 : String(active).startsWith('cqi_')
@@ -981,11 +1011,23 @@ export default function MarkEntryTabs({
                         label="CIA 1 LAB"
                         coA={1}
                         coB={2}
+                        initialEnabledCos={[1, 2]}
                         viewerMode={Boolean(activeForcedViewerMode)}
                       />
                     );
                   }
-                  if (normalizedEffectiveClassType === 'PRACTICAL' || normalizedEffectiveClassType === 'PROJECT') {
+                  if (normalizedEffectiveClassType === 'PROJECT') {
+                    return (
+                      <ReviewCourseMarkEntery
+                        subjectId={subjectId}
+                        teachingAssignmentId={selectedTaId ?? undefined}
+                        assessmentKey="cia1"
+                        viewerMode={Boolean(activeForcedViewerMode)}
+                        classType={effectiveClassType ?? null}
+                      />
+                    );
+                  }
+                  if (normalizedEffectiveClassType === 'PRACTICAL') {
                     return (
                       <ReviewEntry
                         subjectId={subjectId}
@@ -1015,11 +1057,23 @@ export default function MarkEntryTabs({
                         label="CIA 2 LAB"
                         coA={3}
                         coB={4}
+                        initialEnabledCos={[3, 4, 5]}
                         viewerMode={Boolean(activeForcedViewerMode)}
                       />
                     );
                   }
-                  if (normalizedEffectiveClassType === 'PRACTICAL' || normalizedEffectiveClassType === 'PROJECT') {
+                  if (normalizedEffectiveClassType === 'PROJECT') {
+                    return (
+                      <ReviewCourseMarkEntery
+                        subjectId={subjectId}
+                        teachingAssignmentId={selectedTaId ?? undefined}
+                        assessmentKey="cia2"
+                        viewerMode={Boolean(activeForcedViewerMode)}
+                        classType={effectiveClassType ?? null}
+                      />
+                    );
+                  }
+                  if (normalizedEffectiveClassType === 'PRACTICAL') {
                     return (
                       <ReviewEntry
                         subjectId={subjectId}
@@ -1049,11 +1103,23 @@ export default function MarkEntryTabs({
                         label="MODEL LAB"
                         coA={5}
                         coB={null}
+                        initialEnabledCos={[5]}
                         viewerMode={Boolean(activeForcedViewerMode)}
                       />
                     );
                   }
-                  if (normalizedEffectiveClassType === 'PRACTICAL' || normalizedEffectiveClassType === 'PROJECT') {
+                  if (normalizedEffectiveClassType === 'PROJECT') {
+                    return (
+                      <ReviewCourseMarkEntery
+                        subjectId={subjectId}
+                        teachingAssignmentId={selectedTaId ?? undefined}
+                        assessmentKey="model"
+                        viewerMode={Boolean(activeForcedViewerMode)}
+                        classType={effectiveClassType ?? null}
+                      />
+                    );
+                  }
+                  if (normalizedEffectiveClassType === 'PRACTICAL') {
                     return (
                       <ReviewEntry
                         subjectId={subjectId}

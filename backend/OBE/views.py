@@ -5183,6 +5183,28 @@ def edit_request_create(request):
 
     from .models import ObeEditRequest
 
+    # Resolve department HOD for this staff member + academic year.
+    hod_user = None
+    try:
+        from academics.models import DepartmentRole
+
+        dept = getattr(staff_profile, 'current_department', None)
+        if dept is not None and academic_year is not None:
+            hod_role = (
+                DepartmentRole.objects.filter(
+                    department=dept,
+                    academic_year=academic_year,
+                    role='HOD',
+                    is_active=True,
+                )
+                .select_related('staff__user')
+                .first()
+            )
+            if hod_role is not None:
+                hod_user = getattr(getattr(hod_role, 'staff', None), 'user', None)
+    except Exception:
+        hod_user = None
+
     existing = ObeEditRequest.objects.filter(
         staff_user=request.user,
         academic_year=academic_year,
@@ -5199,7 +5221,14 @@ def edit_request_create(request):
             existing.teaching_assignment = ta
         if not getattr(existing, 'section_name', None) and section_name:
             existing.section_name = section_name
-        existing.save(update_fields=['reason', 'subject_name', 'teaching_assignment', 'section_name', 'updated_at'])
+        # If this is an older request with no HOD routing info yet, assign it now.
+        try:
+            if getattr(existing, 'hod_user_id', None) is None and hod_user is not None:
+                existing.hod_user = hod_user
+                existing.hod_approved = False
+        except Exception:
+            pass
+        existing.save(update_fields=['reason', 'subject_name', 'teaching_assignment', 'section_name', 'hod_user', 'hod_approved', 'updated_at'])
         req = existing
     else:
         req = ObeEditRequest.objects.create(
@@ -5212,6 +5241,8 @@ def edit_request_create(request):
             reason=reason,
             teaching_assignment=ta,
             section_name=section_name,
+            hod_user=hod_user,
+            hod_approved=(False if hod_user is not None else True),
         )
 
     return Response({'id': req.id, 'status': req.status, 'scope': req.scope, 'created_at': req.created_at.isoformat() if req.created_at else None})
@@ -5333,7 +5364,7 @@ def edit_requests_pending(request):
     if scope_raw in {'MARK_ENTRY', 'MARK_MANAGER'}:
         scope_filter = scope_raw
 
-    qs = ObeEditRequest.objects.select_related('staff_user', 'academic_year').filter(status='PENDING')
+    qs = ObeEditRequest.objects.select_related('staff_user', 'academic_year').filter(status='PENDING', hod_approved=True)
     if scope_filter:
         qs = qs.filter(scope=scope_filter)
     qs = qs.order_by('-created_at')
@@ -5409,7 +5440,7 @@ def edit_requests_history(request):
         limit = 200
     limit = max(1, min(500, limit))
 
-    qs = ObeEditRequest.objects.select_related('staff_user', 'academic_year', 'reviewed_by').filter(status__in=statuses)
+    qs = ObeEditRequest.objects.select_related('staff_user', 'academic_year', 'reviewed_by').filter(status__in=statuses, hod_approved=True)
     if scope_filter:
         qs = qs.filter(scope=scope_filter)
     qs = qs.order_by('-updated_at')[:limit]
@@ -5469,6 +5500,81 @@ def edit_requests_history(request):
 @api_view(['GET'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
+def edit_requests_hod_pending(request):
+    """HOD: list pending edit requests assigned to this HOD (pre-approval stage)."""
+    user = getattr(request, 'user', None)
+    staff_profile = getattr(user, 'staff_profile', None)
+    if staff_profile is None:
+        return Response({'detail': 'Not a staff member.'}, status=status.HTTP_403_FORBIDDEN)
+
+    try:
+        from academics.models import DepartmentRole
+
+        is_hod = DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True).exists()
+        if not is_hod:
+            return Response({'detail': 'HOD access required.'}, status=status.HTTP_403_FORBIDDEN)
+    except Exception:
+        return Response({'detail': 'HOD access required.'}, status=status.HTTP_403_FORBIDDEN)
+
+    from .models import ObeEditRequest
+
+    qp = getattr(request, 'query_params', {}) if hasattr(request, 'query_params') else request.GET
+    scope_raw = str(qp.get('scope') or '').strip().upper()
+    scope_filter = None
+    if scope_raw in {'MARK_ENTRY', 'MARK_MANAGER'}:
+        scope_filter = scope_raw
+
+    qs = ObeEditRequest.objects.select_related('staff_user', 'academic_year').filter(
+        status='PENDING',
+        hod_approved=False,
+        hod_user=user,
+    )
+    if scope_filter:
+        qs = qs.filter(scope=scope_filter)
+    qs = qs.order_by('-created_at')
+
+    def staff_name(u):
+        if not u:
+            return None
+        try:
+            full = ' '.join([str(getattr(u, 'first_name', '') or '').strip(), str(getattr(u, 'last_name', '') or '').strip()]).strip()
+            return full or getattr(u, 'username', None)
+        except Exception:
+            return getattr(u, 'username', None)
+
+    out = []
+    for r in qs:
+        u = getattr(r, 'staff_user', None)
+        out.append(
+            {
+                'id': r.id,
+                'status': r.status,
+                'assessment': r.assessment,
+                'scope': r.scope,
+                'subject_code': r.subject_code,
+                'subject_name': r.subject_name,
+                'reason': r.reason,
+                'requested_at': r.created_at.isoformat() if r.created_at else None,
+                'academic_year': {
+                    'id': r.academic_year_id,
+                    'name': getattr(getattr(r, 'academic_year', None), 'name', None),
+                }
+                if r.academic_year_id
+                else None,
+                'staff': {
+                    'id': getattr(u, 'id', None),
+                    'username': getattr(u, 'username', None),
+                    'name': staff_name(u),
+                },
+            }
+        )
+
+    return Response({'results': out})
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
 def edit_requests_pending_count(request):
     auth = _require_obe_master(request)
     if auth:
@@ -5476,10 +5582,119 @@ def edit_requests_pending_count(request):
     from .models import ObeEditRequest
     qp = getattr(request, 'query_params', {}) if hasattr(request, 'query_params') else request.GET
     scope_raw = str(qp.get('scope') or '').strip().upper()
-    qs = ObeEditRequest.objects.filter(status='PENDING')
+    qs = ObeEditRequest.objects.filter(status='PENDING', hod_approved=True)
     if scope_raw in {'MARK_ENTRY', 'MARK_MANAGER'}:
         qs = qs.filter(scope=scope_raw)
     return Response({'pending': int(qs.count())})
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def edit_requests_hod_pending_count(request):
+    """HOD: count pending edit requests assigned to this HOD."""
+    user = getattr(request, 'user', None)
+    staff_profile = getattr(user, 'staff_profile', None)
+    if staff_profile is None:
+        return Response({'pending': 0})
+
+    try:
+        from academics.models import DepartmentRole
+
+        is_hod = DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True).exists()
+        if not is_hod:
+            return Response({'pending': 0})
+    except Exception:
+        return Response({'pending': 0})
+
+    from .models import ObeEditRequest
+    qp = getattr(request, 'query_params', {}) if hasattr(request, 'query_params') else request.GET
+    scope_raw = str(qp.get('scope') or '').strip().upper()
+
+    qs = ObeEditRequest.objects.filter(status='PENDING', hod_approved=False, hod_user=user)
+    if scope_raw in {'MARK_ENTRY', 'MARK_MANAGER'}:
+        qs = qs.filter(scope=scope_raw)
+    return Response({'pending': int(qs.count())})
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def edit_request_hod_approve(request, req_id: int):
+    """HOD: approve/forward an edit request to IQAC."""
+    user = getattr(request, 'user', None)
+    staff_profile = getattr(user, 'staff_profile', None)
+    if staff_profile is None:
+        return Response({'detail': 'Not a staff member.'}, status=status.HTTP_403_FORBIDDEN)
+
+    try:
+        from academics.models import DepartmentRole
+
+        is_hod = DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True).exists()
+        if not is_hod:
+            return Response({'detail': 'HOD access required.'}, status=status.HTTP_403_FORBIDDEN)
+    except Exception:
+        return Response({'detail': 'HOD access required.'}, status=status.HTTP_403_FORBIDDEN)
+
+    from .models import ObeEditRequest
+    row = ObeEditRequest.objects.filter(id=req_id).first()
+    if not row:
+        return Response({'detail': 'Request not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    if getattr(row, 'hod_user_id', None) != getattr(user, 'id', None):
+        return Response({'detail': 'Not assigned to you.'}, status=status.HTTP_403_FORBIDDEN)
+
+    if str(getattr(row, 'status', '') or '').upper() != 'PENDING':
+        return Response({'detail': 'Request is not pending.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if bool(getattr(row, 'hod_approved', False)):
+        return Response({'status': 'forwarded'})
+
+    row.hod_approved = True
+    row.hod_reviewed_by = user
+    row.hod_reviewed_at = timezone.now()
+    row.save(update_fields=['hod_approved', 'hod_reviewed_by', 'hod_reviewed_at', 'updated_at'])
+    return Response({'status': 'forwarded'})
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def edit_request_hod_reject(request, req_id: int):
+    """HOD: reject an edit request (does not reach IQAC)."""
+    user = getattr(request, 'user', None)
+    staff_profile = getattr(user, 'staff_profile', None)
+    if staff_profile is None:
+        return Response({'detail': 'Not a staff member.'}, status=status.HTTP_403_FORBIDDEN)
+
+    try:
+        from academics.models import DepartmentRole
+
+        is_hod = DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True).exists()
+        if not is_hod:
+            return Response({'detail': 'HOD access required.'}, status=status.HTTP_403_FORBIDDEN)
+    except Exception:
+        return Response({'detail': 'HOD access required.'}, status=status.HTTP_403_FORBIDDEN)
+
+    from .models import ObeEditRequest
+    row = ObeEditRequest.objects.filter(id=req_id).first()
+    if not row:
+        return Response({'detail': 'Request not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    if getattr(row, 'hod_user_id', None) != getattr(user, 'id', None):
+        return Response({'detail': 'Not assigned to you.'}, status=status.HTTP_403_FORBIDDEN)
+
+    if str(getattr(row, 'status', '') or '').upper() != 'PENDING':
+        return Response({'detail': 'Request is not pending.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if bool(getattr(row, 'hod_approved', False)):
+        return Response({'detail': 'Already forwarded to IQAC.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    row.mark_rejected(user)
+    row.hod_reviewed_by = user
+    row.hod_reviewed_at = timezone.now()
+    row.save(update_fields=['status', 'approved_until', 'reviewed_by', 'reviewed_at', 'hod_reviewed_by', 'hod_reviewed_at', 'updated_at'])
+    return Response({'status': 'rejected'})
 
 
 @api_view(['POST'])
@@ -5494,6 +5709,10 @@ def edit_request_approve(request, req_id: int):
     row = ObeEditRequest.objects.filter(id=req_id).first()
     if not row:
         return Response({'detail': 'Request not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    # Enforce HOD pre-approval when the request is routed to an HOD.
+    if getattr(row, 'hod_user_id', None) is not None and not bool(getattr(row, 'hod_approved', True)):
+        return Response({'detail': 'Awaiting HOD approval.'}, status=status.HTTP_400_BAD_REQUEST)
 
     minutes = (request.data or {}).get('window_minutes')
     try:
@@ -5622,6 +5841,10 @@ def edit_request_reject(request, req_id: int):
     row = ObeEditRequest.objects.filter(id=req_id).first()
     if not row:
         return Response({'detail': 'Request not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    # Enforce HOD pre-approval when the request is routed to an HOD.
+    if getattr(row, 'hod_user_id', None) is not None and not bool(getattr(row, 'hod_approved', True)):
+        return Response({'detail': 'Awaiting HOD approval.'}, status=status.HTTP_400_BAD_REQUEST)
 
     row.mark_rejected(request.user)
     row.save(update_fields=['status', 'approved_until', 'reviewed_by', 'reviewed_at', 'updated_at'])

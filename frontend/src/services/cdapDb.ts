@@ -1,7 +1,19 @@
 import fetchWithAuth from './fetchAuth';
 
-const DEFAULT_API_BASE = 'https://db.zynix.us';
-const API_BASE = import.meta.env.VITE_API_BASE || (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://localhost:8000' : DEFAULT_API_BASE);
+function apiBase() {
+  const fromEnv = import.meta.env.VITE_API_BASE;
+  if (fromEnv) return String(fromEnv).replace(/\/+$/, '');
+
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    const host = String(window.location.hostname || '').trim().toLowerCase();
+    if (host === 'localhost' || host === '127.0.0.1') return 'http://localhost:8000';
+    return String(window.location.origin).replace(/\/+$/, '');
+  }
+
+  return 'https://db.krgi.co.in';
+}
+
+const API_BASE = apiBase();
 
 const ASSESSMENT_MASTER_CFG_CACHE_KEY = 'obe_assessment_master_config_cache';
 
@@ -34,8 +46,9 @@ async function buildFriendlyError(res: Response, fallback: string) {
   return `${fallback}: Server returned ${res.status}.`;
 }
 
-export async function fetchCdapRevision(subjectId: string) {
-  const url = `${API_BASE}/api/obe/cdap-revision/${encodeURIComponent(subjectId)}`;
+export async function fetchCdapRevision(subjectId: string, teachingAssignmentId?: number) {
+  const qp = typeof teachingAssignmentId === 'number' ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
+  const url = `${API_BASE}/api/obe/cdap-revision/${encodeURIComponent(subjectId)}${qp}`;
   const res = await fetchWithAuth(url, { method: 'GET' });
 
   if (!res.ok) {
@@ -45,8 +58,9 @@ export async function fetchCdapRevision(subjectId: string) {
   return res.json();
 }
 
-export async function fetchArticulationMatrix(subjectId: string) {
-  const url = `${API_BASE}/api/obe/articulation-matrix/${encodeURIComponent(subjectId)}`;
+export async function fetchArticulationMatrix(subjectId: string, teachingAssignmentId?: number) {
+  const qp = typeof teachingAssignmentId === 'number' ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
+  const url = `${API_BASE}/api/obe/articulation-matrix/${encodeURIComponent(subjectId)}${qp}`;
   const res = await fetchWithAuth(url, { method: 'GET' });
 
   if (!res.ok) {
@@ -59,7 +73,9 @@ export async function fetchArticulationMatrix(subjectId: string) {
 export async function saveCdapRevision(payload: any) {
   const subjectId = payload?.subjectId || payload?.subject_id;
   if (!subjectId) throw new Error('subjectId is required to save CDAP revision');
-  const url = `${API_BASE}/api/obe/cdap-revision/${encodeURIComponent(subjectId)}`;
+  const teachingAssignmentId = payload?.teaching_assignment_id;
+  const qp = typeof teachingAssignmentId === 'number' ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
+  const url = `${API_BASE}/api/obe/cdap-revision/${encodeURIComponent(subjectId)}${qp}`;
   const res = await fetchWithAuth(url, { method: 'PUT', body: JSON.stringify(payload) });
 
   if (!res.ok) {
@@ -174,6 +190,6 @@ export function subscribeToGlobalAnalysisMapping(onChange: () => void, intervalM
 }
 
 // Legacy aliases used by older pages
-export async function getCdapRevision(subjectId: string) {
-  return fetchCdapRevision(subjectId);
+export async function getCdapRevision(subjectId: string, teachingAssignmentId?: number) {
+  return fetchCdapRevision(subjectId, teachingAssignmentId);
 }

@@ -299,6 +299,9 @@ class StudentProfileAdmin(admin.ModelAdmin):
     def get_urls(self):
         urls = super().get_urls()
         custom = [
+            path('sheets/', self.admin_site.admin_view(self.sheets_view), name='academics_studentprofile_sheets'),
+            path('sheets/data/', self.admin_site.admin_view(self.sheets_data_view), name='academics_studentprofile_sheets_data'),
+            path('sheets/save/', self.admin_site.admin_view(self.sheets_save_view), name='academics_studentprofile_sheets_save'),
             path('import-students/', self.admin_site.admin_view(self.import_students), name='academics_student_import'),
             path('download-template/', self.admin_site.admin_view(self.download_template), name='academics_student_template'),
         ]

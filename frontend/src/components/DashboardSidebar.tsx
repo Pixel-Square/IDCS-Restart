@@ -33,7 +33,9 @@ const ICON_MAP: Record<string, any> = {
   obe_master: BookOpen,
   obe_due_dates: CalendarClock,
   obe_requests: Bell,
+  hod_obe_requests: Bell,
   academic_controller: Layout,
+  notifications: Bell,
 
 };
 
@@ -132,6 +134,8 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // HOD pages: require HOD role or explicit permission
   if (entry.hod_advisors && (rolesUpper.includes('HOD') || permsLower.includes('academics.assign_advisor'))) items.push({ key: 'hod_advisors', label: 'Advisor Assign', to: '/hod/advisors' });
   if (entry.hod_teaching && (rolesUpper.includes('ADVISOR') || permsLower.includes('academics.assign_teaching'))) items.push({ key: 'hod_teaching', label: 'Teaching Assign', to: '/advisor/teaching' });
+  const canHod = rolesUpper.includes('HOD') || Boolean(entry.hod_advisors) || permsLower.includes('academics.assign_advisor');
+  if (canHod) items.push({ key: 'hod_obe_requests', label: 'HOD: OBE Requests', to: '/hod/obe-requests' });
 
   // Advisor pages: require ADVISOR role or explicit permission
   if (entry.advisor_students && (rolesUpper.includes('ADVISOR') || permsLower.includes('academics.view_my_students'))) items.push({ key: 'advisor_students', label: 'My Students', to: '/advisor/students' });
@@ -183,6 +187,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
 
   // fallback: always show profile
   items.unshift({ key: 'profile', label: 'Profile', to: '/profile' });
+
+  // Show notifications for IQAC role only
+  if (isIqac) {
+    items.push({ key: 'notifications', label: 'Notifications', to: '/notifications' });
+  }
 
   // Only add OBE once
   // Group OBE-related links under a single Academic page

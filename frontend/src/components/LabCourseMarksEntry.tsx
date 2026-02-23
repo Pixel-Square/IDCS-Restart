@@ -6,9 +6,13 @@ import fetchWithAuth from '../services/fetchAuth';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
 import { confirmMarkManagerLock, createEditRequest, createPublishRequest, fetchDraft, fetchEditWindow, fetchMyLatestEditRequest, fetchPublishedLabSheet, publishLabSheet, saveDraft } from '../services/obe';
 import { useEditWindow } from '../hooks/useEditWindow';
+import { useEditRequestPending } from '../hooks/useEditRequestPending';
+import { useLockBodyScroll } from '../hooks/useLockBodyScroll';
+import { ensureMobileVerified } from '../services/auth';
 import { useMarkTableLock } from '../hooks/useMarkTableLock';
 import { usePublishWindow } from '../hooks/usePublishWindow';
 import PublishLockOverlay from './PublishLockOverlay';
+import AssessmentContainer from './AssessmentContainer';
 // Vite-friendly asset URL for lock GIF used in the floating panel
 const lockPanelGif = new URL('https://static.vecteezy.com/system/resources/thumbnails/014/585/778/small/gold-locked-padlock-png.png', import.meta.url).href;
 import { fetchDeptRows, fetchMasters } from '../services/curriculum';
@@ -16,6 +20,12 @@ import { isLabClassType, normalizeClassType } from '../constants/classTypes';
 import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
 
 const LAB_CO_MAX_OVERRIDE = { co1: 42, co2: 42, co3: 58, co4: 42, co5: 42 };
+const TCPL_REVIEW_EXPERIMENT_WEIGHT: Record<number, number> = { 1: 9, 2: 9, 3: 4.5 };
+const TCPL_REVIEW_CAA_WEIGHT: Record<number, number> = { 1: 3, 2: 3, 3: 1.5 };
+const TCPL_REVIEW_CAA_RAW_MAX: Record<number, number> = { 1: 20, 2: 20, 3: 10 }; // total 50
+const TCPL_REVIEW_CO_MAX: Record<number, number> = { 1: 12, 2: 12, 3: 6 };
+const LAB_EXPERIMENT_WEIGHT_BY_CO: Record<number, number> = { 1: 9, 2: 9, 3: 4.5, 4: 9, 5: 9 };
+const LAB_CIA_MAX_BY_CO: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 20, 5: 20 };
 
 type Student = {
   id: number;
@@ -34,6 +44,9 @@ type LabRowState = {
   // Backward compatible with existing marksA/marksB.
   marksByCo?: Record<string, Array<number | ''>>;
   ciaExam?: number | '';
+  // TCPL/Review profile: per-CO CAA exam raw marks
+  caaExamByCo?: Record<string, number | ''>;
+  ciaExamByCo?: Record<string, number | ''>;
 };
 
 type BtlLevel = '' | 1 | 2 | 3 | 4 | 5 | 6;
@@ -77,6 +90,10 @@ type Props = {
   coB?: number | null;
   skipMarkManager?: boolean;
 
+  // Optional: for multi-CO assessments (e.g. CIA2 with CO3/CO4/CO5), specify which COs
+  // should be enabled by default when the draft/sheet has not yet been configured.
+  initialEnabledCos?: number[];
+
   // Customization options for other practical-style entries.
   itemLabel?: string; // singular
   itemLabelPlural?: string;
@@ -100,6 +117,11 @@ function clampInt(n: number, min: number, max: number) {
   if (!Number.isFinite(n)) return min;
   return Math.max(min, Math.min(max, Math.trunc(n)));
 
+}
+
+function clampNumber(n: number, min: number, max: number) {
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, n));
 }
 
 function round1(n: number) {
@@ -164,6 +186,55 @@ function pct(mark: number | null, max: number): string {
   return `${Number.isFinite(p) ? p.toFixed(0) : 0}`;
 }
 
+function sumMarks(arr: Array<number | ''>): number {
+  return arr.reduce<number>((acc, v) => acc + (typeof v === 'number' && Number.isFinite(v) ? v : 0), 0);
+}
+
+function normalizeCaaByCo(raw: unknown): Record<string, number | ''> {
+  const src = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const out: Record<string, number | ''> = {};
+  for (const k of Object.keys(src)) {
+    const v = src[k];
+    if (v === '' || v == null) {
+      out[k] = '';
+      continue;
+    }
+    const n = typeof v === 'number' ? v : Number(v);
+    out[k] = Number.isFinite(n) ? n : '';
+  }
+  return out;
+}
+
+function normalizeCoNumberMarks(raw: unknown): Record<string, number | ''> {
+  const src = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const out: Record<string, number | ''> = {};
+  for (const k of Object.keys(src)) {
+    const v = src[k];
+    if (v === '' || v == null) {
+      out[k] = '';
+      continue;
+    }
+    const n = typeof v === 'number' ? v : Number(v);
+    out[k] = Number.isFinite(n) ? n : '';
+  }
+  return out;
+}
+
+function normalizedContribution(obtained: number, totalMax: number, weight: number): number {
+  if (!Number.isFinite(obtained) || !Number.isFinite(totalMax) || !Number.isFinite(weight)) return 0;
+  if (totalMax <= 0 || weight <= 0) return 0;
+  const safeObtained = Math.max(0, obtained);
+  return (safeObtained / totalMax) * weight;
+}
+
+function readCoWeightedMark(source: Record<string, number | ''>, coNumber: number, maxByCo: Record<number, number>): number {
+  const max = Number(maxByCo[coNumber] ?? 0);
+  if (max <= 0) return 0;
+  const raw = source[String(coNumber)];
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return 0;
+  return Math.max(0, Math.min(raw, max));
+}
+
 function shortenRollNo(raw: unknown, keepLast: number = 7): string {
   const s = String(raw ?? '').trim();
   if (!s) return '';
@@ -183,6 +254,8 @@ export default function LabCourseMarksEntry({
   coA,
   coB,
   skipMarkManager = false,
+
+  initialEnabledCos,
 
   itemLabel,
   itemLabelPlural,
@@ -208,6 +281,9 @@ export default function LabCourseMarksEntry({
   const [viewMarksModalOpen, setViewMarksModalOpen] = useState(false);
   const [editRequestReason, setEditRequestReason] = useState('');
   const [editRequestBusy, setEditRequestBusy] = useState(false);
+  const [publishRequestReason, setPublishRequestReason] = useState('');
+  const [publishRequesting, setPublishRequesting] = useState(false);
+  const [publishRequestMessage, setPublishRequestMessage] = useState<string | null>(null);
   const [publishedViewSnapshot, setPublishedViewSnapshot] = useState<LabDraftPayload | null>(null);
   const [publishedViewLoading, setPublishedViewLoading] = useState(false);
   const [publishedViewError, setPublishedViewError] = useState<string | null>(null);
@@ -228,6 +304,19 @@ export default function LabCourseMarksEntry({
   const absentUiEnabled = Boolean(absentEnabled ?? assessmentKey === 'model');
   const autoSaveEnabled = Boolean(autoSaveDraft);
   const autoSaveMs = clampInt(Number(autoSaveDelayMs ?? 900), 250, 5000);
+
+  const initialEnabledCoNums = useMemo(() => {
+    const raw = Array.isArray(initialEnabledCos) && initialEnabledCos.length
+      ? initialEnabledCos
+      : ([coA, coB].filter((v): v is number => typeof v === 'number' && Number.isFinite(v)) as number[]);
+    const normalized = raw.map((n) => clampInt(Number(n), 1, 5));
+    return Array.from(new Set(normalized)).sort((a, b) => a - b);
+  }, [coA, coB, initialEnabledCos]);
+
+  const initialEnabledCoSet = useMemo(
+    () => new Set(initialEnabledCoNums.map((n) => String(n))),
+    [initialEnabledCoNums],
+  );
 
   const lastAutoSavedSigRef = useRef<string | null>(null);
   const autoSaveTimerRef = useRef<number | null>(null);
@@ -269,11 +358,7 @@ export default function LabCourseMarksEntry({
     markManagerUnlockedUntil: string | null;
   }>(null);
 
-  // "Published" should be driven by the lock row, not by whether a snapshot object exists.
-  // Otherwise a fresh page can be treated as published if the API returns a non-null payload.
   const isPublished = Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published);
-  // Formative-style rule: pre-publish the table is editable; post-publish it is editable only when IQAC approves.
-  // Additionally, after a Publish click we "consume" any already-active approval window so it doesn't auto-unlock.
   const markEntryUnblockedUntil = markLock?.mark_entry_unblocked_until ? String(markLock.mark_entry_unblocked_until) : null;
   const markManagerUnlockedUntil = markLock?.mark_manager_unlocked_until ? String(markLock.mark_manager_unlocked_until) : null;
   const markEntryApprovedFresh =
@@ -286,6 +371,23 @@ export default function LabCourseMarksEntry({
 
   const entryOpen = !isPublished ? true : Boolean(markLock?.entry_open) && (publishConsumedApprovals == null || markEntryApprovedFresh || markManagerApprovedFresh);
   const publishedEditLocked = Boolean(isPublished && !entryOpen);
+
+  const publishButtonIsRequestEdit = Boolean(isPublished && publishedEditLocked && !viewerMode);
+
+  const {
+    pending: markEntryReqPending,
+    pendingUntilMs: markEntryReqPendingUntilMs,
+    setPendingUntilMs: setMarkEntryReqPendingUntilMs,
+    refresh: refreshMarkEntryReqPending,
+  } = useEditRequestPending({
+    enabled: Boolean(publishButtonIsRequestEdit) && Boolean(subjectId),
+    assessment: assessmentKey as any,
+    subjectCode: subjectId ? String(subjectId) : null,
+    scope: 'MARK_ENTRY',
+    teachingAssignmentId,
+  });
+
+  useLockBodyScroll(Boolean(markManagerModal) || publishedEditModalOpen || viewMarksModalOpen || (pendingCoDiff && pendingCoDiff.visible) || (pendingMarkManagerReset && pendingMarkManagerReset.visible));
 
   const globalLocked = Boolean(publishWindow?.global_override_active && publishWindow?.global_is_open === false);
 
@@ -304,33 +406,63 @@ export default function LabCourseMarksEntry({
       expMaxB: Boolean(coB) ? DEFAULT_EXPERIMENT_MAX : 0,
       btlA: Array.from({ length: DEFAULT_EXPERIMENTS }, () => 1 as const),
       btlB: Boolean(coB) ? Array.from({ length: DEFAULT_EXPERIMENTS }, () => 1 as const) : [],
-      coConfigs: {
-        [String(clampInt(Number(coA ?? 1), 1, 5))]: {
-          enabled: true,
-          expCount: DEFAULT_EXPERIMENTS,
-          expMax: DEFAULT_EXPERIMENT_MAX,
-          btl: Array.from({ length: DEFAULT_EXPERIMENTS }, () => 1 as const),
-        },
-        ...(coB == null
-          ? {}
-          : {
-              [String(clampInt(Number(coB), 1, 5))]: {
-                enabled: true,
-                expCount: DEFAULT_EXPERIMENTS,
-                expMax: DEFAULT_EXPERIMENT_MAX,
-                btl: Array.from({ length: DEFAULT_EXPERIMENTS }, () => 1 as const),
-              },
-            }),
-      },
+      coConfigs: Object.fromEntries(
+        (Array.isArray(initialEnabledCos) && initialEnabledCos.length
+          ? initialEnabledCos
+          : ([coA, coB].filter((v): v is number => typeof v === 'number' && Number.isFinite(v)) as number[])
+        )
+          .map((n) => clampInt(Number(n), 1, 5))
+          .filter((n, i, arr) => arr.indexOf(n) === i)
+          .map((n) => [
+            String(n),
+            {
+              enabled: true,
+              expCount: DEFAULT_EXPERIMENTS,
+              expMax: DEFAULT_EXPERIMENT_MAX,
+              btl: Array.from({ length: DEFAULT_EXPERIMENTS }, () => 1 as const),
+            },
+          ]),
+      ) as any,
       rowsByStudentId: {},
       markManagerLocked: false,
       markManagerSnapshot: null,
     },
   }));
 
+  // If the sheet/draft was created before a newly-added CO (e.g. CO5 for CIA2)
+  // existed, ensure it's present in the persisted coConfigs before Mark Manager confirmation.
+  useEffect(() => {
+    if (!initialEnabledCoNums.length) return;
+    if (draft.sheet.markManagerSnapshot) return;
+
+    const existing = (draft.sheet.coConfigs && typeof draft.sheet.coConfigs === 'object' ? draft.sheet.coConfigs : {}) as NonNullable<LabSheet['coConfigs']>;
+    const missing = initialEnabledCoNums.filter((n) => !existing[String(n)]);
+    if (!missing.length) return;
+
+    setDraft((p) => {
+      const prev = (p.sheet.coConfigs && typeof p.sheet.coConfigs === 'object' ? p.sheet.coConfigs : {}) as NonNullable<LabSheet['coConfigs']>;
+      const next: NonNullable<LabSheet['coConfigs']> = { ...prev };
+      for (const n of missing) {
+        next[String(n)] = {
+          enabled: true,
+          expCount: DEFAULT_EXPERIMENTS,
+          expMax: DEFAULT_EXPERIMENT_MAX,
+          btl: Array.from({ length: DEFAULT_EXPERIMENTS }, () => 1 as const),
+        };
+      }
+      return { ...p, sheet: { ...p.sheet, coConfigs: next } };
+    });
+  }, [draft.sheet.coConfigs, draft.sheet.markManagerSnapshot, initialEnabledCoNums]);
+
   const [classType, setClassType] = useState<string | null>(null);
   const normalizedClassType = useMemo(() => normalizeClassType(classType), [classType]);
   const isLabCourse = useMemo(() => isLabClassType(classType), [classType]);
+  const isTcplOrReviewBased = useMemo(
+    () => normalizedClassType === 'LAB' || normalizedClassType === 'TCPL' || normalizedClassType === 'TCPR' || normalizedClassType === 'PRACTICAL' || normalizedClassType === 'PROJECT',
+    [normalizedClassType],
+  );
+  const isStrictLabMode = normalizedClassType === 'LAB';
+  const usesLegacyTcplProfile = isTcplOrReviewBased && !isStrictLabMode;
 
   // Load master config for term label
   useEffect(() => {
@@ -478,6 +610,8 @@ export default function LabCourseMarksEntry({
                 marksA: nextA,
                 marksB: nextB,
                 marksByCo,
+                caaExamByCo: normalizeCaaByCo((row as any)?.caaExamByCo),
+                ciaExamByCo: normalizeCoNumberMarks((row as any)?.ciaExamByCo),
               } as LabRowState;
             }
             return out;
@@ -641,6 +775,8 @@ export default function LabCourseMarksEntry({
               marksA: Array.from({ length: expCountA }, () => ''),
               marksB: Array.from({ length: expCountB }, () => ''),
               marksByCo: {},
+              caaExamByCo: {},
+              ciaExamByCo: {},
               ciaExam: '',
             };
           }
@@ -764,6 +900,25 @@ export default function LabCourseMarksEntry({
   const totalExpCols = useMemo(() => enabledCoMetas.reduce((sum, m) => sum + m.expCount, 0), [enabledCoMetas]);
   const experimentsCols = Math.max(totalExpCols, 1);
   const hasEnabledCos = enabledCoMetas.length > 0;
+  const tcplReviewCaaMetas = useMemo(
+    () => enabledCoMetas.filter((m) => Number.isFinite(Number(TCPL_REVIEW_CAA_RAW_MAX[m.coNumber]))),
+    [enabledCoMetas],
+  );
+  const tcplReviewCaaCols = tcplReviewCaaMetas.length;
+  const labCiaMetas = useMemo(
+    () =>
+      isStrictLabMode && ciaExamEnabled
+        ? enabledCoMetas.filter((m) => Number(LAB_CIA_MAX_BY_CO[m.coNumber] || 0) > 0)
+        : [],
+    [enabledCoMetas, isStrictLabMode, ciaExamEnabled],
+  );
+  const examCols = isStrictLabMode
+    ? (ciaExamEnabled ? labCiaMetas.length : 0)
+    : ciaExamEnabled
+      ? usesLegacyTcplProfile
+        ? Math.max(tcplReviewCaaCols, 1)
+        : 1
+      : 0;
   const coAttainmentCols = hasEnabledCos ? enabledCoMetas.length * 2 : 2;
   const maxExpMax = useMemo(() => enabledCoMetas.reduce((m, c) => Math.max(m, c.expMax), 0), [enabledCoMetas]);
 
@@ -773,16 +928,111 @@ export default function LabCourseMarksEntry({
     return Object.values(rows).some((r) => Boolean((r as any)?.absent));
   }, [absentUiEnabled, draft.sheet.rowsByStudentId]);
 
+  function getRowMarksForEnabledCos(row: any, metas: Array<{ coNumber: number; expCount: number; expMax: number }>) {
+    const marksByCoRaw = row?.marksByCo;
+    return metas.map((m) => {
+      const byCo = marksByCoRaw && typeof marksByCoRaw === 'object' ? (marksByCoRaw as any)[String(m.coNumber)] : undefined;
+      const fallback = m.coNumber === coANum ? (row as any)?.marksA : m.coNumber === coBNum ? (row as any)?.marksB : undefined;
+      const marks = normalizeMarksArray(byCo ?? fallback, m.expCount);
+      return { coNumber: m.coNumber, expCount: m.expCount, expMax: m.expMax, marks };
+    });
+  }
+
+  function computeRowCoAttainment(row: any, marksForEnabledCos: Array<{ coNumber: number; expCount: number; expMax: number; marks: Array<number | ''> }>) {
+    const caaByCo = normalizeCaaByCo((row as any)?.caaExamByCo);
+    const ciaByCo = normalizeCoNumberMarks((row as any)?.ciaExamByCo);
+    const ciaExamNumLegacy =
+      ciaExamEnabled && typeof (row as any)?.ciaExam === 'number' && Number.isFinite((row as any)?.ciaExam)
+        ? Number((row as any)?.ciaExam)
+        : null;
+
+    if (isStrictLabMode) {
+      const values = marksForEnabledCos.map((m) => {
+        const totalObtained = sumMarks(m.marks);
+        const totalMax = Math.max(0, m.expCount) * Math.max(0, m.expMax);
+        const expWeight = Number(LAB_EXPERIMENT_WEIGHT_BY_CO[m.coNumber] || 0);
+        const ciaContribution = ciaExamEnabled ? readCoWeightedMark(ciaByCo, m.coNumber, LAB_CIA_MAX_BY_CO) : 0;
+        const expContribution = normalizedContribution(totalObtained, totalMax, expWeight);
+        const hasAnyCoMark = totalObtained > 0 || ciaContribution > 0;
+        const mark = hasAnyCoMark ? round1(expContribution + ciaContribution) : null;
+        const coMax = round1(expWeight + (ciaExamEnabled ? Number(LAB_CIA_MAX_BY_CO[m.coNumber] || 0) : 0));
+        return { coNumber: m.coNumber, mark, coMax };
+      });
+
+      const finalTotalRaw = values.reduce((acc, v) => acc + (typeof v.mark === 'number' && Number.isFinite(v.mark) ? v.mark : 0), 0);
+      const hasAnyMarks = values.some((v) => typeof v.mark === 'number' && Number.isFinite(v.mark));
+      return {
+        caaByCo,
+        ciaByCo,
+        ciaExamNumLegacy,
+        coAttainmentValues: values,
+        hasAnyMarks,
+        finalTotal: hasAnyMarks ? round1(finalTotalRaw) : '',
+      };
+    }
+
+    if (usesLegacyTcplProfile) {
+      let finalTotal = 0;
+      let hasAnyTcplMarks = false;
+      const values = marksForEnabledCos.map((m) => {
+        const totalObtained = sumMarks(m.marks);
+        const totalMax = Math.max(0, m.expCount) * Math.max(0, m.expMax);
+        const expWeight = Number(TCPL_REVIEW_EXPERIMENT_WEIGHT[m.coNumber] || 0);
+        const caaWeight = Number(TCPL_REVIEW_CAA_WEIGHT[m.coNumber] || 0);
+        const caaRawMax = Number(TCPL_REVIEW_CAA_RAW_MAX[m.coNumber] || 0);
+        const coMax = Number(TCPL_REVIEW_CO_MAX[m.coNumber] || 0);
+
+        const expContribution = normalizedContribution(totalObtained, totalMax, expWeight);
+        const rawCaa = caaByCo[String(m.coNumber)];
+        const caaRaw = typeof rawCaa === 'number' && Number.isFinite(rawCaa) ? rawCaa : 0;
+        const caaContribution = normalizedContribution(caaRaw, caaRawMax, caaWeight);
+        const mark = expContribution + caaContribution;
+        if (totalObtained > 0 || caaRaw > 0) hasAnyTcplMarks = true;
+        finalTotal += mark;
+        return { coNumber: m.coNumber, mark: hasAnyTcplMarks ? mark : null, coMax };
+      });
+
+      return {
+        caaByCo,
+        ciaByCo,
+        ciaExamNumLegacy,
+        coAttainmentValues: values.map((v) => ({ ...v, mark: hasAnyTcplMarks ? v.mark : null })),
+        hasAnyMarks: hasAnyTcplMarks,
+        finalTotal: hasAnyTcplMarks ? round1(finalTotal) : '',
+      };
+    }
+
+    const allVisibleMarks = marksForEnabledCos.flatMap((x) => x.marks);
+    const avg = avgMarks(allVisibleMarks);
+    const hasAnyMarks = avg != null || (ciaExamEnabled && ciaExamNumLegacy != null);
+    const values = marksForEnabledCos.map((m) => {
+      const avgMark = avgMarks(m.marks);
+      const mark = !hasAnyMarks ? null : (avgMark ?? 0) + (ciaExamEnabled ? (ciaExamNumLegacy ?? 0) / 2 : 0);
+      const labOverrideVal = (LAB_CO_MAX_OVERRIDE as any)[`co${m.coNumber}`];
+      const perExpMaxes = Array.from({ length: clampInt(Number(m.expCount ?? 0), 0, 12) }).map(() => clampInt(Number(m.expMax ?? DEFAULT_EXPERIMENT_MAX), 0, 100));
+      const avgExpMax = perExpMaxes.length ? perExpMaxes.reduce((a, b) => a + b, 0) / perExpMaxes.length : 0;
+      const coBase = isLabCourse && Number.isFinite(Number(labOverrideVal)) ? Number(labOverrideVal) : avgExpMax;
+      const coMax = Math.round((coBase + (ciaExamEnabled ? DEFAULT_CIA_EXAM_MAX / 2 : 0)) || 0);
+      return { coNumber: m.coNumber, mark, coMax };
+    });
+
+    return {
+      caaByCo,
+      ciaByCo,
+      ciaExamNumLegacy,
+      coAttainmentValues: values,
+      hasAnyMarks,
+      finalTotal: avg == null && ciaExamNumLegacy == null ? '' : round1((avg ?? 0) + (ciaExamNumLegacy ?? 0)),
+    };
+  }
+
   const renderStudents = useMemo(() => {
-    // After publish-lock: keep the table visually empty (per UX) until IQAC approves MARK_ENTRY edits.
-    // Once approved, show the existing marks from the last saved draft/published snapshot.
     if (!viewerMode && isPublished && !entryOpen) return [];
     if (!absentUiEnabled) return students;
     if (!showAbsenteesOnly) return students;
     return students.filter((s) => Boolean(draft.sheet.rowsByStudentId?.[String(s.id)]?.absent));
   }, [viewerMode, isPublished, entryOpen, absentUiEnabled, students, showAbsenteesOnly, draft.sheet.rowsByStudentId]);
 
-  // Autosave (debounced) - enabled only when requested (e.g., ReviewEntry).
   useEffect(() => {
     if (!autoSaveEnabled) return;
     if (!subjectId) return;
@@ -827,7 +1077,7 @@ export default function LabCourseMarksEntry({
       const cur = out[k];
       if (!cur) {
         out[k] = {
-          enabled: false,
+          enabled: initialEnabledCoSet.has(k),
           expCount: DEFAULT_EXPERIMENTS,
           expMax: DEFAULT_EXPERIMENT_MAX,
           btl: Array.from({ length: DEFAULT_EXPERIMENTS }, () => 1 as const),
@@ -1006,6 +1256,8 @@ export default function LabCourseMarksEntry({
                 absentKind: ((existing as any).absentKind || 'AL') as any,
                 marksA: Array.from({ length: expCountA2 }, () => ''),
                 marksB: Array.from({ length: expCountB2 }, () => ''),
+                caaExamByCo: {},
+                ciaExamByCo: {},
                 ciaExam: '',
               },
             },
@@ -1213,19 +1465,24 @@ export default function LabCourseMarksEntry({
                 marksByCo = {};
                 row.marksA = Array.from({ length: nextExpCountA }, () => '');
                 row.marksB = Array.from({ length: nextExpCountB }, () => '');
+                row.caaExamByCo = {};
+                row.ciaExamByCo = {};
                 row.ciaExam = '';
               } else if (resetMode === 'partial' && resetSet.size) {
+                const caaByCo = normalizeCaaByCo(row.caaExamByCo);
                 for (const k of Array.from(resetSet)) {
                   const cfg = coConfigs[String(k)];
                   const len = clampInt(Number(cfg?.expCount ?? 0), 0, 12);
                   // Clear the removed/changed column's marks.
                   if (len > 0) marksByCo[String(k)] = Array.from({ length: len }, () => '');
                   else delete (marksByCo as any)[String(k)];
+                  if (Object.prototype.hasOwnProperty.call(caaByCo, String(k))) caaByCo[String(k)] = '';
 
                   // If the fixed pair uses this CO, clear legacy arrays too.
                   if (Number(k) === fixedCoA) row.marksA = Array.from({ length: nextExpCountA }, () => '');
                   if (fixedCoB != null && Number(k) === fixedCoB) row.marksB = Array.from({ length: nextExpCountB }, () => '');
                 }
+                row.caaExamByCo = caaByCo;
               }
 
               const legacyA = normalizeMarksArray(row?.marksA, nextExpCountA);
@@ -1612,6 +1869,7 @@ export default function LabCourseMarksEntry({
         const canEditAbsent = Boolean(showAbsenteesOnly && absent && (kind === 'ML' || kind === 'SKL'));
         if (absent && !canEditAbsent) return p;
       }
+      if (isStrictLabMode) return p;
       const nextValue = value === '' ? '' : clampInt(Number(value), 0, DEFAULT_CIA_EXAM_MAX);
       return {
         ...p,
@@ -1626,19 +1884,107 @@ export default function LabCourseMarksEntry({
     });
   }
 
+  function setCaaExamByCo(studentId: number, coNumber: number, value: number | '') {
+    setDraft((p) => {
+      if (isStrictLabMode) return p;
+      const k = String(studentId);
+      const existing = p.sheet.rowsByStudentId?.[k];
+      if (!existing) return p;
+
+      if (absentUiEnabled && assessmentKey !== 'model' && Boolean((existing as any).absent)) return p;
+
+      if (assessmentKey === 'model') {
+        const absent = Boolean((existing as any).absent);
+        const kind = absent ? String((existing as any).absentKind || 'AL').toUpperCase() : '';
+        const canEditAbsent = Boolean(showAbsenteesOnly && absent && (kind === 'ML' || kind === 'SKL'));
+        if (absent && !canEditAbsent) return p;
+      }
+
+      const coKey = String(clampInt(Number(coNumber), 1, 5));
+      const maxRaw = Number(TCPL_REVIEW_CAA_RAW_MAX[Number(coKey)] || 0);
+      const nextValue = value === '' ? '' : clampNumber(Number(value), 0, maxRaw > 0 ? maxRaw : 0);
+      const caaExamByCo: Record<string, number | ''> = {
+        ...normalizeCaaByCo((existing as any)?.caaExamByCo),
+        [coKey]: nextValue,
+      };
+
+      return {
+        ...p,
+        sheet: {
+          ...p.sheet,
+          rowsByStudentId: {
+            ...p.sheet.rowsByStudentId,
+            [k]: { ...existing, caaExamByCo } as LabRowState,
+          },
+        },
+      };
+    });
+  }
+
+  function setCiaExamByCo(studentId: number, coNumber: number, value: number | '') {
+    setDraft((p) => {
+      if (!isStrictLabMode) return p;
+      const k = String(studentId);
+      const existing = p.sheet.rowsByStudentId?.[k];
+      if (!existing) return p;
+
+      if (!ciaAvailable || !ciaExamEnabled) return p;
+      if (absentUiEnabled && assessmentKey !== 'model' && Boolean((existing as any).absent)) return p;
+
+      if (assessmentKey === 'model') {
+        const absent = Boolean((existing as any).absent);
+        const kind = absent ? String((existing as any).absentKind || 'AL').toUpperCase() : '';
+        const canEditAbsent = Boolean(showAbsenteesOnly && absent && (kind === 'ML' || kind === 'SKL'));
+        if (absent && !canEditAbsent) return p;
+      }
+
+      const coKey = String(clampInt(Number(coNumber), 1, 5));
+      const maxRaw = Number(LAB_CIA_MAX_BY_CO[Number(coKey)] || 0);
+      if (maxRaw <= 0) return p;
+
+      const nextValue = value === '' ? '' : clampNumber(Number(value), 0, maxRaw);
+      const ciaExamByCo: Record<string, number | ''> = {
+        ...normalizeCoNumberMarks((existing as any)?.ciaExamByCo),
+        [coKey]: nextValue,
+      };
+
+      return {
+        ...p,
+        sheet: {
+          ...p.sheet,
+          rowsByStudentId: {
+            ...p.sheet.rowsByStudentId,
+            [k]: { ...existing, ciaExamByCo } as LabRowState,
+          },
+        },
+      };
+    });
+  }
+
   async function saveNow() {
     if (!subjectId) return;
     setSavingDraft(true);
     try {
       await saveDraft(assessmentKey, String(subjectId), draft);
       setSavedAt(new Date().toLocaleString());
-      alert('Draft saved.');
     } catch (e: any) {
       alert(e?.message || 'Draft save failed');
     } finally {
       setSavingDraft(false);
     }
   }
+
+  // Auto-save draft when switching tabs
+  const draftRefForTabSwitch = React.useRef(draft);
+  draftRefForTabSwitch.current = draft;
+  useEffect(() => {
+    const handler = () => {
+      if (!subjectId || tableBlocked) return;
+      saveDraft(assessmentKey, String(subjectId), draftRefForTabSwitch.current).catch(() => {});
+    };
+    window.addEventListener('obe:before-tab-switch', handler);
+    return () => window.removeEventListener('obe:before-tab-switch', handler);
+  }, [subjectId, assessmentKey, tableBlocked]);
 
   async function resetSheet() {
     if (!subjectId) return;
@@ -1657,6 +2003,8 @@ export default function LabCourseMarksEntry({
         marksA: Array.from({ length: expCountA2 }, () => ''),
         marksB: Array.from({ length: expCountB2 }, () => ''),
         marksByCo: {},
+        caaExamByCo: {},
+        ciaExamByCo: {},
         ciaExam: '',
       };
     }
@@ -1701,6 +2049,18 @@ export default function LabCourseMarksEntry({
 
     // If already published and locked, use Publish as the entry-point to request edits.
     if (isPublished && publishedEditLocked && !viewerMode) {
+      if (markEntryReqPending) {
+        alert('Edit request is pending. Please wait for IQAC approval.');
+        return;
+      }
+
+      const mobileOk = await ensureMobileVerified();
+      if (!mobileOk) {
+        alert('Please verify your mobile number in Profile before requesting edits.');
+        window.location.href = '/profile';
+        return;
+      }
+
       setPublishedEditModalOpen(true);
       return;
     }
@@ -1823,6 +2183,25 @@ export default function LabCourseMarksEntry({
 
   async function requestMarkEntryEdit() {
     if (!subjectId) return;
+
+    const mobileOk = await ensureMobileVerified();
+    if (!mobileOk) {
+      alert('Please verify your mobile number in Profile before requesting edits.');
+      window.location.href = '/profile';
+      return;
+    }
+
+    const reason = String(editRequestReason || '').trim();
+    if (!reason) {
+      alert('Reason is required.');
+      return;
+    }
+
+    if (markEntryReqPending) {
+      alert('Edit request is already pending. Please wait.');
+      return;
+    }
+
     setEditRequestBusy(true);
     const startedAt = new Date();
     const baselineApprovalUntil = markEntryEditWindow?.approval_until ? String(markEntryEditWindow.approval_until) : null;
@@ -1831,11 +2210,20 @@ export default function LabCourseMarksEntry({
         assessment: assessmentKey as any,
         subject_code: String(subjectId),
         scope: 'MARK_ENTRY',
-        reason: editRequestReason || `Edit request: ${label} marks for ${String(subjectId)}`,
+        reason,
         teaching_assignment_id: teachingAssignmentId,
       });
       alert('Edit request sent to IQAC. Waiting for approval...');
       setPublishedEditModalOpen(false);
+      setEditRequestReason('');
+
+      // Enforce the 24h pending window locally immediately.
+      setMarkEntryReqPendingUntilMs(Date.now() + 24 * 60 * 60 * 1000);
+      try {
+        refreshMarkEntryReqPending({ silent: true });
+      } catch {
+        // ignore
+      }
 
       const createdId = Number((created as any)?.id);
       const minReviewMs = startedAt.getTime() - 2000;
@@ -1916,7 +2304,7 @@ export default function LabCourseMarksEntry({
     return [1, 2, 3, 4, 5, 6].filter((n) => set.has(n));
   }, [enabledCoMetas, totalExpCols]);
 
-  const headerCols = 3 + (absentUiEnabled ? 1 : 0) + experimentsCols + 1 + (ciaExamEnabled ? 1 : 0) + coAttainmentCols + visibleBtlIndices.length * 2;
+  const headerCols = 3 + (absentUiEnabled ? 1 : 0) + experimentsCols + 1 + examCols + coAttainmentCols + visibleBtlIndices.length * 2;
 
   const cellTh: React.CSSProperties = {
     border: '1px solid #111',
@@ -1969,10 +2357,10 @@ export default function LabCourseMarksEntry({
     () => [
       ...Array.from({ length: experimentsCols }, () => DEFAULT_DATA_COL_W),
       COL_AVG_W,
-      ...(ciaExamEnabled ? [COL_CIA_W] : []),
+      ...(examCols > 0 ? Array.from({ length: examCols }, () => DEFAULT_DATA_COL_W) : []),
       ...Array.from({ length: coAttainmentCols + visibleBtlIndices.length * 2 }, () => DEFAULT_DATA_COL_W),
     ],
-    [experimentsCols, ciaExamEnabled, coAttainmentCols, visibleBtlIndices.length],
+    [experimentsCols, examCols, coAttainmentCols, visibleBtlIndices.length],
   );
 
   const minTableWidth = useMemo(() => {
@@ -2022,6 +2410,9 @@ export default function LabCourseMarksEntry({
 
   const coEnableStyle: React.CSSProperties = {
     display: 'flex',
+    width: '100%',
+    maxWidth: 1200,
+    margin: '0 auto',
     gap: 10,
     flexWrap: 'wrap',
     alignItems: 'center',
@@ -2069,35 +2460,12 @@ export default function LabCourseMarksEntry({
   const downloadTotals = async () => {
     if (!subjectId) return;
 
-    const enabledCos = Object.entries((draft.sheet as any)?.coConfigs || {})
-      .filter(([, v]: any) => Boolean(v?.enabled))
-      .map(([k]) => String(k));
-
     const rows = students.map((s, idx) => {
       const row = draft.sheet.rowsByStudentId?.[String(s.id)];
-      const marksByCoRaw = (row as any)?.marksByCo;
-
-      const allMarks: number[] = [];
-      for (const coNum of enabledCos) {
-        const cfg = (draft.sheet as any)?.coConfigs?.[coNum];
-        const expCount = clampInt(Number(cfg?.expCount ?? 0), 0, 12);
-        const byCo = marksByCoRaw && typeof marksByCoRaw === 'object' ? (marksByCoRaw as any)[String(coNum)] : undefined;
-        const fallback = Number(coNum) === coANum ? (row as any)?.marksA : Number(coNum) === Number(coBNumRaw) ? (row as any)?.marksB : undefined;
-        const marks = normalizeMarksArray(byCo ?? fallback, expCount);
-        for (const m of marks) {
-          if (typeof m === 'number' && Number.isFinite(m)) allMarks.push(m);
-        }
-      }
-
-      const avg = avgMarks(allMarks as any);
-      const ciaExamNum =
-        ciaExamEnabled && typeof (row as any)?.ciaExam === 'number' && Number.isFinite((row as any).ciaExam)
-          ? Number((row as any).ciaExam)
-          : null;
-
-      const hasAnyMarks = avg != null || (ciaExamEnabled && ciaExamNum != null);
-      const effectiveAbsent = Boolean(absentUiEnabled && (row as any)?.absent && !hasAnyMarks);
-      const total = effectiveAbsent ? 'ABSENT' : avg == null && ciaExamNum == null ? '' : round1((avg ?? 0) + (ciaExamNum ?? 0));
+      const marksForEnabledCos = getRowMarksForEnabledCos(row, enabledCoMetas);
+      const computed = computeRowCoAttainment(row, marksForEnabledCos);
+      const effectiveAbsent = Boolean(absentUiEnabled && (row as any)?.absent && !computed.hasAnyMarks);
+      const total = effectiveAbsent ? 'ABSENT' : computed.finalTotal;
 
       return {
         sno: idx + 1,
@@ -2119,7 +2487,7 @@ export default function LabCourseMarksEntry({
   };
 
   return (
-    <div>
+    <AssessmentContainer>
       <style>{`
         @keyframes markManagerGlitch {
           0% { background: #fff7ed; transform: translateX(0); }
@@ -2148,7 +2516,7 @@ export default function LabCourseMarksEntry({
           animation: markManagerDust 2s ease-out forwards;
         }
       `}</style>
-      <div style={{ marginBottom: 10 }}>
+      <div style={{ margin: '0 0 10px 0', maxWidth: '100%', width: '100%', boxSizing: 'border-box', overflow: 'hidden' }}>
         <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>COs enabled</div>
 
         <div
@@ -2179,13 +2547,13 @@ export default function LabCourseMarksEntry({
               ))}
             </>
           )}
-          <div style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
               <ClipboardList size={18} color={markManagerLocked ? '#6b7280' : '#9a3412'} />
               <div style={{ fontWeight: 950, color: '#111827' }}>Mark Manager</div>
             </div>
 
-            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <button
                 onClick={() => {
                   if (markManagerLocked) {
@@ -2246,7 +2614,7 @@ export default function LabCourseMarksEntry({
             style={{
               width: '100%',
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
               gap: 10,
               marginTop: 8,
             }}
@@ -2286,38 +2654,99 @@ export default function LabCourseMarksEntry({
         {markManagerError ? <div style={{ marginTop: 8, fontSize: 12, color: '#991b1b' }}>{markManagerError}</div> : null}
       </div>
 
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
-        <button
-          onClick={saveNow}
-          className="obe-btn obe-btn-success"
-          disabled={savingDraft || !subjectId || tableBlocked}
-          style={tableBlocked ? { opacity: 0.6, cursor: 'not-allowed' } : undefined}
-          title={tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : undefined}
-        >
-          {savingDraft ? 'Saving…' : 'Save Draft'}
-        </button>
-        <button onClick={downloadTotals} className="obe-btn obe-btn-secondary" disabled={!subjectId || students.length === 0}>
-          Download
-        </button>
-        <button
-          onClick={resetSheet}
-          className="obe-btn obe-btn-danger"
-          disabled={!subjectId || tableBlocked}
-          style={tableBlocked ? { opacity: 0.6, cursor: 'not-allowed' } : undefined}
-          title={tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : undefined}
-        >
-          Reset
-        </button>
-        <button
-          onClick={publish}
-          className="obe-btn obe-btn-primary"
-          disabled={!subjectId || publishing || tableBlocked || globalLocked}
-          style={tableBlocked ? { opacity: 0.6, cursor: 'not-allowed' } : undefined}
-          title={tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : !publishAllowed ? 'Publish window closed' : globalLocked ? 'Publishing locked' : 'Publish'}
-        >
-          {publishing ? 'Publishing…' : 'Publish'}
-        </button>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button onClick={downloadTotals} className="obe-btn obe-btn-secondary" disabled={!subjectId || students.length === 0}>
+            Download
+          </button>
+          <button
+            onClick={resetSheet}
+            className="obe-btn obe-btn-danger"
+            disabled={!subjectId || tableBlocked}
+            title={tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : undefined}
+          >
+            Reset
+          </button>
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <button
+            onClick={saveNow}
+            className="obe-btn obe-btn-success"
+            disabled={savingDraft || !subjectId || tableBlocked}
+            title={tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : undefined}
+          >
+            {savingDraft ? 'Saving…' : 'Save Draft'}
+          </button>
+          <button
+            onClick={publish}
+            className="obe-btn obe-btn-primary"
+            disabled={publishButtonIsRequestEdit ? false : !subjectId || publishing || tableBlocked || globalLocked || !publishAllowed}
+            title={tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : !publishAllowed ? 'Publish window closed' : globalLocked ? 'Publishing locked' : 'Publish'}
+          >
+            {publishButtonIsRequestEdit ? 'Request Edit' : publishing ? 'Publishing…' : 'Publish'}
+          </button>
+          {savedAt && <div style={{ fontSize: 12, color: '#6b7280', alignSelf: 'center' }}>Saved: {savedAt}</div>}
+          {publishedAt && <div style={{ fontSize: 12, color: '#16a34a', alignSelf: 'center' }}>Published: {publishedAt}</div>}
+        </div>
       </div>
+
+      {/* ── Publish window status ── */}
+      {publishWindow && !globalLocked && publishAllowed && (
+        <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 6 }}>
+          Publish window open — due by{' '}
+          <strong>{publishWindow.due_at ? new Date(publishWindow.due_at).toLocaleString() : '—'}</strong>
+          {remainingSeconds != null && remainingSeconds > 0 && (
+            <span> ({Math.ceil(remainingSeconds / 60)} min remaining)</span>
+          )}
+        </div>
+      )}
+
+      {/* ── IQAC locked banner ── */}
+      {globalLocked && (
+        <div style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', padding: '10px 14px', borderRadius: 10, marginBottom: 10, fontWeight: 600 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>Publishing disabled by IQAC</span>
+            <button className="obe-btn obe-btn-secondary" style={{ padding: '2px 10px', fontSize: 12 }} onClick={() => refreshPublishWindow()}>Refresh</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Publish time over + request section ── */}
+      {!globalLocked && !publishAllowed && publishWindow && (
+        <div style={{ background: '#fff7ed', border: '1px solid #fecaca', color: '#9a3412', padding: '10px 14px', borderRadius: 10, marginBottom: 10 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+            <strong>Publish time is over</strong>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button className="obe-btn obe-btn-secondary" style={{ padding: '2px 10px', fontSize: 12 }} onClick={() => refreshPublishWindow()}>Refresh</button>
+              <button
+                className="obe-btn obe-btn-primary"
+                style={{ padding: '2px 10px', fontSize: 12 }}
+                disabled={publishRequesting}
+                onClick={async () => {
+                  if (!publishRequestReason.trim()) return;
+                  setPublishRequesting(true);
+                  setPublishRequestMessage(null);
+                  try {
+                    await createPublishRequest({ assessment: assessmentKey, subject_code: String(subjectId), reason: publishRequestReason, teaching_assignment_id: teachingAssignmentId });
+                    setPublishRequestMessage('Request sent successfully.');
+                    setPublishRequestReason('');
+                  } catch (e: any) { setPublishRequestMessage(e?.message || 'Request failed'); }
+                  setPublishRequesting(false);
+                }}
+              >
+                {publishRequesting ? 'Sending…' : 'Request Approval'}
+              </button>
+            </div>
+          </div>
+          <input
+            type="text" placeholder="Reason for approval…" value={publishRequestReason}
+            onChange={e => setPublishRequestReason(e.target.value)}
+            style={{ width: '100%', padding: '4px 8px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: 13 }}
+          />
+          {publishRequestMessage && <div style={{ marginTop: 4, fontSize: 12, color: publishRequestMessage.includes('success') ? '#065f46' : '#991b1b' }}>{publishRequestMessage}</div>}
+        </div>
+      )}
 
       {loadingRoster ? <div style={{ color: '#6b7280', marginBottom: 8 }}>Loading roster…</div> : null}
       {rosterError ? (
@@ -2404,23 +2833,37 @@ export default function LabCourseMarksEntry({
                   <th style={{ ...cellTh, width: COL_AVG_W, minWidth: COL_AVG_W, maxWidth: COL_AVG_W }} rowSpan={5}>
                     AVG
                   </th>
-                  {ciaExamEnabled ? (
-                    <th
-                      style={{
-                        ...cellTh,
-                        width: COL_CIA_W,
-                        minWidth: COL_CIA_W,
-                        maxWidth: COL_CIA_W,
-                        whiteSpace: 'pre-line',
-                        overflow: 'visible',
-                        textOverflow: 'clip',
-                        lineHeight: 1.05,
-                      }}
-                      rowSpan={5}
-                      title="CIA Exam"
-                    >
-                      {'CIA\nEXAM'}
-                    </th>
+                  {isStrictLabMode ? (
+                    <>
+                      {ciaExamEnabled && labCiaMetas.length > 0 ? (
+                        <th style={cellTh} colSpan={labCiaMetas.length}>
+                          CIA EXAM
+                        </th>
+                      ) : null}
+                    </>
+                  ) : ciaExamEnabled ? (
+                    usesLegacyTcplProfile ? (
+                      <th style={cellTh} colSpan={Math.max(tcplReviewCaaCols, 1)}>
+                        CAA EXAM
+                      </th>
+                    ) : (
+                      <th
+                        style={{
+                          ...cellTh,
+                          width: COL_CIA_W,
+                          minWidth: COL_CIA_W,
+                          maxWidth: COL_CIA_W,
+                          whiteSpace: 'pre-line',
+                          overflow: 'visible',
+                          textOverflow: 'clip',
+                          lineHeight: 1.05,
+                        }}
+                        rowSpan={5}
+                        title="CIA Exam"
+                      >
+                        {'CIA\nEXAM'}
+                      </th>
+                    )
                   ) : null}
                   <th style={cellTh} colSpan={coAttainmentCols}>
                     CO ATTAINMENT
@@ -2446,6 +2889,28 @@ export default function LabCourseMarksEntry({
                       )}
                     </>
                   )}
+
+                  {isStrictLabMode ? (
+                    <>
+                      {ciaExamEnabled
+                        ? labCiaMetas.map((m) => (
+                            <th key={`lab_cia_co_${m.coNumber}`} style={cellTh}>
+                              CO-{m.coNumber}
+                            </th>
+                          ))
+                        : null}
+                    </>
+                  ) : ciaExamEnabled && usesLegacyTcplProfile ? (
+                    tcplReviewCaaCols > 0 ? (
+                      tcplReviewCaaMetas.map((m) => (
+                        <th key={`caa_co_${m.coNumber}`} style={cellTh}>
+                          CO-{m.coNumber}
+                        </th>
+                      ))
+                    ) : (
+                      <th style={cellTh}>—</th>
+                    )
+                  ) : null}
 
                   {hasEnabledCos ? (
                     enabledCoMetas.map((m) => (
@@ -2480,14 +2945,45 @@ export default function LabCourseMarksEntry({
                     </>
                   )}
 
+                  {isStrictLabMode ? (
+                    <>
+                      {ciaExamEnabled
+                        ? labCiaMetas.map((m) => (
+                            <th key={`lab_cia_max_${m.coNumber}`} style={cellTh}>
+                              {LAB_CIA_MAX_BY_CO[m.coNumber] ?? 0}
+                            </th>
+                          ))
+                        : null}
+                    </>
+                  ) : ciaExamEnabled && usesLegacyTcplProfile ? (
+                    tcplReviewCaaCols > 0 ? (
+                      tcplReviewCaaMetas.map((m) => (
+                        <th key={`caa_max_${m.coNumber}`} style={cellTh}>
+                          {TCPL_REVIEW_CAA_RAW_MAX[m.coNumber] ?? 0}
+                        </th>
+                      ))
+                    ) : (
+                      <th style={cellTh}>—</th>
+                    )
+                  ) : null}
+
                   {hasEnabledCos ? (
                     enabledCoMetas.map((m) => {
-                      const labOverrideVal = (LAB_CO_MAX_OVERRIDE as any)[`co${m.coNumber}`];
-                      // build per-experiment max list for this CO and compute its average (matches AVERAGEIF behaviour)
-                      const perExpMaxes = Array.from({ length: clampInt(Number(m.expCount ?? 0), 0, 12) }).map(() => clampInt(Number(m.expMax ?? DEFAULT_EXPERIMENT_MAX), 0, 100));
-                      const avgExpMax = perExpMaxes.length ? perExpMaxes.reduce((a, b) => a + b, 0) / perExpMaxes.length : 0;
-                      const coBase = isLabCourse && Number.isFinite(Number(labOverrideVal)) ? Number(labOverrideVal) : avgExpMax;
-                      const coMax = Math.round((coBase + (ciaExamEnabled ? DEFAULT_CIA_EXAM_MAX / 2 : 0)) || 0);
+                      const coMax = isStrictLabMode
+                        ? round1(
+                            Number(LAB_EXPERIMENT_WEIGHT_BY_CO[m.coNumber] || 0) +
+                              (ciaExamEnabled ? Number(LAB_CIA_MAX_BY_CO[m.coNumber] || 0) : 0),
+                          )
+                        : (() => {
+                            const profileCoMax = Number(TCPL_REVIEW_CO_MAX[m.coNumber] || 0);
+                            const labOverrideVal = (LAB_CO_MAX_OVERRIDE as any)[`co${m.coNumber}`];
+                            const perExpMaxes = Array.from({ length: clampInt(Number(m.expCount ?? 0), 0, 12) }).map(() => clampInt(Number(m.expMax ?? DEFAULT_EXPERIMENT_MAX), 0, 100));
+                            const avgExpMax = perExpMaxes.length ? perExpMaxes.reduce((a, b) => a + b, 0) / perExpMaxes.length : 0;
+                            const coBase = isLabCourse && Number.isFinite(Number(labOverrideVal)) ? Number(labOverrideVal) : avgExpMax;
+                            return usesLegacyTcplProfile && profileCoMax > 0
+                              ? profileCoMax
+                              : Math.round((coBase + (ciaExamEnabled ? DEFAULT_CIA_EXAM_MAX / 2 : 0)) || 0);
+                          })();
                       return (
                         <React.Fragment key={`comax_${m.coNumber}`}>
                           <th style={cellTh}>{coMax}</th>
@@ -2523,7 +3019,7 @@ export default function LabCourseMarksEntry({
                       )}
                     </>
                   )}
-                  <th style={cellTh} colSpan={coAttainmentCols + visibleBtlIndices.length * 2} />
+                  <th style={cellTh} colSpan={coAttainmentCols + visibleBtlIndices.length * 2 + examCols} />
                 </tr>
 
                 <tr>
@@ -2590,41 +3086,21 @@ export default function LabCourseMarksEntry({
                       )}
                     </>
                   )}
-                  <th style={cellTh} colSpan={coAttainmentCols + visibleBtlIndices.length * 2} />
+                  <th style={cellTh} colSpan={coAttainmentCols + visibleBtlIndices.length * 2 + examCols} />
                 </tr>
               </thead>
 
               <tbody>
                 {(!tableBlocked && !publishedEditLocked ? students : []).map((s, idx) => {
                   const row = draft.sheet.rowsByStudentId?.[String(s.id)];
-                  const ciaExamRaw = (row as any)?.ciaExam;
-                  const ciaExamNum = ciaExamEnabled && typeof ciaExamRaw === 'number' && Number.isFinite(ciaExamRaw) ? ciaExamRaw : null;
-
-                  const marksByCoRaw = (row as any)?.marksByCo;
-                  const marksForEnabledCos = enabledCoMetas.map((m) => {
-                    const byCo = marksByCoRaw && typeof marksByCoRaw === 'object' ? (marksByCoRaw as any)[String(m.coNumber)] : undefined;
-                    const fallback = m.coNumber === coANum ? (row as any)?.marksA : m.coNumber === coBNum ? (row as any)?.marksB : undefined;
-                    const marks = normalizeMarksArray(byCo ?? fallback, m.expCount);
-                    return { coNumber: m.coNumber, marks };
-                  });
+                  const marksForEnabledCos = getRowMarksForEnabledCos(row, enabledCoMetas);
 
                   const allVisibleMarks = marksForEnabledCos.flatMap((x) => x.marks);
                   const avgTotal = avgMarks(allVisibleMarks);
-                  const hasAny = avgTotal != null || (ciaExamEnabled && ciaExamNum != null);
-
-                  const coAttainmentValues = hasEnabledCos
-                    ? enabledCoMetas.map((m) => {
-                        const marks = marksForEnabledCos.find((x) => x.coNumber === m.coNumber)?.marks ?? [];
-                        const avg = avgMarks(marks);
-                        const mark = !hasAny ? null : (avg ?? 0) + (ciaExamEnabled ? (ciaExamNum ?? 0) / 2 : 0);
-                          const labOverrideVal = (LAB_CO_MAX_OVERRIDE as any)[`co${m.coNumber}`];
-                          const perExpMaxes = Array.from({ length: clampInt(Number(m.expCount ?? 0), 0, 12) }).map(() => clampInt(Number(m.expMax ?? DEFAULT_EXPERIMENT_MAX), 0, 100));
-                          const avgExpMax = perExpMaxes.length ? perExpMaxes.reduce((a, b) => a + b, 0) / perExpMaxes.length : 0;
-                          const coBase = isLabCourse && Number.isFinite(Number(labOverrideVal)) ? Number(labOverrideVal) : avgExpMax;
-                          const coMax = Math.round((coBase + (ciaExamEnabled ? DEFAULT_CIA_EXAM_MAX / 2 : 0)) || 0);
-                          return { coNumber: m.coNumber, mark, coMax };
-                      })
-                    : [];
+                  const computed = computeRowCoAttainment(row, marksForEnabledCos);
+                  const coAttainmentValues = hasEnabledCos ? computed.coAttainmentValues : [];
+                  const caaByCo = computed.caaByCo;
+                  const ciaByCo = computed.ciaByCo;
 
                   const btlAvgByIndex: Record<number, number | null> = {};
                   for (const n of visibleBtlIndices) {
@@ -2719,34 +3195,113 @@ export default function LabCourseMarksEntry({
                       )}
 
                       <td style={{ ...cellTd, width: COL_AVG_W, minWidth: 0, textAlign: 'right', fontWeight: 800 }}>{avgTotal == null ? '' : avgTotal.toFixed(1)}</td>
-                      {ciaExamEnabled ? (
-                        <td style={{ ...cellTd, width: COL_CIA_W, minWidth: 0, padding: '2px 2px', background: '#fff7ed' }}>
-                          <input
-                            type="number"
-                            value={(row as any)?.ciaExam ?? ''}
-                            onChange={(e) => {
-                              const raw = e.target.value;
-                              if (raw === '') {
+                      {isStrictLabMode ? (
+                        <>
+                          {ciaExamEnabled
+                            ? labCiaMetas.map((m) => {
+                                const maxRaw = Number(LAB_CIA_MAX_BY_CO[m.coNumber] || 0);
+                                const value = ciaByCo[String(m.coNumber)] ?? '';
+                                return (
+                                  <td key={`lab_cia_${s.id}_${m.coNumber}`} style={{ ...cellTd, width: 66, minWidth: 0, padding: '2px 2px', background: '#fff7ed' }}>
+                                    <input
+                                      type="number"
+                                      value={value}
+                                      onChange={(e) => {
+                                        const raw = e.target.value;
+                                        if (raw === '') {
+                                          e.currentTarget.setCustomValidity('');
+                                          return setCiaExamByCo(s.id, m.coNumber, '');
+                                        }
+                                        const next = Number(raw);
+                                        if (!Number.isFinite(next)) return;
+                                        if (next > maxRaw) {
+                                          e.currentTarget.setCustomValidity(`Max mark is ${maxRaw}`);
+                                          e.currentTarget.reportValidity();
+                                          window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                                          return;
+                                        }
+                                        e.currentTarget.setCustomValidity('');
+                                        setCiaExamByCo(s.id, m.coNumber, next);
+                                      }}
+                                      style={inputStyle}
+                                      min={0}
+                                      max={maxRaw}
+                                      step={0.1}
+                                      disabled={tableBlocked}
+                                    />
+                                  </td>
+                                );
+                              })
+                            : null}
+                        </>
+                      ) : ciaExamEnabled ? (
+                        usesLegacyTcplProfile ? (
+                          tcplReviewCaaCols > 0 ? (
+                            tcplReviewCaaMetas.map((m) => {
+                              const maxRaw = Number(TCPL_REVIEW_CAA_RAW_MAX[m.coNumber] || 0);
+                              const value = caaByCo[String(m.coNumber)] ?? '';
+                              return (
+                                <td key={`caa_${s.id}_${m.coNumber}`} style={{ ...cellTd, width: 66, minWidth: 0, padding: '2px 2px', background: '#fff7ed' }}>
+                                  <input
+                                    type="number"
+                                    value={value}
+                                    onChange={(e) => {
+                                      const raw = e.target.value;
+                                      if (raw === '') {
+                                        e.currentTarget.setCustomValidity('');
+                                        return setCaaExamByCo(s.id, m.coNumber, '');
+                                      }
+                                      const next = Number(raw);
+                                      if (!Number.isFinite(next)) return;
+                                      if (next > maxRaw) {
+                                        e.currentTarget.setCustomValidity(`Max mark is ${maxRaw}`);
+                                        e.currentTarget.reportValidity();
+                                        window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                                        return;
+                                      }
+                                      e.currentTarget.setCustomValidity('');
+                                      setCaaExamByCo(s.id, m.coNumber, next);
+                                    }}
+                                    style={inputStyle}
+                                    min={0}
+                                    max={maxRaw}
+                                    disabled={tableBlocked}
+                                  />
+                                </td>
+                              );
+                            })
+                          ) : (
+                            <td style={{ ...cellTd, textAlign: 'center', color: '#6b7280' }}>—</td>
+                          )
+                        ) : (
+                          <td style={{ ...cellTd, width: COL_CIA_W, minWidth: 0, padding: '2px 2px', background: '#fff7ed' }}>
+                            <input
+                              type="number"
+                              value={(row as any)?.ciaExam ?? ''}
+                              onChange={(e) => {
+                                const raw = e.target.value;
+                                if (raw === '') {
+                                  e.currentTarget.setCustomValidity('');
+                                  return setCiaExam(s.id, '');
+                                }
+                                const next = Number(raw);
+                                if (!Number.isFinite(next)) return;
+                                if (next > DEFAULT_CIA_EXAM_MAX) {
+                                  e.currentTarget.setCustomValidity(`Max mark is ${DEFAULT_CIA_EXAM_MAX}`);
+                                  e.currentTarget.reportValidity();
+                                  window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                                  return;
+                                }
                                 e.currentTarget.setCustomValidity('');
-                                return setCiaExam(s.id, '');
-                              }
-                              const next = Number(raw);
-                              if (!Number.isFinite(next)) return;
-                              if (next > DEFAULT_CIA_EXAM_MAX) {
-                                e.currentTarget.setCustomValidity(`Max mark is ${DEFAULT_CIA_EXAM_MAX}`);
-                                e.currentTarget.reportValidity();
-                                window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
-                                return;
-                              }
-                              e.currentTarget.setCustomValidity('');
-                              setCiaExam(s.id, next);
-                            }}
-                            style={inputStyle}
-                            min={0}
-                            max={DEFAULT_CIA_EXAM_MAX}
-                            disabled={tableBlocked}
-                          />
-                        </td>
+                                setCiaExam(s.id, next);
+                              }}
+                              style={inputStyle}
+                              min={0}
+                              max={DEFAULT_CIA_EXAM_MAX}
+                              disabled={tableBlocked}
+                            />
+                          </td>
+                        )
                       ) : null}
 
                       {hasEnabledCos ? (
@@ -2856,11 +3411,18 @@ export default function LabCourseMarksEntry({
                   <button
                     type="button"
                     className="obe-btn obe-btn-success"
-                    onClick={() => {
+                    disabled={markEntryReqPending}
+                    onClick={async () => {
+                      const mobileOk = await ensureMobileVerified();
+                      if (!mobileOk) {
+                        alert('Please verify your mobile number in Profile before requesting edits.');
+                        window.location.href = '/profile';
+                        return;
+                      }
                       setPublishedEditModalOpen(true);
                     }}
                   >
-                    Request Edit
+                    {markEntryReqPending ? 'Request Pending' : 'Request Edit'}
                   </button>
                 </div>
 
@@ -2999,7 +3561,7 @@ export default function LabCourseMarksEntry({
               </button>
               <button
                 className="obe-btn obe-btn-success"
-                disabled={markManagerBusy || !subjectId}
+                disabled={publishButtonIsRequestEdit ? markEntryReqPending : !subjectId || publishing || tableBlocked || globalLocked || !publishAllowed}
                 onClick={async () => {
                   if (!subjectId) return;
                   if (markManagerModal.mode === 'request') {
@@ -3089,6 +3651,8 @@ export default function LabCourseMarksEntry({
                         const nextRow: any = { ...row };
                         nextRow.marksA = Array.from({ length: expCountA2 }, () => '');
                         nextRow.marksB = Array.from({ length: expCountB2 }, () => '');
+                        nextRow.caaExamByCo = {};
+                        nextRow.ciaExamByCo = {};
                         nextRow.ciaExam = '';
                         const mbc = nextRow.marksByCo && typeof nextRow.marksByCo === 'object' ? { ...nextRow.marksByCo } : {};
                         for (const k of [...pendingCoDiff.diff.removed.map(String), ...pendingCoDiff.diff.changed.map(String)]) {
@@ -3212,6 +3776,8 @@ export default function LabCourseMarksEntry({
           <div
             style={{
               width: 'min(560px, 96vw)',
+              maxHeight: 'min(86vh, 740px)',
+              overflow: 'auto',
               background: '#fff',
               borderRadius: 14,
               border: '1px solid #e5e7eb',
@@ -3220,8 +3786,17 @@ export default function LabCourseMarksEntry({
             onClick={(e) => e.stopPropagation()}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-              <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>Edit Request</div>
+              <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>Request Edit Access</div>
               <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>{String(assessmentKey).toUpperCase()} LAB</div>
+            </div>
+
+            <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10, lineHeight: 1.35 }}>
+              This will send a request to IQAC. Once approved, mark entry will open for editing until the approval expires.
+              {markEntryReqPendingUntilMs ? (
+                <div style={{ marginTop: 6 }}>
+                  <strong>Request window:</strong> 24 hours
+                </div>
+              ) : null}
             </div>
 
             <div style={{ fontSize: 13, color: '#374151', marginBottom: 10, lineHeight: 1.35 }}>
@@ -3231,20 +3806,30 @@ export default function LabCourseMarksEntry({
               <div><strong>Saved:</strong> {savedAt || '—'}</div>
             </div>
 
-            <textarea
-              value={editRequestReason}
-              onChange={(e) => setEditRequestReason(e.target.value)}
-              placeholder="Reason (optional)"
-              rows={4}
-              style={{ width: '100%', padding: 10, borderRadius: 10, border: '1px solid #e5e7eb', resize: 'vertical' }}
-            />
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: '#111827', marginBottom: 6 }}>Reason</div>
+              <textarea
+                value={editRequestReason}
+                onChange={(e) => setEditRequestReason(e.target.value)}
+                placeholder="Explain why you need to edit (required)"
+                rows={4}
+                className="obe-input"
+                style={{ resize: 'vertical' }}
+              />
+            </div>
 
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 12 }}>
               <button type="button" className="obe-btn" disabled={editRequestBusy} onClick={() => setPublishedEditModalOpen(false)}>
                 Cancel
               </button>
-              <button type="button" className="obe-btn obe-btn-success" disabled={editRequestBusy || !subjectId} onClick={requestMarkEntryEdit}>
-                {editRequestBusy ? 'Requesting…' : 'Send Request'}
+              <button
+                type="button"
+                className="obe-btn obe-btn-success"
+                disabled={editRequestBusy || markEntryReqPending || !subjectId || !String(editRequestReason || '').trim()}
+                onClick={requestMarkEntryEdit}
+                title={markEntryReqPending ? 'Request pending (up to 24 hours)' : undefined}
+              >
+                {editRequestBusy ? 'Requesting…' : markEntryReqPending ? 'Request Pending' : 'Send Request'}
               </button>
             </div>
           </div>
@@ -3309,7 +3894,7 @@ export default function LabCourseMarksEntry({
             <div style={{ overflowX: 'auto', border: '1px solid #e5e7eb', borderRadius: 12, position: 'relative' }}>
               {(() => {
                 // View table never shows AB column, so compute the exact column count.
-                const viewHeaderCols = 3 + experimentsCols + 1 + (ciaExamEnabled ? 1 : 0) + coAttainmentCols + visibleBtlIndices.length * 2;
+                const viewHeaderCols = 3 + experimentsCols + 1 + examCols + coAttainmentCols + visibleBtlIndices.length * 2;
                 return (
                   <table className="obe-table" style={{ width: '100%', minWidth: minViewTableWidth, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
                     {renderColGroup(viewHeaderCols, false, restColWidths)}
@@ -3335,23 +3920,37 @@ export default function LabCourseMarksEntry({
                     <th style={{ ...cellTh, width: COL_AVG_W, minWidth: COL_AVG_W, maxWidth: COL_AVG_W }} rowSpan={5}>
                       AVG
                     </th>
-                    {ciaExamEnabled ? (
-                      <th
-                        style={{
-                          ...cellTh,
-                          width: COL_CIA_W,
-                          minWidth: COL_CIA_W,
-                          maxWidth: COL_CIA_W,
-                          whiteSpace: 'pre-line',
-                          overflow: 'visible',
-                          textOverflow: 'clip',
-                          lineHeight: 1.05,
-                        }}
-                        rowSpan={5}
-                        title="CIA Exam"
-                      >
-                        {'CIA\nEXAM'}
-                      </th>
+                    {isStrictLabMode ? (
+                      <>
+                        {ciaExamEnabled && labCiaMetas.length > 0 ? (
+                          <th style={cellTh} colSpan={labCiaMetas.length}>
+                            CIA EXAM
+                          </th>
+                        ) : null}
+                      </>
+                    ) : ciaExamEnabled ? (
+                      usesLegacyTcplProfile ? (
+                        <th style={cellTh} colSpan={Math.max(tcplReviewCaaCols, 1)}>
+                          CAA EXAM
+                        </th>
+                      ) : (
+                        <th
+                          style={{
+                            ...cellTh,
+                            width: COL_CIA_W,
+                            minWidth: COL_CIA_W,
+                            maxWidth: COL_CIA_W,
+                            whiteSpace: 'pre-line',
+                            overflow: 'visible',
+                            textOverflow: 'clip',
+                            lineHeight: 1.05,
+                          }}
+                          rowSpan={5}
+                          title="CIA Exam"
+                        >
+                          {'CIA\nEXAM'}
+                        </th>
+                      )
                     ) : null}
                     <th style={cellTh} colSpan={coAttainmentCols}>
                       CO ATTAINMENT
@@ -3377,6 +3976,28 @@ export default function LabCourseMarksEntry({
                         )}
                       </>
                     )}
+
+                    {isStrictLabMode ? (
+                      <>
+                        {ciaExamEnabled
+                          ? labCiaMetas.map((m) => (
+                              <th key={`lab_cia_co_view_${m.coNumber}`} style={cellTh}>
+                                CO-{m.coNumber}
+                              </th>
+                            ))
+                          : null}
+                      </>
+                    ) : ciaExamEnabled && usesLegacyTcplProfile ? (
+                      tcplReviewCaaCols > 0 ? (
+                        tcplReviewCaaMetas.map((m) => (
+                          <th key={`caa_co_view_${m.coNumber}`} style={cellTh}>
+                            CO-{m.coNumber}
+                          </th>
+                        ))
+                      ) : (
+                        <th style={cellTh}>—</th>
+                      )
+                    ) : null}
 
                     {hasEnabledCos ? (
                       enabledCoMetas.map((m) => (
@@ -3411,9 +4032,39 @@ export default function LabCourseMarksEntry({
                       </>
                     )}
 
+                    {isStrictLabMode ? (
+                      <>
+                        {ciaExamEnabled
+                          ? labCiaMetas.map((m) => (
+                              <th key={`lab_cia_max_view_${m.coNumber}`} style={cellTh}>
+                                {LAB_CIA_MAX_BY_CO[m.coNumber] ?? 0}
+                              </th>
+                            ))
+                          : null}
+                      </>
+                    ) : ciaExamEnabled && usesLegacyTcplProfile ? (
+                      tcplReviewCaaCols > 0 ? (
+                        tcplReviewCaaMetas.map((m) => (
+                          <th key={`caa_max_view_${m.coNumber}`} style={cellTh}>
+                            {TCPL_REVIEW_CAA_RAW_MAX[m.coNumber] ?? 0}
+                          </th>
+                        ))
+                      ) : (
+                        <th style={cellTh}>—</th>
+                      )
+                    ) : null}
+
                     {hasEnabledCos ? (
                       enabledCoMetas.map((m) => {
-                        const coMax = m.expMax + (ciaExamEnabled ? DEFAULT_CIA_EXAM_MAX / 2 : 0);
+                        const coMax = isStrictLabMode
+                          ? round1(
+                              Number(LAB_EXPERIMENT_WEIGHT_BY_CO[m.coNumber] || 0) +
+                                (ciaExamEnabled ? Number(LAB_CIA_MAX_BY_CO[m.coNumber] || 0) : 0),
+                            )
+                          : (() => {
+                              const profileCoMax = Number(TCPL_REVIEW_CO_MAX[m.coNumber] || 0);
+                              return usesLegacyTcplProfile && profileCoMax > 0 ? profileCoMax : m.expMax + (ciaExamEnabled ? DEFAULT_CIA_EXAM_MAX / 2 : 0);
+                            })();
                         return (
                           <React.Fragment key={`comax_view_${m.coNumber}`}>
                             <th style={cellTh}>{coMax}</th>
@@ -3449,7 +4100,7 @@ export default function LabCourseMarksEntry({
                         )}
                       </>
                     )}
-                    <th style={cellTh} colSpan={coAttainmentCols + visibleBtlIndices.length * 2} />
+                    <th style={cellTh} colSpan={coAttainmentCols + visibleBtlIndices.length * 2 + examCols} />
                   </tr>
 
                   <tr>
@@ -3466,7 +4117,7 @@ export default function LabCourseMarksEntry({
                         )}
                       </>
                     )}
-                    <th style={cellTh} colSpan={coAttainmentCols + visibleBtlIndices.length * 2} />
+                    <th style={cellTh} colSpan={coAttainmentCols + visibleBtlIndices.length * 2 + examCols} />
                   </tr>
                 </thead>
 
@@ -3474,32 +4125,14 @@ export default function LabCourseMarksEntry({
                   {students.map((s, idx) => {
                     const srcSheet = (publishedViewSnapshot && (publishedViewSnapshot as any).sheet) ? (publishedViewSnapshot as any).sheet : draft.sheet;
                     const row = (srcSheet as any)?.rowsByStudentId?.[String(s.id)];
-                    const ciaExamRaw = (row as any)?.ciaExam;
-                    const ciaExamNum = ciaExamEnabled && typeof ciaExamRaw === 'number' && Number.isFinite(ciaExamRaw) ? ciaExamRaw : null;
-
-                    const marksByCoRaw = (row as any)?.marksByCo;
-                    const marksForEnabledCos = enabledCoMetas.map((m) => {
-                      const byCo = marksByCoRaw && typeof marksByCoRaw === 'object' ? (marksByCoRaw as any)[String(m.coNumber)] : undefined;
-                      const fallback = m.coNumber === coANum ? (row as any)?.marksA : m.coNumber === coBNum ? (row as any)?.marksB : undefined;
-                      const marks = normalizeMarksArray(byCo ?? fallback, m.expCount);
-                      return { coNumber: m.coNumber, marks };
-                    });
+                    const marksForEnabledCos = getRowMarksForEnabledCos(row, enabledCoMetas);
 
                     const allVisibleMarks = marksForEnabledCos.flatMap((x) => x.marks);
                     const avgTotal = avgMarks(allVisibleMarks);
-                    const hasAny = avgTotal != null || (ciaExamEnabled && ciaExamNum != null);
-
-                    const coAttainmentValues = hasEnabledCos
-                      ? enabledCoMetas.map((m) => {
-                          const marks = marksForEnabledCos.find((x) => x.coNumber === m.coNumber)?.marks ?? [];
-                          const avg = avgMarks(marks);
-                          const mark = !hasAny ? null : (avg ?? 0) + (ciaExamEnabled ? (ciaExamNum ?? 0) / 2 : 0);
-                          const labOverrideVal = (LAB_CO_MAX_OVERRIDE as any)[`co${m.coNumber}`];
-                          const coBase = isLabCourse && Number.isFinite(Number(labOverrideVal)) ? Number(labOverrideVal) : m.expMax;
-                          const coMax = coBase + (ciaExamEnabled ? DEFAULT_CIA_EXAM_MAX / 2 : 0);
-                          return { coNumber: m.coNumber, mark, coMax };
-                        })
-                      : [];
+                    const computed = computeRowCoAttainment(row, marksForEnabledCos);
+                    const coAttainmentValues = hasEnabledCos ? computed.coAttainmentValues : [];
+                    const caaByCo = computed.caaByCo;
+                    const ciaByCo = computed.ciaByCo;
 
                     const btlAvgByIndex: Record<number, number | null> = {};
                     for (const n of visibleBtlIndices) {
@@ -3545,10 +4178,32 @@ export default function LabCourseMarksEntry({
                         )}
 
                         <td style={{ ...cellTd, width: COL_AVG_W, minWidth: 0, textAlign: 'right', fontWeight: 800 }}>{avgTotal == null ? '' : avgTotal.toFixed(1)}</td>
-                        {ciaExamEnabled ? (
-                          <td style={{ ...cellTd, width: COL_CIA_W, minWidth: 0, padding: '2px 2px', background: '#fff7ed', textAlign: 'center', fontWeight: 800 }}>
-                            {(row as any)?.ciaExam ?? ''}
-                          </td>
+                        {isStrictLabMode ? (
+                          <>
+                            {ciaExamEnabled
+                              ? labCiaMetas.map((m) => (
+                                  <td key={`view_lab_cia_${s.id}_${m.coNumber}`} style={{ ...cellTd, width: 66, minWidth: 0, padding: '2px 2px', background: '#fff7ed', textAlign: 'center', fontWeight: 800 }}>
+                                    {ciaByCo[String(m.coNumber)] ?? ''}
+                                  </td>
+                                ))
+                              : null}
+                          </>
+                        ) : ciaExamEnabled ? (
+                          usesLegacyTcplProfile ? (
+                            tcplReviewCaaCols > 0 ? (
+                              tcplReviewCaaMetas.map((m) => (
+                                <td key={`view_caa_${s.id}_${m.coNumber}`} style={{ ...cellTd, width: 66, minWidth: 0, padding: '2px 2px', background: '#fff7ed', textAlign: 'center', fontWeight: 800 }}>
+                                  {caaByCo[String(m.coNumber)] ?? ''}
+                                </td>
+                              ))
+                            ) : (
+                              <td style={{ ...cellTd, textAlign: 'center', color: '#6b7280' }}>—</td>
+                            )
+                          ) : (
+                            <td style={{ ...cellTd, width: COL_CIA_W, minWidth: 0, padding: '2px 2px', background: '#fff7ed', textAlign: 'center', fontWeight: 800 }}>
+                              {(row as any)?.ciaExam ?? ''}
+                            </td>
+                          )
                         ) : null}
 
                         {hasEnabledCos ? (
@@ -3599,7 +4254,7 @@ export default function LabCourseMarksEntry({
           </div>
         </div>
       ) : null}
-    </div>
+    </AssessmentContainer>
   );
 }
 

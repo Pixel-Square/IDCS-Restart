@@ -6,6 +6,8 @@ import {
   saveCdapRevision,
   subscribeToGlobalAnalysisMapping,
 } from '../services/cdapDb';
+import { createEditRequest } from '../services/obe';
+import { useEditWindow } from '../hooks/useEditWindow';
 import { ZoomIn, ZoomOut } from 'lucide-react';
 
 type ColumnType = 'text' | 'checkbox';
@@ -82,6 +84,7 @@ const fallbackActiveLearningDropdownOptions: Record<(typeof activeLearningRowLab
 export default function CDAPEditor({
   subjectId,
   imported,
+  onLockChange,
 }: {
   subjectId?: string;
   imported?: {
@@ -91,7 +94,18 @@ export default function CDAPEditor({
     activeLearningOptionsByRow: string[][] | null;
     articulationExtras?: Record<string, any>;
   };
+  onLockChange?: (locked: boolean) => void;
 }) {
+  const teachingAssignmentId = useMemo(() => {
+    if (!subjectId) return undefined;
+    try {
+      const raw = localStorage.getItem(`markEntry_selectedTa_${subjectId}`);
+      const n = raw == null ? NaN : Number(raw);
+      return Number.isFinite(n) ? (n as number) : undefined;
+    } catch {
+      return undefined;
+    }
+  }, [subjectId]);
   const autofillDropdownsIfSingleOption = (optionsByRow: string[][], current: string[]) => {
     const next = [...current];
     for (let i = 0; i < optionsByRow.length; i++) {
@@ -131,6 +145,28 @@ export default function CDAPEditor({
   const [loadingCloud, setLoadingCloud] = useState(false);
   const [cloudError, setCloudError] = useState<string | null>(null);
   const [isLockedAfterSave, setIsLockedAfterSave] = useState(false);
+
+  const {
+    data: editWindow,
+    loading: editWindowLoading,
+    error: editWindowError,
+    refresh: refreshEditWindow,
+  } = useEditWindow({
+    assessment: 'cdap',
+    subjectCode: String(subjectId || ''),
+    scope: 'MARK_ENTRY',
+    teachingAssignmentId,
+    options: { poll: true },
+  });
+
+  const isPublishedByServer = Boolean(isLockedAfterSave);
+  const hasEditApproval = Boolean(editWindow?.allowed_by_approval);
+  const isReadOnly = Boolean(isPublishedByServer && !hasEditApproval);
+
+  const [requestEditOpen, setRequestEditOpen] = useState(false);
+  const [requestEditReason, setRequestEditReason] = useState('');
+  const [requestEditBusy, setRequestEditBusy] = useState(false);
+  const [requestEditError, setRequestEditError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!subjectId) return;
@@ -219,8 +255,15 @@ export default function CDAPEditor({
       try {
         setCloudError(null);
         setLoadingCloud(true);
-        const rev = await fetchCdapRevision(subjectId);
+        const rev = await fetchCdapRevision(subjectId, teachingAssignmentId);
         if (!mounted) return;
+
+        const lockedByServer = String((rev as any)?.status || '').toLowerCase() === 'published';
+        setIsLockedAfterSave(lockedByServer);
+        if (lockedByServer) {
+          setRequestEditOpen(false);
+          setRequestEditError(null);
+        }
 
         if (!rev) {
           setRows([structuredClone(emptyRow)]);
@@ -231,6 +274,7 @@ export default function CDAPEditor({
           setActiveLearningDropdownOptionsByRow(
             activeLearningRowLabels.map((label) => fallbackActiveLearningDropdownOptions[label] ?? [])
           );
+          setIsLockedAfterSave(false);
           return;
         }
 
@@ -306,6 +350,10 @@ export default function CDAPEditor({
   }, [subjectId, emptyRow]);
 
   useEffect(() => {
+    onLockChange && onLockChange(Boolean(isReadOnly));
+  }, [isReadOnly, onLockChange]);
+
+  useEffect(() => {
     let mounted = true;
     const load = async () => {
       try {
@@ -325,6 +373,7 @@ export default function CDAPEditor({
 
   useEffect(() => {
     if (!imported) return;
+    if (isReadOnly) return;
     if (Array.isArray(imported.rows) && imported.rows.length) setRows(filterOutNARows(imported.rows));
     if (typeof imported.textbook === 'string') setTextbookDetails(imported.textbook);
     if (typeof imported.reference === 'string') setReferenceDetails(imported.reference);
@@ -349,7 +398,36 @@ export default function CDAPEditor({
     if (imported.articulationExtras && typeof imported.articulationExtras === 'object') {
       setArticulationExtras(imported.articulationExtras);
     }
-  }, [imported]);
+  }, [imported, isReadOnly]);
+
+  const requestEdit = async () => {
+    if (!subjectId) return;
+    const reason = String(requestEditReason || '').trim();
+    if (!reason) {
+      setRequestEditError('Reason is required.');
+      return;
+    }
+
+    setRequestEditBusy(true);
+    setRequestEditError(null);
+    try {
+      await createEditRequest({
+        assessment: 'cdap',
+        subject_code: subjectId,
+        scope: 'MARK_ENTRY',
+        reason,
+        teaching_assignment_id: teachingAssignmentId,
+      });
+      alert('Edit request sent to IQAC.');
+      setRequestEditOpen(false);
+      // Stay on page; IQAC will review in their requests queue.
+    } catch (e: any) {
+      setRequestEditError(e?.message || 'Failed to request edit');
+    } finally {
+      setRequestEditBusy(false);
+      refreshEditWindow();
+    }
+  };
 
   useEffect(() => {
     setActiveLearningGrid((prev) => applyAnalysisMappingToGrid(prev, activeLearningDropdowns));
@@ -431,12 +509,14 @@ export default function CDAPEditor({
       alert('No subject selected.');
       return;
     }
+
     try {
       setCloudError(null);
       setLoadingCloud(true);
       await saveCdapRevision({
         subjectId,
         status: 'published',
+        teaching_assignment_id: teachingAssignmentId,
         rows,
         books: { textbook: textbookDetails, reference: referenceDetails },
         active_learning: {
@@ -447,11 +527,12 @@ export default function CDAPEditor({
         },
       });
       setIsLockedAfterSave(true);
-      alert('Saved to cloud.');
+      alert('Published to cloud.');
     } catch (e: any) {
       alert(e?.message || 'Failed to save to cloud');
     } finally {
       setLoadingCloud(false);
+      refreshEditWindow();
     }
   };
 
@@ -493,10 +574,12 @@ export default function CDAPEditor({
     <div style={{
       border: '1px solid #dbe4f0',
       borderRadius: 14,
-      padding: 18,
+      padding: '16px 18px',
       background: '#fff',
-      boxShadow: '0 2px 8px rgba(15, 23, 42, 0.06)',
+      boxShadow: '0 2px 12px rgba(15, 23, 42, 0.08)',
       width: '100%',
+      boxSizing: 'border-box',
+      overflow: 'hidden',
     }}>
       <style>{`
         .cdap-slider::-webkit-slider-thumb {
@@ -527,6 +610,81 @@ export default function CDAPEditor({
           border-radius: 999px;
           border: none;
         }
+        .cdap-table-wrap { overflow-x: auto; border: 1px solid #e2e8f0; border-radius: 10px; }
+        .cdap-table { border-collapse: collapse; width: 100%; font-size: 11px; table-layout: fixed; }
+        .cdap-table thead th {
+          position: sticky;
+          top: 0;
+          z-index: 2;
+          border: 1px solid #e2e8f0;
+          padding: 5px 4px;
+          font-size: 10px;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: 0.03em;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .cdap-table tbody tr:hover td { background: #eff6ff !important; }
+        .cdap-table tbody td { border: 1px solid #e2e8f0; padding: 3px 4px; vertical-align: top; }
+        .cdap-cell-textarea {
+          width: 100%;
+          border: 1px solid #cbd5e1;
+          border-radius: 4px;
+          padding: 3px 5px;
+          font-size: 11px;
+          resize: none;
+          font-family: inherit;
+          line-height: 1.4;
+        }
+        .cdap-cell-textarea:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,0.15); }
+        .cdap-cell-textarea:disabled { background: #f3f4f6; cursor: not-allowed; color: #6b7280; }
+        .cdap-unit-card {
+          border: 1px solid #dbe4f0;
+          border-radius: 12px;
+          background: #fff;
+          margin-bottom: 14px;
+          overflow: hidden;
+          box-shadow: 0 1px 4px rgba(15,23,42,0.05);
+        }
+        .cdap-unit-header {
+          display: grid;
+          grid-template-columns: 80px 1fr 1fr;
+          gap: 0;
+          border-bottom: 1px solid #dbe4f0;
+          background: #f1f5f9;
+        }
+        .cdap-unit-header-cell {
+          padding: 8px 10px;
+          border-right: 1px solid #dbe4f0;
+        }
+        .cdap-unit-header-cell:last-child { border-right: none; }
+        .cdap-unit-header-cell label {
+          display: block;
+          font-size: 10px;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+          color: #64748b;
+          margin-bottom: 4px;
+        }
+        .cdap-unit-header-cell textarea {
+          width: 100%;
+          border: 1px solid #cbd5e1;
+          border-radius: 6px;
+          padding: 4px 6px;
+          font-size: 12px;
+          font-family: inherit;
+          resize: none;
+          background: #fff;
+          line-height: 1.4;
+        }
+        .cdap-unit-header-cell textarea:focus { outline: none; border-color: #2563eb; }
+        .cdap-unit-header-cell textarea:disabled { background: #f3f4f6; cursor: not-allowed; color: #6b7280; }
+        .cdap-table-scale-wrap {
+          transform-origin: left top;
+        }
       `}</style>
 
       {loadingCloud ? (
@@ -535,7 +693,7 @@ export default function CDAPEditor({
         <div style={{ marginBottom: 8, fontSize: 12, color: '#b91c1c' }}>{cloudError}</div>
       ) : null}
 
-      {isLockedAfterSave && (
+      {isReadOnly ? (
         <div style={{
           marginBottom: 12,
           padding: '12px 16px',
@@ -550,45 +708,61 @@ export default function CDAPEditor({
           justifyContent: 'space-between',
           gap: 12,
         }}>
-          <span>🔒 Document is locked after save. Click "Unlock to Edit" to make changes.</span>
-          <button
-            onClick={() => setIsLockedAfterSave(false)}
-            style={{
-              padding: '6px 14px',
-              borderRadius: 8,
-              border: '1px solid #92400e',
-              background: '#fff',
-              color: '#92400e',
-              cursor: 'pointer',
-              fontWeight: 600,
-              fontSize: 13,
-              whiteSpace: 'nowrap',
-            }}
-          >
-            🔓 Unlock to Edit
-          </button>
+          <span>🔒 Published — Document is read-only. Use “Request Edit” to make changes.</span>
         </div>
-      )}
+      ) : null}
+
+      {editWindowLoading || editWindowError ? (
+        <div style={{ marginBottom: 10, fontSize: 12, color: editWindowError ? '#b91c1c' : '#64748b' }}>
+          {editWindowError ? editWindowError : 'Checking edit approval…'}
+        </div>
+      ) : isPublishedByServer && hasEditApproval && editWindow?.approval_until ? (
+        <div style={{ marginBottom: 10, fontSize: 12, color: '#065f46' }}>
+          Edit approved until {new Date(editWindow.approval_until).toLocaleString()}.
+        </div>
+      ) : null}
 
       <div style={{
         display: 'flex',
         flexWrap: 'wrap',
         justifyContent: 'space-between',
         alignItems: 'center',
-        gap: 12,
-        padding: 12,
-        background: '#f8fafc',
+        gap: 10,
+        padding: '10px 14px',
+        background: 'linear-gradient(to right, #f8fafc, #f1f5f9)',
         border: '1px solid #e2e8f0',
         borderRadius: 12,
-        marginBottom: 16,
+        marginBottom: 14,
       }}>
-        <div>
-          <div style={{ fontWeight: 700, color: '#0f172a' }}>Revised CDP Editor</div>
-          <div style={{ fontSize: 12, color: '#64748b' }}>Interactive spreadsheet interface</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{
+            width: 36, height: 36, borderRadius: 9,
+            background: 'linear-gradient(135deg, #1e40af 0%, #2563eb 100%)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexShrink: 0,
+          }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2"/>
+              <line x1="3" y1="9" x2="21" y2="9"/>
+              <line x1="3" y1="15" x2="21" y2="15"/>
+              <line x1="9" y1="3" x2="9" y2="21"/>
+            </svg>
+          </div>
+          <div>
+            <div style={{ fontWeight: 700, color: '#0f172a', fontSize: 13 }}>Revised CDP Editor</div>
+            <div style={{ fontSize: 11, color: '#64748b' }}>Interactive spreadsheet interface</div>
+          </div>
         </div>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 10, padding: '6px 10px' }}>
-            <ZoomOut size={16} color="#64748b" />
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          {/* Zoom controls */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, padding: '5px 8px', boxShadow: '0 1px 2px rgba(0,0,0,0.04)' }}>
+            <button
+              type="button"
+              onClick={() => setZoom((z) => Math.max(50, z - 10))}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', display: 'flex', alignItems: 'center' }}
+            >
+              <ZoomOut size={14} color="#64748b" />
+            </button>
             <input
               type="range"
               min="50"
@@ -597,62 +771,135 @@ export default function CDAPEditor({
               value={zoom}
               onChange={(e) => setZoom(parseInt(e.target.value, 10))}
               className="cdap-slider"
-              style={{ width: 110 }}
+              style={{ width: 80 }}
             />
-            <ZoomIn size={16} color="#64748b" />
-            <span style={{ fontSize: 12, color: '#334155', minWidth: 36 }}>{zoom}%</span>
+            <button
+              type="button"
+              onClick={() => setZoom((z) => Math.min(200, z + 10))}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', display: 'flex', alignItems: 'center' }}
+            >
+              <ZoomIn size={14} color="#64748b" />
+            </button>
+            <span style={{ fontSize: 11, color: '#334155', minWidth: 32, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{zoom}%</span>
           </div>
+          {/* Fit screen toggle */}
           <button
             onClick={() => setFitToScreen((v) => !v)}
+            title="Toggle fit-to-screen scaling"
             style={{
-              padding: '8px 12px',
+              padding: '6px 10px',
               borderRadius: 8,
-              border: '1px solid #cbd5f5',
+              border: fitToScreen ? 'none' : '1px solid #e2e8f0',
               background: fitToScreen ? '#111827' : '#fff',
-              color: fitToScreen ? '#fff' : '#111827',
+              color: fitToScreen ? '#fff' : '#374151',
               cursor: 'pointer',
               fontWeight: 600,
-              fontSize: 12,
+              fontSize: 11,
+              display: 'flex', alignItems: 'center', gap: 5,
+              boxShadow: fitToScreen ? '0 2px 6px rgba(17,24,39,0.25)' : '0 1px 2px rgba(0,0,0,0.04)',
+              transition: 'all 150ms ease',
             }}
           >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/>
+            </svg>
             Fit Screen: {fitToScreen ? 'ON' : 'OFF'}
           </button>
+          {/* Add row */}
           <button
             onClick={addRow}
-            disabled={isLockedAfterSave}
+            disabled={isReadOnly}
             style={{
-              padding: '8px 12px',
+              padding: '6px 12px',
               borderRadius: 8,
-              border: '1px solid #059669',
-              background: isLockedAfterSave ? '#d1d5db' : '#10b981',
+              border: 'none',
+              background: isReadOnly ? '#d1d5db' : '#059669',
               color: '#fff',
-              cursor: isLockedAfterSave ? 'not-allowed' : 'pointer',
+              cursor: isReadOnly ? 'not-allowed' : 'pointer',
               fontWeight: 600,
-              fontSize: 12,
-              opacity: isLockedAfterSave ? 0.5 : 1,
+              fontSize: 11,
+              opacity: isReadOnly ? 0.5 : 1,
+              display: 'flex', alignItems: 'center', gap: 5,
+              boxShadow: isReadOnly ? 'none' : '0 2px 6px rgba(5,150,105,0.28)',
             }}
           >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             Add Row
           </button>
+          {/* Publish / Request Edit */}
           <button
-            onClick={saveAll}
-            disabled={isLockedAfterSave}
+            onClick={() => {
+              if (!isReadOnly) return saveAll();
+              setRequestEditOpen((v) => !v);
+              setRequestEditError(null);
+            }}
+            disabled={requestEditBusy}
             style={{
-              padding: '8px 12px',
+              padding: '6px 14px',
               borderRadius: 8,
-              border: '1px solid #2563eb',
-              background: isLockedAfterSave ? '#d1d5db' : '#2563eb',
+              border: 'none',
+              background: isReadOnly ? '#16a34a' : '#2563eb',
               color: '#fff',
-              cursor: isLockedAfterSave ? 'not-allowed' : 'pointer',
-              fontWeight: 600,
-              fontSize: 12,
-              opacity: isLockedAfterSave ? 0.5 : 1,
+              cursor: requestEditBusy ? 'not-allowed' : 'pointer',
+              fontWeight: 700,
+              fontSize: 11,
+              opacity: requestEditBusy ? 0.6 : 1,
+              boxShadow: isReadOnly
+                ? '0 2px 6px rgba(22,163,74,0.28)'
+                : '0 2px 6px rgba(37,99,235,0.28)',
             }}
           >
-            Save All
+            {isReadOnly ? '✏️ Request Edit' : '🚀 Publish'}
           </button>
         </div>
       </div>
+
+      {isReadOnly && requestEditOpen ? (
+        <div style={{
+          marginBottom: 16,
+          border: '1px solid #e2e8f0',
+          borderRadius: 12,
+          padding: 12,
+          background: '#fff',
+        }}>
+          <div style={{ fontWeight: 800, color: '#0f172a', marginBottom: 8 }}>Reason (required)</div>
+          <textarea
+            value={requestEditReason}
+            onChange={(e) => setRequestEditReason(e.target.value)}
+            rows={3}
+            style={{
+              width: '100%',
+              padding: 10,
+              border: '1px solid #cbd5e1',
+              borderRadius: 10,
+              fontSize: 13,
+              background: '#fff',
+            }}
+            placeholder="Why do you need to edit this published CDAP?"
+          />
+          {requestEditError ? (
+            <div style={{ marginTop: 8, fontSize: 12, color: '#b91c1c', fontWeight: 700 }}>{requestEditError}</div>
+          ) : null}
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 10 }}>
+            <button
+              type="button"
+              className="obe-btn"
+              onClick={() => setRequestEditOpen(false)}
+              disabled={requestEditBusy}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="obe-btn obe-btn-success"
+              onClick={requestEdit}
+              disabled={requestEditBusy || !String(requestEditReason || '').trim()}
+            >
+              {requestEditBusy ? 'Requesting…' : 'Confirm Request'}
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <div ref={containerRef}>
         {groupedRows.map((group) => {
@@ -660,120 +907,123 @@ export default function CDAPEditor({
           if (!headerRow) return null;
 
           return (
-            <div key={group.key} style={{
-              border: '1px solid #dbe4f0',
-              borderRadius: 14,
-              padding: 16,
-              background: '#fff',
-              marginBottom: 16,
-            }}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16, marginBottom: 12 }}>
-                <div>
-                  <label style={{ fontSize: 12, color: '#1f2937', fontWeight: 600 }}>UNIT NUMBER</label>
+            <div key={group.key} className="cdap-unit-card">
+              {/* Compact unit header */}
+              <div className="cdap-unit-header">
+                <div className="cdap-unit-header-cell" style={{ background: 'linear-gradient(135deg, #1e40af 0%, #2563eb 100%)' }}>
+                  <label style={{ color: 'rgba(255,255,255,0.75)' }}>Unit #</label>
                   <textarea
                     value={headerRow.unit ?? ''}
                     onChange={(e) => group.items.forEach((item) => updateCell(item.index, 'unit', e.target.value))}
-                    disabled={isLockedAfterSave}
-                    style={{ width: '100%', padding: 8, border: '1px solid #cbd5e1', borderRadius: 8, marginTop: 6, fontSize: 12, background: isLockedAfterSave ? '#f3f4f6' : '#fff', cursor: isLockedAfterSave ? 'not-allowed' : 'text' }}
+                    disabled={isReadOnly}
                     rows={2}
+                    style={{ background: 'rgba(255,255,255,0.15)', border: '1px solid rgba(255,255,255,0.3)', borderRadius: 6, color: '#fff', padding: '4px 6px', fontSize: 13, fontWeight: 700, width: '100%', resize: 'none', fontFamily: 'inherit', cursor: isReadOnly ? 'not-allowed' : 'text' }}
                   />
                 </div>
-                <div>
-                  <label style={{ fontSize: 12, color: '#1f2937', fontWeight: 600 }}>SYLLABUS (UNIT NAME)</label>
+                <div className="cdap-unit-header-cell">
+                  <label>Syllabus (Unit Name)</label>
                   <textarea
                     value={headerRow.unit_name ?? ''}
                     onChange={(e) => group.items.forEach((item) => updateCell(item.index, 'unit_name', e.target.value))}
-                    disabled={isLockedAfterSave}
-                    style={{ width: '100%', padding: 8, border: '1px solid #cbd5e1', borderRadius: 8, marginTop: 6, fontSize: 12, background: isLockedAfterSave ? '#f3f4f6' : '#fff', cursor: isLockedAfterSave ? 'not-allowed' : 'text' }}
+                    disabled={isReadOnly}
                     rows={2}
                   />
                 </div>
-                <div>
-                  <label style={{ fontSize: 12, color: '#1f2937', fontWeight: 600 }}>COURSE OUTCOME (CO)</label>
+                <div className="cdap-unit-header-cell">
+                  <label>Course Outcome (CO)</label>
                   <textarea
                     value={headerRow.co ?? ''}
                     onChange={(e) => group.items.forEach((item) => updateCell(item.index, 'co', e.target.value))}
-                    disabled={isLockedAfterSave}
-                    style={{ width: '100%', padding: 8, border: '1px solid #cbd5e1', borderRadius: 8, marginTop: 6, fontSize: 12, background: isLockedAfterSave ? '#f3f4f6' : '#fff', cursor: isLockedAfterSave ? 'not-allowed' : 'text' }}
+                    disabled={isReadOnly}
                     rows={2}
                   />
                 </div>
               </div>
 
-              <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 10 }}>
-                <div
-                  style={
-                    fitToScreen
-                      ? ({
-                          transform: `scale(${tableZoom * (zoom / 100)})`,
-                          transformOrigin: 'left top',
-                          width: `${Math.max(1, 100 / (tableZoom * (zoom / 100)))}%`,
-                        } as React.CSSProperties)
-                      : ({
-                          transform: `scale(${zoom / 100})`,
-                          transformOrigin: 'left top',
-                          width: `${Math.max(1, 100 / (zoom / 100))}%`,
-                        } as React.CSSProperties)
-                  }
-                >
-                  <table data-cdap-table="1" style={{ borderCollapse: 'collapse', minWidth: 1000, width: '100%', fontSize: 11 }}>
+              <div className="cdap-table-wrap" style={{ margin: '0 0' }}>
+                {(() => {
+                  const effectiveZoom = fitToScreen
+                    ? tableZoom * (zoom / 100)
+                    : zoom / 100;
+                  const invZoom = Math.max(1, 100 / effectiveZoom);
+                  return (
+                    <div
+                      className="cdap-table-scale-wrap"
+                      style={{
+                        transform: `scale(${effectiveZoom})`,
+                        width: `${invZoom}%`,
+                      } as React.CSSProperties}
+                    >
+                  <table data-cdap-table="1" className="cdap-table" style={{ minWidth: 1200 }}>
+                    <colgroup>
+                      <col style={{ width: 34 }} />{/* # */}
+                      <col style={{ width: 90 }} />{/* content_type */}
+                      <col style={{ width: 70 }} />{/* part_no */}
+                      <col style={{ width: 190 }} />{/* topics */}
+                      <col style={{ width: 190 }} />{/* sub_topics */}
+                      <col style={{ width: 62 }} />{/* bt_level */}
+                      {poPsoCols.map((c) => <col key={c.key} style={{ width: 34 }} />)}
+                      <col style={{ width: 82 }} />{/* total_hours */}
+                      <col style={{ width: 66 }} />{/* actions */}
+                    </colgroup>
                     <thead>
                       <tr>
-                        <th style={{ border: '1px solid #e2e8f0', padding: 6, background: '#f8fafc' }}>#</th>
+                        <th style={{ background: '#f1f5f9', textAlign: 'center' }}>#</th>
                         {topCoreCols.map((c) => (
-                          <th key={c.key} style={{ border: '1px solid #e2e8f0', padding: 6, background: '#f8fafc' }}>{c.label}</th>
+                          <th key={c.key} style={{ background: '#f1f5f9', textAlign: 'left' }}>{c.label}</th>
                         ))}
                         {poPsoCols.map((c) => (
-                          <th key={c.key} style={{ border: '1px solid #e2e8f0', padding: 6, background: '#fff7ed', textAlign: 'center' }}>{c.label}</th>
+                          <th key={c.key} style={{ background: c.key.startsWith('pso') ? '#fdf4ff' : '#fff7ed', textAlign: 'center' }}>{c.label}</th>
                         ))}
-                        <th style={{ border: '1px solid #e2e8f0', padding: 6, background: '#f8fafc' }}>TOTAL HOURS REQUIRED</th>
-                        <th style={{ border: '1px solid #e2e8f0', padding: 6, background: '#f8fafc' }}>Actions</th>
+                        <th style={{ background: '#f0fdf4', textAlign: 'center' }}>HRS</th>
+                        <th style={{ background: '#f1f5f9', textAlign: 'center' }}>Act.</th>
                       </tr>
                     </thead>
                     <tbody>
                       {group.items.map((item, idx) => (
                         <Fragment key={item.index}>
-                          <tr style={{ background: idx % 2 === 0 ? '#fff' : '#f9fafb' }}>
-                            <td style={{ border: '1px solid #e2e8f0', padding: 6 }}>{idx + 1}</td>
+                          <tr style={{ background: idx % 2 === 0 ? '#fff' : '#f8fafc' }}>
+                            <td style={{ textAlign: 'center', color: '#94a3b8', fontWeight: 600, fontSize: 10 }}>{idx + 1}</td>
                             {topCoreCols.map((c) => (
-                              <td key={c.key} style={{ border: '1px solid #e2e8f0', padding: 4 }}>
+                              <td key={c.key}>
                                 <textarea
                                   value={item.row[c.key] ?? ''}
                                   onChange={(e) => updateCell(item.index, c.key, e.target.value)}
-                                  disabled={isLockedAfterSave}
-                                  style={{ width: '100%', border: '1px solid #cbd5e1', borderRadius: 4, padding: 4, fontSize: 11, background: isLockedAfterSave ? '#f3f4f6' : '#fff', cursor: isLockedAfterSave ? 'not-allowed' : 'text' }}
+                                  disabled={isReadOnly}
+                                  className="cdap-cell-textarea"
                                   rows={2}
                                 />
                               </td>
                             ))}
                             {poPsoCols.map((c) => (
-                              <td key={c.key} style={{ border: '1px solid #e2e8f0', padding: 4, textAlign: 'center' }}>
+                              <td key={c.key} style={{ textAlign: 'center', background: c.key.startsWith('pso') ? '#fdf4ff' : undefined }}>
                                 <input
                                   type="checkbox"
                                   checked={Boolean(item.row[c.key])}
                                   onChange={(e) => updateCell(item.index, c.key, e.target.checked)}
-                                  disabled={isLockedAfterSave}
-                                  style={{ cursor: isLockedAfterSave ? 'not-allowed' : 'pointer' }}
+                                  disabled={isReadOnly}
+                                  style={{ cursor: isReadOnly ? 'not-allowed' : 'pointer', width: 14, height: 14, accentColor: '#2563eb' }}
                                 />
                               </td>
                             ))}
-                            <td style={{ border: '1px solid #e2e8f0', padding: 4 }}>
+                            <td style={{ textAlign: 'center' }}>
                               <input
                                 type="text"
                                 value={item.row.total_hours_required ?? ''}
                                 onChange={(e) => updateCell(item.index, 'total_hours_required', e.target.value)}
-                                disabled={isLockedAfterSave}
-                                style={{ width: 70, border: '1px solid #cbd5e1', borderRadius: 4, padding: 4, fontSize: 11, background: isLockedAfterSave ? '#f3f4f6' : '#fff', cursor: isLockedAfterSave ? 'not-allowed' : 'text' }}
+                                disabled={isReadOnly}
+                                style={{ width: '100%', border: '1px solid #cbd5e1', borderRadius: 4, padding: '3px 4px', fontSize: 11, background: isReadOnly ? '#f3f4f6' : '#fff', cursor: isReadOnly ? 'not-allowed' : 'text', textAlign: 'center' }}
                               />
                             </td>
-                            <td style={{ border: '1px solid #e2e8f0', padding: 4, textAlign: 'center' }}>
+                            <td style={{ textAlign: 'center' }}>
                               <button
                                 type="button"
                                 onClick={() => removeRow(item.index)}
-                                disabled={isLockedAfterSave}
-                                style={{ padding: '4px 8px', background: isLockedAfterSave ? '#d1d5db' : '#ef4444', color: '#fff', border: 'none', borderRadius: 6, cursor: isLockedAfterSave ? 'not-allowed' : 'pointer', fontSize: 11, opacity: isLockedAfterSave ? 0.5 : 1 }}
+                                disabled={isReadOnly}
+                                title="Delete row"
+                                style={{ padding: '3px 7px', background: isReadOnly ? '#d1d5db' : '#fee2e2', color: isReadOnly ? '#9ca3af' : '#dc2626', border: `1px solid ${isReadOnly ? '#d1d5db' : '#fca5a5'}`, borderRadius: 5, cursor: isReadOnly ? 'not-allowed' : 'pointer', fontSize: 11, fontWeight: 600, opacity: isReadOnly ? 0.5 : 1 }}
                               >
-                                Delete
+                                ✕
                               </button>
                             </td>
                           </tr>
@@ -781,17 +1031,19 @@ export default function CDAPEditor({
                       ))}
                     </tbody>
                   </table>
-                </div>
+                    </div>
+                  );
+                })()}
               </div>
 
-              <div style={{ marginTop: 12 }}>
+              <div style={{ padding: '10px 14px', borderTop: '1px solid #f1f5f9' }}>
                 <button
                   type="button"
                   onClick={() => addRowToGroup(group.key)}
-                  disabled={isLockedAfterSave}
-                  style={{ padding: '8px 12px', background: isLockedAfterSave ? '#d1d5db' : '#059669', color: '#fff', border: 'none', borderRadius: 8, cursor: isLockedAfterSave ? 'not-allowed' : 'pointer', fontWeight: 600, opacity: isLockedAfterSave ? 0.5 : 1 }}
+                  disabled={isReadOnly}
+                  style={{ padding: '6px 12px', background: isReadOnly ? '#e5e7eb' : '#eff6ff', color: isReadOnly ? '#9ca3af' : '#2563eb', border: `1px solid ${isReadOnly ? '#d1d5db' : '#bfdbfe'}`, borderRadius: 7, cursor: isReadOnly ? 'not-allowed' : 'pointer', fontWeight: 600, fontSize: 12, opacity: isReadOnly ? 0.5 : 1, display: 'flex', alignItems: 'center', gap: 5 }}
                 >
-                  Add Row to Unit {group.key}
+                  <span style={{ fontSize: 14, lineHeight: 1 }}>+</span> Add Row to Unit {group.key}
                 </button>
               </div>
             </div>
@@ -807,9 +1059,9 @@ export default function CDAPEditor({
             <textarea
               value={textbookDetails}
               onChange={(e) => setTextbookDetails(e.target.value)}
-              disabled={isLockedAfterSave}
+              disabled={isReadOnly}
               rows={4}
-              style={{ width: '100%', padding: 8, border: '1px solid #cbd5e1', borderRadius: 8, marginTop: 6, background: isLockedAfterSave ? '#f3f4f6' : '#fff', cursor: isLockedAfterSave ? 'not-allowed' : 'text' }}
+              style={{ width: '100%', padding: 8, border: '1px solid #cbd5e1', borderRadius: 8, marginTop: 6, background: isReadOnly ? '#f3f4f6' : '#fff', cursor: isReadOnly ? 'not-allowed' : 'text' }}
               placeholder="Textbook details (Excel: Column B, Row 64)"
             />
           </div>
@@ -818,9 +1070,9 @@ export default function CDAPEditor({
             <textarea
               value={referenceDetails}
               onChange={(e) => setReferenceDetails(e.target.value)}
-              disabled={isLockedAfterSave}
+              disabled={isReadOnly}
               rows={4}
-              style={{ width: '100%', padding: 8, border: '1px solid #cbd5e1', borderRadius: 8, marginTop: 6, background: isLockedAfterSave ? '#f3f4f6' : '#fff', cursor: isLockedAfterSave ? 'not-allowed' : 'text' }}
+              style={{ width: '100%', padding: 8, border: '1px solid #cbd5e1', borderRadius: 8, marginTop: 6, background: isReadOnly ? '#f3f4f6' : '#fff', cursor: isReadOnly ? 'not-allowed' : 'text' }}
               placeholder="Reference book details (Excel: Column B, Row 68)"
             />
           </div>
@@ -839,8 +1091,8 @@ export default function CDAPEditor({
               setActiveLearningGrid(activeLearningRowLabels.map(() => activeLearningPoLabels.map(() => false)));
               setActiveLearningDropdowns(activeLearningRowLabels.map(() => ''));
             }}
-            disabled={isLockedAfterSave}
-            style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', background: isLockedAfterSave ? '#e5e7eb' : '#f8fafc', cursor: isLockedAfterSave ? 'not-allowed' : 'pointer', opacity: isLockedAfterSave ? 0.5 : 1 }}
+            disabled={isReadOnly}
+            style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', background: isReadOnly ? '#e5e7eb' : '#f8fafc', cursor: isReadOnly ? 'not-allowed' : 'pointer', opacity: isReadOnly ? 0.5 : 1 }}
           >
             Clear All
           </button>
@@ -882,8 +1134,8 @@ export default function CDAPEditor({
                           return next;
                         });
                       }}
-                      disabled={isLockedAfterSave}
-                      style={{ width: '100%', padding: 6, border: '1px solid #cbd5e1', borderRadius: 6, background: isLockedAfterSave ? '#f3f4f6' : '#fff', cursor: isLockedAfterSave ? 'not-allowed' : 'pointer' }}
+                      disabled={isReadOnly}
+                      style={{ width: '100%', padding: 6, border: '1px solid #cbd5e1', borderRadius: 6, background: isReadOnly ? '#f3f4f6' : '#fff', cursor: isReadOnly ? 'not-allowed' : 'pointer' }}
                     >
                       <option value="">-- Select Activity --</option>
                       {(() => {
@@ -907,7 +1159,7 @@ export default function CDAPEditor({
                       <input
                         type="checkbox"
                         checked={!!activeLearningGrid[r][c]}
-                        disabled={isLockedAfterSave || (() => {
+                        disabled={isReadOnly || (() => {
                           const sel = activeLearningDropdowns?.[r] ?? '';
                           if (!sel) return false;
                           const mapped = findAnalysisPoMapping(sel);
@@ -921,7 +1173,7 @@ export default function CDAPEditor({
                             return next;
                           });
                         }}
-                        style={{ cursor: isLockedAfterSave ? 'not-allowed' : 'pointer' }}
+                        style={{ cursor: isReadOnly ? 'not-allowed' : 'pointer' }}
                       />
                     </td>
                   ))}

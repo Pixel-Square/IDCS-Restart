@@ -11,8 +11,7 @@ export type DashboardResponse = {
 import fetchWithAuth from './fetchAuth'
 
 export async function fetchDashboard(baseUrl = ''): Promise<DashboardResponse> {
-  const API_BASE = import.meta.env.VITE_API_BASE || 'https://db.zynix.us'
-  const url = baseUrl ? `${baseUrl}/api/accounts/dashboard/` : `${API_BASE}/api/accounts/dashboard/`
+  const url = baseUrl ? `${baseUrl}/api/accounts/dashboard/` : '/api/accounts/dashboard/'
   const res = await fetchWithAuth(url, { method: 'GET' })
 
   if (!res.ok) {

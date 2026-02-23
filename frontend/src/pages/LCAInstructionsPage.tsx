@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 import ArticulationMatrixPage from './ArticulationMatrixPage';
 import CDAPPage from './CDAPPage';
 import LCAPage from './LCAPage';
+import COTargetPage from './COTargetPage';
 
 const styles: { [k: string]: React.CSSProperties } = {
   page: {
@@ -105,6 +107,7 @@ export default function LCAInstructionsPage({
   viewerMode?: boolean;
 }): JSX.Element {
   const resolvedCourseId = useMemo(() => (courseCode ? String(courseCode) : ''), [courseCode]);
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabKey>(initialTab || 'instructions');
 
   useEffect(() => {
@@ -120,7 +123,7 @@ export default function LCAInstructionsPage({
     { key: 'cotarget', label: 'CO Target' },
   ];
 
-  const navBarStyle: React.CSSProperties = {
+    const navBarStyle: React.CSSProperties = {
     display: 'flex',
     gap: 8,
     flexWrap: 'wrap',
@@ -129,10 +132,19 @@ export default function LCAInstructionsPage({
 
   const navButton = (key: typeof activeTab, label: string) => {
     const active = activeTab === key;
+    const handleClick = () => {
+      if (key === 'cotarget') {
+        // Render CO Target inline instead of navigating away
+        setActiveTab(key);
+        return;
+      }
+      setActiveTab(key);
+    };
+
     return (
       <button
         key={label}
-        onClick={() => setActiveTab(key)}
+        onClick={handleClick}
         style={{
           padding: '8px 12px',
           borderRadius: 8,
@@ -346,65 +358,23 @@ export default function LCAInstructionsPage({
           )}
 
           {activeTab === 'cotarget' && (
-            <div>
-              <div style={{ ...styles.card, padding: 14, marginBottom: 12 }}>
-                <div style={styles.sectionTitle}>CO Target — Read Only</div>
-                <p style={styles.paragraph}>This is a read-only view of the Course Outcome Attainment targets. No actions are available on this screen.</p>
-              </div>
-
-              <div style={{ ...styles.card, padding: 12 }}>
-                <div style={{ marginBottom: 8, fontWeight: 700, color: '#0b4a6f' }}>Course Outcome Attainment Targets</div>
-
-                <table style={{ ...styles.table, marginBottom: 12 }}>
-                  <thead>
-                    <tr>
-                      <th style={styles.th}>COs</th>
-                      <th style={styles.th}>ICO</th>
-                      <th style={styles.th}>BCO</th>
-                      <th style={styles.th}>ACO</th>
-                      <th style={styles.th}>API</th>
-                      <th style={styles.th}>IIC</th>
-                      <th style={styles.th}>COs Targets</th>
-                      <th style={styles.th}>CO TARGET IN 3 POINT SCALE</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <td style={styles.tdLeft}>CO1</td>
-                      <td style={styles.td}>0.4</td>
-                      <td style={styles.td}>0.3</td>
-                      <td style={styles.td}>0.1</td>
-                      <td style={styles.td}>0.1</td>
-                      <td style={styles.td}>0.1</td>
-                      <td style={styles.td}>68</td>
-                      <td style={styles.td}>2.03</td>
-                    </tr>
-                    <tr>
-                      <td style={styles.tdLeft}>CO2</td>
-                      <td style={styles.td}>0.4</td>
-                      <td style={styles.td}>0.3</td>
-                      <td style={styles.td}>0.1</td>
-                      <td style={styles.td}>0.1</td>
-                      <td style={styles.td}>0.1</td>
-                      <td style={styles.td}>66</td>
-                      <td style={styles.td}>1.99</td>
-                    </tr>
-                    <tr>
-                      <td style={styles.tdLeft}>CO3</td>
-                      <td style={styles.td}>0.4</td>
-                      <td style={styles.td}>0.3</td>
-                      <td style={styles.td}>0.1</td>
-                      <td style={styles.td}>0.1</td>
-                      <td style={styles.td}>0.1</td>
-                      <td style={styles.td}>67</td>
-                      <td style={styles.td}>2.01</td>
-                    </tr>
-                  </tbody>
-                </table>
-
-                <div style={{ color: '#557085', fontSize: 13 }}>Target table is generated automatically. This view is read-only.</div>
-              </div>
-            </div>
+            <fieldset disabled={Boolean(viewerMode)} style={{ border: 0, padding: 0, margin: 0 }}>
+              {resolvedCourseId ? (
+                <div style={{ ...styles.card, padding: 12 }}>
+                  <COTargetPage
+                    embedded={true}
+                    courseCode={resolvedCourseId}
+                    courseName={courseName ?? undefined}
+                    onClose={() => setActiveTab('instructions')}
+                  />
+                </div>
+              ) : (
+                <div style={{ ...styles.card, padding: 16 }}>
+                  <div style={styles.sectionTitle}>CO Target</div>
+                  <div style={styles.paragraph}>Select a course to view CO Targets.</div>
+                </div>
+              )}
+            </fieldset>
           )}
         </div>
       </div>

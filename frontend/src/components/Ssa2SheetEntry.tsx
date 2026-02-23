@@ -17,10 +17,14 @@ import {
   PublishedSsa2Response,
   saveDraft,
 } from '../services/obe';
+import { ensureMobileVerified } from '../services/auth';
 import { formatRemaining, usePublishWindow } from '../hooks/usePublishWindow';
 import { useEditWindow } from '../hooks/useEditWindow';
 import { useMarkTableLock } from '../hooks/useMarkTableLock';
+import { useEditRequestPending } from '../hooks/useEditRequestPending';
+import { useLockBodyScroll } from '../hooks/useLockBodyScroll';
 import PublishLockOverlay from './PublishLockOverlay';
+import AssessmentContainer from './AssessmentContainer';
 import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
 
 type Props = { subjectId: string; teachingAssignmentId?: number; label?: string; assessmentKey?: 'ssa2' | 'review2' };
@@ -226,6 +230,9 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
 
   const [publishedEditModalOpen, setPublishedEditModalOpen] = useState(false);
+  const [editRequestReason, setEditRequestReason] = useState('');
+  const [editRequestBusy, setEditRequestBusy] = useState(false);
+  const [editRequestError, setEditRequestError] = useState<string | null>(null);
   const [viewMarksModalOpen, setViewMarksModalOpen] = useState(false);
   const [publishedViewSnapshot, setPublishedViewSnapshot] = useState<PublishedSsa2Response | null>(null);
   const [publishedViewLoading, setPublishedViewLoading] = useState(false);
@@ -293,6 +300,38 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
 
   const entryOpen = !isPublished ? true : Boolean(markLock?.entry_open) || markEntryApprovedFresh || markManagerApprovedFresh;
   const publishedEditLocked = Boolean(isPublished && !entryOpen);
+
+  const {
+    pending: markEntryReqPending,
+    pendingUntilMs: markEntryReqPendingUntilMs,
+    setPendingUntilMs: setMarkEntryReqPendingUntilMs,
+    refresh: refreshMarkEntryReqPending,
+  } = useEditRequestPending({
+    enabled: Boolean(isPublished && publishedEditLocked) && Boolean(subjectId),
+    assessment: assessmentKey as any,
+    subjectCode: subjectId ? String(subjectId) : null,
+    scope: 'MARK_ENTRY',
+    teachingAssignmentId,
+  });
+
+  useLockBodyScroll(Boolean(publishedEditModalOpen) || Boolean(markManagerModal) || Boolean(viewMarksModalOpen));
+
+  const publishButtonIsRequestEdit = Boolean(isPublished && publishedEditLocked);
+
+  const openEditRequestModal = async () => {
+    if (markEntryReqPending) {
+      alert('Edit request is pending. Please wait for IQAC approval.');
+      return;
+    }
+    const mobileOk = await ensureMobileVerified();
+    if (!mobileOk) {
+      alert('Please verify your mobile number in Profile before requesting edits.');
+      window.location.href = '/profile';
+      return;
+    }
+    setEditRequestError(null);
+    setPublishedEditModalOpen(true);
+  };
 
   // If we cannot verify lock/publish state (network/API error), default to read-only.
   const lockStatusUnknown = Boolean(subjectId) && (markLockLoading || Boolean(markLockError) || markLock == null);
@@ -719,6 +758,21 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
     }
   };
 
+  // Auto-save draft when switching tabs
+  const sheetRef = useRef(sheet);
+  sheetRef.current = sheet;
+  const btlRef = useRef(selectedBtls);
+  btlRef.current = selectedBtls;
+  useEffect(() => {
+    const handler = () => {
+      if (!subjectId || tableBlocked) return;
+      const payload: Ssa2DraftPayload = { sheet: sheetRef.current, selectedBtls: btlRef.current };
+      saveDraft(assessmentKey, subjectId, payload).catch(() => {});
+    };
+    window.addEventListener('obe:before-tab-switch', handler);
+    return () => window.removeEventListener('obe:before-tab-switch', handler);
+  }, [subjectId, assessmentKey, tableBlocked]);
+
   const publish = async () => {
     if (!subjectId) return;
     if (globalLocked) {
@@ -731,6 +785,18 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
     }
 
     if (isPublished && publishedEditLocked) {
+      if (markEntryReqPending) {
+        setSaveError('Edit request is pending. Please wait for IQAC approval.');
+        return;
+      }
+
+      const mobileOk = await ensureMobileVerified();
+      if (!mobileOk) {
+        alert('Please verify your mobile number in Profile before requesting edits.');
+        window.location.href = '/profile';
+        return;
+      }
+
       setPublishedEditModalOpen(true);
       return;
     }
@@ -837,21 +903,53 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
 
   async function requestMarkEntryEdit() {
     if (!subjectId) return;
+
+    const mobileOk = await ensureMobileVerified();
+    if (!mobileOk) {
+      alert('Please verify your mobile number in Profile before requesting edits.');
+      window.location.href = '/profile';
+      return;
+    }
+
+    if (markEntryReqPending) {
+      alert('Edit request is pending. Please wait for IQAC approval.');
+      return;
+    }
+
+    const reason = String(editRequestReason || '').trim();
+    if (!reason) {
+      setEditRequestError('Reason is required.');
+      return;
+    }
+
+    setEditRequestBusy(true);
+    setEditRequestError(null);
     try {
       await createEditRequest({
         assessment: assessmentKey,
         subject_code: String(subjectId),
         scope: 'MARK_ENTRY',
-        reason: `Edit request: ${displayLabel} marks entry for ${subjectId}`,
+        reason,
         teaching_assignment_id: teachingAssignmentId,
       });
       alert('Edit request sent to IQAC.');
+      setPublishedEditModalOpen(false);
+      setEditRequestReason('');
+      setMarkEntryReqPendingUntilMs(Date.now() + 24 * 60 * 60 * 1000);
+      try {
+        refreshMarkEntryReqPending({ silent: true });
+      } catch {
+        // ignore
+      }
       refreshMarkLock({ silent: true });
       try {
         await (refreshMarkEntryEditWindow ? refreshMarkEntryEditWindow({ silent: true }) : Promise.resolve());
       } catch {}
     } catch (e: any) {
+      setEditRequestError(e?.message || 'Request failed');
       alert(e?.message || 'Request failed');
+    } finally {
+      setEditRequestBusy(false);
     }
   }
 
@@ -1130,16 +1228,6 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
     background: '#fff',
   };
 
-  const pageBgStyle: React.CSSProperties = {
-    minHeight: '100vh',
-    background: 'linear-gradient(180deg, #f0f9ff 0%, #ffffff 65%)',
-    padding: '18px 14px',
-  };
-
-  const pageShellStyle: React.CSSProperties = {
-    maxWidth: 1400,
-    margin: '0 auto',
-  };
 
   const sheetCardStyle: React.CSSProperties = {
     border: '1px solid rgba(15, 23, 42, 0.08)',
@@ -1151,9 +1239,8 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
   };
 
   return (
-    <div style={pageBgStyle}>
-      <div style={pageShellStyle}>
-        <div style={sheetCardStyle}>
+    <>
+      <AssessmentContainer>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button onClick={loadRoster} className="obe-btn obe-btn-secondary" disabled={rosterLoading}>
@@ -1181,17 +1268,24 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
         </div>
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <button onClick={saveDraftToDb} className="obe-btn obe-btn-success" disabled={savingDraft}>
-            {savingDraft ? 'Saving…' : 'Save Draft'}
-          </button>
           <button onClick={downloadTotals} className="obe-btn obe-btn-secondary" disabled={!sheet.rows.length}>
             Download
           </button>
-          <button onClick={() => refreshAll(true)} className="obe-btn" disabled={!subjectId}>
-            Refresh
+          <button
+            onClick={saveDraftToDb}
+            className="obe-btn obe-btn-success"
+            disabled={savingDraft || tableBlocked}
+            title={tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : undefined}
+          >
+            {savingDraft ? 'Saving…' : 'Save Draft'}
           </button>
-          <button onClick={publish} className="obe-btn obe-btn-primary" disabled={publishing || !publishAllowed}>
-            {publishing ? 'Publishing…' : 'Publish'}
+          <button
+            onClick={publish}
+            className="obe-btn obe-btn-primary"
+            disabled={publishButtonIsRequestEdit ? markEntryReqPending : publishing || !publishAllowed || tableBlocked}
+            title={tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : undefined}
+          >
+            {publishButtonIsRequestEdit ? (markEntryReqPending ? 'Request Pending' : 'Request Edit') : publishing ? 'Publishing…' : 'Publish'}
           </button>
         </div>
       </div>
@@ -1545,8 +1639,8 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
                   <button className="obe-btn" onClick={() => setViewMarksModalOpen(true)}>
                     View
                   </button>
-                  <button className="obe-btn obe-btn-success" onClick={() => setPublishedEditModalOpen(true)}>
-                    Request Edit
+                  <button className="obe-btn obe-btn-success" disabled={markEntryReqPending} onClick={openEditRequestModal}>
+                    {markEntryReqPending ? 'Request Pending' : 'Request Edit'}
                   </button>
                 </div>
               </div>
@@ -1574,8 +1668,8 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
                     <button className="obe-btn" onClick={() => setViewMarksModalOpen(true)}>
                       View
                     </button>
-                    <button className="obe-btn obe-btn-success" onClick={() => setPublishedEditModalOpen(true)}>
-                      Request Edit
+                    <button className="obe-btn obe-btn-success" disabled={markEntryReqPending} onClick={openEditRequestModal}>
+                      {markEntryReqPending ? 'Request Pending' : 'Request Edit'}
                     </button>
                   </>
                 ) : (
@@ -1867,12 +1961,35 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
           role="dialog"
           aria-modal="true"
           style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 60 }}
-          onClick={() => setPublishedEditModalOpen(false)}
+          onClick={() => {
+            if (editRequestBusy) return;
+            setPublishedEditModalOpen(false);
+          }}
         >
-          <div style={{ width: 'min(560px, 96vw)', background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: 14 }} onClick={(e) => e.stopPropagation()}>
+          <div
+            style={{
+              width: 'min(560px, 96vw)',
+              maxHeight: 'min(86vh, 740px)',
+              overflow: 'auto',
+              background: '#fff',
+              borderRadius: 14,
+              border: '1px solid #e5e7eb',
+              padding: 14,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-              <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>Edit Request</div>
+              <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>Request Edit Access</div>
               <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>{displayLabel}</div>
+            </div>
+
+            <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10, lineHeight: 1.35 }}>
+              This will send a request to IQAC. Once approved, mark entry will open for editing until the approval expires.
+              {markEntryReqPendingUntilMs ? (
+                <div style={{ marginTop: 6 }}>
+                  <strong>Request window:</strong> 24 hours
+                </div>
+              ) : null}
             </div>
 
             <div style={{ fontSize: 13, color: '#374151', marginBottom: 10, lineHeight: 1.35 }}>
@@ -1887,19 +2004,33 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
               </div>
             </div>
 
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: '#111827', marginBottom: 6 }}>Reason</div>
+              <textarea
+                value={editRequestReason}
+                onChange={(e) => setEditRequestReason(e.target.value)}
+                placeholder="Explain why you need to edit (required)"
+                rows={4}
+                className="obe-input"
+                style={{ resize: 'vertical' }}
+              />
+            </div>
+
+            {editRequestError ? <div style={{ marginTop: 8, fontSize: 12, color: '#b91c1c' }}>{editRequestError}</div> : null}
+
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button type="button" className="obe-btn" onClick={() => setPublishedEditModalOpen(false)}>
-                Close
+              <button type="button" className="obe-btn" disabled={editRequestBusy} onClick={() => setPublishedEditModalOpen(false)}>
+                Cancel
               </button>
               <button
                 type="button"
                 className="obe-btn obe-btn-primary"
+                disabled={editRequestBusy || markEntryReqPending || !subjectId || !String(editRequestReason || '').trim()}
                 onClick={async () => {
                   await requestMarkEntryEdit();
-                  setPublishedEditModalOpen(false);
                 }}
               >
-                Request Edit
+                {editRequestBusy ? 'Requesting…' : markEntryReqPending ? 'Request Pending' : 'Send Request'}
               </button>
             </div>
           </div>
@@ -1928,8 +2059,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
           </div>
         ) : null}
       </div>
-        </div>
-      </div>
-    </div>
+      </AssessmentContainer>
+    </>
   );
 }

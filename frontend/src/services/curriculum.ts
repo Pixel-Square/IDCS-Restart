@@ -39,7 +39,7 @@ export type DeptRow = {
 };
 
 // Default to production API if VITE_API_BASE isn't provided
-const API_BASE = import.meta.env.VITE_API_BASE || 'https://db.zynix.us';
+const API_BASE = import.meta.env.VITE_API_BASE || 'https://db.krgi.co.in';
 import fetchWithAuth from './fetchAuth';
 
 export async function fetchMasters(): Promise<Master[]> {

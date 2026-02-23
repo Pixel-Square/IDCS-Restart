@@ -1,4 +1,17 @@
-const API_BASE = import.meta.env.VITE_API_BASE || 'https://db.zynix.us'
+function apiBase() {
+  const fromEnv = import.meta.env.VITE_API_BASE
+  if (fromEnv) return String(fromEnv).replace(/\/+$/, '')
+
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    const host = String(window.location.hostname || '').trim().toLowerCase()
+    if (host === 'localhost' || host === '127.0.0.1') return 'http://localhost:8000'
+    return String(window.location.origin).replace(/\/+$/, '')
+  }
+
+  return 'https://db.krgi.co.in'
+}
+
+const API_BASE = apiBase()
 
 let isRefreshing = false
 let refreshPromise: Promise<string> | null = null
@@ -61,8 +74,7 @@ export async function fetchWithAuth(input: RequestInfo | URL, init: RequestInit 
   let finalInput: RequestInfo | URL = input
   try {
     if (typeof input === 'string' && input.startsWith('/api')) {
-      const API_BASE = import.meta.env.VITE_API_BASE || 'https://db.zynix.us'
-      finalInput = `${API_BASE}${input}`
+      finalInput = `${apiBase()}${input}`
     }
   } catch (e) {
     // ignore if import.meta not available in some runtimes

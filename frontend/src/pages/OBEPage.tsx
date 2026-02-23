@@ -21,7 +21,7 @@ function apiBase() {
     return String(window.location.origin).replace(/\/+$/, '');
   }
 
-  return 'https://db.zynix.us';
+  return 'https://db.krgi.co.in';
 }
 
 const API_BASE = apiBase();

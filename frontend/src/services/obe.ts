@@ -44,7 +44,7 @@ type DraftResponse<T> = {
   updated_by?: { id?: number | null; username?: string | null; name?: string | null } | null;
 };
 
-export type DraftAssessmentKey = 'ssa1' | 'review1' | 'ssa2' | 'review2' | 'cia1' | 'cia2' | 'formative1' | 'formative2' | 'model';
+export type DraftAssessmentKey = 'ssa1' | 'review1' | 'ssa2' | 'review2' | 'cia1' | 'cia2' | 'formative1' | 'formative2' | 'model' | 'cdap';
 
 export type DueAssessmentKey = DraftAssessmentKey;
 
@@ -59,7 +59,7 @@ function apiBase() {
     return String(window.location.origin).replace(/\/+$/, '');
   }
 
-  return 'https://db.zynix.us';
+  return 'https://db.krgi.co.in';
 }
 
 function authHeader(): Record<string, string> {
@@ -756,6 +756,15 @@ export async function fetchPendingEditRequests(scope?: EditScope): Promise<{ res
   return res.json();
 }
 
+export async function fetchHodPendingEditRequests(scope?: EditScope): Promise<{ results: PendingEditRequestItem[] }> {
+  const qp = scope ? `?scope=${encodeURIComponent(scope)}` : '';
+  const url = `${apiBase()}/api/obe/edit-requests/hod/pending${qp}`;
+  const res = await fetchWithAuth(url, { method: 'GET' });
+  if (res.status === 401) return { results: [] };
+  if (!res.ok) await parseError(res, 'HOD pending edit requests fetch failed');
+  return res.json();
+}
+
 export async function fetchEditRequestsHistory(payload?: { statuses?: Array<'APPROVED' | 'REJECTED'>; limit?: number; scope?: EditScope }): Promise<{ results: EditRequestHistoryItem[] }> {
   const statuses = payload?.statuses?.length ? payload.statuses.join(',') : '';
   const limit = typeof payload?.limit === 'number' ? payload.limit : 200;
@@ -821,6 +830,15 @@ export async function fetchPendingEditRequestCount(scope?: EditScope): Promise<{
   return res.json();
 }
 
+export async function fetchHodPendingEditRequestCount(scope?: EditScope): Promise<{ pending: number }> {
+  const qp = scope ? `?scope=${encodeURIComponent(scope)}` : '';
+  const url = `${apiBase()}/api/obe/edit-requests/hod/pending-count${qp}`;
+  const res = await fetchWithAuth(url, { method: 'GET' });
+  if (res.status === 401) return { pending: 0 };
+  if (!res.ok) await parseError(res, 'HOD pending edit requests count fetch failed');
+  return res.json();
+}
+
 export async function approveEditRequest(reqId: number, windowMinutes = 120): Promise<any> {
   const url = `${apiBase()}/api/obe/edit-requests/${encodeURIComponent(String(reqId))}/approve`;
   const res = await fetch(url, {
@@ -836,6 +854,20 @@ export async function rejectEditRequest(reqId: number): Promise<any> {
   const url = `${apiBase()}/api/obe/edit-requests/${encodeURIComponent(String(reqId))}/reject`;
   const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeader() } });
   if (!res.ok) await parseError(res, 'Reject edit request failed');
+  return res.json();
+}
+
+export async function hodApproveEditRequest(reqId: number): Promise<any> {
+  const url = `${apiBase()}/api/obe/edit-requests/${encodeURIComponent(String(reqId))}/hod-approve`;
+  const res = await fetchWithAuth(url, { method: 'POST' });
+  if (!res.ok) await parseError(res, 'HOD approve/forward failed');
+  return res.json();
+}
+
+export async function hodRejectEditRequest(reqId: number): Promise<any> {
+  const url = `${apiBase()}/api/obe/edit-requests/${encodeURIComponent(String(reqId))}/hod-reject`;
+  const res = await fetchWithAuth(url, { method: 'POST' });
+  if (!res.ok) await parseError(res, 'HOD reject failed');
   return res.json();
 }
 
@@ -1091,7 +1123,7 @@ export type PublishedLabSheetResponse = {
 };
 
 export async function fetchPublishedLabSheet(
-  assessment: 'cia1' | 'cia2' | 'model' | 'formative1' | 'formative2',
+  assessment: 'cia1' | 'cia2' | 'model' | 'formative1' | 'formative2' | 'review1' | 'review2',
   subjectId: string,
   teachingAssignmentId?: number,
 ): Promise<PublishedLabSheetResponse> {
@@ -1103,7 +1135,7 @@ export async function fetchPublishedLabSheet(
 }
 
 export async function publishLabSheet(
-  assessment: 'cia1' | 'cia2' | 'model' | 'formative1' | 'formative2',
+  assessment: 'cia1' | 'cia2' | 'model' | 'formative1' | 'formative2' | 'review1' | 'review2',
   subjectId: string,
   data: any,
   teachingAssignmentId?: number,
@@ -1273,7 +1305,7 @@ export async function fetchCia1Marks(subjectId: string, teachingAssignmentId?: n
     return cleaned.slice(0, limit) + '… (truncated)';
   };
 
-  const DEFAULT_API_BASE = 'https://db.zynix.us';
+  const DEFAULT_API_BASE = 'https://db.krgi.co.in';
   const API_BASE = import.meta.env.VITE_API_BASE || (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://localhost:8000' : DEFAULT_API_BASE);
   const qp = teachingAssignmentId ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
   const url = `${API_BASE}/api/obe/cia1-marks/${encodeURIComponent(subjectId)}${qp}`;
@@ -1325,7 +1357,7 @@ export async function saveCia1Marks(subjectId: string, marks: Record<number, num
     return cleaned.slice(0, limit) + '… (truncated)';
   };
 
-  const DEFAULT_API_BASE = 'https://db.zynix.us';
+  const DEFAULT_API_BASE = 'https://db.krgi.co.in';
   const API_BASE = import.meta.env.VITE_API_BASE || (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://localhost:8000' : DEFAULT_API_BASE);
   const url = `${API_BASE}/api/obe/cia1-marks/${encodeURIComponent(subjectId)}`;
   const token = window.localStorage.getItem('access');

@@ -23,6 +23,7 @@ node_modules/
 frontend/node_modules/
 dist/
 build/
+build_dist/
 .vite/
 
 # Frontend env and caches

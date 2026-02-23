@@ -6,6 +6,9 @@ from django.db.models.signals import m2m_changed
 from django.dispatch import receiver
 from django.core.validators import RegexValidator
 import re
+from django.utils import timezone
+from django.contrib.auth.hashers import make_password, check_password
+import secrets
 
 
 class UsernameValidator(RegexValidator):
@@ -47,6 +50,50 @@ class User(AbstractUser):
 
     def __str__(self):
         return self.username
+
+
+class MobileOtp(models.Model):
+    """OTP for verifying a user's mobile number.
+
+    Stores a *hashed* OTP, not the plain code.
+    """
+
+    PURPOSE_CHOICES = (
+        ('VERIFY_MOBILE', 'Verify mobile'),
+    )
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='mobile_otps')
+    purpose = models.CharField(max_length=32, choices=PURPOSE_CHOICES, default='VERIFY_MOBILE')
+    mobile_number = models.CharField(max_length=32)
+    otp_hash = models.CharField(max_length=256)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    attempts = models.PositiveSmallIntegerField(default=0)
+    verified_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['user', 'purpose', 'mobile_number', '-created_at']),
+        ]
+
+    def is_expired(self) -> bool:
+        try:
+            return timezone.now() >= self.expires_at
+        except Exception:
+            return True
+
+    @staticmethod
+    def generate_code(length: int = 6) -> str:
+        # 6-digit numeric OTP
+        upper = (10 ** length) - 1
+        lower = 10 ** (length - 1)
+        return str(secrets.randbelow(upper - lower + 1) + lower)
+
+    def set_code(self, plain: str) -> None:
+        self.otp_hash = make_password(str(plain))
+
+    def check_code(self, plain: str) -> bool:
+        return check_password(str(plain), self.otp_hash)
 
 
 def _get_profile_type(user):
@@ -181,3 +228,20 @@ def _user_roles_changed(sender, instance, action, reverse, model, pk_set, **kwar
 
         if not remaining:
             raise ValidationError('User must have at least one role; cannot remove all roles.')
+
+
+class NotificationTemplate(models.Model):
+    """Configurable message templates for OTP/alerts.
+
+    These are managed by IQAC via the Notifications page.
+    """
+
+    code = models.CharField(max_length=100, unique=True)
+    name = models.CharField(max_length=255)
+    template = models.TextField()
+    enabled = models.BooleanField(default=False)
+    expiry_minutes = models.PositiveSmallIntegerField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.code

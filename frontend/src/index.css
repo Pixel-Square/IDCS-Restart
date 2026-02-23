@@ -24,4 +24,25 @@ body {
   overflow-x: hidden;
 }
 
+/*
+  Desktop density tweak: mimic ~90% browser zoom for the main app content.
+  Applied to a wrapper inside <main> so fixed sidebar/navbar offsets remain correct.
+  Note: `zoom` is supported by Chromium/Edge (target browsers here).
+*/
+@media (min-width: 768px) {
+  .app-main-zoom {
+    zoom: 0.9;
+  }
+}
+
+/* Wide marks tables: allow horizontal scrolling instead of clipping columns */
+.obe-table-wrapper {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
+}
+
 

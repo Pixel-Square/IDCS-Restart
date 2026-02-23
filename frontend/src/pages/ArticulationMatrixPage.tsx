@@ -1,6 +1,7 @@
 ﻿import React, { useEffect, useState } from 'react';
 import ArticulationMatrix from '../components/ArticulationMatrix';
 import { fetchArticulationMatrix } from '../services/cdapDb';
+import { fetchMyTeachingAssignments } from '../services/obe';
 
 type Props = { courseId?: string; embedded?: boolean };
 
@@ -168,6 +169,31 @@ export default function ArticulationMatrixPage({ courseId, embedded = false }: P
   const [isFocused, setIsFocused] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
 
+  async function resolveTeachingAssignmentId(subjectCode: string): Promise<number | undefined> {
+    if (!subjectCode) return undefined;
+    try {
+      const qp = new URLSearchParams(window.location.search);
+      const raw = qp.get('teaching_assignment_id') || qp.get('teachingAssignmentId');
+      if (raw) {
+        const n = Number(raw);
+        if (Number.isFinite(n)) return n;
+      }
+    } catch {
+      // ignore
+    }
+
+    try {
+      const list = await fetchMyTeachingAssignments();
+      const match = (list || []).find((a: any) => String(a?.subject_code) === String(subjectCode));
+      const idNum = match?.id != null ? Number(match.id) : NaN;
+      if (Number.isFinite(idNum)) return idNum;
+    } catch {
+      // ignore
+    }
+
+    return undefined;
+  }
+
   useEffect(() => {
     if (!subject) return;
     // Auto-load matrix from backend (computed from saved CDAP revision)
@@ -175,7 +201,8 @@ export default function ArticulationMatrixPage({ courseId, embedded = false }: P
       setStatus('loading');
       setMessage(null);
       try {
-        const data = await fetchArticulationMatrix(subject);
+        const taId = await resolveTeachingAssignmentId(subject);
+        const data = await fetchArticulationMatrix(subject, taId);
         setMatrix(data);
         setStatus('success');
       } catch (e: any) {
@@ -191,7 +218,8 @@ export default function ArticulationMatrixPage({ courseId, embedded = false }: P
     setStatus('loading');
     setMessage(null);
     try {
-      const data = await fetchArticulationMatrix(subject);
+      const taId = await resolveTeachingAssignmentId(subject);
+      const data = await fetchArticulationMatrix(subject, taId);
       setMatrix(data);
       setStatus('success');
       const unitCount = Array.isArray(data?.units) ? data.units.length : 0;

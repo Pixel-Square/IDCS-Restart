@@ -34,6 +34,9 @@ class CdapRevisionAdmin(admin.ModelAdmin):
     search_fields = ('subject_id', 'status')
     readonly_fields = ('created_at', 'updated_at')
 
+
+
+
 @admin.register(CdapActiveLearningAnalysisMapping)
 class CdapActiveLearningAnalysisMappingAdmin(admin.ModelAdmin):
     list_display = ('id', 'updated_at')

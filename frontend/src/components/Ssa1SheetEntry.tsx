@@ -5,10 +5,14 @@ import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '
 import fetchWithAuth from '../services/fetchAuth';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
 import { createPublishRequest, createEditRequest, confirmMarkManagerLock, fetchDraft, fetchMyTeachingAssignments, fetchPublishedReview1, fetchPublishedSsa1, publishReview1, publishSsa1, PublishedSsa1Response, saveDraft } from '../services/obe';
+import { ensureMobileVerified } from '../services/auth';
 import { formatRemaining, usePublishWindow } from '../hooks/usePublishWindow';
 import { useEditWindow } from '../hooks/useEditWindow';
 import { useMarkTableLock } from '../hooks/useMarkTableLock';
+import { useEditRequestPending } from '../hooks/useEditRequestPending';
+import { useLockBodyScroll } from '../hooks/useLockBodyScroll';
 import PublishLockOverlay from './PublishLockOverlay';
+import AssessmentContainer from './AssessmentContainer';
 import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
 
 type Props = { subjectId: string; teachingAssignmentId?: number; label?: string; assessmentKey?: 'ssa1' | 'review1' };
@@ -207,9 +211,15 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
   const [savedBy, setSavedBy] = useState<string | null>(null);
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
   const [viewMarksModalOpen, setViewMarksModalOpen] = useState(false);
+  const [publishedEditModalOpen, setPublishedEditModalOpen] = useState(false);
+  const [editRequestReason, setEditRequestReason] = useState('');
+  const [editRequestBusy, setEditRequestBusy] = useState(false);
+  const [editRequestError, setEditRequestError] = useState<string | null>(null);
   const [publishedViewSnapshot, setPublishedViewSnapshot] = useState<PublishedSsa1Response | null>(null);
   const [publishedViewLoading, setPublishedViewLoading] = useState(false);
   const [publishedViewError, setPublishedViewError] = useState<string | null>(null);
+  const [showAbsenteesOnly, setShowAbsenteesOnly] = useState(false);
+  const [absenteesSnapshot, setAbsenteesSnapshot] = useState<number[] | null>(null);
 
   const {
     data: publishWindow,
@@ -257,6 +267,9 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
     setPublishedAt(null);
     setPublishedViewSnapshot(null);
     setPublishedViewError(null);
+    setPublishedEditModalOpen(false);
+    setEditRequestReason('');
+    setEditRequestError(null);
   }, [subjectId, assessmentKey, teachingAssignmentId]);
 
   const markManagerLocked = Boolean(sheet.markManagerLocked);
@@ -276,6 +289,21 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
   // Any approval that existed at the moment of publishing is treated as consumed.
   const entryOpen = !isPublished ? true : Boolean(markLock?.entry_open) || markEntryApprovedFresh || markManagerApprovedFresh;
   const publishedEditLocked = Boolean(isPublished && !entryOpen);
+
+  const {
+    pending: markEntryReqPending,
+    pendingUntilMs: markEntryReqPendingUntilMs,
+    setPendingUntilMs: setMarkEntryReqPendingUntilMs,
+    refresh: refreshMarkEntryReqPending,
+  } = useEditRequestPending({
+    enabled: Boolean(isPublished && publishedEditLocked) && Boolean(subjectId),
+    assessment: assessmentKey as any,
+    subjectCode: subjectId ? String(subjectId) : null,
+    scope: 'MARK_ENTRY',
+    teachingAssignmentId,
+  });
+
+  useLockBodyScroll(Boolean(publishedEditModalOpen) || Boolean(markManagerModal) || Boolean(viewMarksModalOpen));
 
   // If we cannot verify lock/publish state (network/API error), default to read-only.
   const lockStatusUnknown = Boolean(subjectId) && (markLockLoading || Boolean(markLockError) || markLock == null);
@@ -307,6 +335,20 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
     const base = showTotalColumn ? 9 : 8;
     return base + visibleBtlIndices.length * 2;
   }, [visibleBtlIndices.length, showTotalColumn]);
+
+  const hasAbsentees = useMemo(() => {
+    try {
+      return sheet.rows.some((r) => Boolean((r as any).absent) || Object.values(r).some((v) => typeof v === 'string' && String(v).toLowerCase().includes('absent')));
+    } catch {
+      return false;
+    }
+  }, [sheet.rows]);
+
+  const rowsToRender = useMemo(() => {
+    if (!showAbsenteesOnly) return sheet.rows;
+    if (absenteesSnapshot && absenteesSnapshot.length) return sheet.rows.filter((r) => absenteesSnapshot.includes(Number((r as any).studentId)));
+    return sheet.rows.filter((r) => Boolean((r as any).absent) || Object.values(r).some((v) => typeof v === 'string' && String(v).toLowerCase().includes('absent')));
+  }, [sheet.rows, showAbsenteesOnly, absenteesSnapshot]);
 
   // Persist selected BTLs to localStorage and autosave to server (debounced)
   useEffect(() => {
@@ -674,6 +716,21 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
     }
   };
 
+  // Auto-save draft when switching tabs
+  const sheetRef = useRef(sheet);
+  sheetRef.current = sheet;
+  const btlRef = useRef(selectedBtls);
+  btlRef.current = selectedBtls;
+  useEffect(() => {
+    const handler = () => {
+      if (!subjectId || tableBlocked) return;
+      const payload: Ssa1DraftPayload = { sheet: sheetRef.current, selectedBtls: btlRef.current };
+      saveDraft(assessmentKey, subjectId, payload).catch(() => {});
+    };
+    window.addEventListener('obe:before-tab-switch', handler);
+    return () => window.removeEventListener('obe:before-tab-switch', handler);
+  }, [subjectId, assessmentKey, tableBlocked]);
+
   const publish = async () => {
     if (!subjectId) return;
     if (globalLocked) {
@@ -757,19 +814,51 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
 
   async function requestMarkEntryEdit() {
     if (!subjectId) return;
+
+    const mobileOk = await ensureMobileVerified();
+    if (!mobileOk) {
+      alert('Please verify your mobile number in Profile before requesting edits.');
+      window.location.href = '/profile';
+      return;
+    }
+
+    if (markEntryReqPending) {
+      alert('Edit request is pending. Please wait for IQAC approval.');
+      return;
+    }
+
+    const reason = String(editRequestReason || '').trim();
+    if (!reason) {
+      setEditRequestError('Reason is required.');
+      return;
+    }
+
+    setEditRequestBusy(true);
+    setEditRequestError(null);
     try {
       await createEditRequest({
         assessment: assessmentKey,
         subject_code: String(subjectId),
         scope: 'MARK_ENTRY',
-        reason: `Edit request: ${displayLabel} marks entry for ${subjectId}`,
+        reason,
         teaching_assignment_id: teachingAssignmentId,
       });
       alert('Edit request sent to IQAC.');
+      setPublishedEditModalOpen(false);
+      setEditRequestReason('');
+      setMarkEntryReqPendingUntilMs(Date.now() + 24 * 60 * 60 * 1000);
+      try {
+        refreshMarkEntryReqPending({ silent: true });
+      } catch {
+        // ignore
+      }
       refreshMarkLock({ silent: true });
       refreshPublishWindow();
     } catch (e: any) {
+      setEditRequestError(e?.message || 'Request failed');
       alert(e?.message || 'Request failed');
+    } finally {
+      setEditRequestBusy(false);
     }
   }
 
@@ -1062,25 +1151,6 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
     background: '#fff',
   };
 
-  const pageBgStyle: React.CSSProperties = {
-    minHeight: '100vh',
-    background: 'linear-gradient(180deg, #f0f9ff 0%, #ffffff 65%)',
-    padding: '18px 14px',
-  };
-
-  const pageShellStyle: React.CSSProperties = {
-    maxWidth: 1400,
-    margin: '0 auto',
-  };
-
-  const sheetCardStyle: React.CSSProperties = {
-    border: '1px solid rgba(15, 23, 42, 0.08)',
-    borderRadius: 16,
-    background: 'rgba(255,255,255,0.88)',
-    boxShadow: '0 12px 30px rgba(15,23,42,0.08)',
-    padding: 16,
-    backdropFilter: 'blur(10px)',
-  };
 
   const toggleBtl = (n: number) => {
     if (globalLocked) return;
@@ -1103,12 +1173,27 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
   };
 
   const publishButtonIsRequestEdit = Boolean(isPublished && publishedEditLocked);
-  const publishButtonOnClick = publishButtonIsRequestEdit ? requestMarkEntryEdit : publish;
-  const publishButtonDisabled = publishButtonIsRequestEdit ? false : Boolean(publishing || !publishAllowed || tableBlocked);
+  const openEditRequestModal = async () => {
+    if (markEntryReqPending) {
+      alert('Edit request is pending. Please wait for IQAC approval.');
+      return;
+    }
+    const mobileOk = await ensureMobileVerified();
+    if (!mobileOk) {
+      alert('Please verify your mobile number in Profile before requesting edits.');
+      window.location.href = '/profile';
+      return;
+    }
+    setEditRequestError(null);
+    setPublishedEditModalOpen(true);
+  };
+  const publishButtonOnClick = publishButtonIsRequestEdit ? openEditRequestModal : publish;
+  const publishButtonDisabled = publishButtonIsRequestEdit ? markEntryReqPending : Boolean(publishing || !publishAllowed || tableBlocked);
 
   return (
-    <div style={pageBgStyle}>
-      <div style={{ ...pageShellStyle, ...sheetCardStyle }}>
+    <>
+      {/* Standardized assessment container */}
+      <AssessmentContainer>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button onClick={loadRoster} className="obe-btn obe-btn-secondary" disabled={rosterLoading}>
@@ -1116,6 +1201,52 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
             </button>
             <button onClick={resetAllMarks} className="obe-btn obe-btn-danger" disabled={!sheet.rows.length}>
               Reset Marks
+            </button>
+            <button
+              className="obe-btn obe-btn-secondary"
+              disabled={!hasAbsentees}
+              onClick={() => {
+                if (showAbsenteesOnly) return;
+                const snap = sheet.rows
+                  .filter((s) => Boolean((s as any).absent) || Object.values(s).some((v) => typeof v === 'string' && String(v).toLowerCase().includes('absent')))
+                  .map((s) => Number((s as any).studentId))
+                  .filter((n) => Number.isFinite(n));
+                setAbsenteesSnapshot(snap.length ? snap : null);
+                setShowAbsenteesOnly(true);
+              }}
+              title={hasAbsentees ? 'Filter the table to show only absentees' : 'No absentees marked yet'}
+              style={showAbsenteesOnly ? { background: 'linear-gradient(180deg, #111827, #334155)', color: '#fff', borderColor: 'rgba(2,6,23,0.12)' } : undefined}
+            >
+              Show absentees list
+              {showAbsenteesOnly ? (
+                <span
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowAbsenteesOnly(false);
+                    setAbsenteesSnapshot(null);
+                  }}
+                  role="button"
+                  aria-label="Close absentees list"
+                  title="Close absentees list"
+                  style={{
+                    marginLeft: 10,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: 20,
+                    height: 20,
+                    borderRadius: 999,
+                    background: 'rgba(255,255,255,0.18)',
+                    border: '1px solid rgba(255,255,255,0.25)',
+                    fontWeight: 900,
+                    lineHeight: 1,
+                    cursor: 'pointer',
+                    userSelect: 'none',
+                  }}
+                >
+                  ×
+                </span>
+              ) : null}
             </button>
             <button onClick={exportSheetCsv} className="obe-btn obe-btn-secondary" disabled={!sheet.rows.length}>
               Export CSV
@@ -1153,7 +1284,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
               disabled={publishButtonDisabled}
               title={tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : undefined}
             >
-              {publishButtonIsRequestEdit ? 'Request Edit' : publishing ? 'Publishing…' : 'Publish'}
+              {publishButtonIsRequestEdit ? (markEntryReqPending ? 'Request Pending' : 'Request Edit') : publishing ? 'Publishing…' : 'Publish'}
             </button>
           </div>
         </div>
@@ -1319,7 +1450,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                       </td>
                     </tr>
                   ) : (
-                    sheet.rows.map((r, idx) => {
+                    rowsToRender.map((r, idx) => {
                       const raw = publishedViewSnapshot?.marks?.[String(r.studentId)] ?? null;
                       const numericTotal = raw == null || raw === '' ? null : clamp(Number(raw), 0, MAX_ASMT1);
 
@@ -1385,25 +1516,24 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
           </div>
       )}
 
-      </div>
 
       <div style={{ marginTop: 12, ...cardStyle }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ fontWeight: 800 }}>Mark Manager</div>
-          <div>
-            <button
-              className="obe-btn obe-btn-success"
-              onClick={() => {
-                // If Mark Manager has not been confirmed (no snapshot), open confirm modal
-                // to allow selecting BTLs and saving. If already confirmed, open request mode.
-                const confirmed = sheet.markManagerSnapshot != null;
-                setMarkManagerModal({ mode: confirmed ? 'request' : 'confirm' });
-              }}
-              disabled={!subjectId || markManagerBusy}
-            >
-              {sheet.markManagerSnapshot ? 'Edit' : 'Save'}
-            </button>
-          </div>
+            <div>
+              <button
+                className="obe-btn obe-btn-success"
+                onClick={() => {
+                  // If Mark Manager has not been confirmed (no snapshot), open confirm modal
+                  // to allow selecting BTLs and saving. If already confirmed, open request mode.
+                  const confirmed = sheet.markManagerSnapshot != null;
+                  setMarkManagerModal({ mode: confirmed ? 'request' : 'confirm' });
+                }}
+                disabled={!subjectId || markManagerBusy}
+              >
+                {sheet.markManagerSnapshot ? 'Edit' : 'Save'}
+              </button>
+            </div>
         </div>
         <div style={{ marginTop: 8, fontSize: 13, color: '#6b7280' }}>
           <div>Max {displayLabel}: <strong style={{ color: '#111' }}>{MAX_ASMT1}</strong></div>
@@ -1527,7 +1657,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                       </td>
                     </tr>
                   ) : (
-                    sheet.rows.map((r, idx) => {
+                    rowsToRender.map((r, idx) => {
                       const totalRaw = typeof r.total === 'number' ? clamp(Number(r.total), 0, MAX_ASMT1) : null;
 
                       const coShare = totalRaw == null ? null : round1(totalRaw / 2);
@@ -1624,7 +1754,9 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                 {displayPublishedLocked ? (
                   <>
                     <button className="obe-btn" onClick={() => setViewMarksModalOpen(true)}>View</button>
-                    <button className="obe-btn obe-btn-success" onClick={() => requestMarkEntryEdit()}>Request Edit</button>
+                    <button className="obe-btn obe-btn-success" disabled={markEntryReqPending} onClick={openEditRequestModal}>
+                      {markEntryReqPending ? 'Request Pending' : 'Request Edit'}
+                    </button>
                   </>
                 ) : (
                   <>
@@ -1641,6 +1773,68 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
           </div>
         )}
       </div>
+
+      {publishedEditModalOpen ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 80 }}
+          onClick={() => {
+            if (editRequestBusy) return;
+            setPublishedEditModalOpen(false);
+          }}
+        >
+          <div
+            style={{
+              width: 'min(560px, 96vw)',
+              maxHeight: 'min(86vh, 740px)',
+              overflow: 'auto',
+              background: '#fff',
+              borderRadius: 14,
+              border: '1px solid #e5e7eb',
+              padding: 14,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+              <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>Request Edit Access</div>
+              <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>{displayLabel} • {String(subjectId || '')}</div>
+            </div>
+
+            <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10, lineHeight: 1.35 }}>
+              This will send a request to IQAC. Once approved, mark entry will open for editing until the approval expires.
+              {markEntryReqPendingUntilMs ? (
+                <div style={{ marginTop: 6 }}>
+                  <strong>Request window:</strong> 24 hours
+                </div>
+              ) : null}
+            </div>
+
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: '#111827', marginBottom: 6 }}>Reason</div>
+              <textarea
+                value={editRequestReason}
+                onChange={(e) => setEditRequestReason(e.target.value)}
+                placeholder="Explain why you need to edit (required)"
+                rows={4}
+                className="obe-input"
+                style={{ resize: 'vertical' }}
+              />
+            </div>
+
+            {editRequestError ? <div style={{ marginTop: 8, fontSize: 12, color: '#b91c1c' }}>{editRequestError}</div> : null}
+
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 12 }}>
+              <button className="obe-btn" disabled={editRequestBusy} onClick={() => setPublishedEditModalOpen(false)}>
+                Cancel
+              </button>
+              <button className="obe-btn obe-btn-success" disabled={editRequestBusy || markEntryReqPending || !subjectId || !String(editRequestReason || '').trim()} onClick={requestMarkEntryEdit}>
+                {editRequestBusy ? 'Requesting…' : markEntryReqPending ? 'Request Pending' : 'Send Request'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <style>{`
         @keyframes markManagerGlitch {
@@ -1792,6 +1986,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
           </div>
         </div>
         ) : null}
-      </div>
+      </AssessmentContainer>
+    </>
   );
 }

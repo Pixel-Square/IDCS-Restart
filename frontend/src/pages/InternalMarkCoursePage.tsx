@@ -3,7 +3,6 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   fetchClassTypeWeights,
   fetchDraft,
-  fetchIqacCqiConfig,
   fetchIqacQpPattern,
   fetchMyTeachingAssignments,
   fetchPublishedCiaSheet,
@@ -36,21 +35,6 @@ type QuestionDef = { key: string; max: number; co: 1 | 2 | '1&2' };
 type QuestionDef34 = { key: string; max: number; co: 3 | 4 | '3&4' };
 
 type IqacPattern = { marks: number[]; cos?: Array<number | string> };
-
-type CqiEntries = Record<number, Record<string, number | null>>;
-
-function normalizeCqiAssessmentKey(assessmentType: 'cia1' | 'cia2'): 'cia1' | 'cia2' {
-  const k = String(assessmentType || '').trim().toLowerCase();
-  return k === 'cia2' ? 'cia2' : 'cia1';
-}
-
-function cqiEntriesStorageKey(subjectId: string, teachingAssignmentId: number, assessmentType: 'cia1' | 'cia2'): string {
-  return `cqi_entries_${subjectId}_${teachingAssignmentId}_${normalizeCqiAssessmentKey(assessmentType)}`;
-}
-
-function cqiPublishedStorageKey(subjectId: string, teachingAssignmentId: number, assessmentType: 'cia1' | 'cia2'): string {
-  return `cqi_published_${subjectId}_${teachingAssignmentId}_${normalizeCqiAssessmentKey(assessmentType)}`;
-}
 
 const DEFAULT_INTERNAL_MAPPING = {
   // CO1/CO2 are split like CO3/CO4: ssa/cia/fa columns.
@@ -379,13 +363,6 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
   const [weights, setWeights] = useState<{ ssa1: number; cia1: number; formative1: number }>({ ssa1: 1.5, cia1: 3, formative1: 2.5 });
   const [internalMarkWeights, setInternalMarkWeights] = useState<number[]>([...DEFAULT_INTERNAL_MAPPING.weights]);
 
-  const THRESHOLD_PERCENT = 58;
-  const [cqiCfg, setCqiCfg] = useState<{ divider: number; multiplier: number; options: any[] } | null>(null);
-  const [cqiCia1Entries, setCqiCia1Entries] = useState<CqiEntries>({});
-  const [cqiCia2Entries, setCqiCia2Entries] = useState<CqiEntries>({});
-  const [cqiCia1Published, setCqiCia1Published] = useState(false);
-  const [cqiCia2Published, setCqiCia2Published] = useState(false);
-
   const [published, setPublished] = useState<{ ssa1: Record<string, any>; ssa2: Record<string, any>; f1: Record<string, any>; f2: Record<string, any>; cia1: any | null; cia2: any | null }>({
     ssa1: {},
     ssa2: {},
@@ -423,54 +400,6 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
     })();
     return () => { mounted = false; };
   }, [courseId]);
-
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const res: any = await fetchIqacCqiConfig();
-        if (!mounted) return;
-        const divider = Number(res?.divider);
-        const multiplier = Number(res?.multiplier);
-        setCqiCfg({
-          options: Array.isArray(res?.options) ? res.options : [],
-          divider: Number.isFinite(divider) && divider > 0 ? divider : 2,
-          multiplier: Number.isFinite(multiplier) && multiplier >= 0 ? multiplier : 0.15,
-        });
-      } catch {
-        if (mounted) setCqiCfg(null);
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!courseId || !selectedTaId) {
-      setCqiCia1Entries({});
-      setCqiCia2Entries({});
-      setCqiCia1Published(false);
-      setCqiCia2Published(false);
-      return;
-    }
-
-    try {
-      const legacyKey = `cqi_entries_${courseId}_${selectedTaId}`;
-      const cia1 = (lsGet<CqiEntries>(cqiEntriesStorageKey(courseId, selectedTaId, 'cia1')) || lsGet<CqiEntries>(legacyKey) || {}) as any;
-      const cia2 = (lsGet<CqiEntries>(cqiEntriesStorageKey(courseId, selectedTaId, 'cia2')) || {}) as any;
-      setCqiCia1Entries(cia1 && typeof cia1 === 'object' ? cia1 : {});
-      setCqiCia2Entries(cia2 && typeof cia2 === 'object' ? cia2 : {});
-
-      setCqiCia1Published(Boolean(lsGet<any>(cqiPublishedStorageKey(courseId, selectedTaId, 'cia1'))));
-      setCqiCia2Published(Boolean(lsGet<any>(cqiPublishedStorageKey(courseId, selectedTaId, 'cia2'))));
-    } catch {
-      setCqiCia1Entries({});
-      setCqiCia2Entries({});
-      setCqiCia1Published(false);
-      setCqiCia2Published(false);
-    }
-  }, [courseId, selectedTaId]);
 
   useEffect(() => {
     let mounted = true;
@@ -1589,79 +1518,6 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
   const cycles = effMapping.cycles;
   const weightsRow = effMapping.weights;
 
-  const cqiOptionMeta = useMemo(() => {
-    const raw = Array.isArray(cqiCfg?.options) ? cqiCfg?.options : [];
-    const out: Record<string, { id: string; name?: string }> = {};
-    for (const it of raw) {
-      if (typeof it === 'string') {
-        const id = String(it || '').trim();
-        if (id) out[id] = { id };
-      } else if (it && typeof it === 'object') {
-        const id = String((it as any).id || '').trim();
-        if (!id) continue;
-        const name = String((it as any).name || '').trim();
-        out[id] = { id, name: name || undefined };
-      }
-    }
-    const has = (id: string) => Boolean(out[id]);
-    const nameFor = (id: string, fallback: string) => {
-      const nm = out[id]?.name;
-      return (nm && nm.trim()) ? nm.trim() : fallback;
-    };
-    return {
-      enabled: {
-        cia1: has('cia1_co1_co2'),
-        cia2: has('cia2_co3_co4'),
-      },
-      name: {
-        cia1: nameFor('cia1_co1_co2', 'CIA 1'),
-        cia2: nameFor('cia2_co3_co4', 'CIA 2'),
-      },
-    };
-  }, [cqiCfg]);
-
-  const cycleSummary = useMemo(() => {
-    const includeMe = Boolean(publishedModel);
-    const idxs = {
-      co1: [] as number[],
-      co2: [] as number[],
-      co3: [] as number[],
-      co4: [] as number[],
-    };
-
-    for (let i = 0; i < header.length; i++) {
-      const h = String(header[i] || '').trim().toUpperCase();
-      const c = String(cycles[i] || '').trim().toUpperCase();
-
-      // Exclude MODEL/ME columns from cycle grouping unless Model marks are available.
-      const isModelLike = h === 'ME' || c === 'ME' || c === 'MODEL';
-      if (isModelLike && !includeMe) continue;
-
-      if (h === 'CO1') idxs.co1.push(i);
-      else if (h === 'CO2') idxs.co2.push(i);
-      else if (h === 'CO3') idxs.co3.push(i);
-      else if (h === 'CO4') idxs.co4.push(i);
-    }
-
-    const sumW = (arr: number[]) => arr.reduce((s, i) => s + (Number(weightsRow[i]) || 0), 0);
-    const cycle1Idxs = [...idxs.co1, ...idxs.co2];
-    const cycle2Idxs = [...idxs.co3, ...idxs.co4];
-
-    return {
-      cycle1Idxs,
-      cycle2Idxs,
-      coIdxs: idxs,
-      max: {
-        cycle1: sumW(cycle1Idxs),
-        cycle2: sumW(cycle2Idxs),
-        co1: sumW(idxs.co1),
-        co2: sumW(idxs.co2),
-        co3: sumW(idxs.co3),
-        co4: sumW(idxs.co4),
-      },
-    };
-  }, [header, cycles, weightsRow, publishedModel]);
-
   return (
     <div style={{ padding: 12 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
@@ -1705,20 +1561,6 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
               ))}
               <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb' }}>{round2(maxTotal)}</th>
               <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb' }}>100</th>
-
-              {(cqiOptionMeta.enabled.cia1 || cqiCia1Published) ? (
-                <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f0f9ff' }}>{cqiOptionMeta.name.cia1}</th>
-              ) : null}
-              {((cqiOptionMeta.enabled.cia1 || cqiCia1Published) && cqiCia1Published) ? (
-                <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f0f9ff' }}>{cqiOptionMeta.name.cia1} + CQI</th>
-              ) : null}
-
-              {(cqiOptionMeta.enabled.cia2 || cqiCia2Published) ? (
-                <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#faf5ff' }}>{cqiOptionMeta.name.cia2}</th>
-              ) : null}
-              {((cqiOptionMeta.enabled.cia2 || cqiCia2Published) && cqiCia2Published) ? (
-                <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#faf5ff' }}>{cqiOptionMeta.name.cia2} + CQI</th>
-              ) : null}
             </tr>
             <tr>
               <th colSpan={3} style={{ border: '1px solid #e5e7eb', padding: 8, background: '#fff', textAlign: 'left', fontWeight: 800 }}>internal weightage</th>
@@ -1727,20 +1569,6 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
               ))}
               <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#fff' }} />
               <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#fff' }} />
-
-              {(cqiOptionMeta.enabled.cia1 || cqiCia1Published) ? (
-                <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f0f9ff', textAlign: 'center', fontWeight: 800 }}>{cycleSummary.max.cycle1 ? Number(cycleSummary.max.cycle1).toFixed(1) : ''}</th>
-              ) : null}
-              {((cqiOptionMeta.enabled.cia1 || cqiCia1Published) && cqiCia1Published) ? (
-                <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f0f9ff', textAlign: 'center', fontWeight: 800 }}>{cycleSummary.max.cycle1 ? Number(cycleSummary.max.cycle1).toFixed(1) : ''}</th>
-              ) : null}
-
-              {(cqiOptionMeta.enabled.cia2 || cqiCia2Published) ? (
-                <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#faf5ff', textAlign: 'center', fontWeight: 800 }}>{cycleSummary.max.cycle2 ? Number(cycleSummary.max.cycle2).toFixed(1) : ''}</th>
-              ) : null}
-              {((cqiOptionMeta.enabled.cia2 || cqiCia2Published) && cqiCia2Published) ? (
-                <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#faf5ff', textAlign: 'center', fontWeight: 800 }}>{cycleSummary.max.cycle2 ? Number(cycleSummary.max.cycle2).toFixed(1) : ''}</th>
-              ) : null}
             </tr>
             <tr>
               <th colSpan={3} style={{ border: '1px solid #e5e7eb', padding: 8, background: '#fff', textAlign: 'left', fontWeight: 800 }}>cycle</th>
@@ -1749,20 +1577,6 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
               ))}
               <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#fff' }} />
               <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#fff' }} />
-
-              {(cqiOptionMeta.enabled.cia1 || cqiCia1Published) ? (
-                <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f0f9ff', textAlign: 'center', fontWeight: 800 }}>{String(cqiOptionMeta.name.cia1 || '').toUpperCase()}</th>
-              ) : null}
-              {((cqiOptionMeta.enabled.cia1 || cqiCia1Published) && cqiCia1Published) ? (
-                <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f0f9ff', textAlign: 'center', fontWeight: 800 }}>CQI</th>
-              ) : null}
-
-              {(cqiOptionMeta.enabled.cia2 || cqiCia2Published) ? (
-                <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#faf5ff', textAlign: 'center', fontWeight: 800 }}>{String(cqiOptionMeta.name.cia2 || '').toUpperCase()}</th>
-              ) : null}
-              {((cqiOptionMeta.enabled.cia2 || cqiCia2Published) && cqiCia2Published) ? (
-                <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#faf5ff', textAlign: 'center', fontWeight: 800 }}>CQI</th>
-              ) : null}
             </tr>
           </thead>
           <tbody>
@@ -1776,96 +1590,6 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
                 ))}
                 <td style={{ border: '1px solid #e5e7eb', padding: 6, textAlign: 'center', fontWeight: 800 }}>{r.total == null ? '' : Number(r.total).toFixed(2)}</td>
                 <td style={{ border: '1px solid #e5e7eb', padding: 6, textAlign: 'center' }}>{r.pct == null ? '' : Number(r.pct).toFixed(2)}</td>
-
-                {(() => {
-                  const cells: any[] = Array.isArray(r.cells) ? r.cells : [];
-                  const sumIdx = (idxs: number[]) => {
-                    let any = false;
-                    let sum = 0;
-                    for (const i of idxs) {
-                      const v = cells[i];
-                      if (typeof v === 'number' && Number.isFinite(v)) {
-                        any = true;
-                        sum += v;
-                      }
-                    }
-                    return any ? round2(sum) : null;
-                  };
-
-                  const cycle1Value = cycleSummary.max.cycle1 ? sumIdx(cycleSummary.cycle1Idxs) : null;
-                  const cycle2Value = cycleSummary.max.cycle2 ? sumIdx(cycleSummary.cycle2Idxs) : null;
-
-                  const divider = Number(cqiCfg?.divider) || 2;
-                  const multiplier = Number.isFinite(Number(cqiCfg?.multiplier)) ? Number(cqiCfg?.multiplier) : 0.15;
-
-                  const computeAfter = (cycle: 'cia1' | 'cia2') => {
-                    const baseValue = cycle === 'cia1' ? cycle1Value : cycle2Value;
-                    const baseMax = cycle === 'cia1' ? Number(cycleSummary.max.cycle1) : Number(cycleSummary.max.cycle2);
-                    if (!baseMax || !Number.isFinite(baseMax) || baseValue == null) return { after: baseValue, inc: 0 };
-
-                    const totalPct = baseMax ? (Number(baseValue) / baseMax) * 100 : 0;
-                    const entries = (cycle === 'cia1' ? cqiCia1Entries : cqiCia2Entries)[Number(r.id)] || {};
-                    const coKeys = cycle === 'cia1' ? ['co1', 'co2'] : ['co3', 'co4'];
-                    let inc = 0;
-
-                    for (const coKey of coKeys) {
-                      const inputRaw = (entries as any)[coKey];
-                      const input = typeof inputRaw === 'number' && Number.isFinite(inputRaw) ? inputRaw : null;
-                      if (input == null) continue;
-
-                      const idxs = (cycleSummary.coIdxs as any)[coKey.replace('co', 'co')] as number[] | undefined;
-                      const coIdxs = coKey === 'co1' ? cycleSummary.coIdxs.co1 : coKey === 'co2' ? cycleSummary.coIdxs.co2 : coKey === 'co3' ? cycleSummary.coIdxs.co3 : cycleSummary.coIdxs.co4;
-                      const coMax = coKey === 'co1' ? Number(cycleSummary.max.co1) : coKey === 'co2' ? Number(cycleSummary.max.co2) : coKey === 'co3' ? Number(cycleSummary.max.co3) : Number(cycleSummary.max.co4);
-                      const coValue = coMax ? sumIdx(coIdxs) : null;
-                      const coPct = coMax && coValue != null ? (Number(coValue) / coMax) * 100 : 0;
-                      if (!(coPct < THRESHOLD_PERCENT)) continue;
-
-                      const base = (Number(input) / 10) * coMax;
-                      const add = totalPct < THRESHOLD_PERCENT ? (base / divider) : (base * multiplier);
-                      if (Number.isFinite(add) && add > 0) inc += add;
-                    }
-
-                    const after = clamp(Number(baseValue) + inc, 0, baseMax);
-                    return { after: round2(after), inc: round2(inc) };
-                  };
-
-                  const showCia1 = (cqiOptionMeta.enabled.cia1 || cqiCia1Published);
-                  const showCia2 = (cqiOptionMeta.enabled.cia2 || cqiCia2Published);
-                  const cia1Adj = cqiCia1Published ? computeAfter('cia1') : { after: cycle1Value, inc: 0 };
-                  const cia2Adj = cqiCia2Published ? computeAfter('cia2') : { after: cycle2Value, inc: 0 };
-
-                  return (
-                    <>
-                      {showCia1 ? (
-                        <td style={{ border: '1px solid #e5e7eb', padding: 6, textAlign: 'center', background: '#f0f9ff', fontWeight: 800 }}>
-                          {cycle1Value == null ? '' : Number(cycle1Value).toFixed(2)}
-                        </td>
-                      ) : null}
-                      {(showCia1 && cqiCia1Published) ? (
-                        <td style={{ border: '1px solid #e5e7eb', padding: 6, textAlign: 'center', background: '#f0f9ff', fontWeight: 800 }}>
-                          {cia1Adj.after == null ? '' : Number(cia1Adj.after).toFixed(2)}
-                          {cia1Adj.inc > 0 ? (
-                            <div style={{ fontSize: 11, color: '#16a34a', marginTop: 2, fontWeight: 700 }}>(+{Number(cia1Adj.inc).toFixed(2)})</div>
-                          ) : null}
-                        </td>
-                      ) : null}
-
-                      {showCia2 ? (
-                        <td style={{ border: '1px solid #e5e7eb', padding: 6, textAlign: 'center', background: '#faf5ff', fontWeight: 800 }}>
-                          {cycle2Value == null ? '' : Number(cycle2Value).toFixed(2)}
-                        </td>
-                      ) : null}
-                      {(showCia2 && cqiCia2Published) ? (
-                        <td style={{ border: '1px solid #e5e7eb', padding: 6, textAlign: 'center', background: '#faf5ff', fontWeight: 800 }}>
-                          {cia2Adj.after == null ? '' : Number(cia2Adj.after).toFixed(2)}
-                          {cia2Adj.inc > 0 ? (
-                            <div style={{ fontSize: 11, color: '#16a34a', marginTop: 2, fontWeight: 700 }}>(+{Number(cia2Adj.inc).toFixed(2)})</div>
-                          ) : null}
-                        </td>
-                      ) : null}
-                    </>
-                  );
-                })()}
               </tr>
             ))}
           </tbody>

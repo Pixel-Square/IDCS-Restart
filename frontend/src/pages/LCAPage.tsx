@@ -69,11 +69,17 @@ function mapNumericLevelToLearnerBand(level: 1 | 2 | 3 | '-'): { label: string; 
 
 const styles: { [k: string]: React.CSSProperties } = {
   page: {
-    padding: 28,
-    maxWidth: 1100,
-    margin: '18px auto',
+    padding: 20,
+    width: '100%',
+    boxSizing: 'border-box',
+    minHeight: '100vh',
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'flex-start',
+    margin: 0,
     fontFamily: "Inter, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial",
     color: '#1f3947',
+    background: 'transparent',
   },
   card: {
     background: '#fff',
@@ -81,11 +87,30 @@ const styles: { [k: string]: React.CSSProperties } = {
     padding: 18,
     border: '1px solid #e6eef8',
     boxShadow: '0 6px 20px rgba(13,60,100,0.04)',
+    width: '100%',
+    maxWidth: 1200,
+    margin: '18px',
+    flex: '1 1 auto',
+  },
+  // ensure large pages fit the viewport and become scrollable
+  cardScrollable: {
+    maxHeight: 'calc(100vh - 120px)',
+    overflowY: 'auto' as React.CSSProperties['overflowY'],
+    WebkitOverflowScrolling: 'touch' as any,
   },
   title: { margin: 0, color: '#0b4a6f', fontSize: 22, fontWeight: 700 },
   subtitle: { marginTop: 6, color: '#3d5566', fontSize: 13 },
   sectionTitle: { margin: '0 0 10px 0', color: '#0b3b57', fontSize: 16 },
-  table: { width: '100%', borderCollapse: 'collapse', marginTop: 8, tableLayout: 'fixed' as React.CSSProperties['tableLayout'] },
+  table: {
+    width: '100%',
+    borderCollapse: 'collapse',
+    marginTop: 8,
+    tableLayout: 'auto' as React.CSSProperties['tableLayout'],
+    // allow horizontal scrolling on small viewports
+    display: 'block',
+    overflowX: 'auto' as React.CSSProperties['overflowX'],
+    WebkitOverflowScrolling: 'touch' as any,
+  },
   th: {
     background: '#f3f8ff',
     color: '#0b4a6f',

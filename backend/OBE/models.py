@@ -454,6 +454,27 @@ class ObeEditRequest(models.Model):
     status = models.CharField(max_length=16, choices=STATUS_CHOICES, default='PENDING', db_index=True)
     approved_until = models.DateTimeField(null=True, blank=True)
 
+    # HOD pre-approval: if `hod_user` is set and `hod_approved` is False, the request
+    # is pending with the department HOD and should not be visible in IQAC pending list.
+    # Default hod_approved=True to preserve behavior for existing rows created before
+    # introducing HOD routing.
+    hod_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='obe_edit_requests_hod_inbox',
+    )
+    hod_approved = models.BooleanField(default=True, db_index=True)
+    hod_reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='obe_edit_requests_hod_reviewed',
+    )
+    hod_reviewed_at = models.DateTimeField(null=True, blank=True)
+
     reviewed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='obe_edit_requests_reviewed')
     reviewed_at = models.DateTimeField(null=True, blank=True)
 
@@ -467,6 +488,7 @@ class ObeEditRequest(models.Model):
             models.Index(fields=['academic_year', 'assessment']),
             models.Index(fields=['subject_code', 'assessment', 'scope']),
             models.Index(fields=['teaching_assignment', 'assessment', 'scope']),
+            models.Index(fields=['hod_user', 'hod_approved', 'status']),
         ]
 
     def mark_approved(self, reviewer, window_minutes: int = 120):

@@ -1,5 +1,5 @@
 import React from 'react';
-import Ssa2SheetEntry from './Ssa2SheetEntry';
+import LabEntry from './LabEntry';
 
 type Props = {
   subjectId: string;
@@ -9,11 +9,13 @@ type Props = {
 
 export default function Review2Entry({ subjectId, teachingAssignmentId, label }: Props) {
   return (
-    <Ssa2SheetEntry
+    <LabEntry
       subjectId={subjectId}
       teachingAssignmentId={teachingAssignmentId}
       assessmentKey="review2"
       label={label || 'Review 2'}
+      coA={2}
+      coB={3}
     />
   );
 }

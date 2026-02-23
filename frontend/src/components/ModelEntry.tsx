@@ -5,9 +5,12 @@ import { normalizeClassType } from '../constants/classTypes';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
 import fetchWithAuth from '../services/fetchAuth';
 import * as OBE from '../services/obe';
+import { ensureMobileVerified } from '../services/auth';
 import { formatRemaining, usePublishWindow } from '../hooks/usePublishWindow';
 import { useMarkTableLock } from '../hooks/useMarkTableLock';
 import { useEditWindow } from '../hooks/useEditWindow';
+import { useEditRequestPending } from '../hooks/useEditRequestPending';
+import { useLockBodyScroll } from '../hooks/useLockBodyScroll';
 
 type Props = {
   subjectId: string;
@@ -199,6 +202,23 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   const approvalOpen = Boolean(markEntryEditWindow?.allowed_by_approval);
   const entryOpen = !isPublished ? true : approvalOpen;
   const publishedEditLocked = Boolean(isPublished && !approvalOpen);
+
+  const publishButtonIsRequestEdit = Boolean(isPublished && publishedEditLocked);
+
+  const {
+    pending: markEntryReqPending,
+    pendingUntilMs: markEntryReqPendingUntilMs,
+    setPendingUntilMs: setMarkEntryReqPendingUntilMs,
+    refresh: refreshMarkEntryReqPending,
+  } = useEditRequestPending({
+    enabled: Boolean(publishButtonIsRequestEdit) && Boolean(subjectId),
+    assessment: 'model' as any,
+    subjectCode: subjectId ? String(subjectId) : null,
+    scope: 'MARK_ENTRY',
+    teachingAssignmentId,
+  });
+
+  useLockBodyScroll(Boolean(publishedEditModalOpen));
 
   const globalLocked = Boolean(publishWindow?.global_override_active && publishWindow?.global_is_open === false);
 
@@ -539,12 +559,34 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     }
   };
 
+  // Auto-save draft when switching tabs
+  useEffect(() => {
+    const handler = () => {
+      if (!subjectId || publishedEditLocked) return;
+      OBE.saveDraft('model', subjectId, buildPayload()).catch(() => {});
+    };
+    window.addEventListener('obe:before-tab-switch', handler);
+    return () => window.removeEventListener('obe:before-tab-switch', handler);
+  }, [subjectId, publishedEditLocked]);
+
   const publish = async () => {
     if (!subjectId) return;
 
     // After publish, primary action becomes edit request.
     if (isPublished) {
       if (publishedEditLocked) {
+        if (markEntryReqPending) {
+          setActionError('Edit request is pending. Please wait for IQAC approval.');
+          return;
+        }
+
+        const mobileOk = await ensureMobileVerified();
+        if (!mobileOk) {
+          alert('Please verify your mobile number in Profile before requesting edits.');
+          window.location.href = '/profile';
+          return;
+        }
+
         setPublishedEditModalOpen(true);
         return;
       }
@@ -604,6 +646,25 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
 
   const requestEdit = async () => {
     if (!subjectId) return;
+
+    const mobileOk = await ensureMobileVerified();
+    if (!mobileOk) {
+      alert('Please verify your mobile number in Profile before requesting edits.');
+      window.location.href = '/profile';
+      return;
+    }
+
+    if (markEntryReqPending) {
+      setActionError('Edit request is pending. Please wait for IQAC approval.');
+      return;
+    }
+
+    const reason = String(editRequestReason || '').trim();
+    if (!reason) {
+      setActionError('Reason is required.');
+      return;
+    }
+
     setEditRequestBusy(true);
     setActionError(null);
     try {
@@ -611,12 +672,18 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
         assessment: 'model',
         subject_code: String(subjectId),
         scope: 'MARK_ENTRY',
-        reason: editRequestReason || `Edit request: MODEL marks entry for ${subjectId}`,
+        reason,
         teaching_assignment_id: teachingAssignmentId,
       });
       alert('Edit request sent to IQAC. Waiting for approval...');
       setPublishedEditModalOpen(false);
       setEditRequestReason('');
+      setMarkEntryReqPendingUntilMs(Date.now() + 24 * 60 * 60 * 1000);
+      try {
+        refreshMarkEntryReqPending({ silent: true });
+      } catch {
+        // ignore
+      }
       refreshMarkLock({ silent: true });
       refreshMarkEntryEditWindow({ silent: true });
     } catch (e: any) {
@@ -1345,53 +1412,54 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
         </div>
       ) : null}
 
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
-        <button
-          onClick={saveDraftToDb}
-          className="obe-btn obe-btn-success"
-          disabled={savingDraft || !subjectId || publishedEditLocked}
-          title={publishedEditLocked ? 'Published sheets are locked (IQAC must open editing).' : undefined}
-        >
-          {savingDraft ? 'Saving…' : 'Save Draft'}
-        </button>
-        <button onClick={saveLocal} className="obe-btn" disabled={!subjectId || publishedEditLocked}>
-          Save
-        </button>
-        <button onClick={exportSheetCsv} className="obe-btn obe-btn-secondary" disabled={!students.length}>
-          Export CSV
-        </button>
-        <button onClick={exportSheetExcel} className="obe-btn obe-btn-secondary" disabled={!students.length}>
-          Export Excel
-        </button>
-        <button onClick={triggerExcelImport} className="obe-btn obe-btn-secondary" disabled={!students.length || publishedEditLocked || excelBusy}>
-          {excelBusy ? 'Importing…' : 'Import Excel'}
-        </button>
-        <input
-          ref={excelFileInputRef}
-          type="file"
-          accept=".xlsx,.xls"
-          style={{ display: 'none' }}
-          onChange={handleExcelFileSelect}
-        />
-        <button onClick={refreshAll} className="obe-btn" disabled={refreshing || !subjectId}>
-          {refreshing ? 'Refreshing…' : 'Refresh'}
-        </button>
-        <button
-          onClick={publish}
-          className="obe-btn obe-btn-primary"
-          disabled={publishing || students.length === 0 || !publishAllowed || tableBlocked || globalLocked}
-          title={
-            students.length === 0
-              ? 'No students in roster'
-              : !publishAllowed
-              ? 'Publish window is closed.'
-              : globalLocked
-              ? 'Publishing locked by IQAC'
-              : undefined
-          }
-        >
-          {publishing ? 'Publishing…' : isPublished ? 'Edit Request' : 'Publish'}
-        </button>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 10 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button onClick={exportSheetCsv} className="obe-btn obe-btn-secondary" disabled={!students.length}>
+            Export CSV
+          </button>
+          <button onClick={exportSheetExcel} className="obe-btn obe-btn-secondary" disabled={!students.length}>
+            Export Excel
+          </button>
+          <button onClick={triggerExcelImport} className="obe-btn obe-btn-secondary" disabled={!students.length || publishedEditLocked || excelBusy}>
+            {excelBusy ? 'Importing…' : 'Import Excel'}
+          </button>
+          <input
+            ref={excelFileInputRef}
+            type="file"
+            accept=".xlsx,.xls"
+            style={{ display: 'none' }}
+            onChange={handleExcelFileSelect}
+          />
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <button
+            onClick={saveDraftToDb}
+            className="obe-btn obe-btn-success"
+            disabled={savingDraft || !subjectId || publishedEditLocked}
+            title={publishedEditLocked ? 'Published sheets are locked (IQAC must open editing).' : undefined}
+          >
+            {savingDraft ? 'Saving…' : 'Save Draft'}
+          </button>
+          <button
+            onClick={publish}
+            className="obe-btn obe-btn-primary"
+            disabled={publishButtonIsRequestEdit ? markEntryReqPending : publishing || students.length === 0 || !publishAllowed || tableBlocked || globalLocked}
+            title={
+              students.length === 0
+                ? 'No students in roster'
+                : !publishAllowed
+                ? 'Publish window is closed.'
+                : globalLocked
+                ? 'Publishing locked by IQAC'
+                : undefined
+            }
+          >
+            {publishButtonIsRequestEdit ? (markEntryReqPending ? 'Request Pending' : 'Request Edit') : publishing ? 'Publishing…' : 'Publish'}
+          </button>
+          {savedAt && <div style={{ fontSize: 12, color: '#6b7280', alignSelf: 'center' }}>Saved: {savedAt}</div>}
+          {publishedAt && <div style={{ fontSize: 12, color: '#16a34a', alignSelf: 'center' }}>Published: {publishedAt}</div>}
+        </div>
       </div>
 
       <div style={{ marginBottom: 10, fontSize: 12, color: publishAllowed ? '#065f46' : '#b91c1c' }}>
@@ -1410,15 +1478,18 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
 
       {globalLocked ? (
         <div style={{ marginBottom: 10, border: '1px solid #fde68a', background: '#fffbeb', borderRadius: 12, padding: 12 }}>
-          <div style={{ fontWeight: 800, marginBottom: 6 }}>Locked by IQAC</div>
-          <div style={{ fontSize: 12, color: '#6b7280' }}>Publishing is currently locked globally by IQAC.</div>
+          <div style={{ fontWeight: 800, marginBottom: 6 }}>Publishing disabled by IQAC</div>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>
+            Global publishing is turned OFF for this assessment. You can view the sheet, but editing and publishing are locked.
+          </div>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
+            <button className="obe-btn" onClick={() => refreshPublishWindow()} disabled={publishWindowLoading}>Refresh</button>
+          </div>
         </div>
       ) : !publishAllowed ? (
         <div style={{ marginBottom: 10, border: '1px solid #fecaca', background: '#fff7ed', borderRadius: 12, padding: 12 }}>
-          <div style={{ fontWeight: 800, marginBottom: 6 }}>Publish window closed</div>
-          <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10 }}>
-            Request IQAC approval to open the publish window.
-          </div>
+          <div style={{ fontWeight: 800, marginBottom: 6 }}>Publish time is over</div>
+          <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>Send a request to IQAC to approve publishing.</div>
           <textarea
             value={requestReason}
             onChange={(e) => setRequestReason(e.target.value)}
@@ -1426,12 +1497,13 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
             rows={3}
             style={{ width: '100%', padding: 10, borderRadius: 10, border: '1px solid #e5e7eb', resize: 'vertical' }}
           />
-          <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button className="obe-btn obe-btn-success" onClick={requestApproval} disabled={requesting || !subjectId}>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
+            <button className="obe-btn" onClick={() => refreshPublishWindow()} disabled={requesting || publishWindowLoading}>Refresh</button>
+            <button className="obe-btn obe-btn-primary" onClick={requestApproval} disabled={requesting || !subjectId}>
               {requesting ? 'Requesting…' : 'Request Approval'}
             </button>
           </div>
-          {requestMessage ? <div style={{ marginTop: 10, fontSize: 12, color: '#065f46' }}>{requestMessage}</div> : null}
+          {requestMessage ? <div style={{ marginTop: 8, fontSize: 12, color: '#065f46' }}>{requestMessage}</div> : null}
         </div>
       ) : null}
 
@@ -1484,6 +1556,8 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
           <div
             style={{
               width: 'min(520px, 96vw)',
+              maxHeight: 'min(86vh, 740px)',
+              overflow: 'auto',
               background: '#fff',
               borderRadius: 16,
               border: '1px solid #e5e7eb',
@@ -1492,23 +1566,32 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>Edit Request</div>
-            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 6 }}>
-              This will send an edit request to IQAC for published MODEL marks. Once approved, the entry will open for editing until the approval expires.
+            <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>Request Edit Access</div>
+            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 6, lineHeight: 1.35 }}>
+              This will send a request to IQAC. Once approved, mark entry will open for editing until the approval expires.
+              {markEntryReqPendingUntilMs ? (
+                <div style={{ marginTop: 6 }}>
+                  <strong>Request window:</strong> 24 hours
+                </div>
+              ) : null}
             </div>
-            <textarea
-              value={editRequestReason}
-              onChange={(e) => setEditRequestReason(e.target.value)}
-              placeholder="Reason (optional)"
-              rows={3}
-              style={{ width: '100%', padding: 10, borderRadius: 10, border: '1px solid #e5e7eb', resize: 'vertical', marginTop: 10 }}
-            />
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: '#111827', marginBottom: 6 }}>Reason</div>
+              <textarea
+                value={editRequestReason}
+                onChange={(e) => setEditRequestReason(e.target.value)}
+                placeholder="Explain why you need to edit (required)"
+                rows={3}
+                className="obe-input"
+                style={{ resize: 'vertical' }}
+              />
+            </div>
             <div style={{ marginTop: 10, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button className="obe-btn" disabled={editRequestBusy} onClick={() => setPublishedEditModalOpen(false)}>
-                Close
+                Cancel
               </button>
-              <button className="obe-btn obe-btn-success" disabled={editRequestBusy || !subjectId} onClick={requestEdit}>
-                {editRequestBusy ? 'Sending…' : 'Send Request'}
+              <button className="obe-btn obe-btn-success" disabled={editRequestBusy || markEntryReqPending || !subjectId || !String(editRequestReason || '').trim()} onClick={requestEdit}>
+                {editRequestBusy ? 'Sending…' : markEntryReqPending ? 'Request Pending' : 'Send Request'}
               </button>
             </div>
           </div>
@@ -1664,11 +1747,23 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
               </button>
               <button
                 className="obe-btn obe-btn-success"
-                disabled={!subjectId}
-                onClick={() => setPublishedEditModalOpen(true)}
+                disabled={!subjectId || markEntryReqPending}
+                onClick={async () => {
+                  if (markEntryReqPending) {
+                    alert('Edit request is pending. Please wait for IQAC approval.');
+                    return;
+                  }
+                  const mobileOk = await ensureMobileVerified();
+                  if (!mobileOk) {
+                    alert('Please verify your mobile number in Profile before requesting edits.');
+                    window.location.href = '/profile';
+                    return;
+                  }
+                  setPublishedEditModalOpen(true);
+                }}
                 title="Ask IQAC to open editing for published marks"
               >
-                Edit
+                {markEntryReqPending ? 'Request Pending' : 'Request Edit'}
               </button>
             </div>
           </div>

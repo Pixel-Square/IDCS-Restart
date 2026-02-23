@@ -19,7 +19,11 @@ import { fetchMyTeachingAssignments } from '../services/obe';
 import { formatRemaining, usePublishWindow } from '../hooks/usePublishWindow';
 import { useEditWindow } from '../hooks/useEditWindow';
 import { useMarkTableLock } from '../hooks/useMarkTableLock';
+import { ensureMobileVerified } from '../services/auth';
+import { useEditRequestPending } from '../hooks/useEditRequestPending';
+import { useLockBodyScroll } from '../hooks/useLockBodyScroll';
 import PublishLockOverlay from './PublishLockOverlay';
+import AssessmentContainer from './AssessmentContainer';
 import { normalizeClassType } from '../constants/classTypes';
 import * as XLSX from 'xlsx';
 import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
@@ -417,6 +421,23 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   const publishedEditLocked = Boolean(isPublished && !entryOpen);
   const tableBlocked = Boolean(globalLocked || (isPublished ? !entryOpen : !markManagerLocked));
 
+  const publishButtonIsRequestEdit = Boolean(isPublished && publishedEditLocked);
+
+  const {
+    pending: markEntryReqPending,
+    pendingUntilMs: markEntryReqPendingUntilMs,
+    setPendingUntilMs: setMarkEntryReqPendingUntilMs,
+    refresh: refreshMarkEntryReqPending,
+  } = useEditRequestPending({
+    enabled: Boolean(publishButtonIsRequestEdit) && Boolean(subjectId),
+    assessment: assessmentKey as any,
+    subjectCode: subjectId ? String(subjectId) : null,
+    scope: 'MARK_ENTRY',
+    teachingAssignmentId,
+  });
+
+  useLockBodyScroll(Boolean(publishedEditModalOpen) || Boolean(viewMarksModalOpen) || Boolean(markManagerModal));
+
   function markManagerSnapshotOf(
     nextQuestionBtl: Record<string, 1 | 2 | 3 | 4 | 5 | 6 | ''>,
     selections?: { questions?: number[]; marks?: number[]; btls?: number[] },
@@ -457,23 +478,70 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
 
   async function requestMarkEntryEdit() {
     if (!subjectId) return;
+
+    const mobileOk = await ensureMobileVerified();
+    if (!mobileOk) {
+      alert('Please verify your mobile number in Profile before requesting edits.');
+      window.location.href = '/profile';
+      return;
+    }
+
+    if (markEntryReqPending) {
+      setEditRequestMessage('Edit request is pending. Please wait for IQAC approval.');
+      return;
+    }
+
+    const reason = String(editRequestReason || '').trim();
+    if (!reason) {
+      setEditRequestMessage('Reason is required.');
+      return;
+    }
+
     setEditRequestBusy(true);
     try {
       await createEditRequest({
         assessment: assessmentKey,
         subject_code: String(subjectId),
         scope: 'MARK_ENTRY',
-        reason: editRequestReason || `Edit request: ${assessmentLabel} marks entry for ${subjectId}`,
+        reason,
         teaching_assignment_id: teachingAssignmentId,
       });
       setEditRequestMessage('Request sent to IQAC for edit approval.');
       setPublishedEditModalOpen(false);
+      setEditRequestReason('');
+      setMarkEntryReqPendingUntilMs(Date.now() + 24 * 60 * 60 * 1000);
+      try {
+        refreshMarkEntryReqPending({ silent: true });
+      } catch {
+        // ignore
+      }
       refreshMarkLock({ silent: true });
     } catch (e: any) {
       alert(e?.message || 'Request failed');
     } finally {
       setEditRequestBusy(false);
     }
+  }
+
+  async function openEditRequestModal() {
+    if (editRequestBusy) return;
+
+    if (markEntryReqPending) {
+      setEditRequestMessage('Edit request is pending. Please wait for IQAC approval.');
+      return;
+    }
+
+    const mobileOk = await ensureMobileVerified();
+    if (!mobileOk) {
+      alert('Please verify your mobile number in Profile before requesting edits.');
+      window.location.href = '/profile';
+      return;
+    }
+
+    setError(null);
+    setEditRequestMessage(null);
+    setEditRequestReason('');
+    setPublishedEditModalOpen(true);
   }
 
   // While locked after publish, periodically check if IQAC updated the lock row.
@@ -1164,6 +1232,25 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
     return out;
   }, [students, sheet.rowsByStudentId, questions]);
 
+  // Auto-save draft when switching tabs
+  const sheetRef = useRef(sheet);
+  sheetRef.current = sheet;
+  useEffect(() => {
+    const handler = () => {
+      if (!subjectId || students.length === 0 || tableBlocked || globalLocked) return;
+      const s = sheetRef.current;
+      const draft: Cia1DraftPayload = {
+        termLabel: s.termLabel,
+        batchLabel: subjectId,
+        questionBtl: s.questionBtl,
+        rowsByStudentId: s.rowsByStudentId,
+      };
+      saveDraft(assessmentKey, subjectId, draft).catch(() => {});
+    };
+    window.addEventListener('obe:before-tab-switch', handler);
+    return () => window.removeEventListener('obe:before-tab-switch', handler);
+  }, [subjectId, assessmentKey, students.length, tableBlocked, globalLocked]);
+
   const saveDraftToDb = async () => {
     setSaving(true);
     setError(null);
@@ -1196,7 +1283,12 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
 
     // If already published and locked, use Publish action as the entry-point to request edits.
     if (isPublished && publishedEditLocked) {
-      setPublishedEditModalOpen(true);
+      if (markEntryReqPending) {
+        setError('Edit request is pending. Please wait for IQAC approval.');
+        return;
+      }
+
+      await openEditRequestModal();
       return;
     }
 
@@ -1263,7 +1355,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         refreshPublishWindow();
         refreshMarkLock({ silent: true });
         setError(null);
-        setPublishedEditModalOpen(true);
+        await openEditRequestModal();
         return;
       }
 
@@ -1382,7 +1474,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       if (teachingAssignmentId) qs.set('teaching_assignment_id', String(teachingAssignmentId));
       // Ensure backend can generate QP-specific template even when curriculum lookup is missing.
       if (qpTypeKey) qs.set('question_paper_type', String(qpTypeKey));
-      const DEFAULT_API_BASE = 'https://db.zynix.us';
+      const DEFAULT_API_BASE = 'https://db.krgi.co.in';
       const runtimeApiBase = (import.meta as any).env?.VITE_API_BASE || (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://localhost:8000' : DEFAULT_API_BASE);
       const url = `${runtimeApiBase}/api/obe/cia-export-template/${encodeURIComponent(assessmentKey)}/${encodeURIComponent(subjectId)}${qs.toString() ? `?${qs.toString()}` : ''}`;
       const res = await fetchWithAuth(url, { method: 'GET' });
@@ -1676,7 +1768,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   };
 
   return (
-    <div>
+    <AssessmentContainer>
       {limitDialog ? (
         <div
           role="dialog"
@@ -1808,10 +1900,10 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
           </button>
           <button
             onClick={publish}
-            disabled={publishing || students.length === 0 || !publishAllowed || tableBlocked || globalLocked}
+            disabled={publishButtonIsRequestEdit ? markEntryReqPending : publishing || students.length === 0 || !publishAllowed || tableBlocked || globalLocked}
             className="obe-btn obe-btn-primary"
           >
-            {publishing ? 'Publishing…' : 'Publish'}
+            {publishButtonIsRequestEdit ? (markEntryReqPending ? 'Request Pending' : 'Request Edit') : publishing ? 'Publishing…' : 'Publish'}
           </button>
           {savedAt && <div style={{ fontSize: 12, color: '#6b7280', alignSelf: 'center' }}>Saved: {savedAt}</div>}
           {publishedAt && <div style={{ fontSize: 12, color: '#16a34a', alignSelf: 'center' }}>Published: {publishedAt}</div>}
@@ -1893,38 +1985,55 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       ) : (
         <div style={{ position: 'relative' }}>
           <PublishLockOverlay locked={globalLocked}>
-            <div style={{ marginBottom: 10 }}>
-            <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Mark Manager</div>
+            <div style={{ marginBottom: 10, width: '100%', maxWidth: 1200, marginLeft: 'auto', marginRight: 'auto' }}>
+              <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Mark Manager</div>
+              <div
+                style={{
+                  border: '1px solid #fcd34d',
+                  background: markManagerLocked ? '#f3f4f6' : '#fff7ed',
+                  padding: 12,
+                  borderRadius: 12,
+                  width: '100%',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  gap: 10,
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                }}
+              >
+                <div style={{ display: 'flex', gap: 12, alignItems: 'baseline', flexWrap: 'wrap', minWidth: 0 }}>
+                  <div style={{ fontWeight: 950, color: '#111827' }}>BTL configuration</div>
+                  <div style={{ fontSize: 12, color: '#6b7280' }}>Set BTL per question in the BTL row, then confirm.</div>
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    className="obe-btn obe-btn-success"
+                    disabled={!subjectId || markManagerBusy}
+                    onClick={() => setMarkManagerModal({ mode: markManagerLocked ? 'request' : 'confirm' })}
+                  >
+                    {markManagerLocked ? 'Edit' : 'Save'}
+                  </button>
+                </div>
+              </div>
+              {markManagerError ? <div style={{ marginTop: 8, fontSize: 12, color: '#991b1b' }}>{markManagerError}</div> : null}
+            </div>
+
             <div
+              className="obe-table-wrapper"
               style={{
-                border: '1px solid #fcd34d',
-                background: markManagerLocked ? '#f3f4f6' : '#fff7ed',
-                padding: 12,
+                width: '100%',
+                maxWidth: '100%',
+                overflowX: 'scroll',
+                overflowY: 'hidden',
+                WebkitOverflowScrolling: 'touch',
+                overscrollBehaviorX: 'contain',
+                scrollbarGutter: 'stable',
+                border: '1px solid #e5e7eb',
                 borderRadius: 12,
-                display: 'flex',
-                gap: 10,
-                alignItems: 'center',
-                flexWrap: 'wrap',
               }}
             >
-              <div style={{ fontWeight: 950, color: '#111827' }}>BTL configuration</div>
-              <div style={{ fontSize: 12, color: '#6b7280' }}>Set BTL per question in the BTL row, then confirm.</div>
-              <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-                <button
-                  className="obe-btn obe-btn-success"
-                  disabled={!subjectId || markManagerBusy}
-                  onClick={() => setMarkManagerModal({ mode: markManagerLocked ? 'request' : 'confirm' })}
-                >
-                  {markManagerLocked ? 'Edit' : 'Save'}
-                </button>
-              </div>
-            </div>
-            {markManagerError ? <div style={{ marginTop: 8, fontSize: 12, color: '#991b1b' }}>{markManagerError}</div> : null}
-          </div>
-
-            <div className="obe-table-wrapper" style={{ overflowX: 'auto' }}>
-            <table className="obe-table" style={{ width: 'max-content', minWidth: '100%', tableLayout: 'auto' }}>
-            <thead>
+              <table className="obe-table" style={{ width: 'max-content', minWidth: '100%', tableLayout: 'auto', borderCollapse: 'collapse' }}>
+                <thead>
               <tr>
                 <th style={cellTh} colSpan={4 + questions.length + 1 + 4 + visibleBtls.length * 2}>
                   {sheet.termLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {sheet.batchLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {assessmentLabel}
@@ -1992,9 +2101,9 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                   </React.Fragment>
                 ))}
               </tr>
-            </thead>
+              </thead>
 
-            <tbody>
+              <tbody>
               <tr>
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} colSpan={3} />
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>BTL</td>
@@ -2268,13 +2377,12 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                       </button>
                       <button
                         className="obe-btn obe-btn-success"
-                        onClick={() => {
-                          setEditRequestMessage(null);
-                          setPublishedEditModalOpen(true);
+                        onClick={async () => {
+                          await openEditRequestModal();
                         }}
-                        disabled={editRequestBusy}
+                        disabled={editRequestBusy || markEntryReqPending}
                       >
-                        Request Edit
+                        {markEntryReqPending ? 'Request Pending' : 'Request Edit'}
                       </button>
                     </>
                   )}
@@ -2318,7 +2426,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                     </thead>
                     <tbody>
                       {questions.map((q) => (
-                        <tr key={`mm_${q.key}`}>
+                        <tr key={q.key}>
                           <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>{q.label}</td>
                           <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{q.max}</td>
                           <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>
@@ -2507,36 +2615,56 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
             setPublishedEditModalOpen(false);
           }}
         >
-          <div style={{ width: 'min(560px, 96vw)', background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: 14 }} onClick={(e) => e.stopPropagation()}>
+          <div
+            style={{
+              width: 'min(560px, 96vw)',
+              maxHeight: 'min(86vh, 740px)',
+              overflow: 'auto',
+              background: '#fff',
+              borderRadius: 14,
+              border: '1px solid #e5e7eb',
+              padding: 14,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-              <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>Edit Request</div>
+              <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>Request Edit Access</div>
               <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>{assessmentLabel} • {String(subjectId || '')}</div>
             </div>
 
-            <div style={{ fontSize: 13, color: '#374151', marginBottom: 10, lineHeight: 1.35 }}>
-              This will send an edit request to IQAC for published marks. Once approved, the entry will open for editing until the approval expires.
+            <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10, lineHeight: 1.35 }}>
+              This will send a request to IQAC. Once approved, mark entry will open for editing until the approval expires.
+              {markEntryReqPendingUntilMs ? (
+                <div style={{ marginTop: 6 }}>
+                  <strong>Request window:</strong> 24 hours
+                </div>
+              ) : null}
             </div>
 
-            <textarea
-              value={editRequestReason}
-              onChange={(e) => setEditRequestReason(e.target.value)}
-              placeholder="Reason (optional)"
-              rows={4}
-              style={{ width: '100%', padding: 10, borderRadius: 10, border: '1px solid #e5e7eb', resize: 'vertical' }}
-            />
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: '#111827', marginBottom: 6 }}>Reason</div>
+              <textarea
+                value={editRequestReason}
+                onChange={(e) => setEditRequestReason(e.target.value)}
+                placeholder="Explain why you need to edit (required)"
+                rows={4}
+                className="obe-input"
+                style={{ resize: 'vertical' }}
+              />
+            </div>
 
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 12 }}>
               <button className="obe-btn" disabled={editRequestBusy} onClick={() => setPublishedEditModalOpen(false)}>
                 Cancel
               </button>
-              <button className="obe-btn obe-btn-success" disabled={editRequestBusy || !subjectId} onClick={requestMarkEntryEdit}>
-                {editRequestBusy ? 'Requesting…' : 'Send Request'}
+              <button className="obe-btn obe-btn-success" disabled={editRequestBusy || markEntryReqPending || !subjectId || !String(editRequestReason || '').trim()} onClick={requestMarkEntryEdit}>
+                {editRequestBusy ? 'Requesting…' : markEntryReqPending ? 'Request Pending' : 'Send Request'}
               </button>
             </div>
           </div>
         </div>
       ) : null}
-    </div>
+    </AssessmentContainer>
   );
 }
 

@@ -3,9 +3,13 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    // Use a user-writable outDir; `dist/` is owned by www-data in some deployments.
+    outDir: 'build_dist',
+  },
   server: {
     host: true,
-    allowedHosts: ['db.zynix.us', "idcs.zynix.us"],
+    allowedHosts: ['idcs.krgi.co.in', "idcs.zynix.us"],
      port: 80,
     // Dev convenience: when the frontend is served by Vite (often :80) and the
     // Django API is on a different port (often :8000), proxy `/api/...` so
@@ -26,9 +30,9 @@ export default defineConfig({
         '**/staticfiles/**',
         '**/media/**'
       ],
-      // fallback to polling when native watchers fail (safer, higher CPU)
-      usePolling: process.env.CHOKIDAR_USEPOLLING === 'true' || false,
-      interval: Number(process.env.CHOKIDAR_POLL_INTERVAL || 1000)
+      // Use polling to avoid EMFILE (too many open files) with native watchers
+      usePolling: true,
+      interval: 1000
     }
   }
 })

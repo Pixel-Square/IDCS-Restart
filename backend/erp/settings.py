@@ -21,15 +21,17 @@ DEBUG = os.getenv('DEBUG', '0') == '1'
 
 ALLOWED_HOSTS = (
     ['*'] if DEBUG else [
-        'db.zynix.us',
-        'idcs.zynix.us',
-        '192.168.40.253',
+        'cloud.krgi.co.in',    # Frontend domain via tunnel
+        'db.krgi.co.in',       # Your new database domain
+        'idcs.krgi.co.in',     # Your new frontend domain
+        'krgi.co.in',
+        '.krgi.co.in',         # Allow all campus subdomains through Cloudflare
+        '192.168.40.253',      # Your local IP
         'localhost',
         '127.0.0.1',
-        'localhost',
         '0.0.0.0',
-        '.db.zynix.us',   # allow all subdomains
-        '.idcs.zynix.us', # allow all subdomains
+        '.db.krgi.co.in',      # Allow all subdomains for the new domain
+        '.idcs.krgi.co.in',    # Allow all subdomains for the new domain
     ]
 )
 
@@ -60,6 +62,7 @@ MIDDLEWARE = [
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
+    'erp.middleware.SlowRequestLoggingMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
@@ -107,9 +110,13 @@ if DB_NAME:
             # are not compatible with transaction pooling).
             'DISABLE_SERVER_SIDE_CURSORS': True,
             # Keep default short-lived connections unless explicitly overridden.
-            'CONN_MAX_AGE': int(os.getenv('DB_CONN_MAX_AGE', '0')),
+            # Reuse DB connections to avoid reconnect overhead under concurrent login bursts.
+            'CONN_MAX_AGE': int(os.getenv('DB_CONN_MAX_AGE', '60')),
+            'CONN_HEALTH_CHECKS': True,
             'OPTIONS': {
                 'server_side_binding': False,
+                # Fail faster on unhealthy DB instead of hanging workers for long periods.
+                'connect_timeout': int(os.getenv('DB_CONNECT_TIMEOUT', '5')),
             },
         }
     }
@@ -132,6 +139,10 @@ CACHES = {
         }
     }
 }
+
+# Keep sessions mostly in cache to reduce DB pressure during concurrent auth traffic.
+SESSION_ENGINE = os.getenv('SESSION_ENGINE', 'django.contrib.sessions.backends.cached_db')
+SESSION_CACHE_ALIAS = 'default'
 
 AUTH_PASSWORD_VALIDATORS = []
 
@@ -168,6 +179,10 @@ REST_FRAMEWORK = {
     'EXCEPTION_HANDLER': 'curriculum.views.custom_exception_handler',
 }
 
+# Slow endpoint tracing
+SLOW_REQUEST_LOG_ENABLED = os.getenv('SLOW_REQUEST_LOG_ENABLED', '1') == '1'
+SLOW_REQUEST_LOG_MS = int(os.getenv('SLOW_REQUEST_LOG_MS', '1200'))
+
 from rest_framework_simplejwt.settings import api_settings as jwt_api_settings
 
 SIMPLE_JWT = {
@@ -176,11 +191,38 @@ SIMPLE_JWT = {
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
 
-# ...existing code...
+# --- SMS / OTP ---
+# OTP verification uses `accounts.services.sms.send_sms`.
+# By default, SMS_BACKEND=console which logs the SMS (useful for dev).
+# To actually send OTP messages, configure one of these backends:
+# - HTTP GET SMS gateway:
+#     SMS_BACKEND=http_get
+#     SMS_GATEWAY_URL="https://your-sms-provider.example/send?to={to}&message={message}"
+# - Twilio Verify:
+#     SMS_BACKEND=twilio
+#     TWILIO_ACCOUNT_SID=AC...
+#     TWILIO_AUTH_TOKEN=...
+#     TWILIO_SERVICE_SID=VA...
+# - WhatsApp (reuses the existing whatsapp-web.js microservice settings used by OBE notifications):
+#     SMS_BACKEND=whatsapp
+#     OBE_WHATSAPP_API_URL="http://127.0.0.1:3000/send-whatsapp"
+#     OBE_WHATSAPP_API_KEY="..."
+SMS_BACKEND = str(os.getenv('SMS_BACKEND', 'console') or 'console').strip().lower()
+SMS_GATEWAY_URL = str(os.getenv('SMS_GATEWAY_URL', '') or '').strip()
+
+# --- Twilio SMS / OTP ---
+# Twilio credentials for OTP verification
+TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID', '')
+TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN', '')
+TWILIO_SERVICE_SID = os.getenv('TWILIO_SERVICE_SID', '')
+
 # Restrict CORS to explicit origins when credentials (cookies/auth) are used.
 # Wildcard '*' is invalid with `Access-Control-Allow-Credentials: true`.
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = [
+    'https://idcs.krgi.co.in',
+    'https://db.krgi.co.in',
+    'https://cloud.krgi.co.in',
     # Local dev origins (common ports) so frontend at localhost can call API
     'http://localhost',
     'http://localhost:3000',
@@ -191,8 +233,9 @@ CORS_ALLOWED_ORIGINS = [
     'http://127.0.0.1:82',
     'http://127.0.0.1:8000',
     # Production/front-end hosts
-    'https://idcs.zynix.us',
-    'https://db.zynix.us',
+    'https://idcs.krgi.co.in',
+    'https://db.krgi.co.in',
+    'https://cloud.krgi.co.in',
     'http://192.168.40.253:81',
 ]
 # Allow browser to include credentials (cookies or HTTP auth) in cross-origin requests
@@ -211,18 +254,18 @@ if DEBUG:
         'http://127.0.0.1:82',
     ]
 # Always allow the production dashboard hostname if not already present
-if 'https://db.zynix.us' not in CSRF_TRUSTED_ORIGINS:
-    CSRF_TRUSTED_ORIGINS.append('https://db.zynix.us')
+if 'https://db.krgi.co.in' not in CSRF_TRUSTED_ORIGINS:
+    CSRF_TRUSTED_ORIGINS.append('https://db.krgi.co.in')
 # Always allow the production frontend hostname if not already present
-if 'https://idcs.zynix.us' not in CSRF_TRUSTED_ORIGINS:
-    CSRF_TRUSTED_ORIGINS.append('https://idcs.zynix.us')
+if 'https://idcs.krgi.co.in' not in CSRF_TRUSTED_ORIGINS:
+    CSRF_TRUSTED_ORIGINS.append('https://idcs.krgi.co.in')
+if 'https://cloud.krgi.co.in' not in CSRF_TRUSTED_ORIGINS:
+    CSRF_TRUSTED_ORIGINS.append('https://cloud.krgi.co.in')
 
 # Optional: restrict which account may publish marks via the web UI/backend.
 # Set to a username or email (string). If empty/None publishing remains unrestricted
 # (aside from existing permission checks). Example: 'iqac.user@example.com'
 OBE_PUBLISH_ALLOWED_USERNAME = os.getenv('OBE_PUBLISH_ALLOWED_USERNAME', '')
-# ...existing code...
-
 # OBE edit-request approval notifications
 # Email notification uses Django SMTP settings.
 OBE_EDIT_NOTIFICATION_EMAIL_ENABLED = os.getenv('OBE_EDIT_NOTIFICATION_EMAIL_ENABLED', '1') == '1'

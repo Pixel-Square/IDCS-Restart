@@ -93,8 +93,12 @@ urlpatterns = [
     path('edit-request', views.edit_request_create),
     path('edit-requests/my-latest', views.edit_requests_my_latest),
     path('edit-requests/pending', views.edit_requests_pending),
+    path('edit-requests/hod/pending', views.edit_requests_hod_pending),
     path('edit-requests/pending-count', views.edit_requests_pending_count),
+    path('edit-requests/hod/pending-count', views.edit_requests_hod_pending_count),
     path('edit-requests/history', views.edit_requests_history),
+    path('edit-requests/<int:req_id>/hod-approve', views.edit_request_hod_approve),
+    path('edit-requests/<int:req_id>/hod-reject', views.edit_request_hod_reject),
     path('edit-requests/<int:req_id>/approve', views.edit_request_approve),
     path('edit-requests/<int:req_id>/reject', views.edit_request_reject),
 

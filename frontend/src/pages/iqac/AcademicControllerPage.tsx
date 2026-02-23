@@ -5,8 +5,9 @@ import AcademicControllerCoursesPage from './AcademicControllerCoursesPage';
 import AcademicControllerQPPage from './AcademicControllerQPPage';
 import AcademicControllerWeightsPage from './AcademicControllerWeightsPage';
 import AcademicControllerCQIPage from './AcademicControllerCQIPage';
+import AcademicControllerActiveLearningPage from './AcademicControllerActiveLearningPage';
 
-type TabKey = 'dashboard' | 'due_dates' | 'courses' | 'weights' | 'qp' | 'cqi';
+type TabKey = 'dashboard' | 'due_dates' | 'courses' | 'weights' | 'active_learning' | 'qp' | 'cqi';
 
 export default function AcademicControllerPage(): JSX.Element {
   const location = useLocation();
@@ -25,6 +26,7 @@ export default function AcademicControllerPage(): JSX.Element {
   const tabs: Array<{ key: TabKey; label: string }> = [
     { key: 'dashboard', label: 'Dashboard' },
     { key: 'weights', label: 'Weights' },
+    { key: 'active_learning', label: 'Active Learning Mapping' },
     { key: 'due_dates', label: 'OBE Due Dates' },
     { key: 'courses', label: 'Courses' },
     { key: 'qp', label: 'QP' },
@@ -65,6 +67,7 @@ export default function AcademicControllerPage(): JSX.Element {
           <div style={{ color: '#6b7280' }}>Dashboard coming soon.</div>
         )}
         {tab === 'weights' && <AcademicControllerWeightsPage />}
+        {tab === 'active_learning' && <AcademicControllerActiveLearningPage />}
         {tab === 'due_dates' && <OBEDueDatesPage />}
         {tab === 'courses' && <AcademicControllerCoursesPage />}
         {tab === 'qp' && <AcademicControllerQPPage />}

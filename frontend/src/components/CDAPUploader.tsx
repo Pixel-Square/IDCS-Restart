@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-const DEFAULT_API_BASE = 'https://db.zynix.us';
+const DEFAULT_API_BASE = 'https://db.krgi.co.in';
 const API_BASE = import.meta.env.VITE_API_BASE || (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://localhost:8000' : DEFAULT_API_BASE);
 
 function authHeaders(): Record<string, string> {
@@ -39,6 +39,9 @@ export default function CDAPUploader({ subjectId, onUpload }: { subjectId?: stri
     formData.append('file', file);
     if (subjectId) formData.append('subject_id', subjectId);
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60_000); // 60s timeout
+
     try {
       const headers: Record<string, string> = {
         ...authHeaders(),
@@ -47,6 +50,7 @@ export default function CDAPUploader({ subjectId, onUpload }: { subjectId?: stri
         method: 'POST',
         headers,
         body: formData,
+        signal: controller.signal,
       });
 
       if (!res.ok) {
@@ -80,9 +84,16 @@ export default function CDAPUploader({ subjectId, onUpload }: { subjectId?: stri
       onUpload && onUpload({ revision: normalizedRevision, uploadedAt: new Date().toISOString() });
     } catch (e: any) {
       setStatus('error');
-      setMessage(e?.message || 'Upload failed. Please try again.');
+      if (e?.name === 'AbortError') {
+        setMessage('Upload timed out. The server took too long to respond. Please try again.');
+      } else {
+        setMessage(e?.message || 'Upload failed. Please try again.');
+      }
+    } finally {
+      clearTimeout(timeoutId);
+      // Ensure we always leave a terminal state so the UI is never stuck
+      setStatus((prev) => (prev === 'uploading' ? 'error' : prev));
     }
-
   }
 
   function extractCell(row: any, keys: string[]) {

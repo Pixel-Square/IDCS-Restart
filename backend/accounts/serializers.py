@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from .models import Role, UserRole, Permission, RolePermission
+from .models import Role, UserRole, Permission, RolePermission, NotificationTemplate
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from typing import Optional
@@ -80,7 +80,7 @@ class MeSerializer(serializers.Serializer):
             return 'STUDENT'
         if hasattr(obj, 'staff_profile') and obj.staff_profile is not None:
             return 'STAFF'
-        raise serializers.ValidationError('User does not have an associated profile.')
+        return None
 
     def get_profile(self, obj):
         # Minimal profile payload to avoid touching academic serializers
@@ -100,6 +100,8 @@ class MeSerializer(serializers.Serializer):
 
             return {
                 'reg_no': sp.reg_no,
+                'mobile_number': getattr(sp, 'mobile_number', '') or '',
+                'mobile_verified': bool(getattr(sp, 'mobile_number_verified_at', None)),
                 'section_id': getattr(sec_obj, 'id', None),
                 'section': getattr(sec_obj, 'name', None),
                 'batch': getattr(batch, 'name', sp.batch),
@@ -115,6 +117,8 @@ class MeSerializer(serializers.Serializer):
             st = obj.staff_profile
             return {
                 'staff_id': st.staff_id,
+                'mobile_number': getattr(st, 'mobile_number', '') or '',
+                'mobile_verified': bool(getattr(st, 'mobile_number_verified_at', None)),
                 'department': {
                     'code': getattr(st.department, 'code', None),
                     'name': getattr(st.department, 'name', None),
@@ -139,6 +143,12 @@ class MeSerializer(serializers.Serializer):
             }
         except Exception:
             return None
+
+
+class NotificationTemplateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = NotificationTemplate
+        fields = ('code', 'name', 'template', 'enabled', 'expiry_minutes', 'updated_at')
 
 
 class IdentifierTokenObtainPairSerializer(serializers.Serializer):

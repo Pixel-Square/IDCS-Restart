@@ -11,7 +11,7 @@ function apiBase() {
     return String(window.location.origin).replace(/\/+$/, '')
   }
 
-  return 'https://db.zynix.us'
+  return 'https://db.krgi.co.in'
 }
 
 const BASE = `${apiBase()}/api/accounts/`
@@ -102,6 +102,7 @@ export function logout(){
   localStorage.removeItem('refresh')
   localStorage.removeItem('roles')
   localStorage.removeItem('permissions')
+  localStorage.removeItem('me')
 }
 
 // Attach access token to outgoing requests
@@ -126,8 +127,44 @@ export async function getMe(){
     // persist roles and permissions for easy access by UI
     localStorage.setItem('roles', JSON.stringify(me.roles || []))
     localStorage.setItem('permissions', JSON.stringify(me.permissions || []))
+    localStorage.setItem('me', JSON.stringify(me || null))
   }catch(e){
     // ignore storage errors
   }
   return me
+}
+
+export function getCachedMe(): any | null {
+  try {
+    const raw = localStorage.getItem('me')
+    if (!raw) return null
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
+}
+
+export function isMobileVerifiedCached(): boolean {
+  const me = getCachedMe()
+  return Boolean(me?.profile?.mobile_verified)
+}
+
+export async function ensureMobileVerified(): Promise<boolean> {
+  if (isMobileVerifiedCached()) return true
+  try {
+    const me = await getMe()
+    return Boolean(me?.profile?.mobile_verified)
+  } catch {
+    return false
+  }
+}
+
+export async function requestMobileOtp(mobile_number: string) {
+  const res = await apiClient.post('mobile/request-otp/', { mobile_number })
+  return res.data
+}
+
+export async function verifyMobileOtp(mobile_number: string, otp: string) {
+  const res = await apiClient.post('mobile/verify-otp/', { mobile_number, otp })
+  return res.data
 }

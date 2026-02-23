@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../../services/roster';
 import { lsGet, lsSet } from '../../utils/localStorage';
+import { fetchWithAuth } from '../../services/fetchAuth';
 import { 
   fetchPublishedSsa1, 
   fetchPublishedSsa2, 
@@ -11,12 +12,12 @@ import {
   fetchPublishedReview1,
   fetchPublishedReview2,
   fetchPublishedLabSheet,
+  fetchPublishedModelSheet,
   fetchDraft,
   fetchIqacCqiConfig,
 } from '../../services/obe';
 import { fetchAssessmentMasterConfig } from '../../services/cdapDb';
 import { normalizeClassType } from '../../constants/classTypes';
-import fetchWithAuth from '../../services/fetchAuth';
 
 interface CQIEntryProps {
   subjectId?: string;
@@ -69,21 +70,6 @@ function clamp(n: number, min: number, max: number) {
 function normalizeEnabledAssessments(enabledAssessments: string[] | null | undefined): Set<string> {
   const arr = Array.isArray(enabledAssessments) ? enabledAssessments : [];
   return new Set(arr.map((x) => String(x || '').trim().toLowerCase()).filter(Boolean));
-}
-
-function normalizeCqiAssessmentKey(assessmentType: CQIEntryProps['assessmentType']): 'cia1' | 'cia2' | 'model' {
-  const k = String(assessmentType || '').trim().toLowerCase();
-  if (k === 'cia2') return 'cia2';
-  if (k === 'model') return 'model';
-  return 'cia1';
-}
-
-function cqiEntriesStorageKey(subjectId: string, teachingAssignmentId: number, assessmentType: CQIEntryProps['assessmentType']): string {
-  return `cqi_entries_${subjectId}_${teachingAssignmentId}_${normalizeCqiAssessmentKey(assessmentType)}`;
-}
-
-function cqiPublishedStorageKey(subjectId: string, teachingAssignmentId: number, assessmentType: CQIEntryProps['assessmentType']): string {
-  return `cqi_published_${subjectId}_${teachingAssignmentId}_${normalizeCqiAssessmentKey(assessmentType)}`;
 }
 
 function normalizeMarksArray(raw: unknown, length: number): Array<number | ''> {
@@ -300,7 +286,6 @@ export default function CQIEntry({
   const [draftLog, setDraftLog] = useState<{ updated_at?: string | null; updated_by?: any | null } | null>(null);
   const [autoSaveEnabled, setAutoSaveEnabled] = useState(true);
   const [dirty, setDirty] = useState(false);
-  const [publishedLocked, setPublishedLocked] = useState(false);
 
   // Load global IQAC CQI config (applies to all courses).
   useEffect(() => {
@@ -408,19 +393,11 @@ export default function CQIEntry({
   // Load CQI entries from localStorage
   useEffect(() => {
     if (!subjectId || !teachingAssignmentId) return;
-    const key = cqiEntriesStorageKey(subjectId, teachingAssignmentId, assessmentType);
-    const legacyKey = `cqi_entries_${subjectId}_${teachingAssignmentId}`;
-    const stored = lsGet<Record<number, CQIEntry>>(key) || lsGet<Record<number, CQIEntry>>(legacyKey);
+    const key = `cqi_entries_${subjectId}_${teachingAssignmentId}`;
+    const stored = lsGet<Record<number, CQIEntry>>(key);
     if (stored && typeof stored === 'object') {
       setCqiEntries(stored);
       setDirty(false);
-    }
-
-    try {
-      const lockKey = cqiPublishedStorageKey(subjectId, teachingAssignmentId, assessmentType);
-      setPublishedLocked(Boolean(lsGet<any>(lockKey)));
-    } catch {
-      setPublishedLocked(false);
     }
 
     // Try to fetch draft from server if available
@@ -440,7 +417,7 @@ export default function CQIEntry({
         // ignore if server endpoint doesn't exist
       }
     })();
-  }, [subjectId, teachingAssignmentId, assessmentType]);
+  }, [subjectId, teachingAssignmentId]);
 
   // Calculate CO totals from internal marks
   useEffect(() => {
@@ -611,7 +588,7 @@ export default function CQIEntry({
                     const d = await fetchDraft<any>('model' as any, subjectId, teachingAssignmentId);
                     if (d?.draft) return { data: (d.draft as any).data ?? d.draft };
                   } catch {}
-                  return fetchPublishedLabSheet('model', subjectId, teachingAssignmentId).catch(() => ({ data: null }));
+                  return fetchPublishedModelSheet(subjectId, teachingAssignmentId).catch(() => ({ data: null }));
                 })()
               : { data: null },
           ]);
@@ -948,7 +925,6 @@ export default function CQIEntry({
   }, [subjectId, teachingAssignmentId, classType, enabledAssessments, students, coNumbers, masterCfg]);
 
   const handleCQIChange = (studentId: number, coKey: string, value: string) => {
-    if (publishedLocked) return;
     // allow empty to clear
     if (value === '') {
       setCqiErrors(prev => {
@@ -993,7 +969,7 @@ export default function CQIEntry({
       const next = { ...prev, [studentId]: { ...prev[studentId], [coKey]: numValue } };
       // persist just this change so it survives reloads
       if (subjectId && teachingAssignmentId) {
-        const key = cqiEntriesStorageKey(subjectId, teachingAssignmentId, assessmentType);
+        const key = `cqi_entries_${subjectId}_${teachingAssignmentId}`;
         try {
           lsSet(key, next);
         } catch {
@@ -1007,10 +983,6 @@ export default function CQIEntry({
 
   const handleSave = () => {
     if (!subjectId || !teachingAssignmentId) return;
-    if (publishedLocked) {
-      alert("CQI is already published. You can't change it again.");
-      return;
-    }
     // validate no errors
     if (Object.keys(cqiErrors).length) {
       alert('Fix CQI input errors before saving');
@@ -1033,7 +1005,7 @@ export default function CQIEntry({
         // ignore and fallback
       }
 
-      const key = cqiEntriesStorageKey(subjectId, teachingAssignmentId, assessmentType);
+      const key = `cqi_entries_${subjectId}_${teachingAssignmentId}`;
       try {
         lsSet(key, cqiEntries);
         setDirty(false);
@@ -1140,7 +1112,7 @@ export default function CQIEntry({
                   alert('Draft saved to server');
                 } else {
                   // fallback to localStorage
-                  const key = cqiEntriesStorageKey(subjectId, teachingAssignmentId, assessmentType);
+                  const key = `cqi_entries_${subjectId}_${teachingAssignmentId}`;
                   try { lsSet(key, cqiEntries); setDirty(false); alert('Draft saved locally'); } catch (e) { alert('Failed to save draft'); }
                 }
               } catch (e: any) {
@@ -1157,34 +1129,11 @@ export default function CQIEntry({
             type="button"
             onClick={async () => {
               if (!subjectId) return alert('Missing subject');
-              if (!confirm("Publish CQI to DB? After publishing, you can't change it again. This action cannot be undone.")) return;
+              if (!confirm('Publish CQI to DB? This action cannot be undone.')) return;
               try {
                 const qp = teachingAssignmentId ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
                 const res = await fetchWithAuth(`/api/obe/cqi-publish/${encodeURIComponent(String(subjectId))}${qp}`, { method: 'POST' }).catch(() => null);
-                if (res && res.ok) {
-                  try {
-                    if (subjectId && teachingAssignmentId) {
-                      const lockKey = cqiPublishedStorageKey(subjectId, teachingAssignmentId, assessmentType);
-                      lsSet(lockKey, true);
-                      setPublishedLocked(true);
-                    }
-                  } catch {
-                    // ignore
-                  }
-                  alert('CQI published');
-                } else {
-                  // Local fallback (server may not support publish yet)
-                  try {
-                    if (subjectId && teachingAssignmentId) {
-                      const lockKey = cqiPublishedStorageKey(subjectId, teachingAssignmentId, assessmentType);
-                      lsSet(lockKey, true);
-                      setPublishedLocked(true);
-                    }
-                    alert('CQI published (locally locked).');
-                  } catch {
-                    alert('Publish failed (server may not support CQI publish)');
-                  }
-                }
+                if (res && res.ok) { alert('CQI published'); } else { alert('Publish failed (server may not support CQI publish)'); }
               } catch (e: any) { alert('Publish failed: ' + String(e?.message || e)); }
             }}
             className="obe-btn obe-btn-primary"
@@ -1219,35 +1168,35 @@ export default function CQIEntry({
         </div>
         <table className="cqi-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
           <thead>
-            <tr style={{ backgroundColor: '#f8fafc', borderBottom: '2px solid #cbd5e1' }}>
-              <th style={{ padding: '12px 8px', textAlign: 'left', fontWeight: 700, color: '#475569', minWidth: 60, borderRight: '2px solid #94a3b8' }}>
+            <tr style={{ backgroundColor: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
+              <th style={{ padding: '12px 8px', textAlign: 'left', fontWeight: 700, color: '#475569', minWidth: 60 }}>
                 S.No
               </th>
-              <th style={{ padding: '12px 8px', textAlign: 'left', fontWeight: 700, color: '#475569', minWidth: 120, borderRight: '2px solid #94a3b8' }}>
+              <th style={{ padding: '12px 8px', textAlign: 'left', fontWeight: 700, color: '#475569', minWidth: 120 }}>
                 Reg No
               </th>
-              <th style={{ padding: '12px 8px', textAlign: 'left', fontWeight: 700, color: '#475569', minWidth: 200, borderRight: '2px solid #94a3b8' }}>
+              <th style={{ padding: '12px 8px', textAlign: 'left', fontWeight: 700, color: '#475569', minWidth: 200 }}>
                 Name
               </th>
-              <th style={{ padding: '12px 8px', textAlign: 'center', fontWeight: 700, color: '#475569', minWidth: 100, borderRight: '2px solid #94a3b8' }}>
+              <th style={{ padding: '12px 8px', textAlign: 'center', fontWeight: 700, color: '#475569', minWidth: 100 }}>
                 BEFORE CQI
                 <div style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8', marginTop: 2 }}>
                   Total / Max
                 </div>
               </th>
-              <th style={{ padding: '12px 8px', textAlign: 'center', fontWeight: 700, color: '#475569', minWidth: 100, borderRight: '2px solid #94a3b8' }}>
+              <th style={{ padding: '12px 8px', textAlign: 'center', fontWeight: 700, color: '#475569', minWidth: 100 }}>
                 AFTER CQI
                 <div style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8', marginTop: 2 }}>
                   Total / Max
                 </div>
               </th>
-              <th style={{ padding: '12px 8px', textAlign: 'center', fontWeight: 700, color: '#475569', minWidth: 120, borderRight: '2px solid #94a3b8' }}>
+              <th style={{ padding: '12px 8px', textAlign: 'center', fontWeight: 700, color: '#475569', minWidth: 120 }}>
                 TOTAL
                 <div style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8', marginTop: 2 }}>
                   Sum of selected COs
                 </div>
               </th>
-                  {coNumbers.map((coNum, idx) => (
+                  {coNumbers.map(coNum => (
                 <th 
                   key={coNum} 
                   style={{ 
@@ -1256,8 +1205,6 @@ export default function CQIEntry({
                     fontWeight: 700, 
                     color: '#475569',
                     minWidth: 150,
-                    borderRight: idx < coNumbers.length - 1 ? '2px solid #94a3b8' : 'none',
-                    backgroundColor: idx % 2 === 0 ? '#f0f9ff' : '#faf5ff',
                   }}
                 >
                   CO{coNum}
@@ -1333,24 +1280,23 @@ export default function CQIEntry({
                 <tr 
                   key={student.id}
                   style={{ 
-                    borderBottom: '1px solid #cbd5e1',
+                    borderBottom: '1px solid #e5e7eb',
                     backgroundColor: idx % 2 === 0 ? 'white' : '#f9fafb',
                   }}
                 >
-                  <td style={{ padding: '10px 8px', color: '#64748b', borderRight: '2px solid #cbd5e1' }}>
+                  <td style={{ padding: '10px 8px', color: '#64748b' }}>
                     {idx + 1}
                   </td>
-                  <td style={{ padding: '10px 8px', fontFamily: 'monospace', color: '#0f172a', borderRight: '2px solid #cbd5e1' }}>
+                  <td style={{ padding: '10px 8px', fontFamily: 'monospace', color: '#0f172a' }}>
                     {student.reg_no}
                   </td>
-                  <td style={{ padding: '10px 8px', color: '#0f172a', borderRight: '2px solid #cbd5e1' }}>
+                  <td style={{ padding: '10px 8px', color: '#0f172a' }}>
                     {student.name}
                   </td>
                   <td style={{ 
                     padding: '10px 8px', 
                     textAlign: 'center',
                     fontWeight: 600,
-                    borderRight: '2px solid #cbd5e1',
                   }}>
                     {beforeCqiMax > 0 ? (
                       <div>
@@ -1370,7 +1316,6 @@ export default function CQIEntry({
                     textAlign: 'center',
                     fontWeight: 600,
                     backgroundColor: afterCqiValue > beforeCqiValue ? '#f0fdf4' : 'transparent',
-                    borderRight: '2px solid #cbd5e1',
                   }}>
                     {afterCqiMax > 0 ? (
                       <div>
@@ -1391,7 +1336,7 @@ export default function CQIEntry({
                     )}
                   </td>
 
-                  <td style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 700, borderRight: '2px solid #cbd5e1' }}>
+                  <td style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 700 }}>
                     {totalMax > 0 ? (
                       <div style={{ backgroundColor: totalPct < THRESHOLD_PERCENT ? '#fff1f2' : 'transparent', padding: 6, borderRadius: 6 }}>
                         <div style={{ color: totalPct < THRESHOLD_PERCENT ? '#ef4444' : '#0f172a', fontSize: 14, fontWeight: 800 }}>
@@ -1405,7 +1350,7 @@ export default function CQIEntry({
                       <span style={{ color: '#94a3b8' }}>—</span>
                     )}
                   </td>
-                  {coNumbers.map((coNum, coIdx) => {
+                  {coNumbers.map(coNum => {
                     const coKey = `co${coNum}`;
                     const coData = studentTotals[coKey];
                     
@@ -1417,8 +1362,6 @@ export default function CQIEntry({
                             padding: '10px 8px', 
                             textAlign: 'center',
                             color: '#94a3b8',
-                            borderRight: coIdx < coNumbers.length - 1 ? '2px solid #cbd5e1' : 'none',
-                            backgroundColor: coIdx % 2 === 0 ? '#f0f9ff' : '#faf5ff',
                           }}
                         >
                           —
@@ -1436,8 +1379,7 @@ export default function CQIEntry({
                         style={{ 
                           padding: '10px 8px', 
                           textAlign: 'center',
-                          backgroundColor: coIdx % 2 === 0 ? '#f0f9ff' : '#faf5ff',
-                          borderRight: coIdx < coNumbers.length - 1 ? '2px solid #cbd5e1' : 'none',
+                          backgroundColor: isBelowThreshold ? '#fef2f2' : '#f0fdf4',
                         }}
                       >
                         <div style={{ 
@@ -1460,47 +1402,30 @@ export default function CQIEntry({
                           )}
                         </div>
                         {isBelowThreshold ? (
-                          <div style={{
-                            backgroundColor: '#fff7ed',
-                            border: '2px solid #fb923c',
-                            borderRadius: 8,
-                            padding: '8px 10px',
-                            margin: '4px',
-                            boxShadow: '0 2px 4px rgba(251, 146, 60, 0.1)',
-                          }}>
+                          <div>
                             <div style={{ 
                               fontSize: 11, 
-                              color: '#ea580c', 
-                              fontWeight: 700,
-                              marginBottom: 6,
-                              textTransform: 'uppercase',
-                              letterSpacing: '0.5px',
+                              color: '#dc2626', 
+                              fontWeight: 600,
+                              marginBottom: 4,
                             }}>
-                              ⚠ CQI Required
+                              CQI ATTAINED
                             </div>
                             <input
                               type="number"
-                              disabled={publishedLocked}
                               value={cqiValue ?? ''}
                               onChange={(e) => handleCQIChange(student.id, coKey, e.target.value)}
                               placeholder="Enter CQI"
                               className="obe-input"
                               style={{
                                 width: 90,
-                                padding: '6px 10px',
-                                fontSize: 14,
+                                padding: '4px 8px',
+                                fontSize: 13,
                                 textAlign: 'center',
-                                border: '2px solid #fb923c',
-                                borderRadius: 6,
-                                backgroundColor: publishedLocked ? '#f8fafc' : 'white',
-                                fontWeight: 600,
-                                boxShadow: 'inset 0 1px 2px rgba(0, 0, 0, 0.05)',
-                                cursor: publishedLocked ? 'not-allowed' : 'text',
-                                opacity: publishedLocked ? 0.8 : 1,
                               }}
                             />
                             {cqiErrors[`${student.id}_${coKey}`] && (
-                              <div style={{ color: '#dc2626', fontSize: 11, marginTop: 6, fontWeight: 600 }}>
+                              <div style={{ color: '#dc2626', fontSize: 11, marginTop: 6 }}>
                                 {cqiErrors[`${student.id}_${coKey}`]}
                               </div>
                             )}
@@ -1510,7 +1435,6 @@ export default function CQIEntry({
                             fontSize: 12, 
                             color: '#16a34a',
                             fontWeight: 600,
-                            padding: '6px',
                           }}>
                             ✓ NO CQI
                           </div>

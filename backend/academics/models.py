@@ -234,6 +234,10 @@ class StudentProfile(models.Model):
     batch = models.CharField(max_length=32, blank=True)
     status = models.CharField(max_length=16, choices=PROFILE_STATUS_CHOICES, default='ACTIVE')
 
+    # Optional mobile number for OTP verification (kept on profile as requested)
+    mobile_number = models.CharField(max_length=32, blank=True, default='')
+    mobile_number_verified_at = models.DateTimeField(null=True, blank=True)
+
     def __str__(self):
         return f"Student {self.reg_no} ({self.user.username})"
 
@@ -325,6 +329,10 @@ class StaffProfile(models.Model):
     department = models.ForeignKey(Department, on_delete=models.SET_NULL, null=True, blank=True, related_name='staff')
     designation = models.CharField(max_length=128, blank=True)
     status = models.CharField(max_length=16, choices=PROFILE_STATUS_CHOICES, default='ACTIVE')
+
+    # Optional mobile number for OTP verification (kept on profile as requested)
+    mobile_number = models.CharField(max_length=32, blank=True, default='')
+    mobile_number_verified_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return f"Staff {self.staff_id} ({self.user.username})"

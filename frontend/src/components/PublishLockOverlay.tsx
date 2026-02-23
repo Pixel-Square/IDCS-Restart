@@ -40,18 +40,15 @@ export default function PublishLockOverlay({ locked, title, subtitle, children }
 
   return (
     <div style={{ position: 'relative' }}>
-      <div>{children}</div>
+      {/* Lock banner at the top */}
       <div
         style={{
-          position: 'absolute',
-          inset: 0,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: 16,
-          background: 'transparent',
-          backdropFilter: 'none',
-          pointerEvents: 'none',
+          position: 'sticky',
+          top: 0,
+          left: 0,
+          right: 0,
+          zIndex: 10,
+          marginBottom: 12,
         }}
       >
         <div
@@ -60,17 +57,16 @@ export default function PublishLockOverlay({ locked, title, subtitle, children }
             gap: 10,
             alignItems: 'center',
             background: '#ffffff',
-            border: '2px solid #e5e7eb',
-            borderRadius: 14,
-            padding: '14px 18px',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-            maxWidth: 520,
+            border: '2px solid #fde68a',
+            borderRadius: 12,
+            padding: '12px 16px',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
           }}
         >
           <div
             style={{
-              width: 38,
-              height: 38,
+              width: 36,
+              height: 36,
               borderRadius: 999,
               display: 'grid',
               placeItems: 'center',
@@ -79,16 +75,18 @@ export default function PublishLockOverlay({ locked, title, subtitle, children }
               flex: '0 0 auto',
             }}
           >
-            <LockIcon size={22} />
+            <LockIcon size={20} />
           </div>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontWeight: 900, color: '#111827' }}>{title || 'Locked by IQAC'}</div>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ fontWeight: 800, color: '#111827', fontSize: 14 }}>{title || 'Locked by IQAC'}</div>
             <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
               {subtitle || 'Publishing is turned OFF globally for this assessment.'}
             </div>
           </div>
         </div>
       </div>
+      {/* Table content with slight blur when locked */}
+      <div style={{ filter: 'brightness(0.97)', pointerEvents: 'none', userSelect: 'none' }}>{children}</div>
     </div>
   );
 }

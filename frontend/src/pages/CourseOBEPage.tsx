@@ -20,10 +20,27 @@ export default function CourseOBEPage(): JSX.Element {
   const navigate = useNavigate();
   const location = useLocation();
 
+  // All hooks MUST be called before any conditional returns (Rules of Hooks).
+  const courseId = code ? decodeURIComponent(code) : '';
+
   const [activeTab, setActiveTab] = React.useState<TabKey>(() => {
     // default to 'marks'
     return 'marks';
   });
+  const [courseName, setCourseName] = React.useState<string | null>(null);
+  const [courseClassType, setCourseClassType] = React.useState<string | null>(null);
+  const [classTypeLockedFromTA, setClassTypeLockedFromTA] = React.useState(false);
+  const [courseQpType, setCourseQpType] = React.useState<string>(() => {
+    if (!courseId) return 'QP1';
+    try {
+      const stored = localStorage.getItem(`obe_course_qp_${courseId}`);
+      const v = String(stored || '').trim().toUpperCase();
+      return v === 'QP2' ? 'QP2' : 'QP1';
+    } catch {
+      return 'QP1';
+    }
+  });
+  const [courseEnabledAssessments, setCourseEnabledAssessments] = React.useState<string[] | null>(null);
 
   React.useEffect(() => {
     // Derive active tab from the current pathname so direct URLs open correct tab
@@ -48,31 +65,8 @@ export default function CourseOBEPage(): JSX.Element {
     return 'instructions' as const;
   }, [location?.pathname]);
 
-  if (!code) {
-    return (
-      <div style={{ padding: 24 }}>
-        <p style={{ color: '#666' }}>No course selected.</p>
-        <button onClick={() => navigate('/obe')} className="obe-btn obe-btn-primary">Back</button>
-      </div>
-    );
-  }
-
-  const courseId = decodeURIComponent(code);
-  const [courseName, setCourseName] = React.useState<string | null>(null);
-  const [courseClassType, setCourseClassType] = React.useState<string | null>(null);
-  const [classTypeLockedFromTA, setClassTypeLockedFromTA] = React.useState(false);
-  const [courseQpType, setCourseQpType] = React.useState<string>(() => {
-    try {
-      const stored = localStorage.getItem(`obe_course_qp_${courseId}`);
-      const v = String(stored || '').trim().toUpperCase();
-      return v === 'QP2' ? 'QP2' : 'QP1';
-    } catch {
-      return 'QP1';
-    }
-  });
-  const [courseEnabledAssessments, setCourseEnabledAssessments] = React.useState<string[] | null>(null);
-
   React.useEffect(() => {
+    if (!courseId) return;
     let mounted = true;
     (async () => {
       try {
@@ -112,6 +106,7 @@ export default function CourseOBEPage(): JSX.Element {
   }, [courseId]);
 
   React.useEffect(() => {
+    if (!courseId) return;
     let mounted = true;
     (async () => {
       try {
@@ -189,6 +184,15 @@ export default function CourseOBEPage(): JSX.Element {
     })();
     return () => { mounted = false; };
   }, [courseId]);
+
+  if (!code) {
+    return (
+      <div style={{ padding: 24 }}>
+        <p style={{ color: '#666' }}>No course selected.</p>
+        <button onClick={() => navigate('/obe')} className="obe-btn obe-btn-primary">Back</button>
+      </div>
+    );
+  }
 
   return (
     <main className="obe-course-page" style={{ padding: '32px 48px', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif', minHeight: '100vh', background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)' }}>

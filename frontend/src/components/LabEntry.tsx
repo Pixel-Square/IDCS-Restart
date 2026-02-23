@@ -4,11 +4,15 @@ import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster } from '../services/roster';
 import fetchWithAuth from '../services/fetchAuth';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
-import { confirmMarkManagerLock, createEditRequest, fetchDraft, fetchPublishedLabSheet, publishLabSheet, saveDraft } from '../services/obe';
+import { confirmMarkManagerLock, createEditRequest, createPublishRequest, fetchDraft, fetchPublishedLabSheet, publishLabSheet, saveDraft } from '../services/obe';
+import { ensureMobileVerified } from '../services/auth';
 import { useEditWindow } from '../hooks/useEditWindow';
 import { formatRemaining, usePublishWindow } from '../hooks/usePublishWindow';
 import { useMarkTableLock } from '../hooks/useMarkTableLock';
+import { useEditRequestPending } from '../hooks/useEditRequestPending';
+import { useLockBodyScroll } from '../hooks/useLockBodyScroll';
 import PublishLockOverlay from './PublishLockOverlay';
+import AssessmentContainer from './AssessmentContainer';
 
 // Vite-friendly asset URL for lock GIF used in the floating panel
 const lockPanelGif = new URL('https://static.vecteezy.com/system/resources/thumbnails/014/585/778/small/gold-locked-padlock-png.png', import.meta.url).href;
@@ -25,6 +29,7 @@ type LabRowState = {
   marksA: Array<number | ''>;
   marksB: Array<number | ''>;
   ciaExam?: number | '';
+  caaExamByCo?: Record<string, number | ''>;
 };
 
 type LabSheet = {
@@ -54,7 +59,7 @@ type LabDraftPayload = {
 type Props = {
   subjectId?: string | null;
   teachingAssignmentId?: number;
-  assessmentKey: 'formative1' | 'formative2';
+  assessmentKey: 'formative1' | 'formative2' | 'review1' | 'review2';
   label: string;
   coA: number;
   coB: number;
@@ -65,6 +70,10 @@ type Props = {
 const DEFAULT_EXPERIMENTS = 5;
 const DEFAULT_EXPERIMENT_MAX = 25;
 const DEFAULT_CIA_EXAM_MAX = 30;
+const LAB_REVIEW_EXPERIMENT_WEIGHT: Record<number, number> = { 1: 9, 2: 9, 3: 4.5 };
+const LAB_REVIEW_CAA_WEIGHT: Record<number, number> = { 1: 3, 2: 3, 3: 1.5 };
+const LAB_REVIEW_CAA_RAW_MAX: Record<number, number> = { 1: 20, 2: 20, 3: 10 };
+const LAB_REVIEW_CO_MAX: Record<number, number> = { 1: 12, 2: 12, 3: 6 };
 
 function compareRegNo(aRaw: unknown, bRaw: unknown): number {
   const aStr = String(aRaw ?? '').trim();
@@ -113,7 +122,7 @@ function clampInt(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, Math.trunc(n)));
 }
 
-function storageKey(assessmentKey: 'formative1' | 'formative2', subjectId: string) {
+function storageKey(assessmentKey: 'formative1' | 'formative2' | 'review1' | 'review2', subjectId: string) {
   return `${assessmentKey}_sheet_${subjectId}`;
 }
 
@@ -154,6 +163,21 @@ function avgMarks(arr: Array<number | ''>): number | null {
   return nums.reduce((a, b) => a + b, 0) / nums.length;
 }
 
+function normalizeCaaByCo(raw: unknown): Record<string, number | ''> {
+  const src = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const out: Record<string, number | ''> = {};
+  for (const k of Object.keys(src)) {
+    const v = src[k];
+    if (v === '' || v == null) {
+      out[k] = '';
+      continue;
+    }
+    const n = typeof v === 'number' ? v : Number(v);
+    out[k] = Number.isFinite(n) ? n : '';
+  }
+  return out;
+}
+
 function pct(mark: number | null, max: number): string {
   if (mark == null) return '';
   if (!Number.isFinite(max) || max <= 0) return '0';
@@ -182,6 +206,9 @@ export default function LabEntry({
   const [publishing, setPublishing] = useState(false);
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
   const [publishedEditModalOpen, setPublishedEditModalOpen] = useState(false);
+  const [editRequestReason, setEditRequestReason] = useState('');
+  const [editRequestBusy, setEditRequestBusy] = useState(false);
+  const [editRequestError, setEditRequestError] = useState<string | null>(null);
   const [viewMarksModalOpen, setViewMarksModalOpen] = useState(false);
   const [publishedViewSnapshot, setPublishedViewSnapshot] = useState<LabDraftPayload | null>(null);
   const [publishedViewLoading, setPublishedViewLoading] = useState(false);
@@ -189,6 +216,10 @@ export default function LabEntry({
 
   const [markManagerModal, setMarkManagerModal] = useState<null | { mode: 'confirm' | 'request' }>(null);
   const [markManagerBusy, setMarkManagerBusy] = useState(false);
+
+  const [requestReason, setRequestReason] = useState('');
+  const [requesting, setRequesting] = useState(false);
+  const [requestMessage, setRequestMessage] = useState<string | null>(null);
   const [markManagerError, setMarkManagerError] = useState<string | null>(null);
   const [markManagerAnimating, setMarkManagerAnimating] = useState(false);
 
@@ -218,6 +249,8 @@ export default function LabEntry({
     data: publishWindow,
     publishAllowed,
     remainingSeconds,
+    loading: publishWindowLoading,
+    error: publishWindowError,
     refresh: refreshPublishWindow,
   } = usePublishWindow({ assessment: assessmentKey, subjectCode: String(subjectId || ''), teachingAssignmentId });
 
@@ -243,6 +276,21 @@ export default function LabEntry({
   // If we don't have a lock row yet, treat entry as open (table is hidden until Mark Manager is confirmed anyway).
   const entryOpen = markLock?.exists ? Boolean(markLock?.entry_open) : true;
   const publishedEditLocked = Boolean(isPublished && !entryOpen);
+
+  const {
+    pending: markEntryReqPending,
+    pendingUntilMs: markEntryReqPendingUntilMs,
+    setPendingUntilMs: setMarkEntryReqPendingUntilMs,
+    refresh: refreshMarkEntryReqPending,
+  } = useEditRequestPending({
+    enabled: Boolean(isPublished && publishedEditLocked) && Boolean(subjectId),
+    assessment: assessmentKey as any,
+    subjectCode: subjectId ? String(subjectId) : null,
+    scope: 'MARK_ENTRY',
+    teachingAssignmentId,
+  });
+
+  useLockBodyScroll(Boolean(publishedEditModalOpen) || Boolean(markManagerModal) || Boolean(viewMarksModalOpen));
 
   const globalLocked = Boolean(publishWindow?.global_override_active && publishWindow?.global_is_open === false);
 
@@ -288,6 +336,24 @@ export default function LabEntry({
           const expCountB = clampInt(Number((d.sheet as any).expCountB ?? DEFAULT_EXPERIMENTS), 0, 12);
           const btlsA = normalizeBtlArray((d.sheet as any).btlsA, expCountA);
           const btlsB = normalizeBtlArray((d.sheet as any).btlsB, expCountB);
+          const normalizedRows: Record<string, LabRowState> = {};
+          const rawRows = (d.sheet as any).rowsByStudentId && typeof (d.sheet as any).rowsByStudentId === 'object' ? (d.sheet as any).rowsByStudentId : {};
+          for (const [sid, row0] of Object.entries(rawRows)) {
+            const row: any = row0 && typeof row0 === 'object' ? row0 : {};
+            const marksA = normalizeMarksArray(row.marksA, expCountA);
+            const marksB = normalizeMarksArray(row.marksB, expCountB);
+            const rawCia = row.ciaExam;
+            const ciaParsed = rawCia === '' || rawCia == null ? '' : Number(rawCia);
+            const ciaExam = ciaParsed === '' ? '' : Number.isFinite(ciaParsed) ? ciaParsed : '';
+            normalizedRows[String(sid)] = {
+              ...row,
+              studentId: Number.isFinite(Number(row.studentId)) ? Number(row.studentId) : Number(sid),
+              marksA,
+              marksB,
+              ciaExam,
+              caaExamByCo: normalizeCaaByCo(row.caaExamByCo),
+            };
+          }
 
           const loadedSnapshot = (d.sheet as any).markManagerSnapshot ?? null;
           const loadedApprovalUntil = (d.sheet as any).markManagerApprovalUntil ?? null;
@@ -305,7 +371,7 @@ export default function LabEntry({
               expCountB,
               btlsA,
               btlsB,
-              rowsByStudentId: (d.sheet as any).rowsByStudentId && typeof (d.sheet as any).rowsByStudentId === 'object' ? (d.sheet as any).rowsByStudentId : {},
+              rowsByStudentId: normalizedRows,
               markManagerLocked: loadedLocked,
               markManagerSnapshot: loadedSnapshot,
               markManagerApprovalUntil: loadedApprovalUntil,
@@ -394,6 +460,7 @@ export default function LabEntry({
             studentId: s.id,
             marksA: Array.from({ length: expCountA }, () => ''),
             marksB: Array.from({ length: expCountB }, () => ''),
+            caaExamByCo: {},
             ciaExam: '',
           };
         } else {
@@ -402,7 +469,8 @@ export default function LabEntry({
           const rawCia = (existing as any).ciaExam;
           const ciaParsed = rawCia === '' || rawCia == null ? '' : Number(rawCia);
           const ciaExam = ciaParsed === '' ? '' : Number.isFinite(ciaParsed) ? ciaParsed : '';
-          rowsByStudentId[k] = { ...existing, marksA, marksB, ciaExam };
+          const caaExamByCo = normalizeCaaByCo((existing as any).caaExamByCo);
+          rowsByStudentId[k] = { ...existing, marksA, marksB, ciaExam, caaExamByCo };
         }
       }
 
@@ -502,6 +570,18 @@ export default function LabEntry({
   const visibleExpCountA = coAEnabled ? expCountA : 0;
   const visibleExpCountB = coBEnabled ? expCountB : 0;
   const totalExpCols = visibleExpCountA + visibleExpCountB;
+  const visibleCoNumbers = useMemo(() => {
+    const out: number[] = [];
+    if (coAEnabled) out.push(coA);
+    if (coBEnabled) out.push(coB);
+    return out;
+  }, [coAEnabled, coBEnabled, coA, coB]);
+  const ciaExamEnabled = draft.sheet.ciaExamEnabled !== false;
+  const caaCoNumbers = useMemo(
+    () => visibleCoNumbers.filter((n) => Number.isFinite(Number(LAB_REVIEW_CAA_RAW_MAX[n]))),
+    [visibleCoNumbers],
+  );
+  const examCols = ciaExamEnabled ? Math.max(caaCoNumbers.length, 1) : 0;
 
   const visibleBtlIndices = useMemo(() => {
     if (totalExpCols === 0) return [] as number[];
@@ -514,7 +594,6 @@ export default function LabEntry({
   }, [draft.sheet, expCountA, expCountB, totalExpCols, visibleExpCountA, visibleExpCountB]);
 
   const markManagerLocked = Boolean(draft.sheet.markManagerLocked);
-  const ciaExamEnabled = draft.sheet.ciaExamEnabled !== false;
   
   // Table visibility and blocking logic:
   // - BEFORE Mark Manager confirm: table is HIDDEN
@@ -746,19 +825,58 @@ export default function LabEntry({
     });
   }
 
+  function setCaaExamByCo(studentId: number, coNumber: number, value: number | '') {
+    setDraft((p) => {
+      const k = String(studentId);
+      const existing = p.sheet.rowsByStudentId?.[k];
+      if (!existing) return p;
+
+      const coKey = String(clampInt(Number(coNumber), 1, 5));
+      const maxRaw = Number(LAB_REVIEW_CAA_RAW_MAX[Number(coKey)] || 0);
+      const nextValue = value === '' ? '' : clampInt(Number(value), 0, maxRaw > 0 ? maxRaw : 0);
+
+      const caaExamByCo: Record<string, number | ''> = {
+        ...normalizeCaaByCo((existing as any).caaExamByCo),
+        [coKey]: nextValue,
+      };
+
+      return {
+        ...p,
+        sheet: {
+          ...p.sheet,
+          rowsByStudentId: {
+            ...p.sheet.rowsByStudentId,
+            [k]: { ...existing, caaExamByCo } as LabRowState,
+          },
+        },
+      };
+    });
+  }
+
   async function saveNow() {
     if (!subjectId) return;
     setSavingDraft(true);
     try {
       await saveDraft(assessmentKey, subjectId, draft);
       setSavedAt(new Date().toLocaleString());
-      alert('Draft saved.');
     } catch (e: any) {
       alert(e?.message || 'Draft save failed');
     } finally {
       setSavingDraft(false);
     }
   }
+
+  // Auto-save draft when switching tabs
+  const draftRef = React.useRef(draft);
+  draftRef.current = draft;
+  useEffect(() => {
+    const handler = () => {
+      if (!subjectId || tableBlocked) return;
+      saveDraft(assessmentKey, subjectId, draftRef.current).catch(() => {});
+    };
+    window.addEventListener('obe:before-tab-switch', handler);
+    return () => window.removeEventListener('obe:before-tab-switch', handler);
+  }, [subjectId, assessmentKey, tableBlocked]);
 
   async function resetSheet() {
     if (!subjectId) return;
@@ -773,6 +891,7 @@ export default function LabEntry({
         studentId: s.id,
         marksA: Array.from({ length: expCountA2 }, () => ''),
         marksB: Array.from({ length: expCountB2 }, () => ''),
+        caaExamByCo: {},
         ciaExam: '',
       };
     }
@@ -811,6 +930,24 @@ export default function LabEntry({
       return;
     }
 
+    // If already published and locked, use Publish as the entry-point to request edits.
+    if (isPublished && publishedEditLocked) {
+      if (markEntryReqPending) {
+        alert('Edit request is pending. Please wait for IQAC approval.');
+        return;
+      }
+
+      const mobileOk = await ensureMobileVerified();
+      if (!mobileOk) {
+        alert('Please verify your mobile number in Profile before requesting edits.');
+        window.location.href = '/profile';
+        return;
+      }
+
+      setPublishedEditModalOpen(true);
+      return;
+    }
+
     // After publish, keep the table locked (no edits) until IQAC approval.
     if (publishedAt) return;
 
@@ -831,6 +968,27 @@ export default function LabEntry({
       alert(e?.message || 'Publish failed');
     } finally {
       setPublishing(false);
+    }
+  }
+
+  async function requestApproval() {
+    if (!subjectId) return;
+    setRequesting(true);
+    setRequestMessage(null);
+    try {
+      await createPublishRequest({
+        assessment: assessmentKey,
+        subject_code: subjectId,
+        reason: requestReason,
+        teaching_assignment_id: teachingAssignmentId
+      });
+      setRequestMessage('Request sent to IQAC successfully.');
+      setRequestReason('');
+      refreshPublishWindow();
+    } catch (e: any) {
+      setRequestMessage(e?.message || 'Failed to send request.');
+    } finally {
+      setRequesting(false);
     }
   }
 
@@ -912,13 +1070,13 @@ export default function LabEntry({
     refreshPublishedSnapshot(true);
   }, [viewMarksModalOpen, subjectId, assessmentKey]);
 
-  // identity (S.No, RegNo, Name) + experiments + total(avg) + CIA exam + CO(A,B) mark/% + BTL mark/%
-  const headerCols = 3 + totalExpCols + 1 + (ciaExamEnabled ? 1 : 0) + 4 + visibleBtlIndices.length * 2;
+  // identity + experiments + total + CAA split + CO attainment + BTL
+  const headerCols = 3 + totalExpCols + 1 + examCols + 4 + visibleBtlIndices.length * 2;
 
   const expMaxA = clampInt(Number(draft.sheet.expMaxA ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
   const expMaxB = clampInt(Number(draft.sheet.expMaxB ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
-  const coMaxA = expMaxA + (ciaExamEnabled ? DEFAULT_CIA_EXAM_MAX / 2 : 0);
-  const coMaxB = expMaxB + (ciaExamEnabled ? DEFAULT_CIA_EXAM_MAX / 2 : 0);
+  const coMaxA = Number(LAB_REVIEW_CO_MAX[coA] || 0);
+  const coMaxB = Number(LAB_REVIEW_CO_MAX[coB] || 0);
   const maxExpMax = Math.max(expMaxA, expMaxB, DEFAULT_EXPERIMENT_MAX);
 
   const cellTh: React.CSSProperties = {
@@ -964,6 +1122,9 @@ export default function LabEntry({
 
   const coEnableStyle: React.CSSProperties = {
     display: 'flex',
+    width: '100%',
+    maxWidth: 1200,
+    margin: '0 auto',
     gap: 10,
     flexWrap: 'wrap',
     alignItems: 'center',
@@ -999,7 +1160,7 @@ export default function LabEntry({
   };
 
   return (
-    <div>
+    <AssessmentContainer>
       <style>{`
         @keyframes markManagerGlitch {
           0%, 100% { transform: translate(0,0); filter: none; }
@@ -1103,13 +1264,21 @@ export default function LabEntry({
             </label>
             <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontWeight: 800, fontSize: 12, color: '#111827' }}>
               <input type="checkbox" checked={ciaExamEnabled} disabled={markManagerLocked} onChange={(e) => setCiaExamEnabled(e.target.checked)} style={bigCheckboxStyle} />
-              CIA Exam
+              CAA Exam
             </label>
           </div>
 
-          <div style={{ width: '100%', display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 8 }}>
+          <div
+            style={{
+              width: '100%',
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+              gap: 10,
+              marginTop: 8,
+            }}
+          >
             {coAEnabled ? (
-              <div style={{ width: 200 }}>
+              <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: 11, color: '#6b7280' }}>No. of experiments (CO-{coA})</div>
                 <input type="number" className="obe-input" value={expCountA} onChange={(e) => setExpCount('A', Number(e.target.value))} min={0} max={12} disabled={markManagerLocked} />
                 <div style={{ fontSize: 11, color: '#6b7280', marginTop: 6 }}>Max marks (per experiment)</div>
@@ -1117,7 +1286,7 @@ export default function LabEntry({
               </div>
             ) : null}
             {coBEnabled ? (
-              <div style={{ width: 200 }}>
+              <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: 11, color: '#6b7280' }}>No. of experiments (CO-{coB})</div>
                 <input type="number" className="obe-input" value={expCountB} onChange={(e) => setExpCount('B', Number(e.target.value))} min={0} max={12} disabled={markManagerLocked} />
                 <div style={{ fontSize: 11, color: '#6b7280', marginTop: 6 }}>Max marks (per experiment)</div>
@@ -1130,46 +1299,104 @@ export default function LabEntry({
         {markManagerError ? <div style={{ marginTop: 8, fontSize: 12, color: '#991b1b' }}>{markManagerError}</div> : null}
       </div>
 
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button
+            onClick={resetSheet}
+            className="obe-btn obe-btn-danger"
+            disabled={!subjectId || !tableVisible || tableBlocked}
+            title={!tableVisible ? 'Save & Lock Mark Manager first to enable table' : tableBlocked ? 'Table locked after publish' : 'Clear all marks'}
+          >
+            Reset All
+          </button>
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <button
             onClick={saveNow}
             className="obe-btn obe-btn-success"
             disabled={savingDraft || !subjectId || !tableVisible || tableBlocked}
-            style={!tableVisible || tableBlocked ? { opacity: 0.6, cursor: 'not-allowed' } : undefined}
             title={!tableVisible ? 'Save & Lock Mark Manager first to enable table' : tableBlocked ? 'Table locked after publish' : 'Save current draft'}
           >
             {savingDraft ? 'Saving…' : 'Save Draft'}
           </button>
           <button
-            onClick={resetSheet}
-            className="obe-btn obe-btn-danger"
-            disabled={!subjectId || !tableVisible || tableBlocked}
-            style={!tableVisible || tableBlocked ? { opacity: 0.6, cursor: 'not-allowed' } : undefined}
-            title={!tableVisible ? 'Save & Lock Mark Manager first to enable table' : tableBlocked ? 'Table locked after publish' : 'Clear all marks'}
-          >
-            Reset All
-          </button>
-          <button
             onClick={publish}
             className="obe-btn obe-btn-primary"
-            disabled={!subjectId || publishing || !tableVisible || tableBlocked || globalLocked || !publishAllowed}
-            style={!tableVisible || tableBlocked ? { opacity: 0.6, cursor: 'not-allowed' } : undefined}
+            disabled={publishedEditLocked ? markEntryReqPending : !subjectId || publishing || !tableVisible || tableBlocked || globalLocked || !publishAllowed}
             title={!tableVisible ? 'Save & Lock Mark Manager first' : tableBlocked ? 'Table locked after publish' : !publishAllowed ? 'Publish window closed' : globalLocked ? 'Publishing locked by IQAC' : 'Publish marks'}
           >
-            {publishing ? 'Publishing…' : 'Publish'}
+            {publishedEditLocked ? (markEntryReqPending ? 'Request Pending' : 'Request Edit') : publishing ? 'Publishing…' : 'Publish'}
           </button>
-        </div>
-
-        <div style={{ flex: 1 }} />
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12, color: '#6b7280', alignItems: 'center' }}>
-          {savedAt ? <div title="Last saved">💾 {savedAt}</div> : null}
-          {publishedAt ? <div title="Published">✅ {publishedAt}</div> : null}
-          {remainingSeconds != null && !publishAllowed ? <div title="Publish window opens in">⏰ {formatRemaining(remainingSeconds)}</div> : null}
+          {savedAt && <div style={{ fontSize: 12, color: '#6b7280', alignSelf: 'center' }}>Saved: {savedAt}</div>}
+          {publishedAt && <div style={{ fontSize: 12, color: '#16a34a', alignSelf: 'center' }}>Published: {publishedAt}</div>}
         </div>
       </div>
 
-      {error && <div style={{ marginBottom: 10, color: '#b91c1c' }}>{error}</div>}
+      {error && (
+        <div
+          style={{
+            background: '#fef2f2',
+            border: '1px solid #ef444433',
+            color: '#991b1b',
+            padding: 10,
+            borderRadius: 10,
+            marginBottom: 10,
+            maxWidth: '100%',
+            whiteSpace: 'pre-wrap',
+            overflowWrap: 'anywhere',
+            wordBreak: 'break-word',
+          }}
+        >
+          {error}
+        </div>
+      )}
+
+      <div style={{ marginBottom: 10, fontSize: 12, color: publishAllowed ? '#065f46' : '#b91c1c' }}>
+        {publishWindowLoading ? (
+          'Checking publish due time…'
+        ) : publishWindowError ? (
+          publishWindowError
+        ) : publishWindow?.due_at ? (
+          <>
+            Due: {new Date(publishWindow.due_at).toLocaleString()} • Remaining: {formatRemaining(remainingSeconds)}
+            {publishWindow.allowed_by_approval && publishWindow.approval_until ? (
+              <> • Approved until {new Date(publishWindow.approval_until).toLocaleString()}</>
+            ) : null}
+          </>
+        ) : (
+          'Due time not set by IQAC.'
+        )}
+      </div>
+
+      {globalLocked ? (
+        <div style={{ marginBottom: 10, border: '1px solid #fde68a', background: '#fffbeb', borderRadius: 12, padding: 12 }}>
+          <div style={{ fontWeight: 800, marginBottom: 6 }}>Publishing disabled by IQAC</div>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>
+            Global publishing is turned OFF for this assessment. You can view the sheet, but editing and publishing are locked.
+          </div>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
+            <button className="obe-btn" onClick={() => refreshPublishWindow()} disabled={publishWindowLoading}>Refresh</button>
+          </div>
+        </div>
+      ) : !publishAllowed ? (
+        <div style={{ marginBottom: 10, border: '1px solid #fecaca', background: '#fff7ed', borderRadius: 12, padding: 12 }}>
+          <div style={{ fontWeight: 800, marginBottom: 6 }}>Publish time is over</div>
+          <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>Send a request to IQAC to approve publishing.</div>
+          <textarea
+            value={requestReason}
+            onChange={(e) => setRequestReason(e.target.value)}
+            placeholder="Reason (optional)"
+            rows={3}
+            style={{ width: '100%', padding: 10, borderRadius: 10, border: '1px solid #e5e7eb', resize: 'vertical' }}
+          />
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
+            <button className="obe-btn" onClick={() => refreshPublishWindow()} disabled={requesting || publishWindowLoading}>Refresh</button>
+            <button className="obe-btn obe-btn-primary" onClick={requestApproval} disabled={requesting}>{requesting ? 'Requesting…' : 'Request Approval'}</button>
+          </div>
+          {requestMessage ? <div style={{ marginTop: 8, fontSize: 12, color: '#065f46' }}>{requestMessage}</div> : null}
+        </div>
+      ) : null}
       {loading ? (
         <div style={{ color: '#6b7280' }}>Loading roster…</div>
       ) : students.length === 0 ? (
@@ -1192,7 +1419,18 @@ export default function LabEntry({
       ) : (
         <div style={cardStyle}>
           <PublishLockOverlay locked={globalLocked}>
-            <div className="obe-table-wrapper" style={{ overflowX: 'auto' }}>
+            <div
+              className="obe-table-wrapper"
+              style={{
+                width: '100%',
+                maxWidth: '100%',
+                overflowX: 'scroll',
+                overflowY: 'hidden',
+                WebkitOverflowScrolling: 'touch',
+                overscrollBehaviorX: 'contain',
+                scrollbarGutter: 'stable',
+              }}
+            >
               <table className="obe-table" style={{ minWidth: minTableWidth, width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
@@ -1207,7 +1445,7 @@ export default function LabEntry({
 
                 <th style={cellTh} colSpan={Math.max(1, totalExpCols)}>Experiments</th>
                 <th style={cellTh} rowSpan={5}>Total (Avg)</th>
-                {ciaExamEnabled ? <th style={cellTh} rowSpan={5}>CIA Exam</th> : null}
+                {ciaExamEnabled ? <th style={cellTh} colSpan={Math.max(caaCoNumbers.length, 1)}>CAA EXAM</th> : null}
                 <th style={cellTh} colSpan={4}>CO ATTAINMENT</th>
                 {visibleBtlIndices.length ? <th style={cellTh} colSpan={visibleBtlIndices.length * 2}>BTL ATTAINMENT</th> : null}
               </tr>
@@ -1226,6 +1464,16 @@ export default function LabEntry({
                     ))}
                   </>
                 )}
+
+                {ciaExamEnabled ? (
+                  caaCoNumbers.length ? (
+                    caaCoNumbers.map((coNum) => (
+                      <th key={`caa_hdr_${coNum}`} style={cellTh}>CO-{coNum}</th>
+                    ))
+                  ) : (
+                    <th style={cellTh}>—</th>
+                  )
+                ) : null}
 
                 <th style={cellTh} colSpan={2}>CO-{coA}</th>
                 <th style={cellTh} colSpan={2}>CO-{coB}</th>
@@ -1250,6 +1498,16 @@ export default function LabEntry({
                     ))}
                   </>
                 )}
+
+                {ciaExamEnabled ? (
+                  caaCoNumbers.length ? (
+                    caaCoNumbers.map((coNum) => (
+                      <th key={`caa_max_${coNum}`} style={cellTh}>{LAB_REVIEW_CAA_RAW_MAX[coNum] ?? 0}</th>
+                    ))
+                  ) : (
+                    <th style={cellTh}>—</th>
+                  )
+                ) : null}
 
                 <th style={cellTh}>{coMaxA}</th>
                 <th style={cellTh}>%</th>
@@ -1277,7 +1535,7 @@ export default function LabEntry({
                     ))}
                   </>
                 )}
-                <th style={cellTh} colSpan={4 + visibleBtlIndices.length * 2} />
+                <th style={cellTh} colSpan={4 + visibleBtlIndices.length * 2 + examCols} />
               </tr>
 
               <tr>
@@ -1381,7 +1639,7 @@ export default function LabEntry({
                     })}
                   </>
                 )}
-                <th style={cellTh} colSpan={4 + visibleBtlIndices.length * 2} />
+                <th style={cellTh} colSpan={4 + visibleBtlIndices.length * 2 + examCols} />
               </tr>
             </thead>
 
@@ -1398,8 +1656,7 @@ export default function LabEntry({
                     const row = draft.sheet.rowsByStudentId?.[String(s.id)];
                     const marksA = normalizeMarksArray((row as any)?.marksA, expCountA);
                     const marksB = normalizeMarksArray((row as any)?.marksB, expCountB);
-                    const ciaExamRaw = (row as any)?.ciaExam;
-                    const ciaExamNum = ciaExamEnabled && typeof ciaExamRaw === 'number' && Number.isFinite(ciaExamRaw) ? ciaExamRaw : null;
+                    const caaByCo = normalizeCaaByCo((row as any)?.caaExamByCo);
 
                     const visibleMarksA = marksA.slice(0, visibleExpCountA);
                     const visibleMarksB = marksB.slice(0, visibleExpCountB);
@@ -1409,17 +1666,29 @@ export default function LabEntry({
                     const visibleBtlsB = normalizeBtlArray((draft.sheet as any).btlsB, expCountB).slice(0, visibleExpCountB);
 
                     const avgTotal = avgMarks(allVisibleMarks);
-                    const avgA = avgMarks(visibleMarksA);
-                    const avgB = avgMarks(visibleMarksB);
+                    const expTotalA = sumMarks(visibleMarksA);
+                    const expTotalB = sumMarks(visibleMarksB);
+                    const expMaxTotalA = visibleExpCountA * expMaxA;
+                    const expMaxTotalB = visibleExpCountB * expMaxB;
 
-                    const coAMarkNum =
-                      avgA == null && avgTotal == null && (!ciaExamEnabled || ciaExamNum == null)
-                        ? null
-                        : (avgA ?? 0) + (ciaExamEnabled ? (ciaExamNum ?? 0) / 2 : 0);
-                    const coBMarkNum =
-                      avgB == null && avgTotal == null && (!ciaExamEnabled || ciaExamNum == null)
-                        ? null
-                        : (avgB ?? 0) + (ciaExamEnabled ? (ciaExamNum ?? 0) / 2 : 0);
+                    const expWeightA = Number(LAB_REVIEW_EXPERIMENT_WEIGHT[coA] || 0);
+                    const expWeightB = Number(LAB_REVIEW_EXPERIMENT_WEIGHT[coB] || 0);
+                    const coAExpNorm = expMaxTotalA > 0 ? (expTotalA / expMaxTotalA) * expWeightA : 0;
+                    const coBExpNorm = expMaxTotalB > 0 ? (expTotalB / expMaxTotalB) * expWeightB : 0;
+
+                    const caaRawA = typeof caaByCo[String(coA)] === 'number' ? Number(caaByCo[String(coA)]) : 0;
+                    const caaRawB = typeof caaByCo[String(coB)] === 'number' ? Number(caaByCo[String(coB)]) : 0;
+                    const caaRawMaxA = Number(LAB_REVIEW_CAA_RAW_MAX[coA] || 0);
+                    const caaRawMaxB = Number(LAB_REVIEW_CAA_RAW_MAX[coB] || 0);
+                    const caaWeightA = Number(LAB_REVIEW_CAA_WEIGHT[coA] || 0);
+                    const caaWeightB = Number(LAB_REVIEW_CAA_WEIGHT[coB] || 0);
+                    const coACaaNorm = ciaExamEnabled && caaRawMaxA > 0 ? (caaRawA / caaRawMaxA) * caaWeightA : 0;
+                    const coBCaaNorm = ciaExamEnabled && caaRawMaxB > 0 ? (caaRawB / caaRawMaxB) * caaWeightB : 0;
+
+                    const hasAnyA = expTotalA > 0 || caaRawA > 0;
+                    const hasAnyB = expTotalB > 0 || caaRawB > 0;
+                    const coAMarkNum = hasAnyA ? coAExpNorm + coACaaNorm : null;
+                    const coBMarkNum = hasAnyB ? coBExpNorm + coBCaaNorm : null;
 
                     const btlAvgByIndex: Record<number, number | null> = {};
                     for (const n of visibleBtlIndices) {
@@ -1442,8 +1711,8 @@ export default function LabEntry({
                     return (
                       <tr key={s.id}>
                         <td style={{ ...cellTd, width: '30px', minWidth: '30px', fontWeight: 700 }}>{idx + 1}</td>
-                        <td style={{ ...cellTd, width: '70px', minWidth: '70px', fontWeight: 600 }}>{s.reg_no.slice(-8)}</td>
-                        <td style={{ ...cellTd, fontWeight: 600, whiteSpace: 'nowrap' }}>{s.name}</td>
+                        <td style={{ ...cellTd, width: '70px', minWidth: '70px', fontWeight: 600 }}>{String(s.reg_no || '').slice(-8)}</td>
+                        <td style={{ ...cellTd, fontWeight: 600, whiteSpace: 'nowrap' }}>{String(s.name || '')}</td>
 
                         {Array.from({ length: visibleExpCountA }, (_, i) => (
                           <td key={`ma${s.id}_${i}`} style={{ ...cellTd, padding: '2px' }}>
@@ -1507,35 +1776,43 @@ export default function LabEntry({
 
                         <td style={{ ...cellTd, fontWeight: 700, fontSize: 'clamp(10px, 0.9vw, 11px)' }}>{avgTotal == null ? '' : avgTotal.toFixed(1)}</td>
                         {ciaExamEnabled ? (
-                          <td style={{ ...cellTd, padding: '2px' }}>
-                            <input
-                              type="number"
-                              value={(row as any)?.ciaExam ?? ''}
-                              onChange={(e) => {
-                                const raw = e.target.value;
-                                const max = Math.max(expMaxA, expMaxB, DEFAULT_CIA_EXAM_MAX);
-
-                                if (raw === '') {
-                                  e.currentTarget.setCustomValidity('');
-                                  return setCiaExam(s.id, '');
-                                }
-                                const next = Number(raw);
-                                if (!Number.isFinite(next)) return;
-                                if (next > max) {
-                                  e.currentTarget.setCustomValidity(`Max mark is ${max}`);
-                                  e.currentTarget.reportValidity();
-                                  window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
-                                  return;
-                                }
-                                e.currentTarget.setCustomValidity('');
-                                setCiaExam(s.id, next);
-                              }}
-                              style={inputStyle}
-                              min={0}
-                              max={Math.max(expMaxA, expMaxB, DEFAULT_CIA_EXAM_MAX)}
-                              disabled={!tableVisible || tableBlocked}
-                            />
-                          </td>
+                          caaCoNumbers.length ? (
+                            caaCoNumbers.map((coNum) => {
+                              const maxRaw = Number(LAB_REVIEW_CAA_RAW_MAX[coNum] || 0);
+                              const value = caaByCo[String(coNum)] ?? '';
+                              return (
+                                <td key={`caa_${s.id}_${coNum}`} style={{ ...cellTd, padding: '2px' }}>
+                                  <input
+                                    type="number"
+                                    value={value}
+                                    onChange={(e) => {
+                                      const raw = e.target.value;
+                                      if (raw === '') {
+                                        e.currentTarget.setCustomValidity('');
+                                        return setCaaExamByCo(s.id, coNum, '');
+                                      }
+                                      const next = Number(raw);
+                                      if (!Number.isFinite(next)) return;
+                                      if (next > maxRaw) {
+                                        e.currentTarget.setCustomValidity(`Max mark is ${maxRaw}`);
+                                        e.currentTarget.reportValidity();
+                                        window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                                        return;
+                                      }
+                                      e.currentTarget.setCustomValidity('');
+                                      setCaaExamByCo(s.id, coNum, next);
+                                    }}
+                                    style={inputStyle}
+                                    min={0}
+                                    max={maxRaw}
+                                    disabled={!tableVisible || tableBlocked}
+                                  />
+                                </td>
+                              );
+                            })
+                          ) : (
+                            <td style={{ ...cellTd, textAlign: 'center', color: '#6b7280' }}>—</td>
+                          )
                         ) : null}
                         <td style={{ ...cellTd, width: '28px', fontSize: '10px', padding: '2px', fontWeight: 600, color: '#5f6368' }}>{coAMarkNum == null ? '' : coAMarkNum.toFixed(1)}</td>
                         <td style={{ ...cellTd, width: '25px', fontSize: '10px', padding: '2px', fontWeight: 600, color: '#5f6368' }}>{pct(coAMarkNum, coMaxA)}</td>
@@ -1613,11 +1890,22 @@ export default function LabEntry({
                     <button
                       type="button"
                       className="obe-btn obe-btn-success"
-                      onClick={() => {
+                      disabled={markEntryReqPending}
+                      onClick={async () => {
+                        if (markEntryReqPending) {
+                          alert('Edit request is pending. Please wait for IQAC approval.');
+                          return;
+                        }
+                        const mobileOk = await ensureMobileVerified();
+                        if (!mobileOk) {
+                          alert('Please verify your mobile number in Profile before requesting edits.');
+                          window.location.href = '/profile';
+                          return;
+                        }
                         setPublishedEditModalOpen(true);
                       }}
                     >
-                      Edit
+                      {markEntryReqPending ? 'Request Pending' : 'Request Edit'}
                     </button>
                   </div>
 
@@ -1671,11 +1959,16 @@ export default function LabEntry({
             padding: 16,
             zIndex: 60,
           }}
-          onClick={() => setPublishedEditModalOpen(false)}
+          onClick={() => {
+            if (editRequestBusy) return;
+            setPublishedEditModalOpen(false);
+          }}
         >
           <div
             style={{
               width: 'min(560px, 96vw)',
+              maxHeight: 'min(86vh, 740px)',
+              overflow: 'auto',
               background: '#fff',
               borderRadius: 14,
               border: '1px solid #e5e7eb',
@@ -1684,8 +1977,17 @@ export default function LabEntry({
             onClick={(e) => e.stopPropagation()}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-              <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>Edit Request</div>
+              <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>Request Edit Access</div>
               <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>{String(assessmentKey).toUpperCase()} LAB</div>
+            </div>
+
+            <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10, lineHeight: 1.35 }}>
+              This will send a request to IQAC. Once approved, mark entry will open for editing until the approval expires.
+              {markEntryReqPendingUntilMs ? (
+                <div style={{ marginTop: 6 }}>
+                  <strong>Request window:</strong> 24 hours
+                </div>
+              ) : null}
             </div>
 
             <div style={{ fontSize: 13, color: '#374151', marginBottom: 10, lineHeight: 1.35 }}>
@@ -1703,32 +2005,77 @@ export default function LabEntry({
               </div>
             </div>
 
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: '#111827', marginBottom: 6 }}>Reason</div>
+              <textarea
+                value={editRequestReason}
+                onChange={(e) => setEditRequestReason(e.target.value)}
+                placeholder="Explain why you need to edit (required)"
+                rows={4}
+                className="obe-input"
+                style={{ resize: 'vertical' }}
+              />
+            </div>
+
+            {editRequestError ? <div style={{ marginTop: 8, fontSize: 12, color: '#b91c1c' }}>{editRequestError}</div> : null}
+
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button type="button" className="obe-btn" onClick={() => setPublishedEditModalOpen(false)}>
-                Close
+              <button type="button" className="obe-btn" disabled={editRequestBusy} onClick={() => setPublishedEditModalOpen(false)}>
+                Cancel
               </button>
               <button
                 type="button"
                 className="obe-btn obe-btn-primary"
+                disabled={editRequestBusy || markEntryReqPending || !subjectId || !String(editRequestReason || '').trim()}
                 onClick={async () => {
                   if (!subjectId) return;
+
+                  const mobileOk = await ensureMobileVerified();
+                  if (!mobileOk) {
+                    alert('Please verify your mobile number in Profile before requesting edits.');
+                    window.location.href = '/profile';
+                    return;
+                  }
+
+                  if (markEntryReqPending) {
+                    alert('Edit request is pending. Please wait.');
+                    return;
+                  }
+
+                  const reason = String(editRequestReason || '').trim();
+                  if (!reason) {
+                    setEditRequestError('Reason is required.');
+                    return;
+                  }
+                  setEditRequestBusy(true);
+                  setEditRequestError(null);
                   try {
                     await createEditRequest({
                       assessment: assessmentKey as any,
                       subject_code: String(subjectId),
                       scope: 'MARK_ENTRY',
-                      reason: `Edit request: Marks entry for ${label}`,
+                      reason,
                       teaching_assignment_id: teachingAssignmentId,
                     });
                     alert('Edit request sent to IQAC.');
                     setPublishedEditModalOpen(false);
+                    setEditRequestReason('');
+                    setMarkEntryReqPendingUntilMs(Date.now() + 24 * 60 * 60 * 1000);
+                    try {
+                      refreshMarkEntryReqPending({ silent: true });
+                    } catch {
+                      // ignore
+                    }
                     refreshMarkLock({ silent: true });
                   } catch (e: any) {
+                    setEditRequestError(e?.message || 'Request failed');
                     alert(e?.message || 'Request failed');
+                  } finally {
+                    setEditRequestBusy(false);
                   }
                 }}
               >
-                Request Edit
+                {editRequestBusy ? 'Requesting…' : markEntryReqPending ? 'Request Pending' : 'Send Request'}
               </button>
             </div>
           </div>
@@ -1810,7 +2157,7 @@ export default function LabEntry({
                         </tr>
                       ) : null}
                       <tr>
-                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 800 }}>CIA Exam</td>
+                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 800 }}>CAA Exam</td>
                         <td colSpan={2} style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right', fontWeight: 600 }}>
                           {ciaExamEnabled ? '✅ Enabled' : '❌ Disabled'}
                         </td>
@@ -1969,14 +2316,30 @@ export default function LabEntry({
 
               const viewExpMaxA = clampInt(Number((viewSheet as any).expMaxA ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
               const viewExpMaxB = clampInt(Number((viewSheet as any).expMaxB ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
-              const viewCoMaxA = viewExpMaxA + (viewCiaEnabled ? DEFAULT_CIA_EXAM_MAX / 2 : 0);
-              const viewCoMaxB = viewExpMaxB + (viewCiaEnabled ? DEFAULT_CIA_EXAM_MAX / 2 : 0);
+              const viewCoMaxA = Number(LAB_REVIEW_CO_MAX[coA] || 0);
+              const viewCoMaxB = Number(LAB_REVIEW_CO_MAX[coB] || 0);
               const viewMaxExp = Math.max(viewExpMaxA, viewExpMaxB, DEFAULT_EXPERIMENT_MAX);
-              const viewHeaderCols = 3 + viewTotalExp + 1 + (viewCiaEnabled ? 1 : 0) + 4 + viewBtls.length * 2;
-              const viewMinWidth = Math.max(920, 360 + (viewTotalExp + viewBtls.length * 2 + (viewCiaEnabled ? 1 : 0)) * 80);
+              const viewVisibleCoNumbers = [viewCoAEnabled ? coA : null, viewCoBEnabled ? coB : null].filter((v): v is number => typeof v === 'number');
+              const viewCaaCoNumbers = viewVisibleCoNumbers.filter((n) => Number.isFinite(Number(LAB_REVIEW_CAA_RAW_MAX[n])));
+              const viewExamCols = viewCiaEnabled ? Math.max(viewCaaCoNumbers.length, 1) : 0;
+              const viewHeaderCols = 3 + viewTotalExp + 1 + viewExamCols + 4 + viewBtls.length * 2;
+              const viewMinWidth = Math.max(920, 360 + (viewTotalExp + viewBtls.length * 2 + viewExamCols) * 80);
 
               return (
-                <div style={{ overflowX: 'auto', border: '1px solid #e5e7eb', borderRadius: 12 }}>
+                <div
+                  className="obe-table-wrapper"
+                  style={{
+                    width: '100%',
+                    maxWidth: '100%',
+                    overflowX: 'scroll',
+                    overflowY: 'hidden',
+                    WebkitOverflowScrolling: 'touch',
+                    overscrollBehaviorX: 'contain',
+                    scrollbarGutter: 'stable',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: 12,
+                  }}
+                >
                   <table className="obe-table" style={{ width: 'max-content', minWidth: viewMinWidth, tableLayout: 'auto', borderCollapse: 'collapse' }}>
                     <thead>
                       <tr>
@@ -1990,7 +2353,7 @@ export default function LabEntry({
                         <th style={cellTh} rowSpan={5}>Name of the Students</th>
                         <th style={cellTh} colSpan={Math.max(1, viewTotalExp)}>Experiments</th>
                         <th style={cellTh} rowSpan={5}>Total (Avg)</th>
-                        {viewCiaEnabled ? <th style={cellTh} rowSpan={5}>CIA Exam</th> : null}
+                        {viewCiaEnabled ? <th style={cellTh} colSpan={Math.max(viewCaaCoNumbers.length, 1)}>CAA EXAM</th> : null}
                         <th style={cellTh} colSpan={4}>CO ATTAINMENT</th>
                         {viewBtls.length ? <th style={cellTh} colSpan={viewBtls.length * 2}>BTL ATTAINMENT</th> : null}
                       </tr>
@@ -2007,6 +2370,15 @@ export default function LabEntry({
                             ))}
                           </>
                         )}
+                        {viewCiaEnabled ? (
+                          viewCaaCoNumbers.length ? (
+                            viewCaaCoNumbers.map((coNum) => (
+                              <th key={`v_caa_${coNum}`} style={cellTh}>CO-{coNum}</th>
+                            ))
+                          ) : (
+                            <th style={cellTh}>—</th>
+                          )
+                        ) : null}
                         <th style={cellTh} colSpan={2}>CO-{coA}</th>
                         <th style={cellTh} colSpan={2}>CO-{coB}</th>
                         {viewBtls.map((n) => (
@@ -2023,6 +2395,15 @@ export default function LabEntry({
                             ))}
                           </>
                         )}
+                        {viewCiaEnabled ? (
+                          viewCaaCoNumbers.length ? (
+                            viewCaaCoNumbers.map((coNum) => (
+                              <th key={`v_caa_max_${coNum}`} style={cellTh}>{LAB_REVIEW_CAA_RAW_MAX[coNum] ?? 0}</th>
+                            ))
+                          ) : (
+                            <th style={cellTh}>—</th>
+                          )
+                        ) : null}
                         <th style={cellTh}>{viewCoMaxA}</th>
                         <th style={cellTh}>%</th>
                         <th style={cellTh}>{viewCoMaxB}</th>
@@ -2047,7 +2428,7 @@ export default function LabEntry({
                             ))}
                           </>
                         )}
-                        <th style={cellTh} colSpan={4 + viewBtls.length * 2} />
+                        <th style={cellTh} colSpan={4 + viewBtls.length * 2 + viewExamCols} />
                       </tr>
                       <tr>
                         {viewTotalExp === 0 ? (
@@ -2062,7 +2443,7 @@ export default function LabEntry({
                             ))}
                           </>
                         )}
-                        <th style={cellTh} colSpan={4 + viewBtls.length * 2} />
+                        <th style={cellTh} colSpan={4 + viewBtls.length * 2 + viewExamCols} />
                       </tr>
                     </thead>
                     <tbody>
@@ -2072,19 +2453,25 @@ export default function LabEntry({
                         const marksB = normalizeMarksArray((row as any)?.marksB, viewExpB).slice(0, viewVisibleExpB);
                         const allVisible = marksA.concat(marksB);
                         const avgTotal = avgMarks(allVisible);
-                        const avgA = avgMarks(marksA);
-                        const avgB = avgMarks(marksB);
-                        const ciaRaw = (row as any)?.ciaExam;
-                        const ciaNum = viewCiaEnabled && typeof ciaRaw === 'number' && Number.isFinite(ciaRaw) ? ciaRaw : null;
-
-                        const coAMarkNum =
-                          avgA == null && avgTotal == null && (!viewCiaEnabled || ciaNum == null)
-                            ? null
-                            : (avgA ?? 0) + (viewCiaEnabled ? (ciaNum ?? 0) / 2 : 0);
-                        const coBMarkNum =
-                          avgB == null && avgTotal == null && (!viewCiaEnabled || ciaNum == null)
-                            ? null
-                            : (avgB ?? 0) + (viewCiaEnabled ? (ciaNum ?? 0) / 2 : 0);
+                        const caaByCo = normalizeCaaByCo((row as any)?.caaExamByCo);
+                        const expTotalA = sumMarks(marksA);
+                        const expTotalB = sumMarks(marksB);
+                        const expMaxTotalA = viewVisibleExpA * viewExpMaxA;
+                        const expMaxTotalB = viewVisibleExpB * viewExpMaxB;
+                        const expWeightA = Number(LAB_REVIEW_EXPERIMENT_WEIGHT[coA] || 0);
+                        const expWeightB = Number(LAB_REVIEW_EXPERIMENT_WEIGHT[coB] || 0);
+                        const coAExpNorm = expMaxTotalA > 0 ? (expTotalA / expMaxTotalA) * expWeightA : 0;
+                        const coBExpNorm = expMaxTotalB > 0 ? (expTotalB / expMaxTotalB) * expWeightB : 0;
+                        const caaRawA = typeof caaByCo[String(coA)] === 'number' ? Number(caaByCo[String(coA)]) : 0;
+                        const caaRawB = typeof caaByCo[String(coB)] === 'number' ? Number(caaByCo[String(coB)]) : 0;
+                        const caaRawMaxA = Number(LAB_REVIEW_CAA_RAW_MAX[coA] || 0);
+                        const caaRawMaxB = Number(LAB_REVIEW_CAA_RAW_MAX[coB] || 0);
+                        const caaWeightA = Number(LAB_REVIEW_CAA_WEIGHT[coA] || 0);
+                        const caaWeightB = Number(LAB_REVIEW_CAA_WEIGHT[coB] || 0);
+                        const coACaaNorm = viewCiaEnabled && caaRawMaxA > 0 ? (caaRawA / caaRawMaxA) * caaWeightA : 0;
+                        const coBCaaNorm = viewCiaEnabled && caaRawMaxB > 0 ? (caaRawB / caaRawMaxB) * caaWeightB : 0;
+                        const coAMarkNum = expTotalA > 0 || caaRawA > 0 ? coAExpNorm + coACaaNorm : null;
+                        const coBMarkNum = expTotalB > 0 || caaRawB > 0 ? coBExpNorm + coBCaaNorm : null;
 
                         const btlAvgByIndex: Record<number, number | null> = {};
                         for (const n of viewBtls) {
@@ -2107,8 +2494,8 @@ export default function LabEntry({
                         return (
                           <tr key={`v_${s.id}`}>
                             <td style={{ ...cellTd, textAlign: 'center', width: 42, minWidth: 42 }}>{idx + 1}</td>
-                            <td style={cellTd}>{s.reg_no}</td>
-                            <td style={cellTd}>{s.name}</td>
+                            <td style={cellTd}>{String(s.reg_no || '')}</td>
+                            <td style={cellTd}>{String(s.name || '')}</td>
 
                             {viewTotalExp === 0 ? (
                               <td style={{ ...cellTd, textAlign: 'center', color: '#6b7280' }}>—</td>
@@ -2129,9 +2516,15 @@ export default function LabEntry({
 
                             <td style={{ ...cellTd, textAlign: 'right', fontWeight: 800 }}>{avgTotal == null ? '' : avgTotal.toFixed(1)}</td>
                             {viewCiaEnabled ? (
-                              <td style={{ ...cellTd, width: 90, minWidth: 90, background: '#fff7ed', textAlign: 'center', fontWeight: 800 }}>
-                                {(row as any)?.ciaExam ?? ''}
-                              </td>
+                              viewCaaCoNumbers.length ? (
+                                viewCaaCoNumbers.map((coNum) => (
+                                  <td key={`v_caa_cell_${s.id}_${coNum}`} style={{ ...cellTd, width: 90, minWidth: 90, background: '#fff7ed', textAlign: 'center', fontWeight: 800 }}>
+                                    {caaByCo[String(coNum)] ?? ''}
+                                  </td>
+                                ))
+                              ) : (
+                                <td style={{ ...cellTd, textAlign: 'center', color: '#6b7280' }}>—</td>
+                              )
                             ) : null}
 
                             <td style={{ ...cellTd, textAlign: 'right' }}>{coAMarkNum == null ? '' : coAMarkNum.toFixed(1)}</td>
@@ -2173,6 +2566,6 @@ export default function LabEntry({
           </div>
         </div>
       ) : null}
-    </div>
+    </AssessmentContainer>
   );
 }

@@ -52,11 +52,10 @@
 .obe-input:focus{ box-shadow: 0 6px 18px rgba(11,116,184,0.08); border-color: var(--obe-accent); }
 
 .obe-table{
-  width: auto;
+  width: 100%;
   border-collapse: separate;
   border-spacing: 0;
   min-width: 720px;
-  table-layout: auto;
 }
 .obe-table thead th{
   background: linear-gradient(180deg, rgba(11,74,111,0.06), rgba(240,249,255,0.06));
@@ -79,15 +78,7 @@
 .obe-small-muted{ color: var(--obe-muted); font-size: 13px }
 
 /* responsive table wrapper */
-.obe-table-wrapper{
-  overflow-x: auto;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  border-radius:8px;
-  border:1px solid rgba(226,232,240,0.9);
-  max-height: calc(100vh - 220px);
-  background: white;
-}
+.obe-table-wrapper{ overflow-x:auto; border-radius:8px; border:1px solid rgba(226,232,240,0.9); }
 
 /* Tab Navigation Styles - Professional OBE Tabs */
 .obe-tab-nav{
@@ -209,15 +200,16 @@
   border-collapse: collapse;
   width: 100%;
   font-size: 14px;
-  table-layout: fixed;
 }
 .cqi-table th,
 .cqi-table td {
-  padding: 14px 14px;
+  padding: 12px 10px;
   vertical-align: middle;
-  position: relative;
-  /* keep a subtle right divider area for the separator pseudo element */
-  box-sizing: border-box;
+  border-right: 1px solid #e6eef8;
+}
+.cqi-table th:last-child,
+.cqi-table td:last-child {
+  border-right: none;
 }
 .cqi-table thead th {
   background: #f8fafc;
@@ -233,43 +225,6 @@
 }
 .cqi-table tbody tr:nth-child(even) td {
   background: #fbfdff;
-}
-
-/* Vertical column separator using a pseudo element so it looks like a gutter */
-.cqi-table th:not(:last-child)::after,
-.cqi-table td:not(:last-child)::after {
-  content: '';
-  position: absolute;
-  right: 6px;
-  top: 10px;
-  bottom: 10px;
-  width: 2px;
-  border-radius: 2px;
-  background: linear-gradient(180deg, rgba(226,232,240,0), rgba(226,232,240,0.95) 30%, rgba(226,232,240,0.95) 70%, rgba(226,232,240,0));
-  pointer-events: none;
-  opacity: 1;
-}
-
-/* Slightly stronger separator in the header for clarity */
-.cqi-table thead th:not(:last-child)::after {
-  right: 8px;
-  top: 14px;
-  bottom: 14px;
-  background: linear-gradient(180deg, rgba(226,232,240,0), rgba(226,232,240,1) 25%, rgba(226,232,240,1) 75%, rgba(226,232,240,0));
-  width: 2px;
-}
-
-/* Input focus inside table — more visible */
-.cqi-table input:focus {
-  box-shadow: 0 6px 20px rgba(11,116,184,0.08);
-  border-color: var(--obe-accent);
-  outline: none;
-}
-
-/* Make cells breathe: add horizontal gutter space by adding extra right padding except last column */
-.cqi-table td:not(:last-child),
-.cqi-table th:not(:last-child) {
-  padding-right: 22px;
 }
 
 /* CQI floating button: unique accent and gentle floating animation */

@@ -9,11 +9,6 @@ type Props = {
 
 export default function Ssa2Entry({ subjectId, teachingAssignmentId, label }: Props) {
   return (
-    <Ssa2SheetEntry
-      subjectId={subjectId}
-      teachingAssignmentId={teachingAssignmentId}
-      assessmentKey="ssa2"
-      label={label || 'SSA2'}
-    />
+    <Ssa2SheetEntry subjectId={subjectId} teachingAssignmentId={teachingAssignmentId} assessmentKey="ssa2" label={label || 'SSA2'} />
   );
 }
