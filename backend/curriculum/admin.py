@@ -302,9 +302,9 @@ class RegulationFilter(SimpleListFilter):
 
 @admin.register(CurriculumDepartment)
 class CurriculumDepartmentAdmin(admin.ModelAdmin):
-    list_display = ('department', 'regulation', 'semester', 'course_code', 'course_name', 'is_elective', 'editable', 'overridden')
+    list_display = ('department', 'regulation', 'semester', 'course_code', 'mnemonic', 'course_name', 'is_elective', 'editable', 'overridden')
     list_filter = ('department', RegulationFilter, 'semester', 'is_elective', 'editable', 'overridden')
-    search_fields = ('course_code', 'course_name')
+    search_fields = ('course_code', 'course_name', 'mnemonic')
 
     def get_readonly_fields(self, request, obj=None):
         # If this department row is linked to a master which is not editable,
@@ -312,7 +312,7 @@ class CurriculumDepartmentAdmin(admin.ModelAdmin):
         ro = list(super().get_readonly_fields(request, obj))
         if obj and obj.master and not getattr(obj.master, 'editable', False):
             ro += [
-                'regulation', 'semester', 'course_code', 'course_name', 'category', 'is_elective',
+                'regulation', 'semester', 'course_code', 'mnemonic', 'course_name', 'category', 'is_elective',
                 'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark',
                 'total_hours', 'question_paper_type',
             ]

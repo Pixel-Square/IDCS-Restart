@@ -173,6 +173,7 @@ class CurriculumDepartment(models.Model):
     # link to Semester for consistent filtering with Section.semester
     semester = models.ForeignKey('academics.Semester', on_delete=models.PROTECT, related_name='department_curricula')
     course_code = models.CharField(max_length=64, blank=True, null=True)
+    mnemonic = models.CharField(max_length=16, blank=True, null=True)
     course_name = models.CharField(max_length=255, blank=True, null=True)
     class_type = models.CharField(max_length=16, choices=CLASS_TYPE_CHOICES, default='THEORY')
     category = models.CharField(max_length=64, blank=True)

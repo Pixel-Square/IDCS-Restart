@@ -28,6 +28,7 @@ from .models import TeachingAssignment
 from .models import StudentMentorMap, SectionAdvisor, DepartmentRole
 from .models import StudentSubjectBatch
 from .models import PeriodAttendanceSession, PeriodAttendanceRecord, AttendanceUnlockRequest
+from .models import DailyAttendanceSession, DailyAttendanceRecord
 from django import forms
 from django.db import models
 from django.core.exceptions import ValidationError
@@ -1273,6 +1274,34 @@ class AttendanceUnlockRequestAdmin(admin.ModelAdmin):
     raw_id_fields = ('session', 'requested_by', 'reviewed_by')
     readonly_fields = ('requested_at', 'reviewed_at')
     date_hierarchy = 'requested_at'
+
+
+class DailyAttendanceRecordInline(admin.TabularInline):
+    model = DailyAttendanceRecord
+    extra = 0
+    readonly_fields = ('marked_at',)
+    fields = ('student', 'status', 'marked_by', 'remarks', 'marked_at')
+
+
+@admin.register(DailyAttendanceSession)
+class DailyAttendanceSessionAdmin(admin.ModelAdmin):
+    list_display = ('section', 'date', 'created_by', 'is_locked', 'created_at', 'updated_at')
+    list_filter = ('date', 'is_locked')
+    search_fields = ('section__name',)
+    raw_id_fields = ('section', 'created_by')
+    readonly_fields = ('created_at', 'updated_at')
+    date_hierarchy = 'date'
+    inlines = (DailyAttendanceRecordInline,)
+
+
+@admin.register(DailyAttendanceRecord)
+class DailyAttendanceRecordAdmin(admin.ModelAdmin):
+    list_display = ('session', 'student', 'status', 'remarks', 'marked_at', 'marked_by')
+    search_fields = ('student__reg_no', 'student__user__username')
+    list_filter = ('status', 'session__date')
+    raw_id_fields = ('session', 'student', 'marked_by')
+    readonly_fields = ('marked_at',)
+    date_hierarchy = 'session__date'
 
 class SpecialCourseAssessmentEditRequestInline(admin.TabularInline):
     model = SpecialCourseAssessmentEditRequest

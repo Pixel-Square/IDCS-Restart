@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import fetchWithAuth from '../../services/fetchAuth'
-import { Calendar, Clock, Users, CheckCircle2, XCircle, Loader2, Save, X, ChevronDown, AlertCircle, Lock, Unlock } from 'lucide-react'
+import { Calendar, Clock, Users, CheckCircle2, XCircle, Loader2, Save, X, ChevronDown, AlertCircle, Lock, Unlock, GraduationCap, Check } from 'lucide-react'
 
 type PeriodItem = {
   id: number
@@ -25,6 +25,7 @@ type PeriodItem = {
   consecutive_periods?: { period_id: number; label?: string }[]
   combined_period_label?: string
   is_special?: boolean
+  is_swap?: boolean
 }
 
 type Student = {
@@ -44,6 +45,10 @@ export default function PeriodAttendance(){
   const [selected, setSelected] = useState<PeriodItem | null>(null)
   const [students, setStudents] = useState<Student[]>([])
   const [marks, setMarks] = useState<Record<number,string>>({})
+  // dailyLocks: maps student id → their daily attendance override reason
+  //   'OD' | 'LEAVE'  → period status is locked to that value (cannot be changed)
+  //   'LATE'          → period status was forced to Present by daily LATE
+  const [dailyLocks, setDailyLocks] = useState<Record<number, string>>({})
   const [saving, setSaving] = useState(false)
   const [locking, setLocking] = useState(false)
 
@@ -60,9 +65,22 @@ export default function PeriodAttendance(){
   // Consecutive period detection
   const [consecutiveModal, setConsecutiveModal] = useState(false)
   const [pendingPeriod, setPendingPeriod] = useState<PeriodItem | null>(null)
-  const [consecutivePeriod, setConsecutivePeriod] = useState<PeriodItem | null>(null)
+  const [consecutivePeriods, setConsecutivePeriods] = useState<PeriodItem[]>([])
 
-  useEffect(()=>{ fetchPeriods() }, [date])
+  // Daily attendance state
+  const [dailyMode, setDailyMode] = useState(false)
+  const [myClassSections, setMyClassSections] = useState<any[]>([])
+  const [selectedSection, setSelectedSection] = useState<any>(null)
+  const [dailyAttendance, setDailyAttendance] = useState<any[]>([])
+  const [dailySessionData, setDailySessionData] = useState<any>(null)
+  const [attendanceStatus, setAttendanceStatus] = useState<Record<number, string>>({})
+  const [attendanceRemarks, setAttendanceRemarks] = useState<Record<number, string>>({})
+  const [savingDaily, setSavingDaily] = useState(false)
+  const [loadingDaily, setLoadingDaily] = useState(false)
+  const [lockingDaily, setLockingDaily] = useState(false)
+
+  useEffect(()=>{ fetchPeriods(); loadMyClassSections() }, [date])
+  useEffect(()=>{ if (selectedSection && dailyMode) loadDailyAttendance() }, [selectedSection, date, dailyMode])
 
   // Group periods by canonical subject key so same-subject same-period across
   // multiple sections appear as a single card.
@@ -108,59 +126,78 @@ export default function PeriodAttendance(){
   }
 
   // Find consecutive period with same subject (including with breaks/lunch in between)
-  function findConsecutivePeriod(currentPeriod: PeriodItem | any): PeriodItem | null {
-    // Support grouped currentPeriod (multiple sections)
+  // Returns all OTHER periods with the same subject as currentPeriod that form a
+  // consecutive chain with it. Two same-subject periods are considered consecutive
+  // when there is NO other teaching period (different subject, same section) between
+  // their period indices — break/lunch slots never appear in `periods` so they are
+  // transparently skipped, allowing e.g. P1 → Break → P2 to still be chained.
+  function findConsecutivePeriods(currentPeriod: PeriodItem | any): PeriodItem[] {
     const currentSectionIds: number[] = currentPeriod.section_ids && Array.isArray(currentPeriod.section_ids) && currentPeriod.section_ids.length ? currentPeriod.section_ids : [currentPeriod.section_id]
+    const currentSubjNorm = String(currentPeriod.subject_display || currentPeriod.subject || '').trim().toLowerCase()
 
-    // Look for periods with same section (one of current sections) and same subject
-    const sameSubjectPeriods = periods.filter(p => {
+    function isSameSubject(p: PeriodItem) {
+      if (currentPeriod.subject_batch_id && p.subject_batch_id === currentPeriod.subject_batch_id) return true
+      if (currentPeriod.elective_subject_id && p.elective_subject_id === currentPeriod.elective_subject_id) return true
+      const pSubjNorm = String(p.subject_display || p.subject || '').trim().toLowerCase()
+      return !!(currentSubjNorm && pSubjNorm && currentSubjNorm === pSubjNorm)
+    }
+
+    // Collect all periods (including current) that share the same subject & section
+    const sameSubjectAll = periods.filter(p => {
       if (!p || p.attendance_session_locked) return false
-      if (!currentSectionIds.includes(p.section_id)) return false
-      // avoid comparing to the exact same assignment entry
-      if (currentPeriod.id && p.id === currentPeriod.id) return false
-
-      // Same subject identification
-      const match = (
-        (currentPeriod.subject_batch_id && p.subject_batch_id === currentPeriod.subject_batch_id) ||
-        (currentPeriod.teaching_assignment_id && p.teaching_assignment_id === currentPeriod.teaching_assignment_id) ||
-        (currentPeriod.elective_subject_id && p.elective_subject_id === currentPeriod.elective_subject_id) ||
-        (currentPeriod.subject && p.subject === currentPeriod.subject)
-      )
-      return !!match
+      const pSectionIds: number[] = p.section_ids && Array.isArray(p.section_ids) && p.section_ids.length ? p.section_ids : [p.section_id]
+      if (!pSectionIds.some(sid => currentSectionIds.includes(sid))) return false
+      return isSameSubject(p)
     })
 
-    if (sameSubjectPeriods.length === 0) return null
+    if (sameSubjectAll.length <= 1) return []
 
-    // Sort by period index to find nearest periods
-    const sorted = [...sameSubjectPeriods].sort((a, b) => a.period.index - b.period.index)
+    const sorted = [...sameSubjectAll].sort((a, b) => a.period.index - b.period.index)
 
-    const currentIndex = currentPeriod.period?.index || (currentPeriod.period && currentPeriod.period.index) || 0
-    // Find the next period after current (even with gaps like breaks/lunch)
-    const nextPeriod = sorted.find(p => p.period.index > currentIndex)
-    // Find the previous period before current (even with gaps)
-    const prevPeriod = [...sorted].reverse().find(p => p.period.index < currentIndex)
-
-    // Choose the closest one (within reasonable range of 4 periods)
-    const maxGap = 4 // Allow up to 4 period indices gap (covers breaks and lunch)
-
-    if (nextPeriod && (nextPeriod.period.index - currentIndex) <= maxGap) {
-      return nextPeriod
+    // Build chains: adjacent same-subject periods stay in the same chain UNLESS a
+    // different-subject teaching period (same section) falls between their indices.
+    // Breaks/lunch never appear in `periods`, so gaps caused by them are ignored.
+    const chains: PeriodItem[][] = []
+    let current: PeriodItem[] = [sorted[0]]
+    for (let i = 1; i < sorted.length; i++) {
+      const prevIdx = sorted[i - 1].period.index
+      const nextIdx = sorted[i].period.index
+      // Is there a different-subject teaching period between prevIdx and nextIdx (exclusive)?
+      const blocked = periods.some(p => {
+        if (!p) return false
+        const pIdx = p.period?.index ?? 0
+        if (pIdx <= prevIdx || pIdx >= nextIdx) return false
+        if (isSameSubject(p)) return false
+        const pSectionIds: number[] = p.section_ids && Array.isArray(p.section_ids) ? p.section_ids : [p.section_id]
+        return pSectionIds.some(sid => currentSectionIds.includes(sid))
+      })
+      if (!blocked) {
+        current.push(sorted[i])
+      } else {
+        chains.push(current)
+        current = [sorted[i]]
+      }
     }
+    chains.push(current)
 
-    if (prevPeriod && (currentIndex - prevPeriod.period.index) <= maxGap) {
-      return prevPeriod
-    }
+    // Find the chain containing the current period
+    const currentId = currentPeriod.id
+    const currentIdx = currentPeriod.period?.index ?? 0
+    const chain = chains.find(ch =>
+      ch.some(p => (currentId && p.id === currentId) || p.period.index === currentIdx)
+    )
+    if (!chain || chain.length <= 1) return []
 
-    return null
+    return chain.filter(p => !(currentId && p.id === currentId) && p.period.index !== currentIdx)
   }
 
   // Handle period click with consecutive detection
   function handlePeriodClick(p: PeriodItem | any) {
-    const consecutive = findConsecutivePeriod(p as PeriodItem)
+    const others = findConsecutivePeriods(p as PeriodItem)
 
-    if (consecutive) {
+    if (others.length > 0) {
       setPendingPeriod(p)
-      setConsecutivePeriod(consecutive)
+      setConsecutivePeriods(others)
       setConsecutiveModal(true)
     } else {
       openPeriod(p)
@@ -172,6 +209,7 @@ export default function PeriodAttendance(){
     setSelected(p)
     setStudents([])
     setMarks({})
+    setDailyLocks({})
     setLoading(true)
     try{
       let studs: any[] = []
@@ -224,9 +262,65 @@ export default function PeriodAttendance(){
       })));
       const initial: Record<number,string> = {};
       (deduped||[]).forEach((s:any)=> initial[s.id] = 'P');
+      
+      // Load daily attendance as default for students (if exists)
+      // OD/LEAVE → lock that status in period; LATE → force Present; others → copy as-is
+      const locksByStudent: Record<number, string> = {}
+      try {
+        // Collect section IDs from three sources (priority: student home section > period section_ids):
+        //   1. Home section of each student (covers elective/cross-dept students)
+        //   2. Period's own section_ids (for non-elective normal periods)
+        // This ensures students from other sections/depts get their own daily attendance loaded.
+        const studentSectionMap: Record<number, number> = {}
+        for (const s of deduped) {
+          const sid = Number(s.section_id ?? null)
+          if (sid) studentSectionMap[Number(s.id)] = sid
+        }
+        const studentHomeSections = Array.from(new Set(Object.values(studentSectionMap)))
+        const periodSectionIds: number[] = (p.section_ids && Array.isArray(p.section_ids) && p.section_ids.length > 0)
+          ? p.section_ids.map(Number).filter(Boolean)
+          : (p.section_id ? [Number(p.section_id)] : [])
+        // Union of both – de-duplicated
+        const allSectionIds = Array.from(new Set([...studentHomeSections, ...periodSectionIds]))
+
+        const dailyMarks: Record<number, string> = {};
+        
+        await Promise.allSettled(allSectionIds.map(async (secId) => {
+          if (!secId) return;
+          try {
+            const dailyRes = await fetchWithAuth(`/api/academics/analytics/daily-attendance/?section_id=${secId}&date=${date}`);
+            if (dailyRes.ok) {
+              const dailyData = await dailyRes.json();
+              (dailyData.students || []).forEach((student: any) => {
+                const status = student.status || 'P';
+                if (status === 'OD' || status === 'LEAVE') {
+                  dailyMarks[student.student_id] = status;
+                  locksByStudent[student.student_id] = status;
+                } else if (status === 'LATE') {
+                  dailyMarks[student.student_id] = 'P';
+                  locksByStudent[student.student_id] = 'LATE';
+                } else if (status !== 'P') {
+                  dailyMarks[student.student_id] = status;
+                }
+              });
+            }
+          } catch (e) {
+            console.debug('Could not load daily attendance for section', secId, e);
+          }
+        }))
+        
+        // Apply daily attendance as base (overrides initial 'P' for absent/OD/late students)
+        Object.assign(initial, dailyMarks);
+      } catch (e) {
+        console.debug('Could not load daily attendance defaults', e);
+      }
+      
+      setDailyLocks(locksByStudent)
       setMarks(initial);
 
       // If grouped, try to load existing session records from attendance_session_ids
+      // These will override daily attendance defaults if period was manually marked,
+      // EXCEPT for OD/LEAVE which stay locked to their daily status.
       if (p.attendance_session_id || (p.attendance_session_ids && p.attendance_session_ids.length)){
         try{
           const sessIds = p.attendance_session_ids && p.attendance_session_ids.length ? p.attendance_session_ids : [p.attendance_session_id]
@@ -235,6 +329,11 @@ export default function PeriodAttendance(){
           const settled = await Promise.allSettled(tasks)
           const updated = { ...initial }
           for (const s of settled){ if (s.status !== 'fulfilled' || !s.value) continue; const pj = s.value; const recs = pj.records || []; recs.forEach((r:any)=>{ const sid = r.student_pk || (r.student && r.student.id) || null; if (sid) updated[sid] = r.status || updated[sid] || 'A' }) }
+          // Re-apply OD/LEAVE locks so saved records can never override them
+          for (const [sidStr, lock] of Object.entries(locksByStudent)) {
+            if (lock === 'OD' || lock === 'LEAVE') updated[Number(sidStr)] = lock
+            if (lock === 'LATE') updated[Number(sidStr)] = 'P'
+          }
           setMarks(updated)
         }catch(e){ console.error('load session records', e) }
       }
@@ -305,9 +404,9 @@ export default function PeriodAttendance(){
     finally{ setSaving(false) }
   }
 
-  // Mark both consecutive periods with same attendance
-  async function markBothPeriods() {
-    if (!pendingPeriod || !consecutivePeriod) return
+  // Mark all consecutive periods (pendingPeriod + consecutivePeriods) with same attendance
+  async function markAllPeriods() {
+    if (!pendingPeriod || !consecutivePeriods.length) return
     setConsecutiveModal(false)
     // Prepare UI for manual marking across both periods instead of auto-saving
     try {
@@ -357,20 +456,65 @@ export default function PeriodAttendance(){
       const initialMarks: Record<number,string> = {}
       studentList.forEach((s:any)=> initialMarks[s.id] = 'P')
 
+      // Load daily attendance as default (if exists)
+      // OD/LEAVE → lock; LATE → force Present
+      const consecutiveLocks: Record<number, string> = {}
+      try {
+        // Derive section IDs from students' own home sections first (covers cross-dept/elective)
+        const studentSecMap: Record<number, number> = {}
+        for (const s of studentList) {
+          const sid = Number(s.section_id ?? null)
+          if (sid) studentSecMap[Number(s.id)] = sid
+        }
+        const homeSects = Array.from(new Set(Object.values(studentSecMap)))
+        const periodSects: number[] = (p.section_ids && Array.isArray(p.section_ids) && p.section_ids.length > 0)
+          ? p.section_ids.map(Number).filter(Boolean)
+          : (p.section_id ? [Number(p.section_id)] : [])
+        const allSects = Array.from(new Set([...homeSects, ...periodSects]))
+
+        await Promise.allSettled(allSects.map(async (secId) => {
+          if (!secId) return;
+          try {
+            const dailyRes = await fetchWithAuth(`/api/academics/analytics/daily-attendance/?section_id=${secId}&date=${date}`);
+            if (dailyRes.ok) {
+              const dailyData = await dailyRes.json();
+              (dailyData.students || []).forEach((student: any) => {
+                const status = student.status || 'P';
+                if (status === 'OD' || status === 'LEAVE') {
+                  if (initialMarks[student.student_id] !== undefined) initialMarks[student.student_id] = status;
+                  consecutiveLocks[student.student_id] = status;
+                } else if (status === 'LATE') {
+                  consecutiveLocks[student.student_id] = 'LATE';
+                } else if (status !== 'P' && initialMarks[student.student_id] !== undefined) {
+                  initialMarks[student.student_id] = status;
+                }
+              });
+            }
+          } catch (e) {
+            console.debug('Could not load daily attendance for section', secId, e);
+          }
+        }))
+      } catch (e) {
+        console.debug('Could not load daily attendance defaults for both periods', e);
+      }
+
       setStudents(studentList)
       setMarks(initialMarks)
-      // Prepare selected with combined info and section names
-      const combinedLabel = `${pendingPeriod.period?.label || `Period ${pendingPeriod.period?.index}`} & ${consecutivePeriod.period?.label || `Period ${consecutivePeriod.period?.index}`}`
+      setDailyLocks(consecutiveLocks)
       const sectionNames = p.section_names && p.section_names.length ? p.section_names.join(' + ') : (p.section_name || '')
-      setSelected({ ...pendingPeriod, consecutive_periods: [ { period_id: pendingPeriod.period.id, label: pendingPeriod.period?.label || '' }, { period_id: consecutivePeriod.period.id, label: consecutivePeriod.period?.label || '' } ], combined_period_label: combinedLabel, section_name: sectionNames, section_ids: p.section_ids || [p.section_id] })
+      // Build consecutive_periods from ALL periods in the chain (sorted by index)
+      const allPeriodsInChain = [pendingPeriod, ...consecutivePeriods].sort((a, b) => (a.period?.index ?? 0) - (b.period?.index ?? 0))
+      const combinedLabel = allPeriodsInChain.map(pp => pp.period?.label || `Period ${pp.period?.index}`).join(' & ')
+      const consecutivePeriodsPayload = allPeriodsInChain.map(pp => ({ period_id: pp.period.id, label: pp.period?.label || '' }))
+      setSelected({ ...pendingPeriod, consecutive_periods: consecutivePeriodsPayload, combined_period_label: combinedLabel, section_name: sectionNames, section_ids: p.section_ids || [p.section_id] })
       // Do not auto-save: allow user to review/edit then click Save
     } catch(e) {
-      console.error('markBothPeriods error:', e)
-      alert('Failed to prepare marking for both periods: ' + (e instanceof Error ? e.message : String(e)))
+      console.error('markAllPeriods error:', e)
+      alert('Failed to prepare marking for all periods: ' + (e instanceof Error ? e.message : String(e)))
     } finally {
       setConsecutiveModal(false)
       setPendingPeriod(null)
-      setConsecutivePeriod(null)
+      setConsecutivePeriods([])
     }
   }
 
@@ -380,7 +524,7 @@ export default function PeriodAttendance(){
     setConsecutiveModal(false)
     openPeriod(pendingPeriod)
     setPendingPeriod(null)
-    setConsecutivePeriod(null)
+    setConsecutivePeriods([])
   }
 
   // Lock/Unlock attendance session
@@ -562,6 +706,164 @@ export default function PeriodAttendance(){
     loadAgg()
   }, [selectedAssignments, bulkAssignments])
 
+  // Daily Attendance Functions
+  async function loadMyClassSections() {
+    setLoadingDaily(true)
+    try {
+      const response = await fetchWithAuth('/api/academics/analytics/my-class-students/')
+      if (!response.ok) throw new Error('Failed to load sections')
+      const data = await response.json()
+      setMyClassSections(data.sections || [])
+      if (data.sections && data.sections.length > 0 && !selectedSection) {
+        setSelectedSection(data.sections[0])
+      }
+    } catch (error) {
+      console.error('Error loading sections:', error)
+      setMyClassSections([])
+    } finally {
+      setLoadingDaily(false)
+    }
+  }
+
+  async function loadDailyAttendance() {
+    if (!selectedSection) return
+    setLoadingDaily(true)
+    try {
+      const response = await fetchWithAuth(`/api/academics/analytics/daily-attendance/?section_id=${selectedSection.section_id}&date=${date}`)
+      if (!response.ok) throw new Error('Failed to load attendance')
+      const data = await response.json()
+      setDailyAttendance(data.students || [])
+      setDailySessionData(data)
+      
+      const statusMap: Record<number, string> = {}
+      const remarksMap: Record<number, string> = {}
+      data.students.forEach((student: any) => {
+        statusMap[student.student_id] = student.status || 'P'
+        remarksMap[student.student_id] = student.remarks || ''
+      })
+      setAttendanceStatus(statusMap)
+      setAttendanceRemarks(remarksMap)
+    } catch (error) {
+      console.error('Error loading daily attendance:', error)
+      setDailyAttendance([])
+      setDailySessionData(null)
+    } finally {
+      setLoadingDaily(false)
+    }
+  }
+
+  async function saveDailyAttendance() {
+    if (!selectedSection) return
+    
+    // Check if session is locked
+    if (dailySessionData?.is_locked) {
+      alert('Daily attendance is locked and cannot be modified')
+      return
+    }
+    
+    setSavingDaily(true)
+    try {
+      const records = dailyAttendance.map(student => ({
+        student_id: student.student_id,
+        status: attendanceStatus[student.student_id] || 'P',
+        remarks: attendanceRemarks[student.student_id] || ''
+      }))
+
+      const response = await fetchWithAuth('/api/academics/analytics/daily-attendance/', {
+        method: 'POST',
+        body: JSON.stringify({
+          section_id: selectedSection.section_id,
+          date: date,
+          attendance: records
+        })
+      })
+
+      if (!response.ok) throw new Error('Failed to save attendance')
+      alert('Daily attendance saved successfully!')
+      await loadDailyAttendance()
+    } catch (error) {
+      console.error('Error saving daily attendance:', error)
+      alert('Failed to save attendance')
+    } finally {
+      setSavingDaily(false)
+    }
+  }
+
+  function markAllDaily(status: string) {
+    const newStatus: Record<number, string> = {}
+    dailyAttendance.forEach(student => {
+      newStatus[student.student_id] = status
+    })
+    setAttendanceStatus(newStatus)
+  }
+
+  // Daily attendance lock/unlock functions
+  async function toggleDailyLock() {
+    if (!dailySessionData || !dailySessionData.session_id) {
+      alert('No active daily attendance session to lock/unlock')
+      return
+    }
+
+    const isLocked = dailySessionData.is_locked
+    const sessionId = dailySessionData.session_id
+    const confirmed = window.confirm(
+      isLocked
+        ? 'Are you sure you want to request an unlock for this daily attendance session? Unlocking requires approval.'
+        : 'Are you sure you want to lock this daily attendance session? This will prevent any further changes to daily attendance records.'
+    )
+
+    if (!confirmed) return
+
+    setLockingDaily(true)
+    try {
+      if (isLocked) {
+        // Create an unlock request instead of immediately unlocking
+        const reqRes = await fetchWithAuth('/api/academics/analytics/daily-attendance-unlock-request/', {
+          method: 'POST',
+          body: JSON.stringify({ session: sessionId, note: '' }),
+        })
+        if (!reqRes.ok) {
+          const err = await reqRes.json().catch(() => ({}))
+          if (reqRes.status === 400 && err.error?.includes('already pending')) {
+            alert('An unlock request for this session already exists and is pending approval.')
+          } else {
+            throw new Error(err.error || 'Failed to create unlock request')
+          }
+        } else {
+          const reqData = await reqRes.json()
+          console.log('Daily unlock request created:', reqData)
+          alert('Unlock request submitted successfully!')
+          // Update local state to reflect pending status
+          setDailySessionData(prev => prev ? ({ 
+            ...prev, 
+            unlock_request_status: reqData.status, 
+            unlock_request_id: reqData.id 
+          }) : prev)
+        }
+        // Do not change locked state until approval
+      } else {
+        // Lock immediately
+        const res = await fetchWithAuth(
+          `/api/academics/analytics/daily-attendance-lock/${sessionId}/`,
+          { method: 'POST' }
+        )
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => ({}))
+          throw new Error(errorData.error || `Failed to lock session`)
+        }
+        const sessionData = await res.json()
+        console.log('Daily session locked successfully:', sessionData)
+        setDailySessionData(prev => prev ? ({ ...prev, is_locked: true }) : prev)
+        alert('Daily attendance session locked successfully!')
+      }
+    } catch (e) {
+      console.error('toggleDailyLock error:', e)
+      alert('Failed to perform lock/unlock: ' + (e instanceof Error ? e.message : String(e)))
+    } finally {
+      setLockingDaily(false)
+    }
+  }
+
   return (
     <div className="min-h-screen p-4 md:p-6 bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
       {/* Header */}
@@ -593,6 +895,52 @@ export default function PeriodAttendance(){
         </div>
       </div>
 
+      {/* Daily Attendance Section */}
+      {!dailyMode && myClassSections && myClassSections.length > 0 && (
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-6">
+          <div className="px-6 py-4 border-b border-slate-200 bg-gradient-to-r from-emerald-50 to-teal-50">
+            <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
+              <GraduationCap className="w-5 h-5 text-emerald-600" />
+              My Class - Daily Attendance
+            </h2>
+          </div>
+
+          <div className="p-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {myClassSections.map(sec => (
+                <div key={sec.section_id} className="border border-slate-200 rounded-lg p-4 bg-white hover:shadow-md transition-shadow">
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="flex-1">
+                      <h3 className="font-semibold text-slate-900 mb-1 flex items-center gap-2">
+                        <GraduationCap className="w-4 h-4 text-emerald-600" />
+                        {sec.section_name}
+                      </h3>
+                      <div className="text-sm text-slate-600 mb-1">
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-md bg-emerald-100 text-emerald-800 font-medium">
+                          {sec.students?.length || 0} Student{sec.students?.length !== 1 ? 's' : ''}
+                        </span>
+                      </div>
+                      <div className="text-sm text-slate-600">
+                        {sec.batch_name || 'Batch'}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-3">
+                    <button 
+                      onClick={() => { setSelectedSection(sec); setDailyMode(true) }}
+                      className="w-full px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
+                    >
+                      <Calendar className="w-4 h-4" />
+                      Mark Daily Attendance
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Assigned Periods */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-6">
         <div className="px-6 py-4 border-b border-slate-200 bg-slate-50">
@@ -611,18 +959,21 @@ export default function PeriodAttendance(){
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {groupPeriodsList(periods).map(p=> (
-                <div key={p.id} className="border border-slate-200 rounded-lg p-4 bg-white hover:shadow-md transition-shadow">
+                <div key={p.id} className={`rounded-lg p-4 hover:shadow-md transition-shadow ${p.is_swap ? 'border border-green-300 bg-green-50' : p.is_special ? 'border border-amber-300 bg-amber-50' : 'border border-slate-200 bg-white'}`}>
                   <div className="flex items-start justify-between mb-2">
                     <div className="flex-1">
-                      <h3 className="font-semibold text-slate-900 mb-1">
+                      <h3 className="font-semibold text-slate-900 mb-1 flex items-center gap-1.5">
                         {p.period.label || `Period ${p.period.index}`}
+                        {p.is_swap
+                          ? <span className="text-xs font-medium px-1.5 py-0.5 bg-green-200 text-green-800 rounded">⇄ Swap</span>
+                          : p.is_special && <span className="text-xs font-medium px-1.5 py-0.5 bg-amber-200 text-amber-800 rounded">Special</span>}
                       </h3>
                       <div className="flex items-center gap-1.5 text-sm text-slate-600 mb-1">
                         <Clock className="w-4 h-4" />
                         {p.period.start_time || ''}{p.period.start_time && p.period.end_time ? ` — ${p.period.end_time}` : ''}
                       </div>
                       <div className="text-sm text-slate-700 mb-1">
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-md bg-blue-100 text-blue-800 font-medium">
+                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-md font-medium ${p.is_swap ? 'bg-green-100 text-green-800' : p.is_special ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800'}`}>
                           {p.section_names && p.section_names.length ? p.section_names.join(' + ') : p.section_name}
                         </span>
                       </div>
@@ -655,7 +1006,7 @@ export default function PeriodAttendance(){
                     ) : (
                       <button 
                         onClick={()=> handlePeriodClick(p)}
-                        className="w-full px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
+                        className={`w-full px-3 py-2 text-white rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 ${p.is_swap ? 'bg-green-600 hover:bg-green-700' : p.is_special ? 'bg-amber-500 hover:bg-amber-600' : 'bg-indigo-600 hover:bg-indigo-700'}`}
                       >
                         {p.attendance_session_id ? (
                           <>
@@ -696,6 +1047,172 @@ export default function PeriodAttendance(){
           )}
         </div>
       </div>
+
+      {/* Daily Attendance Marking Panel */}
+      {dailyMode && selectedSection && (
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-6">
+          <div className="px-6 py-4 border-b border-slate-200 bg-gradient-to-r from-emerald-50 to-teal-50 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <GraduationCap className="w-5 h-5 text-emerald-600" />
+              <h3 className="text-lg font-semibold text-slate-900">
+                Daily Attendance - {selectedSection.section_name}
+                <span className="ml-3 inline-flex items-center px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-sm font-medium">
+                  {dailyAttendance.length} student{dailyAttendance.length !== 1 ? 's' : ''}
+                </span>
+              </h3>
+              {dailySessionData?.is_locked && (
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-amber-100 text-amber-800 border border-amber-300 rounded-md text-xs font-medium">
+                  <Lock className="w-3 h-3" />
+                  Locked
+                </span>
+              )}
+              {dailySessionData?.unlock_request_status === 'PENDING' && (
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-blue-100 text-blue-800 border border-blue-300 rounded-md text-xs font-medium">
+                  Unlock Pending
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {dailySessionData?.session_id && (
+                <button 
+                  onClick={toggleDailyLock}
+                  disabled={lockingDaily}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
+                    dailySessionData?.is_locked 
+                      ? 'bg-amber-100 hover:bg-amber-200 text-amber-800 border border-amber-300' 
+                      : 'bg-red-100 hover:bg-red-200 text-red-800 border border-red-300'
+                  } ${lockingDaily ? 'disabled:opacity-50' : ''}`}
+                >
+                  {lockingDaily ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : dailySessionData?.is_locked ? (
+                    <Unlock className="w-4 h-4" />
+                  ) : (
+                    <Lock className="w-4 h-4" />
+                  )}
+                  {dailySessionData?.is_locked ? 'Request Unlock' : 'Lock Session'}
+                </button>
+              )}
+              <button 
+                onClick={() => { setDailyMode(false); setSelectedSection(null) }}
+                className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
+              >
+                <X className="w-4 h-4" />
+                Close
+              </button>
+            </div>
+          </div>
+
+          <div className="p-6">
+            {loadingDaily ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="w-8 h-8 text-emerald-600 animate-spin" />
+                <span className="ml-3 text-slate-600">Loading attendance...</span>
+              </div>
+            ) : (
+              <>
+                {/* Bulk Actions */}
+                <div className="mb-4 flex gap-2">
+                  <button
+                    onClick={() => markAllDaily('P')}
+                    disabled={dailySessionData?.is_locked}
+                    className={`px-4 py-2 bg-green-100 hover:bg-green-200 text-green-800 rounded-lg text-sm font-medium border border-green-300 flex items-center gap-2 ${dailySessionData?.is_locked ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed disabled:border-slate-300' : ''}`}
+                  >
+                    <Check className="w-4 h-4" />
+                    Mark All Present
+                  </button>
+                </div>
+
+                {/* Students Table */}
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-slate-200">
+                        <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700 bg-slate-50">Reg No</th>
+                        <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700 bg-slate-50">Student</th>
+                        <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700 bg-slate-50">Status</th>
+                        <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700 bg-slate-50">Remarks</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200">
+                      {dailyAttendance.map(student => {
+                        const status = attendanceStatus[student.student_id] || 'P'
+                        const statusClasses: Record<string, string> = {
+                          P: 'bg-green-50 text-green-800 border-green-300',
+                          A: 'bg-red-50 text-red-800 border-red-300',
+                          OD: 'bg-blue-50 text-blue-800 border-blue-300',
+                          LATE: 'bg-yellow-50 text-yellow-800 border-yellow-300',
+                          LEAVE: 'bg-purple-50 text-purple-800 border-purple-300'
+                        }
+                        return (
+                          <tr key={student.student_id} className="hover:bg-slate-50">
+                            <td className="py-3 px-4 text-sm text-slate-700">{student.reg_no}</td>
+                            <td className="py-3 px-4 text-sm text-slate-900 font-medium">{student.username}</td>
+                            <td className="py-3 px-4">
+                              <select
+                                value={status}
+                                onChange={(e) => setAttendanceStatus(prev => ({ ...prev, [student.student_id]: e.target.value }))}
+                                disabled={dailySessionData?.is_locked}
+                                className={`px-3 py-1.5 rounded-lg border text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500 ${statusClasses[status]} ${dailySessionData?.is_locked ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''}`}
+                              >
+                                <option value="P">Present</option>
+                                <option value="OD">On Duty</option>
+                                <option value="LATE">Late</option>
+                                <option value="LEAVE">Leave</option>
+                              </select>
+                            </td>
+                            <td className="py-3 px-4">
+                              <input
+                                type="text"
+                                value={attendanceRemarks[student.student_id] || ''}
+                                onChange={(e) => setAttendanceRemarks(prev => ({ ...prev, [student.student_id]: e.target.value }))}
+                                disabled={dailySessionData?.is_locked}
+                                placeholder="Optional remarks"
+                                className={`px-3 py-1.5 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 w-full ${dailySessionData?.is_locked ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''}`}
+                              />
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Save Button */}
+                <div className="mt-6 flex justify-end">
+                  {dailySessionData?.is_locked ? (
+                    <button
+                      disabled
+                      className="px-6 py-3 bg-slate-300 text-slate-500 rounded-lg font-medium cursor-not-allowed flex items-center gap-2"
+                    >
+                      <Lock className="w-5 h-5" />
+                      Session Locked
+                    </button>
+                  ) : (
+                    <button
+                      onClick={saveDailyAttendance}
+                      disabled={savingDaily}
+                      className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium disabled:bg-slate-300 disabled:cursor-not-allowed flex items-center gap-2 shadow-lg"
+                    >
+                      {savingDaily ? (
+                        <>
+                          <Loader2 className="w-5 h-5 animate-spin" />
+                          Saving...
+                        </>
+                      ) : (
+                        <>
+                          <Save className="w-5 h-5" />
+                          Save Daily Attendance
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Session Panel */}
       {selected && (
@@ -752,45 +1269,59 @@ export default function PeriodAttendance(){
                 <tbody className="divide-y divide-slate-200">
                   {students.map(s=> {
                     const status = marks[s.id] || 'P'
+                    const dailyLock = dailyLocks[s.id] || null  // 'OD' | 'LEAVE' | 'LATE' | null
+                    const isLocked = selected.attendance_session_locked || dailyLock === 'OD' || dailyLock === 'LEAVE'
                     const statusSelectClasses: Record<string,string> = {
                       P: 'bg-green-50 text-green-800 border-green-300',
                       A: 'bg-red-50 text-red-800 border-red-300',
-                      LEAVE: 'bg-amber-50 text-amber-800 border-amber-300',
                       OD: 'bg-blue-50 text-blue-800 border-blue-300',
                       LATE: 'bg-indigo-50 text-indigo-800 border-indigo-300',
+                      LEAVE: 'bg-purple-50 text-purple-800 border-purple-300',
                     }
                     const statusBadgeClasses: Record<string,string> = {
                       P: 'bg-green-600',
                       A: 'bg-red-600',
-                      LEAVE: 'bg-amber-600',
                       OD: 'bg-blue-600',
                       LATE: 'bg-indigo-600',
+                      LEAVE: 'bg-purple-600',
                     }
                     const statusCls = statusSelectClasses[status] || statusSelectClasses['P']
                     const badgeCls = statusBadgeClasses[status] || statusBadgeClasses['P']
 
                     return (
-                      <tr key={s.id} className="hover:bg-slate-50 transition-colors">
+                      <tr key={s.id} className={`transition-colors ${isLocked ? 'bg-slate-50' : 'hover:bg-slate-50'}`}>
                         <td className="py-3 px-4 text-sm font-medium text-slate-900">{s.reg_no}</td>
-                        <td className="py-3 px-4 text-sm text-slate-700">{s.username}</td>
+                        <td className="py-3 px-4 text-sm text-slate-700">
+                          {s.username}
+                          {dailyLock === 'LATE' && (
+                            <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700" title="Marked LATE in daily attendance — counted Present for this period">
+                              Late→P
+                            </span>
+                          )}
+                        </td>
                         <td className="py-3 px-4">
-                          <div className="flex items-center">
-                            <span className={`inline-block w-3 h-3 rounded-full mr-2 ${badgeCls}`} />
+                          <div className="flex items-center gap-2">
+                            <span className={`inline-block w-3 h-3 rounded-full ${badgeCls}`} />
+                            {isLocked && dailyLock ? (
+                              /* OD / LEAVE locked from daily attendance */
+                              <div className="flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-sm font-medium bg-slate-100 text-slate-600 border-slate-300" title={`Locked by daily attendance (${dailyLock})`}>
+                                <Lock className="w-3 h-3 text-slate-400" />
+                                {dailyLock === 'OD' ? 'On Duty' : 'Leave'}
+                              </div>
+                            ) : (
                             <div className="relative inline-block">
                               <select 
                                 value={marks[s.id] || 'P'} 
                                 onChange={e=> setMark(s.id, e.target.value)}
-                                disabled={selected.attendance_session_locked}
-                                className={`appearance-none px-3 py-1.5 pr-8 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent ${statusCls} ${selected.attendance_session_locked ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''}`}
+                                disabled={isLocked}
+                                className={`appearance-none px-3 py-1.5 pr-8 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent ${statusCls} ${isLocked ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''}`}
                               >
                                 <option value="P">Present</option>
                                 <option value="A">Absent</option>
-                                <option value="LEAVE">Leave</option>
-                                <option value="OD">On Duty</option>
-                                <option value="LATE">Late</option>
                               </select>
                               <ChevronDown className="w-4 h-4 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
                             </div>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -1123,93 +1654,79 @@ export default function PeriodAttendance(){
       )}
 
       {/* Consecutive Period Confirmation Modal */}
-      {consecutiveModal && pendingPeriod && consecutivePeriod && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl w-full max-w-md shadow-2xl">
-            <div className="bg-gradient-to-br from-amber-500 to-orange-600 px-6 py-4 rounded-t-xl">
-              <div className="flex items-center gap-3 text-white">
-                <AlertCircle className="w-6 h-6" />
-                <h3 className="text-xl font-bold">Consecutive Periods Detected</h3>
+      {consecutiveModal && pendingPeriod && consecutivePeriods.length > 0 && (() => {
+        const allChain = [pendingPeriod, ...consecutivePeriods].sort((a, b) => (a.period?.index ?? 0) - (b.period?.index ?? 0))
+        return (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl w-full max-w-md shadow-2xl">
+              <div className="bg-gradient-to-br from-amber-500 to-orange-600 px-6 py-4 rounded-t-xl">
+                <div className="flex items-center gap-3 text-white">
+                  <AlertCircle className="w-6 h-6" />
+                  <h3 className="text-xl font-bold">Consecutive Periods Detected</h3>
+                </div>
               </div>
-            </div>
 
-            <div className="p-6 space-y-4">
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
-                <p className="text-sm text-slate-700 mb-3">
-                  The same subject has consecutive periods{Math.abs(consecutivePeriod.period.index - pendingPeriod.period.index) > 1 ? ' (with break/lunch in between)' : ''}:
-                </p>
-                
-                <div className="space-y-2 mb-3">
-                  <div className="flex items-center gap-2 text-sm">
-                    <div className="w-2 h-2 rounded-full bg-indigo-600"></div>
-                    <span className="font-semibold text-slate-900">
-                      {pendingPeriod.period.label || `Period ${pendingPeriod.period.index}`}
-                    </span>
-                    <span className="text-slate-600">
-                      ({pendingPeriod.period.start_time} - {pendingPeriod.period.end_time})
-                    </span>
+              <div className="p-6 space-y-4">
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                  <p className="text-sm text-slate-700 mb-3">
+                    The same subject spans {allChain.length} consecutive period{allChain.length > 1 ? 's' : ''} today:
+                  </p>
+
+                  <div className="space-y-1 mb-3">
+                    {allChain.map((pp, i) => {
+                        return (
+                          <div key={pp.id ?? pp.period.id} className="flex items-center gap-2 text-sm">
+                            <div className="w-2 h-2 rounded-full bg-indigo-600 shrink-0"></div>
+                            <span className="font-semibold text-slate-900">
+                              {pp.period.label || `Period ${pp.period.index}`}
+                            </span>
+                            {pp.period.start_time && (
+                              <span className="text-slate-500 text-xs">
+                                ({pp.period.start_time}{pp.period.end_time ? ` – ${pp.period.end_time}` : ''})
+                              </span>
+                            )}
+                          </div>
+                        )
+                      })}
                   </div>
-                  
-                  {Math.abs(consecutivePeriod.period.index - pendingPeriod.period.index) > 1 && (
-                    <div className="flex items-center gap-2 text-sm pl-4">
-                      <span className="text-slate-500 italic">
-                        ↓ {Math.abs(consecutivePeriod.period.index - pendingPeriod.period.index) - 1} period(s) in between (break/lunch)
-                      </span>
-                    </div>
-                  )}
-                  
-                  <div className="flex items-center gap-2 text-sm">
-                    <div className="w-2 h-2 rounded-full bg-indigo-600"></div>
-                    <span className="font-semibold text-slate-900">
-                      {consecutivePeriod.period.label || `Period ${consecutivePeriod.period.index}`}
-                    </span>
-                    <span className="text-slate-600">
-                      ({consecutivePeriod.period.start_time} - {consecutivePeriod.period.end_time})
-                    </span>
-                  </div>
+
+                  <p className="text-sm font-medium text-slate-900">
+                    Subject: <span className="text-indigo-600">{pendingPeriod.subject_display || pendingPeriod.subject || 'Same Subject'}</span>
+                  </p>
                 </div>
 
-                <p className="text-sm font-medium text-slate-900">
-                  Subject: <span className="text-indigo-600">{pendingPeriod.subject || pendingPeriod.subject_display || 'Same Subject'}</span>
+                <p className="text-sm text-slate-600">
+                  Mark attendance for all {allChain.length} periods at once, or just the selected period?
                 </p>
               </div>
 
-              <p className="text-sm text-slate-600">
-                Would you like to mark attendance for both periods at once (all students Present), 
-                or just the selected period?
-              </p>
-            </div>
+              <div className="px-6 pb-6 flex flex-col gap-3">
+                <button
+                  onClick={markAllPeriods}
+                  className="w-full px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+                >
+                  <CheckCircle2 className="w-5 h-5" />
+                  Mark All {allChain.length} Periods
+                </button>
 
-            <div className="px-6 pb-6 flex flex-col gap-3">
-              <button 
-                onClick={markBothPeriods}
-                className="w-full px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
-              >
-                <CheckCircle2 className="w-5 h-5" />
-                Mark Both Periods (All Present)
-              </button>
-              
-              <button 
-                onClick={markSinglePeriodOnly}
-                className="w-full px-4 py-3 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg font-medium transition-colors"
-              >
-                Single Period Only
-              </button>
-              
-              <button 
-                onClick={() => {
-                  setConsecutiveModal(false)
-                  setPendingPeriod(null)
-                  setConsecutivePeriod(null)
-                }}
-                className="w-full px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium transition-colors"
-              >
-                Cancel
-              </button>
+                <button
+                  onClick={markSinglePeriodOnly}
+                  className="w-full px-4 py-3 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg font-medium transition-colors"
+                >
+                  This Period Only
+                </button>
+
+                <button
+                  onClick={() => { setConsecutiveModal(false); setPendingPeriod(null); setConsecutivePeriods([]) }}
+                  className="w-full px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
 
     </div>
   )

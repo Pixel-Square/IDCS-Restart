@@ -60,6 +60,14 @@ export default function TeachingAssignmentsPage(){
   const [editingAssignments, setEditingAssignments] = useState<Set<string>>(new Set())
   const [editingElectives, setEditingElectives] = useState<Set<string>>(new Set())
 
+  // derive staff list for elective dropdowns: prefer elective-specific filter, else top filter
+  const getFilteredStaffForElective = () => {
+    if (!staff || !Array.isArray(staff)) return []
+    if (selectedElectiveDept) return staff.filter(s => (s.department && s.department.id === selectedElectiveDept) || (s as any).department === selectedElectiveDept)
+    if (selectedDept) return staff.filter(s => (s.department && s.department.id === selectedDept) || (s as any).department === selectedDept)
+    return staff
+  }
+
   // permissions (used to decide which staff endpoint to call)
   const perms = (() => { try { return JSON.parse(localStorage.getItem('permissions') || '[]') as string[] } catch { return [] } })()
   const canViewElectives = perms.includes('academics.view_elective_teaching')
@@ -623,7 +631,7 @@ export default function TeachingAssignmentsPage(){
                                 className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-700 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                               >
                                 <option value="">-- select staff --</option>
-                                {staff.map(st => (<option key={st.id} value={st.id}>{st.staff_id} - {getStaffDisplayName(st)}</option>))}
+                                {getFilteredStaffForElective().map(st => (<option key={st.id} value={st.id}>{st.staff_id} - {getStaffDisplayName(st)}</option>))}
                               </select>
                             ) : existingElectiveAssignment ? (
                               <div className="text-sm text-gray-900 font-medium">

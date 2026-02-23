@@ -867,6 +867,80 @@ class AttendanceUnlockRequest(models.Model):
         return f"UnlockRequest session={self.session_id} status={self.status} requested_by={getattr(self.requested_by, 'staff_id', None)}"
 
 
+class DailyAttendanceUnlockRequest(models.Model):
+    STATUS_CHOICES = (
+        ('PENDING', 'Pending'),
+        ('APPROVED', 'Approved'),
+        ('REJECTED', 'Rejected')
+    )
+
+    session = models.ForeignKey('DailyAttendanceSession', on_delete=models.CASCADE, related_name='unlock_requests')
+    requested_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='daily_attendance_unlock_requests')
+    requested_at = models.DateTimeField(auto_now_add=True)
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default='PENDING')
+    reviewed_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='daily_attendance_unlock_reviews')
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    note = models.TextField(blank=True)
+
+    class Meta:
+        verbose_name = 'Daily Attendance Unlock Request'
+        verbose_name_plural = 'Daily Attendance Unlock Requests'
+        ordering = ('-requested_at',)
+
+    def __str__(self):
+        return f"DailyUnlockRequest session={self.session_id} status={self.status} requested_by={getattr(self.requested_by, 'staff_id', None)}"
+
+
+class DailyAttendanceSession(models.Model):
+    """Daily overall attendance for a section (not period-specific).
+    
+    Used by class advisors to mark overall daily attendance for their section.
+    Complements period-wise attendance with a simpler daily view.
+    """
+    section = models.ForeignKey('academics.Section', on_delete=models.PROTECT, related_name='daily_attendance_sessions')
+    date = models.DateField(default=timezone.now)
+    created_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='created_daily_sessions')
+    is_locked = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Daily Attendance Session'
+        verbose_name_plural = 'Daily Attendance Sessions'
+        unique_together = (('section', 'date'),)
+        ordering = ('-date', 'section__name')
+
+    def __str__(self):
+        return f"DailyAttendance {self.section} @ {self.date}"
+
+
+class DailyAttendanceRecord(models.Model):
+    """Individual student's daily attendance record."""
+    DAILY_ATTENDANCE_STATUS_CHOICES = (
+        ('P', 'Present'),
+        ('A', 'Absent'),
+        ('OD', 'On Duty'),
+        ('LATE', 'Late'),
+        ('LEAVE', 'Leave'),
+    )
+    
+    session = models.ForeignKey(DailyAttendanceSession, on_delete=models.CASCADE, related_name='records')
+    student = models.ForeignKey('academics.StudentProfile', on_delete=models.CASCADE, related_name='daily_attendance_records')
+    status = models.CharField(max_length=8, choices=DAILY_ATTENDANCE_STATUS_CHOICES, default='A')
+    marked_at = models.DateTimeField(auto_now=True)
+    marked_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='marked_daily_attendance')
+    remarks = models.CharField(max_length=255, blank=True, null=True)
+
+    class Meta:
+        verbose_name = 'Daily Attendance Record'
+        verbose_name_plural = 'Daily Attendance Records'
+        unique_together = (('session', 'student'),)
+        ordering = ('student__reg_no',)
+
+    def __str__(self):
+        return f"{self.student.reg_no} -> {self.get_status_display()} @ {self.session.date}"
+
+
 # Historically the code deleted users when profiles were removed.
 # That behavior is unsafe for audit/history. Do NOT delete users when
 # profiles are removed; prefer deactivation via accounts.services.deactivate_user.

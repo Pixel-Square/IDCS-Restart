@@ -72,13 +72,13 @@ export async function fetchWithAuth(input: RequestInfo | URL, init: RequestInit 
 
   // Debug: log 400/401/403 errors with response body and request details
   if (res.status === 400) {
-    const text = await res.text()
+    const text = await res.clone().text()
     console.error('400 Bad Request:', { url: finalInput, token, response: text })
   }
   if (res.status === 401 || res.status === 403) {
     let text = ''
     try {
-      text = await res.text()
+      text = await res.clone().text()
     } catch (e) {
       /* ignore */
     }
@@ -86,14 +86,23 @@ export async function fetchWithAuth(input: RequestInfo | URL, init: RequestInit 
     try {
       res.headers.forEach((v, k) => { respHeaders[k] = v })
     } catch (_) {}
-    console.error('Auth error from fetchWithAuth', {
-      url: String(finalInput),
-      status: res.status,
-      requestHeaders: headers,
-      responseHeaders: respHeaders,
-      token,
-      responseText: text,
-    })
+    if (res.status === 401) {
+      console.error('Auth error from fetchWithAuth', {
+        url: String(finalInput),
+        status: res.status,
+        requestHeaders: headers,
+        responseHeaders: respHeaders,
+        token,
+        responseText: text,
+      })
+    } else {
+      // 403: permission denied - warn rather than error to avoid noisy logs
+      console.warn('Permission denied (403) from fetchWithAuth', {
+        url: String(finalInput),
+        status: res.status,
+        token,
+      })
+    }
   }
 
   // If not a 401 or retry is disabled, return the response as-is

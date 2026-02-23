@@ -12,6 +12,7 @@ function shortLabel(item:any){
     const firstWord = s.split(/[\s\-\_]+/)[0]
     return firstWord || s.slice(0, 15) + (s.length > 15 ? '…' : '')
   }
+  if(item.mnemonic) return item.mnemonic
   if(item.course_code) return item.course_code
   // Prioritize course_name over course_code for better readability
   const txt = item.course_name || item.course || item.subject_text || ''
