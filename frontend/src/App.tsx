@@ -89,10 +89,6 @@ export default function App() {
     );
   }
 
-  const userPerms = Array.isArray(user?.permissions) ? user?.permissions : [];
-  const lowerPerms = userPerms.map((p) => String(p || '').toLowerCase());
-  // const canObeMaster = lowerPerms.includes('obe.master.manage');
-
   return (
     <div className="min-h-screen bg-gray-50 overflow-x-hidden">
       <Navbar user={user} />

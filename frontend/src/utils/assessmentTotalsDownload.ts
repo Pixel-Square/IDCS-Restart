@@ -20,6 +20,7 @@ export type TotalsHeaderMeta = {
   courseCode?: string;
   staffName?: string;
   className?: string;
+  bannerUrl?: string;
 };
 
 function safeFilePart(raw: string) {
@@ -28,15 +29,6 @@ function safeFilePart(raw: string) {
     .replace(/\s+/g, '_')
     .replace(/[^a-zA-Z0-9_-]/g, '')
     .slice(0, 64);
-}
-
-function normalizeFormat(raw: unknown): DownloadFormat | null {
-  const s = String(raw ?? '')
-    .trim()
-    .toLowerCase();
-  if (s === 'excel' || s === 'xlsx' || s === 'xls') return 'excel';
-  if (s === 'pdf') return 'pdf';
-  return null;
 }
 
 function truncateTextToWidth(doc: jsPDF, text: string, maxWidth: number): string {
@@ -70,9 +62,9 @@ async function getCurrentStaffDisplayName(): Promise<string> {
   try {
     const res = await fetchWithAuth('/api/accounts/me/', { method: 'GET' });
     if (!res.ok) return '';
-    const me: any = await res.json();
-    const username = String(me?.username || '').trim();
-    const staffId = String(me?.profile?.staff_id || '').trim();
+    const me = (await res.json()) as { username?: unknown; profile?: { staff_id?: unknown } };
+    const username = String(me?.username ?? '').trim();
+    const staffId = String(me?.profile?.staff_id ?? '').trim();
     return username || staffId || '';
   } catch {
     return '';
@@ -95,7 +87,7 @@ function headerLines(meta: TotalsHeaderMeta): string[] {
   ];
 }
 
-function rowsToAoa(meta: TotalsHeaderMeta, rows: TotalsRow[]): any[][] {
+function rowsToAoa(meta: TotalsHeaderMeta, rows: TotalsRow[]): Array<Array<string | number>> {
   const lines = headerLines(meta);
   const header = ['S.No', 'Reg No', 'Name', 'Total'];
   const body = rows.map((r) => [r.sno, r.regNo, r.name, r.total]);
@@ -112,13 +104,13 @@ function writeExcel(filenameBase: string, meta: TotalsHeaderMeta, rows: TotalsRo
 
   pages.forEach((pageRows, idx) => {
     const ws = XLSX.utils.aoa_to_sheet(rowsToAoa(meta, pageRows));
-    ws['!freeze'] = { xSplit: 0, ySplit: 7 } as any; // header lines + blank + table header
+    ws['!freeze'] = { xSplit: 0, ySplit: 7 }; // header lines + blank + table header
     ws['!cols'] = [{ wch: 6 }, { wch: 16 }, { wch: 34 }, { wch: 12 }];
     XLSX.utils.book_append_sheet(wb, ws, pages.length > 1 ? `Page_${idx + 1}` : 'Sheet1');
   });
 
   const filename = `${safeFilePart(filenameBase) || 'marks'}_totals.xlsx`;
-  (XLSX as any).writeFile(wb, filename);
+  XLSX.writeFile(wb, filename);
 }
 
 type PdfLayout = {
@@ -309,13 +301,12 @@ async function fetchImageDataUrl(url: string): Promise<string | null> {
 
 async function drawPdfTotalsSinglePageWithBanner(doc: jsPDF, layout: PdfLayout, meta: TotalsHeaderMeta, rows: TotalsRow[]) {
   // Attempt to load banner image. Prefer meta.bannerUrl if provided.
-  const defaultBanner = String((meta as any)?.bannerUrl || logoUrl);
-  const bannerUrl = (meta as any)?.bannerUrl || defaultBanner;
+  const defaultBanner = String(meta.bannerUrl || logoUrl);
+  const bannerUrl = meta.bannerUrl || defaultBanner;
   const dataUrl = await fetchImageDataUrl(bannerUrl);
 
   // If image available, draw it perfectly centered and auto-resized as a banner.
   const dense = rows.length >= 55;
-  let bannerHeight = 0;
   if (dataUrl) {
     try {
       const img = new Image();
@@ -339,7 +330,6 @@ async function drawPdfTotalsSinglePageWithBanner(doc: jsPDF, layout: PdfLayout, 
       const x = (pageW - drawW) / 2;
       const y = 12; // Top margin
       layout.doc.addImage(dataUrl, 'PNG', x, y, drawW, drawH);
-      bannerHeight = drawH;
       layout.tableTopY = y + drawH + (dense ? 10 : 14); // Space below banner
     } catch {
       // ignore image errors

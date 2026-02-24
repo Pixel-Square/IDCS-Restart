@@ -32,7 +32,8 @@ const CQI_OPTIONS = [
   { id: 'model_co1_co2_co3_co4_co5', label: 'MODEL', cos: ['CO1', 'CO2', 'CO3', 'CO4', 'CO5'], assessment: 'model' },
   { id: 'model_co3_co4_co5', label: 'MODEL', cos: ['CO3', 'CO4', 'CO5'], assessment: 'model' },
   { id: 'model_co5', label: 'MODEL', cos: ['CO5'], assessment: 'model' },
-] as const satisfies ReadonlyArray<{ id: CQIOptionId; label: string; cos: string[]; assessment: 'cia1' | 'cia2' | 'model' }>;
+] as const satisfies ReadonlyArray<{ id: CQIOptionId; label: string; cos: readonly string[]; assessment: 'cia1' | 'cia2' | 'model' }>;
+
 
 function normalizeOptionId(raw: any): CQIOptionId | null {
   const id = String(raw || '').trim().toLowerCase();

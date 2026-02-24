@@ -76,7 +76,7 @@ export default function AssignedSubjectsPage() {
       const studsAll = (sdata.results || sdata)
       // exclude students already present in existing batches for this curriculum_row
       const crId = item.curriculum_row_id || item.curriculum_row?.id
-      let excluded = new Set<number>()
+      const excluded = new Set<number>()
       if (crId) {
         for (const b of batches) {
           if (b.curriculum_row && b.curriculum_row.id === crId) {

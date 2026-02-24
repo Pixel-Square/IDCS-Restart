@@ -3,6 +3,7 @@ export type Master = {
   regulation: string;
   semester: number;
   course_code?: string | null;
+  mnemonic?: string | null;
   course_name?: string | null;
   class_type?: string;
   enabled_assessments?: string[];

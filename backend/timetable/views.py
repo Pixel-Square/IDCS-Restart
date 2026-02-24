@@ -10,6 +10,9 @@ from rest_framework.response import Response
 from academics.models import Section
 from rest_framework.exceptions import PermissionDenied
 from django.db.models import OuterRef, Exists, Q
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class CurriculumBySectionView(APIView):
@@ -139,11 +142,21 @@ class SectionTimetableView(APIView):
                     from curriculum.models import ElectiveSubject
                     es = ElectiveSubject.objects.filter(pk=elective_id).first()
                     if es:
-                        elective_obj = {'id': es.pk, 'course_code': getattr(es, 'course_code', None), 'course_name': getattr(es, 'course_name', None)}
+                        elective_obj = {
+                            'id': es.pk,
+                            'course_code': getattr(es, 'course_code', None),
+                            'course_name': getattr(es, 'course_name', None),
+                            'mnemonic': getattr(es, 'mnemonic', None),
+                        }
                 except Exception:
                     elective_obj = None
             else:
-                curriculum_obj = {'id': a.curriculum_row.pk, 'course_code': a.curriculum_row.course_code, 'course_name': a.curriculum_row.course_name} if a.curriculum_row else None
+                curriculum_obj = {
+                    'id': a.curriculum_row.pk,
+                    'course_code': a.curriculum_row.course_code,
+                    'course_name': a.curriculum_row.course_name,
+                    'mnemonic': getattr(a.curriculum_row, 'mnemonic', None),
+                } if a.curriculum_row else None
 
             new_entry = {
                 'id': getattr(a, 'id', None),
@@ -194,20 +207,42 @@ class SectionTimetableView(APIView):
 
         # convert keys to sorted list of days
         results = []
-        # include special timetable entries for this section (date-specific overrides)
+        # include special timetable entries for this section
+        # Show all specials that fall within the same Mon–Sun week as the requested
+        # week_date (or date) parameter, defaulting to the current server week.
+        # This makes a special entry visible for its whole week then disappear naturally.
         try:
+            import datetime as _dt_sec
             from timetable.models import SpecialTimetableEntry
-            special_qs = SpecialTimetableEntry.objects.filter(is_active=True, timetable__section=sec).select_related('timetable', 'period', 'staff', 'curriculum_row', 'subject_batch')
+            _date_param = request.query_params.get('week_date') or request.query_params.get('date')
+            try:
+                _anchor = _dt_sec.date.fromisoformat(_date_param) if _date_param else _dt_sec.date.today()
+            except Exception:
+                _anchor = _dt_sec.date.today()
+            # Compute Monday of the week containing the anchor date.
+            # Mon=0 … Sun=6 in Python weekday(), so subtracting weekday() always
+            # lands on the Monday of the same week — matching the frontend logic.
+            _week_mon = _anchor - _dt_sec.timedelta(days=_anchor.weekday())
+            _week_sun = _week_mon + _dt_sec.timedelta(days=6)
+            _today_sec = _dt_sec.date.today()
+            special_qs = SpecialTimetableEntry.objects.filter(
+                is_active=True, timetable__section=sec,
+                date__gte=_week_mon, date__lte=_week_sun
+            ).filter(
+                # Swap entries only show from today onwards; other specials show for the full week
+                ~Q(timetable__name__startswith='[SWAP]') | Q(date__gte=_today_sec)
+            ).select_related('timetable', 'period', 'staff', 'curriculum_row', 'subject_batch')
             # Filter special entries by student batch using the same strict logic
             # For subjects with batch assignments, only show the student's batch
             # For subjects without batch assignments, show unbatched entries
             if student_profile:
                 from django.db.models import Q
                 
-                # Find curriculum rows that have batch assignments for special entries in this section
+                # Find curriculum rows that have batch assignments for special entries in this section this week
                 batched_special_curriculum_rows = SpecialTimetableEntry.objects.filter(
                     timetable__section=sec,
                     is_active=True,
+                    date__gte=_week_mon, date__lte=_week_sun,
                     subject_batch__isnull=False
                 ).values_list('curriculum_row_id', flat=True).distinct()
                 
@@ -238,9 +273,9 @@ class SectionTimetableView(APIView):
                                     elective_obj = {'id': es.pk, 'course_code': getattr(es, 'course_code', None), 'course_name': getattr(es, 'course_name', None)}
                                     elective_id = es.pk
                                 else:
-                                    curr_obj = {'id': e.curriculum_row.id, 'course_code': getattr(e.curriculum_row, 'course_code', None), 'course_name': getattr(e.curriculum_row, 'course_name', None)}
+                                    curr_obj = {'id': e.curriculum_row.id, 'course_code': getattr(e.curriculum_row, 'course_code', None), 'course_name': getattr(e.curriculum_row, 'course_name', None), 'mnemonic': getattr(e.curriculum_row, 'mnemonic', None)}
                             else:
-                                curr_obj = {'id': e.curriculum_row.id, 'course_code': getattr(e.curriculum_row, 'course_code', None), 'course_name': getattr(e.curriculum_row, 'course_name', None)}
+                                curr_obj = {'id': e.curriculum_row.id, 'course_code': getattr(e.curriculum_row, 'course_code', None), 'course_name': getattr(e.curriculum_row, 'course_name', None), 'mnemonic': getattr(e.curriculum_row, 'mnemonic', None)}
                         except Exception:
                             curr_obj = {'id': e.curriculum_row.id, 'course_code': getattr(e.curriculum_row, 'course_code', None), 'course_name': getattr(e.curriculum_row, 'course_name', None)}
                     
@@ -269,11 +304,30 @@ class SectionTimetableView(APIView):
                         } if getattr(e, 'staff', None) else None,
                         'section': {'id': getattr(sec, 'pk', None), 'name': getattr(sec, 'name', None)} if sec else None,
                         'is_special': True,
+                        'is_swap': (getattr(e.timetable, 'name', '') or '').startswith('[SWAP]'),
                         'date': getattr(e, 'date', None),
                         'timetable_name': getattr(e.timetable, 'name', None) if getattr(e, 'timetable', None) else None,
                     })
                 except Exception:
                     continue
+        except Exception:
+            pass
+
+        # Honor an explicit curriculum id sent by the client when assigning
+        # from another department. Frontend may send `chosen_curriculum_id`
+        # or `curriculum_department_id` to indicate the desired CurriculumDepartment.
+        try:
+            explicit_id = data.get('chosen_curriculum_id') or data.get('curriculum_department_id')
+            if explicit_id:
+                try:
+                    cid = int(explicit_id)
+                    from curriculum.models import CurriculumDepartment
+                    cd = CurriculumDepartment.objects.filter(pk=cid).first()
+                    if cd:
+                        data['curriculum_row'] = cd.pk
+                        logger.info('Using explicit chosen curriculum id %s for assignment', cid)
+                except Exception:
+                    pass
         except Exception:
             pass
         # Cleanup: for any day where a special entry exists for a given period,
@@ -358,6 +412,322 @@ class SectionSubjectsStaffView(APIView):
         return Response({'results': results})
 
 
+class PeriodSwapView(APIView):
+    """Create or undo a date-specific period swap for a section.
+
+    POST  /api/timetable/section/<id>/swap-periods/
+        Body: { date, from_period_id, to_period_id }
+        Creates two SpecialTimetableEntry records that swap the subjects/staff
+        of the two periods on that exact date only.
+
+    DELETE /api/timetable/section/<id>/swap-periods/
+        Body/params: { date }  – undoes all swaps for that section on that date.
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request, section_id):
+        import datetime
+        from .models import SpecialTimetable, SpecialTimetableEntry, TimetableAssignment
+        from academics.models import Section
+
+        try:
+            sec = Section.objects.get(pk=int(section_id))
+        except Exception:
+            return Response({'error': 'Section not found'}, status=404)
+
+        date_str = request.data.get('date')
+        from_period_id = request.data.get('from_period_id')
+        to_period_id = request.data.get('to_period_id')
+
+        if not date_str or not from_period_id or not to_period_id:
+            return Response({'error': 'date, from_period_id and to_period_id are required'}, status=400)
+        try:
+            from_period_id = int(from_period_id)
+            to_period_id = int(to_period_id)
+        except Exception:
+            return Response({'error': 'period ids must be integers'}, status=400)
+        if from_period_id == to_period_id:
+            return Response({'error': 'Cannot swap a period with itself'}, status=400)
+        
+        # Validate that neither period is a break or lunch
+        from .models import TimetableSlot
+        try:
+            from_period = TimetableSlot.objects.get(pk=from_period_id)
+            to_period = TimetableSlot.objects.get(pk=to_period_id)
+            if from_period.is_break or from_period.is_lunch:
+                return Response({
+                    'error': f'Cannot swap period {from_period_id}: it is a {"break" if from_period.is_break else "lunch"} period'
+                }, status=400)
+            if to_period.is_break or to_period.is_lunch:
+                return Response({
+                    'error': f'Cannot swap period {to_period_id}: it is a {"break" if to_period.is_break else "lunch"} period'
+                }, status=400)
+        except TimetableSlot.DoesNotExist as e:
+            return Response({'error': f'Period not found: {str(e)}'}, status=404)
+        
+        try:
+            swap_date = datetime.date.fromisoformat(date_str)
+        except Exception:
+            return Response({'error': 'Invalid date format, use YYYY-MM-DD'}, status=400)
+
+        # day of week: isoweekday() 1=Mon … 7=Sun (matches TimetableAssignment.day)
+        day_of_week = swap_date.isoweekday()
+
+        from_assigns = list(TimetableAssignment.objects.filter(
+            section=sec, period_id=from_period_id, day=day_of_week
+        ).select_related('staff', 'curriculum_row', 'subject_batch').order_by('id'))
+        to_assigns = list(TimetableAssignment.objects.filter(
+            section=sec, period_id=to_period_id, day=day_of_week
+        ).select_related('staff', 'curriculum_row', 'subject_batch').order_by('id'))
+
+        # If exact period_id lookup fails, fall back to matching by period index
+        # (covers the case where the frontend column headers come from a different
+        #  TimetableTemplate than the section's actual TimetableSlot rows)
+        if not from_assigns:
+            try:
+                from_slot_index = TimetableAssignment.objects.filter(
+                    period_id=from_period_id
+                ).values_list('period__index', flat=True).first()
+                if from_slot_index is not None:
+                    from_assigns = list(TimetableAssignment.objects.filter(
+                        section=sec, period__index=from_slot_index, day=day_of_week
+                    ).select_related('staff', 'curriculum_row', 'subject_batch').order_by('id'))
+            except Exception:
+                pass
+        if not to_assigns:
+            try:
+                to_slot_index = TimetableAssignment.objects.filter(
+                    period_id=to_period_id
+                ).values_list('period__index', flat=True).first()
+                if to_slot_index is not None:
+                    to_assigns = list(TimetableAssignment.objects.filter(
+                        section=sec, period__index=to_slot_index, day=day_of_week
+                    ).select_related('staff', 'curriculum_row', 'subject_batch').order_by('id'))
+            except Exception:
+                pass
+
+        if not from_assigns:
+            return Response({'error': f'No assignment found for period {from_period_id} on day {day_of_week} in section {sec.name}'}, status=400)
+        if not to_assigns:
+            return Response({'error': f'No assignment found for period {to_period_id} on day {day_of_week} in section {sec.name}'}, status=400)
+
+        from_a = from_assigns[0]
+        to_a = to_assigns[0]
+        # Use the actual period_id from the resolved assignments (may differ from what
+        # the frontend sent if a fallback index-based lookup was needed)
+        from_period_id = from_a.period_id
+        to_period_id = to_a.period_id
+
+        # ── Validate BEFORE touching the DB ─────────────────────────────────────
+        # Prevent swapping a period with itself (same subject AND same staff)
+        from_cr = getattr(from_a, 'curriculum_row', None)
+        to_cr   = getattr(to_a,   'curriculum_row', None)
+        from_text = (getattr(from_a, 'subject_text', None) or '').strip().lower()
+        to_text   = (getattr(to_a,   'subject_text', None) or '').strip().lower()
+        same_subject = (
+            (from_cr and to_cr and from_cr.pk == to_cr.pk)
+            or ((not from_cr) and (not to_cr) and from_text and to_text and from_text == to_text)
+        )
+        same_staff = (
+            from_a.staff_id is not None and from_a.staff_id == to_a.staff_id
+        )
+        if same_subject and same_staff:
+            return Response({'error': 'Cannot swap a period with itself (same subject and same staff)'}, status=400)
+        # ────────────────────────────────────────────────────────────────────────
+
+        staff_profile = getattr(request.user, 'staff_profile', None)
+
+        # Deactivate any existing swap entries for these two periods on this date
+        SpecialTimetableEntry.objects.filter(
+            timetable__section=sec,
+            timetable__name__startswith='[SWAP]',
+            date=swap_date,
+            period_id__in=[from_period_id, to_period_id],
+            is_active=True,
+        ).update(is_active=False)
+
+        # Get or create the swap SpecialTimetable for this section+date
+        swap_name = f'[SWAP] {date_str}'
+        st, _ = SpecialTimetable.objects.get_or_create(
+            section=sec,
+            name=swap_name,
+            defaults={'created_by': staff_profile, 'is_active': True},
+        )
+        if not st.is_active:
+            st.is_active = True
+            st.save(update_fields=['is_active'])
+
+        # Auto-deactivate any expired swap entries (date < today) to keep the DB tidy
+        import datetime as _dt_cleanup
+        _today = _dt_cleanup.date.today()
+        SpecialTimetableEntry.objects.filter(
+            timetable__name__startswith='[SWAP]',
+            date__lt=_today,
+            is_active=True,
+        ).update(is_active=False)
+        SpecialTimetable.objects.filter(
+            name__startswith='[SWAP]',
+            is_active=True,
+        ).exclude(
+            entries__date__gte=_today,
+        ).update(is_active=False)
+        SpecialTimetableEntry.objects.filter(timetable=st, date=swap_date, period_id=from_period_id).delete()
+        # subject_text stores the ORIGINAL (displaced) subject code so the UI can show "new ⇄ orig"
+        from_orig_text = getattr(from_a.curriculum_row, 'course_code', None) or getattr(from_a.curriculum_row, 'course_name', None) or (from_a.subject_text or '') if from_a.curriculum_row else (from_a.subject_text or '')
+        to_orig_text = getattr(to_a.curriculum_row, 'course_code', None) or getattr(to_a.curriculum_row, 'course_name', None) or (to_a.subject_text or '') if to_a.curriculum_row else (to_a.subject_text or '')
+        
+        logger.info(f"Creating swap for section {sec.name} on {date_str}:")
+        logger.info(f"  Period {from_period_id}: {from_orig_text} (staff={from_a.staff_id if from_a.staff else None}) → {to_orig_text} (staff={to_a.staff_id if to_a.staff else None})")
+        logger.info(f"  Period {to_period_id}: {to_orig_text} (staff={to_a.staff_id if to_a.staff else None}) → {from_orig_text} (staff={from_a.staff_id if from_a.staff else None})")
+        
+        SpecialTimetableEntry.objects.create(
+            timetable=st, date=swap_date, period_id=from_period_id,
+            staff=to_a.staff, curriculum_row=to_a.curriculum_row,
+            subject_batch=to_a.subject_batch, subject_text=from_orig_text,
+            is_active=True,
+        )
+        # Entry B: to_period now carries from_a's subject/staff
+        SpecialTimetableEntry.objects.filter(timetable=st, date=swap_date, period_id=to_period_id).delete()
+        SpecialTimetableEntry.objects.create(
+            timetable=st, date=swap_date, period_id=to_period_id,
+            staff=from_a.staff, curriculum_row=from_a.curriculum_row,
+            subject_batch=from_a.subject_batch, subject_text=to_orig_text,
+            is_active=True,
+        )
+
+        return Response({
+            'swap_id': st.id,
+            'date': date_str,
+            'from_period_id': from_period_id,
+            'to_period_id': to_period_id,
+            'message': 'Periods swapped successfully',
+        })
+
+    def delete(self, request, section_id):
+        """Undo all period swaps for a section on a given date."""
+        from .models import SpecialTimetable, SpecialTimetableEntry
+        from academics.models import Section
+
+        date_str = request.data.get('date') or request.query_params.get('date')
+        if not date_str:
+            return Response({'error': 'date is required'}, status=400)
+        try:
+            sec = Section.objects.get(pk=int(section_id))
+        except Exception:
+            return Response({'error': 'Section not found'}, status=404)
+
+        swap_name = f'[SWAP] {date_str}'
+        SpecialTimetableEntry.objects.filter(
+            timetable__section=sec, timetable__name=swap_name, is_active=True,
+        ).update(is_active=False)
+        SpecialTimetable.objects.filter(section=sec, name=swap_name).update(is_active=False)
+        return Response({'message': 'Swap undone'})
+
+    def put(self, request, section_id):
+        """Make a swap permanent: update the base TimetableAssignment records to reflect
+        the swapped arrangement and deactivate the special entry so the swap becomes
+        the default schedule going forward."""
+        import datetime
+        from .models import SpecialTimetable, SpecialTimetableEntry, TimetableAssignment
+        from academics.models import Section
+
+        date_str = request.data.get('date') or request.query_params.get('date')
+        if not date_str:
+            return Response({'error': 'date is required'}, status=400)
+        try:
+            sec = Section.objects.get(pk=int(section_id))
+            swap_date = datetime.date.fromisoformat(date_str)
+        except Exception as ex:
+            return Response({'error': str(ex)}, status=400)
+
+        swap_name = f'[SWAP] {date_str}'
+        existing_entries = list(SpecialTimetableEntry.objects.filter(
+            timetable__section=sec, timetable__name=swap_name, is_active=True
+        ).select_related('staff', 'curriculum_row', 'subject_batch', 'period'))
+        if not existing_entries:
+            return Response({'error': 'No active swap found for this date'}, status=404)
+
+        day_of_week = swap_date.isoweekday()  # 1=Mon … 7=Sun
+        updated = []
+        for entry in existing_entries:
+            base_assigns = list(TimetableAssignment.objects.filter(
+                section=sec, period=entry.period, day=day_of_week
+            ))
+            for ba in base_assigns:
+                ba.staff = entry.staff
+                ba.curriculum_row = entry.curriculum_row
+                ba.subject_batch = entry.subject_batch
+                if entry.curriculum_row:
+                    ba.subject_text = (
+                        getattr(entry.curriculum_row, 'course_code', None)
+                        or getattr(entry.curriculum_row, 'course_name', None)
+                    )
+                ba.save(update_fields=['staff', 'curriculum_row', 'subject_batch', 'subject_text'])
+                updated.append(ba.id)
+
+        # Deactivate the now-redundant swap special entries
+        SpecialTimetableEntry.objects.filter(
+            timetable__section=sec, timetable__name=swap_name, is_active=True
+        ).update(is_active=False)
+        SpecialTimetable.objects.filter(section=sec, name=swap_name).update(is_active=False)
+
+        return Response({'message': 'Swap made permanent', 'updated_assignments': updated})
+        """Retain an existing swap by copying its entries to the same day next week."""
+        import datetime
+        from .models import SpecialTimetable, SpecialTimetableEntry
+        from academics.models import Section
+
+        date_str = request.data.get('date') or request.query_params.get('date')
+        if not date_str:
+            return Response({'error': 'date is required'}, status=400)
+        try:
+            sec = Section.objects.get(pk=int(section_id))
+            swap_date = datetime.date.fromisoformat(date_str)
+        except Exception as ex:
+            return Response({'error': str(ex)}, status=400)
+
+        swap_name = f'[SWAP] {date_str}'
+        existing_entries = list(SpecialTimetableEntry.objects.filter(
+            timetable__section=sec, timetable__name=swap_name, is_active=True
+        ).select_related('staff', 'curriculum_row', 'subject_batch'))
+        if not existing_entries:
+            return Response({'error': 'No active swap found for this date'}, status=404)
+
+        next_date = swap_date + datetime.timedelta(days=7)
+        next_date_str = next_date.isoformat()
+        next_swap_name = f'[SWAP] {next_date_str}'
+        staff_profile = getattr(request.user, 'staff_profile', None)
+
+        # Deactivate any existing swap entries for the next-week date
+        SpecialTimetableEntry.objects.filter(
+            timetable__section=sec, timetable__name=next_swap_name, is_active=True
+        ).update(is_active=False)
+
+        st_next, _ = SpecialTimetable.objects.get_or_create(
+            section=sec, name=next_swap_name,
+            defaults={'created_by': staff_profile, 'is_active': True},
+        )
+        if not st_next.is_active:
+            st_next.is_active = True
+            st_next.save(update_fields=['is_active'])
+
+        for entry in existing_entries:
+            SpecialTimetableEntry.objects.filter(
+                timetable=st_next, date=next_date, period_id=entry.period_id
+            ).delete()
+            SpecialTimetableEntry.objects.create(
+                timetable=st_next, date=next_date,
+                period_id=entry.period_id,
+                staff=entry.staff,
+                curriculum_row=entry.curriculum_row,
+                subject_batch=entry.subject_batch,
+                subject_text=entry.subject_text,
+                is_active=True,
+            )
+
+        return Response({'message': 'Swap retained', 'new_date': next_date_str})
+
+
 class TimetableTemplateViewSet(viewsets.ModelViewSet):
     queryset = TimetableTemplate.objects.all().prefetch_related('periods')
     serializer_class = TimetableTemplateSerializer
@@ -423,6 +793,60 @@ class TimetableAssignmentViewSet(viewsets.ModelViewSet):
             staff_provided = data.get('staff', None)
             curriculum_row = data.get('curriculum_row', None)
             section = data.get('section', None)
+            # determine explicit curriculum override from incoming data if any
+            explicit_id = None
+            try:
+                explicit_id = (self.request.data.get('chosen_curriculum_id') or self.request.data.get('curriculum_department_id') or self.request.data.get('curriculum_row') or self.request.data.get('original_curriculum_raw'))
+            except Exception:
+                explicit_id = None
+
+            # helper to resolve an id to CurriculumDepartment instance (handle ElectiveSubject parent)
+            def resolve_to_curriculum_department(raw_id):
+                try:
+                    rid = int(raw_id)
+                except Exception:
+                    return None
+                try:
+                    from curriculum.models import ElectiveSubject, CurriculumDepartment
+                    es = ElectiveSubject.objects.filter(pk=rid).first()
+                    if es and getattr(es, 'parent_id', None):
+                        return CurriculumDepartment.objects.filter(pk=es.parent_id).first()
+                    cd = CurriculumDepartment.objects.filter(pk=rid).first()
+                    return cd
+                except Exception:
+                    return None
+
+            forced_cd = None
+            if explicit_id:
+                try:
+                    forced_cd = resolve_to_curriculum_department(explicit_id)
+                    if forced_cd:
+                        # If client also specified an other_department_id, ensure the
+                        # resolved curriculum actually belongs to that department.
+                        try:
+                            other_dept = None
+                            try:
+                                other_dept = int(self.request.data.get('other_department_id'))
+                            except Exception:
+                                other_dept = None
+                            if other_dept and getattr(forced_cd, 'department_id', None) != other_dept:
+                                # attempt to find a CurriculumDepartment in the requested
+                                # department with same course_code or course_name
+                                from curriculum.models import CurriculumDepartment as _CD
+                                candidate = None
+                                if forced_cd.course_code:
+                                    candidate = _CD.objects.filter(department_id=other_dept, course_code=forced_cd.course_code).first()
+                                if not candidate and forced_cd.course_name:
+                                    candidate = _CD.objects.filter(department_id=other_dept, course_name=forced_cd.course_name).first()
+                                if candidate:
+                                    logger.info('perform_create: adjusted explicit curriculum %s -> %s for department %s', getattr(forced_cd,'id',None), getattr(candidate,'id',None), other_dept)
+                                    forced_cd = candidate
+                        except Exception:
+                            pass
+                        logger.info('perform_create: forcing curriculum_row to explicit id %s', getattr(forced_cd, 'id', None))
+                except Exception:
+                    forced_cd = None
+
             if not staff_provided and curriculum_row and section:
                 from academics.models import TeachingAssignment
                 ta = TeachingAssignment.objects.filter(section=section, curriculum_row=curriculum_row, is_active=True).select_related('staff').first()
@@ -431,13 +855,74 @@ class TimetableAssignmentViewSet(viewsets.ModelViewSet):
                     # so the UI can dynamically resolve the current TeachingAssignment
                     # mapping; persisting the staff makes the timetable stale when
                     # the TeachingAssignment changes.
-                    serializer.save()
+                    if forced_cd:
+                        serializer.save(curriculum_row=forced_cd)
+                    else:
+                        serializer.save()
                     return
         except Exception:
             # ignore auto-assign failures and fall back to normal save
             pass
 
-        serializer.save()
+        # Final save: if client provided an explicit chosen curriculum, enforce it
+        try:
+            explicit_id = (self.request.data.get('chosen_curriculum_id') or self.request.data.get('curriculum_department_id') or self.request.data.get('curriculum_row') or self.request.data.get('original_curriculum_raw'))
+        except Exception:
+            explicit_id = None
+        # prefer any forced_cd already resolved above (in auto-assign branch)
+        try:
+            forced_cd = locals().get('forced_cd', None)
+        except Exception:
+            forced_cd = None
+
+        if not forced_cd and explicit_id:
+            try:
+                from curriculum.models import ElectiveSubject, CurriculumDepartment
+                try:
+                    rid = int(explicit_id)
+                except Exception:
+                    rid = None
+                if rid:
+                    es = ElectiveSubject.objects.filter(pk=rid).first()
+                    if es and getattr(es, 'parent_id', None):
+                        forced_cd = CurriculumDepartment.objects.filter(pk=es.parent_id).first()
+                    else:
+                        forced_cd = CurriculumDepartment.objects.filter(pk=rid).first()
+                # If client also provided other_department_id, ensure the forced_cd
+                # belongs to that department; if not, try to find a matching
+                # curriculum row in the requested department by course_code/name.
+                if forced_cd:
+                    try:
+                        other_dept = None
+                        try:
+                            other_dept = int(self.request.data.get('other_department_id'))
+                        except Exception:
+                            other_dept = None
+                        if other_dept and getattr(forced_cd, 'department_id', None) != other_dept:
+                            candidate = None
+                            try:
+                                candidate = CurriculumDepartment.objects.filter(department_id=other_dept, course_code=forced_cd.course_code).first()
+                            except Exception:
+                                candidate = None
+                            if not candidate and getattr(forced_cd, 'course_name', None):
+                                try:
+                                    candidate = CurriculumDepartment.objects.filter(department_id=other_dept, course_name=forced_cd.course_name).first()
+                                except Exception:
+                                    candidate = None
+                            if candidate:
+                                logger.info('perform_create: adjusted explicit curriculum %s -> %s for department %s', getattr(forced_cd,'id',None), getattr(candidate,'id',None), other_dept)
+                                forced_cd = candidate
+                    except Exception:
+                        pass
+                if forced_cd:
+                    logger.info('perform_create: applying explicit curriculum override -> %s', getattr(forced_cd, 'id', None))
+            except Exception:
+                forced_cd = None
+
+        if forced_cd:
+            serializer.save(curriculum_row=forced_cd)
+        else:
+            serializer.save()
 
     def perform_update(self, serializer):
         user = self.request.user
@@ -472,18 +957,77 @@ class TimetableAssignmentViewSet(viewsets.ModelViewSet):
         serializer.save()
 
     def create(self, request, *args, **kwargs):
+        try:
+            # log at INFO and also print so runserver console always shows payload
+            logger.info('TimetableAssignment.create called by %s; data=%s', getattr(request.user, 'username', str(request.user)), dict(request.data))
+            try:
+                print('[DEBUG TIMETABLE] create called by', getattr(request.user, 'username', str(request.user)), 'data=', dict(request.data))
+            except Exception:
+                print('[DEBUG TIMETABLE] create called; failed to print request.data')
+        except Exception:
+            pass
+
+        # Work with a mutable copy of incoming payload so we can normalize elective ids
+        if hasattr(request.data, 'copy'):
+            data = request.data.copy()
+        else:
+            data = dict(request.data or {})
+
+        # If client sent an ElectiveSubject id (or raw selection) map it to its parent CurriculumDepartment id.
+        try:
+            mapped = False
+            raw_sel = data.get('original_curriculum_raw') or data.get('curriculum_row') or data.get('curriculum')
+            if raw_sel:
+                try:
+                    sel_id = int(raw_sel)
+                    from curriculum.models import ElectiveSubject, CurriculumDepartment
+                    # If selection matches an ElectiveSubject, use its parent CurriculumDepartment id
+                    es = ElectiveSubject.objects.filter(pk=sel_id).first()
+                    if es and getattr(es, 'parent_id', None):
+                        data['curriculum_row'] = es.parent_id
+                        mapped = True
+                        logger.info('Mapping ElectiveSubject %s -> parent CurriculumDepartment %s', sel_id, es.parent_id)
+                    else:
+                        # If selection matches a CurriculumDepartment id, use it directly
+                        cd = CurriculumDepartment.objects.filter(pk=sel_id).first()
+                        if cd:
+                            data['curriculum_row'] = cd.pk
+                            mapped = True
+                            logger.info('Using provided CurriculumDepartment id %s from original_raw', sel_id)
+                except Exception:
+                    pass
+            # If client included explicit other_department_id but no mapping yet, try to interpret curriculum_row under that department
+            if not mapped and data.get('other_department_id') and data.get('curriculum_row'):
+                try:
+                    # If curriculum_row is numeric but doesn't exist under this department, attempt to find matching course_code under that department
+                    from curriculum.models import CurriculumDepartment
+                    try:
+                        cr_try = int(data.get('curriculum_row'))
+                    except Exception:
+                        cr_try = None
+                    if cr_try:
+                        cd = CurriculumDepartment.objects.filter(pk=cr_try, department_id=data.get('other_department_id')).first()
+                        if cd:
+                            data['curriculum_row'] = cd.pk
+                            mapped = True
+                    # otherwise leave as-is
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         # accept slot_id/section_id/academic_year_id in payload
         # if an assignment already exists for (section, day, period) -> update it (upsert)
-        sec_id = request.data.get('section_id') or request.data.get('section')
-        period_id = request.data.get('period_id') or request.data.get('period')
-        day = request.data.get('day')
+        sec_id = data.get('section_id') or data.get('section')
+        period_id = data.get('period_id') or data.get('period')
+        day = data.get('day')
         try:
             if sec_id is not None and period_id is not None and day is not None:
                 sec_id = int(sec_id)
                 period_id = int(period_id)
                 day = int(day)
                 # consider subject_batch in matching so different batches may occupy same cell
-                sb_raw = request.data.get('subject_batch_id') or request.data.get('subject_batch')
+                sb_raw = data.get('subject_batch_id') or data.get('subject_batch')
                 sb_id = None
                 try:
                     if sb_raw is not None and sb_raw != '':
@@ -497,9 +1041,100 @@ class TimetableAssignmentViewSet(viewsets.ModelViewSet):
                 else:
                     existing = TimetableAssignment.objects.filter(section_id=sec_id, period_id=period_id, day=day, subject_batch_id=sb_id).first()
                 if existing:
+                    try:
+                        logger.info('Upsert: found existing assignment id=%s with existing.curriculum_row=%s; incoming curriculum_row=%s; data keys=%s', getattr(existing, 'id', None), getattr(getattr(existing, 'curriculum_row', None), 'id', None), data.get('curriculum_row'), list(data.keys()))
+                    except Exception:
+                        pass
+                    # resolve any explicit chosen curriculum id from the normalized payload
+                    forced_cd = None
+                    try:
+                        explicit_id = data.get('chosen_curriculum_id') or data.get('curriculum_department_id') or data.get('curriculum_row') or data.get('original_curriculum_raw')
+                        if explicit_id:
+                            try:
+                                from curriculum.models import ElectiveSubject, CurriculumDepartment
+                                try:
+                                    rid = int(explicit_id)
+                                except Exception:
+                                    rid = None
+                                if rid:
+                                    es = ElectiveSubject.objects.filter(pk=rid).first()
+                                    if es and getattr(es, 'parent_id', None):
+                                        forced_cd = CurriculumDepartment.objects.filter(pk=es.parent_id).first()
+                                    else:
+                                        forced_cd = CurriculumDepartment.objects.filter(pk=rid).first()
+                                if forced_cd:
+                                    # If client indicated other_department_id, ensure the forced
+                                    # curriculum belongs to that department; if not, try to
+                                    # locate a matching curriculum in the requested department
+                                    try:
+                                        other_dept = data.get('other_department_id')
+                                        try:
+                                            other_dept = int(other_dept)
+                                        except Exception:
+                                            other_dept = None
+                                        if other_dept and getattr(forced_cd, 'department_id', None) != other_dept:
+                                            candidate = None
+                                            try:
+                                                candidate = CurriculumDepartment.objects.filter(department_id=other_dept, course_code=forced_cd.course_code).first()
+                                            except Exception:
+                                                candidate = None
+                                            if not candidate and getattr(forced_cd, 'course_name', None):
+                                                try:
+                                                    candidate = CurriculumDepartment.objects.filter(department_id=other_dept, course_name=forced_cd.course_name).first()
+                                                except Exception:
+                                                    candidate = None
+                                            if candidate:
+                                                logger.info('Upsert: adjusted explicit curriculum %s -> %s for department %s', getattr(forced_cd,'id',None), getattr(candidate,'id',None), other_dept)
+                                                forced_cd = candidate
+                                    except Exception:
+                                        pass
+                                    logger.info('Upsert: will force curriculum_row -> %s (from explicit %s)', getattr(forced_cd, 'id', None), explicit_id)
+                                    try:
+                                        print('[DEBUG TIMETABLE] upsert resolved forced_cd=', getattr(forced_cd, 'id', None), 'dept=', getattr(forced_cd, 'department_id', None), 'explicit_id=', explicit_id, 'other_department_id=', data.get('other_department_id'))
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                forced_cd = None
+                    except Exception:
+                        forced_cd = None
                     # perform update via serializer (partial)
-                    serializer = self.get_serializer(existing, data=request.data, partial=True)
-                    serializer.is_valid(raise_exception=True)
+                    serializer = self.get_serializer(existing, data=data, partial=True)
+                    try:
+                        serializer.is_valid(raise_exception=True)
+                    except Exception as e:
+                        # If validation fails but client insisted on an explicit curriculum
+                        # override (forced_cd), apply a direct update to ensure the
+                        # chosen department curriculum is persisted.
+                        try:
+                            if forced_cd:
+                                # update existing instance directly from incoming data where safe
+                                if data.get('subject_text') is not None:
+                                    existing.subject_text = data.get('subject_text')
+                                if data.get('subject_batch_id'):
+                                    try:
+                                        from academics.models import StudentSubjectBatch
+                                        sb = StudentSubjectBatch.objects.filter(pk=int(data.get('subject_batch_id'))).first()
+                                        existing.subject_batch = sb
+                                    except Exception:
+                                        pass
+                                if data.get('staff_id'):
+                                    try:
+                                        from academics.models import StaffProfile
+                                        sp = StaffProfile.objects.filter(pk=int(data.get('staff_id'))).first()
+                                        existing.staff = sp
+                                    except Exception:
+                                        pass
+                                existing.curriculum_row = forced_cd
+                                existing.save()
+                                try:
+                                    logger.info('Upsert fallback: directly updated existing id=%s to curriculum_row=%s after validation error', getattr(existing, 'id', None), getattr(getattr(existing, 'curriculum_row', None), 'id', None))
+                                except Exception:
+                                    pass
+                                return Response(self.get_serializer(existing).data, status=status.HTTP_200_OK)
+                        except Exception:
+                            pass
+                        # re-raise original validation error if we couldn't handle it
+                        raise
 
                     # permission check similar to perform_update
                     user = request.user
@@ -528,28 +1163,47 @@ class TimetableAssignmentViewSet(viewsets.ModelViewSet):
 
                     # auto-assign staff if not provided
                     try:
-                        data = serializer.validated_data
-                        staff_provided = data.get('staff', None)
-                        curriculum_row = data.get('curriculum_row', None) or getattr(existing, 'curriculum_row', None)
-                        section = data.get('section', None) or getattr(existing, 'section', None)
+                        vdata = serializer.validated_data
+                        staff_provided = vdata.get('staff', None)
+                        curriculum_row = vdata.get('curriculum_row', None) or getattr(existing, 'curriculum_row', None)
+                        section = vdata.get('section', None) or getattr(existing, 'section', None)
                         if not staff_provided and curriculum_row and section:
                             from academics.models import TeachingAssignment
                             ta = TeachingAssignment.objects.filter(section=section, curriculum_row=curriculum_row, is_active=True).select_related('staff').first()
                             if ta and getattr(ta, 'staff', None):
                                 # As above, avoid persisting the resolved staff on upsert.
-                                serializer.save()
+                                if forced_cd:
+                                    inst = serializer.save(curriculum_row=forced_cd)
+                                else:
+                                    inst = serializer.save()
+                                try:
+                                    logger.info('Upsert: auto-assigned via TA -> updated assignment id=%s curriculum_row=%s', getattr(inst, 'id', None), getattr(getattr(inst, 'curriculum_row', None), 'id', None))
+                                except Exception:
+                                    pass
                                 return Response(serializer.data, status=status.HTTP_200_OK)
                     except Exception:
                         pass
 
                     # normal save
-                    serializer.save()
+                    if forced_cd:
+                        inst = serializer.save(curriculum_row=forced_cd)
+                    else:
+                        inst = serializer.save()
+                    try:
+                        logger.info('Upsert: updated assignment id=%s curriculum_row=%s', getattr(inst, 'id', None), getattr(getattr(inst, 'curriculum_row', None), 'id', None))
+                    except Exception:
+                        pass
                     return Response(serializer.data, status=status.HTTP_200_OK)
         except Exception:
             # fall back to normal create which will validate and surface errors
             pass
 
-        return super().create(request, *args, **kwargs)
+        # Fallback: use normalized data for standard create
+        serializer = self.get_serializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
 
 class StaffTimetableView(APIView):
@@ -568,13 +1222,22 @@ class StaffTimetableView(APIView):
         if not staff_profile:
             return Response({'results': []})
 
-        # optional date param to determine date-specific overrides
-        date_param = request.query_params.get('date')
+        # optional date/week_date param to determine the current week for special entries
+        date_param = request.query_params.get('week_date') or request.query_params.get('date')
         import datetime
+        import datetime as _dt_staff
         try:
             date_for_override = datetime.date.fromisoformat(date_param) if date_param else None
         except Exception:
             date_for_override = None
+
+        # Pre-compute Mon–Sun week bounds once so the normal-assignment override check
+        # and the special entries retrieval both operate on the same week window.
+        # Always use the Monday of the week containing the anchor date — this matches
+        # the frontend getDateForDayIndex logic which never advances on weekends.
+        _s_anchor = date_for_override if date_for_override else _dt_staff.date.today()
+        _s_mon = _s_anchor - _dt_staff.timedelta(days=_s_anchor.weekday())  # Mon=0…Sun=6
+        _s_sun = _s_mon + _dt_staff.timedelta(days=6)
 
         try:
             from academics.models import TeachingAssignment
@@ -641,11 +1304,11 @@ class StaffTimetableView(APIView):
                     from curriculum.models import ElectiveSubject
                     es = ElectiveSubject.objects.filter(pk=elective_id).first()
                     if es:
-                        elective_obj = {'id': es.pk, 'course_code': getattr(es, 'course_code', None), 'course_name': getattr(es, 'course_name', None)}
+                        elective_obj = {'id': es.pk, 'course_code': getattr(es, 'course_code', None), 'course_name': getattr(es, 'course_name', None), 'mnemonic': getattr(es, 'mnemonic', None)}
                 except Exception:
                     elective_obj = None
             else:
-                curriculum_obj = {'id': a.curriculum_row.pk, 'course_code': a.curriculum_row.course_code, 'course_name': a.curriculum_row.course_name} if a.curriculum_row else None
+                curriculum_obj = {'id': a.curriculum_row.pk, 'course_code': a.curriculum_row.course_code, 'course_name': a.curriculum_row.course_name, 'mnemonic': getattr(a.curriculum_row, 'mnemonic', None)} if a.curriculum_row else None
 
             # Enhanced section info with batch details  
             section_info = None
@@ -681,37 +1344,60 @@ class StaffTimetableView(APIView):
                 } if staff_obj else None,
                 'section': section_info,
             })
-            # If a date was provided and a special entry exists for this section/period/date,
-            # skip including the normal timetable assignment so the staff sees only the
-            # special period for that date.
+            # If a special entry exists for this section/period on the same calendar day
+            # within the viewing week, suppress the regular assignment so the staff
+            # sees only the special (e.g. a period swap entry) for that day.
             try:
-                if date_for_override:
-                    from timetable.models import SpecialTimetableEntry
-                    if SpecialTimetableEntry.objects.filter(timetable__section=a.section, period=a.period, date=date_for_override, is_active=True).exists():
-                        # remove the last appended item
-                        lst.pop()
-                        continue
+                from timetable.models import SpecialTimetableEntry
+                # a.day: 1=Mon … 7=Sun; _s_mon is the Monday of the viewed week.
+                day_date = _s_mon + _dt_staff.timedelta(days=a.day - 1)
+                if SpecialTimetableEntry.objects.filter(
+                    timetable__section=a.section, period=a.period,
+                    date=day_date, is_active=True
+                ).exists():
+                    lst.pop()
+                    continue
             except Exception:
                 pass
 
         # include special timetable entries where applicable
+        # Show specials for the entire Mon–Sun week of the requested date.
+        # _s_mon/_s_sun were already computed above (before the normal assignments loop).
         try:
             from timetable.models import SpecialTimetableEntry
             specials_added = []
-            special_qs = SpecialTimetableEntry.objects.filter(is_active=True).select_related('timetable', 'timetable__section', 'timetable__section__batch', 'period', 'staff', 'curriculum_row')
+            import datetime as _dt_today_staff
+            _today_staff = _dt_today_staff.date.today()
+            special_qs = SpecialTimetableEntry.objects.filter(
+                is_active=True, date__gte=_s_mon, date__lte=_s_sun
+            ).filter(
+                # Swap entries only show from today onwards; other specials show for the full week
+                ~Q(timetable__name__startswith='[SWAP]') | Q(date__gte=_today_staff)
+            ).select_related('timetable', 'timetable__section', 'timetable__section__batch', 'period', 'staff', 'curriculum_row')
             for e in special_qs:
                 try:
-                    # include if entry explicitly assigned to this staff or if a TeachingAssignment maps this staff to the curriculum_row
+                    # Treat all special entries (including swaps) uniformly
+                    # Show to staff if: explicitly assigned, or if staff has TeachingAssignment matching the section/day
                     include_special = False
-                    if getattr(e, 'staff', None) and getattr(e.staff, 'id', None) == getattr(staff_profile, 'id', None):
-                        include_special = True
+                    explicit_staff = getattr(e, 'staff', None)
+                    
+                    if explicit_staff:
+                        # Show if explicitly assigned to this staff
+                        if getattr(explicit_staff, 'id', None) == getattr(staff_profile, 'id', None):
+                            include_special = True
                     else:
+                        # No explicit staff - check if staff teaches in this section on this day via TeachingAssignment
                         try:
-                            ta_q = TeachingAssignment.objects.filter(is_active=True, staff=staff_profile).filter(Q(curriculum_row=e.curriculum_row) | Q(elective_subject__parent=e.curriculum_row)).filter(Q(section=e.timetable.section) | Q(section__isnull=True))
-                            if ta_q.exists():
-                                include_special = True
+                            special_section = getattr(e.timetable, 'section', None)
+                            if special_section:
+                                day_of_week = e.date.isoweekday()
+                                # Check if staff has any assignment in this section on this day
+                                staff_teaches_here = qs.filter(section=special_section, day=day_of_week).exists()
+                                if staff_teaches_here:
+                                    include_special = True
                         except Exception:
-                            include_special = False
+                            pass
+                    
                     if not include_special:
                         continue
                     daynum = e.date.isoweekday()
@@ -738,11 +1424,11 @@ class StaffTimetableView(APIView):
                             from curriculum.models import ElectiveSubject
                             es = ElectiveSubject.objects.filter(pk=elective_id).first()
                             if es:
-                                elective_obj = {'id': es.pk, 'course_code': getattr(es, 'course_code', None), 'course_name': getattr(es, 'course_name', None)}
+                                elective_obj = {'id': es.pk, 'course_code': getattr(es, 'course_code', None), 'course_name': getattr(es, 'course_name', None), 'mnemonic': getattr(es, 'mnemonic', None)}
                         except Exception:
                             elective_obj = None
                     else:
-                        curr_obj = {'id': e.curriculum_row.id, 'course_code': getattr(e.curriculum_row, 'course_code', None), 'course_name': getattr(e.curriculum_row, 'course_name', None)} if e.curriculum_row else None
+                        curr_obj = {'id': e.curriculum_row.id, 'course_code': getattr(e.curriculum_row, 'course_code', None), 'course_name': getattr(e.curriculum_row, 'course_name', None), 'mnemonic': getattr(e.curriculum_row, 'mnemonic', None)} if e.curriculum_row else None
 
                     # Enhanced section info with batch details
                     section_info = None
@@ -778,6 +1464,8 @@ class StaffTimetableView(APIView):
                         } if getattr(e, 'staff', None) else None,
                         'section': section_info,
                         'is_special': True,
+                        'is_swap': (getattr(e.timetable, 'name', '') or '').startswith('[SWAP]'),
+                        'timetable_name': getattr(e.timetable, 'name', None) if getattr(e, 'timetable', None) else None,
                         'date': getattr(e, 'date', None),
                     })
                     specials_added.append(e.id)
@@ -946,29 +1634,34 @@ class SpecialTimetableEntryViewSet(viewsets.ModelViewSet):
         if not allowed:
             raise PermissionDenied('You do not have permission to create special timetable entries')
 
+        staff_profile = getattr(user, 'staff_profile', None)
+
         # Attempt to auto-resolve a staff for this special entry if not provided.
+        resolved_entry = None
         try:
             data = serializer.validated_data
             staff_provided = data.get('staff', None)
             curriculum_row = data.get('curriculum_row', None)
             timetable_obj = data.get('timetable', None)
-            period_obj = data.get('period', None)
-            if not staff_provided and curriculum_row and timetable_obj:
-                try:
-                    from academics.models import TeachingAssignment
-                    # Prefer section-scoped mapping
-                    ta = TeachingAssignment.objects.filter(section=timetable_obj.section, curriculum_row=curriculum_row, is_active=True).select_related('staff').first()
-                    if not ta:
-                        ta = TeachingAssignment.objects.filter(curriculum_row=curriculum_row, is_active=True).select_related('staff').first()
-                    if ta and getattr(ta, 'staff', None):
-                        serializer.save(staff=ta.staff)
-                        return
-                except Exception:
-                    pass
+            subject_text = data.get('subject_text', None)
+            if not staff_provided:
+                if curriculum_row and timetable_obj:
+                    try:
+                        from academics.models import TeachingAssignment
+                        ta = TeachingAssignment.objects.filter(section=timetable_obj.section, curriculum_row=curriculum_row, is_active=True).select_related('staff').first()
+                        if not ta:
+                            ta = TeachingAssignment.objects.filter(curriculum_row=curriculum_row, is_active=True).select_related('staff').first()
+                        if ta and getattr(ta, 'staff', None):
+                            resolved_entry = serializer.save(staff=ta.staff)
+                    except Exception:
+                        pass
+                # For event/custom-text or any other no-staff case: auto-assign the requesting staff.
+                if resolved_entry is None and staff_profile:
+                    resolved_entry = serializer.save(staff=staff_profile)
         except Exception:
             pass
 
-        entry = serializer.save()
+        entry = resolved_entry if resolved_entry is not None else serializer.save()
 
         # Ensure a PeriodAttendanceSession exists for this special entry so
         # staff can mark attendance for the special period on the date.

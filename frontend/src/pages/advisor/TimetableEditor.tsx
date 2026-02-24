@@ -5,53 +5,89 @@ import { Calendar, Clock, BookOpen, Users, Edit, Trash2, Plus, X, Save, AlertCir
 const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
 
 // Stable CellPopup component outside main component to prevent recreation on every render
-function CellPopup({ 
-  editingCell,
-  periods,
-  assignmentMap,
-  specialName,
-  setSpecialName,
-  selectedSpecialId,
-  setSelectedSpecialId,
-  specialTimetables,
-  specialDate,
-  setSpecialDate,
-  curriculum,
-  currentSectionRegulation,
-  editingCurriculumId,
-  setEditingCurriculumId,
-  customSubjectText,
-  setCustomSubjectText,
-  editingAvailableBatches,
-  setEditingAvailableBatches,
-  editingBatchId,
-  setEditingBatchId,
-  isCustomAssignment,
-  setIsCustomAssignment,
-  customAssignmentText,
-  setCustomAssignmentText,
-  selectedStaffId,
-  setSelectedStaffId,
-  staffList,
-  sectionId,
-  shortLabel,
-  loadBatchesForCurriculum,
-  handleDeleteSpecialEntry,
-  handleDeleteAssignment,
-  handleUpdateAssignment,
-  handleAssign,
-  loadTimetable,
-  setShowCellPopup,
-  customSubjectOptions,
-  setEditingCell,
-  fetchWithAuth
-}: any) {
+function CellPopup(props: any) {
+  const {
+    editingCell,
+    periods,
+    assignmentMap,
+    specialName,
+    setSpecialName,
+    selectedSpecialId,
+    setSelectedSpecialId,
+    specialTimetables,
+    specialDate,
+    setSpecialDate,
+    curriculum,
+    currentSectionRegulation,
+    editingCurriculumId,
+    setEditingCurriculumId,
+    customSubjectText,
+    setCustomSubjectText,
+    editingAvailableBatches,
+    setEditingAvailableBatches,
+    editingBatchId,
+    setEditingBatchId,
+    isCustomAssignment,
+    setIsCustomAssignment,
+    customAssignmentText,
+    setCustomAssignmentText,
+    selectedStaffId,
+    setSelectedStaffId,
+    staffList,
+    sections,
+    sectionId,
+    shortLabel,
+    loadBatchesForCurriculum,
+    handleDeleteSpecialEntry,
+    handleDeleteAssignment,
+    handleUpdateAssignment,
+    handleAssign,
+    loadTimetable,
+    setShowCellPopup,
+    setEditingCell,
+    fetchWithAuth,
+    customSubjectOptions,
+    setSectionId,
+    setSectionDepartmentId,
+    departments,
+    deptCurriculum,
+    setDeptCurriculum,
+    isOtherDept,
+    setIsOtherDept,
+    selectedOtherDept,
+    setSelectedOtherDept,
+    setLastSelectedCurriculumRaw,
+    otherDeptStaffList,
+    setOtherDeptStaffList,
+  } = props
+  const [deptCurriculumError, setDeptCurriculumError] = useState<string | null>(null)
+  const [specialSubjectType, setSpecialSubjectType] = useState<'curriculum' | 'custom' | 'otherdept' | 'event'>('curriculum')
+  const [specialEventText, setSpecialEventText] = useState<string>('')
+  
+
+
   if(!editingCell) return null
   const day = editingCell.day
   const periodId = editingCell.periodId
   const assigned = assignmentMap[day] && assignmentMap[day][periodId] || []
   const periodObj = periods.find((p: any) => p.id === periodId) || {}
-  
+
+  // Ensure we always work with arrays for curriculum sources
+  const subjectSource: any[] = Array.isArray(selectedOtherDept ? deptCurriculum : curriculum)
+    ? (selectedOtherDept ? deptCurriculum : curriculum)
+    : (selectedOtherDept ? (deptCurriculum && (deptCurriculum.results || []) ) : (curriculum && (curriculum.results || [])))
+
+  // helper: resolve curriculum_row id to use in payload. If item is an ElectiveSubject
+  // it may have `parent` pointing to the department curriculum row — prefer that.
+  function resolveCurriculumId(item:any){
+    if(!item) return null
+    // parent may be object or id
+    if(item.parent && typeof item.parent === 'object' && item.parent.id) return item.parent.id
+    if(item.parent) return item.parent
+    if(item.parent_id) return item.parent_id
+    return item.id
+  }
+
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50 p-4">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
@@ -190,15 +226,17 @@ function CellPopup({
               <div className="space-y-4 bg-gray-50 rounded-lg p-4 border border-gray-200">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Assignment Type</label>
-                  <div className="flex gap-2">
+                    <div className="flex gap-2 items-center">
                     <button
                       onClick={() => {
                         setIsCustomAssignment(false)
+                        setIsOtherDept(false)
                         setCustomAssignmentText('')
                         setSelectedStaffId(null)
+                        setSelectedOtherDept(null)
                       }}
                       className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
-                        !isCustomAssignment 
+                        (!isCustomAssignment && !isOtherDept) 
                           ? 'bg-indigo-600 text-white border-indigo-600' 
                           : 'bg-white text-gray-700 border-gray-300 hover:border-indigo-300'
                       }`}
@@ -208,9 +246,11 @@ function CellPopup({
                     <button
                       onClick={() => {
                         setIsCustomAssignment(true)
+                        setIsOtherDept(false)
                         setEditingCurriculumId(null)
                         setEditingBatchId(null)
                         setEditingAvailableBatches([])
+                        setSelectedOtherDept(null)
                       }}
                       className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
                         isCustomAssignment 
@@ -220,17 +260,176 @@ function CellPopup({
                     >
                       Custom Subject
                     </button>
+                                        <div className="ml-2">
+                                          <button
+                                            onClick={() => { setIsOtherDept(true); setIsCustomAssignment(false); setSelectedOtherDept(null) }}
+                                            className={`px-3 py-2 text-sm rounded-lg border transition-colors ${isOtherDept ? 'bg-indigo-100 text-indigo-700 border-indigo-300' : 'bg-white text-gray-700 border-gray-300 hover:border-indigo-300'}`}
+                                          >
+                                            Other Dept
+                                          </button>
+                                        </div>
                   </div>
                 </div>
 
-                {!isCustomAssignment ? (
+                {isOtherDept ? (
                   <>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Select Dept</label>
+                      <select
+                        value={selectedOtherDept || ''}
+                        onChange={async (e) => {
+                          const val = Number(e.target.value) || null
+                          if (!val) return
+                          setDeptCurriculumError(null)
+                          setDeptCurriculum([])
+                          setSelectedOtherDept(val)
+                          try {
+                            const r = await fetchWithAuth(`/api/curriculum/?department=${val}&page_size=0`)
+                            if (!r.ok) {
+                              console.debug('dept curriculum fetch failed', { status: r.status, url: `/api/curriculum/?department=${val}&page_size=0` })
+                              // try permissive fallback
+                              if (r.status === 401 || r.status === 403) {
+                                try {
+                                  const fall = await fetchWithAuth('/api/curriculum/?page_size=0')
+                                  if (fall.ok) {
+                                    const fd = await fall.json()
+                                    let raw = fd.results ?? fd ?? []
+                                    let items: any[] = []
+                                    if (raw && !Array.isArray(raw) && typeof raw === 'object') {
+                                      // API returned a link map (e.g. { master, department, elective }) — follow department link
+                                      if (typeof raw.department === 'string') {
+                                        try {
+                                          const follow = await fetchWithAuth(`${raw.department}?department=${val}&page_size=0`)
+                                          if (follow.ok) {
+                                            const fd2 = await follow.json()
+                                            raw = fd2.results ?? fd2 ?? []
+                                          }
+                                        } catch (e) { console.debug('follow department link failed', e) }
+                                      } else {
+                                        // otherwise, use object values
+                                        raw = Object.values(raw)
+                                      }
+                                    }
+                                    items = Array.isArray(raw) ? raw : (raw && typeof raw === 'object' ? Object.values(raw) : [])
+                                    console.debug('fallback curriculum items normalized', { rawType: typeof raw, itemsLength: items.length })
+                                    const section = sections.find(s => s.id === sectionId)
+                                    const sectionBatch = section?.batch ?? null
+                                    const sectionRegCode = typeof currentSectionRegulation === 'string' ? currentSectionRegulation : currentSectionRegulation?.code
+                                    const sectionSem = section?.semester ?? (typeof currentSectionRegulation === 'object' ? currentSectionRegulation?.semester ?? null : null)
+                                    const filtered = (items || []).filter((c:any) => {
+                                      if (sectionRegCode) {
+                                        if (!c.regulation || c.regulation !== sectionRegCode) return false
+                                      }
+                                      if (sectionSem && c.semester !== undefined) {
+                                        if (c.semester !== sectionSem) return false
+                                      }
+                                      if (sectionBatch && (c.batch !== undefined || c.batch_name !== undefined)) {
+                                        if (c.batch !== undefined && String(c.batch) !== String(sectionBatch)) return false
+                                        if (c.batch_name !== undefined && String(c.batch_name) !== String(sectionBatch)) return false
+                                      }
+                                      return true
+                                    })
+                                    // when viewing other department, prefer elective rows
+                                    const electiveOnly = filtered.filter((c:any) => Boolean(c.is_elective))
+                                    if (electiveOnly.length > 0) {
+                                      setDeptCurriculum(electiveOnly)
+                                    } else {
+                                      setDeptCurriculum(filtered)
+                                      setDeptCurriculumError('No electives found for this department+section; showing all matched subjects as fallback.')
+                                    }
+                                    // load staff for department
+                                    try{
+                                      const sres = await fetchWithAuth(`/api/academics/advisor-staff/?department=${val}&page_size=0`)
+                                      if(sres.ok){
+                                        const sd = await sres.json()
+                                        setOtherDeptStaffList(sd.results || sd || [])
+                                      } else {
+                                        setOtherDeptStaffList([])
+                                      }
+                                    }catch(e){ console.debug('failed to load other dept staff', e); setOtherDeptStaffList([]) }
+                                    return
+                                  }
+                                } catch (e) { console.debug('fallback fetch failed', e) }
+                              }
+                              throw new Error('Failed to fetch department curriculum')
+                            }
+                            const d = await r.json()
+                            let raw = d.results ?? d ?? []
+                            let items: any[] = []
+                            if (raw && !Array.isArray(raw) && typeof raw === 'object') {
+                              if (typeof raw.department === 'string') {
+                                try {
+                                  const follow = await fetchWithAuth(`${raw.department}?department=${val}&page_size=0`)
+                                  if (follow.ok) {
+                                    const fd2 = await follow.json()
+                                    raw = fd2.results ?? fd2 ?? []
+                                  }
+                                } catch (e) { console.debug('follow department link failed', e) }
+                              } else {
+                                raw = Object.values(raw)
+                              }
+                            }
+                            items = Array.isArray(raw) ? raw : (raw && typeof raw === 'object' ? Object.values(raw) : [])
+                            console.debug('dept curriculum items normalized', { rawType: typeof raw, itemsLength: items.length })
+                            const section = sections.find(s => s.id === sectionId)
+                            const sectionBatch = section?.batch ?? null
+                            const sectionRegCode = typeof currentSectionRegulation === 'string' ? currentSectionRegulation : currentSectionRegulation?.code
+                            const sectionSem = section?.semester ?? (typeof currentSectionRegulation === 'object' ? currentSectionRegulation?.semester ?? null : null)
+                            const filtered = (items || []).filter((c:any) => {
+                              if (sectionRegCode) {
+                                if (!c.regulation || c.regulation !== sectionRegCode) return false
+                              }
+                              if (sectionSem && c.semester !== undefined) {
+                                if (c.semester !== sectionSem) return false
+                              }
+                              if (sectionBatch && (c.batch !== undefined || c.batch_name !== undefined)) {
+                                if (c.batch !== undefined && String(c.batch) !== String(sectionBatch)) return false
+                                if (c.batch_name !== undefined && String(c.batch_name) !== String(sectionBatch)) return false
+                              }
+                              return true
+                            })
+                            // when viewing other department, prefer elective rows
+                            const electiveOnly = filtered.filter((c:any) => Boolean(c.is_elective))
+                            if (electiveOnly.length > 0) {
+                              setDeptCurriculum(electiveOnly)
+                            } else {
+                              setDeptCurriculum(filtered)
+                              setDeptCurriculumError('No electives found for this department+section; showing all matched subjects as fallback.')
+                            }
+                            // load staff for department
+                            try{
+                              const sres = await fetchWithAuth(`/api/academics/advisor-staff/?department=${val}&page_size=0`)
+                              if(sres.ok){
+                                const sd = await sres.json()
+                                setOtherDeptStaffList(sd.results || sd || [])
+                              } else {
+                                setOtherDeptStaffList([])
+                              }
+                            }catch(e){ console.debug('failed to load other dept staff', e); setOtherDeptStaffList([]) }
+                          } catch (err:any) {
+                            console.error('Other Dept selection failed', err)
+                            setDeptCurriculum([])
+                            setDeptCurriculumError('Failed to load subjects for selected department (permission or network issue). Check DevTools Network.')
+                          }
+                        }}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      >
+                        <option value="">Select department…</option>
+                        {departments.map(d => (
+                          <option key={d.id} value={d.id}>{d.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    {/* Show subject/batch using deptCurriculum if department selected */}
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1.5">Subject</label>
                       <select 
                         value={editingCurriculumId || ''} 
                         onChange={async (e) => {
-                          const val = Number(e.target.value) || null
+                          const raw = e.target.value
+                          const val = Number(raw) || null
+                          try{ console.debug('OtherDept subject select changed', { raw, resolved: val, selectedOtherDept, deptCurriculumSample: (deptCurriculum||[]).slice(0,5) }) } catch(e){}
+                          setLastSelectedCurriculumRaw && setLastSelectedCurriculumRaw(String(raw))
                           setEditingCurriculumId(val)
                           setEditingBatchId(null)
                           if(val){
@@ -242,10 +441,64 @@ function CellPopup({
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                       >
                         <option value="">Select subject…</option>
-                        {curriculum
-                          .filter((c: any) => !currentSectionRegulation?.code || c.regulation === currentSectionRegulation.code)
+                        {(selectedOtherDept ? deptCurriculum : curriculum)
+                          .filter((c: any) => Boolean(c))
                           .map((c: any) => (
-                            <option key={c.id} value={c.id}>{c.course_code} — {c.course_name}</option>
+                            <option key={c.id} value={resolveCurriculumId(c)}>{c.course_code} — {c.course_name}</option>
+                          ))}
+                      </select>
+                    </div>
+                    {deptCurriculumError && (
+                      <p className="text-sm text-amber-600 mt-2">{deptCurriculumError}</p>
+                    )}
+                    {/* Hidden debug output removed */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Batch (optional)</label>
+                      <select 
+                        value={editingBatchId || ''} 
+                        onChange={e=> setEditingBatchId(Number(e.target.value) || null)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      >
+                        <option value="">Select batch (optional)</option>
+                        {editingAvailableBatches.map((b: any) => (
+                          <option key={b.id} value={b.id}>{b.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </>
+                ) : !isCustomAssignment ? (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Subject</label>
+                      <select 
+                        value={editingCurriculumId || ''} 
+                        onChange={async (e) => {
+                          const raw = e.target.value
+                          const val = Number(raw) || null
+                          try{ console.debug('Subject select changed', { raw, resolved: val, selectedOtherDept }) } catch(e){}
+                          setLastSelectedCurriculumRaw && setLastSelectedCurriculumRaw(String(raw))
+                          setEditingCurriculumId(val)
+                          setEditingBatchId(null)
+                          if(val){
+                            await loadBatchesForCurriculum(val)
+                          } else {
+                            setEditingAvailableBatches([])
+                          }
+                        }}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      >
+                        <option value="">Select subject…</option>
+                        {subjectSource
+                          .filter((c: any) => {
+                            // when other dept selected, show only elective rows (ignore regulation)
+                            if (selectedOtherDept) {
+                              return Boolean(c.is_elective)
+                            }
+                            if (!currentSectionRegulation?.code) return true
+                            return c.regulation === currentSectionRegulation.code
+                          })
+                          .map((c: any) => (
+                            <option key={c.id} value={resolveCurriculumId(c)}>{c.course_code} — {c.course_name}</option>
                           ))}
                       </select>
                     </div>
@@ -328,127 +581,264 @@ function CellPopup({
                   <h4 className="text-lg font-semibold text-gray-900">Mark Special Period</h4>
                 </div>
                 <p className="text-sm text-gray-600 mb-4">Create a date-specific override for this period.</p>
-                
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Special timetable</label>
-                    <select 
-                      value={selectedSpecialId ?? ''} 
-                      onChange={e=> setSelectedSpecialId(e.target.value ? Number(e.target.value) : null)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
-                    >
-                      <option value="">Create new…</option>
-                      {specialTimetables.map((t: any) => (
-                        <option key={t.id} value={t.id}>{t.name} {t.is_active? '': '(inactive)'}</option>
-                      ))}
-                    </select>
-                    {!selectedSpecialId && (
-                      <input 
-                        key="special-name-input"
-                        placeholder="Name for new special timetable" 
-                        value={specialName} 
-                        onChange={(e) => {
-                          e.preventDefault()
-                          setSpecialName(e.target.value)
-                        }}
-                        className="w-full mt-2 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
-                      />
-                    )}
-                  </div>
 
+                <div className="space-y-4">
+                  {/* Date */}
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1.5">Date</label>
-                    <input 
-                      type="date" 
-                      value={specialDate||''} 
-                      onChange={e=> setSpecialDate(e.target.value || null)}
+                    <input
+                      type="date"
+                      value={specialDate || ''}
+                      onChange={e => setSpecialDate(e.target.value || null)}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
                     />
                   </div>
 
+                  {/* Subject type tabs */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Subject</label>
-                    <select 
-                      value={editingCurriculumId ?? ''} 
-                      onChange={(e) => {
-                        const val = Number(e.target.value) || null
-                        setEditingCurriculumId(val)
-                        setCustomSubjectText('')
-                        setEditingBatchId(null)
-                        // Load batches asynchronously without blocking the UI
-                        if(val && val !== -1) {
-                          loadBatchesForCurriculum(val).catch(console.error)
-                        }
-                      }}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
-                    >
-                      <option value="">-- choose from section subjects --</option>
-                      {curriculum
-                        .filter((c: any) => !currentSectionRegulation?.code || c.regulation === currentSectionRegulation.code)
-                        .map((c: any) => (
-                          <option key={c.id} value={c.id}>{c.course_code} — {c.course_name}</option>
-                        ))}
-                      <option value="-1">Custom text…</option>
-                    </select>
-                    {editingCurriculumId === -1 && (
-                      <select
-                        key="custom-subject-input"
-                        value={customSubjectText || ''}
-                        onChange={(e) => {
-                          e.preventDefault()
-                          setCustomSubjectText(e.target.value)
-                        }}
-                        className="w-full mt-2 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
-                      >
-                        <option value="">-- choose custom subject --</option>
-                        {customSubjectOptions.map((opt:any) => (
-                          <option key={opt.value} value={opt.label}>{opt.label}</option>
-                        ))}
-                      </select>
-                    )}
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Subject Type</label>
+                    <div className="grid grid-cols-4 gap-1.5">
+                      {(['curriculum', 'custom', 'otherdept', 'event'] as const).map(type => (
+                        <button
+                          key={type}
+                          type="button"
+                          onClick={() => {
+                            setSpecialSubjectType(type)
+                            setEditingCurriculumId(null)
+                            setCustomSubjectText('')
+                            setEditingBatchId(null)
+                            setEditingAvailableBatches([])
+                            setSpecialEventText('')
+                            if (type !== 'otherdept') { setSelectedOtherDept(null); setDeptCurriculum([]) }
+                          }}
+                          className={`px-2 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+                            specialSubjectType === type
+                              ? 'bg-amber-500 text-white border-amber-500'
+                              : 'bg-white text-gray-600 border-gray-300 hover:border-amber-300'
+                          }`}
+                        >
+                          {type === 'curriculum' ? 'Curriculum' : type === 'custom' ? 'Custom' : type === 'otherdept' ? 'Other Dept' : 'Event'}
+                        </button>
+                      ))}
+                    </div>
                   </div>
 
-                  {editingAvailableBatches && editingAvailableBatches.length > 0 && editingCurriculumId && editingCurriculumId !== -1 && (
+                  {/* Curriculum */}
+                  {specialSubjectType === 'curriculum' && (
+                    <>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1.5">Subject</label>
+                        <select
+                          value={editingCurriculumId ?? ''}
+                          onChange={async (e) => {
+                            const val = Number(e.target.value) || null
+                            setEditingCurriculumId(val)
+                            setEditingBatchId(null)
+                            if (val) await loadBatchesForCurriculum(val).catch(console.error)
+                            else setEditingAvailableBatches([])
+                          }}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                        >
+                          <option value="">Select subject…</option>
+                          {curriculum
+                            .filter((c: any) => !currentSectionRegulation?.code || c.regulation === currentSectionRegulation.code)
+                            .map((c: any) => (
+                              <option key={c.id} value={resolveCurriculumId(c)}>{c.course_code} — {c.course_name}</option>
+                            ))}
+                        </select>
+                      </div>
+                      {editingAvailableBatches.length > 0 && editingCurriculumId && (
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1.5">Batch (optional)</label>
+                          <select
+                            value={editingBatchId || ''}
+                            onChange={e => setEditingBatchId(Number(e.target.value) || null)}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                          >
+                            <option value="">None</option>
+                            {editingAvailableBatches.map((b: any) => (
+                              <option key={b.id} value={b.id}>{b.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {/* Custom */}
+                  {specialSubjectType === 'custom' && (
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Batch (optional)</label>
-                      <select 
-                        value={editingBatchId || ''} 
-                        onChange={e=> setEditingBatchId(Number(e.target.value) || null)}
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Custom Subject</label>
+                      <select
+                        value={customSubjectText || ''}
+                        onChange={e => setCustomSubjectText(e.target.value)}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
                       >
-                        <option value="">None</option>
-                        {editingAvailableBatches.map((b: any) => (
-                          <option key={b.id} value={b.id}>{b.name}</option>
+                        <option value="">Select…</option>
+                        {customSubjectOptions.map((opt: any) => (
+                          <option key={opt.value} value={opt.label}>{opt.label}</option>
                         ))}
                       </select>
                     </div>
                   )}
 
-                  <button 
-                    onClick={async ()=>{
-                      if(!specialDate) return alert('Select a date')
-                      try{
-                        let timetableId = selectedSpecialId
-                        if(!timetableId){
-                          const name = specialName || `Special - ${specialDate}`
-                          const tRes = await fetchWithAuth('/api/timetable/special-timetables/', { method: 'POST', body: JSON.stringify({ name, section: sectionId, is_active: true }) })
-                          if(!tRes.ok){ const txt = await tRes.text(); return alert('Failed to create special timetable: '+txt) }
-                          const tData = await tRes.json()
-                          timetableId = tData.id
+                  {/* Other Dept */}
+                  {specialSubjectType === 'otherdept' && (
+                    <>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1.5">Department</label>
+                        <select
+                          value={selectedOtherDept || ''}
+                          onChange={async (e) => {
+                            const val = Number(e.target.value) || null
+                            if (!val) return
+                            setDeptCurriculumError(null)
+                            setDeptCurriculum([])
+                            setEditingCurriculumId(null)
+                            setSelectedOtherDept(val)
+                            try {
+                              const r = await fetchWithAuth(`/api/curriculum/?department=${val}&page_size=0`)
+                              const d = r.ok ? await r.json() : null
+                              let raw = d?.results ?? d ?? []
+                              if (raw && !Array.isArray(raw) && typeof raw === 'object') {
+                                if (typeof raw.department === 'string') {
+                                  try {
+                                    const follow = await fetchWithAuth(`${raw.department}?department=${val}&page_size=0`)
+                                    if (follow.ok) { const fd2 = await follow.json(); raw = fd2.results ?? fd2 ?? [] }
+                                  } catch { /* ignore */ }
+                                } else {
+                                  raw = Object.values(raw)
+                                }
+                              }
+                              const items: any[] = Array.isArray(raw) ? raw : []
+                              // Filter by the current section's regulation, semester (and optionally batch)
+                              const section = sections.find((s: any) => s.id === sectionId)
+                              const sectionBatch = section?.batch ?? null
+                              const sectionRegCode = typeof currentSectionRegulation === 'string' ? currentSectionRegulation : currentSectionRegulation?.code
+                              const sectionSem = section?.semester ?? (typeof currentSectionRegulation === 'object' ? currentSectionRegulation?.semester ?? null : null)
+                              const filtered = items.filter((c: any) => {
+                                if (sectionRegCode) {
+                                  if (!c.regulation || c.regulation !== sectionRegCode) return false
+                                }
+                                if (sectionSem && c.semester !== undefined) {
+                                  if (c.semester !== sectionSem) return false
+                                }
+                                if (sectionBatch && (c.batch !== undefined || c.batch_name !== undefined)) {
+                                  if (c.batch !== undefined && String(c.batch) !== String(sectionBatch)) return false
+                                  if (c.batch_name !== undefined && String(c.batch_name) !== String(sectionBatch)) return false
+                                }
+                                return true
+                              })
+                              // Prefer elective rows; fall back to all matched
+                              const electiveOnly = filtered.filter((c: any) => Boolean(c.is_elective))
+                              if (electiveOnly.length > 0) {
+                                setDeptCurriculum(electiveOnly)
+                              } else if (filtered.length > 0) {
+                                setDeptCurriculum(filtered)
+                                setDeptCurriculumError('No electives found for this department+section — showing all matched subjects as fallback.')
+                              } else if (items.length > 0) {
+                                setDeptCurriculum(items)
+                                setDeptCurriculumError('No subjects matched this section\'s regulation/semester — showing unfiltered list.')
+                              } else {
+                                setDeptCurriculum([])
+                                setDeptCurriculumError('No subjects found for this department.')
+                              }
+                            } catch {
+                              setDeptCurriculumError('Failed to load department subjects.')
+                            }
+                          }}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                        >
+                          <option value="">Select department…</option>
+                          {departments.map((d: any) => (
+                            <option key={d.id} value={d.id}>{d.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                      {selectedOtherDept && (
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1.5">Subject</label>
+                          <select
+                            value={editingCurriculumId ?? ''}
+                            onChange={async (e) => {
+                              const val = Number(e.target.value) || null
+                              setEditingCurriculumId(val)
+                              setEditingBatchId(null)
+                              if (val) await loadBatchesForCurriculum(val).catch(console.error)
+                              else setEditingAvailableBatches([])
+                            }}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                          >
+                            <option value="">Select subject…</option>
+                            {deptCurriculum.map((c: any) => (
+                              <option key={c.id} value={resolveCurriculumId(c)}>{c.course_code} — {c.course_name}</option>
+                            ))}
+                          </select>
+                          {deptCurriculumError && <p className="text-xs text-amber-600 mt-1">{deptCurriculumError}</p>}
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {/* Event */}
+                  {specialSubjectType === 'event' && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Event Name</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Guest Lecture, Cultural Day…"
+                        value={specialEventText}
+                        onChange={e => setSpecialEventText(e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">You will be assigned as the staff for this event and will handle attendance for it.</p>
+                    </div>
+                  )}
+
+                  <button
+                    onClick={async () => {
+                      if (!specialDate) return alert('Select a date')
+                      // Validate subject selection based on type
+                      if (specialSubjectType === 'curriculum' && !editingCurriculumId) return alert('Select a subject from curriculum')
+                      if (specialSubjectType === 'custom' && !customSubjectText) return alert('Select a custom subject')
+                      if (specialSubjectType === 'otherdept' && !editingCurriculumId) return alert('Select a department and subject')
+                      if (specialSubjectType === 'event' && !specialEventText.trim()) return alert('Enter an event name')
+                      try {
+                        // Auto-create special timetable with a descriptive name
+                        const ttName = specialSubjectType === 'event'
+                          ? `Event: ${specialEventText.trim()} - ${specialDate}`
+                          : `Special - ${specialDate}`
+                        const tRes = await fetchWithAuth('/api/timetable/special-timetables/', {
+                          method: 'POST',
+                          body: JSON.stringify({ name: ttName, section: sectionId, is_active: true })
+                        })
+                        if (!tRes.ok) { const txt = await tRes.text(); return alert('Failed to create special timetable: ' + txt) }
+                        const tData = await tRes.json()
+                        const timetableId = tData.id
+
+                        const entryPayload: any = { timetable_id: timetableId, period_id: periodId, date: specialDate }
+                        if (specialSubjectType === 'curriculum' || specialSubjectType === 'otherdept') {
+                          entryPayload.curriculum_row = editingCurriculumId
+                          if (editingBatchId) entryPayload.subject_batch_id = editingBatchId
+                        } else if (specialSubjectType === 'custom') {
+                          entryPayload.subject_text = customSubjectText
+                        } else if (specialSubjectType === 'event') {
+                          entryPayload.subject_text = specialEventText.trim()
+                          // staff left null = will be auto-set to request user on backend
                         }
 
-                        const entryPayload: any = { timetable_id: timetableId, timetable: timetableId, date: specialDate, period_id: periodId, period: periodId }
-                        if(editingCurriculumId && editingCurriculumId !== -1) entryPayload.curriculum_row = editingCurriculumId
-                        if(editingCurriculumId === -1 && customSubjectText) entryPayload.subject_text = customSubjectText
-                        if(editingBatchId) entryPayload.subject_batch_id = editingBatchId
-
-                        const eRes = await fetchWithAuth('/api/timetable/special-entries/', { method: 'POST', body: JSON.stringify(entryPayload) })
-                        if(!eRes.ok){ const txt = await eRes.text(); return alert('Failed to create special entry: '+txt) }
+                        const eRes = await fetchWithAuth('/api/timetable/special-entries/', {
+                          method: 'POST',
+                          body: JSON.stringify(entryPayload)
+                        })
+                        if (!eRes.ok) { const txt = await eRes.text(); return alert('Failed to create special entry: ' + txt) }
                         alert('Special period created')
+                        setSpecialEventText('')
+                        setSpecialSubjectType('curriculum')
                         await loadTimetable()
                         setShowCellPopup(false)
                         setEditingCell(null)
-                      }catch(err){ console.error(err); alert('Failed to create special entry') }
+                      } catch (err) { console.error(err); alert('Failed to create special entry') }
                     }}
                     className="w-full px-4 py-2.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors flex items-center justify-center gap-2 font-medium"
                   >
@@ -478,6 +868,7 @@ export default function TimetableEditor(){
   const [subjectStaffList, setSubjectStaffList] = useState<any[]>([])
   const [editingCell, setEditingCell] = useState<{day:number, periodId:number} | null>(null)
   const [editingCurriculumId, setEditingCurriculumId] = useState<number | null>(null)
+  const [lastSelectedCurriculumRaw, setLastSelectedCurriculumRaw] = useState<string | null>(null)
   const [editingAvailableBatches, setEditingAvailableBatches] = useState<any[]>([])
   const [editingBatchId, setEditingBatchId] = useState<number | null>(null)
   const [showCellPopup, setShowCellPopup] = useState(false)
@@ -491,6 +882,11 @@ export default function TimetableEditor(){
   const [customAssignmentText, setCustomAssignmentText] = useState<string>('')
   const [selectedStaffId, setSelectedStaffId] = useState<number | null>(null)
   const [staffList, setStaffList] = useState<any[]>([])
+  const [departments, setDepartments] = useState<any[]>([])
+  const [deptCurriculum, setDeptCurriculum] = useState<any[]>([])
+  const [otherDeptStaffList, setOtherDeptStaffList] = useState<any[]>([])
+  const [isOtherDept, setIsOtherDept] = useState<boolean>(false)
+  const [selectedOtherDept, setSelectedOtherDept] = useState<number | null>(null)
 
   useEffect(()=>{
     // Advisors don't have access to the HOD sections endpoint; use my-students
@@ -504,7 +900,9 @@ export default function TimetableEditor(){
           name: entry.section_name, 
           batch: entry.batch,
           batch_regulation: entry.batch_regulation,
-          department_id: entry.department_id
+          department_id: entry.department_id,
+          // include semester if present on the API response under common keys
+          semester: entry.semester ?? entry.section_semester ?? entry.batch_semester ?? entry.sem ?? null
         }))
         setSections(secs)
         // auto-select first section so advisor doesn't need manual selection
@@ -529,6 +927,11 @@ export default function TimetableEditor(){
       .then(r => r.ok ? r.json() : { results: [] })
       .then(d => setCustomSubjectOptions(d.results || []))
       .catch(err => console.error('Failed to load custom subjects', err))
+    // load departments for Other Dept selector
+    fetchWithAuth('/api/academics/departments/?page_size=0')
+      .then(r => r.ok ? r.json() : { results: [] })
+      .then(d => setDepartments(d.results || d || []))
+      .catch(e => console.error('Failed to load departments', e))
   },[])
 
   useEffect(()=>{
@@ -566,7 +969,8 @@ export default function TimetableEditor(){
   async function loadTimetable(){
     if(!sectionId) return
     try{
-      const res = await fetchWithAuth(`/api/timetable/section/${sectionId}/timetable/`)
+      const weekDate = new Date().toISOString().slice(0,10)
+      const res = await fetchWithAuth(`/api/timetable/section/${sectionId}/timetable/?week_date=${weekDate}`)
       if(!res.ok) return
       const d = await res.json()
       setTimetable(d.results || [])
@@ -592,6 +996,7 @@ export default function TimetableEditor(){
       if(s.length <= 12) return s
       return s.slice(0,12) + '…'
     }
+    if(item.mnemonic) return item.mnemonic
     if(item.course_code) return item.course_code
     const txt = item.course_name || item.course || item.subject_text || ''
     const s = String(txt).trim()
@@ -632,7 +1037,21 @@ export default function TimetableEditor(){
       payload.curriculum_row = curriculumId
       if(editingBatchId) payload.subject_batch_id = editingBatchId
     }
-    
+    // if assigning from Other Dept, include metadata so backend can honor chosen dept/option
+    if(isOtherDept && selectedOtherDept) {
+      payload.other_department_id = selectedOtherDept
+      if(lastSelectedCurriculumRaw) payload.original_curriculum_raw = lastSelectedCurriculumRaw
+      // include explicit chosen curriculum id so backend can unambiguously use it
+      try {
+        if(curriculumId) {
+          payload.chosen_curriculum_id = curriculumId
+          payload.curriculum_department_id = curriculumId
+        }
+      } catch(e) { /* ignore */ }
+    }
+    // debug: log payload to help diagnose Other Dept assignments
+    try { console.debug('Timetable assign payload', { payload, isOtherDept, selectedOtherDept, lastSelectedCurriculumRaw, editingCurriculumId }) } catch(e){}
+
     const res = await fetchWithAuth('/api/timetable/assignments/', { method: 'POST', body: JSON.stringify(payload) })
     if(!res.ok){ const txt = await res.text(); return alert('Failed: '+txt) }
     
@@ -721,6 +1140,9 @@ export default function TimetableEditor(){
       </div>
     )
   }
+
+  // hide break/lunch periods in the main editor grid (we show only teaching periods)
+  const visiblePeriods = periods.filter(p => !p.is_break && !p.is_lunch)
 
   // API helpers for update and delete
   async function handleDeleteAssignment(assignId:number){
@@ -846,15 +1268,15 @@ export default function TimetableEditor(){
             </div>
           </div>
           
-          <div className="overflow-x-auto">
-            <table className="w-full">
+          <div className="overflow-x-auto lg:overflow-visible">
+            <table className="w-full table-fixed">
               <thead>
                 <tr className="bg-gradient-to-r from-slate-50 to-blue-50 border-b-2 border-gray-200">
                   <th className="px-4 py-3 text-left font-semibold text-gray-700 min-w-[120px] sticky left-0 bg-gradient-to-r from-slate-50 to-blue-50 z-10">
                     Day / Period
                   </th>
-                  {periods.map(p=> (
-                    <th key={p.id} className="px-4 py-3 min-w-[160px]">
+                  {visiblePeriods.map(p=> (
+                    <th key={p.id} className="px-4 py-3">
                       <div className="text-sm font-bold text-indigo-700">
                         {p.label || `Period ${p.index || ''}`}
                       </div>
@@ -869,7 +1291,7 @@ export default function TimetableEditor(){
                 {DAYS.map((d,di)=> (
                   <tr key={d} className="hover:bg-gray-50 transition-colors">
                     <td className="px-4 py-3 font-bold text-gray-900 bg-gray-50 sticky left-0 z-10">{d}</td>
-                    {periods.map(p=> {
+                    {visiblePeriods.map(p=> {
                       const isSelected = editingCell && editingCell.day === (di+1) && editingCell.periodId === p.id
                       return (
                         <td 
@@ -1004,8 +1426,21 @@ export default function TimetableEditor(){
           loadTimetable={loadTimetable}
           setShowCellPopup={setShowCellPopup}
           setEditingCell={setEditingCell}
-          fetchWithAuth={fetchWithAuth}
+            fetchWithAuth={fetchWithAuth}
           customSubjectOptions={customSubjectOptions}
+          setSectionId={setSectionId}
+          setSectionDepartmentId={setSectionDepartmentId}
+              deptCurriculum={deptCurriculum}
+              setDeptCurriculum={setDeptCurriculum}
+              isOtherDept={isOtherDept}
+              setIsOtherDept={setIsOtherDept}
+              selectedOtherDept={selectedOtherDept}
+              setSelectedOtherDept={setSelectedOtherDept}
+                  setLastSelectedCurriculumRaw={setLastSelectedCurriculumRaw}
+                otherDeptStaffList={otherDeptStaffList}
+                setOtherDeptStaffList={setOtherDeptStaffList}
+              departments={departments}
+            sections={sections}
         />
       ) : null}
     </div>

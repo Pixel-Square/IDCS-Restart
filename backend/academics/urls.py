@@ -30,7 +30,8 @@ from .views import (
     StudentAttendanceView,
     StudentMarksView,
 )
-from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView, ClassAttendanceReportView, TodayPeriodAttendanceView, PeriodAttendanceReportView, OverallSectionView
+from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView, ClassAttendanceReportView, TodayPeriodAttendanceView, PeriodAttendanceReportView, OverallSectionView, MyClassStudentsView, DailyAttendanceView, DailyAttendanceLockView, DailyAttendanceUnlockView, DailyAttendanceUnlockRequestView, MyClassAttendanceAnalyticsView, DailyAttendanceSessionDetailView, SectionStudentAttendanceDayView
+from .views import UnifiedUnlockRequestsView
 
 router = DefaultRouter()
 router.register(r'section-advisors', SectionAdvisorViewSet, basename='section-advisor')
@@ -86,4 +87,13 @@ urlpatterns = [
     path('analytics/today-periods/', TodayPeriodAttendanceView.as_view()),
     path('analytics/period-log/', PeriodAttendanceReportView.as_view()),
     path('analytics/overall-section/', OverallSectionView.as_view()),
+    path('analytics/my-class-students/', MyClassStudentsView.as_view()),
+    path('analytics/daily-attendance/', DailyAttendanceView.as_view()),
+    path('analytics/daily-attendance/<int:session_id>/', DailyAttendanceSessionDetailView.as_view()),
+    path('analytics/daily-attendance-lock/<int:session_id>/', DailyAttendanceLockView.as_view()),
+    path('analytics/daily-attendance-unlock/<int:session_id>/', DailyAttendanceUnlockView.as_view()),
+    path('analytics/daily-attendance-unlock-request/', DailyAttendanceUnlockRequestView.as_view()),
+    path('analytics/section-student-day/', SectionStudentAttendanceDayView.as_view()),
+    path('attendance-analytics/', MyClassAttendanceAnalyticsView.as_view()),  # My Class endpoint
+    path('unified-unlock-requests/', UnifiedUnlockRequestsView.as_view()),
 ]

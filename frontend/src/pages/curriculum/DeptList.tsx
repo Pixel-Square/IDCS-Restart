@@ -7,6 +7,8 @@ import { Edit, Check, X, Save } from 'lucide-react';
 
 export default function DeptList() {
   const [rows, setRows] = useState<any[]>([]);
+  const [editAll, setEditAll] = useState(false);
+  const [savingAll, setSavingAll] = useState(false);
   const [loading, setLoading] = useState(true);
   const uniqueRegs = rows && rows.length ? Array.from(new Set(rows.map(r => r.regulation))) : [];
   const uniqueSems = rows && rows.length ? Array.from(new Set(rows.map(r => r.semester))).sort((a,b)=>a-b) : [];
@@ -180,6 +182,31 @@ export default function DeptList() {
     </CurriculumLayout>
   );
 
+  async function saveAllVisible() {
+    const visible = rows.filter(r => (!currentDept || r.department.id === currentDept) && (!selectedReg || r.regulation === selectedReg) && (!selectedSem || r.semester === selectedSem));
+    if (visible.length === 0) return alert('No visible rows to save');
+    if (!confirm(`Save ${visible.length} visible rows?`)) return;
+    try {
+      setSavingAll(true);
+      const promises = visible.map(r => updateDeptRow(r.id, r).catch(e => ({ __error: String(e), id: r.id })));
+      const results = await Promise.all(promises);
+      // apply successful updates
+      const updatedMap: Record<number, any> = {};
+      results.forEach(res => { if (res && !res.__error) updatedMap[res.id] = res; });
+      setRows(rs => rs.map(r => updatedMap[r.id] ? updatedMap[r.id] : r));
+      const errors = results.filter(r => r && r.__error);
+      if (errors.length) {
+        alert(`${errors.length} rows failed to save. Check console for details.`);
+        console.error('SaveAll errors', errors);
+      } else {
+        alert('All visible rows saved');
+        setEditAll(false);
+      }
+    } catch (e:any) {
+      alert(String(e));
+    } finally { setSavingAll(false); }
+  }
+
   return (
     <CurriculumLayout>
       <div className="px-4 pb-6">
@@ -243,11 +270,27 @@ export default function DeptList() {
             })}
           </div>
         </div>
+        <div className="flex items-center justify-between mb-4">
+          <div />
+          <div className="flex items-center gap-2">
+            {editAll ? (
+              <>
+                <button onClick={() => { setEditAll(false); }} className="px-3 py-2 border border-gray-300 rounded text-gray-700 bg-white hover:bg-gray-50">Cancel All</button>
+                <button onClick={saveAllVisible} disabled={savingAll} className="px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 ml-2">
+                  {savingAll ? 'Saving…' : 'Save All'}
+                </button>
+              </>
+            ) : (
+              <button onClick={() => setEditAll(true)} className="px-3 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700">Edit All</button>
+            )}
+          </div>
+        </div>
       <div className="w-full overflow-x-auto bg-white rounded-lg shadow-md">
         <table className="w-full divide-y divide-gray-200">
           <thead className="bg-gradient-to-r from-gray-50 to-indigo-50">
             <tr>
               <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Code</th>
+              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Mnemonic</th>
               <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap min-w-[200px]">Course</th>
               <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">CAT</th>
               <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Class</th>
@@ -269,9 +312,10 @@ export default function DeptList() {
           <tbody className="bg-white divide-y divide-gray-200">
             {rows.filter(r => (!currentDept || r.department.id === currentDept) && (!selectedReg || r.regulation === selectedReg) && (!selectedSem || r.semester === selectedSem)).map(r => (
               <tr key={r.id} className={`hover:bg-gray-50 transition-colors ${r.editable ? 'bg-slate-50' : ''}`}>
-                {editingRow === r.id ? (
+                {(editingRow === r.id || editAll) ? (
                   <>
-                    <td className="px-3 py-2 whitespace-nowrap"><input value={r.course_code || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, course_code: e.target.value } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input value={r.course_code || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, course_code: e.target.value } : row))} className="w-full min-w-[160px] px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input value={r.mnemonic || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, mnemonic: e.target.value } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
                     <td className="px-3 py-2">
                       <textarea
                         value={r.course_name || ''}
@@ -291,7 +335,7 @@ export default function DeptList() {
                       <input
                         value={r.category || ''}
                         onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, category: e.target.value } : row))}
-                        className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 edit-cell-input"
+                        className="w-full min-w-[140px] px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 edit-cell-input"
                       />
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">
@@ -311,15 +355,15 @@ export default function DeptList() {
                     <td className="px-3 py-2 text-center whitespace-nowrap">
                       <input type="checkbox" checked={!!r.is_elective} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, is_elective: e.target.checked } : row))} className="w-4 h-4" />
                     </td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.l || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, l: Number(e.target.value) } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.t || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, t: Number(e.target.value) } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.p || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, p: Number(e.target.value) } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.s || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, s: Number(e.target.value) } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.c || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, c: Number(e.target.value) } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.internal_mark || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, internal_mark: Number(e.target.value) } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.external_mark || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, external_mark: Number(e.target.value) } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.total_mark || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, total_mark: Number(e.target.value) } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.total_hours || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, total_hours: Number(e.target.value) } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.l || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, l: Number(e.target.value) } : row))} className="w-full min-w-[72px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.t || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, t: Number(e.target.value) } : row))} className="w-full min-w-[72px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.p || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, p: Number(e.target.value) } : row))} className="w-full min-w-[72px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.s || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, s: Number(e.target.value) } : row))} className="w-full min-w-[72px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.c || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, c: Number(e.target.value) } : row))} className="w-full min-w-[72px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.internal_mark || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, internal_mark: Number(e.target.value) } : row))} className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.external_mark || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, external_mark: Number(e.target.value) } : row))} className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.total_mark || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, total_mark: Number(e.target.value) } : row))} className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.total_hours || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, total_hours: Number(e.target.value) } : row))} className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
                     <td className="px-3 py-2 whitespace-nowrap"><input value={r.question_paper_type || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, question_paper_type: e.target.value } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
                     <td className="px-3 py-2 whitespace-nowrap">{r.editable ? <span className="text-emerald-600 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}</td>
                     <td className="px-3 py-2 whitespace-nowrap">
@@ -342,6 +386,7 @@ export default function DeptList() {
                 ) : (
                   <>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.course_code || '-'}</td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.mnemonic || '-'}</td>
                     <td className="px-3 py-2.5 text-sm text-gray-900 font-medium">{r.course_name || '-'}</td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.category || '-'}</td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.class_type || '-'}</td>
@@ -510,7 +555,7 @@ export default function DeptList() {
                 <input 
                   value={addForm.course_code || ''} 
                   onChange={e => setAddForm(f => ({ ...f, course_code: e.target.value }))} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                  className="w-full min-w-[200px] px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
                 />
               </div>
               <div>
@@ -533,7 +578,7 @@ export default function DeptList() {
                 <input 
                   value={addForm.category || ''} 
                   onChange={e => setAddForm(f => ({ ...f, category: e.target.value }))} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                  className="w-full min-w-[200px] px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
                 />
               </div>
               <div>
@@ -671,7 +716,7 @@ export default function DeptList() {
                 <input 
                   value={editElectiveForm.course_code || ''} 
                   onChange={e => setEditElectiveForm((f:any) => ({ ...f, course_code: e.target.value }))} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                  className="w-full min-w-[200px] px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
                 />
               </div>
               <div>
@@ -694,7 +739,7 @@ export default function DeptList() {
                 <input 
                   value={editElectiveForm.category || ''} 
                   onChange={e => setEditElectiveForm((f:any) => ({ ...f, category: e.target.value }))} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                  className="w-full min-w-[200px] px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
                 />
               </div>
               <div>

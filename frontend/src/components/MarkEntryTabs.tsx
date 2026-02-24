@@ -406,7 +406,7 @@ export default function MarkEntryTabs({
   }, [activeAssessmentKey, subjectId, selectedTaId]);
 
   const activeEnabled = activeAssessmentKey ? Boolean(activeGate.enabled) : true;
-  const activeForcedViewerMode = Boolean(viewerMode) || (activeAssessmentKey ? !Boolean(activeGate.open) : false);
+  const activeForcedViewerMode = Boolean(viewerMode) || (activeAssessmentKey ? !activeGate.open : false);
 
   const selectedTa = useMemo(() => {
     if (selectedTaId == null) return null;
@@ -778,7 +778,7 @@ export default function MarkEntryTabs({
           Student rows load from the selected section roster.
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-          {Boolean(isSpecial && selectedTaId) ? (
+          {isSpecial && selectedTaId ? (
             <button className="obe-btn" onClick={() => setShowFacultyPanel((s) => !s)}>
               Show exams
             </button>

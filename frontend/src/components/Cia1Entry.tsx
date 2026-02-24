@@ -819,7 +819,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
           }
         }
         if (!mounted) return;
-        let roster = (data.students || []).slice().sort((a, b) => {
+        const roster = (data.students || []).slice().sort((a, b) => {
           const an = String(a?.name || '').trim().toLowerCase();
           const bn = String(b?.name || '').trim().toLowerCase();
           if (an && bn) {

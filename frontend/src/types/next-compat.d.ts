@@ -1,9 +1,20 @@
 declare module 'next/router' {
-  const useRouter: any;
-  export { useRouter };
+  export type NextRouter = {
+    query: Record<string, string | string[] | undefined>;
+  };
+
+  export function useRouter(): NextRouter;
 }
 
 declare module 'next/link' {
-  const Link: any;
+  import type * as React from 'react';
+
+  export type LinkProps = {
+    href: string;
+    children?: React.ReactNode;
+    [key: string]: unknown;
+  };
+
+  const Link: React.FC<LinkProps>;
   export default Link;
 }

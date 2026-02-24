@@ -4,7 +4,7 @@ import { Link, useLocation } from 'react-router-dom';
 
 
 import useDashboard from '../hooks/useDashboard';
-import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, FileText, Upload, Bell, CalendarClock } from 'lucide-react';
+import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock } from 'lucide-react';
 import './DashboardSidebar.css';
 
 import { useSidebar } from './SidebarContext';

@@ -353,7 +353,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
   const tableBlocked = Boolean(
     globalLocked ||
       lockStatusUnknown ||
-      (markLock ? !Boolean(markLock.entry_open) : isPublished ? !entryOpen : !markManagerLocked),
+      (markLock ? !markLock.entry_open : isPublished ? !entryOpen : !markManagerLocked),
   );
 
   const showNameList = Boolean(sheet.markManagerSnapshot != null);

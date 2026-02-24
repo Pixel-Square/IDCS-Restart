@@ -1,5 +1,5 @@
 // Simple localStorage helpers for JSON values
-export function lsGet<T = any>(key: string): T | null {
+export function lsGet<T = unknown>(key: string): T | null {
   try {
     const val = window.localStorage.getItem(key);
     return val ? (JSON.parse(val) as T) : null;
@@ -8,7 +8,7 @@ export function lsGet<T = any>(key: string): T | null {
   }
 }
 
-export function lsSet(key: string, value: any) {
+export function lsSet(key: string, value: unknown) {
   try {
     window.localStorage.setItem(key, JSON.stringify(value));
   } catch {

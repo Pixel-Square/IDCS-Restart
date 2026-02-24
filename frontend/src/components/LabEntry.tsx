@@ -744,11 +744,11 @@ export default function LabEntry({
   // - AFTER Mark Manager confirm: table is VISIBLE
   // - Table editability is driven by backend `entry_open` (blocks after publish unless IQAC unblocks)
   const tableVisible = markManagerLocked; // Only show table after Mark Manager is confirmed
-  const tableBlocked = Boolean(globalLocked || (markLock?.exists ? !Boolean(markLock?.entry_open) : false));
+  const tableBlocked = Boolean(globalLocked || (markLock?.exists ? !markLock?.entry_open : false));
 
   function setCoEnabled(coNumber: number, enabled: boolean) {
     setDraft((p) => {
-      if (Boolean(p.sheet.markManagerLocked)) return p;
+      if (p.sheet.markManagerLocked) return p;
       const cfgs = buildCoConfigs(p.sheet, selectableCosArr, coA, coB);
       cfgs[String(coNumber)] = { ...cfgs[String(coNumber)], enabled };
       return { ...p, sheet: { ...p.sheet, coConfigs: cfgs } };
@@ -758,7 +758,7 @@ export default function LabEntry({
   function setExpMax(coNumber: number, v: number) {
     const next = clampInt(Number(v), 0, 100);
     setDraft((p) => {
-      if (Boolean(p.sheet.markManagerLocked)) return p;
+      if (p.sheet.markManagerLocked) return p;
       const cfgs = buildCoConfigs(p.sheet, selectableCosArr, coA, coB);
       cfgs[String(coNumber)] = { ...cfgs[String(coNumber)], expMax: next };
       return { ...p, sheet: { ...p.sheet, coConfigs: cfgs } };
@@ -768,7 +768,7 @@ export default function LabEntry({
   function setExpCount(coNumber: number, n: number) {
     const next = clampInt(n, 0, 12);
     setDraft((p) => {
-      if (Boolean(p.sheet.markManagerLocked)) return p;
+      if (p.sheet.markManagerLocked) return p;
       const cfgs = buildCoConfigs(p.sheet, selectableCosArr, coA, coB);
       const old = cfgs[String(coNumber)];
       cfgs[String(coNumber)] = {
@@ -807,7 +807,7 @@ export default function LabEntry({
 
   function setCiaExamEnabled(enabled: boolean) {
     setDraft((p) => {
-      if (Boolean(p.sheet.markManagerLocked)) return p;
+      if (p.sheet.markManagerLocked) return p;
       return { ...p, sheet: { ...p.sheet, ciaExamEnabled: Boolean(enabled) } };
     });
   }

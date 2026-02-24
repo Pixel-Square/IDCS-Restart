@@ -1,7 +1,5 @@
 import fetchWithAuth from './fetchAuth'
 
-const API_BASE = import.meta.env.VITE_API_BASE || ''
-
 export type AssignedSubject = {
   id: number
   subject_code?: string | null

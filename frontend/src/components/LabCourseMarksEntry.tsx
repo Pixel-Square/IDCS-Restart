@@ -427,11 +427,11 @@ export default function LabCourseMarksEntry({
       ciaExamEnabled: ciaAvailable ? true : false,
       ciaExamMax: DEFAULT_CIA_EXAM_MAX,
       expCountA: DEFAULT_EXPERIMENTS,
-      expCountB: Boolean(coB) ? DEFAULT_EXPERIMENTS : 0,
+      expCountB: coB ? DEFAULT_EXPERIMENTS : 0,
       expMaxA: DEFAULT_EXPERIMENT_MAX,
-      expMaxB: Boolean(coB) ? DEFAULT_EXPERIMENT_MAX : 0,
+      expMaxB: coB ? DEFAULT_EXPERIMENT_MAX : 0,
       btlA: Array.from({ length: DEFAULT_EXPERIMENTS }, () => 1 as const),
-      btlB: Boolean(coB) ? Array.from({ length: DEFAULT_EXPERIMENTS }, () => 1 as const) : [],
+      btlB: coB ? Array.from({ length: DEFAULT_EXPERIMENTS }, () => 1 as const) : [],
       coConfigs: Object.fromEntries(
         (Array.isArray(initialEnabledCos) && initialEnabledCos.length
           ? initialEnabledCos
@@ -887,7 +887,7 @@ export default function LabCourseMarksEntry({
     }
 
     // Approval not active -> lock if it was unlocked
-    if (!Boolean(draft.sheet.markManagerLocked)) {
+    if (!draft.sheet.markManagerLocked) {
       setDraft((p) => ({
         ...p,
         sheet: { ...p.sheet, markManagerLocked: true },
@@ -1276,7 +1276,7 @@ export default function LabCourseMarksEntry({
   function setCiaExamEnabled(enabled: boolean) {
     setDraft((p) => {
       if (!ciaAvailable) return p;
-      if (Boolean(p.sheet.markManagerLocked)) return p;
+      if (p.sheet.markManagerLocked) return p;
       return { ...p, sheet: { ...p.sheet, ciaExamEnabled: Boolean(enabled) } };
     });
   }
@@ -1285,7 +1285,7 @@ export default function LabCourseMarksEntry({
     if (!isTcpr) return;
     setDraft((p) => {
       if (!ciaAvailable) return p;
-      if (Boolean(p.sheet.markManagerLocked)) return p;
+      if (p.sheet.markManagerLocked) return p;
 
       const nextMax = clampInt(Number(v), 0, 100);
       const rowsByStudentId: Record<string, LabRowState> = { ...(p.sheet.rowsByStudentId || {}) };
@@ -1365,7 +1365,7 @@ export default function LabCourseMarksEntry({
   function toggleCoSelection(coNumber: number, nextChecked: boolean) {
     const n = clampInt(Number(coNumber), 1, 5);
     setDraft((p) => {
-      if (Boolean(p.sheet.markManagerLocked)) return p;
+      if (p.sheet.markManagerLocked) return p;
       const configs = ensureCoConfigs(p.sheet);
       const key = String(n);
       const existing = configs[key];
@@ -1682,7 +1682,7 @@ export default function LabCourseMarksEntry({
   function setCoExpCount(coNumber: number, v: number) {
     const next = clampInt(Number(v), 0, 12);
     setDraft((p) => {
-      if (Boolean(p.sheet.markManagerLocked)) return p;
+      if (p.sheet.markManagerLocked) return p;
       const configs = ensureCoConfigs(p.sheet);
       const key = String(coNumber);
       const existing = configs[key];
@@ -1729,7 +1729,7 @@ export default function LabCourseMarksEntry({
   function setCoExpMax(coNumber: number, v: number) {
     const next = clampInt(Number(v), 0, 100);
     setDraft((p) => {
-      if (Boolean(p.sheet.markManagerLocked)) return p;
+      if (p.sheet.markManagerLocked) return p;
       const configs = ensureCoConfigs(p.sheet);
       const key = String(coNumber);
       const existing = configs[key];
@@ -1796,7 +1796,7 @@ export default function LabCourseMarksEntry({
 
   function setCoBtl(coNumber: number, expIndex: number, value: BtlLevel) {
     setDraft((p) => {
-      if (Boolean(p.sheet.markManagerLocked)) return p;
+      if (p.sheet.markManagerLocked) return p;
       const configs = ensureCoConfigs(p.sheet);
       const key = String(clampInt(Number(coNumber), 1, 5));
       const existing = configs[key];
@@ -3234,7 +3234,7 @@ export default function LabCourseMarksEntry({
                               onChange={(e) => setAbsent(s.id, e.target.checked)}
                               disabled={tableBlocked}
                             />
-                            {Boolean((row as any)?.absent) ? (
+                            {(row as any)?.absent ? (
                               <div className="obe-ios-select" title="Absent type">
                                 <span className="obe-ios-select-value">{String((row as any).absentKind || 'AL')}</span>
                                 <select

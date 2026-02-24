@@ -3,7 +3,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from .models import TeachingAssignment
-from .models import SpecialCourseAssessmentEditRequest
+from .models import SpecialCourseAssessmentEditRequest, DailyAttendanceUnlockRequest
 from academics.models import Subject, Section
 from accounts.utils import get_user_permissions
 from academics.models import SectionAdvisor, StaffProfile
@@ -688,6 +688,51 @@ class AttendanceUnlockRequestSerializer(serializers.ModelSerializer):
     def get_reviewed_by_display(self, obj):
         try:
             rb = obj.reviewed_by
+            return getattr(getattr(rb, 'user', None), 'username', None) or getattr(rb, 'staff_id', None) or str(getattr(rb, 'id', ''))
+        except Exception:
+            return None
+
+
+class DailyAttendanceUnlockRequestSerializer(serializers.ModelSerializer):
+    session_id = serializers.IntegerField(source='session.id', read_only=True)
+    session_display = serializers.SerializerMethodField(read_only=True)
+    requested_by = serializers.SerializerMethodField(read_only=True)
+    requested_by_display = serializers.SerializerMethodField(read_only=True)
+    reviewed_by_display = serializers.SerializerMethodField(read_only=True)
+    request_type = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = DailyAttendanceUnlockRequest
+        fields = ('id', 'session', 'session_id', 'session_display', 'requested_by', 'requested_by_display', 'requested_at', 'status', 'reviewed_by', 'reviewed_by_display', 'reviewed_at', 'note', 'request_type')
+        read_only_fields = ('requested_at',)
+
+    def get_request_type(self, obj):
+        return 'daily'
+
+    def get_session_display(self, obj):
+        try:
+            sess = obj.session
+            return f"{getattr(sess.section, 'name', '')} | Daily Attendance @ {getattr(sess, 'date', '')}"
+        except Exception:
+            return None
+
+    def get_requested_by(self, obj):
+        try:
+            sb = obj.requested_by
+            return {'id': getattr(sb, 'id', None), 'staff_id': getattr(sb, 'staff_id', None), 'username': getattr(getattr(sb, 'user', None), 'username', None)}
+        except Exception:
+            return None
+
+    def get_requested_by_display(self, obj):
+        try:
+            sb = obj.requested_by
+            return getattr(getattr(sb, 'user', None), 'username', None) or getattr(sb, 'staff_id', None) or str(getattr(sb, 'id', ''))
+        except Exception:
+            return None
+
+    def get_reviewed_by_display(self, obj):
+        try:
+            rb = obj.reviewed_by
             if rb:
                 return getattr(getattr(rb, 'user', None), 'username', None) or getattr(rb, 'staff_id', None) or str(getattr(rb, 'id', ''))
         except Exception:
@@ -876,13 +921,29 @@ class PeriodAttendanceRecordSerializer(serializers.ModelSerializer):
     # session is optional for nested/bulk payloads; the view will supply the session
     session = serializers.PrimaryKeyRelatedField(queryset=_PeriodAttendanceSession.objects.all(), required=False, write_only=True)
     student_id = serializers.PrimaryKeyRelatedField(queryset=StudentProfile.objects.all(), source='student', write_only=True)
-    student = serializers.StringRelatedField(read_only=True)
+    student = serializers.SerializerMethodField(read_only=True)
     student_pk = serializers.IntegerField(source='student.id', read_only=True)
+    reg_no = serializers.CharField(source='student.reg_no', read_only=True)
+    regno = serializers.CharField(source='student.reg_no', read_only=True)
 
     class Meta:
         model = PeriodAttendanceRecord
-        fields = ('id', 'session', 'student', 'student_pk', 'student_id', 'status', 'marked_at', 'marked_by')
+        fields = ('id', 'session', 'student', 'student_pk', 'student_id', 'status', 'marked_at', 'marked_by', 'reg_no', 'regno')
         read_only_fields = ('marked_at', 'marked_by')
+
+    def get_student(self, obj):
+        """Return detailed student information including registration number."""
+        if not obj.student:
+            return None
+        return {
+            'id': obj.student.id,
+            'pk': obj.student.id,
+            'reg_no': obj.student.reg_no,
+            'regno': obj.student.reg_no,
+            'registration_number': obj.student.reg_no,
+            'name': obj.student.user.get_full_name() if obj.student.user else '',
+            'username': obj.student.user.username if obj.student.user else '',
+        }
 
 
 class BulkRecordSerializer(serializers.Serializer):

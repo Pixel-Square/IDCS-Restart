@@ -338,7 +338,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
   const tableBlocked = Boolean(
     globalLocked ||
       lockStatusUnknown ||
-      (markLock ? !Boolean(markLock.entry_open) : isPublished ? !entryOpen : !markManagerLocked),
+      (markLock ? !markLock.entry_open : isPublished ? !entryOpen : !markManagerLocked),
   );
 
   const marksEditDisabled = Boolean(globalLocked || publishedEditLocked || tableBlocked);

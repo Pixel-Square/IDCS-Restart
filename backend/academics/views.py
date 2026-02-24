@@ -39,7 +39,7 @@ from OBE.models import (
     InternalMarkMapping,
 )
 from .models import PeriodAttendanceSession, PeriodAttendanceRecord
-from .models import AttendanceUnlockRequest
+from .models import AttendanceUnlockRequest, DailyAttendanceUnlockRequest
 
 from .serializers import (
     SectionAdvisorSerializer,
@@ -47,7 +47,7 @@ from .serializers import (
     StudentSimpleSerializer,
 )
 from .serializers import AcademicYearSerializer
-from .serializers import PeriodAttendanceSessionSerializer, BulkPeriodAttendanceSerializer, AttendanceUnlockRequestSerializer
+from .serializers import PeriodAttendanceSessionSerializer, BulkPeriodAttendanceSerializer, AttendanceUnlockRequestSerializer, DailyAttendanceUnlockRequestSerializer
 from accounts.utils import get_user_permissions
 from .utils import get_user_effective_departments
 from .serializers import TeachingAssignmentInfoSerializer
@@ -2069,15 +2069,30 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                 ta_qs = _TA.objects.filter(is_active=True, staff=staff_profile).filter(Q(section=section) | Q(section__isnull=True))
                 cr = getattr(getattr(ta, 'curriculum_row', None), 'pk', None) if ta is not None else None
                 if cr:
+                    # Filter by the period's curriculum_row — only match if staff actually teaches it.
                     ta_qs = ta_qs.filter(Q(curriculum_row_id=cr) | Q(elective_subject__parent_id=cr))
-                teach_assign = ta_qs.order_by(
-                    models.Case(
-                        models.When(section=section, then=models.Value(0)),
-                        default=models.Value(1),
-                        output_field=models.IntegerField(),
-                    ),
-                    'id',
-                ).first()
+                    teach_assign = ta_qs.order_by(
+                        models.Case(
+                            models.When(section=section, then=models.Value(0)),
+                            default=models.Value(1),
+                            output_field=models.IntegerField(),
+                        ),
+                        'id',
+                    ).first()
+                elif ta is None:
+                    # No timetable assignment context at all — fall back to any active TA for
+                    # this staff+section (e.g. attendance created directly without a timetable slot).
+                    teach_assign = ta_qs.order_by(
+                        models.Case(
+                            models.When(section=section, then=models.Value(0)),
+                            default=models.Value(1),
+                            output_field=models.IntegerField(),
+                        ),
+                        'id',
+                    ).first()
+                # else: ta exists but has no curriculum_row (period uses custom subject_text /
+                # substitute subject). Don't pick a random TA — keep teach_assign=None to prevent
+                # the wrong subject's TeachingAssignment from being linked to this session.
             except Exception:
                 teach_assign = None
 
@@ -2162,15 +2177,30 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                 ta_qs = _TA.objects.filter(is_active=True, staff=staff_profile).filter(Q(section=section) | Q(section__isnull=True))
                 cr_id = getattr(ta, 'curriculum_row_id', None) if ta is not None else None
                 if cr_id:
+                    # Filter by the period's curriculum_row — only match if staff actually teaches it.
                     ta_qs = ta_qs.filter(Q(curriculum_row_id=cr_id) | Q(elective_subject__parent_id=cr_id))
-                teach_assign = ta_qs.order_by(
-                    models.Case(
-                        models.When(section=section, then=models.Value(0)),
-                        default=models.Value(1),
-                        output_field=models.IntegerField(),
-                    ),
-                    'id',
-                ).first()
+                    teach_assign = ta_qs.order_by(
+                        models.Case(
+                            models.When(section=section, then=models.Value(0)),
+                            default=models.Value(1),
+                            output_field=models.IntegerField(),
+                        ),
+                        'id',
+                    ).first()
+                elif ta is None:
+                    # No timetable assignment context at all — fall back to any active TA for
+                    # this staff+section (e.g. attendance created directly without a timetable slot).
+                    teach_assign = ta_qs.order_by(
+                        models.Case(
+                            models.When(section=section, then=models.Value(0)),
+                            default=models.Value(1),
+                            output_field=models.IntegerField(),
+                        ),
+                        'id',
+                    ).first()
+                # else: ta exists but curriculum_row is None (custom subject_text / substitute period).
+                # Don't pick a random TA — keep teach_assign=None to prevent the wrong subject's
+                # TeachingAssignment from being linked to this attendance session.
             except Exception:
                 teach_assign = None
 
@@ -2263,11 +2293,35 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                         # skip students not in batch
                         continue
 
+                # ── Daily-attendance override ──────────────────────────────────────────
+                # If the student has a daily attendance record for this section/date:
+                #   OD / LEAVE  → force the same status (locked; cannot differ per period)
+                #   LATE        → force Present ('P') for every period
+                # Any other daily status leaves the submitted status_val unchanged.
+                daily_override = None
+                try:
+                    from .models import DailyAttendanceSession as _DAS, DailyAttendanceRecord as _DAR
+                    _daily_session = _DAS.objects.filter(
+                        section_id=session.section_id, date=session.date
+                    ).first()
+                    if _daily_session:
+                        _daily_rec = _DAR.objects.filter(session=_daily_session, student=stu).first()
+                        if _daily_rec:
+                            if _daily_rec.status in ('OD', 'LEAVE'):
+                                status_val = _daily_rec.status
+                                daily_override = _daily_rec.status
+                            elif _daily_rec.status == 'LATE':
+                                status_val = 'P'
+                                daily_override = 'LATE'
+                except Exception:
+                    pass  # never block period-attendance saving due to override errors
+                # ──────────────────────────────────────────────────────────────────────
+
                 obj, created = PeriodAttendanceRecord.objects.update_or_create(
                     session=session, student=stu,
                     defaults={'status': status_val, 'marked_by': staff_profile}
                 )
-                out.append({'id': obj.id, 'student_id': getattr(obj.student, 'id', None), 'status': obj.status})
+                out.append({'id': obj.id, 'student_id': getattr(obj.student, 'id', None), 'status': obj.status, 'daily_override': daily_override})
 
             resp_ser = PeriodAttendanceSessionSerializer(session, context={'request': request})
             return Response(resp_ser.data, status=status.HTTP_200_OK)
@@ -2733,6 +2787,127 @@ class AttendanceUnlockRequestViewSet(viewsets.ModelViewSet):
         return Response(ser.data)
 
 
+class UnifiedUnlockRequestsView(APIView):
+    """Unified view that returns both period attendance and daily attendance unlock requests."""
+    permission_classes = (IsAuthenticated,)
+    
+    def get(self, request):
+        user = request.user
+        perms = get_user_permissions(user)
+        
+        # Determine if user can view all requests or only their own
+        can_view_all = 'analytics.view_all_analytics' in perms or user.is_superuser
+        staff_profile = getattr(user, 'staff_profile', None)
+        
+        if can_view_all:
+            # Admin: get all requests
+            period_requests = AttendanceUnlockRequest.objects.select_related(
+                'session__section', 'requested_by', 'reviewed_by'
+            ).order_by('-requested_at')
+            
+            daily_requests = DailyAttendanceUnlockRequest.objects.select_related(
+                'session__section', 'requested_by', 'reviewed_by'
+            ).order_by('-requested_at')
+        elif staff_profile:
+            # Staff: get only their requests
+            period_requests = AttendanceUnlockRequest.objects.select_related(
+                'session__section', 'requested_by', 'reviewed_by'
+            ).filter(requested_by=staff_profile).order_by('-requested_at')
+            
+            daily_requests = DailyAttendanceUnlockRequest.objects.select_related(
+                'session__section', 'requested_by', 'reviewed_by'
+            ).filter(requested_by=staff_profile).order_by('-requested_at')
+        else:
+            period_requests = AttendanceUnlockRequest.objects.none()
+            daily_requests = DailyAttendanceUnlockRequest.objects.none()
+        
+        # Serialize both types
+        period_serializer = AttendanceUnlockRequestSerializer(period_requests, many=True, context={'request': request})
+        daily_serializer = DailyAttendanceUnlockRequestSerializer(daily_requests, many=True, context={'request': request})
+        
+        # Add request_type field to period requests for frontend differentiation
+        period_data = period_serializer.data
+        for item in period_data:
+            item['request_type'] = 'period'
+        
+        # Combine and sort by requested_at
+        combined_data = period_data + daily_serializer.data
+        combined_data.sort(key=lambda x: x['requested_at'], reverse=True)
+        
+        return Response({
+            'results': combined_data,
+            'total_period_requests': len(period_data),
+            'total_daily_requests': len(daily_serializer.data),
+            'total_requests': len(combined_data)
+        })
+    
+    def patch(self, request):
+        """Handle approval/rejection for both types of unlock requests."""
+        user = request.user
+        perms = get_user_permissions(user)
+        
+        if not ('analytics.view_all_analytics' in perms or user.is_superuser):
+            return Response({'detail': 'Permission denied'}, status=403)
+        
+        request_id = request.data.get('id')
+        request_type = request.data.get('request_type')  # 'period' or 'daily'
+        action = request.data.get('action')  # 'approve' or 'reject'
+        
+        if not all([request_id, request_type, action]):
+            return Response({'detail': 'Missing required fields: id, request_type, action'}, status=400)
+        
+        if action not in ['approve', 'reject']:
+            return Response({'detail': 'Invalid action. Must be approve or reject'}, status=400)
+            
+        if request_type not in ['period', 'daily']:
+            return Response({'detail': 'Invalid request_type. Must be period or daily'}, status=400)
+        
+        try:
+            if request_type == 'period':
+                unlock_req = AttendanceUnlockRequest.objects.select_related('session').get(id=request_id)
+                serializer_class = AttendanceUnlockRequestSerializer
+            else:  # daily
+                unlock_req = DailyAttendanceUnlockRequest.objects.select_related('session').get(id=request_id)
+                serializer_class = DailyAttendanceUnlockRequestSerializer
+                
+            if unlock_req.status != 'PENDING':
+                return Response({'detail': 'Request has already been processed'}, status=400)
+            
+            staff_profile = getattr(user, 'staff_profile', None)
+            
+            if action == 'approve':
+                unlock_req.status = 'APPROVED'
+                unlock_req.reviewed_by = staff_profile
+                unlock_req.reviewed_at = timezone.now()
+                unlock_req.save()
+                
+                # Unlock the session
+                session = unlock_req.session
+                session.is_locked = False 
+                session.save(update_fields=['is_locked'])
+                
+                response_message = f'{request_type.title()} attendance session unlocked successfully'
+            else:  # reject
+                unlock_req.status = 'REJECTED'
+                unlock_req.reviewed_by = staff_profile
+                unlock_req.reviewed_at = timezone.now()
+                unlock_req.save()
+                
+                response_message = f'{request_type.title()} unlock request rejected'
+                
+            serializer = serializer_class(unlock_req, context={'request': request})
+            return Response({
+                'success': True,
+                'message': response_message,
+                'request': serializer.data
+            })
+            
+        except (AttendanceUnlockRequest.DoesNotExist, DailyAttendanceUnlockRequest.DoesNotExist):
+            return Response({'detail': 'Request not found'}, status=404)
+        except Exception as e:
+            return Response({'detail': str(e)}, status=500)
+
+
 class StaffPeriodsView(APIView):
     permission_classes = (IsAuthenticated,)
 
@@ -2875,9 +3050,12 @@ class StaffPeriodsView(APIView):
             if teach_assign is not None:
                 sess_qs = sess_qs.filter(teaching_assignment=teach_assign)
             else:
-                # When teaching_assignment is NULL (electives with no TA configured), MUST filter by created_by
-                # to avoid showing another staff's session for the same period.
-                sess_qs = sess_qs.filter(teaching_assignment__isnull=True)
+                # teach_assign is None: this is a custom-subject/substitute period where the
+                # timetable uses subject_text and no matching TeachingAssignment was found.
+                # Look for sessions this staff created OR sessions already linked to any of
+                # this staff's teaching assignments (catches historical mis-saves from the old
+                # fallback-to-first-TA bug) — but always scoped to created_by=staff_profile
+                # to avoid crossing into another staff member's session for the same period.
                 if staff_profile is not None:
                     sess_qs = sess_qs.filter(created_by=staff_profile)
                 else:
@@ -3065,6 +3243,7 @@ class StaffPeriodsView(APIView):
                     'unlock_request_status': special_unlock_status,
                     'unlock_request_id': special_unlock_id,
                     'is_special': True,
+                    'is_swap': (getattr(getattr(se, 'timetable', None), 'name', '') or '').startswith('[SWAP]'),
                 })
         except Exception:
             # non-fatal: if special entries cannot be included, return the standard results

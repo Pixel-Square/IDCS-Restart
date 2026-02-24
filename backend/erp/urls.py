@@ -12,7 +12,7 @@ from django.http import HttpResponse
 urlpatterns = [
     path('', RedirectView.as_view(url='/admin/', permanent=False), name='db-dashboard'),
     path('favicon.ico', lambda request: HttpResponse(status=204), name='favicon'),
-    path('grappelli/', include('grappelli.urls')),
+    # path('grappelli/', include('grappelli.urls')),
     path('admin/', admin.site.urls),
     path('api/accounts/', include('accounts.urls')),
     # also expose the same endpoints under /api/auth/ for compatibility
