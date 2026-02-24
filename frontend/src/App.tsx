@@ -61,14 +61,26 @@ export default function App() {
   const { collapsed } = useSidebar();
 
   useEffect(() => {
+    // Add a short timeout so the app doesn't stay on the Loading... screen
+    // indefinitely if the backend is unavailable.
+    let cancelled = false
+    const timeout = setTimeout(() => {
+      if (!cancelled) {
+        console.warn('getMe() timed out')
+        setUser(null)
+        setLoading(false)
+      }
+    }, 5000)
+
     getMe()
-        .then((r) => {
+      .then((r) => {
+        if (cancelled) return
         // Normalize roles to string array and keep profile info
         const normalizedUser = {
           ...r,
           roles: Array.isArray(r.roles)
             ? r.roles.map((role: string | RoleObj) =>
-                typeof role === "string" ? role : role.name,
+                typeof role === 'string' ? role : role.name,
               )
             : [],
           permissions: Array.isArray(r.permissions) ? r.permissions : [],
@@ -77,8 +89,10 @@ export default function App() {
         };
         setUser(normalizedUser as Me);
       })
-      .catch(() => setUser(null))
-      .finally(() => setLoading(false));
+      .catch(() => { if (!cancelled) setUser(null) })
+      .finally(() => { if (!cancelled) { clearTimeout(timeout); setLoading(false) } })
+
+    return () => { cancelled = true; clearTimeout(timeout) }
   }, []);
 
   if (loading) {

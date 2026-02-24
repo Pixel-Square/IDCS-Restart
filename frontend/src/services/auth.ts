@@ -18,7 +18,9 @@ const BASE = `${apiBase()}/api/accounts/`
 
 // Create an axios instance used across the app so we can centrally handle
 // automatic access-token refresh on 401 responses.
-export const apiClient = axios.create({ baseURL: BASE })
+// Default request timeout (ms) for API calls — configurable via VITE_API_TIMEOUT.
+const DEFAULT_API_TIMEOUT = Number(import.meta.env.VITE_API_TIMEOUT) || 5000
+export const apiClient = axios.create({ baseURL: BASE, timeout: DEFAULT_API_TIMEOUT })
 
 let isRefreshing = false
 let refreshSubscribers: Array<(token: string) => void> = []
@@ -90,7 +92,8 @@ export async function login(identifier: string, password: string){
   localStorage.setItem('refresh', refresh)
   // prefetch user info (roles/permissions) after login
   try{
-    await getMe()
+    // fetch profile asynchronously so login isn't blocked by potentially slow `me/` endpoint
+    getMe().catch(() => { /* ignore */ })
   }catch(err){
     // ignore - caller will handle missing profile
   }
