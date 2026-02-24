@@ -1,13 +1,21 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { fetchResetNotifications, dismissResetNotifications, ResetNotification } from '../services/obe';
+import { clearLocalDraftCache } from '../utils/obeDraftCache';
 
 interface Props {
   teachingAssignmentId: number;
+  subjectId: string;
+  onApplied?: () => void;
 }
 
-export default function IqacResetNotificationAlert({ teachingAssignmentId }: Props): JSX.Element | null {
+export default function IqacResetNotificationAlert({ teachingAssignmentId, subjectId, onApplied }: Props): JSX.Element | null {
   const [notifications, setNotifications] = useState<ResetNotification[]>([]);
   const [dismissed, setDismissed] = useState(false);
+
+  const assessments = useMemo(
+    () => [...new Set(notifications.map((n) => String(n.assessment || '').trim().toLowerCase()).filter(Boolean))],
+    [notifications],
+  );
 
   useEffect(() => {
     let mounted = true;
@@ -18,7 +26,25 @@ export default function IqacResetNotificationAlert({ teachingAssignmentId }: Pro
         // Filter to ensure we only show notifications for this specific teaching assignment
         const filtered = notifs.filter(n => n.teaching_assignment_id === teachingAssignmentId);
         setNotifications(filtered);
-        if (filtered.length === 0) setDismissed(true);
+        if (filtered.length === 0) {
+          setDismissed(true);
+          return;
+        }
+
+        // Clear local cached drafts immediately so the UI doesn't keep showing old marks.
+        try {
+          for (const n of filtered) {
+            clearLocalDraftCache(String(subjectId), String(n.assessment));
+          }
+        } catch {
+          // ignore
+        }
+
+        try {
+          onApplied && onApplied();
+        } catch {
+          // ignore
+        }
       } catch (e) {
         console.error('Failed to fetch reset notifications:', e);
         if (mounted) setDismissed(true);
@@ -32,7 +58,17 @@ export default function IqacResetNotificationAlert({ teachingAssignmentId }: Pro
     try {
       const ids = notifications.map(n => n.id);
       await dismissResetNotifications(ids);
+      try {
+        for (const a of assessments) clearLocalDraftCache(String(subjectId), String(a));
+      } catch {
+        // ignore
+      }
       setDismissed(true);
+      try {
+        onApplied && onApplied();
+      } catch {
+        // ignore
+      }
     } catch (e) {
       console.error('Failed to dismiss notifications:', e);
       setDismissed(true); // dismiss UI anyway to avoid blocking user
@@ -53,8 +89,6 @@ export default function IqacResetNotificationAlert({ teachingAssignmentId }: Pro
     model: 'Model Exam',
   };
 
-  // Group notifications by assessment
-  const assessments = [...new Set(notifications.map(n => n.assessment))];
   const assessmentNames = assessments.map(a => assessmentLabels[a] || a).join(', ');
 
   return (

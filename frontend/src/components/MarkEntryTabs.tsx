@@ -14,6 +14,8 @@ import Review1Entry from './Review1Entry';
 import Review2Entry from './Review2Entry';
 import Ssa1Entry from './Ssa1Entry';
 import Ssa2Entry from './Ssa2Entry';
+import Ssa1SheetEntry from './Ssa1SheetEntry';
+import Ssa2SheetEntry from './Ssa2SheetEntry';
 import CQIEntry from '../pages/staff/CQIEntry';
 import DashboardWidgets from './DashboardWidgets';
 import { DraftAssessmentKey, DueAssessmentKey, fetchMyTeachingAssignments, fetchPublishWindow, iqacResetAssessment, TeachingAssignmentItem } from '../services/obe';
@@ -22,6 +24,7 @@ import FacultyAssessmentPanel from './FacultyAssessmentPanel';
 import fetchWithAuth from '../services/fetchAuth';
 import { fetchTeachingAssignmentRoster } from '../services/roster';
 import IqacResetNotificationAlert from './IqacResetNotificationAlert';
+import { clearLocalDraftCache } from '../utils/obeDraftCache';
 
 type BaseTabKey = 'dashboard' | 'ssa1' | 'review1' | 'ssa2' | 'review2' | 'formative1' | 'formative2' | 'cia1' | 'cia2' | 'model';
 type CqiTabKey = `cqi_${number}`;
@@ -166,24 +169,6 @@ function getVisibleTabs(classType: string | null | undefined, enabledAssessments
 
 function storageKey(subjectId: string, tab: BaseTabKey) {
   return `marks_${subjectId}_${tab}`;
-}
-
-function clearLocalDraftCache(subjectId: string, assessment: string) {
-  const a = String(assessment || '').trim().toLowerCase();
-
-  // Generic fallback (used by simpler entry tables)
-  lsRemove(`marks_${subjectId}_${a}`);
-
-  // Sheet-style caches
-  if (a === 'ssa1') lsRemove(`ssa1_sheet_${subjectId}`);
-  if (a === 'review1') lsRemove(`review1_sheet_${subjectId}`);
-  if (a === 'ssa2') lsRemove(`ssa2_sheet_${subjectId}`);
-  if (a === 'review2') lsRemove(`review2_sheet_${subjectId}`);
-  if (a === 'formative1') lsRemove(`formative1_sheet_${subjectId}`);
-  if (a === 'formative2') lsRemove(`formative2_sheet_${subjectId}`);
-  if (a === 'cia1') lsRemove(`cia1_sheet_${subjectId}`);
-  if (a === 'cia2') lsRemove(`cia2_sheet_${subjectId}`);
-  if (a === 'model') lsRemove(`model_sheet_${subjectId}`);
 }
 
 function downloadCsv(filename: string, rows: MarkRow[]) {
@@ -748,7 +733,13 @@ export default function MarkEntryTabs({
   return (
     <div>
       {/* Show reset notification if faculty opens a course that was reset by IQAC */}
-      {selectedTaId != null && <IqacResetNotificationAlert teachingAssignmentId={selectedTaId} />}
+      {selectedTaId != null && (
+        <IqacResetNotificationAlert
+          teachingAssignmentId={selectedTaId}
+          subjectId={String(subjectId)}
+          onApplied={() => setRefreshKey((k) => k + 1)}
+        />
+      )}
       
       <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 12 }}>
         <div style={{ minWidth: 260 }}>
@@ -1015,9 +1006,21 @@ export default function MarkEntryTabs({
                 }
 
                 if (active === 'ssa1') return <Ssa1Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />;
-                if (active === 'review1') return <Review1Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />;
+                if (active === 'review1') {
+                  return normalizedEffectiveClassType === 'TCPR' ? (
+                    <Ssa1SheetEntry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} assessmentKey="review1" label="Review 1" />
+                  ) : (
+                    <Review1Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
+                  );
+                }
                 if (active === 'ssa2') return <Ssa2Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />;
-                if (active === 'review2') return <Review2Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />;
+                if (active === 'review2') {
+                  return normalizedEffectiveClassType === 'TCPR' ? (
+                    <Ssa2SheetEntry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} assessmentKey="review2" label="Review 2" />
+                  ) : (
+                    <Review2Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
+                  );
+                }
 
                 if (active === 'cia1') {
                   if (normalizedEffectiveClassType === 'LAB') {

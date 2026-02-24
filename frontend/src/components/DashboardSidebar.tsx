@@ -27,6 +27,7 @@ const ICON_MAP: Record<string, any> = {
   student_timetable: Calendar,
   staff_timetable: Calendar,
   student_attendance: ClipboardList,
+  student_academics: GraduationCap,
   my_mentees: Users,
   period_attendance: ClipboardList,
   obe: BookOpen,
@@ -155,6 +156,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
 
   // Student: show My Attendance link for students
   if (flags.is_student) {
+    items.push({ key: 'student_academics', label: 'Academics', to: '/student/academics' });
     items.push({ key: 'student_attendance', label: 'My Attendance', to: '/student/attendance' });
   }
 

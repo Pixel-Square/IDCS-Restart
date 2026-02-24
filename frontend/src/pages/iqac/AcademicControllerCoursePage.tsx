@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { fetchIQACCourseTeachingMap, IQACTeachingMapRow } from '../../services/academics';
 import { fetchDeptRows, DeptRow } from '../../services/curriculum';
 import { iqacResetAssessment, DraftAssessmentKey } from '../../services/obe';
+import { clearLocalDraftCache } from '../../utils/obeDraftCache';
 
 export default function AcademicControllerCoursePage(): JSX.Element {
   const { courseCode } = useParams<{ courseCode: string }>();
@@ -79,6 +80,9 @@ export default function AcademicControllerCoursePage(): JSX.Element {
         try {
           // subject id here is the course code
           await iqacResetAssessment(a, code, teachingAssignmentId);
+
+          // Clear local cached drafts too (helps IQAC verify reset immediately)
+          clearLocalDraftCache(code, a);
         } catch (e) {
           // continue resetting others
           // eslint-disable-next-line no-console

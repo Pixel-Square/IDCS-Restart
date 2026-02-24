@@ -1307,10 +1307,12 @@ def iqac_reset_assessment(request, assessment: str, subject_id: str):
                 deleted['published'] += int(Ssa1Mark.objects.filter(subject=subject).delete()[0] or 0)
             elif assessment_key == 'review1':
                 deleted['published'] += int(Review1Mark.objects.filter(subject=subject).delete()[0] or 0)
+                deleted['published'] += int(LabPublishedSheet.objects.filter(subject=subject, assessment='review1').delete()[0] or 0)
             elif assessment_key == 'ssa2':
                 deleted['published'] += int(Ssa2Mark.objects.filter(subject=subject).delete()[0] or 0)
             elif assessment_key == 'review2':
                 deleted['published'] += int(Review2Mark.objects.filter(subject=subject).delete()[0] or 0)
+                deleted['published'] += int(LabPublishedSheet.objects.filter(subject=subject, assessment='review2').delete()[0] or 0)
             elif assessment_key == 'formative1':
                 deleted['published'] += int(Formative1Mark.objects.filter(subject=subject).delete()[0] or 0)
                 deleted['published'] += int(LabPublishedSheet.objects.filter(subject=subject, assessment='formative1').delete()[0] or 0)
@@ -2968,7 +2970,7 @@ def lab_published_sheet(request, assessment: str, subject_id: str):
     if pub_auth:
         return pub_auth
 
-    if assessment not in ('cia1', 'cia2', 'model', 'formative1', 'formative2'):
+    if assessment not in ('cia1', 'cia2', 'model', 'formative1', 'formative2', 'review1', 'review2'):
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
     subject = _get_subject(subject_id, request)
@@ -2990,7 +2992,7 @@ def lab_publish_sheet(request, assessment: str, subject_id: str):
         return err
 
     assessment = str(assessment or '').lower().strip()
-    if assessment not in ('cia1', 'cia2', 'model', 'formative1', 'formative2'):
+    if assessment not in ('cia1', 'cia2', 'model', 'formative1', 'formative2', 'review1', 'review2'):
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
     subject = _get_subject(subject_id, request)

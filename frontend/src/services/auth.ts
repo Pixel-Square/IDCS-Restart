@@ -168,3 +168,7 @@ export async function verifyMobileOtp(mobile_number: string, otp: string) {
   const res = await apiClient.post('mobile/verify-otp/', { mobile_number, otp })
   return res.data
 }
+export async function removeMobileNumber(password: string){
+  const res = await apiClient.post('mobile/remove/', { password })
+  return res.data
+}

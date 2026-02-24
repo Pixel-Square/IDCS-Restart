@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { normalizeClassType } from '../../constants/classTypes';
+import { fetchDeptRows, fetchMasters } from '../../services/curriculum';
 import { fetchInternalMarkMapping, upsertInternalMarkMapping } from '../../services/obe';
 
 export default function InternalMarkPage(): JSX.Element {
@@ -11,6 +13,7 @@ export default function InternalMarkPage(): JSX.Element {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mapping, setMapping] = useState<Record<string, any> | null>(null);
+  const [classType, setClassType] = useState<string | null>(null);
 
   const DEFAULTS = {
     header: ['CO1', 'CO1', 'CO1', 'CO2', 'CO2', 'CO2', 'CO3', 'CO3', 'CO3', 'CO4', 'CO4', 'CO4', 'CO1', 'CO2', 'CO3', 'CO4', 'CO5'],
@@ -75,6 +78,32 @@ export default function InternalMarkPage(): JSX.Element {
     return () => { mounted = false; };
   }, [subjectId]);
 
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      if (!subjectId) return;
+      try {
+        const [rows, masters] = await Promise.all([fetchDeptRows(), fetchMasters()]);
+        if (!mounted) return;
+        const code = String(subjectId).trim().toUpperCase();
+        const matches = (rows || []).filter((r: any) => String(r?.course_code || '').trim().toUpperCase() === code);
+        const pick = matches[0];
+        if (pick) {
+          setClassType(pick?.class_type ? String(pick.class_type) : null);
+        } else {
+          const m = (masters || []).find((mm: any) => String(mm?.course_code || '').trim().toUpperCase() === code);
+          setClassType(m?.class_type ? String(m.class_type) : null);
+        }
+      } catch {
+        if (!mounted) return;
+        setClassType(null);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [subjectId]);
+
   const ensureDefault = () => {
     if (mapping) return normalizeMapping(mapping);
     setMapping(DEFAULTS);
@@ -114,6 +143,7 @@ export default function InternalMarkPage(): JSX.Element {
   const headers: string[] = m.header;
   const weightsArr: any[] = m.weights;
   const cycles: string[] = m.cycles;
+  const isTcpl = normalizeClassType(classType) === 'TCPL';
 
   return (
     <main style={{ padding: 18 }}>
@@ -135,7 +165,9 @@ export default function InternalMarkPage(): JSX.Element {
             </tr>
             <tr>
               {cycles.map((c, i) => (
-                <th key={`cy-${i}`} style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb', fontWeight: 600 }}>{c}</th>
+                <th key={`cy-${i}`} style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb', fontWeight: 600 }}>
+                  {isTcpl && String(c).toLowerCase() === 'fa' ? 'Lab' : c}
+                </th>
               ))}
             </tr>
           </thead>

@@ -28,6 +28,7 @@ from .views import (
     AttendanceUnlockRequestViewSet,
     StaffPeriodsView,
     StudentAttendanceView,
+    StudentMarksView,
 )
 from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView, ClassAttendanceReportView, TodayPeriodAttendanceView, PeriodAttendanceReportView, OverallSectionView
 
@@ -77,6 +78,7 @@ urlpatterns = [
     path('my-students/', AdvisorMyStudentsView.as_view()),
     path('staff/periods/', StaffPeriodsView.as_view()),
     path('student/attendance/', StudentAttendanceView.as_view()),
+    path('student/marks/', StudentMarksView.as_view()),
     path('custom-subjects/', CustomSubjectsListView.as_view()),
     path('analytics/attendance/', AttendanceAnalyticsView.as_view()),
     path('analytics/filters/', AnalyticsFiltersView.as_view()),

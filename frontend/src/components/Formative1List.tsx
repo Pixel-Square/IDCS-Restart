@@ -212,6 +212,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
   const [savingDraft, setSavingDraft] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
+  const draftLoadedRef = useRef(false);
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
   const [inlineViewOnly, setInlineViewOnly] = useState(false);
 
@@ -255,6 +256,17 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
 
   const isPublished = Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published);
   const markManagerLocked = skipMarkManager ? true : Boolean(sheet.markManagerLocked);
+
+  // Restore publishedAt from backend when markLock indicates the table was published
+  useEffect(() => {
+    if (markLock?.is_published && markLock?.updated_at && !publishedAt) {
+      try {
+        setPublishedAt(new Date(String(markLock.updated_at)).toLocaleString());
+      } catch {
+        setPublishedAt(String(markLock.updated_at));
+      }
+    }
+  }, [markLock?.is_published, markLock?.updated_at]);
   const markEntryApprovalUntil = markEntryEditWindow?.approval_until ? String(markEntryEditWindow.approval_until) : null;
   const markManagerApprovalUntil = markManagerEditWindow?.approval_until ? String(markManagerEditWindow.approval_until) : null;
   const markEntryApprovedFresh =
@@ -362,17 +374,19 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewMarksModalOpen, subjectId, assessmentKey]);
 
-  const prevEntryOpenRef = useRef<boolean>(Boolean(entryOpen));
+  const prevEntryOpenRef = useRef<boolean | null>(null);
   useEffect(() => {
     // When IQAC opens MARK_ENTRY edits post-publish, reload the editable draft.
     if (!subjectId) return;
     if (!isPublished) return;
-
-    const prev = prevEntryOpenRef.current;
-    if (prev || !entryOpen) {
-      prevEntryOpenRef.current = Boolean(entryOpen);
+    if (!entryOpen) {
+      prevEntryOpenRef.current = false;
       return;
     }
+
+    const prev = prevEntryOpenRef.current;
+    prevEntryOpenRef.current = true;
+    if (prev === true) return;
 
     let mounted = true;
     (async () => {
@@ -384,35 +398,47 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
         const draftPartBtl = d?.partBtl;
 
         if (draftSheet && typeof draftSheet === 'object' && typeof draftSheet.rowsByStudentId === 'object') {
-          setSheet((prevSheet) => ({
-            ...prevSheet,
-            termLabel: String(draftSheet.termLabel || masterTermLabel || 'KRCT AY25-26'),
-            batchLabel: String(subjectId),
-            rowsByStudentId: draftSheet.rowsByStudentId || {},
-            markManagerLocked:
-              typeof draftSheet.markManagerLocked === 'boolean'
-                ? draftSheet.markManagerLocked
-                : Boolean(draftSheet.markManagerSnapshot ?? prevSheet.markManagerSnapshot),
-            markManagerSnapshot: draftSheet.markManagerSnapshot ?? prevSheet.markManagerSnapshot ?? null,
-            markManagerApprovalUntil: draftSheet.markManagerApprovalUntil ?? prevSheet.markManagerApprovalUntil ?? null,
-          }));
-        }
-
-        if (draftPartBtl && typeof draftPartBtl === 'object') {
-          const next: any = {};
-          for (const k of ['skill1', 'skill2', 'att1', 'att2']) {
-            const v = (draftPartBtl as any)[k];
-            next[k] = v === '' || v == null ? '' : Number(v);
-            if (!(next[k] === '' || (Number.isFinite(next[k]) && next[k] >= 1 && next[k] <= 6))) next[k] = '';
+          const rows = draftSheet.rowsByStudentId;
+          const hasMarks = rows && Object.values(rows).some((row: any) => {
+            if (!row || typeof row !== 'object') return false;
+            return ['skill1', 'skill2', 'att1', 'att2'].some(k => (row as any)[k] !== '' && (row as any)[k] != null);
+          });
+          if (hasMarks) {
+            setSheet((prevSheet) => ({
+              ...prevSheet,
+              termLabel: String(draftSheet.termLabel || masterTermLabel || 'KRCT AY25-26'),
+              batchLabel: String(subjectId),
+              rowsByStudentId: draftSheet.rowsByStudentId || {},
+              markManagerLocked:
+                typeof draftSheet.markManagerLocked === 'boolean'
+                  ? draftSheet.markManagerLocked
+                  : Boolean(draftSheet.markManagerSnapshot ?? prevSheet.markManagerSnapshot),
+              markManagerSnapshot: draftSheet.markManagerSnapshot ?? prevSheet.markManagerSnapshot ?? null,
+              markManagerApprovalUntil: draftSheet.markManagerApprovalUntil ?? prevSheet.markManagerApprovalUntil ?? null,
+            }));
+            if (draftPartBtl && typeof draftPartBtl === 'object') {
+              const next: any = {};
+              for (const k of ['skill1', 'skill2', 'att1', 'att2']) {
+                const v = (draftPartBtl as any)[k];
+                next[k] = v === '' || v == null ? '' : Number(v);
+                if (!(next[k] === '' || (Number.isFinite(next[k]) && next[k] >= 1 && next[k] <= 6))) next[k] = '';
+              }
+              setPartBtl(next);
+            }
+            draftLoadedRef.current = true;
+            return;
           }
-          setPartBtl(next);
         }
+        // Fallback: refresh published snapshot if draft was empty
+        if (!mounted) return;
+        refreshPublishedSnapshot(false);
       } catch {
         // ignore
+        if (!mounted) return;
+        refreshPublishedSnapshot(false);
       }
     })();
 
-    prevEntryOpenRef.current = Boolean(entryOpen);
     return () => {
       mounted = false;
     };
@@ -736,6 +762,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
   // Auto-save selected BTLs to server (debounced)
   useEffect(() => {
     if (!subjectId) return;
+    if (!draftLoadedRef.current) return;
     let cancelled = false;
     const tid = setTimeout(async () => {
       try {
@@ -758,6 +785,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
   // Load draft from DB (preferred)
   useEffect(() => {
     let mounted = true;
+    draftLoadedRef.current = false;
     (async () => {
       if (!subjectId) return;
       try {
@@ -817,6 +845,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
       } catch {
         // keep local fallback
       }
+      if (mounted) draftLoadedRef.current = true;
     })();
     return () => {
       mounted = false;

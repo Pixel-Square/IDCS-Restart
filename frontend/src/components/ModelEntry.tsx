@@ -12,6 +12,7 @@ import { useEditWindow } from '../hooks/useEditWindow';
 import { useEditRequestPending } from '../hooks/useEditRequestPending';
 import { useLockBodyScroll } from '../hooks/useLockBodyScroll';
 import { ModalPortal } from './ModalPortal';
+import AssessmentContainer from './AssessmentContainer';
 
 type Props = {
   subjectId: string;
@@ -1327,7 +1328,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   }, [rowsToRender, showAbsenteesOnly, activeSheet, absenteesSnapshotKeys]);
 
   return (
-    <div>
+    <AssessmentContainer>
       {limitDialog ? (
         <div
           role="dialog"
@@ -2875,6 +2876,6 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
           </table>
         </div>
       </div>
-    </div>
+    </AssessmentContainer>
   );
 }

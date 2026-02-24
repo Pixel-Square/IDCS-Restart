@@ -26,8 +26,6 @@ import { usePublishWindow } from '../hooks/usePublishWindow';
 import PublishLockOverlay from './PublishLockOverlay';
 import AssessmentContainer from './AssessmentContainer';
 import { ModalPortal } from './ModalPortal';
-// Vite-friendly asset URL for lock GIF used in the floating panel
-const lockPanelGif = new URL('https://static.vecteezy.com/system/resources/thumbnails/014/585/778/small/gold-locked-padlock-png.png', import.meta.url).href;
 import { fetchDeptRows, fetchMasters } from '../services/curriculum';
 import { isLabClassType, normalizeClassType } from '../constants/classTypes';
 import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
@@ -289,6 +287,7 @@ export default function LabCourseMarksEntry({
   const [savingDraft, setSavingDraft] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [savedBy, setSavedBy] = useState<string | null>(null);
+  const draftLoadedRef = React.useRef(false);
   const [publishing, setPublishing] = useState(false);
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
   const [publishedEditModalOpen, setPublishedEditModalOpen] = useState(false);
@@ -373,6 +372,18 @@ export default function LabCourseMarksEntry({
   }>(null);
 
   const isPublished = Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published);
+
+  // Restore publishedAt from backend when markLock indicates the table was published
+  useEffect(() => {
+    if (markLock?.is_published && markLock?.updated_at && !publishedAt) {
+      try {
+        setPublishedAt(new Date(String(markLock.updated_at)).toLocaleString());
+      } catch {
+        setPublishedAt(String(markLock.updated_at));
+      }
+    }
+  }, [markLock?.is_published, markLock?.updated_at]);
+
   const markEntryUnblockedUntil = markLock?.mark_entry_unblocked_until ? String(markLock.mark_entry_unblocked_until) : null;
   const markManagerUnlockedUntil = markLock?.mark_manager_unlocked_until ? String(markLock.mark_manager_unlocked_until) : null;
   const markEntryApprovedFresh =
@@ -536,6 +547,7 @@ export default function LabCourseMarksEntry({
   // Load draft from backend
   useEffect(() => {
     let mounted = true;
+    draftLoadedRef.current = false;
     (async () => {
       if (!subjectId) return;
       try {
@@ -734,6 +746,7 @@ export default function LabCourseMarksEntry({
       } catch {
         // ignore
       }
+      if (mounted) draftLoadedRef.current = true;
     })();
     return () => {
       mounted = false;
@@ -1068,6 +1081,7 @@ export default function LabCourseMarksEntry({
   useEffect(() => {
     if (!autoSaveEnabled) return;
     if (!subjectId) return;
+    if (!draftLoadedRef.current) return;
     if (tableBlocked) return;
     if (publishedEditLocked) return;
 
@@ -2177,28 +2191,40 @@ export default function LabCourseMarksEntry({
     refreshPublishedSnapshot(false);
   }, [subjectId, assessmentKey, markLock?.exists, markLock?.is_published]);
 
-  const prevEntryOpenRef = React.useRef<boolean>(Boolean(entryOpen));
+  const prevEntryOpenRef = React.useRef<boolean | null>(null);
   useEffect(() => {
     // When IQAC opens MARK_ENTRY edits, re-hydrate the editable draft so the table
     // shows existing marks (prefer last saved draft; fall back to the published snapshot).
     if (!subjectId) return;
     if (!isPublished) return;
-
-    const prev = prevEntryOpenRef.current;
-    if (prev || !entryOpen) {
-      prevEntryOpenRef.current = Boolean(entryOpen);
+    if (!entryOpen) {
+      prevEntryOpenRef.current = false;
       return;
     }
+
+    const prev = prevEntryOpenRef.current;
+    prevEntryOpenRef.current = true;
+    if (prev === true) return;
 
     let mounted = true;
     (async () => {
       try {
         const resp = await fetchDraft(assessmentKey as any, String(subjectId), teachingAssignmentId);
-        const data = (resp as any)?.data ?? null;
+        const d = (resp as any)?.draft ?? null;
         if (!mounted) return;
-        if (data && typeof data === 'object' && (data as any).sheet) {
-          setDraft(data as LabDraftPayload);
-          return;
+        if (d && typeof d === 'object' && (d as any).sheet) {
+          // Check if draft has actual marks
+          const rows = (d as any).sheet?.rowsByStudentId;
+          const hasMarks = rows && Object.values(rows).some((row: any) =>
+            row?.marksA?.some((v: any) => v !== '' && v != null) ||
+            row?.marksB?.some((v: any) => v !== '' && v != null) ||
+            (row?.ciaExam !== '' && row?.ciaExam != null)
+          );
+          if (hasMarks) {
+            setDraft(d as LabDraftPayload);
+            draftLoadedRef.current = true;
+            return;
+          }
         }
       } catch {
         // ignore and fall back
@@ -2206,14 +2232,14 @@ export default function LabCourseMarksEntry({
       if (!mounted) return;
       if (publishedViewSnapshot && (publishedViewSnapshot as any).sheet) {
         setDraft(publishedViewSnapshot);
+        draftLoadedRef.current = true;
       }
     })();
 
-    prevEntryOpenRef.current = Boolean(entryOpen);
     return () => {
       mounted = false;
     };
-  }, [entryOpen, isPublished, subjectId, assessmentKey, publishedViewSnapshot]);
+  }, [entryOpen, isPublished, subjectId, assessmentKey, publishedViewSnapshot, teachingAssignmentId]);
 
   useEffect(() => {
     // While locked after publish, periodically check if IQAC updated the lock row.
@@ -2944,7 +2970,7 @@ export default function LabCourseMarksEntry({
                       >
                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, lineHeight: 1.05 }}>
                           <div style={{ whiteSpace: 'pre-line' }}>{'CIA\nEXAM'}</div>
-                          {isTcpr ? <div style={{ fontSize: 12, fontWeight: 900 }}>{ciaExamMaxEffective}</div> : null}
+                          <div style={{ fontSize: 12, fontWeight: 900 }}>{ciaExamMaxEffective}</div>
                         </div>
                       </th>
                     )
@@ -3498,25 +3524,16 @@ export default function LabCourseMarksEntry({
 
                 <div
                   style={{
-                    width: 170,
-                    height: 92,
+                    width: 64,
+                    height: 64,
                     display: 'grid',
                     placeItems: 'center',
-                    background: '#fff',
-                    borderRadius: 10,
-                    border: '1px solid rgba(2,6,23,0.08)',
                   }}
                 >
-                  <img
-                    id="published-lock-image"
-                    src={new URL('../../assets/gif/lockong.png', import.meta.url).toString()}
-                    alt="locked"
-                    style={{ maxWidth: 150, maxHeight: 80, display: 'block' }}
-                    onError={(e) => {
-                      (e.currentTarget as HTMLImageElement).onerror = null;
-                      (e.currentTarget as HTMLImageElement).src = 'https://media.lordicon.com/icons/wired/flat/1103-check-mark.gif';
-                    }}
-                  />
+                  <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#065f46" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2" fill="#d1fae5" />
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                  </svg>
                 </div>
               </div>
             ) : null}

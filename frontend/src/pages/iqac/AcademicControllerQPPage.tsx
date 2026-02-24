@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { fetchIqacQpPattern, upsertIqacQpPattern } from '../../services/obe';
+import { fetchAssessmentMasterConfig, saveAssessmentMasterConfig } from '../../services/cdapDb';
 
 type QpOption = {
   key: string;
@@ -24,6 +25,24 @@ export default function AcademicControllerQPPage(): JSX.Element {
   const selected = useMemo(() => options.find((o) => o.key === selectedKey) || null, [options, selectedKey]);
 
   const [selectedExam, setSelectedExam] = useState<'CIA1' | 'CIA2' | 'MODEL'>('CIA1');
+
+  const isReviewCfgClass = selected?.class_type === 'TCPR' || selected?.class_type === 'TCPL';
+  const [selectedReviewExam, setSelectedReviewExam] = useState<'review1' | 'review2'>('review1');
+
+  type ReviewCfg = {
+    cia_max?: number;
+  };
+
+  type ReviewConfigRoot = {
+    TCPR?: { review1?: ReviewCfg; review2?: ReviewCfg };
+    TCPL?: { review1?: ReviewCfg; review2?: ReviewCfg };
+  };
+
+  const [reviewConfig, setReviewConfig] = useState<ReviewConfigRoot>({});
+  const [reviewCfgLoading, setReviewCfgLoading] = useState(false);
+  const [reviewCfgSaving, setReviewCfgSaving] = useState(false);
+  const [reviewCfgMsg, setReviewCfgMsg] = useState<string | null>(null);
+  const [reviewCfgErr, setReviewCfgErr] = useState<string | null>(null);
 
   type PatternRow = { marks: string; co: string };
 
@@ -75,6 +94,69 @@ export default function AcademicControllerQPPage(): JSX.Element {
       cancelled = true;
     };
   }, [backendKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!isReviewCfgClass) return;
+    (async () => {
+      setReviewCfgLoading(true);
+      setReviewCfgMsg(null);
+      setReviewCfgErr(null);
+      try {
+        const cfg = await fetchAssessmentMasterConfig();
+        if (cancelled) return;
+        const root = (cfg as any)?.review_config;
+        if (root && typeof root === 'object') setReviewConfig(root as ReviewConfigRoot);
+        else setReviewConfig({});
+      } catch (e: any) {
+        if (cancelled) return;
+        setReviewCfgErr(String(e?.message || e || 'Failed to load review config.'));
+      } finally {
+        if (!cancelled) setReviewCfgLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isReviewCfgClass, selected?.class_type]);
+
+  const currentReviewCfg = useMemo(() => {
+    const ct = selected?.class_type;
+    const root = reviewConfig || {};
+    const byCt: any = (ct && (root as any)[ct]) || {};
+    return (byCt && byCt[selectedReviewExam]) || {};
+  }, [reviewConfig, selected?.class_type, selectedReviewExam]);
+
+  const updateReviewCiaMax = (value: string) => {
+    const ct = selected?.class_type;
+    if (!ct) return;
+    const next = value === '' ? undefined : Number(value);
+    setReviewConfig((prev) => {
+      const out: any = { ...(prev || {}) };
+      const ctBlock: any = { ...(out[ct] || {}) };
+      const examBlock: any = { ...(ctBlock[selectedReviewExam] || {}) };
+      examBlock.cia_max = Number.isFinite(next as any) ? Math.max(0, Math.trunc(next as any)) : undefined;
+      ctBlock[selectedReviewExam] = examBlock;
+      out[ct] = ctBlock;
+      return out;
+    });
+  };
+
+  const saveReviewConfig = async () => {
+    setReviewCfgMsg(null);
+    setReviewCfgErr(null);
+    try {
+      setReviewCfgSaving(true);
+      const existing = await fetchAssessmentMasterConfig();
+      const merged = { ...(existing || {}), review_config: reviewConfig || {} };
+      await saveAssessmentMasterConfig(merged);
+      setReviewCfgMsg('Review config saved.');
+    } catch (e: any) {
+      setReviewCfgErr(String(e?.message || e || 'Save failed.'));
+    } finally {
+      setReviewCfgSaving(false);
+    }
+  };
 
   const addRow = () => {
     setPatternRows((prev) => [...prev, { marks: '', co: selectedExam === 'CIA2' ? '3' : '1' }]);
@@ -315,6 +397,64 @@ export default function AcademicControllerQPPage(): JSX.Element {
           </button>
         </div>
       </div>
+
+      {/* TCPR/TCPL Review configuration */}
+      {isReviewCfgClass ? (
+        <div className="obe-card" style={{ padding: 12, marginTop: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'baseline', flexWrap: 'wrap', marginBottom: 10 }}>
+            <div style={{ fontWeight: 900, color: '#111827' }}>Review Config</div>
+            <div style={{ fontSize: 12, color: '#6b7280' }}>{selected?.label || selectedKey} • {selectedReviewExam === 'review1' ? 'Review 1' : 'Review 2'}</div>
+          </div>
+
+          {reviewCfgErr ? (
+            <div style={{ background: '#fef2f2', border: '1px solid #ef444433', color: '#991b1b', padding: 10, borderRadius: 10, marginBottom: 10 }}>
+              {reviewCfgErr}
+            </div>
+          ) : null}
+          {reviewCfgMsg ? (
+            <div style={{ background: '#ecfdf5', border: '1px solid #10b98133', color: '#065f46', padding: 10, borderRadius: 10, marginBottom: 10 }}>
+              {reviewCfgMsg}
+            </div>
+          ) : null}
+
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'end' }}>
+            <div>
+              <div style={{ fontSize: 12, color: '#6b7280', fontWeight: 800, marginBottom: 6 }}>Exam type</div>
+              <select className="obe-input" value={selectedReviewExam} onChange={(e) => setSelectedReviewExam(e.target.value as any)} style={{ minWidth: 160 }}>
+                <option value="review1">Review 1</option>
+                <option value="review2">Review 2</option>
+              </select>
+            </div>
+
+            <div>
+              <div style={{ fontSize: 12, color: '#6b7280', fontWeight: 800, marginBottom: 6 }}>CIA exam max marks</div>
+              <input
+                className="obe-input"
+                type="number"
+                min={0}
+                step={1}
+                value={String((currentReviewCfg as any)?.cia_max ?? '')}
+                onChange={(e) => updateReviewCiaMax(e.target.value)}
+                placeholder="e.g. 40"
+                style={{ maxWidth: 160 }}
+                disabled={reviewCfgLoading}
+              />
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button type="button" className="obe-btn obe-btn-secondary" onClick={() => {
+                setReviewCfgMsg(null);
+                setReviewCfgErr(null);
+              }} disabled={reviewCfgSaving}>
+                Clear message
+              </button>
+              <button type="button" className="obe-btn obe-btn-primary" onClick={saveReviewConfig} disabled={reviewCfgSaving || reviewCfgLoading}>
+                {reviewCfgSaving ? 'Saving…' : 'Save Review Config'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

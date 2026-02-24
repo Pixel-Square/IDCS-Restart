@@ -27,6 +27,17 @@ from .models import (
     SpecialCourseAssessmentSelection,
     SpecialCourseAssessmentEditRequest,
 )
+from OBE.models import (
+    Cia1Mark,
+    Cia2Mark,
+    Ssa1Mark,
+    Ssa2Mark,
+    Review1Mark,
+    Review2Mark,
+    Formative1Mark,
+    Formative2Mark,
+    InternalMarkMapping,
+)
 from .models import PeriodAttendanceSession, PeriodAttendanceRecord
 from .models import AttendanceUnlockRequest
 
@@ -3281,4 +3292,357 @@ class StudentAttendanceView(APIView):
             logging.getLogger(__name__).exception('StudentAttendanceView error: %s', e)
             tb = traceback.format_exc()
             return Response({'detail': 'Internal server error', 'error': str(e), 'trace': tb}, status=500)
+
+
+class StudentMarksView(APIView):
+    """Return the logged-in student's marks aggregated by subject and cycle.
+
+    URL: /api/academics/student/marks/
+    The view derives the student from request.user and will not accept a student_id param.
+    """
+
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        user = request.user
+        sp = getattr(user, 'student_profile', None)
+        if sp is None:
+            return Response({'detail': 'Student profile not found for user.'}, status=status.HTTP_403_FORBIDDEN)
+
+        section = sp.get_current_section() or getattr(sp, 'section', None)
+        semester = getattr(section, 'semester', None) if section is not None else None
+        course = getattr(getattr(section, 'batch', None), 'course', None) if section is not None else None
+
+        from .models import Subject
+
+        if semester is None:
+            return Response({'student': {'id': sp.id, 'reg_no': sp.reg_no}, 'semester': None, 'courses': []})
+
+        # Subjects shown to the student MUST be limited to what they are enrolled for.
+        # Strategy:
+        # - Prefer curriculum rows (core + the student's active elective choices) to build an allowed code list
+        # - Fallback to Subject(course=student_course) only (never expand to all semester subjects)
+        subjects = Subject.objects.none()
+
+        # Best-effort curriculum metadata for class_type/internal max
+        try:
+            from curriculum.models import CurriculumDepartment
+        except Exception:
+            CurriculumDepartment = None
+
+        try:
+            from curriculum.models import ElectiveChoice
+        except Exception:
+            ElectiveChoice = None
+
+        regulation_code = None
+        try:
+            regulation_code = getattr(getattr(getattr(section, 'batch', None), 'regulation', None), 'code', None)
+        except Exception:
+            regulation_code = None
+        if not regulation_code:
+            try:
+                regulation_code = str(getattr(getattr(section, 'batch', None), 'regulation', '') or '').strip() or None
+            except Exception:
+                regulation_code = None
+
+        dept = getattr(course, 'department', None) if course is not None else None
+
+        # Build enrolled subject code list from curriculum + elective choices when possible
+        allowed_codes = set()
+        try:
+            if CurriculumDepartment is not None and dept is not None and regulation_code and semester is not None:
+                core_codes = list(
+                    CurriculumDepartment.objects.filter(
+                        department=dept,
+                        regulation=regulation_code,
+                        semester=semester,
+                        is_elective=False,
+                    )
+                    .exclude(course_code__isnull=True)
+                    .exclude(course_code='')
+                    .values_list('course_code', flat=True)
+                )
+                allowed_codes.update([str(c).strip() for c in core_codes if c])
+
+                if ElectiveChoice is not None:
+                    # Prefer active academic year electives, but tolerate null academic_year rows.
+                    try:
+                        ay = AcademicYear.objects.filter(is_active=True).first()
+                    except Exception:
+                        ay = None
+
+                    eqs = ElectiveChoice.objects.filter(student=sp, is_active=True).select_related('elective_subject')
+                    if ay is not None:
+                        # include choices bound to active AY OR legacy choices with AY unset
+                        eqs = eqs.filter(models.Q(academic_year=ay) | models.Q(academic_year__isnull=True))
+
+                    elective_codes = []
+                    for ch in eqs:
+                        es = getattr(ch, 'elective_subject', None)
+                        if not es:
+                            continue
+                        if dept is not None and getattr(es, 'department_id', None) != getattr(dept, 'id', None):
+                            continue
+                        if regulation_code and str(getattr(es, 'regulation', '') or '').strip() != str(regulation_code):
+                            continue
+                        if getattr(es, 'semester_id', None) != getattr(semester, 'id', None):
+                            continue
+                        code = str(getattr(es, 'course_code', '') or '').strip()
+                        if code:
+                            elective_codes.append(code)
+                    allowed_codes.update(elective_codes)
+        except Exception:
+            allowed_codes = set()
+
+        if allowed_codes:
+            subjects = Subject.objects.filter(semester=semester, code__in=sorted(list(allowed_codes))).order_by('code')
+        elif course is not None:
+            # Strict fallback: only course-specific subjects.
+            subjects = Subject.objects.filter(semester=semester, course=course).order_by('code')
+        else:
+            # Can't safely determine enrollment without a course/curriculum context.
+            subjects = Subject.objects.none()
+
+        curriculum_by_code = {}
+        try:
+            if CurriculumDepartment is not None and dept is not None and regulation_code and semester is not None:
+                codes = [getattr(s, 'code', None) for s in subjects]
+                codes = [c for c in codes if c]
+                if codes:
+                    rows = CurriculumDepartment.objects.filter(
+                        department=dept,
+                        regulation=regulation_code,
+                        semester=semester,
+                        course_code__in=codes,
+                    ).only('course_code', 'class_type', 'internal_mark')
+                    curriculum_by_code = {getattr(r, 'course_code', None): r for r in rows}
+        except Exception:
+            curriculum_by_code = {}
+
+        # CQI availability: CQI is configured globally by IQAC; the UI shows a CQI marker
+        # when CQI is enabled and the subject is not an AUDIT course.
+        try:
+            from OBE.models import ObeCqiConfig
+            cqi_cfg = ObeCqiConfig.objects.first()
+            cqi_globally_enabled = bool(cqi_cfg and (cqi_cfg.options or []))
+        except Exception:
+            cqi_globally_enabled = False
+
+        def _cycle_key_to_int(v):
+            s = str(v or '').strip().lower()
+            if not s:
+                return None
+            # tolerate: "1", "cycle 1", "cycle i", "i", "ii"
+            if 'ii' in s or s == '2' or 'cycle 2' in s or 'cycle ii' in s:
+                return 2
+            if '1' in s or s == 'i' or 'cycle 1' in s or 'cycle i' in s:
+                return 1
+            return None
+
+        def _internal_maxes_from_mapping(mapping_dict):
+            if not isinstance(mapping_dict, dict):
+                return (None, None, None)
+            weights = mapping_dict.get('weights')
+            cycles = mapping_dict.get('cycles')
+            if not isinstance(weights, list):
+                return (None, None, None)
+
+            w_list = []
+            for x in weights:
+                try:
+                    w_list.append(float(x))
+                except Exception:
+                    w_list.append(0.0)
+            total = sum(w_list) if w_list else None
+
+            if not isinstance(cycles, list) or len(cycles) != len(w_list):
+                return (total, None, None)
+
+            c1 = 0.0
+            c2 = 0.0
+            any_cycle = False
+            for i, w in enumerate(w_list):
+                ck = _cycle_key_to_int(cycles[i])
+                if ck == 1:
+                    c1 += w
+                    any_cycle = True
+                elif ck == 2:
+                    c2 += w
+                    any_cycle = True
+
+            if not any_cycle:
+                return (total, None, None)
+
+            return (total, c1 or None, c2 or None)
+
+        def _num(v):
+            try:
+                if v is None:
+                    return None
+                return float(v)
+            except Exception:
+                return None
+
+        out_courses = []
+        for subj in subjects:
+            # curriculum row metadata (class_type, internal max)
+            class_type = None
+            internal_max_total = None
+            try:
+                row = curriculum_by_code.get(getattr(subj, 'code', None))
+                if row is not None:
+                    class_type = getattr(row, 'class_type', None)
+                    im = getattr(row, 'internal_mark', None)
+                    if im is not None:
+                        try:
+                            internal_max_total = float(im)
+                        except Exception:
+                            internal_max_total = None
+            except Exception:
+                row = None
+
+            try:
+                cia1 = Cia1Mark.objects.filter(subject=subj, student=sp).first()
+            except Exception:
+                cia1 = None
+            try:
+                cia2 = Cia2Mark.objects.filter(subject=subj, student=sp).first()
+            except Exception:
+                cia2 = None
+            try:
+                ssa1 = Ssa1Mark.objects.filter(subject=subj, student=sp).first()
+            except Exception:
+                ssa1 = None
+            try:
+                ssa2 = Ssa2Mark.objects.filter(subject=subj, student=sp).first()
+            except Exception:
+                ssa2 = None
+            try:
+                rev1 = Review1Mark.objects.filter(subject=subj, student=sp).first()
+            except Exception:
+                rev1 = None
+            try:
+                rev2 = Review2Mark.objects.filter(subject=subj, student=sp).first()
+            except Exception:
+                rev2 = None
+            try:
+                f1 = Formative1Mark.objects.filter(subject=subj, student=sp).first()
+            except Exception:
+                f1 = None
+            try:
+                f2 = Formative2Mark.objects.filter(subject=subj, student=sp).first()
+            except Exception:
+                f2 = None
+
+            # internal mapping (may be None)
+            try:
+                imm = InternalMarkMapping.objects.filter(subject=subj).first()
+                mapping = imm.mapping if imm else None
+            except Exception:
+                mapping = None
+
+            map_total, map_c1, map_c2 = _internal_maxes_from_mapping(mapping)
+            if internal_max_total is None:
+                internal_max_total = map_total
+            internal_max_cycle1 = map_c1
+            internal_max_cycle2 = map_c2
+            if internal_max_total is not None and (internal_max_cycle1 is None and internal_max_cycle2 is None):
+                # fallback split when only a total is known
+                internal_max_cycle1 = internal_max_total / 2.0
+                internal_max_cycle2 = internal_max_total / 2.0
+
+            # best-effort internal marks: sum available internal-like components
+            internal_components = []
+            for m in (
+                f1 and getattr(f1, 'total', None),
+                f2 and getattr(f2, 'total', None),
+                ssa1 and getattr(ssa1, 'mark', None),
+                ssa2 and getattr(ssa2, 'mark', None),
+                rev1 and getattr(rev1, 'mark', None),
+                rev2 and getattr(rev2, 'mark', None),
+            ):
+                if m is not None:
+                    try:
+                        internal_components.append(float(m))
+                    except Exception:
+                        pass
+            internal_computed = sum(internal_components) if internal_components else None
+
+            # cycle-wise internal components
+            internal_cycle1_components = []
+            for m in (
+                f1 and getattr(f1, 'total', None),
+                ssa1 and getattr(ssa1, 'mark', None),
+                rev1 and getattr(rev1, 'mark', None),
+            ):
+                if m is not None:
+                    try:
+                        internal_cycle1_components.append(float(m))
+                    except Exception:
+                        pass
+            internal_cycle1 = sum(internal_cycle1_components) if internal_cycle1_components else None
+
+            internal_cycle2_components = []
+            for m in (
+                f2 and getattr(f2, 'total', None),
+                ssa2 and getattr(ssa2, 'mark', None),
+                rev2 and getattr(rev2, 'mark', None),
+            ):
+                if m is not None:
+                    try:
+                        internal_cycle2_components.append(float(m))
+                    except Exception:
+                        pass
+            internal_cycle2 = sum(internal_cycle2_components) if internal_cycle2_components else None
+
+            ct_norm = str(class_type or '').upper()
+            # In this codebase, class_type values include THEORY/LAB/TCPR/TCPL/PRACTICAL/PROJECT/SPECIAL.
+            # CQI is configured globally by IQAC; show it for all academic class types except AUDIT.
+            has_cqi = bool(cqi_globally_enabled and ct_norm != 'AUDIT')
+
+            # CIA max defaults (no authoritative config in DB yet)
+            cia_max = 30.0
+
+            out_courses.append(
+                {
+                    'id': getattr(subj, 'id', None),
+                    'code': getattr(subj, 'code', None),
+                    'name': getattr(subj, 'name', None),
+                    'class_type': ct_norm or None,
+                    'marks': {
+                        'cia1': _num(getattr(cia1, 'mark', None)),
+                        'cia2': _num(getattr(cia2, 'mark', None)),
+                        'cia_max': cia_max,
+                        'ssa1': _num(getattr(ssa1, 'mark', None)),
+                        'ssa2': _num(getattr(ssa2, 'mark', None)),
+                        'review1': _num(getattr(rev1, 'mark', None)),
+                        'review2': _num(getattr(rev2, 'mark', None)),
+                        'formative1': _num(getattr(f1, 'total', None)),
+                        'formative2': _num(getattr(f2, 'total', None)),
+                        'internal': {
+                            'computed': internal_computed,
+                            'cycle1': internal_cycle1,
+                            'cycle2': internal_cycle2,
+                            'max_total': internal_max_total,
+                            'max_cycle1': internal_max_cycle1,
+                            'max_cycle2': internal_max_cycle2,
+                            'mapping': mapping,
+                        },
+                        'has_cqi': has_cqi,
+                    },
+                }
+            )
+
+        resp = {
+            'student': {
+                'id': sp.id,
+                'reg_no': sp.reg_no,
+                'name': getattr(getattr(sp, 'user', None), 'username', None),
+            },
+            'semester': {'id': getattr(semester, 'id', None), 'number': getattr(semester, 'number', None)},
+            'courses': out_courses,
+        }
+
+        return Response(resp)
 

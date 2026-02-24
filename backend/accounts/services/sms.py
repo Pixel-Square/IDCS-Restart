@@ -151,60 +151,70 @@ def send_sms(to_number: str, message: str) -> SmsSendResult:
             return SmsSendResult(ok=False, message=str(e))
 
     if backend == 'whatsapp':
-        endpoint = str(getattr(settings, 'OBE_WHATSAPP_API_URL', '') or '').strip()
-        api_key = str(getattr(settings, 'OBE_WHATSAPP_API_KEY', '') or '').strip()
-        if not endpoint or not api_key:
-            return SmsSendResult(ok=False, message='WhatsApp API URL or API key not configured')
-
-        allow_non_local = bool(getattr(settings, 'OBE_WHATSAPP_ALLOW_NON_LOCAL_URL', False))
-        if not allow_non_local and not _is_safe_local_whatsapp_endpoint(endpoint):
-            return SmsSendResult(ok=False, message='Unsafe WhatsApp API URL: only localhost/127.0.0.1 is allowed')
-
-        recipient = _normalize_whatsapp_number(to_number)
-        if not recipient:
-            return SmsSendResult(ok=False, message='Invalid WhatsApp number')
-        if not str(message or '').strip():
-            return SmsSendResult(ok=False, message='Message is empty')
-
-        payload = {
-            'api_key': api_key,
-            'to': recipient,
-            'message': str(message).strip(),
-        }
-
-        def _post_once():
-            import requests
-
-            timeout = float(getattr(settings, 'OBE_WHATSAPP_TIMEOUT_SECONDS', 8.0) or 8.0)
-            return requests.post(endpoint, json=payload, timeout=timeout)
-
-        try:
-            response = _post_once()
-            status_code = int(getattr(response, 'status_code', 0) or 0)
-            response_text = str(getattr(response, 'text', '') or '')
-            if 200 <= status_code < 300:
-                return SmsSendResult(ok=True, message='Sent via WhatsApp')
-
-            # whatsapp-web.js + Puppeteer can intermittently fail with detached-frame errors;
-            # retry once for transient provider faults.
-            transient = status_code >= 500 or 'detached frame' in response_text.lower() or 'execution context was destroyed' in response_text.lower()
-            if transient:
-                try:
-                    time.sleep(0.7)
-                except Exception:
-                    pass
-                retry = _post_once()
-                retry_status = int(getattr(retry, 'status_code', 0) or 0)
-                if 200 <= retry_status < 300:
-                    return SmsSendResult(ok=True, message='Sent via WhatsApp')
-                return SmsSendResult(ok=False, message=f'WhatsApp HTTP {retry_status}: {getattr(retry, "text", "")!r}')
-
-            return SmsSendResult(ok=False, message=f'WhatsApp HTTP {status_code}: {response_text!r}')
-        except Exception as e:
-            log.exception('SMS(whatsapp) failed')
-            return SmsSendResult(ok=False, message=str(e))
+        return send_whatsapp(to_number, message)
 
     return SmsSendResult(ok=False, message=f'Unsupported SMS_BACKEND: {backend}')
+
+
+def send_whatsapp(to_number: str, message: str) -> SmsSendResult:
+    """Send a WhatsApp text message via the local whatsapp-web.js microservice.
+
+    This uses the same `OBE_WHATSAPP_*` settings as OBE edit-request notifications.
+    Unlike `send_sms`, this function always attempts WhatsApp delivery regardless of `SMS_BACKEND`.
+    """
+
+    endpoint = str(getattr(settings, 'OBE_WHATSAPP_API_URL', '') or '').strip()
+    api_key = str(getattr(settings, 'OBE_WHATSAPP_API_KEY', '') or '').strip()
+    if not endpoint or not api_key:
+        return SmsSendResult(ok=False, message='WhatsApp API URL or API key not configured')
+
+    allow_non_local = bool(getattr(settings, 'OBE_WHATSAPP_ALLOW_NON_LOCAL_URL', False))
+    if not allow_non_local and not _is_safe_local_whatsapp_endpoint(endpoint):
+        return SmsSendResult(ok=False, message='Unsafe WhatsApp API URL: only localhost/127.0.0.1 is allowed')
+
+    recipient = _normalize_whatsapp_number(to_number)
+    if not recipient:
+        return SmsSendResult(ok=False, message='Invalid WhatsApp number')
+    if not str(message or '').strip():
+        return SmsSendResult(ok=False, message='Message is empty')
+
+    payload = {
+        'api_key': api_key,
+        'to': recipient,
+        'message': str(message).strip(),
+    }
+
+    def _post_once():
+        import requests
+
+        timeout = float(getattr(settings, 'OBE_WHATSAPP_TIMEOUT_SECONDS', 8.0) or 8.0)
+        return requests.post(endpoint, json=payload, timeout=timeout)
+
+    try:
+        response = _post_once()
+        status_code = int(getattr(response, 'status_code', 0) or 0)
+        response_text = str(getattr(response, 'text', '') or '')
+        if 200 <= status_code < 300:
+            return SmsSendResult(ok=True, message='Sent via WhatsApp')
+
+        # whatsapp-web.js + Puppeteer can intermittently fail with detached-frame errors;
+        # retry once for transient provider faults.
+        transient = status_code >= 500 or 'detached frame' in response_text.lower() or 'execution context was destroyed' in response_text.lower()
+        if transient:
+            try:
+                time.sleep(0.7)
+            except Exception:
+                pass
+            retry = _post_once()
+            retry_status = int(getattr(retry, 'status_code', 0) or 0)
+            if 200 <= retry_status < 300:
+                return SmsSendResult(ok=True, message='Sent via WhatsApp')
+            return SmsSendResult(ok=False, message=f'WhatsApp HTTP {retry_status}: {getattr(retry, "text", "")!r}')
+
+        return SmsSendResult(ok=False, message=f'WhatsApp HTTP {status_code}: {response_text!r}')
+    except Exception as e:
+        log.exception('WhatsApp send failed')
+        return SmsSendResult(ok=False, message=str(e))
 
 
 def verify_otp(to_number: str, code: str) -> OtpVerifyResult:

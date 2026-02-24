@@ -11,7 +11,7 @@ import logging
 from django.conf import settings
 
 from .models import MobileOtp, NotificationTemplate
-from .services.sms import send_sms, verify_otp
+from .services.sms import send_sms, send_whatsapp, verify_otp
 from .permissions_api import HasPermissionCode
 
 log = logging.getLogger(__name__)
@@ -276,6 +276,83 @@ class MobileOtpVerifyView(APIView):
         except Exception:
             pass
 
+        # Best-effort WhatsApp confirmation message after verification.
+        # This is independent of SMS_BACKEND so users who verify via SMS can still
+        # receive a WhatsApp confirmation when the WhatsApp gateway is configured.
+        whatsapp_confirmation = None
+        try:
+            template_text = (
+                'IDCS: Your mobile number {mobile} has been verified successfully. '
+                'You now have access to your Academic Panel and can manage your requests. Thank you.'
+            )
+            try:
+                tpl = NotificationTemplate.objects.filter(code='mobile_verified', enabled=True).first()
+                if tpl and str(getattr(tpl, 'template', '') or '').strip():
+                    template_text = str(tpl.template)
+            except Exception:
+                pass
+
+            full_name = ''
+            try:
+                full_name = str(getattr(request.user, 'get_full_name', lambda: '')() or '').strip()
+            except Exception:
+                full_name = ''
+
+            ctx = {
+                '{mobile}': str(mobile),
+                '{username}': str(getattr(request.user, 'username', '') or ''),
+                '{name}': full_name or str(getattr(request.user, 'username', '') or ''),
+            }
+            msg = str(template_text)
+            for k, v in ctx.items():
+                msg = msg.replace(k, v)
+
+            outcome = send_whatsapp(mobile, msg)
+            whatsapp_confirmation = {'ok': bool(outcome.ok), 'message': str(getattr(outcome, 'message', '') or '')}
+            if not outcome.ok:
+                log.warning('WhatsApp verify-confirmation not delivered: %s', whatsapp_confirmation.get('message'))
+        except Exception:
+            log.exception('Failed to send WhatsApp mobile-verified confirmation')
+
         # Return updated me payload for convenience
+        serializer = MeSerializer(request.user)
+        resp = {'ok': True, 'me': serializer.data}
+        if whatsapp_confirmation is not None:
+            resp['whatsapp_confirmation'] = whatsapp_confirmation
+        return Response(resp)
+
+
+class MobileRemoveView(APIView):
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request):
+        password = str((request.data or {}).get('password') or '').strip()
+        if not password:
+            return Response({'detail': 'Password is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Verify password
+        if not request.user.check_password(password):
+            return Response({'detail': 'Incorrect password.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Remove mobile from profile
+        if hasattr(request.user, 'student_profile') and getattr(request.user, 'student_profile') is not None:
+            sp = request.user.student_profile
+            sp.mobile_number = ''
+            sp.mobile_number_verified_at = None
+            sp.save(update_fields=['mobile_number', 'mobile_number_verified_at'])
+        elif hasattr(request.user, 'staff_profile') and getattr(request.user, 'staff_profile') is not None:
+            st = request.user.staff_profile
+            st.mobile_number = ''
+            st.mobile_number_verified_at = None
+            st.save(update_fields=['mobile_number', 'mobile_number_verified_at'])
+
+        # Also clear from User.mobile_no if present
+        try:
+            request.user.mobile_no = ''
+            request.user.save(update_fields=['mobile_no'])
+        except Exception:
+            pass
+
+        # Return updated me payload
         serializer = MeSerializer(request.user)
         return Response({'ok': True, 'me': serializer.data})

@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { getMe, requestMobileOtp, verifyMobileOtp } from '../services/auth';
-import { User, Mail, Shield, Building, Briefcase, School, Phone, CheckCircle2 } from 'lucide-react';
+import { getMe, requestMobileOtp, verifyMobileOtp, removeMobileNumber } from '../services/auth';
+import { User, Mail, Shield, Building, Briefcase, School, Phone, CheckCircle2, Trash2 } from 'lucide-react';
 import DashboardLayout from '../components/DashboardLayout';
+import { ModalPortal } from '../components/ModalPortal';
+import logo from '../assets/idcs-logo.png';
 
 type RoleObj = { name: string };
 type Me = {
@@ -40,10 +42,18 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
   const [otpExpiresAtMs, setOtpExpiresAtMs] = useState<number | null>(null);
   const [otpSecondsLeft, setOtpSecondsLeft] = useState<number>(0);
 
+  const [removeModalOpen, setRemoveModalOpen] = useState(false);
+  const [removeBusy, setRemoveBusy] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
+  const [removePassword, setRemovePassword] = useState('');
+  const [verifySuccess, setVerifySuccess] = useState(false);
+
   useEffect(() => {
     // Keep local UI state synced with loaded profile
     const current = profileMobile || '';
-    setMobileDraft(current);
+    // Ensure +91 prefix for display
+    const normalized = current.trim() ? (current.startsWith('+91') ? current : `+91${current.replace(/^\+91\s*/, '')}`) : '';
+    setMobileDraft(normalized);
     setMobileEditing(!profileMobileVerified || !current);
     setOtpSent(false);
     setOtpDraft('');
@@ -51,6 +61,7 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
     setOtpInfo(null);
     setOtpExpiresAtMs(null);
     setOtpSecondsLeft(0);
+    setVerifySuccess(false);
   }, [profileMobile, profileMobileVerified]);
 
   useEffect(() => {
@@ -126,8 +137,12 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
     setOtpError(null);
     setOtpInfo(null);
 
-    const nextMobile = String(mobileDraft || '').trim();
-    if (!nextMobile) {
+    let nextMobile = String(mobileDraft || '').trim();
+    // Ensure +91 prefix
+    if (nextMobile && !nextMobile.startsWith('+91')) {
+      nextMobile = `+91${nextMobile}`;
+    }
+    if (!nextMobile || nextMobile === '+91') {
       setOtpError('Enter mobile number.');
       return;
     }
@@ -161,9 +176,13 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
   async function handleVerifyOtp() {
     setOtpError(null);
     setOtpInfo(null);
-    const nextMobile = String(mobileDraft || '').trim();
+    let nextMobile = String(mobileDraft || '').trim();
+    // Ensure +91 prefix
+    if (nextMobile && !nextMobile.startsWith('+91')) {
+      nextMobile = `+91${nextMobile}`;
+    }
     const otp = String(otpDraft || '').trim();
-    if (!nextMobile) {
+    if (!nextMobile || nextMobile === '+91') {
       setOtpError('Enter mobile number.');
       return;
     }
@@ -197,6 +216,8 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
       setMobileEditing(false);
       setOtpExpiresAtMs(null);
       setOtpSecondsLeft(0);
+      setVerifySuccess(true);
+      setTimeout(() => setVerifySuccess(false), 8000);
     } catch (e: any) {
       const statusCode = Number(e?.response?.status || 0);
       const msg = statusCode === 401
@@ -209,6 +230,45 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
   }
 
   const canResendOtp = otpSent && otpExpiresAtMs != null && otpSecondsLeft <= 0;
+
+  async function handleRemoveMobile() {
+    setRemoveError(null);
+    const pwd = String(removePassword || '').trim();
+    if (!pwd) {
+      setRemoveError('Password is required.');
+      return;
+    }
+    try {
+      setRemoveBusy(true);
+      const res = await removeMobileNumber(pwd);
+      const me = (res && (res.me as any)) || null;
+      if (me) {
+        const normalized = {
+          ...me,
+          roles: Array.isArray(me.roles) ? me.roles.map((role: any) => (typeof role === 'string' ? role : role.name)) : [],
+        } as Me;
+        setUser(normalized);
+      } else {
+        const r = await getMe();
+        const normalized = {
+          ...r,
+          roles: Array.isArray(r.roles) ? r.roles.map((role: any) => (typeof role === 'string' ? role : role.name)) : [],
+        } as Me;
+        setUser(normalized);
+      }
+      setRemoveModalOpen(false);
+      setRemovePassword('');
+      setRemoveError(null);
+    } catch (e: any) {
+      const statusCode = Number(e?.response?.status || 0);
+      const msg = statusCode === 401
+        ? 'Session expired or incorrect password.'
+        : String(e?.response?.data?.detail || e?.message || e || 'Failed to remove mobile number');
+      setRemoveError(msg);
+    } finally {
+      setRemoveBusy(false);
+    }
+  }
 
   return (
     <DashboardLayout>
@@ -329,13 +389,27 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-semibold text-gray-500 mb-2">Mobile Number</div>
 
+                  {verifySuccess && (
+                    <div className="mb-3 bg-emerald-50 border border-emerald-200 rounded-lg p-3 flex items-start gap-2">
+                      <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5" />
+                      <div className="text-sm text-emerald-800 leading-relaxed">
+                        <strong>Mobile number verified successfully!</strong> You can now access your Academic panel and submit requests through IDCS.
+                      </div>
+                    </div>
+                  )}
+
                   <div className="flex items-center gap-2">
-                    <div className="relative flex-1">
+                    <div className="relative flex-1 flex">
+                      <div className="flex items-center gap-1.5 px-3 py-2 bg-gray-100 border border-gray-200 rounded-l-md border-r-0">
+                        <span className="text-base leading-none">🇮🇳</span>
+                        <span className="text-sm font-semibold text-gray-700">+91</span>
+                      </div>
                       <input
-                        className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-teal-200"
-                        value={mobileDraft}
+                        className="flex-1 rounded-r-md rounded-l-none border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-teal-200"
+                        value={mobileDraft.replace(/^\+91\s*/, '')}
                         onChange={(e) => {
-                          setMobileDraft(e.target.value);
+                          const rawValue = e.target.value.replace(/^\+91\s*/, '').replace(/[^\d]/g, '');
+                          setMobileDraft(rawValue ? `+91${rawValue}` : '');
                           setOtpSent(false);
                           setOtpDraft('');
                           setOtpError(null);
@@ -344,7 +418,8 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                           setOtpSecondsLeft(0);
                         }}
                         readOnly={showVerifiedCheck}
-                        placeholder="Enter mobile number"
+                        placeholder="Enter 10-digit mobile number"
+                        maxLength={10}
                       />
                       {showVerifiedCheck && (
                         <div className="absolute right-2 top-1/2 -translate-y-1/2">
@@ -402,19 +477,33 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                   )}
 
                   {showVerifiedCheck && (
-                    <button
-                      type="button"
-                      className="mt-2 text-xs text-blue-700 underline font-semibold"
-                      onClick={() => {
-                        setMobileEditing(true);
-                        setOtpSent(false);
-                        setOtpDraft('');
-                        setOtpError(null);
-                        setOtpInfo(null);
-                      }}
-                    >
-                      Change number
-                    </button>
+                    <div className="mt-2 flex items-center gap-3">
+                      <button
+                        type="button"
+                        className="text-xs text-blue-700 underline font-semibold"
+                        onClick={() => {
+                          setMobileEditing(true);
+                          setOtpSent(false);
+                          setOtpDraft('');
+                          setOtpError(null);
+                          setOtpInfo(null);
+                        }}
+                      >
+                        Change number
+                      </button>
+                      <button
+                        type="button"
+                        className="text-xs text-red-700 underline font-semibold flex items-center gap-1"
+                        onClick={() => {
+                          setRemovePassword('');
+                          setRemoveError(null);
+                          setRemoveModalOpen(true);
+                        }}
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        Remove
+                      </button>
+                    </div>
                   )}
                 </div>
               </div>
@@ -422,6 +511,139 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
           </div>
         </div>
       </div>
+
+      {removeModalOpen ? (
+        <ModalPortal>
+          <div
+            role="dialog"
+            aria-modal="true"
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0,0,0,0.45)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              overflowY: 'auto',
+              padding: 16,
+              zIndex: 80,
+            }}
+            onClick={() => {
+              if (removeBusy) return;
+              setRemoveModalOpen(false);
+              setRemovePassword('');
+              setRemoveError(null);
+            }}
+          >
+            <div
+              style={{
+                width: 'min(420px, 96vw)',
+                background: '#fff',
+                borderRadius: 16,
+                border: '2px solid #fca5a5',
+                boxShadow: '0 8px 32px rgba(220,38,38,0.12), 0 2px 8px rgba(0,0,0,0.10)',
+                overflow: 'hidden',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div style={{
+                background: 'linear-gradient(135deg, #fff1f2 0%, #ffe4e6 100%)',
+                borderBottom: '1px solid #fecaca',
+                padding: '16px 20px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+              }}>
+                <img src={logo} alt="IDCS Logo" style={{ width: 36, height: 36, objectFit: 'contain', flexShrink: 0 }} />
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 15, color: '#991b1b', lineHeight: 1.2 }}>Remove Mobile Number</div>
+                  <div style={{ fontSize: 11, color: '#b91c1c', marginTop: 2 }}>This action cannot be undone</div>
+                </div>
+              </div>
+
+              {/* Body */}
+              <div style={{ padding: '20px 20px 16px' }}>
+                <div style={{
+                  fontSize: 13,
+                  color: '#374151',
+                  marginBottom: 18,
+                  lineHeight: 1.55,
+                  background: '#fef9c3',
+                  border: '1px solid #fde68a',
+                  borderRadius: 8,
+                  padding: '10px 12px',
+                }}>
+                  Your verified mobile number will be removed. You will need to re-verify to access features that require it.
+                </div>
+
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 6, letterSpacing: '0.03em' }}>
+                  IDCS PASSWORD
+                </label>
+                <input
+                  autoFocus
+                  type="password"
+                  className="obe-input"
+                  style={{
+                    borderColor: removePassword.trim() ? '#dc2626' : '#fca5a5',
+                    outline: 'none',
+                    boxShadow: removePassword.trim() ? '0 0 0 3px rgba(220,38,38,0.15)' : '0 0 0 3px rgba(252,165,165,0.25)',
+                    borderWidth: 2,
+                    fontSize: 14,
+                    padding: '10px 12px',
+                    transition: 'box-shadow 0.15s, border-color 0.15s',
+                  }}
+                  value={removePassword}
+                  onChange={(e) => setRemovePassword(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && removePassword.trim() && !removeBusy) {
+                      handleRemoveMobile();
+                    }
+                  }}
+                  placeholder="Enter your IDCS password"
+                />
+
+                {removeError ? (
+                  <div className="obe-danger-pill" style={{ marginTop: 10, fontSize: 13 }}>{removeError}</div>
+                ) : null}
+              </div>
+
+              {/* Footer */}
+              <div style={{
+                display: 'flex',
+                gap: 8,
+                justifyContent: 'flex-end',
+                padding: '12px 20px 16px',
+                borderTop: '1px solid #fee2e2',
+                background: '#fff7f7',
+              }}>
+                <button
+                  type="button"
+                  className="obe-btn"
+                  disabled={removeBusy}
+                  style={{ minWidth: 80 }}
+                  onClick={() => {
+                    setRemoveModalOpen(false);
+                    setRemovePassword('');
+                    setRemoveError(null);
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="obe-btn obe-btn-danger"
+                  disabled={removeBusy || !removePassword.trim()}
+                  style={{ minWidth: 100 }}
+                  onClick={handleRemoveMobile}
+                >
+                  {removeBusy ? 'Removing…' : '🗑 Remove'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </ModalPortal>
+      ) : null}
     </DashboardLayout>
   );
 }

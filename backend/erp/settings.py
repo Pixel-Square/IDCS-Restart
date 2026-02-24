@@ -54,6 +54,7 @@ INSTALLED_APPS = [
     'template_api.apps.TemplateApiConfig',
     'question_bank.apps.QuestionBankConfig',
     'timetable',
+    'bi.apps.BiConfig',
 ]
 
 MIDDLEWARE = [

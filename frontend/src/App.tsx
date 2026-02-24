@@ -39,6 +39,7 @@ import AssignedSubjectsPage from './pages/staff/AssignedSubjects';
 import PeriodAttendance from './pages/staff/PeriodAttendance';
 import AttendanceAnalytics from './pages/staff/AttendanceAnalytics';
 import StudentAttendancePage from './pages/student/Attendance';
+import StudentAcademics from './pages/student/Academics';
 import MentorAssign from './pages/advisor/MentorAssign';
 import MyMentees from './pages/staff/MyMentees';
 import NotificationsPage from './pages/Notifications';
@@ -190,6 +191,10 @@ export default function App() {
                 <Route
                   path="/student/attendance"
                   element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} element={<StudentAttendancePage />} />}
+                />
+                <Route
+                  path="/student/academics"
+                  element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} element={<StudentAcademics />} />}
                 />
                 {/* Attendance pages removed */}
                 <Route

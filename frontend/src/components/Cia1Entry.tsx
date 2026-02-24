@@ -343,6 +343,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   const [students, setStudents] = useState<Student[]>([]);
   const [serverTotals, setServerTotals] = useState<Record<number, number | null>>({});
   const [savedAt, setSavedAt] = useState<string | null>(null);
+  const draftLoadedRef = useRef(false);
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
   const [viewMarksModalOpen, setViewMarksModalOpen] = useState(false);
   const [publishedViewLoading, setPublishedViewLoading] = useState(false);
@@ -408,6 +409,17 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   const isPublished = Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published);
   const markManagerLocked = Boolean(sheet.markManagerLocked);
   const showNameList = Boolean(sheet.markManagerSnapshot != null);
+
+  // Restore publishedAt from backend when markLock indicates the table was published
+  useEffect(() => {
+    if (markLock?.is_published && markLock?.updated_at && !publishedAt) {
+      try {
+        setPublishedAt(new Date(String(markLock.updated_at)).toLocaleString());
+      } catch {
+        setPublishedAt(String(markLock.updated_at));
+      }
+    }
+  }, [markLock?.is_published, markLock?.updated_at]);
 
   const markEntryApprovalUntil = markEntryEditWindow?.approval_until ? String(markEntryEditWindow.approval_until) : null;
   const markManagerApprovalUntil = markManagerEditWindow?.approval_until ? String(markManagerEditWindow.approval_until) : null;
@@ -560,17 +572,19 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
     return () => window.clearInterval(tid);
   }, [entryOpen, isPublished, subjectId, refreshMarkLock]);
 
-  const prevEntryOpenRef = useRef<boolean>(Boolean(entryOpen));
+  const prevEntryOpenRef = useRef<boolean | null>(null);
   useEffect(() => {
     // When IQAC opens MARK_ENTRY edits post-publish, reload the editable draft.
     if (!subjectId) return;
     if (!isPublished) return;
-
-    const prev = prevEntryOpenRef.current;
-    if (prev || !entryOpen) {
-      prevEntryOpenRef.current = Boolean(entryOpen);
+    if (!entryOpen) {
+      prevEntryOpenRef.current = false;
       return;
     }
+
+    const prev = prevEntryOpenRef.current;
+    prevEntryOpenRef.current = true;
+    if (prev === true) return;
 
     let mounted = true;
     (async () => {
@@ -579,20 +593,31 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         if (!mounted) return;
         const d = res?.draft as any;
         if (d && typeof d === 'object') {
-          setSheet((prevSheet) => ({
-            ...prevSheet,
-            termLabel: String(d.termLabel || prevSheet.termLabel),
-            batchLabel: subjectId,
-            questionBtl: d.questionBtl && typeof d.questionBtl === 'object' ? d.questionBtl : prevSheet.questionBtl,
-            rowsByStudentId: d.rowsByStudentId && typeof d.rowsByStudentId === 'object' ? d.rowsByStudentId : prevSheet.rowsByStudentId,
-            markManagerLocked: d.markManagerLocked ?? prevSheet.markManagerLocked,
-            markManagerSnapshot: d.markManagerSnapshot ?? prevSheet.markManagerSnapshot,
-            markManagerApprovalUntil: d.markManagerApprovalUntil ?? prevSheet.markManagerApprovalUntil,
-          }));
-        } else {
-          // Fallback: refresh published sheet for view purposes.
-          refreshPublishedSheet(true);
+          const rows = d.rowsByStudentId;
+          const hasMarks = rows && typeof rows === 'object' && Object.values(rows).some((row: any) => {
+            if (!row || typeof row !== 'object') return false;
+            const marks = row.marks || row.questionMarks;
+            if (Array.isArray(marks)) return marks.some((v: any) => v !== '' && v != null);
+            // Check all question keys
+            return Object.keys(row).some(k => k.startsWith('q') && row[k] !== '' && row[k] != null);
+          });
+          if (hasMarks) {
+            setSheet((prevSheet) => ({
+              ...prevSheet,
+              termLabel: String(d.termLabel || prevSheet.termLabel),
+              batchLabel: subjectId,
+              questionBtl: d.questionBtl && typeof d.questionBtl === 'object' ? d.questionBtl : prevSheet.questionBtl,
+              rowsByStudentId: d.rowsByStudentId,
+              markManagerLocked: d.markManagerLocked ?? prevSheet.markManagerLocked,
+              markManagerSnapshot: d.markManagerSnapshot ?? prevSheet.markManagerSnapshot,
+              markManagerApprovalUntil: d.markManagerApprovalUntil ?? prevSheet.markManagerApprovalUntil,
+            }));
+            draftLoadedRef.current = true;
+            return;
+          }
         }
+        // Fallback: refresh published sheet for view purposes.
+        refreshPublishedSheet(true);
       } catch {
         // ignore and fall back
         try {
@@ -603,7 +628,6 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       }
     })();
 
-    prevEntryOpenRef.current = Boolean(entryOpen);
     return () => {
       mounted = false;
     };
@@ -952,6 +976,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   // Load draft from DB (preferred) and merge into local sheet.
   useEffect(() => {
     let mounted = true;
+    draftLoadedRef.current = false;
     (async () => {
       if (!subjectId) return;
       try {
@@ -988,6 +1013,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         // If draft fetch fails (permissions/network), keep working locally.
         if (!mounted) return;
       }
+      if (mounted) draftLoadedRef.current = true;
     })();
     return () => {
       mounted = false;
@@ -1121,6 +1147,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   // Autosave question BTL changes (debounced) and persist to localStorage
   useEffect(() => {
     if (!subjectId) return;
+    if (!draftLoadedRef.current) return;
     let cancelled = false;
     const tid = setTimeout(async () => {
       try {

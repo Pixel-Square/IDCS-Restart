@@ -230,6 +230,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [savedBy, setSavedBy] = useState<string | null>(null);
+  const draftLoadedRef = useRef(false);
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
 
   const [publishedEditModalOpen, setPublishedEditModalOpen] = useState(false);
@@ -270,8 +271,6 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
   const [markManagerBusy, setMarkManagerBusy] = useState(false);
   const [markManagerError, setMarkManagerError] = useState<string | null>(null);
 
-  const markManagerSaveActive = Boolean(subjectId && !markManagerBusy);
-
   const [publishConsumedApprovals, setPublishConsumedApprovals] = useState<null | {
     markEntryApprovalUntil: string | null;
     markManagerApprovalUntil: string | null;
@@ -287,8 +286,18 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
   }, [subjectId, assessmentKey, teachingAssignmentId]);
 
   const isPublished = Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published) || Boolean(publishedViewSnapshot);
-  const displayPublishedLocked = !markManagerSaveActive && isPublished;
   const markManagerLocked = Boolean(sheet.markManagerLocked);
+
+  // Restore publishedAt from backend when markLock indicates the table was published
+  useEffect(() => {
+    if (markLock?.is_published && markLock?.updated_at && !publishedAt) {
+      try {
+        setPublishedAt(new Date(String(markLock.updated_at)).toLocaleString());
+      } catch {
+        setPublishedAt(String(markLock.updated_at));
+      }
+    }
+  }, [markLock?.is_published, markLock?.updated_at]);
 
   const markEntryApprovalUntil = markEntryEditWindow?.approval_until ? String(markEntryEditWindow.approval_until) : null;
   const markManagerApprovalUntil = markManagerEditWindow?.approval_until ? String(markManagerEditWindow.approval_until) : null;
@@ -375,6 +384,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
       lsSet(sk, selectedBtls);
     } catch {}
 
+    if (!draftLoadedRef.current) return;
     let cancelled = false;
     const tid = setTimeout(async () => {
       try {
@@ -420,6 +430,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
 
   useEffect(() => {
     let mounted = true;
+    draftLoadedRef.current = false;
     (async () => {
       if (!subjectId) return;
       try {
@@ -478,6 +489,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
       } catch {
         // ignore
       }
+      if (mounted) draftLoadedRef.current = true;
     })();
     return () => {
       mounted = false;
@@ -657,11 +669,11 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subjectId, assessmentKey, teachingAssignmentId]);
 
-  const prevEntryOpenRef = useRef<boolean>(Boolean(entryOpen));
+  const prevEntryOpenRef = useRef<boolean | null>(null);
   useEffect(() => {
     // Reset the edge-trigger detector when switching SSA2 <-> Review2.
-    prevEntryOpenRef.current = Boolean(entryOpen);
-  }, [subjectId, assessmentKey, teachingAssignmentId, entryOpen]);
+    prevEntryOpenRef.current = null;
+  }, [subjectId, assessmentKey, teachingAssignmentId]);
   const publishedViewTableRef = useRef<HTMLDivElement | null>(null);
 
   async function refreshAll(showLoading = true) {
@@ -682,12 +694,14 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
   useEffect(() => {
     if (!subjectId) return;
     if (!isPublished) return;
-
-    const prev = prevEntryOpenRef.current;
-    if (prev || !entryOpen) {
-      prevEntryOpenRef.current = Boolean(entryOpen);
+    if (!entryOpen) {
+      prevEntryOpenRef.current = false;
       return;
     }
+
+    const prev = prevEntryOpenRef.current;
+    prevEntryOpenRef.current = true;
+    if (prev === true) return;
 
     let mounted = true;
     (async () => {
@@ -698,23 +712,27 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
         const draftSheet = (d as any)?.sheet;
         const draftBtls = (d as any)?.selectedBtls;
         if (draftSheet && typeof draftSheet === 'object' && Array.isArray((draftSheet as any).rows)) {
-          setSheet((prevSheet) => ({
-            ...prevSheet,
-            termLabel: String((draftSheet as any).termLabel || masterTermLabel || 'KRCT AY25-26'),
-            batchLabel: subjectId,
-            rows: (draftSheet as any).rows,
-            markManagerSnapshot: (draftSheet as any)?.markManagerSnapshot ?? prevSheet.markManagerSnapshot ?? null,
-            markManagerApprovalUntil: (draftSheet as any)?.markManagerApprovalUntil ?? prevSheet.markManagerApprovalUntil ?? null,
-            markManagerLocked:
-              typeof (draftSheet as any)?.markManagerLocked === 'boolean'
-                ? (draftSheet as any).markManagerLocked
-                : Boolean((draftSheet as any)?.markManagerSnapshot ?? prevSheet.markManagerSnapshot),
-          }));
+          const hasMarks = (draftSheet as any).rows.some((r: any) => r?.total !== '' && r?.total != null);
+          if (hasMarks) {
+            setSheet((prevSheet) => ({
+              ...prevSheet,
+              termLabel: String((draftSheet as any).termLabel || masterTermLabel || 'KRCT AY25-26'),
+              batchLabel: subjectId,
+              rows: (draftSheet as any).rows,
+              markManagerSnapshot: (draftSheet as any)?.markManagerSnapshot ?? prevSheet.markManagerSnapshot ?? null,
+              markManagerApprovalUntil: (draftSheet as any)?.markManagerApprovalUntil ?? prevSheet.markManagerApprovalUntil ?? null,
+              markManagerLocked:
+                typeof (draftSheet as any)?.markManagerLocked === 'boolean'
+                  ? (draftSheet as any).markManagerLocked
+                  : Boolean((draftSheet as any)?.markManagerSnapshot ?? prevSheet.markManagerSnapshot),
+            }));
+            if (Array.isArray(draftBtls)) {
+              setSelectedBtls(draftBtls.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n)));
+            }
+            draftLoadedRef.current = true;
+            return;
+          }
         }
-        if (Array.isArray(draftBtls)) {
-          setSelectedBtls(draftBtls.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n)));
-        }
-        return;
       } catch {
         // ignore
       }
@@ -723,7 +741,6 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
       refreshPublishedSnapshot(false);
     })();
 
-    prevEntryOpenRef.current = Boolean(entryOpen);
     return () => {
       mounted = false;
     };
@@ -1443,8 +1460,8 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
           <div className="obe-table-wrapper" style={{ overflowX: 'auto' }}>
               <PublishLockOverlay
                 locked={Boolean(globalLocked || publishedEditLocked || (isPublished && lockStatusUnknown))}
-                title={globalLocked ? 'Locked by IQAC' : displayPublishedLocked ? 'Published — Locked' : 'Table Locked'}
-                subtitle={globalLocked ? 'Publishing is turned OFF globally for this assessment.' : displayPublishedLocked ? 'Marks are published. Request IQAC approval to edit.' : 'Confirm the Mark Manager'}
+                title={globalLocked ? 'Locked by IQAC' : publishedEditLocked ? 'Published — Locked' : 'Table Locked'}
+                subtitle={globalLocked ? 'Publishing is turned OFF globally for this assessment.' : publishedEditLocked ? 'Marks are published. Request IQAC approval to edit.' : 'Confirm the Mark Manager'}
               >
                 <table className="ssa-modern-table" style={{ borderCollapse: 'separate', borderSpacing: 0, width: '100%', minWidth: 920 }}>
           <thead>
@@ -1628,7 +1645,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
                 }}
               >
                 <div style={{ textAlign: 'center' }}>
-                  {displayPublishedLocked ? (
+                  {publishedEditLocked ? (
                     <>
                       <div style={{ fontWeight: 900, color: '#065f46' }}>Published</div>
                       <div style={{ fontSize: 13, color: '#065f46' }}>Marks are locked. Request IQAC approval to edit.</div>
@@ -1661,14 +1678,14 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
             }}
           >
             <div style={{ display: 'grid', placeItems: 'center', padding: 40 }}>
-              <div style={{ fontWeight: 800, fontSize: 16, marginTop: 8 }}>{displayPublishedLocked && showNameList ? 'Published — Locked' : 'Table Locked'}</div>
+              <div style={{ fontWeight: 800, fontSize: 16, marginTop: 8 }}>{publishedEditLocked ? 'Published — Locked' : 'Table Locked'}</div>
               <div style={{ color: '#6b7280', marginTop: 6 }}>
-                {displayPublishedLocked && showNameList
+                {publishedEditLocked
                   ? 'Marks published. Use View to inspect or Request Edit to ask IQAC for edit access.'
                   : 'Confirm the Mark Manager to unlock the student list.'}
               </div>
               <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-                {displayPublishedLocked && showNameList ? (
+                {publishedEditLocked ? (
                   <>
                     <button className="obe-btn" onClick={() => setViewMarksModalOpen(true)}>
                       View

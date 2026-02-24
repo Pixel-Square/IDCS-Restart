@@ -275,6 +275,8 @@ class LabPublishedSheet(models.Model):
         ('model', 'MODEL LAB'),
         ('formative1', 'Lab 1 (Formative1)'),
         ('formative2', 'Lab 2 (Formative2)'),
+        ('review1', 'Review 1 (Lab-style)'),
+        ('review2', 'Review 2 (Lab-style)'),
     )
 
     subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='lab_published_sheets')

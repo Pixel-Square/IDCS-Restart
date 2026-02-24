@@ -25,8 +25,6 @@ import PublishLockOverlay from './PublishLockOverlay';
 import AssessmentContainer from './AssessmentContainer';
 import { ModalPortal } from './ModalPortal';
 
-// Vite-friendly asset URL for lock GIF used in the floating panel
-const lockPanelGif = new URL('https://static.vecteezy.com/system/resources/thumbnails/014/585/778/small/gold-locked-padlock-png.png', import.meta.url).href;
 
 type Student = {
   id: number;
@@ -93,6 +91,7 @@ type Props = {
   allCos?: number[];
   showCia1Embed?: boolean;
   cia1Embed?: React.ReactNode;
+  tcprMode?: boolean;
 };
 
 const DEFAULT_EXPERIMENTS = 5;
@@ -294,6 +293,7 @@ export default function LabEntry({
   const [savingDraft, setSavingDraft] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [savedBy, setSavedBy] = useState<string | null>(null);
+  const draftLoadedRef = React.useRef(false);
   const [publishing, setPublishing] = useState(false);
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
   const [publishedEditModalOpen, setPublishedEditModalOpen] = useState(false);
@@ -368,6 +368,17 @@ export default function LabEntry({
   const entryOpen = markLock?.exists ? Boolean(markLock?.entry_open) : true;
   const publishedEditLocked = Boolean(isPublished && !entryOpen);
 
+  // Restore publishedAt from backend when markLock indicates the table was published
+  useEffect(() => {
+    if (markLock?.is_published && markLock?.updated_at && !publishedAt) {
+      try {
+        setPublishedAt(new Date(String(markLock.updated_at)).toLocaleString());
+      } catch {
+        setPublishedAt(String(markLock.updated_at));
+      }
+    }
+  }, [markLock?.is_published, markLock?.updated_at]);
+
   const {
     pending: markEntryReqPending,
     pendingUntilMs: markEntryReqPendingUntilMs,
@@ -413,6 +424,7 @@ export default function LabEntry({
   // Load draft from backend
   useEffect(() => {
     let mounted = true;
+    draftLoadedRef.current = false;
     (async () => {
       if (!subjectId) return;
       try {
@@ -484,6 +496,33 @@ export default function LabEntry({
           if (updatedBy) {
             setSavedBy(String(updatedBy.name || updatedBy.username || updatedBy.id || ''));
           }
+
+          // If the saved draft has no actual marks but we have a published snapshot, prefer the snapshot.
+          // This handles the case where autosave saved an empty draft after publish.
+          const hasAnyMarks = Object.values(normalizedRows).some((row: LabRowState) => {
+            const aHas = row.marksA?.some((v) => v !== '' && v != null);
+            const bHas = row.marksB?.some((v) => v !== '' && v != null);
+            return aHas || bHas || (row.ciaExam !== '' && row.ciaExam != null);
+          });
+          if (!hasAnyMarks && Object.keys(normalizedRows).length > 0) {
+            // Draft has students but no marks — try to restore from published snapshot
+            try {
+              const pubResp = await fetchPublishedLabSheet(assessmentKey as any, String(subjectId), teachingAssignmentId);
+              const pubData = (pubResp as any)?.data ?? null;
+              if (mounted && pubData && typeof pubData === 'object' && (pubData as any).sheet) {
+                const pubSheet = (pubData as any).sheet;
+                const pubRows = pubSheet.rowsByStudentId && typeof pubSheet.rowsByStudentId === 'object' ? pubSheet.rowsByStudentId : {};
+                const pubHasMarks = Object.values(pubRows).some((row: any) => {
+                  return row?.marksA?.some((v: any) => v !== '' && v != null) || row?.marksB?.some((v: any) => v !== '' && v != null) || (row?.ciaExam !== '' && row?.ciaExam != null);
+                });
+                if (pubHasMarks) {
+                  setDraft(pubData as LabDraftPayload);
+                }
+              }
+            } catch {
+              // ignore — keep empty draft
+            }
+          }
         } else {
           // fallback to localStorage
           const stored = key ? (lsGet<any>(key) as any) : null;
@@ -496,6 +535,7 @@ export default function LabEntry({
       } catch {
         // ignore
       }
+      if (mounted) draftLoadedRef.current = true;
     })();
     return () => {
       mounted = false;
@@ -635,8 +675,11 @@ export default function LabEntry({
   ]);
 
   // Autosave draft to backend (debounced)
+  // Guard: do not autosave until the initial draft has been loaded from the backend
+  // to prevent overwriting real marks with an empty initial draft.
   useEffect(() => {
     if (!subjectId) return;
+    if (!draftLoadedRef.current) return;
     let cancelled = false;
     const tid = setTimeout(async () => {
       try {
@@ -987,9 +1030,6 @@ export default function LabEntry({
       return;
     }
 
-    // After publish, keep the table locked (no edits) until IQAC approval.
-    if (publishedAt) return;
-
     setPublishing(true);
     try {
       await publishLabSheet(assessmentKey, subjectId, draft, teachingAssignmentId);
@@ -1053,43 +1093,58 @@ export default function LabEntry({
     refreshPublishedSnapshot(false);
   }, [subjectId, assessmentKey]);
 
-  const prevEntryOpenRef = React.useRef<boolean>(Boolean(entryOpen));
+  const prevEntryOpenRef = React.useRef<boolean | null>(null);
   useEffect(() => {
-    // When IQAC opens MARK_ENTRY edits, re-hydrate the editable draft so the table
-    // shows existing marks (prefer last saved draft; fall back to the published snapshot).
+    // When IQAC opens MARK_ENTRY edits (transition or initial load),
+    // re-hydrate the editable draft so the table shows existing marks
+    // (prefer last saved draft; fall back to the published snapshot).
     if (!subjectId) return;
     if (!isPublished) return;
-
-    const prev = prevEntryOpenRef.current;
-    if (prev || !entryOpen) {
-      prevEntryOpenRef.current = Boolean(entryOpen);
+    if (!entryOpen) {
+      prevEntryOpenRef.current = false;
       return;
     }
+
+    // Skip if entry was already open (no transition)
+    const prev = prevEntryOpenRef.current;
+    prevEntryOpenRef.current = true;
+    if (prev === true) return;
 
     let mounted = true;
     (async () => {
       try {
         const resp = await fetchDraft(assessmentKey as any, String(subjectId), teachingAssignmentId);
-        const data = (resp as any)?.data ?? null;
+        const d = (resp as any)?.draft ?? null;
         if (!mounted) return;
-        if (data && typeof data === 'object' && (data as any).sheet) {
-          setDraft(data as LabDraftPayload);
-          return;
+        if (d && typeof d === 'object' && (d as any).sheet) {
+          // Check if the draft has actual marks
+          const rows = (d as any).sheet?.rowsByStudentId;
+          const hasMarks = rows && Object.values(rows).some((row: any) =>
+            row?.marksA?.some((v: any) => v !== '' && v != null) ||
+            row?.marksB?.some((v: any) => v !== '' && v != null) ||
+            (row?.ciaExam !== '' && row?.ciaExam != null)
+          );
+          if (hasMarks) {
+            setDraft(d as LabDraftPayload);
+            draftLoadedRef.current = true;
+            return;
+          }
         }
       } catch {
         // ignore and fall back
       }
       if (!mounted) return;
+      // Fall back to published snapshot
       if (publishedViewSnapshot && (publishedViewSnapshot as any).sheet) {
         setDraft(publishedViewSnapshot);
+        draftLoadedRef.current = true;
       }
     })();
 
-    prevEntryOpenRef.current = Boolean(entryOpen);
     return () => {
       mounted = false;
     };
-  }, [entryOpen, isPublished, subjectId, assessmentKey, publishedViewSnapshot]);
+  }, [entryOpen, isPublished, subjectId, assessmentKey, publishedViewSnapshot, teachingAssignmentId]);
 
   useEffect(() => {
     // While locked after publish, periodically check if IQAC updated the lock row.
@@ -1474,6 +1529,7 @@ export default function LabEntry({
                 <th style={cellTh} rowSpan={5}>
                   <div>Total</div>
                   <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 900 }}>{ciaExamEnabled ? 'CIA exam' : 'Avg'}</div>
+                  {ciaExamEnabled && <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 900 }}>{DEFAULT_CIA_EXAM_MAX}</div>}
                 </th>
                 <th style={cellTh} colSpan={coAttainmentCols}>CO ATTAINMENT</th>
                 {visibleBtlIndices.length ? <th style={cellTh} colSpan={visibleBtlIndices.length * 2}>BTL ATTAINMENT</th> : null}
@@ -1769,7 +1825,7 @@ export default function LabEntry({
               ) : null}
 
               {/* Floating panel when blocked by Mark Manager */}
-              {!markManagerLocked ? (
+              {!markManagerLocked && !publishedEditLocked ? (
                 <div style={floatingPanelStyle}>
                   <div style={{ width: 100, height: 72, display: 'grid', placeItems: 'center', background: '#fff', borderRadius: 8 }}>
                     <img
@@ -1820,24 +1876,16 @@ export default function LabEntry({
 
                   <div
                     style={{
-                      width: 170,
-                      height: 92,
+                      width: 64,
+                      height: 64,
                       display: 'grid',
                       placeItems: 'center',
-                      background: '#fff',
-                      borderRadius: 10,
-                      border: '1px solid rgba(2,6,23,0.08)',
                     }}
                   >
-                    <img
-                      src={new URL('../../assets/gif/lockong.png', import.meta.url).toString()}
-                      alt="locked"
-                      style={{ maxWidth: 150, maxHeight: 80, display: 'block' }}
-                      onError={(e) => {
-                        (e.currentTarget as HTMLImageElement).onerror = null;
-                        (e.currentTarget as HTMLImageElement).src = lockPanelGif;
-                      }}
-                    />
+                    <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#065f46" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="11" width="18" height="11" rx="2" ry="2" fill="#d1fae5" />
+                      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                    </svg>
                   </div>
                 </div>
               ) : null}
