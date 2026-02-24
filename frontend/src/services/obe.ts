@@ -576,7 +576,8 @@ function normalizeQpPattern(raw: any): QpPatternConfig {
 
 export async function fetchIqacQpPattern(params: { class_type: string; question_paper_type?: string | null; exam: QpPatternExam }): Promise<QpPatternResponse> {
   const qpParts: string[] = [];
-  qpParts.push(`class_type=${encodeURIComponent(String(params.class_type || '').trim())}`);
+  const ct = String(params.class_type || '').trim();
+  if (ct) qpParts.push(`class_type=${encodeURIComponent(ct)}`);
   if (params.question_paper_type) qpParts.push(`question_paper_type=${encodeURIComponent(String(params.question_paper_type || '').trim())}`);
   qpParts.push(`exam=${encodeURIComponent(String(params.exam || '').trim())}`);
   const qp = qpParts.length ? `?${qpParts.join('&')}` : '';

@@ -1,5 +1,5 @@
 import React from 'react';
-import C1CQIPage from './C1CQIPage';
+import C1CQIPage from './cdap/C1CQIPage';
 
 type Props = {
   courseId: string;

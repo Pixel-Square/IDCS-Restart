@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import DashboardLayout from '../../components/DashboardLayout';
+import DashboardLayout from '../../components/layout/DashboardLayout';
 import { Bell, Save, Plus, X } from 'lucide-react';
 
 import { fetchNotificationTemplates, saveNotificationTemplates, type NotificationTemplate as ApiTemplate } from '../../services/notifications';

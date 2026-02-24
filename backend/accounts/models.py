@@ -245,3 +245,44 @@ class NotificationTemplate(models.Model):
 
     def __str__(self):
         return self.code
+
+
+class UserQuery(models.Model):
+    """User queries, doubts, errors, and bug reports.
+    
+    Available to all users without permission requirements.
+    """
+    
+    STATUS_CHOICES = [
+        ('SENT', 'Sent'),
+        ('VIEWED', 'Viewed'),
+        ('REVIEWED', 'Reviewed'),
+        ('PENDING', 'Pending'),
+        ('IN_PROGRESS', 'In Progress'),
+        ('FIXED', 'Fixed'),
+        ('LATER', 'Later'),
+        ('CLOSED', 'Closed'),
+    ]
+    
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='queries'
+    )
+    query_text = models.TextField(help_text='Query, doubt, error, or bug description')
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='SENT'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    admin_notes = models.TextField(blank=True, default='', help_text='Response or notes from admin (visible to user)')
+    
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'User Query'
+        verbose_name_plural = 'User Queries'
+    
+    def __str__(self):
+        return f"{self.user.username} - {self.status} - {self.created_at.strftime('%Y-%m-%d')}"

@@ -426,10 +426,41 @@ class SectionAdvisorViewSet(viewsets.ModelViewSet):
                 existing = SectionAdvisor.objects.filter(section_id=sec_id, academic_year_id=ay_id, is_active=True).first()
                 if existing:
                     # update advisor and return existing
+                    try:
+                        old_advisor = getattr(existing, 'advisor', None)
+                        old_advisor_id = getattr(old_advisor, 'id', None)
+                    except Exception:
+                        old_advisor = None
+                        old_advisor_id = None
+
                     existing.advisor_id = int(advisor_id)
                     if 'is_active' in data:
                         existing.is_active = bool(data.get('is_active'))
                     existing.save()
+
+                    # If the advisor changed, attempt to remove ADVISOR role from the previous advisor
+                    try:
+                        if old_advisor_id and int(advisor_id) != int(old_advisor_id):
+                            from accounts.models import Role
+                            # reload the old advisor instance to be safe
+                            old_sp = StaffProfile.objects.filter(pk=old_advisor_id).select_related('user').first()
+                            if old_sp:
+                                old_user = getattr(old_sp, 'user', None)
+                                if old_user:
+                                    role_obj = Role.objects.filter(name='ADVISOR').first()
+                                    if role_obj and role_obj in old_user.roles.all():
+                                        # Check if old advisor has any other active SectionAdvisor mappings
+                                        other_active = SectionAdvisor.objects.filter(advisor=old_sp, is_active=True).exclude(pk=existing.pk).exists()
+                                        if not other_active:
+                                            try:
+                                                old_user.roles.remove(role_obj)
+                                            except Exception:
+                                                # Don't raise from role removal; signal handlers or validations may prevent removal
+                                                pass
+                    except Exception:
+                        # best-effort only; never fail the API because role-sync failed
+                        pass
+
                     serializer = self.get_serializer(existing)
                     return Response(serializer.data, status=status.HTTP_200_OK)
 

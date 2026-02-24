@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'react-router-dom';
-import OBEPage from './OBEPage';
-import OBEMasterPage from './OBEMasterPage';
-import OBEDueDatesPage from './OBEDueDatesPage';
+import OBEPage from './obe/OBEPage';
+import OBEMasterPage from './obe/OBEMasterPage';
+import OBEDueDatesPage from './obe/OBEDueDatesPage';
 
 export default function AcademicPage(): JSX.Element {
   const location = useLocation();

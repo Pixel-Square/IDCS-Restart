@@ -1,12 +1,12 @@
 import React from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import CDAPPage from './CDAPPage';
-import ArticulationMatrixPage from './ArticulationMatrixPage';
+import CDAPPage from './lca/CDAPPage';
+import ArticulationMatrixPage from './lca/ArticulationMatrixPage';
 import MarkEntryPage from './MarkEntryPage';
-import LCAInstructionsPage from './LCAInstructionsPage';
+import LCAInstructionsPage from './lca/LCAInstructionsPage';
 import COAttainmentPage from './COAttainmentPage';
 import CQIPage from './CQIPage';
-import LCAPage from './LCAPage';
+import LCAPage from './lca/LCAPage';
 import InternalMarkCoursePage from './InternalMarkCoursePage';
 import { fetchMyTeachingAssignments } from '../services/obe';
 import { fetchDeptRows, fetchElectives } from '../services/curriculum';

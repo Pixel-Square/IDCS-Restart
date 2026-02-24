@@ -12,7 +12,7 @@ import { useEditWindow } from '../hooks/useEditWindow';
 import { useEditRequestPending } from '../hooks/useEditRequestPending';
 import { useLockBodyScroll } from '../hooks/useLockBodyScroll';
 import { ModalPortal } from './ModalPortal';
-import AssessmentContainer from './AssessmentContainer';
+import AssessmentContainer from './containers/AssessmentContainer';
 
 type Props = {
   subjectId: string;

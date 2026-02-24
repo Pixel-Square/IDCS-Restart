@@ -17,7 +17,7 @@ import Ssa2Entry from './Ssa2Entry';
 import Ssa1SheetEntry from './Ssa1SheetEntry';
 import Ssa2SheetEntry from './Ssa2SheetEntry';
 import CQIEntry from '../pages/staff/CQIEntry';
-import DashboardWidgets from './DashboardWidgets';
+import DashboardWidgets from './layout/DashboardWidgets';
 import { DraftAssessmentKey, DueAssessmentKey, fetchMyTeachingAssignments, fetchPublishWindow, iqacResetAssessment, TeachingAssignmentItem } from '../services/obe';
 import * as OBE from '../services/obe';
 import FacultyAssessmentPanel from './FacultyAssessmentPanel';

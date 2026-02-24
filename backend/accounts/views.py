@@ -2,7 +2,15 @@ from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.contrib.auth import get_user_model
-from .serializers import UserSerializer, RegisterSerializer, MeSerializer, IdentifierTokenObtainPairSerializer, NotificationTemplateSerializer
+from .serializers import (
+    UserSerializer, 
+    RegisterSerializer, 
+    MeSerializer, 
+    IdentifierTokenObtainPairSerializer, 
+    NotificationTemplateSerializer,
+    UserQuerySerializer,
+    UserQueryListSerializer,
+)
 from rest_framework_simplejwt.views import TokenObtainPairView
 from django.utils import timezone
 from datetime import timedelta
@@ -10,7 +18,7 @@ import re
 import logging
 from django.conf import settings
 
-from .models import MobileOtp, NotificationTemplate
+from .models import MobileOtp, NotificationTemplate, UserQuery
 from .services.sms import send_sms, send_whatsapp, verify_otp
 from .permissions_api import HasPermissionCode
 
@@ -356,3 +364,77 @@ class MobileRemoveView(APIView):
         # Return updated me payload
         serializer = MeSerializer(request.user)
         return Response({'ok': True, 'me': serializer.data})
+
+
+class UserQueryListCreateView(APIView):
+    """List all queries for the current user or create a new query."""
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request):
+        """Get all queries for the current user."""
+        queries = UserQuery.objects.filter(user=request.user).order_by('-created_at')
+        serializer = UserQueryListSerializer(queries, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        """Create a new query."""
+        serializer = UserQuerySerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class UserQueryDetailView(APIView):
+    """Retrieve a specific query by ID."""
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request, pk):
+        """Get a specific query for the current user."""
+        try:
+            query = UserQuery.objects.get(pk=pk, user=request.user)
+            serializer = UserQuerySerializer(query)
+            return Response(serializer.data)
+        except UserQuery.DoesNotExist:
+            return Response({'detail': 'Query not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+
+class AllQueriesListView(APIView):
+    """List all queries from all users - for admin/receivers only."""
+    permission_classes = (permissions.IsAuthenticated, HasPermissionCode)
+    required_permission_code = 'queries.manage'
+
+    def get(self, request):
+        """Get all queries with optional status filter."""
+        status_filter = request.GET.get('status')
+        queries = UserQuery.objects.select_related('user').all()
+        
+        if status_filter:
+            queries = queries.filter(status=status_filter)
+        
+        queries = queries.order_by('-created_at')
+        serializer = UserQuerySerializer(queries, many=True)
+        return Response(serializer.data)
+
+
+class QueryUpdateView(APIView):
+    """Update query status and admin notes - for admin/receivers only."""
+    permission_classes = (permissions.IsAuthenticated, HasPermissionCode)
+    required_permission_code = 'queries.manage'
+
+    def patch(self, request, pk):
+        """Update query status and/or admin notes."""
+        try:
+            query = UserQuery.objects.get(pk=pk)
+        except UserQuery.DoesNotExist:
+            return Response({'detail': 'Query not found.'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Update allowed fields
+        if 'status' in request.data:
+            query.status = request.data['status']
+        if 'admin_notes' in request.data:
+            query.admin_notes = request.data['admin_notes']
+        
+        query.save()
+        serializer = UserQuerySerializer(query)
+        return Response(serializer.data)

@@ -24,7 +24,7 @@ import { ensureMobileVerified } from '../services/auth';
 import { useMarkTableLock } from '../hooks/useMarkTableLock';
 import { usePublishWindow } from '../hooks/usePublishWindow';
 import PublishLockOverlay from './PublishLockOverlay';
-import AssessmentContainer from './AssessmentContainer';
+import AssessmentContainer from './containers/AssessmentContainer';
 import { ModalPortal } from './ModalPortal';
 import { fetchDeptRows, fetchMasters } from '../services/curriculum';
 import { isLabClassType, normalizeClassType } from '../constants/classTypes';

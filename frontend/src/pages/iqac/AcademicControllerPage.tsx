@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import OBEDueDatesPage from '../OBEDueDatesPage';
+import OBEDueDatesPage from '../obe/OBEDueDatesPage';
 import AcademicControllerCoursesPage from './AcademicControllerCoursesPage';
 import AcademicControllerQPPage from './AcademicControllerQPPage';
 import AcademicControllerWeightsPage from './AcademicControllerWeightsPage';

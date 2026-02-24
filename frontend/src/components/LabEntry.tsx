@@ -22,7 +22,7 @@ import { useMarkTableLock } from '../hooks/useMarkTableLock';
 import { useEditRequestPending } from '../hooks/useEditRequestPending';
 import { useLockBodyScroll } from '../hooks/useLockBodyScroll';
 import PublishLockOverlay from './PublishLockOverlay';
-import AssessmentContainer from './AssessmentContainer';
+import AssessmentContainer from './containers/AssessmentContainer';
 import { ModalPortal } from './ModalPortal';
 
 

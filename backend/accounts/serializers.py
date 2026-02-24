@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from .models import Role, UserRole, Permission, RolePermission, NotificationTemplate
+from .models import Role, UserRole, Permission, RolePermission, NotificationTemplate, UserQuery
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from typing import Optional
@@ -167,6 +167,35 @@ class NotificationTemplateSerializer(serializers.ModelSerializer):
     class Meta:
         model = NotificationTemplate
         fields = ('code', 'name', 'template', 'enabled', 'expiry_minutes', 'updated_at')
+
+
+class UserQuerySerializer(serializers.ModelSerializer):
+    """Serializer for user queries, doubts, errors, and bug reports."""
+    username = serializers.CharField(source='user.username', read_only=True)
+    
+    class Meta:
+        model = UserQuery
+        fields = ('id', 'user', 'username', 'query_text', 'status', 'created_at', 'updated_at', 'admin_notes')
+        read_only_fields = ('id', 'user', 'username', 'created_at', 'updated_at', 'admin_notes', 'status')
+    
+    def create(self, validated_data):
+        # Set the user from context
+        validated_data['user'] = self.context['request'].user
+        return super().create(validated_data)
+
+
+class UserQueryListSerializer(serializers.ModelSerializer):
+    """Minimal serializer for listing queries."""
+    username = serializers.CharField(source='user.username', read_only=True)
+    query_preview = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = UserQuery
+        fields = ('id', 'username', 'query_preview', 'status', 'admin_notes', 'created_at', 'updated_at')
+    
+    def get_query_preview(self, obj):
+        """Return first 100 characters of query text."""
+        return obj.query_text[:100] + '...' if len(obj.query_text) > 100 else obj.query_text
 
 
 class IdentifierTokenObtainPairSerializer(serializers.Serializer):

@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 from django.utils.html import format_html
-from .models import User, Role, UserRole, Permission, RolePermission
+from .models import User, Role, UserRole, Permission, RolePermission, UserQuery
 from academics.models import StudentProfile, StaffProfile, Section, Department
 from django import forms
 from django.core.exceptions import ValidationError
@@ -580,3 +580,23 @@ class PermissionAdmin(admin.ModelAdmin):
 @admin.register(RolePermission)
 class RolePermissionAdmin(admin.ModelAdmin):
     list_display = ('role', 'permission')
+
+
+@admin.register(UserQuery)
+class UserQueryAdmin(admin.ModelAdmin):
+    list_display = ('id', 'user', 'status', 'created_at', 'updated_at', 'query_preview')
+    list_filter = ('status', 'created_at', 'updated_at')
+    search_fields = ('user__username', 'user__email', 'query_text')
+    readonly_fields = ('user', 'query_text', 'created_at', 'updated_at')
+    fields = ('user', 'query_text', 'status', 'admin_notes', 'created_at', 'updated_at')
+    ordering = ('-created_at',)
+    
+    def query_preview(self, obj):
+        """Show a preview of the query text in the list view."""
+        preview = obj.query_text[:100] + '...' if len(obj.query_text) > 100 else obj.query_text
+        return preview
+    query_preview.short_description = 'Query Preview'
+    
+    def has_add_permission(self, request):
+        """Prevent adding queries from admin - they should be created by users via API."""
+        return False

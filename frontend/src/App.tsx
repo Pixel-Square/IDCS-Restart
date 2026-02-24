@@ -1,9 +1,9 @@
 ﻿import React, { useEffect, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { getMe } from "./services/auth";
-import Navbar from "./components/Navbar";
-import DashboardSidebar from './components/DashboardSidebar';
-import { useSidebar } from './components/SidebarContext';
+import Navbar from "./components/navigation/Navbar";
+import DashboardSidebar from './components/layout/DashboardSidebar';
+import { useSidebar } from './components/layout/SidebarContext';
 import TimetableEditor from './pages/advisor/TimetableEditor';
 import HodTimetableEditor from './pages/iqac/TimetableEditor';
 import ObeRequestsPage from './pages/iqac/ObeRequestsPage';
@@ -12,23 +12,23 @@ import AcademicControllerCoursePage from './pages/iqac/AcademicControllerCourseP
 import AcademicControllerCourseMarksPage from './pages/iqac/AcademicControllerCourseMarksPage';
 import AcademicControllerCourseOBEPage from './pages/iqac/AcademicControllerCourseOBEPage';
 import InternalMarkPage from './pages/iqac/InternalMarkPage';
-import OBERequestsPage from './pages/OBERequestsPage';
-import OBEDueDatesPage from './pages/OBEDueDatesPage';
+import OBERequestsPage from './pages/obe/OBERequestsPage';
+import OBEDueDatesPage from './pages/obe/OBEDueDatesPage';
 import ProtectedRoute from './components/ProtectedRoute';
-import HomePage from "./components/HomePage";
-import DashboardPage from "./pages/Dashboard";
-import ProfilePage from "./pages/Profile";
+import HomePage from "./components/containers/HomePage";
+import DashboardPage from "./pages/dashboard/Dashboard";
+import ProfilePage from "./pages/profile/Profile";
 import MasterList from './pages/curriculum/MasterList';
 import MasterEditor from './pages/curriculum/MasterEditor';
 import DeptList from './pages/curriculum/DeptList';
 import ElectiveImport from './pages/curriculum/ElectiveImport';
 import AcademicPage from './pages/AcademicPage';
-import QuestionImportPage from "./pages/QuestionImportPage";
-import OBEPage from './pages/OBEPage';
+import QuestionImportPage from "./pages/tools/QuestionImportPage";
+import OBEPage from './pages/obe/OBEPage';
 import CourseOBEPage from './pages/CourseOBEPage';
-import COTargetPage from './pages/COTargetPage';
+import COTargetPage from './pages/lca/COTargetPage';
 import { useParams } from 'react-router-dom';
-import OBERequestPage from './pages/OBERequestPage';
+import OBERequestPage from './pages/obe/OBERequestPage';
 import AdvisorAssignments from './pages/hod/AdvisorAssignments';
 import TeachingAssignmentsPage from './pages/hod/TeachingAssignments';
 import ObeEditRequestsPage from './pages/hod/ObeEditRequestsPage';
@@ -43,6 +43,7 @@ import StudentAcademics from './pages/student/Academics';
 import MentorAssign from './pages/advisor/MentorAssign';
 import MyMentees from './pages/staff/MyMentees';
 import NotificationsPage from './pages/Notifications';
+import QueriesPage from './pages/queries/QueriesPage';
 
 type RoleObj = { name: string };
 type Me = {
@@ -121,6 +122,7 @@ export default function App() {
                 <Route path="/" element={<Navigate to="/dashboard" replace />} />
                 <Route path="/dashboard" element={<DashboardPage />} />
                 <Route path="/profile" element={<ProfilePage user={user} />} />
+                <Route path="/queries" element={<QueriesPage />} />
                 <Route path="/notifications" element={<NotificationsPage />} />
                 <Route path="/import/questions" element={<QuestionImportPage />} />
                 <Route path="/curriculum/master" element={<MasterList />} />

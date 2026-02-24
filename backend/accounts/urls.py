@@ -1,5 +1,17 @@
 from django.urls import path
-from .views import RegisterView, MeView, CustomTokenObtainPairView, MobileOtpRequestView, MobileOtpVerifyView, MobileRemoveView, NotificationTemplateApiView
+from .views import (
+    RegisterView, 
+    MeView, 
+    CustomTokenObtainPairView, 
+    MobileOtpRequestView, 
+    MobileOtpVerifyView, 
+    MobileRemoveView, 
+    NotificationTemplateApiView,
+    UserQueryListCreateView,
+    UserQueryDetailView,
+    AllQueriesListView,
+    QueryUpdateView,
+)
 from rest_framework_simplejwt.views import TokenRefreshView
 from .api.dashboard import DashboardView
 
@@ -13,4 +25,8 @@ urlpatterns = [
     path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('dashboard/', DashboardView.as_view(), name='dashboard'),
     path('notification-templates/', NotificationTemplateApiView.as_view(), name='notification_templates'),
+    path('queries/', UserQueryListCreateView.as_view(), name='user_queries'),
+    path('queries/<int:pk>/', UserQueryDetailView.as_view(), name='user_query_detail'),
+    path('queries/all/', AllQueriesListView.as_view(), name='all_queries'),
+    path('queries/<int:pk>/update/', QueryUpdateView.as_view(), name='query_update'),
 ]

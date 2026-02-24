@@ -1,7 +1,7 @@
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import fetchWithAuth from '../services/fetchAuth';
-import logoUrl from '../../assets/logo.jpg';
+import logoUrl from '../assets/idcs-logo.png';
 
 const DEFAULT_COLLEGE_NAME = 'K RAMAKRISHNAN COLLEGE OF TECHNOLOGY, Autonomous';
 
