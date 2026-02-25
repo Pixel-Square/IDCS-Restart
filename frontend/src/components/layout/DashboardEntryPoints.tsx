@@ -1,7 +1,32 @@
 import React from 'react';
 import { User, BookOpen, GraduationCap, Calendar } from 'lucide-react';
 
-export default function DashboardEntryPoints() {
+interface DashboardEntryPointsProps {
+  user?: { username: string; profile_type?: string; profile?: any } | null;
+}
+
+export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps) {
+  const username = user?.username || 'User';
+  
+  // Get designation based on profile type
+  const getDesignation = () => {
+    if (!user) return 'Welcome to the dashboard.';
+    
+    const profileType = (user.profile_type || '').toUpperCase();
+    
+    if (profileType === 'STAFF' && user.profile?.designation) {
+      return user.profile.designation;
+    }
+    
+    if (profileType === 'STUDENT') {
+      return 'Student';
+    }
+    
+    return 'Welcome to the dashboard.';
+  };
+  
+  const designation = getDesignation();
+  
   return (
     <div className="space-y-6">
       {/* Welcome Card */}
@@ -11,8 +36,8 @@ export default function DashboardEntryPoints() {
             <User className="w-7 h-7 text-white" />
           </div>
           <div>
-            <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Welcome back</h1>
-            <p className="text-gray-600 mt-1">Welcome to the dashboard.</p>
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Welcome, {username}</h1>
+            <p className="text-gray-600 mt-1">{designation}</p>
           </div>
         </div>
       </div>

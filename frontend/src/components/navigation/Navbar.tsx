@@ -6,7 +6,7 @@ import { Menu, X, LogOut, Home, LogIn } from 'lucide-react';
 import { useSidebar } from '../layout/SidebarContext';
 
 interface NavbarProps {
-  user: { username: string; email?: string } | null;
+  user: { username: string; email?: string; profile_type?: string; profile?: any } | null;
 }
 
 export default function Navbar({ user }: NavbarProps) {
@@ -20,6 +20,25 @@ export default function Navbar({ user }: NavbarProps) {
     logout();
     navigate("/login");
   };
+
+  // Get role-specific ID display
+  const getUserDisplayId = () => {
+    if (!user) return null;
+    
+    const profileType = (user.profile_type || '').toUpperCase();
+    
+    if (profileType === 'STUDENT' && user.profile?.reg_no) {
+      return user.profile.reg_no;
+    }
+    
+    if (profileType === 'STAFF' && user.profile?.staff_id) {
+      return user.profile.staff_id;
+    }
+    
+    return user.username;
+  };
+
+  const displayId = getUserDisplayId();
 
   return (
     <nav className="bg-white shadow-md border-b border-gray-200 fixed top-0 left-0 right-0 z-40 overflow-x-hidden">
@@ -51,14 +70,9 @@ export default function Navbar({ user }: NavbarProps) {
             {user ? (
               <div className="flex items-center gap-4">
                 <div className="hidden sm:block">
-                  <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 rounded-lg">
-                    <div className="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center">
-                      <span className="text-white font-semibold text-sm">
-                        {user.username.charAt(0).toUpperCase()}
-                      </span>
-                    </div>
-                    <span className="text-sm font-medium text-gray-700">{user.username}</span>
-                  </div>
+                 <div className="px-3 py-2 bg-blue-50 rounded-lg">
+                  <span className="text-sm font-medium text-gray-700">{displayId}</span>
+                </div>
                 </div>
                 <button
                   onClick={handleLogout}
