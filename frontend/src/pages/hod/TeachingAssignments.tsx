@@ -59,6 +59,10 @@ export default function TeachingAssignmentsPage(){
   const [loading, setLoading] = useState(true)
   const [editingAssignments, setEditingAssignments] = useState<Set<string>>(new Set())
   const [editingElectives, setEditingElectives] = useState<Set<string>>(new Set())
+  const [isBulkEditMode, setIsBulkEditMode] = useState(false)
+  const [isBulkElectiveEditMode, setIsBulkElectiveEditMode] = useState(false)
+  const [selectedElectiveRegulation, setSelectedElectiveRegulation] = useState<string | null>(null)
+  const [selectedElectiveSemester, setSelectedElectiveSemester] = useState<number | null>(null)
 
   // derive staff list for elective dropdowns: prefer elective-specific filter, else top filter
   const getFilteredStaffForElective = () => {
@@ -72,6 +76,36 @@ export default function TeachingAssignmentsPage(){
   const perms = (() => { try { return JSON.parse(localStorage.getItem('permissions') || '[]') as string[] } catch { return [] } })()
   const canViewElectives = perms.includes('academics.view_elective_teaching')
   const canAssignElectives = perms.includes('academics.assign_elective_teaching')
+
+  // Helper functions for elective filtering
+  const getUniqueElectiveRegulations = () => {
+    const regulations = new Set<string>();
+    electiveParents.forEach(parent => {
+      if (parent.regulation) {
+        regulations.add(parent.regulation);
+      }
+    });
+    return Array.from(regulations).sort();
+  }
+
+  const getUniqueElectiveSemesters = () => {
+    const semesters = new Set<number>();
+    electiveParents.forEach(parent => {
+      if (parent.semester) {
+        semesters.add(parent.semester);
+      }
+    });
+    return Array.from(semesters).sort((a, b) => a - b);
+  }
+
+  const getFilteredElectiveParents = () => {
+    return electiveParents.filter(p => {
+      const deptMatch = !selectedElectiveDept || (p.department && p.department.id === selectedElectiveDept);
+      const regulationMatch = !selectedElectiveRegulation || p.regulation === selectedElectiveRegulation;
+      const semesterMatch = !selectedElectiveSemester || p.semester === selectedElectiveSemester;
+      return deptMatch && regulationMatch && semesterMatch;
+    });
+  }
 
   useEffect(() => { fetchData() }, [])
 
@@ -298,6 +332,190 @@ export default function TeachingAssignmentsPage(){
     }
   }
 
+  // Bulk edit functions
+  const startBulkEditing = () => {
+    const bulkKeys = new Set<string>();
+    sections.forEach(section => {
+      const sectionSubjects = curriculum.filter(c => 
+        (section.semester ? (c.semester === section.semester) : true) &&
+        (section.batch_regulation ? (c.regulation === section.batch_regulation.code) : true) &&
+        !((c as any).is_elective)
+      );
+      sectionSubjects.forEach(subject => {
+        const key = getAssignmentKey(section.id, subject.id);
+        bulkKeys.add(key);
+      });
+    });
+    setEditingAssignments(bulkKeys);
+    setIsBulkEditMode(true);
+  }
+
+  const cancelBulkEditing = () => {
+    setEditingAssignments(new Set());
+    setIsBulkEditMode(false);
+  }
+
+  const saveBulkEditing = async () => {
+    let successCount = 0;
+    let failureCount = 0;
+    
+    try {
+      for (const section of sections) {
+        const sectionSubjects = curriculum.filter(c => 
+          (section.semester ? (c.semester === section.semester) : true) &&
+          (section.batch_regulation ? (c.regulation === section.batch_regulation.code) : true) &&
+          !((c as any).is_elective)
+        );
+
+        for (const subject of sectionSubjects) {
+          const staffSel = document.getElementById(`staff-${section.id}-${subject.id}`) as HTMLSelectElement;
+          if (!staffSel?.value) continue;
+
+          const existingAssignment = findExistingAssignment(section.id, subject.id);
+          
+          try {
+            if (existingAssignment) {
+              const payload = { 
+                staff_id: Number(staffSel.value), 
+                is_active: true 
+              };
+              const res = await fetchWithAuth(`/api/academics/teaching-assignments/${existingAssignment.id}/`, { 
+                method: 'PATCH', 
+                body: JSON.stringify(payload) 
+              });
+              if (res.ok) {
+                successCount++;
+              } else {
+                failureCount++;
+              }
+            } else {
+              const payload = { 
+                section_id: section.id, 
+                staff_id: Number(staffSel.value), 
+                curriculum_row_id: subject.id, 
+                is_active: true 
+              };
+              const res = await fetchWithAuth('/api/academics/teaching-assignments/', { 
+                method: 'POST', 
+                body: JSON.stringify(payload) 
+              });
+              if (res.ok) {
+                successCount++;
+              } else {
+                failureCount++;
+              }
+            }
+          } catch (e) {
+            failureCount++;
+          }
+        }
+      }
+
+      if (successCount > 0 || failureCount === 0) {
+        if (failureCount === 0) {
+          alert(`Successfully updated ${successCount} assignment(s)`);
+        } else {
+          alert(`Updated ${successCount} assignment(s) with ${failureCount} failure(s)`);
+        }
+        setEditingAssignments(new Set());
+        setIsBulkEditMode(false);
+        fetchData();
+      } else {
+        alert('Failed to update assignments');
+      }
+    } catch (error) {
+      console.error('Bulk save error:', error);
+      alert('Error saving bulk assignments');
+    }
+  }
+
+  // Bulk elective edit functions
+  const startBulkElectiveEditing = () => {
+    const bulkElectiveKeys = new Set<string>();
+    getFilteredElectiveParents().forEach(parent => {
+      electiveOptions
+        .filter((e: any) => e.parent === parent.id)
+        .forEach((opt: any) => {
+          const key = getElectiveAssignmentKey(opt.id);
+          bulkElectiveKeys.add(key);
+        });
+    });
+    setEditingElectives(bulkElectiveKeys);
+    setIsBulkElectiveEditMode(true);
+  }
+
+  const cancelBulkElectiveEditing = () => {
+    setEditingElectives(new Set());
+    setIsBulkElectiveEditMode(false);
+  }
+
+  const saveBulkElectiveEditing = async () => {
+    if (!canAssignElectives) {
+      alert('No permission to assign electives');
+      return;
+    }
+
+    let successCount = 0;
+    let failureCount = 0;
+    
+    try {
+      for (const parent of getFilteredElectiveParents()) {
+        const options = electiveOptions.filter((e: any) => e.parent === parent.id);
+        
+        for (const opt of options) {
+          const staffSel = document.getElementById(`elective-staff-${opt.id}`) as HTMLSelectElement;
+          if (!staffSel?.value) continue;
+
+          const existingElectiveAssignment = findExistingElectiveAssignment(opt.id);
+          
+          try {
+            if (existingElectiveAssignment) {
+              const payload = { staff_id: Number(staffSel.value), is_active: true };
+              const res = await fetchWithAuth(`/api/academics/teaching-assignments/${existingElectiveAssignment.id}/`, { 
+                method: 'PATCH', 
+                body: JSON.stringify(payload) 
+              });
+              if (res.ok) {
+                successCount++;
+              } else {
+                failureCount++;
+              }
+            } else {
+              const payload = { elective_subject_id: opt.id, staff_id: Number(staffSel.value), is_active: true };
+              const res = await fetchWithAuth('/api/academics/teaching-assignments/', { 
+                method: 'POST', 
+                body: JSON.stringify(payload) 
+              });
+              if (res.ok) {
+                successCount++;
+              } else {
+                failureCount++;
+              }
+            }
+          } catch (e) {
+            failureCount++;
+          }
+        }
+      }
+
+      if (successCount > 0 || failureCount === 0) {
+        if (failureCount === 0) {
+          alert(`Successfully updated ${successCount} elective assignment(s)`);
+        } else {
+          alert(`Updated ${successCount} elective assignment(s) with ${failureCount} failure(s)`);
+        }
+        setEditingElectives(new Set());
+        setIsBulkElectiveEditMode(false);
+        fetchData();
+      } else {
+        alert('Failed to update elective assignments');
+      }
+    } catch (error) {
+      console.error('Bulk elective save error:', error);
+      alert('Error saving bulk elective assignments');
+    }
+  }
+
   if (loading) return (
     <div style={{ padding: '28px', minHeight: '100vh', background: 'linear-gradient(180deg, #f7fbff 0%, #ffffff 60%)' }}>
       <div style={{ padding: '16px', borderRadius: '8px', background: '#fff', border: '1px solid rgba(15,23,42,0.04)', color: '#6b7280' }}>
@@ -350,9 +568,40 @@ export default function TeachingAssignmentsPage(){
 
         {/* Assignment Table */}
         <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
-          <div className="flex items-center gap-2 mb-4">
-            <BookOpen className="h-5 w-5 text-blue-600" />
-            <h3 className="text-lg font-semibold text-gray-900">Course Assignments</h3>
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-2">
+              <BookOpen className="h-5 w-5 text-blue-600" />
+              <h3 className="text-lg font-semibold text-gray-900">Course Assignments</h3>
+            </div>
+            {!isBulkEditMode ? (
+              <button
+                onClick={startBulkEditing}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium text-sm flex items-center gap-2 border border-blue-600"
+                title="Edit all subjects for the department"
+              >
+                <Edit className="h-4 w-4" />
+                Edit
+              </button>
+            ) : (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={saveBulkEditing}
+                  className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium text-sm flex items-center gap-2 border border-green-600"
+                  title="Save all assignments"
+                >
+                  <Save className="h-4 w-4" />
+                  Save All
+                </button>
+                <button
+                  onClick={cancelBulkEditing}
+                  className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-medium text-sm flex items-center gap-2 border border-red-600"
+                  title="Cancel bulk edit"
+                >
+                  <X className="h-4 w-4" />
+                  Cancel
+                </button>
+              </div>
+            )}
           </div>
           
           {sections.length === 0 ? (
@@ -451,7 +700,7 @@ export default function TeachingAssignmentsPage(){
                                   </td>
                                   <td className="px-4 py-3 text-center">
                                     <div className="flex items-center justify-center gap-2">
-                                      {!editing ? (
+                                      {!editing && !isBulkEditMode ? (
                                         <>
                                           <button 
                                             onClick={() => startEditing(section.id, subject.id)}
@@ -460,9 +709,8 @@ export default function TeachingAssignmentsPage(){
                                           >
                                             <Edit className="h-4 w-4" />
                                           </button>
-                                          {/* external delete removed; deletion available inside edit toolbar */}
                                         </>
-                                      ) : (
+                                      ) : editing && !isBulkEditMode ? (
                                         <>
                                           <button 
                                             onClick={() => {
@@ -518,30 +766,36 @@ export default function TeachingAssignmentsPage(){
                                           >
                                             <Save className="h-4 w-4" />
                                           </button>
-                                          <button 
-                                            onClick={() => cancelEditing(section.id, subject.id)}
-                                            className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors border border-red-300"
-                                            title="Cancel"
-                                          >
-                                            <X className="h-4 w-4" />
-                                          </button>
-                                          {existingAssignment && (
-                                            <button
-                                              onClick={async () => {
-                                                if (!confirm('Delete teaching assignment for this subject/section?')) return
-                                                try {
-                                                  const res = await fetchWithAuth(`/api/academics/teaching-assignments/${existingAssignment.id}/`, { method: 'DELETE' })
-                                                  if (!res.ok) { const txt = await res.text().catch(()=>null); alert('Failed: ' + (txt || res.status)) } else { alert('Deleted'); cancelEditing(section.id, subject.id); fetchData() }
-                                                } catch (e) { console.error(e); alert('Failed to delete') }
-                                              }}
-                                              className="p-2 text-red-700 hover:bg-red-50 rounded-lg transition-colors border border-red-300"
-                                              title="Delete Assignment"
-                                            >
-                                              <Trash2 className="h-4 w-4" />
-                                            </button>
+                                          {!isBulkEditMode && (
+                                            <>
+                                              <button 
+                                                onClick={() => cancelEditing(section.id, subject.id)}
+                                                className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors border border-red-300"
+                                                title="Cancel"
+                                              >
+                                                <X className="h-4 w-4" />
+                                              </button>
+                                              {existingAssignment && (
+                                                <button
+                                                  onClick={async () => {
+                                                    if (!confirm('Delete teaching assignment for this subject/section?')) return
+                                                    try {
+                                                      const res = await fetchWithAuth(`/api/academics/teaching-assignments/${existingAssignment.id}/`, { method: 'DELETE' })
+                                                      if (!res.ok) { const txt = await res.text().catch(()=>null); alert('Failed: ' + (txt || res.status)) } else { alert('Deleted'); cancelEditing(section.id, subject.id); fetchData() }
+                                                    } catch (e) { console.error(e); alert('Failed to delete') }
+                                                  }}
+                                                  className="p-2 text-red-700 hover:bg-red-50 rounded-lg transition-colors border border-red-300"
+                                                  title="Delete Assignment"
+                                                >
+                                                  <Trash2 className="h-4 w-4" />
+                                                </button>
+                                              )}
+                                            </>
                                           )}
                                         </>
-                                      )}
+                                      ) : isBulkEditMode ? (
+                                        <></>
+                                      ) : null}
                                     </div>
                                   </td>
                                 </tr>
@@ -561,7 +815,38 @@ export default function TeachingAssignmentsPage(){
         {/* Elective Subject Assignments */}
         {canViewElectives && (
         <div className="bg-white rounded-lg shadow-sm p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Elective Subject Assignments</h3>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+            <h3 className="text-lg font-semibold text-gray-900">Elective Subject Assignments</h3>
+            {!isBulkElectiveEditMode ? (
+              <button
+                onClick={startBulkElectiveEditing}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium text-sm flex items-center justify-center gap-2 border border-blue-600 whitespace-nowrap"
+                title="Edit all electives"
+              >
+                <Edit className="h-4 w-4" />
+                Edit
+              </button>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={saveBulkElectiveEditing}
+                  className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium text-sm flex items-center gap-2 border border-green-600 whitespace-nowrap"
+                  title="Save all elective assignments"
+                >
+                  <Save className="h-4 w-4" />
+                  Save All
+                </button>
+                <button
+                  onClick={cancelBulkElectiveEditing}
+                  className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-medium text-sm flex items-center gap-2 border border-red-600 whitespace-nowrap"
+                  title="Cancel bulk edit"
+                >
+                  <X className="h-4 w-4" />
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
           
           {/* Department Filter Buttons */}
           {userDepartments.length > 1 && (
@@ -595,14 +880,65 @@ export default function TeachingAssignmentsPage(){
             </div>
           )}
 
+          {/* Regulation and Semester Filters */}
+          <div className="mb-6 flex flex-col md:flex-row md:items-center gap-4">
+            {/* Regulation Filter */}
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-gray-700 whitespace-nowrap">Regulation:</span>
+              <select
+                value={selectedElectiveRegulation || ''}
+                onChange={e => setSelectedElectiveRegulation(e.target.value || null)}
+                className="px-3 py-1.5 border border-gray-300 rounded-lg bg-white text-gray-700 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              >
+                <option value="">All Regulations</option>
+                {getUniqueElectiveRegulations().map(reg => (
+                  <option key={reg} value={reg}>
+                    {reg}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Semester Filter */}
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-gray-700 whitespace-nowrap">Semester:</span>
+              <select
+                value={selectedElectiveSemester || ''}
+                onChange={e => setSelectedElectiveSemester(e.target.value ? Number(e.target.value) : null)}
+                className="px-3 py-1.5 border border-gray-300 rounded-lg bg-white text-gray-700 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              >
+                <option value="">All Semesters</option>
+                {getUniqueElectiveSemesters().map(sem => (
+                  <option key={sem} value={sem}>
+                    Semester {sem}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
           <div className="space-y-4">
-            {electiveParents.filter(p => !selectedElectiveDept || (p.department && p.department.id === selectedElectiveDept)).length === 0 ? (
-              <div className="text-gray-500 text-sm">No elective parents found for the selected department.</div>
+            {getFilteredElectiveParents().length === 0 ? (
+              <div className="text-gray-500 text-sm">No elective parents found for the selected filters.</div>
             ) : (
-              electiveParents.filter(p => !selectedElectiveDept || (p.department && p.department.id === selectedElectiveDept)).map(parent => (
+              getFilteredElectiveParents().map(parent => (
                 <div key={parent.id} className="bg-gray-50 border border-gray-200 rounded-lg p-4">
                   <div className="flex justify-between items-center mb-4">
-                    <div className="font-semibold text-gray-900">{parent.course_name || parent.course_code || 'Elective'}</div>
+                    <div>
+                      <div className="font-semibold text-gray-900">{parent.course_name || parent.course_code || 'Elective'}</div>
+                      <div className="flex items-center gap-3 mt-1">
+                        {parent.regulation && (
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800 border border-indigo-200">
+                            {parent.regulation}
+                          </span>
+                        )}
+                        {parent.semester && (
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 border border-blue-200">
+                            Semester {parent.semester}
+                          </span>
+                        )}
+                      </div>
+                    </div>
                   </div>
                   <div className="space-y-3">
                     {(electiveOptions && electiveOptions.filter((e: any) => e.parent === parent.id)).map((opt: any) => {
@@ -619,11 +955,11 @@ export default function TeachingAssignmentsPage(){
                       });
                       
                       return (
-                        <div key={opt.id} className="flex items-center gap-3 p-3 bg-white rounded-lg border border-gray-200">
+                        <div key={opt.id} className="flex flex-col md:flex-row md:items-center gap-3 p-3 bg-white rounded-lg border border-gray-200">
                           <div className="flex-1 text-sm font-medium text-gray-900">
                             {opt.course_code || '-'} — {opt.course_name || '-'}
                           </div>
-                          <div className="min-w-[200px]">
+                          <div className="w-full md:min-w-[200px] md:w-auto">
                             {editingElective ? (
                               <select 
                                 id={`elective-staff-${opt.id}`}
@@ -643,8 +979,8 @@ export default function TeachingAssignmentsPage(){
                               </div>
                             )}
                           </div>
-                          <div className="flex items-center gap-2">
-                            {!editingElective ? (
+                          <div className="flex items-center gap-2 justify-end md:justify-start">
+                            {!editingElective && !isBulkElectiveEditMode ? (
                               <>
                                 <button 
                                   onClick={() => startEditingElective(opt.id)}
@@ -653,9 +989,8 @@ export default function TeachingAssignmentsPage(){
                                 >
                                   <Edit className="h-4 w-4" />
                                 </button>
-                                {/* external delete removed; deletion available inside edit toolbar */}
                               </>
-                            ) : (
+                            ) : editingElective && !isBulkElectiveEditMode ? (
                               <>
                                 <button 
                                   disabled={!canAssignElectives}
@@ -681,6 +1016,8 @@ export default function TeachingAssignmentsPage(){
                                 >
                                   <Save className="h-4 w-4" />
                                 </button>
+                                {!isBulkElectiveEditMode && (
+                                  <>
                                     <button 
                                       onClick={() => cancelEditingElective(opt.id)}
                                       className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors border border-red-300"
@@ -703,8 +1040,12 @@ export default function TeachingAssignmentsPage(){
                                         <Trash2 className="h-4 w-4" />
                                       </button>
                                     )}
+                                  </>
+                                )}
                               </>
-                            )}
+                            ) : isBulkElectiveEditMode ? (
+                              <></>
+                            ) : null}
                           </div>
                         </div>
                       );
