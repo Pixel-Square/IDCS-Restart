@@ -8,25 +8,18 @@ function shortLabel(item:any){
   if(!item) return ''
   if(typeof item === 'string'){
     const s = item.trim()
-    // Extract first word only for better readability
     const firstWord = s.split(/[\s\-\_]+/)[0]
     return firstWord || s.slice(0, 15) + (s.length > 15 ? '…' : '')
   }
+  
+  // Priority: mnemonic > course_name > course_code
   if(item.mnemonic) return item.mnemonic
+  if(item.course_name) return item.course_name
   if(item.course_code) return item.course_code
-  // Prioritize course_name over course_code for better readability
-  const txt = item.course_name || item.course || item.subject_text || ''
-  const s = String(txt).trim()
-  if(!s) return ''
+  if(item.subject_text) return item.subject_text
+  if(item.course) return item.course
   
-  // Extract first word from course name
-  const words = s.split(/[\s\-\_]+/).filter(w => w.length > 0)
-  if(words.length > 0) {
-    return words[0]
-  }
-  
-  // Fallback: return first 15 characters if no word separation found
-  return s.slice(0, 15) + (s.length > 15 ? '…' : '')
+  return ''
 }
 
 export default function StudentTimetable(){
@@ -35,6 +28,13 @@ export default function StudentTimetable(){
   const [periods, setPeriods] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [studentId, setStudentId] = useState<number | null>(null)
+  // Auto-detect current day: 0=Mon, 1=Tue, ..., 6=Sun
+  const getCurrentDay = () => {
+    const today = new Date()
+    const dow = today.getDay() // 0=Sun, 1=Mon, ..., 6=Sat
+    return dow === 0 ? 6 : dow - 1 // Convert to Mon=0, ..., Sun=6
+  }
+  const [selectedDay, setSelectedDay] = useState(getCurrentDay())
 
   useEffect(()=>{ fetchProfile() }, [])
 
@@ -121,7 +121,8 @@ export default function StudentTimetable(){
               </div>
             </div>
 
-            <div className="overflow-x-auto">
+            {/* Desktop view: Horizontal table */}
+            <div className="hidden md:block overflow-x-auto">
               <table className="w-full">
                 <thead>
                   <tr className="bg-gradient-to-r from-slate-50 to-blue-50 border-b-2 border-gray-200">
@@ -185,7 +186,7 @@ export default function StudentTimetable(){
                                         </div>
                                         <div className="text-xs text-gray-700 mt-1 flex items-center gap-1">
                                           <Users className="h-3 w-3" />
-                                          Staff: {a.staff?.username || '—'}
+                                          {a.staff?.username || '—'}
                                         </div>
                                         {overridden && (
                                           <div className="text-xs text-red-600 mt-1 font-medium">
@@ -225,6 +226,127 @@ export default function StudentTimetable(){
                   ))}
                 </tbody>
               </table>
+            </div>
+
+            {/* Mobile view: Day tabs + Period/Subject columns */}
+            <div className="md:hidden p-4">
+              {/* Day tabs */}
+              <div className="grid grid-cols-7 gap-1 mb-4">
+                {DAYS.map((d, di) => (
+                  <button
+                    key={d}
+                    onClick={() => setSelectedDay(di)}
+                    className={`px-2 py-2 rounded-lg text-xs font-medium transition-colors ${
+                      selectedDay === di
+                        ? 'bg-indigo-600 text-white shadow-md'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    {d}
+                  </button>
+                ))}
+              </div>
+
+              {/* Period/Subject table for selected day */}
+              <div className="border border-gray-200 rounded-lg overflow-hidden">
+                <table className="w-full">
+                  <thead>
+                    <tr className="bg-gradient-to-r from-slate-50 to-blue-50 border-b border-gray-200">
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-indigo-700 w-24">Period</th>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-indigo-700">Subject</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {(() => {
+                      const dayObj = timetable.find(x => x.day === selectedDay + 1) || { assignments: [] }
+                      const nonBreakPeriods = periods.filter((p: any) => !p.is_break && !p.is_lunch)
+                      
+                      return nonBreakPeriods.map((p: any) => {
+                        const assignments = (dayObj.assignments || []).filter((x: any) => x.period_id === p.id)
+                        const hasSpecial = assignments.some((x: any) => x.is_special)
+                        
+                        return (
+                          <tr key={p.id} className="hover:bg-gray-50">
+                            <td className="px-3 py-3 align-top">
+                              <div className="text-xs font-semibold text-gray-900">
+                                {p.label || `P${p.index}`}
+                              </div>
+                              {(p.start_time || p.end_time) && (
+                                <div className="text-xs text-gray-500 mt-0.5">
+                                  {p.start_time}{p.start_time && p.end_time ? '–' : ''}{p.end_time}
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-3 py-2">
+                              {assignments && assignments.length ? (
+                                <div className="space-y-2">
+                                  {assignments.map((a: any, i: number) => {
+                                    const overridden = hasSpecial && !a.is_special
+                                    return (
+                                      <div
+                                        key={`${a.id || a.curriculum_row?.id || i}`}
+                                        className={`rounded-lg p-2.5 ${
+                                          a.is_special
+                                            ? 'bg-amber-50 border border-amber-200'
+                                            : overridden
+                                              ? 'bg-red-50 border border-red-200'
+                                              : 'bg-blue-50 border border-blue-200'
+                                        }`}
+                                      >
+                                        <div className="font-semibold text-gray-900 text-sm leading-tight flex items-center gap-1">
+                                          <BookOpen className="h-3 w-3" />
+                                          {a.is_special
+                                            ? (a.timetable_name || 'Special')
+                                            : shortLabel(a.curriculum_row || a.subject_text)
+                                          }
+                                          {a.is_special && (
+                                            <span className="text-amber-600 ml-1">
+                                              • {shortLabel(a.curriculum_row || a.subject_text)}
+                                            </span>
+                                          )}
+                                        </div>
+                                        <div className="text-xs text-gray-700 mt-1 flex items-center gap-1">
+                                          <Users className="h-3 w-3" />
+                                          Staff: {a.staff?.username || '—'}
+                                        </div>
+                                        {overridden && (
+                                          <div className="text-xs text-red-600 mt-1 font-medium">
+                                            Overridden by special
+                                          </div>
+                                        )}
+                                        {a.is_special && (
+                                          <div className="text-xs text-amber-700 mt-1 flex items-center gap-1">
+                                            <Calendar className="h-3 w-3" />
+                                            {a.date || ''}
+                                          </div>
+                                        )}
+                                        {a.subject_batch && (
+                                          <div className="text-xs text-blue-700 mt-1 font-medium">
+                                            Batch: {a.subject_batch.name}
+                                          </div>
+                                        )}
+                                        {overridden && a.elective_subject && (
+                                          <div className="text-xs text-red-600 mt-1">
+                                            Elective: {a.elective_subject.course_code || a.elective_subject.course_name}
+                                          </div>
+                                        )}
+                                      </div>
+                                    )
+                                  })}
+                                </div>
+                              ) : (
+                                <div className="flex items-center py-2">
+                                  <span className="text-gray-300 text-sm">—</span>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        )
+                      })
+                    })()}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         )}

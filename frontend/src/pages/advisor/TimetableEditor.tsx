@@ -887,6 +887,13 @@ export default function TimetableEditor(){
   const [otherDeptStaffList, setOtherDeptStaffList] = useState<any[]>([])
   const [isOtherDept, setIsOtherDept] = useState<boolean>(false)
   const [selectedOtherDept, setSelectedOtherDept] = useState<number | null>(null)
+  // Auto-detect current day: 0=Mon, 1=Tue, ..., 6=Sun
+  const getCurrentDay = () => {
+    const today = new Date()
+    const dow = today.getDay() // 0=Sun, 1=Mon, ..., 6=Sat
+    return dow === 0 ? 6 : dow - 1 // Convert to Mon=0, ..., Sun=6
+  }
+  const [selectedDay, setSelectedDay] = useState(getCurrentDay())
 
   useEffect(()=>{
     // Advisors don't have access to the HOD sections endpoint; use my-students
@@ -1268,7 +1275,8 @@ export default function TimetableEditor(){
             </div>
           </div>
           
-          <div className="overflow-x-auto lg:overflow-visible">
+          {/* Desktop view: Horizontal table */}
+          <div className="hidden md:block overflow-x-auto lg:overflow-visible">
             <table className="w-full table-fixed">
               <thead>
                 <tr className="bg-gradient-to-r from-slate-50 to-blue-50 border-b-2 border-gray-200">
@@ -1308,6 +1316,65 @@ export default function TimetableEditor(){
                 ))}
               </tbody>
             </table>
+          </div>
+
+          {/* Mobile view: Day tabs + Period/Subject columns */}
+          <div className="md:hidden p-4">
+            {/* Day tabs */}
+            <div className="grid grid-cols-7 gap-1 mb-4">
+              {DAYS.map((d, di) => (
+                <button
+                  key={d}
+                  onClick={() => setSelectedDay(di)}
+                  className={`px-2 py-2 rounded-lg text-xs font-medium transition-colors ${
+                    selectedDay === di
+                      ? 'bg-indigo-600 text-white shadow-md'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  {d}
+                </button>
+              ))}
+            </div>
+
+            {/* Period/Subject table for selected day */}
+            <div className="border border-gray-200 rounded-lg overflow-hidden">
+              <table className="w-full">
+                <thead>
+                  <tr className="bg-gradient-to-r from-slate-50 to-blue-50 border-b border-gray-200">
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-indigo-700 w-24">Period</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-indigo-700">Assignment</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {(() => {
+                    const nonBreakPeriods = visiblePeriods.filter((p: any) => !p.is_break && !p.is_lunch)
+                    
+                    return nonBreakPeriods.map((p: any) => {
+                      const isSelected = editingCell && editingCell.day === (selectedDay + 1) && editingCell.periodId === p.id
+                      
+                      return (
+                        <tr key={p.id} className={`${isSelected ? 'bg-indigo-50' : 'hover:bg-gray-50'}`}>
+                          <td className="px-3 py-3 align-top">
+                            <div className="text-xs font-semibold text-gray-900">
+                              {p.label || `P${p.index || ''}`}
+                            </div>
+                            {(p.start_time || p.end_time) && (
+                              <div className="text-xs text-gray-500 mt-0.5">
+                                {p.start_time}{p.start_time && p.end_time ? '–' : ''}{p.end_time}
+                              </div>
+                            )}
+                          </td>
+                          <td className={`px-3 py-2 ${isSelected ? 'border-2 border-indigo-300' : ''}`}>
+                            {renderCell(selectedDay + 1, p)}
+                          </td>
+                        </tr>
+                      )
+                    })
+                  })()}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
 

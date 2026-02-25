@@ -12,14 +12,14 @@ function shortLabel(item: any) {
     return firstWord || s.slice(0, 15) + (s.length > 15 ? '…' : '')
   }
 
-  // Prefer a provided mnemonic, otherwise derive a short label
+  // Priority: mnemonic > course_name > course_code
   if (item?.mnemonic) return item.mnemonic
-  const txt = item?.course_name || item?.course || item?.subject_text || item?.course_code || ''
-  const s = String(txt).trim()
-  if (!s) return ''
-  const words = s.split(/[\s\-\_]+/).filter((w: string) => w.length > 0)
-  if (words.length > 0) return words[0]
-  return s.slice(0, 15) + (s.length > 15 ? '…' : '')
+  if (item?.course_name) return item.course_name
+  if (item?.course_code) return item.course_code
+  if (item?.subject_text) return item.subject_text
+  if (item?.course) return item.course
+  
+  return ''
 }
 
 function formatSectionInfo(assignment: any[]) {
@@ -71,6 +71,13 @@ export default function StaffTimetable(){
   const [timetable, setTimetable] = useState<any[]>([])
   const [periods, setPeriods] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
+  // Auto-detect current day: 0=Mon, 1=Tue, ..., 6=Sun
+  const getCurrentDay = () => {
+    const today = new Date()
+    const dow = today.getDay() // 0=Sun, 1=Mon, ..., 6=Sat
+    return dow === 0 ? 6 : dow - 1 // Convert to Mon=0, ..., Sun=6
+  }
+  const [selectedDay, setSelectedDay] = useState(getCurrentDay())
 
   // Section timetable drawer state
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -279,7 +286,8 @@ export default function StaffTimetable(){
             </div>
             <p className="text-xs text-gray-400 mb-4">Click any period card to view that section’s full timetable — then click another period on the same day to swap</p>
 
-            <div className="w-full">
+            {/* Desktop view: Horizontal table */}
+            <div className="hidden md:block w-full">
               <table className="w-full table-fixed">
                 <thead>
                   <tr className="bg-gradient-to-r from-gray-50 to-blue-50 border-b-2 border-gray-200">
@@ -401,6 +409,153 @@ export default function StaffTimetable(){
                   ))}
                 </tbody>
               </table>
+            </div>
+
+            {/* Mobile view: Day tabs + Period/Subject columns */}
+            <div className="md:hidden">
+              {/* Day tabs */}
+              <div className="grid grid-cols-7 gap-1 mb-4">
+                {DAYS.map((d, di) => (
+                  <button
+                    key={d}
+                    onClick={() => setSelectedDay(di)}
+                    className={`px-2 py-2 rounded-lg text-xs font-medium transition-colors ${
+                      selectedDay === di
+                        ? 'bg-blue-600 text-white shadow-md'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    {d}
+                  </button>
+                ))}
+              </div>
+
+              {/* Period/Subject table for selected day */}
+              <div className="border border-gray-200 rounded-lg overflow-hidden">
+                <table className="w-full">
+                  <thead>
+                    <tr className="bg-gradient-to-r from-gray-50 to-blue-50 border-b border-gray-200">
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-blue-700 w-24">Period</th>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-blue-700">Subject</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {(() => {
+                      const dayObj = timetable.find(x => x.day === selectedDay + 1) || { assignments: [] }
+                      const nonBreakPeriods = periods.filter((p: any) => !p.is_break && !p.is_lunch)
+                      
+                      return nonBreakPeriods.map((p: any) => {
+                        const assignments = (dayObj.assignments || []).filter((x: any) => x.period_id === p.id)
+                        const hasSpecial = assignments.some((x: any) => x.is_special)
+                        
+                        return (
+                          <tr key={p.id} className="hover:bg-gray-50">
+                            <td className="px-3 py-3 align-top">
+                              <div className="text-xs font-semibold text-gray-900">
+                                {p.label || `P${p.index}`}
+                              </div>
+                              {(p.start_time || p.end_time) && (
+                                <div className="text-xs text-gray-500 mt-0.5">
+                                  {p.start_time}{p.start_time && p.end_time ? '–' : ''}{p.end_time}
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-3 py-2">
+                              {assignments && assignments.length ? (
+                                <div className="space-y-2">
+                                  {(() => {
+                                    const groups: Record<string, any[]> = {}
+                                    for (const a of assignments) {
+                                      let key = ''
+                                      if (a.is_special) key = `special_${a.timetable_name || a.id}`
+                                      else if (a.curriculum_row && a.curriculum_row.id) key = `curr_${a.curriculum_row.id}`
+                                      else if (a.subject_batch && a.subject_batch.id) key = `batch_${a.subject_batch.id}`
+                                      else if (a.elective_subject && a.elective_subject.id) key = `elective_${a.elective_subject.id}`
+                                      else if (a.subject_text) key = `subj_${(a.subject_text||'').replace(/[^A-Za-z0-9]/g,'').toLowerCase()}`
+                                      else key = `section_${a.section?.id || Math.random()}`
+                                      groups[key] = groups[key] || []
+                                      groups[key].push(a)
+                                    }
+
+                                    return Object.keys(groups).map((k, idx) => {
+                                      const g = groups[k]
+                                      const a = g[0]
+                                      const overridden = hasSpecial && !a.is_special
+                                      const bgClass = a.is_swap
+                                        ? 'bg-green-50 border border-green-200'
+                                        : a.is_special
+                                          ? 'bg-amber-50 border border-amber-200'
+                                          : overridden
+                                            ? 'bg-red-50 border border-red-200'
+                                            : 'bg-blue-50 border border-blue-200'
+                                      const sectionId: number | undefined = a.section?.id
+                                      const sectionName: string = a.section?.name || formatSectionInfo(g)
+                                      const batchName: string | undefined = a.section?.batch?.name || a.subject_batch?.name
+                                      const subjLabel = a.is_swap
+                                        ? shortLabel(a.elective_subject || a.curriculum_row || a.subject_text)
+                                        : a.is_special
+                                          ? (a.timetable_name || 'Special')
+                                          : shortLabel(a.elective_subject || a.curriculum_row || a.subject_text)
+                                      const isElective = !!(a.elective_subject || a.elective_subject_id)
+                                      const clickable = (a.is_swap || !a.is_special) && !isElective && !!sectionId
+                                      
+                                      return (
+                                        <div
+                                          key={idx}
+                                          onClick={() => clickable && openSectionDrawer(sectionId!, sectionName, batchName, subjLabel, a.is_swap ? undefined : selectedDay, a.is_swap ? undefined : a.period_id)}
+                                          title={clickable ? `Click to view ${sectionName} full timetable` : undefined}
+                                          className={`rounded p-2 ${bgClass} ${clickable ? 'cursor-pointer active:shadow-lg active:scale-[0.98] transition-all' : ''}`}
+                                        >
+                                          <div className="font-semibold text-gray-900 text-sm leading-tight">
+                                            <span className={a.is_swap ? 'text-green-800' : ''}>
+                                              {a.is_swap ? (
+                                                <>
+                                                  <ArrowRightLeft className="w-3 h-3 inline mr-1 text-green-600" />
+                                                  {shortLabel(a.elective_subject || a.curriculum_row || a.subject_text)}
+                                                  {a.subject_text && (
+                                                    <span className="text-green-500 font-normal ml-1">⇄ {a.subject_text}</span>
+                                                  )}
+                                                </>
+                                              ) : a.is_special ? (
+                                                <>{a.timetable_name || 'Special'}<span className="text-amber-600 ml-1">• {shortLabel(a.elective_subject || a.curriculum_row || a.subject_text)}</span></>
+                                              ) : shortLabel(a.elective_subject || a.curriculum_row || a.subject_text)}
+                                            </span>
+                                          </div>
+                                          <div className={`text-xs font-medium mt-1 flex items-center gap-1 ${a.is_swap ? 'text-green-700' : 'text-blue-700'}`}>
+                                            {clickable && <Users className="w-3 h-3 flex-shrink-0" />}
+                                            {formatSectionInfo(g)}
+                                          </div>
+                                          {overridden && <div className="text-xs text-red-600 mt-1 font-medium">Overridden</div>}
+                                          {a.is_swap && <div className="text-xs text-green-600 mt-1 font-medium">Swap • {a.date || ''}</div>}
+                                          {a.is_swap && a.date && (
+                                            <div className="mt-2" onClick={e => e.stopPropagation()}>
+                                              <button
+                                                onClick={e => { e.stopPropagation(); undoSwap(a.date, sectionId) }}
+                                                className="flex items-center gap-1 text-xs text-red-600 hover:text-red-800 bg-red-50 border border-red-200 rounded px-2 py-1"
+                                              >
+                                                <X className="w-3 h-3" /> Undo
+                                              </button>
+                                            </div>
+                                          )}
+                                          {a.is_special && !a.is_swap && <div className="text-xs text-amber-700 mt-1">{a.date || ''}</div>}
+                                        </div>
+                                      )
+                                    })
+                                  })()}
+                                </div>
+                              ) : (
+                                <div className="flex items-center py-2">
+                                  <span className="text-gray-300 text-sm">—</span>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        )
+                      })
+                    })()}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         )}
