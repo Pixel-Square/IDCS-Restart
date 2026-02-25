@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { User, Edit, BookOpen, Save, X, Trash2 } from 'lucide-react'
+import { User, Edit, BookOpen, Save, X, Trash2, Edit2 } from 'lucide-react'
 import fetchWithAuth from '../../services/fetchAuth'
 
 type Section = { id: number; name: string; batch: string; department_id?: number; department_code?: string; department_short_name?: string }
@@ -14,6 +14,8 @@ export default function AdvisorAssignments() {
   const [canAssign, setCanAssign] = useState(false)
   const [selectedDept, setSelectedDept] = useState<number | null>(null)
   const [editingSections, setEditingSections] = useState<Set<number>>(new Set())
+  const [bulkEditMode, setBulkEditMode] = useState(false)
+  const [bulkAdvisorSelection, setBulkAdvisorSelection] = useState<Record<number, number | null>>({})
 
   useEffect(() => { fetchData() }, [])
 
@@ -91,19 +93,89 @@ export default function AdvisorAssignments() {
     return assignments.find(a => a.section_id === sectionId && a.is_active)
   }
 
+  async function saveBulkAssignments() {
+    if (Object.keys(bulkAdvisorSelection).length === 0) {
+      alert('No changes made')
+      return
+    }
+
+    setLoading(true)
+    try {
+      let successCount = 0
+      let errorCount = 0
+
+      for (const [sectionIdStr, advisorId] of Object.entries(bulkAdvisorSelection)) {
+        if (!advisorId) continue
+
+        const sectionId = Number(sectionIdStr)
+        const payload = { section_id: sectionId, advisor_id: advisorId, is_active: true }
+
+        try {
+          const res = await fetchWithAuth('/api/academics/section-advisors/', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+          })
+          if (res.ok) {
+            successCount++
+          } else {
+            errorCount++
+            const err = await res.text()
+            console.error(`Failed to assign advisor to section ${sectionId}:`, err)
+          }
+        } catch (e) {
+          errorCount++
+          console.error(`Error assigning advisor to section ${sectionId}:`, e)
+        }
+      }
+
+      if (successCount > 0) {
+        alert(`Successfully assigned ${successCount} section(s)${errorCount > 0 ? ` (${errorCount} failed)` : ''}`)
+        setBulkEditMode(false)
+        setBulkAdvisorSelection({})
+        await fetchData()
+      } else {
+        alert(`Failed to assign advisors. Check console for details.`)
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function cancelBulkEdit() {
+    setBulkEditMode(false)
+    setBulkAdvisorSelection({})
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
-          <div className="flex items-center gap-3">
-            <div className="p-3 bg-blue-50 rounded-lg">
-              <User className="h-6 w-6 text-blue-600" />
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-blue-50 rounded-lg">
+                <User className="h-6 w-6 text-blue-600" />
+              </div>
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900">Advisor Assign</h1>
+                <p className="text-gray-600">Assign advisors to sections and edit existing assignments</p>
+              </div>
             </div>
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">Advisor Assign</h1>
-              <p className="text-gray-600">Assign advisors to sections and edit existing assignments</p>
-            </div>
+            {!loading && sections.length > 0 && (
+              <button
+                onClick={() => setBulkEditMode(true)}
+                disabled={bulkEditMode}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 md:self-start ${
+                  bulkEditMode
+                    ? 'bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-300'
+                    : 'bg-blue-100 text-blue-700 hover:bg-blue-200 border border-blue-300'
+                }`}
+                title="Edit all assignments at once"
+              >
+                <Edit2 className="h-4 w-4" />
+                Common Edit
+              </button>
+            )}
           </div>
         </div>
 
@@ -118,6 +190,37 @@ export default function AdvisorAssignments() {
 
         {!loading && sections.length > 0 && (
           <>
+            {/* Bulk Edit Action Bar */}
+            {bulkEditMode && (
+              <div className="bg-blue-50 border-l-4 border-blue-500 rounded-lg shadow-sm p-4 mb-6">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                  <div className="flex items-center gap-2">
+                    <Edit2 className="h-5 w-5 text-blue-600" />
+                    <span className="text-sm font-medium text-blue-900">
+                      Bulk Edit Mode: Select advisors for all sections below
+                    </span>
+                  </div>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <button
+                      disabled={loading}
+                      onClick={saveBulkAssignments}
+                      className="px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition-colors disabled:bg-gray-400 flex items-center justify-center gap-2"
+                    >
+                      <Save className="h-4 w-4" />
+                      Save All Changes
+                    </button>
+                    <button
+                      disabled={loading}
+                      onClick={cancelBulkEdit}
+                      className="px-4 py-2 bg-red-100 text-red-700 text-sm font-medium rounded-lg hover:bg-red-200 transition-colors border border-red-300 disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+            
             {/* Department Filter Pills */}
             <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
               <h3 className="text-lg font-medium text-gray-900 mb-4">Filter by Department</h3>
@@ -188,7 +291,8 @@ export default function AdvisorAssignments() {
                           {deptSections.map(sec => {
                             const assignedAdvisor = findAssignedAdvisor(sec.id)
                             const isEditing = editingSections.has(sec.id)
-                            const showDropdown = !assignedAdvisor || isEditing
+                            const showDropdown = !assignedAdvisor || isEditing || bulkEditMode
+                            const bulkSelectedAdvisor = bulkEditMode ? bulkAdvisorSelection[sec.id] || assignedAdvisor?.advisor_id || "" : null
 
                             return (
                               <tr key={sec.id} className="hover:bg-gray-50 transition-colors">
@@ -198,7 +302,15 @@ export default function AdvisorAssignments() {
                                     <select
                                       id={`advisor-${sec.id}`}
                                       className="w-full p-2 border border-gray-300 rounded-lg bg-white text-gray-700 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                      defaultValue={assignedAdvisor?.advisor_id || ""}
+                                      defaultValue={bulkEditMode ? (bulkSelectedAdvisor || "") : (assignedAdvisor?.advisor_id || "")}
+                                      onChange={(e) => {
+                                        if (bulkEditMode) {
+                                          setBulkAdvisorSelection(prev => ({
+                                            ...prev,
+                                            [sec.id]: e.target.value ? Number(e.target.value) : null
+                                          }))
+                                        }
+                                      }}
                                     >
                                       <option value="">-- Select Advisor --</option>
                                       {deptStaff.map(st => (
@@ -212,7 +324,9 @@ export default function AdvisorAssignments() {
                                   )}
                                 </td>
                                 <td className="px-4 py-3">
-                                  {assignedAdvisor && !isEditing ? (
+                                  {bulkEditMode ? (
+                                    <span className="text-sm text-gray-500">Auto-save on submit</span>
+                                  ) : assignedAdvisor && !isEditing ? (
                                     <button
                                       disabled={!canAssign}
                                       className={`p-2 text-sm font-medium rounded-lg transition-colors ${
