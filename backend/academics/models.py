@@ -490,22 +490,33 @@ class SectionAdvisor(models.Model):
 def _sync_advisor_role_on_save(sender, instance: SectionAdvisor, created, **kwargs):
     try:
         sp = instance.advisor
-        user = getattr(sp, 'user', None)
-        if not user:
+        if sp is None or not sp.pk:
             return
+            
+        user = getattr(sp, 'user', None)
+        if not user or not user.pk:
+            return
+            
         role_obj, _ = Role.objects.get_or_create(name='ADVISOR')
+        
         if instance.is_active:
+            # Add ADVISOR role if not present
             if role_obj not in user.roles.all():
-                user.roles.add(role_obj)
+                try:
+                    user.roles.add(role_obj)
+                except (ValidationError, Exception):
+                    pass
         else:
             # If deactivated, remove ADVISOR only if no other active SectionAdvisor exists
             other_active = SectionAdvisor.objects.filter(advisor=sp, is_active=True).exclude(pk=instance.pk).exists()
             if not other_active:
                 try:
-                    if role_obj in user.roles.all():
+                    user_roles = list(user.roles.all())
+                    # Only remove if user has other roles (must maintain at least 1 role)
+                    if role_obj in user_roles and len(user_roles) > 1:
                         user.roles.remove(role_obj)
-                except ValidationError:
-                    # don't crash on validation; leave role in place
+                except (ValidationError, Exception):
+                    # Don't crash on validation; leave role in place
                     pass
     except Exception:
         pass
@@ -515,20 +526,31 @@ def _sync_advisor_role_on_save(sender, instance: SectionAdvisor, created, **kwar
 def _sync_advisor_role_on_delete(sender, instance: SectionAdvisor, **kwargs):
     try:
         sp = instance.advisor
-        user = getattr(sp, 'user', None)
-        if not user:
+        # If StaffProfile is being deleted (CASCADE), skip role sync
+        if sp is None or sp._state.adding or not sp.pk:
             return
+        
+        user = getattr(sp, 'user', None)
+        if not user or not user.pk:
+            return
+            
         role_obj = Role.objects.filter(name='ADVISOR').first()
         if not role_obj:
             return
+            
+        # Only remove role if no other active advisor assignments exist
         other_active = SectionAdvisor.objects.filter(advisor=sp, is_active=True).exists()
         if not other_active:
             try:
-                if role_obj in user.roles.all():
+                # Check current roles to avoid ValidationError (user must have >= 1 role)
+                user_roles = list(user.roles.all())
+                if role_obj in user_roles and len(user_roles) > 1:
                     user.roles.remove(role_obj)
-            except ValidationError:
+            except (ValidationError, Exception):
+                # Silently ignore if validation fails or user/roles are being deleted
                 pass
     except Exception:
+        # Catch all to prevent signal from breaking delete operations
         pass
 
 

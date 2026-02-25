@@ -1706,6 +1706,74 @@ class DepartmentsListView(APIView):
         return Response({'results': results})
 
 
+class StaffsPageView(APIView):
+    """Return departments along with their staffs according to user's permissions.
+
+    - Requires explicit `academics.view_staffs_page` permission (or staff/superuser).
+    - If user has `academics.view_all_staff` (or is staff/superuser), returns all departments.
+    - Otherwise limits to departments returned by `get_user_effective_departments(user)`.
+
+    Response format:
+      { results: [ { id, code, name, short_name, staffs: [ {id, staff_id, user: {username, first_name, last_name}, designation, status} ] } ] }
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        user = request.user
+        perms = get_user_permissions(user)
+
+        # require page-view permission unless staff/superuser
+        if not (user.is_staff or user.is_superuser or 'academics.view_staffs_page' in perms):
+            return Response({'detail': 'You do not have permission to view staffs page.'}, status=403)
+
+        from .models import Department, StaffProfile
+        from django.db.models import Q
+
+        # determine departments to include
+        if ('academics.view_all_staff' in perms) or user.is_staff or user.is_superuser or ('academics.view_all_departments' in perms):
+            dept_qs = Department.objects.all()
+        else:
+            dept_ids = get_user_effective_departments(user) or []
+            if not dept_ids:
+                return Response({'results': []})
+            dept_qs = Department.objects.filter(id__in=dept_ids)
+
+        results = []
+        for d in dept_qs.order_by('code'):
+            # collect staff for department (current FK or active department assignment)
+            staff_qs = StaffProfile.objects.filter(
+                Q(department_id=d.id) |
+                Q(department_assignments__department_id=d.id, department_assignments__end_date__isnull=True)
+            ).select_related('user').distinct()
+
+            staffs = []
+            for s in staff_qs:
+                user_data = None
+                if s.user:
+                    user_data = {
+                        'username': s.user.username,
+                        'first_name': getattr(s.user, 'first_name', ''),
+                        'last_name': getattr(s.user, 'last_name', ''),
+                    }
+                staffs.append({
+                    'id': s.id,
+                    'staff_id': s.staff_id,
+                    'user': user_data,
+                    'designation': getattr(s, 'designation', None),
+                    'status': getattr(s, 'status', None),
+                })
+
+            results.append({
+                'id': d.id,
+                'code': getattr(d, 'code', None),
+                'name': getattr(d, 'name', None),
+                'short_name': getattr(d, 'short_name', None),
+                'staffs': staffs,
+            })
+
+        return Response({'results': results})
+
+
 class AdvisorStaffListView(APIView):
     """Return staff list limited to departments/sections the advisor is assigned to.
 

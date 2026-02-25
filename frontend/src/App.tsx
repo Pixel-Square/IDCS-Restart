@@ -44,6 +44,7 @@ import MentorAssign from './pages/advisor/MentorAssign';
 import MyMentees from './pages/staff/MyMentees';
 import NotificationsPage from './pages/Notifications';
 import QueriesPage from './pages/queries/QueriesPage';
+import StaffsPage from './pages/StaffsPage';
 
 type RoleObj = { name: string };
 type Me = {
@@ -151,6 +152,10 @@ export default function App() {
                 <Route
                   path="/hod/obe-requests"
                   element={<ProtectedRoute user={user} requiredRoles={["HOD"]} requiredPermissions={["academics.assign_advisor"]} element={<ObeEditRequestsPage />} />}
+                />
+                <Route
+                  path="/staffs"
+                  element={<ProtectedRoute user={user} requiredPermissions={["academics.view_staffs_page"]} element={<StaffsPage />} />}
                 />
                 <Route
                   path="/advisor/teaching"

@@ -9,7 +9,7 @@ import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, Cli
 import { useSidebar } from './SidebarContext';
 import { fetchPendingPublishRequestCount } from '../../services/obe';
 
-const ICON_MAP: Record<string, any> = {
+  const ICON_MAP: Record<string, any> = {
   profile: User,
   queries: MessageSquare,
   curriculum_master: BookOpen,
@@ -20,6 +20,7 @@ const ICON_MAP: Record<string, any> = {
   home: Home,
   hod_advisors: Users,
   hod_teaching: BookOpen,
+  staffs: Users,
   advisor_students: GraduationCap,
   mentor_assign: Users,
   timetable_templates: Calendar,
@@ -136,6 +137,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   if (entry.hod_teaching && (rolesUpper.includes('ADVISOR') || permsLower.includes('academics.assign_teaching'))) items.push({ key: 'hod_teaching', label: 'Teaching Assign', to: '/advisor/teaching' });
   const canHodObeRequests = Boolean((entry as any)?.hod_obe_requests) || rolesUpper.includes('HOD');
   if (canHodObeRequests) items.push({ key: 'hod_obe_requests', label: 'HOD: OBE Requests', to: '/hod/obe-requests' });
+
+  // Staffs page: require explicit view permission
+  if (permsLower.includes('academics.view_staffs_page')) {
+    items.push({ key: 'staffs', label: 'Staff Directory', to: '/staffs' });
+  }
 
   // Advisor pages: require ADVISOR role or explicit permission
   if (entry.advisor_students && (rolesUpper.includes('ADVISOR') || permsLower.includes('academics.view_my_students'))) items.push({ key: 'advisor_students', label: 'My Students', to: '/advisor/students' });

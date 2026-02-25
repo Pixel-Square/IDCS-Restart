@@ -4,6 +4,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     SectionAdvisorViewSet,
     HODStaffListView,
+    StaffsPageView,
     HODSectionsView,
     TeachingAssignmentViewSet,
     AdvisorMyStudentsView,
@@ -57,6 +58,7 @@ urlpatterns = [
 
     # HOD / staff endpoints
     path('hod-staff/', HODStaffListView.as_view()),
+    path('staffs-page/', StaffsPageView.as_view()),
     path('advisor-staff/', AdvisorStaffListView.as_view()),
     path('mentor/staff/', MentorStaffListView.as_view()),
     path('mentor/staff/<int:staff_id>/students/', MentorStudentsForStaffView.as_view()),
