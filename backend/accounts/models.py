@@ -118,7 +118,7 @@ def validate_roles_for_user(user, roles):
     role_names = {getattr(r, 'name', str(r)).upper() for r in roles}
 
     STUDENT_ALLOWED = {'STUDENT'}
-    STAFF_ALLOWED = {'STAFF', 'FACULTY', 'ADVISOR', 'HOD', 'ADMIN'}
+    STAFF_ALLOWED = {'STAFF', 'FACULTY', 'ADVISOR', 'HOD', 'AHOD', 'MENTOR', 'ADMIN'}
 
     if profile == 'STUDENT':
         invalid = role_names - STUDENT_ALLOWED

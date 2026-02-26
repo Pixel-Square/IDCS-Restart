@@ -1,7 +1,14 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import CurriculumMasterViewSet, CurriculumDepartmentViewSet, ElectiveSubjectViewSet, ElectiveChoicesView, MasterImportView
-from .elective_import_views import ElectiveChoiceTemplateDownloadView, ElectiveChoiceBulkImportView
+from .views import (
+    CurriculumMasterViewSet, 
+    CurriculumDepartmentViewSet, 
+    ElectiveSubjectViewSet, 
+    ElectiveChoicesView, 
+    MasterImportView,
+    ElectiveChoiceTemplateDownloadView,
+    ElectiveChoiceBulkImportView
+)
 
 router = DefaultRouter()
 router.register(r'master', CurriculumMasterViewSet, basename='curriculum-master')
@@ -14,6 +21,6 @@ urlpatterns = [
     path('master/import/', MasterImportView.as_view(), name='curriculum-master-import'),
     path('elective-choices/template/', ElectiveChoiceTemplateDownloadView.as_view(), name='elective-choices-template'),
     path('elective-choices/import/', ElectiveChoiceBulkImportView.as_view(), name='elective-choices-import'),
-    path('', include(router.urls)),
     path('elective-choices/', ElectiveChoicesView.as_view(), name='elective-choices'),
+    path('', include(router.urls)),
 ]

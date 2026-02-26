@@ -1,22 +1,30 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { getMe, requestMobileOtp, verifyMobileOtp, removeMobileNumber } from '../../services/auth';
-import { User, Mail, Shield, Building, Briefcase, School, Phone, CheckCircle2, Trash2 } from 'lucide-react';
+import { getMe, requestMobileOtp, verifyMobileOtp, removeMobileNumber, changePassword } from '../../services/auth';
+import { User, Mail, Shield, Building, Briefcase, School, Phone, CheckCircle2, Trash2, Key, Eye, EyeOff, Edit2, Save, X } from 'lucide-react';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import { ModalPortal } from '../../components/ModalPortal';
 import logo from '../../assets/idcs-logo.png';
+import fetchWithAuth from '../../services/fetchAuth';
 
 type RoleObj = { name: string };
 type Me = {
   id: number;
   username: string;
   email?: string;
+  first_name?: string;
+  last_name?: string;
   roles?: string[] | RoleObj[];
   permissions?: string[];
   profile_type?: string | null;
   profile_status?: string | null;
   capabilities?: Record<string, string[]>;
   profile?: any;
-  college?: any;
+  college?: {
+    code?: string;
+    name?: string;
+    short_name?: string;
+    address?: string;
+  };
 };
 
 function normalizeMobileForUi(raw: unknown): string {
@@ -47,6 +55,31 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
   const [removeError, setRemoveError] = useState<string | null>(null);
   const [removePassword, setRemovePassword] = useState('');
   const [verifySuccess, setVerifySuccess] = useState(false);
+
+  // Change password states
+  const [changePasswordModalOpen, setChangePasswordModalOpen] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [changePasswordBusy, setChangePasswordBusy] = useState(false);
+  const [changePasswordError, setChangePasswordError] = useState<string | null>(null);
+  const [changePasswordSuccess, setChangePasswordSuccess] = useState(false);
+
+  // Edit username and name (combined) states
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [usernameDraft, setUsernameDraft] = useState('');
+  const [nameFirstDraft, setNameFirstDraft] = useState('');
+  const [nameLastDraft, setNameLastDraft] = useState('');
+  const [profileEditError, setProfileEditError] = useState<string | null>(null);
+  const [profileSaving, setProfileSaving] = useState(false);
+  
+  const [editingEmail, setEditingEmail] = useState(false);
+  const [emailDraft, setEmailDraft] = useState('');
+  const [emailError, setEmailError] = useState<string | null>(null);
+  const [emailSaving, setEmailSaving] = useState(false);
 
   useEffect(() => {
     const current = profileMobile || '';
@@ -264,6 +297,154 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
     }
   }
 
+  async function handleChangePassword() {
+    setChangePasswordError(null);
+    setChangePasswordSuccess(false);
+
+    const current = String(currentPassword || '').trim();
+    const newPwd = String(newPassword || '').trim();
+    const confirmPwd = String(confirmPassword || '').trim();
+
+    if (!current) {
+      setChangePasswordError('Current password is required.');
+      return;
+    }
+    if (!newPwd) {
+      setChangePasswordError('New password is required.');
+      return;
+    }
+    if (!confirmPwd) {
+      setChangePasswordError('Please confirm your new password.');
+      return;
+    }
+    if (newPwd !== confirmPwd) {
+      setChangePasswordError('New passwords do not match.');
+      return;
+    }
+    if (current === newPwd) {
+      setChangePasswordError('New password must be different from current password.');
+      return;
+    }
+    if (newPwd.length < 6) {
+      setChangePasswordError('New password must be at least 6 characters long.');
+      return;
+    }
+
+    try {
+      setChangePasswordBusy(true);
+      await changePassword(current, newPwd, confirmPwd);
+      setChangePasswordSuccess(true);
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setTimeout(() => {
+        setChangePasswordModalOpen(false);
+        setChangePasswordSuccess(false);
+      }, 2000);
+    } catch (e: any) {
+      const statusCode = Number(e?.response?.status || 0);
+      const msg = statusCode === 401
+        ? 'Session expired or incorrect password.'
+        : String(e?.response?.data?.detail || e?.message || e || 'Failed to change password');
+      setChangePasswordError(msg);
+    } finally {
+      setChangePasswordBusy(false);
+    }
+  }
+
+  async function handleSaveProfile() {
+    setProfileEditError(null);
+    const username = String(usernameDraft || '').trim();
+    const firstName = String(nameFirstDraft || '').trim();
+    const lastName = String(nameLastDraft || '').trim();
+
+    if (!username) {
+      setProfileEditError('Username cannot be empty');
+      return;
+    }
+
+    try {
+      setProfileSaving(true);
+      const response = await fetchWithAuth('/api/accounts/profile/update/', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, first_name: firstName, last_name: lastName })
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.detail || 'Failed to update profile');
+      }
+
+      const updated = await getMe();
+      const normalized = {
+        ...updated,
+        roles: Array.isArray(updated.roles) ? updated.roles.map((role: any) => (typeof role === 'string' ? role : role.name)) : [],
+      } as Me;
+      setUser(normalized);
+      setEditingProfile(false);
+    } catch (e: any) {
+      setProfileEditError(String(e?.message || e || 'Failed to update profile'));
+    } finally {
+      setProfileSaving(false);
+    }
+  }
+
+  function startEditingProfile() {
+    setUsernameDraft(user?.username || '');
+    setNameFirstDraft(user?.first_name || '');
+    setNameLastDraft(user?.last_name || '');
+    setEditingProfile(true);
+    setProfileEditError(null);
+  }
+
+  function cancelEditingProfile() {
+    setEditingProfile(false);
+    setProfileEditError(null);
+  }
+
+  async function handleSaveEmail() {
+    setEmailError(null);
+    const email = String(emailDraft || '').trim();
+
+    try {
+      setEmailSaving(true);
+      const response = await fetchWithAuth('/api/accounts/profile/update/', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.detail || 'Failed to update email');
+      }
+
+      const updated = await getMe();
+      const normalized = {
+        ...updated,
+        roles: Array.isArray(updated.roles) ? updated.roles.map((role: any) => (typeof role === 'string' ? role : role.name)) : [],
+      } as Me;
+      setUser(normalized);
+      setEditingEmail(false);
+    } catch (e: any) {
+      setEmailError(String(e?.message || e || 'Failed to update email'));
+    } finally {
+      setEmailSaving(false);
+    }
+  }
+
+  function startEditingEmail() {
+    setEmailDraft(user?.email || '');
+    setEditingEmail(true);
+    setEmailError(null);
+  }
+
+  function cancelEditingEmail() {
+    setEditingEmail(false);
+    setEmailError(null);
+  }
+
   return (
     <DashboardLayout>
       <div className="px-4 sm:px-6 lg:px-8 pb-6 space-y-6">
@@ -290,15 +471,103 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
         <div>
           <h3 className="text-xl font-bold text-gray-900 mb-4">Details</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {/* Account Card */}
+            {/* Staff/Student ID Card */}
             <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow">
               <div className="flex items-start gap-3">
                 <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center flex-shrink-0">
                   <User className="w-5 h-5 text-blue-600" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-semibold text-gray-500 mb-1">Account</div>
-                  <div className="text-gray-900 font-medium truncate">ID: {user.id}</div>
+                  <div className="text-sm font-semibold text-gray-500 mb-1">
+                    {user.profile_type === 'STAFF' ? 'Staff ID' : user.profile_type === 'STUDENT' ? 'Student ID' : 'ID'}
+                  </div>
+                  <div className="text-gray-900 font-medium truncate">
+                    {user.profile_type === 'STAFF' ? (user.profile?.staff_id || '—') : 
+                     user.profile_type === 'STUDENT' ? (user.profile?.student_id || '—') : '—'}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Username & Name Card (Combined) */}
+            <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <User className="w-5 h-5 text-indigo-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-gray-500 mb-1">Username & Name</div>
+                  {editingProfile ? (
+                    <div className="space-y-2">
+                      <input
+                        type="text"
+                        value={usernameDraft}
+                        onChange={(e) => setUsernameDraft(e.target.value)}
+                        placeholder="Username"
+                        className="w-full px-2 py-1 border rounded text-sm"
+                        disabled={profileSaving}
+                      />
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          type="text"
+                          value={nameFirstDraft}
+                          onChange={(e) => setNameFirstDraft(e.target.value)}
+                          placeholder="First Name"
+                          className="w-full px-2 py-1 border rounded text-sm"
+                          disabled={profileSaving}
+                        />
+                        <input
+                          type="text"
+                          value={nameLastDraft}
+                          onChange={(e) => setNameLastDraft(e.target.value)}
+                          placeholder="Last Name"
+                          className="w-full px-2 py-1 border rounded text-sm"
+                          disabled={profileSaving}
+                        />
+                      </div>
+                      {profileEditError && <div className="text-xs text-red-600">{profileEditError}</div>}
+                      <div className="flex gap-2">
+                        <button
+                          onClick={handleSaveProfile}
+                          disabled={profileSaving}
+                          className="flex items-center gap-1 px-2 py-1 bg-green-600 text-white rounded text-xs hover:bg-green-700"
+                        >
+                          <Save className="w-3 h-3" />
+                          {profileSaving ? 'Saving...' : 'Save'}
+                        </button>
+                        <button
+                          onClick={cancelEditingProfile}
+                          disabled={profileSaving}
+                          className="flex items-center gap-1 px-2 py-1 bg-gray-200 text-gray-700 rounded text-xs hover:bg-gray-300"
+                        >
+                          <X className="w-3 h-3" />
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-semibold text-gray-500 w-20">Username:</span>
+                          <span className="text-gray-900 font-medium">{user.username || '—'}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-semibold text-gray-500 w-20">Name:</span>
+                          <span className="text-gray-900 font-medium">
+                            {user.first_name || ''} {user.last_name || ''} {(!user.first_name && !user.last_name) && '—'}
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        onClick={startEditingProfile}
+                        className="mt-2 flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700"
+                      >
+                        <Edit2 className="w-3 h-3" />
+                        Edit
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -311,7 +580,48 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-semibold text-gray-500 mb-1">Email</div>
-                  <div className="text-gray-900 font-medium truncate">{user.email || '—'}</div>
+                  {editingEmail ? (
+                    <div className="space-y-2">
+                      <input
+                        type="email"
+                        value={emailDraft}
+                        onChange={(e) => setEmailDraft(e.target.value)}
+                        placeholder="Email"
+                        className="w-full px-2 py-1 border rounded text-sm"
+                        disabled={emailSaving}
+                      />
+                      {emailError && <div className="text-xs text-red-600">{emailError}</div>}
+                      <div className="flex gap-2">
+                        <button
+                          onClick={handleSaveEmail}
+                          disabled={emailSaving}
+                          className="flex items-center gap-1 px-2 py-1 bg-green-600 text-white rounded text-xs hover:bg-green-700"
+                        >
+                          <Save className="w-3 h-3" />
+                          {emailSaving ? 'Saving...' : 'Save'}
+                        </button>
+                        <button
+                          onClick={cancelEditingEmail}
+                          disabled={emailSaving}
+                          className="flex items-center gap-1 px-2 py-1 bg-gray-200 text-gray-700 rounded text-xs hover:bg-gray-300"
+                        >
+                          <X className="w-3 h-3" />
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <div className="text-gray-900 font-medium truncate">{user.email || '—'}</div>
+                      <button
+                        onClick={startEditingEmail}
+                        className="mt-2 flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700"
+                      >
+                        <Edit2 className="w-3 h-3" />
+                        Edit
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -360,22 +670,43 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
             </div>
 
             {/* College Card */}
-            <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow">
+            <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow lg:col-span-3">
               <div className="flex items-start gap-3">
                 <div className="w-10 h-10 bg-pink-100 rounded-lg flex items-center justify-center flex-shrink-0">
                   <School className="w-5 h-5 text-pink-600" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-semibold text-gray-500 mb-1">College</div>
-                  <div className="text-gray-900 font-medium truncate">
-                    {(user.college && (user.college.short_name || user.college.name)) || '—'}
-                  </div>
+                  <div className="text-sm font-semibold text-gray-500 mb-2">College</div>
+                  {user.college ? (
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-semibold text-gray-500 w-20">Code:</span>
+                        <span className="text-gray-900 font-medium">{user.college.code || '—'}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-semibold text-gray-500 w-20">Name:</span>
+                        <span className="text-gray-900 font-medium">{user.college.name || '—'}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-semibold text-gray-500 w-20">Short Name:</span>
+                        <span className="text-gray-900 font-medium">{user.college.short_name || '—'}</span>
+                      </div>
+                      {user.college.address && (
+                        <div className="flex items-start gap-2">
+                          <span className="text-xs font-semibold text-gray-500 w-20">Address:</span>
+                          <span className="text-gray-900 font-medium">{user.college.address}</span>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-gray-900 font-medium">—</div>
+                  )}
                 </div>
               </div>
             </div>
 
             {/* Mobile Number Card */}
-            <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow">
+            <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow lg:col-span-2">
               <div className="flex items-start gap-3">
                 <div className="w-10 h-10 bg-teal-100 rounded-lg flex items-center justify-center flex-shrink-0">
                   <Phone className="w-5 h-5 text-teal-600" />
@@ -440,8 +771,150 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
               </div>
             </div>
 
+            {/* Change Password Card */}
+            <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <Key className="w-5 h-5 text-indigo-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-gray-500 mb-2">Password</div>
+                  <div className="text-gray-900 font-medium mb-3">••••••••</div>
+                  <button
+                    onClick={() => setChangePasswordModalOpen(true)}
+                    className="bg-indigo-600 text-white px-4 py-2 rounded-md text-sm hover:bg-indigo-700 transition-colors"
+                  >
+                    Change Password
+                  </button>
+                </div>
+              </div>
+            </div>
+
           </div>
         </div>
+
+        {/* Change Password Modal */}
+        {changePasswordModalOpen && (
+          <ModalPortal>
+            <div className="fixed inset-0 flex items-center justify-center z-50">
+              <div className="absolute inset-0 bg-black opacity-30" onClick={() => {
+                if (!changePasswordBusy) {
+                  setChangePasswordModalOpen(false);
+                  setChangePasswordError(null);
+                  setChangePasswordSuccess(false);
+                  setCurrentPassword('');
+                  setNewPassword('');
+                  setConfirmPassword('');
+                }
+              }} />
+              <div className="bg-white rounded-lg p-6 shadow-lg z-10 w-full max-w-md">
+                <h3 className="text-lg font-semibold mb-4">Change Password</h3>
+
+                {changePasswordSuccess && (
+                  <div className="mb-4 bg-emerald-50 border border-emerald-200 rounded-lg p-3 flex items-start gap-2">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5" />
+                    <div className="text-sm text-emerald-800">Password changed successfully!</div>
+                  </div>
+                )}
+
+                <div className="space-y-4">
+                  {/* Current Password */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Current Password</label>
+                    <div className="relative">
+                      <input
+                        type={showCurrentPassword ? "text" : "password"}
+                        value={currentPassword}
+                        onChange={(e) => setCurrentPassword(e.target.value)}
+                        className="w-full px-3 py-2 border rounded-md pr-10"
+                        disabled={changePasswordBusy}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
+                      >
+                        {showCurrentPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* New Password */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">New Password</label>
+                    <div className="relative">
+                      <input
+                        type={showNewPassword ? "text" : "password"}
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        className="w-full px-3 py-2 border rounded-md pr-10"
+                        disabled={changePasswordBusy}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowNewPassword(!showNewPassword)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
+                      >
+                        {showNewPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Confirm New Password */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Confirm New Password</label>
+                    <div className="relative">
+                      <input
+                        type={showConfirmPassword ? "text" : "password"}
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
+                        className="w-full px-3 py-2 border rounded-md pr-10"
+                        disabled={changePasswordBusy}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
+                      >
+                        {showConfirmPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {changePasswordError && (
+                  <div className="mt-3 text-sm text-red-600">{changePasswordError}</div>
+                )}
+
+                <div className="flex justify-end gap-2 mt-6">
+                  <button
+                    onClick={() => {
+                      if (!changePasswordBusy) {
+                        setChangePasswordModalOpen(false);
+                        setChangePasswordError(null);
+                        setChangePasswordSuccess(false);
+                        setCurrentPassword('');
+                        setNewPassword('');
+                        setConfirmPassword('');
+                      }
+                    }}
+                    className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md"
+                    disabled={changePasswordBusy}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleChangePassword}
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:bg-gray-400"
+                    disabled={changePasswordBusy}
+                  >
+                    {changePasswordBusy ? 'Changing...' : 'Change Password'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </ModalPortal>
+        )}
 
         {/* Remove mobile modal */}
         {removeModalOpen && (

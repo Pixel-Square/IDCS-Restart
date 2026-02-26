@@ -3,6 +3,7 @@ from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from django.db.models import Count, Q
+from django.http import HttpResponse
 from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject
 from .serializers import CurriculumMasterSerializer, CurriculumDepartmentSerializer, ElectiveSubjectSerializer
 from .permissions import IsIQACOrReadOnly
@@ -14,7 +15,15 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from django.db import transaction
 import csv, io, re
 
+try:
+    from openpyxl import Workbook, load_workbook
+    from openpyxl.worksheet.datavalidation import DataValidation
+    EXCEL_SUPPORT = True
+except ImportError:
+    EXCEL_SUPPORT = False
+
 logger = logging.getLogger(__name__)
+
 
 def custom_exception_handler(exc, context):
     response = exception_handler(exc, context)
@@ -370,3 +379,277 @@ class ElectiveChoicesView(APIView):
             return Response({'results': []})
 
         return Response({'results': results})
+
+
+class ElectiveChoiceTemplateDownloadView(APIView):
+    """Download a CSV or Excel template for importing elective student mappings."""
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        user = request.user
+        perms = get_user_permissions(user)
+        
+        # Check permission
+        if not ('curriculum.import_elective_choices' in perms or user.is_staff or user.is_superuser):
+            return Response({'error': 'You do not have permission to download elective import template'}, 
+                          status=status.HTTP_403_FORBIDDEN)
+        
+        # Get all departments for dropdown
+        from academics.models import Department
+        departments = Department.objects.all().order_by('short_name')
+        dept_short_names = [dept.short_name if dept.short_name else dept.code for dept in departments]
+        
+        # Check if Excel format is requested
+        format_type = request.query_params.get('format', 'csv').lower()
+        
+        if format_type == 'excel' and EXCEL_SUPPORT:
+            # Create Excel template
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Elective Choices"
+            
+            # Headers
+            headers = ['student_reg_no', 'elective_subject_code', 'department', 'academic_year', 'is_active']
+            ws.append(headers)
+            
+            # Sample row
+            sample_dept = dept_short_names[0] if dept_short_names else 'CSE'
+            ws.append(['REG001', 'ELEC001', sample_dept, '2025-2026', 'TRUE'])
+            
+            # Add dropdown validation for department column (column C)
+            if dept_short_names:
+                dept_list = ','.join(dept_short_names)
+                dv = DataValidation(type="list", formula1=f'"{dept_list}"', allow_blank=False)
+                dv.error = 'Please select a department from the list'
+                dv.errorTitle = 'Invalid Department'
+                dv.prompt = 'Select a department'
+                dv.promptTitle = 'Department Selection'
+                # Apply validation to column C (department) from row 2 to 1000
+                ws.add_data_validation(dv)
+                dv.add(f'C2:C1000')
+            
+            # Save to bytes
+            from io import BytesIO
+            excel_file = BytesIO()
+            wb.save(excel_file)
+            excel_file.seek(0)
+            
+            response = HttpResponse(
+                excel_file.read(),
+                content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+            response['Content-Disposition'] = 'attachment; filename="elective_choices_template.xlsx"'
+            return response
+        else:
+            # Create CSV template (default)
+            response = HttpResponse(content_type='text/csv')
+            response['Content-Disposition'] = 'attachment; filename="elective_choices_template.csv"'
+            
+            writer = csv.writer(response)
+            writer.writerow([
+                'student_reg_no',
+                'elective_subject_code',
+                'department',
+                'academic_year',
+                'is_active'
+            ])
+            
+            # Add sample row
+            sample_dept = dept_short_names[0] if dept_short_names else 'CSE'
+            writer.writerow([
+                'REG001',
+                'ELEC001',
+                sample_dept,
+                '2025-2026',
+                'TRUE'
+            ])
+            
+            # Add comment row showing available departments
+            if dept_short_names:
+                writer.writerow([
+                    '# Available departments:',
+                    '',
+                    ', '.join(dept_short_names),
+                    '',
+                    ''
+                ])
+            
+            return response
+
+
+class ElectiveChoiceBulkImportView(APIView):
+    """Bulk import elective student mappings from CSV or Excel file."""
+    parser_classes = (MultiPartParser, FormParser)
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request):
+        user = request.user
+        perms = get_user_permissions(user)
+        
+        # Check permission
+        if not ('curriculum.import_elective_choices' in perms or user.is_staff or user.is_superuser):
+            return Response({'error': 'You do not have permission to import elective choices'}, 
+                          status=status.HTTP_403_FORBIDDEN)
+        
+        uploaded_file = request.FILES.get('csv_file')
+        if not uploaded_file:
+            return Response({'error': 'No file provided'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        filename = uploaded_file.name.lower()
+        is_excel = filename.endswith(('.xlsx', '.xls'))
+        is_csv = filename.endswith('.csv')
+        
+        if not (is_csv or is_excel):
+            return Response({'error': 'File must be CSV or Excel (.xlsx, .xls)'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Parse file based on format
+        rows = []
+        if is_excel:
+            if not EXCEL_SUPPORT:
+                return Response({'error': 'Excel support not available. Please install openpyxl or use CSV format.'}, 
+                              status=status.HTTP_400_BAD_REQUEST)
+            try:
+                wb = load_workbook(uploaded_file, read_only=True)
+                ws = wb.active
+                
+                # Get headers from first row
+                headers = []
+                for cell in ws[1]:
+                    headers.append(cell.value)
+                
+                # Read data rows
+                for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+                    row_dict = {}
+                    for idx, value in enumerate(row):
+                        if idx < len(headers) and headers[idx]:
+                            row_dict[headers[idx]] = str(value) if value is not None else ''
+                    if any(row_dict.values()):  # Skip empty rows
+                        rows.append((row_idx, row_dict))
+            except Exception as e:
+                return Response({'error': f'Failed to parse Excel file: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            # Parse CSV
+            try:
+                decoded_file = uploaded_file.read().decode('utf-8-sig')
+                io_string = io.StringIO(decoded_file)
+                reader = csv.DictReader(io_string)
+                rows = [(idx, row) for idx, row in enumerate(reader, start=2)]
+            except Exception as e:
+                return Response({'error': f'Failed to parse CSV file: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Process rows
+        try:
+            from .models import ElectiveChoice, ElectiveSubject
+            from academics.models import StudentProfile, AcademicYear, Department
+            
+            created_count = 0
+            updated_count = 0
+            errors = []
+            
+            with transaction.atomic():
+                for idx, row in rows:
+                    try:
+                        student_reg = row.get('student_reg_no', '').strip()
+                        elective_code = row.get('elective_subject_code', '').strip()
+                        department_short = row.get('department', '').strip()
+                        ay_name = row.get('academic_year', '').strip()
+                        is_active_str = row.get('is_active', 'TRUE').strip().upper()
+                        
+                        if not student_reg or not elective_code:
+                            errors.append(f'Row {idx}: Missing required fields (student_reg_no or elective_subject_code)')
+                            continue
+                        
+                        # Find student
+                        try:
+                            student = StudentProfile.objects.get(reg_no=student_reg)
+                        except StudentProfile.DoesNotExist:
+                            errors.append(f'Row {idx}: Student with reg_no "{student_reg}" not found')
+                            continue
+                        
+                        # Find department if provided
+                        department = None
+                        if department_short:
+                            try:
+                                department = Department.objects.filter(short_name=department_short).first()
+                                if not department:
+                                    # Try finding by code as fallback
+                                    department = Department.objects.filter(code=department_short).first()
+                                if not department:
+                                    errors.append(f'Row {idx}: Department with short_name or code "{department_short}" not found')
+                                    continue
+                            except Exception as e:
+                                errors.append(f'Row {idx}: Error finding department: {str(e)}')
+                                continue
+                        
+                        # Find elective subject
+                        try:
+                            elective_query = ElectiveSubject.objects.filter(course_code=elective_code)
+                            
+                            # Filter by department if provided
+                            if department:
+                                elective_query = elective_query.filter(department=department)
+                            
+                            elective = elective_query.first()
+                            
+                            if not elective:
+                                dept_info = f' in department "{department_short}"' if department_short else ''
+                                errors.append(f'Row {idx}: Elective subject with code "{elective_code}"{dept_info} not found')
+                                continue
+                        except Exception as e:
+                            errors.append(f'Row {idx}: Error finding elective subject: {str(e)}')
+                            continue
+                        
+                        # Find academic year
+                        academic_year = None
+                        if ay_name:
+                            try:
+                                academic_year = AcademicYear.objects.filter(name=ay_name).first()
+                                if not academic_year:
+                                    errors.append(f'Row {idx}: Academic year "{ay_name}" not found')
+                                    continue
+                            except Exception as e:
+                                errors.append(f'Row {idx}: Error finding academic year: {str(e)}')
+                                continue
+                        else:
+                            # Use active academic year
+                            academic_year = AcademicYear.objects.filter(is_active=True).first()
+                            if not academic_year:
+                                errors.append(f'Row {idx}: No active academic year found. Please specify academic_year in CSV.')
+                                continue
+                        
+                        is_active = is_active_str in ('TRUE', '1', 'YES', 'Y')
+                        
+                        # Create or update choice
+                        choice, created = ElectiveChoice.objects.update_or_create(
+                            student=student,
+                            elective_subject=elective,
+                            academic_year=academic_year,
+                            defaults={
+                                'is_active': is_active,
+                                'created_by': user
+                            }
+                        )
+                        
+                        if created:
+                            created_count += 1
+                        else:
+                            updated_count += 1
+                            
+                    except Exception as e:
+                        errors.append(f'Row {idx}: {str(e)}')
+            
+            result = {
+                'message': 'Import completed',
+                'created': created_count,
+                'updated': updated_count,
+                'errors': errors[:50]  # Limit error messages
+            }
+            
+            if errors:
+                result['warning'] = f'Import completed with {len(errors)} errors'
+            
+            return Response(result, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            return Response({'error': f'Failed to process file: {str(e)}'}, 
+                          status=status.HTTP_500_INTERNAL_SERVER_ERROR)

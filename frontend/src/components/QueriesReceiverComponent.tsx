@@ -11,9 +11,10 @@ import {
   Save, 
   X,
   Filter,
-  User
+  User,
+  Shield
 } from 'lucide-react';
-import { fetchAllQueries, updateQuery, UserQuery } from '../services/queries';
+import { fetchAllQueries, updateQuery, UserQuery, AllQueriesResponse } from '../services/queries';
 
 const STATUS_CONFIG = {
   SENT: { label: 'Sent', icon: Send, color: 'bg-blue-100 text-blue-700', borderColor: 'border-blue-300' },
@@ -30,10 +31,16 @@ const STATUS_OPTIONS = Object.keys(STATUS_CONFIG);
 
 export default function QueriesReceiverComponent() {
   const [queries, setQueries] = useState<UserQuery[]>([]);
+  const [departments, setDepartments] = useState<Array<{ id: number; code: string; name: string; short_name: string }>>([]);
+  const [roles, setRoles] = useState<Array<{ id: number; name: string }>>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [filteredCount, setFilteredCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('');
+  const [departmentFilter, setDepartmentFilter] = useState<string>('');
+  const [roleFilter, setRoleFilter] = useState<string>('');
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editStatus, setEditStatus] = useState('');
   const [editNotes, setEditNotes] = useState('');
@@ -41,14 +48,18 @@ export default function QueriesReceiverComponent() {
 
   useEffect(() => {
     loadQueries();
-  }, [statusFilter]);
+  }, [statusFilter, departmentFilter, roleFilter]);
 
   async function loadQueries() {
     setLoading(true);
     setError('');
     try {
-      const data = await fetchAllQueries(statusFilter);
-      setQueries(data);
+      const data = await fetchAllQueries(statusFilter, departmentFilter, roleFilter);
+      setQueries(data.queries);
+      setDepartments(data.departments);
+      setRoles(data.roles);
+      setTotalCount(data.total_count);
+      setFilteredCount(data.filtered_count);
     } catch (err) {
       setError('Failed to load queries. Please try again.');
     } finally {
@@ -122,11 +133,20 @@ export default function QueriesReceiverComponent() {
               <p className="text-sm text-slate-600">All user queries and support tickets</p>
             </div>
           </div>
-          <div className="flex items-center gap-2 text-sm">
-            <span className="text-slate-600 font-medium">Total:</span>
-            <span className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full font-bold">
-              {queries.length}
+          <div className="flex items-center gap-3">
+            <span className="text-slate-600 font-medium text-sm">Total:</span>
+            <span className="px-3 py-1 bg-slate-100 text-slate-700 rounded-full font-bold text-sm">
+              {totalCount}
             </span>
+            {(statusFilter || departmentFilter || roleFilter) && (
+              <>
+                <span className="text-slate-400">|</span>
+                <span className="text-slate-600 font-medium text-sm">Filtered:</span>
+                <span className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full font-bold text-sm">
+                  {filteredCount}
+                </span>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -152,8 +172,10 @@ export default function QueriesReceiverComponent() {
         <div className="flex items-center gap-3 flex-wrap">
           <div className="flex items-center gap-2 text-sm text-slate-700 font-medium">
             <Filter className="w-4 h-4" />
-            Filter by status:
+            Filters:
           </div>
+          
+          {/* Status Filter */}
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
@@ -167,6 +189,48 @@ export default function QueriesReceiverComponent() {
               </option>
             ))}
           </select>
+
+          {/* Department Filter */}
+          <select
+            value={departmentFilter}
+            onChange={(e) => setDepartmentFilter(e.target.value)}
+            className="px-3 py-1.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+          >
+            <option value="">All Departments</option>
+            {departments.map((dept) => (
+              <option key={dept.id} value={dept.id}>
+                {dept.short_name || dept.code} - {dept.name}
+              </option>
+            ))}
+          </select>
+
+          {/* Role Filter */}
+          <select
+            value={roleFilter}
+            onChange={(e) => setRoleFilter(e.target.value)}
+            className="px-3 py-1.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+          >
+            <option value="">All Roles</option>
+            {roles.map((role) => (
+              <option key={role.id} value={role.name}>
+                {role.name}
+              </option>
+            ))}
+          </select>
+
+          {/* Clear Filters */}
+          {(statusFilter || departmentFilter || roleFilter) && (
+            <button
+              onClick={() => {
+                setStatusFilter('');
+                setDepartmentFilter('');
+                setRoleFilter('');
+              }}
+              className="px-3 py-1.5 text-sm text-slate-600 hover:text-slate-900 hover:bg-slate-200 rounded-lg transition-colors"
+            >
+              Clear Filters
+            </button>
+          )}
         </div>
       </div>
 
@@ -208,8 +272,31 @@ export default function QueriesReceiverComponent() {
                         <User className="w-5 h-5 text-slate-600" />
                       </div>
                       <div>
-                        <div className="font-semibold text-slate-900">{query.username}</div>
-                        <div className="text-xs text-slate-500">Query #{query.id}</div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <div className="font-semibold text-slate-900">{query.username}</div>
+                          {query.user_roles && query.user_roles.length > 0 && (
+                            <div className="flex items-center gap-1">
+                              {query.user_roles.map((role) => (
+                                <span
+                                  key={role}
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded text-xs font-medium"
+                                >
+                                  <Shield className="w-3 h-3" />
+                                  {role}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 text-xs text-slate-500">
+                          <span>Query #{query.serial_number}</span>
+                          {query.user_department && (
+                            <>
+                              <span>•</span>
+                              <span className="font-medium">{query.user_department.short_name || query.user_department.code}</span>
+                            </>
+                          )}
+                        </div>
                       </div>
                     </div>
                     

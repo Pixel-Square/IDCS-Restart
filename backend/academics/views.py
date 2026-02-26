@@ -1711,7 +1711,7 @@ class StaffsPageView(APIView):
 
     - Requires explicit `academics.view_staffs_page` permission (or staff/superuser).
     - If user has `academics.view_all_staff` (or is staff/superuser), returns all departments.
-    - Otherwise limits to departments returned by `get_user_effective_departments(user)`.
+    - Otherwise HODs and other staff see ONLY their own primary department (not effective departments).
 
     Response format:
       { results: [ { id, code, name, short_name, staffs: [ {id, staff_id, user: {username, first_name, last_name}, designation, status} ] } ] }
@@ -1722,20 +1722,40 @@ class StaffsPageView(APIView):
         user = request.user
         perms = get_user_permissions(user)
 
-        # require page-view permission unless staff/superuser
-        if not (user.is_staff or user.is_superuser or 'academics.view_staffs_page' in perms):
+        # require page-view permission unless superuser
+        if not (user.is_superuser or 'academics.view_staffs_page' in perms):
             return Response({'detail': 'You do not have permission to view staffs page.'}, status=403)
 
         from .models import Department, StaffProfile
         from django.db.models import Q
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Debug: Log user permissions
+        logger.info(f"StaffsPage - User: {user.username}, Superuser: {user.is_superuser}")
+        logger.info(f"StaffsPage - Permissions: {perms}")
+        logger.info(f"StaffsPage - Has view_all_staff: {'academics.view_all_staff' in perms}")
+        logger.info(f"StaffsPage - Has edit_staff: {'academics.edit_staff' in perms}")
+
+        # Check if user can edit staff
+        can_edit = user.is_superuser or 'academics.edit_staff' in perms
 
         # determine departments to include
-        if ('academics.view_all_staff' in perms) or user.is_staff or user.is_superuser or ('academics.view_all_departments' in perms):
+        if user.is_superuser or ('academics.view_all_staff' in perms):
+            # View all departments
+            logger.info(f"StaffsPage - Showing ALL departments (superuser or has view_all_staff)")
             dept_qs = Department.objects.all()
         else:
-            dept_ids = get_user_effective_departments(user) or []
+            # HODs and other staff: show departments they are affiliated with
+            # This includes their primary department AND any HOD/AHOD mapped departments
+            from academics.utils import get_user_effective_departments
+            
+            dept_ids = get_user_effective_departments(user)
             if not dept_ids:
+                logger.info(f"StaffsPage - No effective departments found, returning empty")
                 return Response({'results': []})
+            
+            logger.info(f"StaffsPage - Showing departments: {dept_ids} (includes primary + HOD mappings)")
             dept_qs = Department.objects.filter(id__in=dept_ids)
 
         results = []
@@ -1749,18 +1769,29 @@ class StaffsPageView(APIView):
             staffs = []
             for s in staff_qs:
                 user_data = None
+                user_roles = []
                 if s.user:
                     user_data = {
                         'username': s.user.username,
                         'first_name': getattr(s.user, 'first_name', ''),
                         'last_name': getattr(s.user, 'last_name', ''),
+                        'email': getattr(s.user, 'email', ''),
                     }
+                    # Get user roles
+                    try:
+                        user_roles = [r.name for r in s.user.roles.all()]
+                    except Exception:
+                        user_roles = []
+                
                 staffs.append({
                     'id': s.id,
                     'staff_id': s.staff_id,
                     'user': user_data,
+                    'user_id': s.user.id if s.user else None,
                     'designation': getattr(s, 'designation', None),
                     'status': getattr(s, 'status', None),
+                    'department': s.department_id if s.department_id else None,
+                    'roles': user_roles,
                 })
 
             results.append({
@@ -1771,7 +1802,163 @@ class StaffsPageView(APIView):
                 'staffs': staffs,
             })
 
-        return Response({'results': results})
+        return Response({'results': results, 'can_edit': can_edit})
+
+
+class StaffProfileCreateView(APIView):
+    """Create a new staff profile with user account."""
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request):
+        from .serializers import StaffProfileSerializer
+        from accounts.utils import get_user_permissions
+        
+        user = request.user
+        perms = get_user_permissions(user)
+        
+        # Check permission - require edit_staff or superuser to create staff
+        if not (user.is_superuser or 'academics.edit_staff' in perms):
+            return Response(
+                {'detail': 'You do not have permission to create staff profiles.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Validate department scope for non-superusers
+        if not user.is_superuser and 'academics.view_all_staff' not in perms:
+            # HODs can only create staff in departments they are mapped to
+            from academics.utils import get_user_effective_departments
+            
+            allowed_dept_ids = get_user_effective_departments(user)
+            if allowed_dept_ids:
+                requested_dept = request.data.get('department')
+                if requested_dept and int(requested_dept) not in allowed_dept_ids:
+                    return Response(
+                        {'detail': 'You can only create staff in departments you manage.'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            else:
+                return Response(
+                    {'detail': 'You are not mapped to any departments.'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        
+        serializer = StaffProfileSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class StaffProfileUpdateView(APIView):
+    """Update an existing staff profile."""
+    permission_classes = (IsAuthenticated,)
+
+    def put(self, request, pk):
+        from .serializers import StaffProfileSerializer
+        from accounts.utils import get_user_permissions
+        
+        user = request.user
+        perms = get_user_permissions(user)
+        
+        # Check permission - require edit_staff or superuser to edit staff
+        if not (user.is_superuser or 'academics.edit_staff' in perms):
+            return Response(
+                {'detail': 'You do not have permission to edit staff profiles.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        try:
+            staff_profile = StaffProfile.objects.get(pk=pk)
+        except StaffProfile.DoesNotExist:
+            return Response(
+                {'detail': 'Staff profile not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Validate department scope for non-superusers without view_all_staff
+        if not user.is_superuser and 'academics.view_all_staff' not in perms:
+            # HODs can only edit staff in departments they are mapped to
+            from academics.utils import get_user_effective_departments
+            
+            allowed_dept_ids = get_user_effective_departments(user)
+            if allowed_dept_ids:
+                # Check current department of staff being edited
+                if staff_profile.department_id not in allowed_dept_ids:
+                    return Response(
+                        {'detail': 'You can only edit staff in departments you manage.'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+                # If they're trying to change department, validate
+                new_dept = request.data.get('department')
+                if new_dept and int(new_dept) not in allowed_dept_ids:
+                    return Response(
+                        {'detail': 'You cannot transfer staff to departments you do not manage.'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            else:
+                return Response(
+                    {'detail': 'You are not mapped to any departments.'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        
+        serializer = StaffProfileSerializer(staff_profile, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def patch(self, request, pk):
+        """Same as PUT but allows partial updates."""
+        return self.put(request, pk)
+
+
+class StaffProfileDeleteView(APIView):
+    """Delete a staff profile."""
+    permission_classes = (IsAuthenticated,)
+
+    def delete(self, request, pk):
+        from accounts.utils import get_user_permissions
+        
+        user = request.user
+        perms = get_user_permissions(user)
+        
+        # Check permission - require edit_staff or superuser to delete staff
+        if not (user.is_superuser or 'academics.edit_staff' in perms):
+            return Response(
+                {'detail': 'You do not have permission to delete staff profiles.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        try:
+            staff_profile = StaffProfile.objects.get(pk=pk)
+        except StaffProfile.DoesNotExist:
+            return Response(
+                {'detail': 'Staff profile not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Validate department scope for non-superusers without view_all_staff
+        if not user.is_superuser and 'academics.view_all_staff' not in perms:
+            # HODs can only delete staff in departments they are mapped to
+            from academics.utils import get_user_effective_departments
+            
+            allowed_dept_ids = get_user_effective_departments(user)
+            if allowed_dept_ids:
+                if staff_profile.department_id not in allowed_dept_ids:
+                    return Response(
+                        {'detail': 'You can only delete staff in departments you manage.'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            else:
+                return Response(
+                    {'detail': 'You are not mapped to any departments.'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        
+        # Delete the user (cascade will delete staff profile)
+        staff_profile.user.delete()
+        
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class AdvisorStaffListView(APIView):

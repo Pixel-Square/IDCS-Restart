@@ -58,6 +58,8 @@ class MeSerializer(serializers.Serializer):
     id = serializers.IntegerField(read_only=True)
     username = serializers.CharField(read_only=True)
     email = serializers.EmailField(read_only=True)
+    first_name = serializers.CharField(read_only=True)
+    last_name = serializers.CharField(read_only=True)
     roles = serializers.SerializerMethodField()
     permissions = serializers.SerializerMethodField()
     profile_type = serializers.SerializerMethodField()
@@ -118,6 +120,7 @@ class MeSerializer(serializers.Serializer):
 
             return {
                 'reg_no': sp.reg_no,
+                'student_id': sp.reg_no,  # Alias for consistency
                 'mobile_number': getattr(sp, 'mobile_number', '') or '',
                 'mobile_verified': bool(getattr(sp, 'mobile_number_verified_at', None)),
                 'section_id': getattr(sec_obj, 'id', None),
@@ -158,6 +161,7 @@ class MeSerializer(serializers.Serializer):
                 'code': c.code,
                 'name': c.name,
                 'short_name': c.short_name,
+                'address': c.address,
             }
         except Exception:
             return None
@@ -172,11 +176,41 @@ class NotificationTemplateSerializer(serializers.ModelSerializer):
 class UserQuerySerializer(serializers.ModelSerializer):
     """Serializer for user queries, doubts, errors, and bug reports."""
     username = serializers.CharField(source='user.username', read_only=True)
+    serial_number = serializers.SerializerMethodField()
+    user_roles = serializers.SerializerMethodField()
+    user_department = serializers.SerializerMethodField()
     
     class Meta:
         model = UserQuery
-        fields = ('id', 'user', 'username', 'query_text', 'status', 'created_at', 'updated_at', 'admin_notes')
-        read_only_fields = ('id', 'user', 'username', 'created_at', 'updated_at', 'admin_notes', 'status')
+        fields = ('id', 'serial_number', 'user', 'username', 'user_roles', 'user_department', 'query_text', 'status', 'created_at', 'updated_at', 'admin_notes')
+        read_only_fields = ('id', 'serial_number', 'user', 'username', 'user_roles', 'user_department', 'created_at', 'updated_at', 'admin_notes', 'status')
+    
+    def get_serial_number(self, obj):
+        """Calculate serial number based on creation order (oldest = 1)."""
+        return UserQuery.objects.filter(created_at__lt=obj.created_at).count() + 1
+    
+    def get_user_roles(self, obj):
+        """Get user's roles as a list of role names."""
+        return [ur.role.name for ur in obj.user.user_roles.select_related('role').all()]
+    
+    def get_user_department(self, obj):
+        """Get user's department information if available."""
+        try:
+            if hasattr(obj.user, 'staff_profile'):
+                dept = obj.user.staff_profile.current_department
+                if dept:
+                    return {'id': dept.id, 'code': dept.code, 'name': dept.name, 'short_name': dept.short_name}
+            elif hasattr(obj.user, 'student_profile'):
+                student = obj.user.student_profile
+                # Get department through section->batch->course->department
+                section = student.current_section or student.section
+                if section and hasattr(section, 'batch') and section.batch:
+                    dept = section.batch.course.department
+                    if dept:
+                        return {'id': dept.id, 'code': dept.code, 'name': dept.name, 'short_name': dept.short_name}
+        except Exception:
+            pass
+        return None
     
     def create(self, validated_data):
         # Set the user from context
@@ -188,14 +222,19 @@ class UserQueryListSerializer(serializers.ModelSerializer):
     """Minimal serializer for listing queries."""
     username = serializers.CharField(source='user.username', read_only=True)
     query_preview = serializers.SerializerMethodField()
+    serial_number = serializers.SerializerMethodField()
     
     class Meta:
         model = UserQuery
-        fields = ('id', 'username', 'query_preview', 'status', 'admin_notes', 'created_at', 'updated_at')
+        fields = ('id', 'serial_number', 'username', 'query_preview', 'status', 'admin_notes', 'created_at', 'updated_at')
     
     def get_query_preview(self, obj):
         """Return first 100 characters of query text."""
         return obj.query_text[:100] + '...' if len(obj.query_text) > 100 else obj.query_text
+    
+    def get_serial_number(self, obj):
+        """Calculate serial number based on creation order (oldest = 1)."""
+        return UserQuery.objects.filter(created_at__lt=obj.created_at).count() + 1
 
 
 class IdentifierTokenObtainPairSerializer(serializers.Serializer):

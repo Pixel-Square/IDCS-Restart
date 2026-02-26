@@ -366,14 +366,16 @@ class StaffProfile(models.Model):
             raise ValidationError({'status': 'Staff cannot have status ALUMNI.'})
 
     def save(self, *args, **kwargs):
-        # Immutable staff_id after creation
+        # Validate staff_id uniqueness when changed
         if self.pk:
             try:
                 old = StaffProfile.objects.get(pk=self.pk)
             except StaffProfile.DoesNotExist:
                 old = None
             if old and old.staff_id != self.staff_id:
-                raise ValidationError('Staff staff_id is immutable and cannot be changed.')
+                # Check if new staff_id is already taken
+                if StaffProfile.objects.filter(staff_id=self.staff_id).exclude(pk=self.pk).exists():
+                    raise ValidationError({'staff_id': 'This staff ID is already in use.'})
 
         # run full clean to enforce validations
         self.full_clean()

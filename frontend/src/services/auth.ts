@@ -171,7 +171,13 @@ export async function verifyMobileOtp(mobile_number: string, otp: string) {
   const res = await apiClient.post('mobile/verify-otp/', { mobile_number, otp })
   return res.data
 }
+
 export async function removeMobileNumber(password: string){
   const res = await apiClient.post('mobile/remove/', { password })
+  return res.data
+}
+
+export async function changePassword(current_password: string, new_password: string, confirm_password: string) {
+  const res = await apiClient.post('change-password/', { current_password, new_password, confirm_password })
   return res.data
 }

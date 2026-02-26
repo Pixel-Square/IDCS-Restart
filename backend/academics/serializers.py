@@ -1003,4 +1003,140 @@ class PeriodAttendanceSessionSerializer(serializers.ModelSerializer):
             return None
 
 
+class StaffProfileSerializer(serializers.ModelSerializer):
+    """Serializer for creating and updating staff profiles."""
+    # User fields for creation
+    username = serializers.CharField(write_only=True, required=False)
+    password = serializers.CharField(write_only=True, required=False)
+    first_name = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    last_name = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    email = serializers.EmailField(write_only=True, required=False, allow_blank=True)
+    
+    # Read-only user info
+    user_username = serializers.CharField(source='user.username', read_only=True)
+    user_first_name = serializers.CharField(source='user.first_name', read_only=True)
+    user_last_name = serializers.CharField(source='user.last_name', read_only=True)
+    user_email = serializers.CharField(source='user.email', read_only=True)
+    
+    # Roles
+    roles = serializers.ListField(
+        child=serializers.CharField(),
+        write_only=True,
+        required=False,
+        allow_empty=True
+    )
+    user_roles = serializers.SerializerMethodField(read_only=True)
+    
+    class Meta:
+        model = StaffProfile
+        fields = [
+            'id', 'staff_id', 'department', 'designation', 'status',
+            'mobile_number', 'mobile_number_verified_at',
+            # Write-only user fields
+            'username', 'password', 'first_name', 'last_name', 'email',
+            # Read-only user fields
+            'user_username', 'user_first_name', 'user_last_name', 'user_email',
+            # Roles
+            'roles', 'user_roles',
+        ]
+        read_only_fields = ['id', 'mobile_number_verified_at']
+    
+    def get_user_roles(self, obj):
+        """Get user roles."""
+        try:
+            return [r.name for r in obj.user.roles.all()]
+        except Exception:
+            return []
+    
+    def create(self, validated_data):
+        """Create a staff profile with a new user."""
+        from django.contrib.auth import get_user_model
+        from accounts.models import Role
+        
+        User = get_user_model()
+        
+        # Extract user-related fields
+        username = validated_data.pop('username', None)
+        password = validated_data.pop('password', None)
+        first_name = validated_data.pop('first_name', '')
+        last_name = validated_data.pop('last_name', '')
+        email = validated_data.pop('email', '')
+        roles = validated_data.pop('roles', [])
+        
+        if not username:
+            raise serializers.ValidationError({'username': 'Username is required for new staff.'})
+        
+        # Create user
+        try:
+            user = User.objects.create_user(
+                username=username,
+                password=password or 'changeme123',
+                first_name=first_name,
+                last_name=last_name,
+                email=email
+            )
+        except IntegrityError:
+            raise serializers.ValidationError({'username': 'Username already exists.'})
+        
+        # Create staff profile
+        validated_data['user'] = user
+        staff_profile = StaffProfile.objects.create(**validated_data)
+        
+        # Assign roles
+        if roles:
+            role_objects = Role.objects.filter(name__in=roles)
+            user.roles.set(role_objects)
+        
+        return staff_profile
+    
+    def update(self, instance, validated_data):
+        """Update staff profile and optionally user details."""
+        from accounts.models import Role
+        from django.contrib.auth import get_user_model
+        
+        User = get_user_model()
+        
+        # Extract user-related fields
+        first_name = validated_data.pop('first_name', None)
+        last_name = validated_data.pop('last_name', None)
+        email = validated_data.pop('email', None)
+        password = validated_data.pop('password', None)
+        username = validated_data.pop('username', None)  # Allow username updates
+        roles = validated_data.pop('roles', None)
+        
+        # Validate staff_id uniqueness if being changed
+        new_staff_id = validated_data.get('staff_id')
+        if new_staff_id and new_staff_id != instance.staff_id:
+            from academics.models import StaffProfile
+            if StaffProfile.objects.filter(staff_id=new_staff_id).exclude(pk=instance.pk).exists():
+                raise serializers.ValidationError({'staff_id': 'This staff ID is already in use.'})
+        
+        # Update user fields if provided
+        user = instance.user
+        if first_name is not None:
+            user.first_name = first_name
+        if last_name is not None:
+            user.last_name = last_name
+        if email is not None:
+            user.email = email
+        if username is not None:
+            # Check if new username already exists for a different user
+            if User.objects.filter(username=username).exclude(pk=user.pk).exists():
+                raise serializers.ValidationError({'username': 'A user with this username already exists.'})
+            user.username = username
+        if password:
+            user.set_password(password)
+        user.save()
+        
+        # Update roles if provided
+        if roles is not None:
+            role_objects = Role.objects.filter(name__in=roles)
+            user.roles.set(role_objects)
+        
+        # Update staff profile fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        
+        return instance
  

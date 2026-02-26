@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
-import { Users, Building2, AlertCircle } from 'lucide-react'
+import { Users, Building2, AlertCircle, Edit, Trash2, UserPlus } from 'lucide-react'
 import fetchWithAuth from '../services/fetchAuth'
+import StaffFormModal from '../components/StaffFormModal'
 
 type StaffMember = {
   id: number
@@ -9,9 +10,13 @@ type StaffMember = {
     username: string
     first_name: string
     last_name: string
+    email?: string
   } | null
+  user_id: number | null
   designation: string | null
   status: string | null
+  department: number | null
+  roles: string[]
 }
 
 type Department = {
@@ -24,17 +29,18 @@ type Department = {
 
 const getStaffDisplayName = (staff: StaffMember): string => {
   if (!staff.user) return staff.staff_id
-  const firstName = staff.user.first_name || ''
-  const lastName = staff.user.last_name || ''
-  const fullName = `${firstName} ${lastName}`.trim()
-  return fullName || staff.user.username || staff.staff_id
+  return staff.user.username || staff.staff_id
 }
 
 export default function StaffsPage() {
   const [departments, setDepartments] = useState<Department[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [expandedDepts, setExpandedDepts] = useState<Set<number>>(new Set())
+  const [currentDeptId, setCurrentDeptId] = useState<number | null>(null)
+  const [isModalOpen, setIsModalOpen] = useState(false)
+  const [editingStaff, setEditingStaff] = useState<StaffMember | null>(null)
+  const [selectedDeptId, setSelectedDeptId] = useState<number | null>(null)
+  const [canEdit, setCanEdit] = useState(false)
 
   useEffect(() => {
     fetchStaffs()
@@ -58,10 +64,12 @@ export default function StaffsPage() {
       const data = await res.json()
       const depts = data.results || []
       setDepartments(depts)
+      setCanEdit(data.can_edit || false)
       
-      // Auto-expand all departments by default
-      const allIds = new Set(depts.map((d: Department) => d.id))
-      setExpandedDepts(allIds)
+      // Set first department as default
+      if (depts.length > 0 && currentDeptId === null) {
+        setCurrentDeptId(depts[0].id)
+      }
     } catch (err) {
       console.error('Error fetching staffs:', err)
       setError('An error occurred while loading staff data.')
@@ -70,16 +78,50 @@ export default function StaffsPage() {
     }
   }
 
-  const toggleDepartment = (deptId: number) => {
-    setExpandedDepts((prev) => {
-      const next = new Set(prev)
-      if (next.has(deptId)) {
-        next.delete(deptId)
+  const handleEdit = (staff: StaffMember) => {
+    setEditingStaff(staff)
+    setIsModalOpen(true)
+  }
+
+  const handleDelete = async (staffId: number, staffName: string) => {
+    if (!confirm(`Are you sure you want to delete ${staffName}? This action cannot be undone.`)) {
+      return
+    }
+    
+    try {
+      const response = await fetchWithAuth(`/api/academics/staffs/${staffId}/delete/`, {
+        method: 'DELETE',
+      })
+      
+      if (response.ok) {
+        // Refresh the staff list
+        await fetchStaffs()
+        alert('Staff member deleted successfully.')
       } else {
-        next.add(deptId)
+        const errorData = await response.json().catch(() => ({}))
+        alert(errorData.detail || 'Failed to delete staff member.')
       }
-      return next
-    })
+    } catch (err: any) {
+      console.error('Delete error:', err)
+      alert('An error occurred while deleting the staff member.')
+    }
+  }
+
+  const handleAddStaff = (deptId: number) => {
+    setEditingStaff(null)
+    setSelectedDeptId(deptId)
+    setIsModalOpen(true)
+  }
+
+  const handleModalClose = () => {
+    setIsModalOpen(false)
+    setEditingStaff(null)
+    setSelectedDeptId(null)
+  }
+
+  const handleModalSuccess = async () => {
+    // Refresh the staff list
+    await fetchStaffs()
   }
 
   if (loading) {
@@ -133,120 +175,185 @@ export default function StaffsPage() {
           </div>
         </div>
 
-        {/* Departments Grid */}
-        <div className="grid grid-cols-1 gap-6">
-          {departments.map((dept) => {
-            const isExpanded = expandedDepts.has(dept.id)
-            const staffCount = dept.staffs?.length || 0
-
-            return (
-              <div
-                key={dept.id}
-                className="bg-white rounded-lg shadow-md overflow-hidden transition-all"
-              >
-                {/* Department Header */}
+        {/* Department Button Navigation */}
+        <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+          <h3 className="text-lg font-medium text-gray-900 mb-4">Filter by Department</h3>
+          <div className="flex flex-wrap gap-2">
+            {departments.map((dept) => {
+              const isActive = currentDeptId === dept.id
+              const displayName = dept.short_name || dept.code || dept.name || `Dept ${dept.id}`
+              return (
                 <button
-                  onClick={() => toggleDepartment(dept.id)}
-                  className="w-full px-6 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors"
+                  key={dept.id}
+                  onClick={() => setCurrentDeptId(dept.id)}
+                  className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
+                    isActive
+                      ? 'bg-blue-100 text-blue-700'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
                 >
-                  <div className="flex items-center space-x-4">
-                    <Building2 className="h-6 w-6 text-indigo-600" />
-                    <div className="text-left">
-                      <h2 className="text-lg font-semibold text-gray-900">
-                        {dept.code || dept.short_name || 'Unknown'}
-                        {dept.name && dept.name !== dept.code && (
-                          <span className="text-sm font-normal text-gray-600 ml-2">
-                            — {dept.name}
-                          </span>
-                        )}
-                      </h2>
-                      <p className="text-sm text-gray-600">{staffCount} staff member{staffCount !== 1 ? 's' : ''}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <span className="text-sm font-medium text-indigo-600">
-                      {isExpanded ? 'Hide' : 'Show'}
-                    </span>
-                    <svg
-                      className={`h-5 w-5 text-gray-400 transition-transform ${
-                        isExpanded ? 'transform rotate-180' : ''
-                      }`}
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                    </svg>
-                  </div>
+                  {displayName}
                 </button>
+              )
+            })}
+          </div>
+        </div>
 
-                {/* Staff List */}
-                {isExpanded && (
-                  <div className="border-t border-gray-200">
-                    {staffCount === 0 ? (
-                      <div className="px-6 py-8 text-center text-gray-500">
-                        <Users className="h-10 w-10 mx-auto mb-2 text-gray-300" />
-                        <p>No staff members in this department</p>
-                      </div>
-                    ) : (
-                      <div className="overflow-x-auto">
-                        <table className="min-w-full divide-y divide-gray-200">
-                          <thead className="bg-gray-50">
-                            <tr>
-                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                Staff ID
-                              </th>
-                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                Name
-                              </th>
-                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                Designation
-                              </th>
-                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                Status
-                              </th>
-                            </tr>
-                          </thead>
-                          <tbody className="bg-white divide-y divide-gray-200">
-                            {dept.staffs.map((staff) => (
-                              <tr key={staff.id} className="hover:bg-gray-50 transition-colors">
-                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                                  {staff.staff_id}
-                                </td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
-                                  {getStaffDisplayName(staff)}
-                                </td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                                  {staff.designation || '—'}
-                                </td>
-                                <td className="px-6 py-4 whitespace-nowrap">
-                                  <span
-                                    className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-                                      staff.status === 'ACTIVE'
-                                        ? 'bg-green-100 text-green-800'
-                                        : staff.status === 'INACTIVE'
-                                        ? 'bg-gray-100 text-gray-800'
-                                        : staff.status === 'RESIGNED'
-                                        ? 'bg-red-100 text-red-800'
-                                        : 'bg-gray-100 text-gray-600'
-                                    }`}
-                                  >
-                                    {staff.status || 'Unknown'}
-                                  </span>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
+        {/* Staff Table for Selected Department */}
+        {currentDeptId !== null && (() => {
+          const currentDept = departments.find(d => d.id === currentDeptId)
+          if (!currentDept) return null
+
+          const staffCount = currentDept.staffs?.length || 0
+
+          return (
+            <div className="bg-white rounded-lg shadow-md overflow-hidden">
+              {/* Department Header with Add Button */}
+              <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+                <div className="flex items-center space-x-4">
+                  <Building2 className="h-6 w-6 text-indigo-600" />
+                  <div>
+                    <h2 className="text-lg font-semibold text-gray-900">
+                      {currentDept.code || currentDept.short_name || 'Unknown'}
+                      {currentDept.name && currentDept.name !== currentDept.code && (
+                        <span className="text-sm font-normal text-gray-600 ml-2">
+                          — {currentDept.name}
+                        </span>
+                      )}
+                    </h2>
+                    <p className="text-sm text-gray-600">{staffCount} staff member{staffCount !== 1 ? 's' : ''}</p>
                   </div>
+                </div>
+                {canEdit && (
+                  <button
+                    onClick={() => handleAddStaff(currentDept.id)}
+                    className="flex items-center space-x-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+                    title="Add Staff"
+                  >
+                    <UserPlus className="h-5 w-5" />
+                    <span className="text-sm font-medium">Add Staff</span>
+                  </button>
                 )}
               </div>
-            )
-          })}
-        </div>
+
+              {/* Staff List */}
+              {staffCount === 0 ? (
+                <div className="px-6 py-8 text-center text-gray-500">
+                  <Users className="h-10 w-10 mx-auto mb-2 text-gray-300" />
+                  <p>No staff members in this department</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Staff ID
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Name
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Designation
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Roles
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Status
+                        </th>
+                        {canEdit && (
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Actions
+                          </th>
+                        )}
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {currentDept.staffs.map((staff) => (
+                        <tr key={staff.id} className="hover:bg-gray-50 transition-colors">
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                            {staff.staff_id}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
+                            {getStaffDisplayName(staff)}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                            {staff.designation || '—'}
+                          </td>
+                          <td className="px-6 py-4 text-sm text-gray-600">
+                            {staff.roles && staff.roles.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {staff.roles.map((role, idx) => (
+                                  <span
+                                    key={idx}
+                                    className="inline-flex px-2 py-0.5 text-xs font-medium rounded bg-blue-100 text-blue-800"
+                                  >
+                                    {role}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              '—'
+                            )}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <span
+                              className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                                staff.status === 'ACTIVE'
+                                  ? 'bg-green-100 text-green-800'
+                                  : staff.status === 'INACTIVE'
+                                  ? 'bg-gray-100 text-gray-800'
+                                  : staff.status === 'RESIGNED'
+                                  ? 'bg-red-100 text-red-800'
+                                  : 'bg-gray-100 text-gray-600'
+                              }`}
+                            >
+                              {staff.status || 'Unknown'}
+                            </span>
+                          </td>
+                          {canEdit && (
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                              <div className="flex items-center space-x-2">
+                                <button
+                                  onClick={() => handleEdit(staff)}
+                                  className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                                  title="Edit Staff"
+                                >
+                                  <Edit className="h-4 w-4" />
+                                </button>
+                                <button
+                                  onClick={() => handleDelete(staff.id, getStaffDisplayName(staff))}
+                                  className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                  title="Delete Staff"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              </div>
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )
+        })()}
       </div>
+
+      {/* Staff Form Modal */}
+      {canEdit && (
+        <StaffFormModal
+          isOpen={isModalOpen}
+          onClose={handleModalClose}
+          onSuccess={handleModalSuccess}
+          staffId={editingStaff?.id || null}
+          initialData={editingStaff}
+          departmentId={selectedDeptId}
+        />
+      )}
     </div>
   )
 }

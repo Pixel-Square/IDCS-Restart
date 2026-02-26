@@ -239,7 +239,7 @@ export default function UserQueriesComponent() {
                   )}
                   
                   <div className="flex items-center justify-between text-xs text-slate-500">
-                    <span>Query #{query.id}</span>
+                    <span>Query #{query.serial_number}</span>
                     <span>{formatDate(query.created_at)}</span>
                   </div>
                 </div>

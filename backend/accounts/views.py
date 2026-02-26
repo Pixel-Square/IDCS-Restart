@@ -18,7 +18,7 @@ import re
 import logging
 from django.conf import settings
 
-from .models import MobileOtp, NotificationTemplate, UserQuery
+from .models import MobileOtp, NotificationTemplate, UserQuery, Role
 from .services.sms import send_sms, send_whatsapp, verify_otp
 from .permissions_api import HasPermissionCode
 
@@ -366,6 +366,95 @@ class MobileRemoveView(APIView):
         return Response({'ok': True, 'me': serializer.data})
 
 
+class ChangePasswordView(APIView):
+    """Allow authenticated users to change their password."""
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request):
+        current_password = str((request.data or {}).get('current_password') or '').strip()
+        new_password = str((request.data or {}).get('new_password') or '').strip()
+        confirm_password = str((request.data or {}).get('confirm_password') or '').strip()
+
+        # Validate required fields
+        if not current_password:
+            return Response({'detail': 'Current password is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not new_password:
+            return Response({'detail': 'New password is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not confirm_password:
+            return Response({'detail': 'Please confirm your new password.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Verify current password
+        if not request.user.check_password(current_password):
+            return Response({'detail': 'Current password is incorrect.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validate new password matches confirmation
+        if new_password != confirm_password:
+            return Response({'detail': 'New passwords do not match.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validate new password is different from current
+        if current_password == new_password:
+            return Response({'detail': 'New password must be different from current password.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validate password strength (minimum 6 characters)
+        if len(new_password) < 6:
+            return Response({'detail': 'New password must be at least 6 characters long.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Set new password
+        request.user.set_password(new_password)
+        request.user.save()
+
+        return Response({'ok': True, 'message': 'Password changed successfully.'}, status=status.HTTP_200_OK)
+
+
+class ProfileUpdateView(APIView):
+    """Allow authenticated users to update their profile information (name, email, username)."""
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def patch(self, request):
+        user = request.user
+        
+        # Extract fields that can be updated
+        first_name = request.data.get('first_name')
+        last_name = request.data.get('last_name')
+        email = request.data.get('email')
+        username = request.data.get('username')
+        
+        # Update user fields if provided
+        updated = False
+        
+        if first_name is not None:
+            user.first_name = str(first_name).strip()
+            updated = True
+            
+        if last_name is not None:
+            user.last_name = str(last_name).strip()
+            updated = True
+            
+        if email is not None:
+            user.email = str(email).strip()
+            updated = True
+        
+        if username is not None:
+            new_username = str(username).strip()
+            if not new_username:
+                return Response({'detail': 'Username cannot be empty.'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Check if username is already taken by another user
+            User = get_user_model()
+            if User.objects.filter(username=new_username).exclude(pk=user.pk).exists():
+                return Response({'detail': 'Username already exists.'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            user.username = new_username
+            updated = True
+        
+        if updated:
+            user.save()
+            
+        # Return updated user data
+        serializer = MeSerializer(user)
+        return Response({'ok': True, 'user': serializer.data}, status=status.HTTP_200_OK)
+
+
 class UserQueryListCreateView(APIView):
     """List all queries for the current user or create a new query."""
     permission_classes = (permissions.IsAuthenticated,)
@@ -405,16 +494,51 @@ class AllQueriesListView(APIView):
     required_permission_code = 'queries.manage'
 
     def get(self, request):
-        """Get all queries with optional status filter."""
+        """Get all queries with optional status, department, and role filters."""
         status_filter = request.GET.get('status')
-        queries = UserQuery.objects.select_related('user').all()
+        dept_filter = request.GET.get('department')
+        role_filter = request.GET.get('role')
+        
+        queries = UserQuery.objects.select_related('user').prefetch_related(
+            'user__user_roles__role',
+            'user__staff_profile__department',
+            'user__student_profile__section__batch__course__department'
+        ).all()
         
         if status_filter:
             queries = queries.filter(status=status_filter)
         
-        queries = queries.order_by('-created_at')
+        # Department filter
+        if dept_filter:
+            from django.db.models import Q
+            queries = queries.filter(
+                Q(user__staff_profile__department_id=dept_filter) |
+                Q(user__student_profile__section__batch__course__department_id=dept_filter)
+            )
+        
+        # Role filter
+        if role_filter:
+            queries = queries.filter(user__user_roles__role__name=role_filter)
+        
+        queries = queries.order_by('-created_at').distinct()
+        
+        # Store count before serialization
+        filtered_count = queries.count()
+        
         serializer = UserQuerySerializer(queries, many=True)
-        return Response(serializer.data)
+        
+        # Get unique departments and roles for filter options
+        from academics.models import Department
+        departments = Department.objects.all().order_by('code').values('id', 'code', 'name', 'short_name')
+        roles = Role.objects.all().order_by('name').values('id', 'name')
+        
+        return Response({
+            'queries': serializer.data,
+            'departments': list(departments),
+            'roles': list(roles),
+            'total_count': UserQuery.objects.count(),
+            'filtered_count': filtered_count
+        })
 
 
 class QueryUpdateView(APIView):

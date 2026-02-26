@@ -2,8 +2,11 @@ import fetchWithAuth from './fetchAuth';
 
 export interface UserQuery {
   id: number;
+  serial_number: number;
   user: number;
   username: string;
+  user_roles: string[];
+  user_department: { id: number; code: string; name: string; short_name: string } | null;
   query_text: string;
   status: 'SENT' | 'VIEWED' | 'REVIEWED' | 'PENDING' | 'IN_PROGRESS' | 'FIXED' | 'LATER' | 'CLOSED';
   created_at: string;
@@ -13,6 +16,7 @@ export interface UserQuery {
 
 export interface UserQueryListItem {
   id: number;
+  serial_number: number;
   username: string;
   query_preview: string;
   status: string;
@@ -52,11 +56,29 @@ export async function createQuery(query_text: string): Promise<UserQuery> {
 }
 
 // Receiver/Admin functions
-export async function fetchAllQueries(statusFilter?: string): Promise<UserQuery[]> {
+export interface AllQueriesResponse {
+  queries: UserQuery[];
+  departments: Array<{ id: number; code: string; name: string; short_name: string }>;
+  roles: Array<{ id: number; name: string }>;
+  total_count: number;
+  filtered_count: number;
+}
+
+export async function fetchAllQueries(
+  statusFilter?: string,
+  departmentFilter?: string,
+  roleFilter?: string
+): Promise<AllQueriesResponse> {
+  const params = new URLSearchParams();
+  if (statusFilter) params.append('status', statusFilter);
+  if (departmentFilter) params.append('department', departmentFilter);
+  if (roleFilter) params.append('role', roleFilter);
+  
   let url = '/api/accounts/queries/all/';
-  if (statusFilter) {
-    url += `?status=${statusFilter}`;
+  if (params.toString()) {
+    url += `?${params.toString()}`;
   }
+  
   const res = await fetchWithAuth(url);
   if (!res.ok) {
     throw new Error('Failed to fetch all queries');
