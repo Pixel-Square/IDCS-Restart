@@ -1578,16 +1578,20 @@ class HODSectionsView(APIView):
         if not dept_ids:
             return Response({'results': []})
 
-        sections = Section.objects.filter(batch__course__department_id__in=dept_ids).select_related('batch__course__department', 'batch__regulation')
+        sections = Section.objects.filter(batch__course__department_id__in=dept_ids).select_related(
+            'batch__course__department', 'batch__regulation', 'semester'
+        ).order_by('batch__course__department__code', 'batch__name', 'name')
         results = []
         for s in sections:
             batch = getattr(s, 'batch', None)
             course = getattr(batch, 'course', None) if batch else None
             dept = getattr(course, 'department', None) if course is not None else None
             reg = getattr(batch, 'regulation', None) if batch else None
+            sem_obj = getattr(s, 'semester', None)
+            sem_val = getattr(sem_obj, 'number', None) if sem_obj else None
             results.append({
                 'id': s.id,
-                'name': str(s),
+                'name': s.name,
                 'batch_id': getattr(batch, 'id', None),
                 'batch_name': getattr(batch, 'name', None),
                 'batch_regulation': {'id': getattr(reg, 'id', None), 'code': getattr(reg, 'code', None), 'name': getattr(reg, 'name', None)} if reg else None,
@@ -1595,6 +1599,7 @@ class HODSectionsView(APIView):
                 'department_id': getattr(dept, 'id', None),
                 'department_code': getattr(dept, 'code', None),
                 'department_short_name': getattr(dept, 'short_name', None),
+                'semester': sem_val,
             })
         return Response({'results': results})
 
@@ -3621,18 +3626,96 @@ class AdvisorMyStudentsView(APIView):
                 course = getattr(batch, 'course', None) if batch is not None else None
                 dept = getattr(course, 'department', None) if course is not None else None
                 reg = getattr(batch, 'regulation', None) if batch else None
+                sem_obj = getattr(sec, 'semester', None)
+                sem_val = getattr(sem_obj, 'number', None) if sem_obj else None
                 results.append({
                     'section_id': sec.id,
                     'section_name': sec.name,
                     'batch': getattr(batch, 'name', None),
                     'batch_regulation': {'id': getattr(reg, 'id', None), 'code': getattr(reg, 'code', None)} if reg else None,
+                    'department_id': getattr(dept, 'id', None),
+                    'department': {'id': getattr(dept, 'id', None), 'code': getattr(dept, 'code', None)} if dept else None,
                     'department_short_name': (getattr(dept, 'short_name', None) or getattr(dept, 'code', None)) if dept else None,
+                    'semester': sem_val,
                     'students': ser.data,
                 })
 
             return Response({'results': results})
         except Exception as e:
             logging.getLogger(__name__).exception('AdvisorMyStudentsView error: %s', e)
+            return Response({'detail': 'Internal server error', 'error': str(e)}, status=500)
+
+
+class MentorMyMenteesView(APIView):
+    """Return students for which the current user is the assigned mentor.
+
+    Response format:
+    { results: [ { section_id, section_name, batch, department_short_name, students: [...] } ] }
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        import logging
+        try:
+            from accounts.utils import get_user_permissions
+            user = request.user
+            perms = get_user_permissions(user)
+            if 'academics.view_mentees' not in perms:
+                return Response({'error': 'Permission denied'}, status=403)
+
+            staff_profile = getattr(user, 'staff_profile', None)
+            if not staff_profile:
+                return Response({'results': []})
+
+            from .models import StudentMentorMap
+            mentee_maps = StudentMentorMap.objects.filter(
+                mentor=staff_profile, is_active=True
+            ).select_related(
+                'student__user',
+                'student__section__batch__course__department',
+                'student__section__batch__regulation',
+            )
+
+            students_by_section: dict = {}
+            for mm in mentee_maps:
+                st = mm.student
+                sec = getattr(st, 'section', None)
+                if sec:
+                    students_by_section.setdefault(sec.id, {'section': sec, 'students': []})
+                    students_by_section[sec.id]['students'].append(st)
+
+            results = []
+            for sec_id, data in students_by_section.items():
+                sec = data['section']
+                studs = data['students']
+                batch = getattr(sec, 'batch', None)
+                course = getattr(batch, 'course', None) if batch else None
+                dept = getattr(course, 'department', None) if course else None
+                ser = StudentSimpleSerializer([
+                    {
+                        'id': st.pk,
+                        'reg_no': st.reg_no,
+                        'user': getattr(st, 'user', None),
+                        'section_id': sec.id,
+                        'section_name': sec.name,
+                        'has_mentor': True,
+                        'mentor_id': staff_profile.id,
+                        'mentor_name': user.username,
+                    }
+                    for st in studs
+                ], many=True)
+                results.append({
+                    'section_id': sec.id,
+                    'section_name': sec.name,
+                    'batch': getattr(batch, 'name', None),
+                    'department_id': getattr(dept, 'id', None),
+                    'department': {'id': getattr(dept, 'id', None), 'code': getattr(dept, 'code', None)} if dept else None,
+                    'department_short_name': (getattr(dept, 'short_name', None) or getattr(dept, 'code', None)) if dept else None,
+                    'students': ser.data,
+                })
+            return Response({'results': results})
+        except Exception as e:
+            logging.getLogger(__name__).exception('MentorMyMenteesView error: %s', e)
             return Response({'detail': 'Internal server error', 'error': str(e)}, status=500)
 
 

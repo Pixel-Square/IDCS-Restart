@@ -34,7 +34,7 @@ from .views import (
     StudentMarksView,
 )
 from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView, ClassAttendanceReportView, TodayPeriodAttendanceView, PeriodAttendanceReportView, OverallSectionView, MyClassStudentsView, DailyAttendanceView, DailyAttendanceLockView, DailyAttendanceUnlockView, DailyAttendanceUnlockRequestView, MyClassAttendanceAnalyticsView, DailyAttendanceSessionDetailView, SectionStudentAttendanceDayView
-from .views import UnifiedUnlockRequestsView, DepartmentStudentsView, AllStudentsView
+from .views import UnifiedUnlockRequestsView, DepartmentStudentsView, AllStudentsView, MentorMyMenteesView
 
 router = DefaultRouter()
 router.register(r'section-advisors', SectionAdvisorViewSet, basename='section-advisor')
@@ -83,6 +83,7 @@ urlpatterns = [
 
     # department / all students endpoints
     path('my-students/', AdvisorMyStudentsView.as_view()),  # used by MentorAssign
+    path('mentor/my-mentees/', MentorMyMenteesView.as_view()),
     path('department-students/', DepartmentStudentsView.as_view()),
     path('all-students/', AllStudentsView.as_view()),
     path('staff/periods/', StaffPeriodsView.as_view()),

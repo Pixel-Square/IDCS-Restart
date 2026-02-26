@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import fetchWithAuth from '../../services/fetchAuth'
-import { Users, GraduationCap, Mail, Loader2, UserCircle2, ChevronLeft, ChevronRight, Building2, Globe } from 'lucide-react'
+import { Users, GraduationCap, Mail, Loader2, UserCircle2, ChevronLeft, ChevronRight, Building2, Globe, UserCheck, Heart } from 'lucide-react'
 
 type Student = { 
   id: number; 
@@ -29,17 +29,21 @@ type SectionMeta = {
   label: string  // formatted display label
 }
 
-type ViewMode = 'department-students' | 'all-students'
+type ViewMode = 'my-students' | 'my-mentees' | 'department-students' | 'all-students'
 
 interface StudentsPageProps {
   user?: any;
 }
 
 export default function StudentsPage({ user }: StudentsPageProps = {}) {
-  const [viewMode, setViewMode] = useState<ViewMode>('department-students')
+  const [viewMode, setViewMode] = useState<ViewMode>('my-students')
   // section list + lazy-loaded students per selected section
+  const [myStudentsSections, setMyStudentsSections] = useState<SectionMeta[]>([])
+  const [myMenteesSections, setMyMenteesSections] = useState<SectionMeta[]>([])
   const [deptSections, setDeptSections] = useState<SectionMeta[]>([])
   const [allSections, setAllSections] = useState<SectionMeta[]>([])
+  // Pre-cached students for my-students / my-mentees modes (keyed by section_id)
+  const [studentsCache, setStudentsCache] = useState<Record<number, Student[]>>({})
   const [lazyStudents, setLazyStudents] = useState<Student[]>([])
   const [loadingStudents, setLoadingStudents] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -65,7 +69,21 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
   // Available view modes based on permissions
   const availableViews = [
     {
-      key: 'department-students' as ViewMode, 
+      key: 'my-students' as ViewMode,
+      label: 'My Students',
+      icon: UserCheck,
+      permission: 'academics.view_my_students',
+      description: 'Students in your advised sections'
+    },
+    {
+      key: 'my-mentees' as ViewMode,
+      label: 'My Mentees',
+      icon: Heart,
+      permission: 'academics.view_mentees',
+      description: 'Students assigned to you as mentor'
+    },
+    {
+      key: 'department-students' as ViewMode,
       label: 'Department Students',
       icon: Building2,
       permission: 'students.view_department_students',
@@ -73,7 +91,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
     },
     {
       key: 'all-students' as ViewMode,
-      label: 'All Students', 
+      label: 'All Students',
       icon: Globe,
       permission: 'students.view_all_students',
       description: 'Students from all departments'
@@ -95,8 +113,11 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
   }, [viewMode])
 
   useEffect(() => {
-    // For dept/all: when section selected, lazy-fetch its students
-    if ((viewMode === 'department-students' || viewMode === 'all-students') && selectedSection !== null) {
+    if (selectedSection === null) return
+    if (viewMode === 'my-students' || viewMode === 'my-mentees') {
+      // Data is pre-loaded – pull from cache, no extra API call
+      setLazyStudents(studentsCache[selectedSection] || [])
+    } else {
       fetchSectionStudents(selectedSection)
     }
   }, [selectedSection])
@@ -104,11 +125,65 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
   // Reset to page 1 when section changes
   useEffect(() => { setCurrentPage(1) }, [selectedSection])
 
+  // Map a raw result entry (from my-students or my-mentees response) to SectionMeta + Student[]
+  function parsePreloadedSection(r: any): { meta: SectionMeta; students: Student[] } {
+    const meta: SectionMeta = {
+      section_id: r.section_id,
+      section_name: r.section_name,
+      batch_name: r.batch,
+      department_short_name: r.department_short_name || r.department?.code,
+      label: [r.department_short_name || r.department?.code, r.batch, r.section_name].filter(Boolean).join(' · '),
+    }
+    const students: Student[] = (r.students || []).map((s: any) => ({
+      id: s.id,
+      reg_no: s.reg_no,
+      username: s.username || s.user?.username,
+      first_name: s.first_name ?? s.user?.first_name,
+      last_name: s.last_name ?? s.user?.last_name,
+      email: s.email ?? s.user?.email,
+      section_id: r.section_id,
+      section_name: r.section_name,
+      department_code: r.department_short_name || r.department?.code,
+      status: s.status || 'active',
+    }))
+    return { meta, students }
+  }
+
   // Fetch section list; then lazy-load students per selected section
   async function fetchSectionsOrStudents() {
+    // Don't call the API if the current view isn't available to this user
+    if (availableViews.length === 0 || !availableViews.find(v => v.key === viewMode)) return
     setLoading(true)
     try {
-      if (viewMode === 'department-students') {
+      if (viewMode === 'my-students') {
+        const res = await fetchWithAuth('/api/academics/my-students/')
+        if (!res.ok) throw new Error(await res.text())
+        const data = await res.json()
+        const cache: Record<number, Student[]> = {}
+        const sections: SectionMeta[] = (data.results || []).map((r: any) => {
+          const { meta, students } = parsePreloadedSection(r)
+          cache[meta.section_id] = students
+          return meta
+        })
+        setStudentsCache(prev => ({ ...prev, ...cache }))
+        setMyStudentsSections(sections)
+        if (sections.length > 0) setSelectedSection(sections[0].section_id)
+
+      } else if (viewMode === 'my-mentees') {
+        const res = await fetchWithAuth('/api/academics/mentor/my-mentees/')
+        if (!res.ok) throw new Error(await res.text())
+        const data = await res.json()
+        const cache: Record<number, Student[]> = {}
+        const sections: SectionMeta[] = (data.results || []).map((r: any) => {
+          const { meta, students } = parsePreloadedSection(r)
+          cache[meta.section_id] = students
+          return meta
+        })
+        setStudentsCache(prev => ({ ...prev, ...cache }))
+        setMyMenteesSections(sections)
+        if (sections.length > 0) setSelectedSection(sections[0].section_id)
+
+      } else if (viewMode === 'department-students') {
         const res = await fetchWithAuth('/api/academics/department-students/')
         if (!res.ok) throw new Error(await res.text())
         const data = await res.json()
@@ -156,7 +231,11 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
   }
 
   // Current section list and students
-  const currentSectionList: SectionMeta[] = viewMode === 'department-students' ? deptSections : allSections
+  const currentSectionList: SectionMeta[] =
+    viewMode === 'my-students' ? myStudentsSections
+    : viewMode === 'my-mentees' ? myMenteesSections
+    : viewMode === 'department-students' ? deptSections
+    : allSections
   const displayStudentsList: Student[] = lazyStudents
 
   // Pagination calculations
@@ -287,6 +366,8 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
             </div>
             <h3 className="text-lg font-semibold text-slate-900 mb-2">No Students Found</h3>
             <p className="text-slate-600 text-sm">
+              {viewMode === 'my-students' && 'No students found in your advised sections.'}
+              {viewMode === 'my-mentees' && 'No students assigned to you as mentor.'}
               {viewMode === 'department-students' && 'No students found in your department.'}
               {viewMode === 'all-students' && 'No students found in the system.'}
             </p>

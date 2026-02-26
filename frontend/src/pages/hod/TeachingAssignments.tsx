@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { User, BookOpen, Save, Edit, X, Trash2 } from 'lucide-react'
 import fetchWithAuth from '../../services/fetchAuth'
 
-type Section = { id: number; name: string; batch: string; batch_regulation?: { id: number; code: string; name?: string } | null; department_id?: number; semester?: number; department?: { id: number; code?: string } }
+type Section = { id: number; name: string; batch: string; batch_regulation?: { id: number; code: string; name?: string } | null; department_id?: number; department_short_name?: string; semester?: number; department?: { id: number; code?: string } }
 type Staff = { id: number; user: string | { username?: string; first_name?: string; last_name?: string }; staff_id: string; department?: { id?: number; code?: string; name?: string } }
 type CurriculumRow = { id: number; course_code?: string; course_name?: string; department?: { id: number; code?: string }; semester?: number; regulation?: string }
 type TeachingAssignment = { 
@@ -112,7 +112,10 @@ export default function TeachingAssignmentsPage(){
   async function fetchData(){
     try{
       setLoading(true)
-      const sres = await fetchWithAuth('/api/academics/my-students/?page_size=0')
+      // Always load only the logged-in user's assigned advisor sections (my-students)
+      // so Course Assignments never shows unrelated dept/HOD sections
+      const sectionsEndpoint = '/api/academics/my-students/'
+      const sres = await fetchWithAuth(sectionsEndpoint)
       const staffEndpoint = (canViewElectives || canAssignElectives) ? '/api/academics/hod-staff/?page_size=0' : '/api/academics/advisor-staff/?page_size=0'
       // fetch staff list optionally filtered by selected department
       let staffRes = await fetchWithAuth(selectedDept && staffEndpoint.includes('hod-staff') ? `${staffEndpoint}&department=${selectedDept}` : staffEndpoint)
@@ -137,7 +140,19 @@ export default function TeachingAssignmentsPage(){
         return r.json()
       }
 
-      if (sres.ok){ const d = await safeJson(sres); const secs = (d.results || d).map((r:any) => ({ id: r.section_id, name: r.section_name, batch: r.batch, batch_regulation: r.batch_regulation, department_id: r.department_id, semester: r.semester, department: r.department })); setSections(secs); }
+      if (sres.ok){
+        const d = await safeJson(sres)
+        const raw = d.results || d
+        const secs = raw.map((r: any) => {
+          // HODSectionsView format has `id`, advisor my-students format has `section_id`
+          if (r.section_id !== undefined) {
+            return { id: r.section_id, name: r.section_name, batch: r.batch, batch_regulation: r.batch_regulation, department_id: r.department_id, department_short_name: r.department_short_name, semester: r.semester, department: r.department }
+          } else {
+            return { id: r.id, name: r.name, batch: r.batch_name, batch_regulation: r.batch_regulation, department_id: r.department_id, semester: r.semester, department: { id: r.department_id, code: r.department_code } }
+          }
+        })
+        setSections(secs)
+      }
       if (staffRes.ok){ const d = await safeJson(staffRes); let staffList = (d.results || d) as Staff[]; // if backend didn't filter, apply client-side filter
         if (selectedDept){ staffList = staffList.filter(s => (s.department && s.department.id === selectedDept) || (s as any).department === selectedDept) }
         setStaff(staffList)
@@ -335,7 +350,8 @@ export default function TeachingAssignmentsPage(){
   // Bulk edit functions
   const startBulkEditing = () => {
     const bulkKeys = new Set<string>();
-    sections.forEach(section => {
+    const visibleSections = selectedDept ? sections.filter(s => s.department_id === selectedDept) : sections
+    visibleSections.forEach(section => {
       const sectionSubjects = curriculum.filter(c => 
         (section.semester ? (c.semester === section.semester) : true) &&
         (section.batch_regulation ? (c.regulation === section.batch_regulation.code) : true) &&
@@ -360,7 +376,8 @@ export default function TeachingAssignmentsPage(){
     let failureCount = 0;
     
     try {
-      for (const section of sections) {
+      const visibleSections = selectedDept ? sections.filter(s => s.department_id === selectedDept) : sections
+      for (const section of visibleSections) {
         const sectionSubjects = curriculum.filter(c => 
           (section.semester ? (c.semester === section.semester) : true) &&
           (section.batch_regulation ? (c.regulation === section.batch_regulation.code) : true) &&
@@ -604,15 +621,20 @@ export default function TeachingAssignmentsPage(){
             )}
           </div>
           
-          {sections.length === 0 ? (
-            <div className="text-center py-8">
-              <div className="text-gray-500 text-sm">
-                No sections available for the selected filters.
+          {(() => {
+            const visibleSections = selectedDept
+              ? sections.filter(s => s.department_id === selectedDept)
+              : sections
+            if (visibleSections.length === 0) return (
+              <div className="text-center py-8">
+                <div className="text-gray-500 text-sm">
+                  No sections available for the selected filters.
+                </div>
               </div>
-            </div>
-          ) : (
+            )
+            return (
             <div className="space-y-6">
-              {sections.map(section => {
+              {visibleSections.map(section => {
                 const sectionSubjects = curriculum.filter(c => 
                   (section.semester ? (c.semester === section.semester) : true) &&
                   (section.batch_regulation ? (c.regulation === section.batch_regulation.code) : true) &&
@@ -626,7 +648,7 @@ export default function TeachingAssignmentsPage(){
                       <div className="flex items-center justify-between">
                         <div>
                           <h4 className="text-lg font-semibold text-blue-900">
-                            {section.batch} / {section.name}
+                            {[section.department_short_name || section.department?.code, section.batch, section.name].filter(Boolean).join(' · ')}
                           </h4>
                           <div className="flex items-center gap-3 mt-1">
                             <p className="text-blue-700 text-sm">
@@ -809,7 +831,8 @@ export default function TeachingAssignmentsPage(){
                 );
               })}
             </div>
-          )}
+            )
+          })()}
         </div>
 
         {/* Elective Subject Assignments */}
