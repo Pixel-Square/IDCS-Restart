@@ -2981,6 +2981,561 @@ def lab_published_sheet(request, assessment: str, subject_id: str):
     except OperationalError:
         data = None
     return Response({'subject': {'code': subject.code, 'name': subject.name}, 'assessment': assessment, 'data': data})
+    
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def obe_progress_overview(request):
+    """Aggregated OBE progress overview for HOD and Advisor roles.
+
+    Response shape (simplified):
+
+    {
+      "role": "HOD" | "ADVISOR" | "FACULTY",
+      "academic_year": { id, name } | null,
+      "department": { id, code, name, short_name } | null,
+      "sections": [
+        {
+          "id": number,
+          "name": string,
+          "batch": { id, name },
+          "course": { id, name, department: { ... } },
+          "staff": [
+            {
+              "id": number,        # StaffProfile id
+              "name": string,
+              "user_id": number | null,
+              "teaching_assignments": [
+                {
+                  "id": number,
+                  "subject_code": string,
+                  "subject_name": string,
+                  "enabled_assessments": string[],
+                  "exam_progress": [
+                    {
+                      "assessment": string,   # e.g. ssa1, cia1
+                      "rows_filled": number,
+                      "total_students": number,
+                      "percentage": number,
+                      "published": boolean,
+                    },
+                    ...
+                  ],
+                }
+              ],
+            }
+          ],
+        }
+      ],
+    }
+
+    HODs see all sections in their department for the active AcademicYear;
+    Advisors see only their advised sections; other staff see their own
+    teaching-assignments grouped by section.
+    """
+
+    from academics.models import AcademicYear, DepartmentRole, SectionAdvisor, TeachingAssignment, Subject
+    from .models import (
+        ObeMarkTableLock,
+        Ssa1Mark,
+        Ssa2Mark,
+        Review1Mark,
+        Review2Mark,
+        Formative1Mark,
+        Formative2Mark,
+        Cia1Mark,
+        Cia2Mark,
+        ModelPublishedSheet,
+    )
+
+    user = getattr(request, 'user', None)
+    if not user or not getattr(user, 'is_authenticated', False):
+        return Response({'detail': 'Authentication required.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+    # Resolve active academic year (fallback to latest)
+    ay = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.order_by('-id').first()
+
+    # Helper: normalize role names for this user
+    role_names: set[str] = set()
+    try:
+        role_names = {str(r.name or '').strip().upper() for r in user.roles.all()}
+    except Exception:
+        try:
+            # Fallback via Role model m2m if available
+            role_qs = Role.objects.filter(userrole__user=user)
+            role_names = {str(r.name or '').strip().upper() for r in role_qs}
+        except Exception:
+            role_names = set()
+
+    has_hod = 'HOD' in role_names or 'AHOD' in role_names
+    has_advisor = 'ADVISOR' in role_names
+
+    # Determine primary context: HOD > ADVISOR > FACULTY
+    primary_role = 'FACULTY'
+    department = None
+    sections_qs = None
+
+    if has_hod and ay is not None:
+        # Find department from DepartmentRole for this academic year
+        dept_role = DepartmentRole.objects.filter(staff__user=user, academic_year=ay, is_active=True).select_related('department').first()
+        department = getattr(dept_role, 'department', None)
+        if department is not None:
+            primary_role = 'HOD'
+            # All sections whose batch.course.department matches HOD department
+            from academics.models import Section
+
+            sections_qs = (
+                Section.objects.select_related('batch', 'batch__course', 'batch__course__department')
+                .filter(batch__course__department=department)
+            )
+
+    if sections_qs is None and has_advisor and ay is not None:
+        # Advisor sees only their advised sections for the year
+        primary_role = 'ADVISOR'
+        advisor_rows = (
+            SectionAdvisor.objects.select_related('section', 'section__batch', 'section__batch__course', 'section__batch__course__department')
+            .filter(advisor__user=user, academic_year=ay, is_active=True)
+        )
+        from academics.models import Section
+
+        sections_qs = Section.objects.filter(id__in=[s.section_id for s in advisor_rows])
+        # Derive department from the first section if not already set
+        if department is None:
+            first_sec = advisor_rows.first()
+            if first_sec and getattr(first_sec.section.batch.course, 'department', None) is not None:
+                department = first_sec.section.batch.course.department
+
+    if sections_qs is None:
+        # Fallback: treat as regular faculty; show sections from their TeachingAssignments
+        from academics.models import Section
+
+        ta_qs = TeachingAssignment.objects.select_related('section', 'section__batch', 'section__batch__course', 'section__batch__course__department').filter(
+            staff__user=user,
+            is_active=True,
+        )
+        if ay is not None:
+            ta_qs = ta_qs.filter(academic_year=ay)
+        section_ids = {ta.section_id for ta in ta_qs if ta.section_id}
+        sections_qs = Section.objects.filter(id__in=section_ids).select_related('batch', 'batch__course', 'batch__course__department')
+        if department is None:
+            first_ta = ta_qs.first()
+            if first_ta and getattr(first_ta.section.batch.course, 'department', None) is not None:
+                department = first_ta.section.batch.course.department
+
+    sections = list(sections_qs or [])
+
+    def _normalize_class_type(val) -> str:
+        s = str(val or '').strip().upper()
+        if not s:
+            return 'THEORY'
+        # tolerate legacy spellings
+        aliases = {
+            'THEORY': 'THEORY',
+            'SPECIAL': 'SPECIAL',
+            'LAB': 'LAB',
+            'TCPL': 'TCPL',
+            'TCPR': 'TCPR',
+            'PRACTICAL': 'PRACTICAL',
+            'PROJECT': 'PROJECT',
+        }
+        return aliases.get(s, s)
+
+    def _resolve_ta_class_type(ta) -> str:
+        try:
+            row = getattr(ta, 'curriculum_row', None)
+            if row is not None:
+                ct = getattr(row, 'class_type', None) or getattr(getattr(row, 'master', None), 'class_type', None)
+                if ct:
+                    return _normalize_class_type(ct)
+        except Exception:
+            pass
+        try:
+            es = getattr(ta, 'elective_subject', None)
+            ct = getattr(es, 'class_type', None) if es is not None else None
+            if ct:
+                return _normalize_class_type(ct)
+        except Exception:
+            pass
+        return 'THEORY'
+
+    def _resolve_curriculum_row_for_ta(ta):
+        row = getattr(ta, 'curriculum_row', None)
+        if row is not None:
+            return row
+        # Legacy: TA may have only Subject. Try to resolve curriculum row.
+        try:
+            from curriculum.models import CurriculumDepartment
+
+            dept = None
+            try:
+                dept = ta.section.batch.course.department
+            except Exception:
+                dept = None
+
+            subj = getattr(ta, 'subject', None)
+            code = getattr(subj, 'code', None)
+            name = getattr(subj, 'name', None)
+
+            qs = CurriculumDepartment.objects.all().select_related('master', 'department')
+            if dept is not None:
+                qs = qs.filter(department=dept)
+
+            if code:
+                code_s = str(code).strip()
+                qs = qs.filter(Q(course_code__iexact=code_s) | Q(master__course_code__iexact=code_s))
+            elif name:
+                name_s = str(name).strip()
+                qs = qs.filter(Q(course_name__iexact=name_s) | Q(master__course_name__iexact=name_s))
+            else:
+                return None
+
+            return qs.order_by('-updated_at', '-id').first()
+        except Exception:
+            return None
+
+    def _resolve_subject_meta_for_ta(ta):
+        """Return (subject_code, subject_name, subject_obj_or_none)."""
+        subj = getattr(ta, 'subject', None)
+        if subj is not None:
+            return getattr(subj, 'code', None), getattr(subj, 'name', None), subj
+
+        code = None
+        name = None
+
+        try:
+            es = getattr(ta, 'elective_subject', None)
+            if es is not None:
+                code = getattr(es, 'course_code', None)
+                name = getattr(es, 'course_name', None)
+        except Exception:
+            pass
+
+        if not code and not name:
+            try:
+                row = getattr(ta, 'curriculum_row', None)
+                if row is not None:
+                    code = getattr(row, 'course_code', None) or getattr(getattr(row, 'master', None), 'course_code', None)
+                    name = getattr(row, 'course_name', None) or getattr(getattr(row, 'master', None), 'course_name', None)
+            except Exception:
+                pass
+
+        if not code and not name:
+            try:
+                cs = getattr(ta, 'custom_subject', None)
+                if cs:
+                    code = str(cs).strip()
+                    try:
+                        name = ta.get_custom_subject_display()
+                    except Exception:
+                        name = code
+            except Exception:
+                pass
+
+        code = str(code).strip() if code else None
+        name = str(name).strip() if name else None
+
+        subj_obj = None
+        if code:
+            try:
+                subj_obj = Subject.objects.filter(code=code).first()
+            except Exception:
+                subj_obj = None
+
+        # Best effort name fallback from Subject record
+        if not name and subj_obj is not None:
+            name = getattr(subj_obj, 'name', None)
+
+        return code, name, subj_obj
+
+    def _clean_special_enabled(vals):
+        allowed = ['ssa1', 'ssa2', 'formative1', 'formative2', 'cia1', 'cia2']
+        out = []
+        for v in (vals or []):
+            s = str(v or '').strip().lower()
+            if s and s in allowed and s not in out:
+                out.append(s)
+        # Keep stable UI order
+        ordered = [k for k in allowed if k in out]
+        # preserve any additional allowed keys (shouldn't happen)
+        for k in out:
+            if k not in ordered:
+                ordered.append(k)
+        return ordered
+
+    def _resolve_special_enabled_assessments(ta) -> list[str]:
+        """Mirrors academics.views.TeachingAssignmentViewSet.enabled_assessments (GET) for SPECIAL courses."""
+        row = _resolve_curriculum_row_for_ta(ta)
+        master_id = getattr(row, 'master_id', None) if row is not None else None
+
+        enabled = None
+        try:
+            from academics.models import SpecialCourseAssessmentSelection
+
+            if master_id is not None and getattr(ta, 'academic_year', None) is not None:
+                sel = (
+                    SpecialCourseAssessmentSelection.objects.filter(
+                        curriculum_row__master_id=master_id,
+                        academic_year=ta.academic_year,
+                    )
+                    .select_related('curriculum_row')
+                    .order_by('id')
+                    .first()
+                )
+                if sel is not None:
+                    enabled = getattr(sel, 'enabled_assessments', None)
+        except Exception:
+            enabled = None
+
+        if enabled is None and row is not None:
+            enabled = getattr(row, 'enabled_assessments', None)
+        if enabled is None:
+            enabled = []
+
+        return _clean_special_enabled(enabled)
+
+    def _assessments_for_ta(ta) -> list[str]:
+        """Determine which assessment keys should be shown for progress."""
+        ct = _resolve_ta_class_type(ta)
+        if ct == 'SPECIAL':
+            return _resolve_special_enabled_assessments(ta)
+        if ct == 'PRACTICAL':
+            return ['cia1', 'cia2', 'model']
+        if ct == 'PROJECT':
+            return ['review1', 'review2', 'model']
+        if ct == 'TCPR':
+            return ['ssa1', 'review1', 'cia1', 'ssa2', 'review2', 'cia2', 'model']
+        if ct == 'LAB':
+            return ['cia1', 'cia2', 'model']
+        # THEORY / TCPL / unknown: show the standard theory keys
+        return ['ssa1', 'formative1', 'cia1', 'ssa2', 'formative2', 'cia2', 'model']
+
+    def _assessment_label_for_progress(*, class_type: str, assessment_key: str) -> str | None:
+        """Return a UI label for an assessment key based on class type.
+
+        Keep this narrowly scoped: only cases where the label differs from the raw key.
+        """
+        ct = _normalize_class_type(class_type)
+        key = str(assessment_key or '').strip().lower()
+        if not key:
+            return None
+
+        # TCPL: formative keys are used but shown as LAB 1 / LAB 2
+        if ct == 'TCPL':
+            if key == 'formative1':
+                return 'LAB 1'
+            if key == 'formative2':
+                return 'LAB 2'
+
+        # LAB: assessment names should explicitly say LAB
+        if ct == 'LAB':
+            if key == 'cia1':
+                return 'CIA 1 LAB'
+            if key == 'cia2':
+                return 'CIA 2 LAB'
+            if key == 'model':
+                return 'MODEL LAB'
+
+        return None
+
+    # Utility: compute exam progress for a teaching assignment and assessment key
+    def _exam_progress_for_ta(ta, *, assessment_key: str, subject_obj, students, class_type: str) -> dict:
+        total_students = len(students)
+
+        subject = subject_obj
+
+        rows_filled = 0
+
+        if subject is not None and total_students > 0:
+            student_ids = [s.id for s in students]
+
+            if assessment_key == 'ssa1':
+                rows_filled = Ssa1Mark.objects.filter(subject=subject, student_id__in=student_ids, mark__isnull=False).count()
+            elif assessment_key == 'ssa2':
+                rows_filled = Ssa2Mark.objects.filter(subject=subject, student_id__in=student_ids, mark__isnull=False).count()
+            elif assessment_key == 'review1':
+                rows_filled = Review1Mark.objects.filter(subject=subject, student_id__in=student_ids, mark__isnull=False).count()
+            elif assessment_key == 'review2':
+                rows_filled = Review2Mark.objects.filter(subject=subject, student_id__in=student_ids, mark__isnull=False).count()
+            elif assessment_key == 'formative1':
+                rows_filled = Formative1Mark.objects.filter(subject=subject, student_id__in=student_ids).exclude(total__isnull=True).count()
+            elif assessment_key == 'formative2':
+                rows_filled = Formative2Mark.objects.filter(subject=subject, student_id__in=student_ids).exclude(total__isnull=True).count()
+            elif assessment_key == 'cia1':
+                rows_filled = Cia1Mark.objects.filter(subject=subject, student_id__in=student_ids, mark__isnull=False).count()
+            elif assessment_key == 'cia2':
+                rows_filled = Cia2Mark.objects.filter(subject=subject, student_id__in=student_ids, mark__isnull=False).count()
+            elif assessment_key == 'model':
+                # MODEL snapshot: treat presence of a published sheet as fully filled
+                try:
+                    has_sheet = ModelPublishedSheet.objects.filter(subject=subject).exists()
+                except Exception:
+                    has_sheet = False
+                rows_filled = total_students if has_sheet else 0
+
+        percentage = float(rows_filled) / float(total_students) * 100.0 if total_students > 0 and rows_filled > 0 else 0.0
+
+        # Published flag via ObeMarkTableLock (preferred), falling back to False
+        published = False
+        try:
+            lock = ObeMarkTableLock.objects.filter(teaching_assignment=ta, assessment=str(assessment_key).lower()).first()
+            published = bool(getattr(lock, 'is_published', False)) if lock is not None else False
+        except Exception:
+            published = False
+
+        return {
+            'assessment': assessment_key,
+            'label': _assessment_label_for_progress(class_type=class_type, assessment_key=assessment_key),
+            'rows_filled': int(rows_filled),
+            'total_students': int(total_students),
+            'percentage': round(percentage, 1),
+            'published': published,
+        }
+
+    # Build response per section
+    section_results = []
+
+    for sec in sections:
+        # Teaching assignments in this section for the academic year
+        ta_qs = TeachingAssignment.objects.select_related(
+            'staff',
+            'staff__user',
+            'subject',
+            'section',
+            'academic_year',
+            'curriculum_row',
+            'curriculum_row__master',
+            'elective_subject',
+        ).filter(
+            section=sec,
+            is_active=True,
+        )
+        if ay is not None:
+            ta_qs = ta_qs.filter(academic_year=ay)
+
+        tas = list(ta_qs)
+        if not tas:
+            continue
+
+        # Group by staff
+        staff_map: dict[int, dict] = {}
+
+        for ta in tas:
+            staff = getattr(ta, 'staff', None)
+            if not staff:
+                continue
+            staff_id = getattr(staff, 'id', None)
+            if staff_id is None:
+                continue
+
+            if staff_id not in staff_map:
+                user_obj = getattr(staff, 'user', None)
+                full_name = ''
+                try:
+                    full_name = str(getattr(user_obj, 'get_full_name', lambda: '')() or '').strip() if user_obj is not None else ''
+                except Exception:
+                    full_name = ''
+                if not full_name:
+                    try:
+                        full_name = ' '.join(filter(None, [getattr(user_obj, 'first_name', ''), getattr(user_obj, 'last_name', '')])).strip() if user_obj is not None else ''
+                    except Exception:
+                        full_name = ''
+                if not full_name:
+                    try:
+                        full_name = str(getattr(user_obj, 'username', '') or '').strip() if user_obj is not None else ''
+                    except Exception:
+                        full_name = ''
+
+                staff_map[staff_id] = {
+                    'id': staff_id,
+                    'name': full_name or str(getattr(staff, 'staff_id', '') or '').strip() or str(getattr(staff, 'id', '') or '').strip(),
+                    'user_id': getattr(user_obj, 'id', None),
+                    'teaching_assignments': [],
+                }
+
+            # Resolve subject code/name (supports curriculum_row / elective_subject)
+            subject_code, subject_name, subject_obj = _resolve_subject_meta_for_ta(ta)
+
+            # Determine which exams should be shown for this TA
+            class_type = _resolve_ta_class_type(ta)
+            assessment_keys = _assessments_for_ta(ta)
+
+            # Get roster once per TA
+            try:
+                students = _get_students_for_teaching_assignment(ta)
+            except Exception:
+                students = []
+
+            exam_progress = []
+            for assess in assessment_keys:
+                if not assess:
+                    continue
+                exam_progress.append(
+                    _exam_progress_for_ta(
+                        ta,
+                        assessment_key=assess,
+                        subject_obj=subject_obj,
+                        students=students,
+                        class_type=class_type,
+                    )
+                )
+
+            staff_map[staff_id]['teaching_assignments'].append(
+                {
+                    'id': getattr(ta, 'id', None),
+                    'subject_code': subject_code,
+                    'subject_name': subject_name,
+                    # Kept for UI/debug: for SPECIAL this is the enabled list; for others it's the computed visible keys
+                    'enabled_assessments': assessment_keys,
+                    'exam_progress': exam_progress,
+                }
+            )
+
+        # Skip if no staff entries
+        if not staff_map:
+            continue
+
+        batch = getattr(sec, 'batch', None)
+        course = getattr(batch, 'course', None) if batch is not None else None
+        course_dept = getattr(course, 'department', None) if course is not None else None
+
+        section_results.append(
+            {
+                'id': getattr(sec, 'id', None),
+                'name': getattr(sec, 'name', None),
+                'batch': {
+                    'id': getattr(batch, 'id', None) if batch is not None else None,
+                    'name': getattr(batch, 'name', None) if batch is not None else None,
+                },
+                'course': {
+                    'id': getattr(course, 'id', None) if course is not None else None,
+                    'name': getattr(course, 'name', None) if course is not None else None,
+                },
+                'department': {
+                    'id': getattr(course_dept, 'id', None) if course_dept is not None else None,
+                    'code': getattr(course_dept, 'code', None) if course_dept is not None else None,
+                    'name': getattr(course_dept, 'name', None) if course_dept is not None else None,
+                    'short_name': getattr(course_dept, 'short_name', None) if course_dept is not None else None,
+                },
+                'staff': list(staff_map.values()),
+            }
+        )
+
+    resp = {
+        'role': primary_role,
+        'academic_year': {'id': getattr(ay, 'id', None), 'name': getattr(ay, 'name', None)} if ay is not None else None,
+        'department': None,
+        'sections': section_results,
+    }
+
+    if department is not None:
+        resp['department'] = {
+            'id': getattr(department, 'id', None),
+            'code': getattr(department, 'code', None),
+            'name': getattr(department, 'name', None),
+            'short_name': getattr(department, 'short_name', None),
+        }
+
+    return Response(resp)
 
 
 @api_view(['POST'])

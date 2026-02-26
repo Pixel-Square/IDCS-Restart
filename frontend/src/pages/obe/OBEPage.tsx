@@ -90,7 +90,47 @@ type OBEItem = {
   achieved: string;
 };
 
-type TabKey = 'courses' | 'exam';
+type TabKey = 'courses' | 'exam' | 'progress';
+
+type ObeProgressExam = {
+  assessment: string;
+  label?: string | null;
+  rows_filled: number;
+  total_students: number;
+  percentage: number;
+  published: boolean;
+};
+
+type ObeProgressTeachingAssignment = {
+  id: number | null;
+  subject_code: string | null;
+  subject_name: string | null;
+  enabled_assessments: string[];
+  exam_progress: ObeProgressExam[];
+};
+
+type ObeProgressStaff = {
+  id: number;
+  name: string;
+  user_id: number | null;
+  teaching_assignments: ObeProgressTeachingAssignment[];
+};
+
+type ObeProgressSection = {
+  id: number | null;
+  name: string | null;
+  batch: { id: number | null; name: string | null };
+  course: { id: number | null; name: string | null };
+  department: { id: number | null; code: string | null; name: string | null; short_name: string | null };
+  staff: ObeProgressStaff[];
+};
+
+type ObeProgressResponse = {
+  role: 'HOD' | 'ADVISOR' | 'FACULTY' | string;
+  academic_year: { id: number | null; name: string | null } | null;
+  department: { id: number | null; code: string | null; name: string | null; short_name: string | null } | null;
+  sections: ObeProgressSection[];
+};
 
 export default function OBEPage(): JSX.Element {
   const [data, setData] = useState<OBEItem[]>([]);
@@ -129,6 +169,12 @@ export default function OBEPage(): JSX.Element {
   const [previewUpload, setPreviewUpload] = useState<any | null>(null);
   const [previewQuestions, setPreviewQuestions] = useState<any[] | null>(null);
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+
+  // Progress overview state
+  const [progressLoading, setProgressLoading] = useState(false);
+  const [progressError, setProgressError] = useState<string | null>(null);
+  const [progressData, setProgressData] = useState<ObeProgressResponse | null>(null);
+  const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
 
   function normalizeImageSrc(img: any): string | null {
     try {
@@ -229,6 +275,41 @@ export default function OBEPage(): JSX.Element {
 
   const [examUploadStatus, setExamUploadStatus] = useState<'idle'|'uploading'|'success'|'error'>('idle');
   const [examUploadMessage, setExamUploadMessage] = useState<string | null>(null);
+
+  // Fetch progress when switching to Progress tab (lazy-load)
+  useEffect(() => {
+    if (activeTab !== 'progress') return;
+    if (progressLoading || progressData) return;
+
+    (async () => {
+      try {
+        setProgressLoading(true);
+        setProgressError(null);
+        const res = await fetchWithFallback('/api/obe/progress', {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            ...authHeaders(),
+          },
+        });
+        if (!res.ok) {
+          const txt = await res.text();
+          throw new Error(txt || `Failed to load progress (${res.status})`);
+        }
+        const js = (await res.json()) as ObeProgressResponse;
+        setProgressData(js);
+        // Default selected section: first section (if any)
+        if (js.sections && js.sections.length > 0) {
+          const first = js.sections[0];
+          if (first && first.id != null) setSelectedSectionId(first.id);
+        }
+      } catch (e: any) {
+        setProgressError(e?.message || 'Failed to load progress');
+      } finally {
+        setProgressLoading(false);
+      }
+    })();
+  }, [activeTab, progressLoading, progressData]);
 
   async function handleExamUploadFile(f: File) {
     setExamUploadStatus('uploading');
@@ -455,6 +536,23 @@ export default function OBEPage(): JSX.Element {
                   }}
                 >
                   📝 Exam Management
+                </button>
+                <button
+                  onClick={() => setActiveTab('progress')}
+                  style={{
+                    padding: '10px 24px',
+                    borderRadius: 8,
+                    border: 'none',
+                    background: activeTab === 'progress' ? 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)' : 'transparent',
+                    color: activeTab === 'progress' ? '#fff' : '#64748b',
+                    cursor: 'pointer',
+                    fontWeight: activeTab === 'progress' ? 600 : 500,
+                    fontSize: 15,
+                    transition: 'all 0.2s ease',
+                    boxShadow: activeTab === 'progress' ? '0 2px 8px rgba(22,163,74,0.25)' : 'none'
+                  }}
+                >
+                  📈 Progress
                 </button>
               </div>
 
@@ -785,6 +883,186 @@ export default function OBEPage(): JSX.Element {
                     </div>
                     {examUploadMessage && (
                       <div style={{ marginTop: 12, fontSize: 14, color: examUploadStatus === 'error' ? '#dc2626' : '#16a34a', background: examUploadStatus === 'error' ? '#fef2f2' : '#f0fdf4', padding: '12px 16px', borderRadius: 10, border: `1px solid ${examUploadStatus === 'error' ? '#fecaca' : '#bbf7d0'}` }}>{examUploadMessage}</div>
+                    )}
+                  </div>
+                </section>
+              )}
+
+              {/* Progress overview tab */}
+              {activeTab === 'progress' && (
+                <section aria-label="OBE progress overview" style={{ background: '#fff', padding: 24, borderRadius: 16, boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                      <div>
+                        <div style={{ fontSize: 18, fontWeight: 700, color: '#0f172a' }}>Section-wise Exam Progress</div>
+                        <div style={{ fontSize: 13, color: '#64748b', marginTop: 4 }}>
+                          {progressData?.role === 'HOD' && progressData.department
+                            ? `HOD view • Department: ${progressData.department.short_name || progressData.department.code || progressData.department.name || ''}`
+                            : progressData?.role === 'ADVISOR'
+                              ? 'Advisor view • Your advised sections'
+                              : 'Faculty view • Your sections'}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 12, color: '#94a3b8' }}>
+                        {progressData?.academic_year?.name ? `Academic Year: ${progressData.academic_year.name}` : 'Academic Year: —'}
+                      </div>
+                    </div>
+
+                    {progressLoading && (
+                      <div style={{ padding: 40, textAlign: 'center', color: '#64748b', fontSize: 15 }}>⏳ Loading progress…</div>
+                    )}
+
+                    {progressError && !progressLoading && (
+                      <div style={{ padding: 16, borderRadius: 10, border: '1px solid #fecaca', background: '#fef2f2', color: '#b91c1c', fontSize: 14 }}>
+                        ❌ {progressError}
+                      </div>
+                    )}
+
+                    {!progressLoading && !progressError && progressData && (
+                      <div style={{ display: 'grid', gridTemplateColumns: '260px 1fr', gap: 20 }}>
+                        {/* Left column: section picker */}
+                        <div>
+                          <div style={{ fontSize: 13, color: '#64748b', marginBottom: 8, fontWeight: 600 }}>Sections</div>
+                          {(!progressData.sections || progressData.sections.length === 0) && (
+                            <div style={{ padding: 20, borderRadius: 10, border: '1px dashed #e2e8f0', background: '#f8fafc', fontSize: 13, color: '#64748b' }}>
+                              No sections found for this context.
+                            </div>
+                          )}
+                          {progressData.sections && progressData.sections.length > 0 && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                              {progressData.sections.map((sec) => {
+                                const sid = sec.id ?? -1;
+                                const selected = selectedSectionId === sid;
+                                const label = `${sec.batch?.name ?? ''} ${sec.name ?? ''}`.trim() || sec.name || 'Unnamed section';
+                                return (
+                                  <button
+                                    key={sid}
+                                    onClick={() => setSelectedSectionId(sid)}
+                                    style={{
+                                      textAlign: 'left',
+                                      padding: '10px 12px',
+                                      borderRadius: 10,
+                                      border: selected ? '2px solid #22c55e' : '1px solid #e2e8f0',
+                                      background: selected ? 'linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%)' : '#fff',
+                                      cursor: 'pointer',
+                                      fontSize: 13,
+                                      color: '#0f172a',
+                                      display: 'flex',
+                                      flexDirection: 'column',
+                                      gap: 2,
+                                    }}
+                                  >
+                                    <span style={{ fontWeight: 600 }}>{label}</span>
+                                    {sec.course?.name && (
+                                      <span style={{ fontSize: 11, color: '#64748b' }}>{sec.course.name}</span>
+                                    )}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Right column: section details */}
+                        <div>
+                          {(() => {
+                            const current = progressData.sections.find((s) => (s.id ?? -1) === (selectedSectionId ?? -1));
+                            if (!current) {
+                              return (
+                                <div style={{ padding: 24, borderRadius: 12, border: '1px dashed #e2e8f0', background: '#f9fafb', color: '#64748b', fontSize: 14 }}>
+                                  Select a section on the left to view staff-wise exam progress.
+                                </div>
+                              );
+                            }
+
+                            return (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+                                  <div>
+                                    <div style={{ fontSize: 16, fontWeight: 700, color: '#0f172a' }}>
+                                      {`${current.batch?.name ?? ''} ${current.name ?? ''}`.trim() || current.name || 'Section'}
+                                    </div>
+                                    {current.course?.name && (
+                                      <div style={{ fontSize: 13, color: '#64748b', marginTop: 2 }}>{current.course.name}</div>
+                                    )}
+                                  </div>
+                                  <div style={{ fontSize: 12, color: '#a1a1aa' }}>
+                                    {current.department?.short_name || current.department?.code || current.department?.name || ''}
+                                  </div>
+                                </div>
+
+                                {current.staff.length === 0 && (
+                                  <div style={{ padding: 20, borderRadius: 12, border: '1px dashed #e2e8f0', background: '#f9fafb', fontSize: 13, color: '#64748b' }}>
+                                    No teaching assignments found for this section.
+                                  </div>
+                                )}
+
+                                {current.staff.length > 0 && (
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                                    {current.staff.map((st) => (
+                                      <div key={st.id} style={{ borderRadius: 12, border: '1px solid #e5e7eb', background: '#fff', padding: 14, boxShadow: '0 1px 2px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                            <div style={{ width: 32, height: 32, borderRadius: '999px', background: '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, color: '#0f172a' }}>
+                                              {st.name ? String(st.name).slice(0, 1).toUpperCase() : 'S'}
+                                            </div>
+                                            <div>
+                                              <div style={{ fontSize: 14, fontWeight: 600, color: '#0f172a' }}>{st.name}</div>
+                                              <div style={{ fontSize: 11, color: '#9ca3af' }}>Teaching assignments: {st.teaching_assignments.length}</div>
+                                            </div>
+                                          </div>
+                                        </div>
+
+                                        {st.teaching_assignments.length > 0 && (
+                                          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+                                            {st.teaching_assignments.map((ta, idxTa) => (
+                                              <div key={`${ta.id ?? idxTa}`} style={{ borderRadius: 10, border: '1px solid #e5e7eb', padding: 10, background: '#f9fafb', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                                                  <div>
+                                                    <div style={{ fontSize: 13, fontWeight: 600, color: '#111827' }}>{ta.subject_name || 'Course'}</div>
+                                                    {ta.subject_code && (
+                                                      <div style={{ fontSize: 11, color: '#3b82f6' }}>{ta.subject_code}</div>
+                                                    )}
+                                                  </div>
+                                                </div>
+                                                {ta.exam_progress.length === 0 && (
+                                                  <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>No enabled assessments for this course.</div>
+                                                )}
+                                                {ta.exam_progress.length > 0 && (
+                                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
+                                                    {ta.exam_progress.map((ex) => {
+                                                      const label = (ex.label ? String(ex.label) : String(ex.assessment)).trim();
+                                                      const pctLabel = `${ex.percentage.toFixed(1)}%`;
+                                                      const filledLabel = `${ex.rows_filled}/${ex.total_students}`;
+                                                      const color = ex.published ? '#16a34a' : '#2563eb';
+                                                      const bg = ex.published ? '#dcfce7' : '#eff6ff';
+                                                      const border = ex.published ? '#4ade80' : '#bfdbfe';
+                                                      return (
+                                                        <div key={ex.assessment} style={{ padding: '6px 10px', borderRadius: 999, border: `1px solid ${border}`, background: bg, display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#0f172a' }}>
+                                                          <span style={{ fontWeight: 700, textTransform: 'uppercase', color }}>{label}</span>
+                                                          <span style={{ color: '#4b5563' }}>{filledLabel}</span>
+                                                          <span style={{ fontWeight: 700, color }}>{pctLabel}</span>
+                                                          <span style={{ padding: '2px 6px', borderRadius: 999, background: ex.published ? '#22c55e' : '#e5e7eb', color: ex.published ? '#fff' : '#4b5563', fontSize: 10 }}>
+                                                            {ex.published ? 'Published' : 'Draft'}
+                                                          </span>
+                                                        </div>
+                                                      );
+                                                    })}
+                                                  </div>
+                                                )}
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      </div>
                     )}
                   </div>
                 </section>
