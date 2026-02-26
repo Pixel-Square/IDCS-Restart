@@ -200,7 +200,22 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     options: { poll: false },
   });
 
-  const isPublished = Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published) || Boolean(publishedViewSnapshot);
+  // Published must be derived from the authoritative lock state.
+  // The `*-published` endpoint returns a JSON shape even when empty, so
+  // `publishedViewSnapshot` is NOT a reliable signal for publish status.
+  const isPublished = Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published);
+
+  // Restore publishedAt from backend when markLock indicates the sheet was published.
+  useEffect(() => {
+    if (!markLock?.is_published || !markLock?.updated_at) return;
+    let next: string;
+    try {
+      next = new Date(String(markLock.updated_at)).toLocaleString();
+    } catch {
+      next = String(markLock.updated_at);
+    }
+    if (next !== (publishedAt || '')) setPublishedAt(next);
+  }, [markLock?.is_published, markLock?.updated_at, publishedAt]);
   const approvalOpen = Boolean(markEntryEditWindow?.allowed_by_approval);
   const entryOpen = !isPublished ? true : approvalOpen;
   const publishedEditLocked = Boolean(isPublished && !approvalOpen);

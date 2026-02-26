@@ -172,7 +172,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
     termLabel: 'KRCT AY25-26',
     batchLabel: subjectId,
     rows: [],
-    coSplitMax: isReview ? { co1: [15], co2: [15] } : undefined,
+    coSplitMax: isReview ? { co1: [''], co2: [''] } : undefined,
     // Default: locked until Mark Manager is confirmed (saved)
     markManagerLocked: false,
     markManagerSnapshot: null,
@@ -272,18 +272,23 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
   const [markManagerError, setMarkManagerError] = useState<string | null>(null);
   const [markManagerAnimating, setMarkManagerAnimating] = useState(false);
 
-  const isPublished = Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published) || Boolean(publishedViewSnapshot);
+  // Published must be derived from the authoritative lock state.
+  // The `*-published` endpoints always return a JSON shape (even when empty),
+  // so `publishedViewSnapshot` is NOT a reliable signal for publish status.
+  const isPublished = Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published);
 
-  // Restore publishedAt from backend when markLock indicates the table was published
+  // Restore publishedAt from backend when markLock indicates the table was published.
+  // Avoid gating on `!publishedAt` so it still updates after refresh/poll.
   useEffect(() => {
-    if (markLock?.is_published && markLock?.updated_at && !publishedAt) {
-      try {
-        setPublishedAt(new Date(String(markLock.updated_at)).toLocaleString());
-      } catch {
-        setPublishedAt(String(markLock.updated_at));
-      }
+    if (!markLock?.is_published || !markLock?.updated_at) return;
+    let next: string;
+    try {
+      next = new Date(String(markLock.updated_at)).toLocaleString();
+    } catch {
+      next = String(markLock.updated_at);
     }
-  }, [markLock?.is_published, markLock?.updated_at]);
+    if (next !== (publishedAt || '')) setPublishedAt(next);
+  }, [markLock?.is_published, markLock?.updated_at, publishedAt]);
 
   const [publishConsumedApprovals, setPublishConsumedApprovals] = useState<null | {
     markEntryApprovalUntil: string | null;
@@ -304,6 +309,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
   }, [subjectId, assessmentKey, teachingAssignmentId]);
 
   const markManagerLocked = Boolean(sheet.markManagerLocked);
+  const markManagerConfirmed = Boolean(sheet.markManagerSnapshot != null) || Boolean(markLock?.exists && markLock?.mark_manager_locked);
 
   const markEntryApprovalUntil = markEntryEditWindow?.approval_until ? String(markEntryEditWindow.approval_until) : null;
   const markManagerApprovalUntil = markManagerEditWindow?.approval_until ? String(markManagerEditWindow.approval_until) : null;
@@ -417,10 +423,10 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
         termLabel: masterCfg?.termLabel ? String(masterCfg.termLabel) : String((stored as any).termLabel || 'KRCT AY25-26'),
         batchLabel: subjectId,
         rows: (stored as any).rows,
-        coSplitMax: (stored as any).coSplitMax ?? (isReview ? { co1: [15], co2: [15] } : undefined),
+        coSplitMax: (stored as any).coSplitMax ?? (isReview ? { co1: [''], co2: [''] } : undefined),
       });
     } else {
-      setSheet({ termLabel: masterTermLabel || 'KRCT AY25-26', batchLabel: subjectId, rows: [], coSplitMax: isReview ? { co1: [15], co2: [15] } : undefined });
+      setSheet({ termLabel: masterTermLabel || 'KRCT AY25-26', batchLabel: subjectId, rows: [], coSplitMax: isReview ? { co1: [''], co2: [''] } : undefined });
     }
   }, [key, subjectId, masterCfg, masterTermLabel]);
 
@@ -442,7 +448,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
             termLabel: String((draftSheet as any).termLabel || masterTermLabel || 'KRCT AY25-26'),
             batchLabel: subjectId,
             rows: (draftSheet as any).rows,
-            coSplitMax: (draftSheet as any)?.coSplitMax ?? prev.coSplitMax ?? (isReview ? { co1: [15], co2: [15] } : undefined),
+            coSplitMax: (draftSheet as any)?.coSplitMax ?? prev.coSplitMax ?? (isReview ? { co1: [''], co2: [''] } : undefined),
             // mark manager metadata from server draft (if present)
             markManagerSnapshot: (draftSheet as any)?.markManagerSnapshot ?? prev.markManagerSnapshot ?? null,
             markManagerApprovalUntil: (draftSheet as any)?.markManagerApprovalUntil ?? prev.markManagerApprovalUntil ?? null,
@@ -468,7 +474,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                 termLabel: String((draftSheet as any).termLabel || masterTermLabel || 'KRCT AY25-26'),
                 batchLabel: subjectId,
                 rows: (draftSheet as any).rows,
-                coSplitMax: (draftSheet as any)?.coSplitMax ?? (isReview ? { co1: [15], co2: [15] } : undefined),
+                coSplitMax: (draftSheet as any)?.coSplitMax ?? (isReview ? { co1: [''], co2: [''] } : undefined),
               });
           } catch {
             // ignore localStorage errors
@@ -787,6 +793,17 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
     if (!publishAllowed) {
       setSaveError('Publish window is closed. Please request IQAC approval.');
       return;
+    }
+
+    if (isReview) {
+      const a = safeSplitArr((sheet as any)?.coSplitMax?.co1, CO_MAX.co1);
+      const b = safeSplitArr((sheet as any)?.coSplitMax?.co2, CO_MAX.co2);
+      const ok1 = Math.abs(sumSplit(a) - CO_MAX.co1) < 1e-6;
+      const ok2 = Math.abs(sumSplit(b) - CO_MAX.co2) < 1e-6;
+      if (!ok1 || !ok2) {
+        alert('CO split totals must equal 15 for both CO-1 and CO-2 before publishing.');
+        return;
+      }
     }
 
     setPublishing(true);
@@ -1204,14 +1221,14 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
 
   const coSplitMax = (sheet as any).coSplitMax as { co1?: Array<number | ''>; co2?: Array<number | ''> } | undefined;
   const safeSplitArr = (raw: any, fallbackMax: number): Array<number | ''> => {
-    if (!Array.isArray(raw) || raw.length === 0) return [fallbackMax];
+    if (!Array.isArray(raw) || raw.length === 0) return [''];
     const mapped = raw
       .map((v) => {
         if (v === '') return '';
         const n = Number(v);
         return Number.isFinite(n) && n >= 0 ? clamp(n, 0, fallbackMax) : '';
       })
-      .slice(0, 10);
+      .slice(0, 15);
 
     // Enforce total <= fallbackMax by clamping each split to the remaining.
     let remaining = fallbackMax;
@@ -1223,89 +1240,112 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
     });
   };
   const sumSplit = (arr: Array<number | ''>) => arr.reduce((a, b) => a + (typeof b === 'number' && Number.isFinite(b) ? b : 0), 0);
-  const updateCoSplit = (coKey: 'co1' | 'co2', next: Array<number | ''>) => {
-    setSheet((prev) => ({
-      ...prev,
-      coSplitMax: {
-        ...(prev.coSplitMax || {}),
-        [coKey]: next,
-      },
-    }));
-  };
-  const renderCoSplitCell = (coKey: 'co1' | 'co2', coMax: number) => {
-    const disabled = Boolean(marksEditDisabled || (markManagerLocked && sheet.markManagerSnapshot != null));
-    const current = safeSplitArr((coSplitMax as any)?.[coKey], coMax);
-    const total = sumSplit(current);
-    const exceedBy = total - coMax;
+  const padTo = <T,>(arr: T[], len: number, fill: T) => (arr.length >= len ? arr.slice(0, len) : arr.concat(Array.from({ length: len - arr.length }, () => fill)));
 
-    const last = current.length ? current[current.length - 1] : '';
+  // Review-only CO split rows (shared row count across CO-1 and CO-2)
+  // Split config is a header-level setting; keep it editable even if the
+  // student mark table is blocked by Mark Manager gating.
+  const splitEditDisabled = Boolean(globalLocked || publishedEditLocked || (markManagerLocked && sheet.markManagerSnapshot != null));
+  const co1SplitsRaw = isReview ? safeSplitArr((coSplitMax as any)?.co1, CO_MAX.co1) : [''];
+  const co2SplitsRaw = isReview ? safeSplitArr((coSplitMax as any)?.co2, CO_MAX.co2) : [''];
+  const coSplitRowCount = isReview ? Math.max(1, co1SplitsRaw.length, co2SplitsRaw.length) : 0;
+  const co1Splits = isReview ? padTo(co1SplitsRaw, coSplitRowCount, '' as const) : ([] as Array<number | ''>);
+  const co2Splits = isReview ? padTo(co2SplitsRaw, coSplitRowCount, '' as const) : ([] as Array<number | ''>);
+  const co1TotalSplit = isReview ? sumSplit(co1Splits) : 0;
+  const co2TotalSplit = isReview ? sumSplit(co2Splits) : 0;
+  const reviewSplitsOk =
+    !isReview || (Math.abs(co1TotalSplit - CO_MAX.co1) < 1e-6 && Math.abs(co2TotalSplit - CO_MAX.co2) < 1e-6);
+
+  const addCoSplitRow = () => {
+    if (!isReview || splitEditDisabled) return;
+    setSheet((prev) => {
+      const raw = (prev as any).coSplitMax || {};
+      const a0 = safeSplitArr(raw.co1, CO_MAX.co1);
+      const b0 = safeSplitArr(raw.co2, CO_MAX.co2);
+      const len = Math.max(1, a0.length, b0.length);
+      if (len >= 15) return prev;
+      const nextA = padTo(a0, len, '' as const).concat(['']);
+      const nextB = padTo(b0, len, '' as const).concat(['']);
+      return { ...prev, coSplitMax: { ...(prev as any).coSplitMax, co1: nextA, co2: nextB } };
+    });
+  };
+
+  const removeCoSplitRow = () => {
+    if (!isReview || splitEditDisabled) return;
+    setSheet((prev) => {
+      const raw = (prev as any).coSplitMax || {};
+      const a0 = safeSplitArr(raw.co1, CO_MAX.co1);
+      const b0 = safeSplitArr(raw.co2, CO_MAX.co2);
+      const len = Math.max(1, a0.length, b0.length);
+      if (len <= 1) return prev;
+      const nextA = padTo(a0, len, '' as const).slice(0, -1);
+      const nextB = padTo(b0, len, '' as const).slice(0, -1);
+      return { ...prev, coSplitMax: { ...(prev as any).coSplitMax, co1: nextA, co2: nextB } };
+    });
+  };
+
+  const updateCoSplitAt = (coKey: 'co1' | 'co2', idx: number, rawVal: string) => {
+    if (!isReview) return;
+    setSheet((prev) => {
+      const raw = (prev as any).coSplitMax || {};
+      const a0 = safeSplitArr(raw.co1, CO_MAX.co1);
+      const b0 = safeSplitArr(raw.co2, CO_MAX.co2);
+      const len = Math.max(1, a0.length, b0.length, idx + 1);
+      const a = padTo(a0, len, '' as const);
+      const b = padTo(b0, len, '' as const);
+
+      const target = coKey === 'co1' ? a : b;
+      if (rawVal === '') {
+        target[idx] = '';
+        return { ...prev, coSplitMax: { ...(prev as any).coSplitMax, co1: a, co2: b } };
+      }
+
+      const n = Number(rawVal);
+      const otherSum = target.reduce((acc, v, j) => {
+        if (j === idx) return acc;
+        return acc + (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+      }, 0);
+      const coMax = coKey === 'co1' ? CO_MAX.co1 : CO_MAX.co2;
+      const remaining = clamp(coMax - otherSum, 0, coMax);
+      const nextVal = Number.isFinite(n) ? clamp(n, 0, remaining) : '';
+      target[idx] = nextVal as any;
+      return { ...prev, coSplitMax: { ...(prev as any).coSplitMax, co1: a, co2: b } };
+    });
+  };
+
+  const renderCoSplitHeaderCell = (coKey: 'co1' | 'co2', coMax: number, total: number) => {
+    const arr = coKey === 'co1' ? co1Splits : co2Splits;
+    const last = arr.length ? arr[arr.length - 1] : '';
     const lastFilled = typeof last === 'number' && Number.isFinite(last) && last > 0;
-    const canAdd = Boolean(!disabled && current.length < 10 && lastFilled && total < coMax);
-    const canRemove = Boolean(!disabled && current.length > 1);
+    const canAdd = Boolean(!splitEditDisabled && coSplitRowCount > 0 && coSplitRowCount < 15 && lastFilled && total < coMax - 1e-6);
+    const canRemove = Boolean(!splitEditDisabled && coSplitRowCount > 1);
+    const remaining = round1(coMax - total);
+    const ok = Math.abs(remaining) < 1e-6;
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center' }}>
         <div style={{ fontWeight: 900, fontSize: 12 }}>{coMax}</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%', alignItems: 'center' }}>
-          {current.map((v, idx) => (
-            <input
-              key={`${coKey}_split_${idx}`}
-              type="number"
-              inputMode="decimal"
-              min={0}
-              max={coMax}
-              step="0.5"
-              disabled={disabled}
-              value={v === '' ? '' : String(v)}
-              onChange={(e) => {
-                const raw = e.target.value;
-                if (raw === '') {
-                  const next = current.slice();
-                  next[idx] = '';
-                  updateCoSplit(coKey, next);
-                  return;
-                }
-                const n = Number(raw);
-                const otherSum = current.reduce((acc, v2, j) => {
-                  if (j === idx) return acc;
-                  return acc + (typeof v2 === 'number' && Number.isFinite(v2) ? v2 : 0);
-                }, 0);
-                const remaining = clamp(coMax - otherSum, 0, coMax);
-                const nextVal = Number.isFinite(n) ? clamp(n, 0, remaining) : '';
-                const next = current.slice();
-                next[idx] = nextVal;
-                updateCoSplit(coKey, next);
-              }}
-              style={{
-                ...splitInputStyle,
-                ...(exceedBy > 0 ? { borderColor: 'rgba(220,38,38,0.55)' } : null),
-              }}
-            />
-          ))}
-        </div>
         <div style={{ display: 'flex', gap: 6 }}>
           <button
             type="button"
             disabled={!canAdd}
-            onClick={() => updateCoSplit(coKey, current.concat(['']))}
+            onClick={addCoSplitRow}
             style={{ ...splitButtonStyle, opacity: canAdd ? 1 : 0.6, cursor: canAdd ? 'pointer' : 'not-allowed' }}
-            aria-label={`Add split for ${coKey}`}
+            aria-label={`Add split row for ${coKey}`}
           >
             +
           </button>
           <button
             type="button"
             disabled={!canRemove}
-            onClick={() => updateCoSplit(coKey, current.slice(0, -1))}
+            onClick={removeCoSplitRow}
             style={{ ...splitButtonStyle, opacity: canRemove ? 1 : 0.6, cursor: canRemove ? 'pointer' : 'not-allowed' }}
-            aria-label={`Remove split for ${coKey}`}
+            aria-label={`Remove split row for ${coKey}`}
           >
             -
           </button>
         </div>
-        {exceedBy > 0 ? (
-          <div style={{ color: '#b91c1c', fontSize: 11, fontWeight: 900 }}>Exceeds by {round1(exceedBy)}</div>
-        ) : null}
+        <div style={{ fontSize: 11, fontWeight: 900, color: ok ? '#065f46' : '#b91c1c' }}>{ok ? 'OK' : `Remaining ${remaining}`}</div>
       </div>
     );
   };
@@ -1367,7 +1407,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
     setPublishedEditModalOpen(true);
   };
   const publishButtonOnClick = publishButtonIsRequestEdit ? openEditRequestModal : publish;
-  const publishButtonDisabled = publishButtonIsRequestEdit ? markEntryReqPending : Boolean(publishing || !publishAllowed || tableBlocked);
+  const publishButtonDisabled = publishButtonIsRequestEdit ? markEntryReqPending : Boolean(publishing || !publishAllowed || tableBlocked || !reviewSplitsOk);
 
   return (
     <>
@@ -1581,8 +1621,8 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                     </th>
                   </tr>
                   <tr>
-                    <th style={{ ...cellTh, width: 42, minWidth: 42 }} rowSpan={4}>S.No</th>
-                    <th style={cellTh} rowSpan={4}>Register No.</th>
+                    <th style={{ ...cellTh, width: 42, minWidth: 42 }} rowSpan={isReview ? 4 + coSplitRowCount : 4}>S.No</th>
+                    <th style={cellTh} rowSpan={isReview ? 4 + coSplitRowCount : 4}>Register No.</th>
                     <th style={cellTh} rowSpan={3}>Name of the Students</th>
 
                     <th style={cellTh}>{displayLabel}</th>
@@ -1625,9 +1665,9 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                     <th style={cellTh}>Name / Max Marks</th>
                     <th style={cellTh}>{MAX_ASMT1}</th>
                     {showTotalColumn ? <th style={cellTh}>{MAX_ASMT1}</th> : null}
-                    <th style={cellTh}>{isReview ? renderCoSplitCell('co1', CO_MAX.co1) : CO_MAX.co1}</th>
+                    <th style={cellTh}>{CO_MAX.co1}</th>
                     <th style={cellTh}>%</th>
-                    <th style={cellTh}>{isReview ? renderCoSplitCell('co2', CO_MAX.co2) : CO_MAX.co2}</th>
+                    <th style={cellTh}>{CO_MAX.co2}</th>
                     <th style={cellTh}>%</th>
                     {visibleBtlIndices.flatMap((n) => [
                       <th key={`btl-max-${n}`} style={cellTh}>
@@ -1724,12 +1764,11 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                 onClick={() => {
                   // If Mark Manager has not been confirmed (no snapshot), open confirm modal
                   // to allow selecting BTLs and saving. If already confirmed, open request mode.
-                  const confirmed = sheet.markManagerSnapshot != null;
-                  setMarkManagerModal({ mode: confirmed ? 'request' : 'confirm' });
+                  setMarkManagerModal({ mode: markManagerConfirmed ? 'request' : 'confirm' });
                 }}
                 disabled={!subjectId || markManagerBusy}
               >
-                {sheet.markManagerSnapshot ? 'Edit' : 'Save'}
+                {markManagerConfirmed ? 'Edit' : 'Save'}
               </button>
             </div>
         </div>
@@ -1829,9 +1868,9 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                     <th style={cellTh}>Name / Max Marks</th>
                     <th style={cellTh}>{MAX_ASMT1}</th>
                     {showTotalColumn ? <th style={cellTh}>{MAX_ASMT1}</th> : null}
-                    <th style={cellTh}>{isReview ? renderCoSplitCell('co1', CO_MAX.co1) : CO_MAX.co1}</th>
+                    <th style={cellTh}>{isReview ? renderCoSplitHeaderCell('co1', CO_MAX.co1, co1TotalSplit) : CO_MAX.co1}</th>
                     <th style={cellTh}>%</th>
-                    <th style={cellTh}>{isReview ? renderCoSplitCell('co2', CO_MAX.co2) : CO_MAX.co2}</th>
+                    <th style={cellTh}>{isReview ? renderCoSplitHeaderCell('co2', CO_MAX.co2, co2TotalSplit) : CO_MAX.co2}</th>
                     <th style={cellTh}>%</th>
                     {visibleBtlIndices.flatMap((n) => [
                       <th key={`btl-max-${n}`} style={cellTh}>
@@ -1840,6 +1879,50 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                       <th key={`btl-pct-${n}`} style={cellTh}>%</th>,
                     ])}
                   </tr>
+
+                  {isReview
+                    ? Array.from({ length: coSplitRowCount }).map((_, splitIdx) => (
+                        <tr key={`co-split-row-${splitIdx}`}>
+                          <th style={cellTh}>{`Split ${splitIdx + 1}`}</th>
+                          <th style={cellTh} />
+                          {showTotalColumn ? <th style={cellTh} /> : null}
+                          <th style={cellTh}>
+                            <input
+                              key={`co1_split_input_${splitIdx}`}
+                              type="number"
+                              inputMode="decimal"
+                              min={0}
+                              max={CO_MAX.co1}
+                              step="0.5"
+                              disabled={splitEditDisabled}
+                              value={co1Splits[splitIdx] === '' ? '' : String(co1Splits[splitIdx])}
+                              onChange={(e) => updateCoSplitAt('co1', splitIdx, e.target.value)}
+                              style={splitInputStyle}
+                            />
+                          </th>
+                          <th style={cellTh} />
+                          <th style={cellTh}>
+                            <input
+                              key={`co2_split_input_${splitIdx}`}
+                              type="number"
+                              inputMode="decimal"
+                              min={0}
+                              max={CO_MAX.co2}
+                              step="0.5"
+                              disabled={splitEditDisabled}
+                              value={co2Splits[splitIdx] === '' ? '' : String(co2Splits[splitIdx])}
+                              onChange={(e) => updateCoSplitAt('co2', splitIdx, e.target.value)}
+                              style={splitInputStyle}
+                            />
+                          </th>
+                          <th style={cellTh} />
+                          {visibleBtlIndices.flatMap((n) => [
+                            <th key={`btl-split-mark-${splitIdx}-${n}`} style={cellTh} />,
+                            <th key={`btl-split-pct-${splitIdx}-${n}`} style={cellTh} />,
+                          ])}
+                        </tr>
+                      ))
+                    : null}
                 </thead>
                 <tbody>
                   {sheet.rows.length === 0 ? (

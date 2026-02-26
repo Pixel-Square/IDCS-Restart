@@ -8,7 +8,20 @@ import '../../styles/obe-theme.css';
 
 // OBE/marks/COAttainment fetch and types removed
 import { getMe } from '../../services/auth';
-import { fetchMyTeachingAssignments, TeachingAssignmentItem } from '../../services/obe';
+import {
+  fetchMyTeachingAssignments,
+  TeachingAssignmentItem,
+  fetchPublishedSsa1,
+  fetchPublishedSsa2,
+  fetchPublishedReview1,
+  fetchPublishedReview2,
+  fetchPublishedFormative,
+  fetchCiaMarks,
+  fetchPublishedModelSheet,
+  fetchPublishedCiaSheet,
+  fetchDraft,
+} from '../../services/obe';
+import { fetchTeachingAssignmentRoster } from '../../services/roster';
 
 function apiBase() {
   const fromEnv = import.meta.env.VITE_API_BASE;
@@ -60,6 +73,8 @@ type Me = {
   faculty_id?: string | number;
   staff_id?: string | number;
   employee_id?: string | number;
+  roles?: string[];
+  permissions?: string[];
 };
 
 type ParsedQuestion = {
@@ -140,6 +155,27 @@ export default function OBEPage(): JSX.Element {
 
   const [me, setMe] = useState<Me | null>(null);
 
+  const cachedRoles = useMemo((): string[] => {
+    try {
+      const raw = window.localStorage.getItem('roles');
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.map((r) => String(r)) : [];
+    } catch {
+      return [];
+    }
+  }, []);
+
+  const effectiveRoles = useMemo((): string[] => {
+    const fromMe = (me as any)?.roles;
+    if (Array.isArray(fromMe)) return fromMe.map((r) => String(r));
+    return cachedRoles;
+  }, [me, cachedRoles]);
+
+  const canViewProgress = useMemo(() => {
+    const rolesUpper = new Set(effectiveRoles.map((r) => String(r || '').trim().toUpperCase()));
+    return rolesUpper.has('HOD') || rolesUpper.has('AHOD') || rolesUpper.has('ADVISOR');
+  }, [effectiveRoles]);
+
   const [assignments, setAssignments] = useState<TeachingAssignmentItem[]>([]);
   const [loadingAssignments, setLoadingAssignments] = useState(false);
 
@@ -175,6 +211,41 @@ export default function OBEPage(): JSX.Element {
   const [progressError, setProgressError] = useState<string | null>(null);
   const [progressData, setProgressData] = useState<ObeProgressResponse | null>(null);
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
+
+  // Progress chip modal state
+  type ProgressModalMeta = {
+    taId: number | null;
+    subjectCode: string;
+    subjectName: string;
+    assessment: string;
+    label: string;
+    staffName: string;
+    sectionName: string;
+    published: boolean;
+  };
+  type ProgressModalRow = { student_id: string; reg_no: string; name: string; values: (string | null)[] };
+  // CIA / Model-style per-question sheet
+  type CiaQDef = { key: string; label: string; max: number; co: any; btl: number };
+  type CiaSheetRow = { studentId: string; reg_no: string; name: string; absent: boolean; q: Record<string, number | ''> };
+  type CiaSheetForModal = {
+    termLabel: string;
+    batchLabel: string;
+    assessmentLabel: string;
+    questions: CiaQDef[];
+    questionBtl: Record<string, number | ''>;
+    rows: CiaSheetRow[];
+    coPair: { a: number; b: number };
+    maxTotal: number;
+    coMax: { a: number; b: number };
+    btlMax: Record<number, number>;
+    visibleBtls: number[];
+  };
+  const [progressModal, setProgressModal] = useState<ProgressModalMeta | null>(null);
+  const [modalLoading, setModalLoading] = useState(false);
+  const [modalMarkCols, setModalMarkCols] = useState<string[]>([]);
+  const [modalRows, setModalRows] = useState<ProgressModalRow[] | null>(null);
+  const [modalCiaSheet, setModalCiaSheet] = useState<CiaSheetForModal | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
 
   function normalizeImageSrc(img: any): string | null {
     try {
@@ -242,6 +313,13 @@ export default function OBEPage(): JSX.Element {
     })();
   }, []);
 
+  // Guard: Progress is only for HOD / Advisor.
+  useEffect(() => {
+    if (activeTab === 'progress' && !canViewProgress) {
+      setActiveTab('courses');
+    }
+  }, [activeTab, canViewProgress]);
+
   const facultyId = useMemo(() => {
     if (!me) return null;
     return me.faculty_id ?? me.staff_id ?? me.employee_id ?? me.id ?? null;
@@ -251,7 +329,262 @@ export default function OBEPage(): JSX.Element {
   // OBE/marks/COAttainment course selection removed
   const selectedCourse = null;
 
- 
+  // Helper: CO weights for a question in CIA table
+  const _ciaCoWeights = (co: any, pair: {a: number; b: number}): {a: number; b: number} => {
+    const s = String(co ?? '1').trim();
+    if (s === 'both' || s === '1&2' || s === '3&4') return { a: 0.5, b: 0.5 };
+    const n = Number(s);
+    if (n === pair.a || (pair.a === 3 && n === 1)) return { a: 1, b: 0 };
+    if (n === pair.b || (pair.b === 4 && n === 2)) return { a: 0, b: 1 };
+    return { a: 0, b: 0 };
+  };
+
+  // Parse a CIA/Model published sheet data object into CiaSheetForModal
+  const _parseCiaSheetData = (
+    data: any,
+    assessmentKey: string,
+    studentMap: Map<string, {id: number; reg_no: string; name: string}>,
+    rosterStudents: Array<{id: number; reg_no: string; name: string}>,
+  ): any => {
+    if (!data || typeof data !== 'object') return null;
+
+    // Questions may be stored directly or under a legacy key
+    const rawQuestions = Array.isArray(data.questions) ? data.questions : [];
+    const DEFAULT_Q_KEYS = ['q1','q2','q3','q4','q5','q6','q7','q8','q9'];
+    const questions = rawQuestions.length > 0
+      ? rawQuestions.map((q: any) => ({
+          key: String(q.key || ''),
+          label: String(q.label || q.key || ''),
+          max: Number(q.max || 0),
+          co: q.co ?? 1,
+          btl: Number(q.btl || 1),
+        }))
+      : DEFAULT_Q_KEYS.map((k, i) => ({ key: k, label: k.toUpperCase(), max: i < 6 ? 2 : 16, co: i < 3 ? 1 : i < 6 ? 2 : (i === 8 ? '1&2' : i < 8 ? (i < 7 ? 1 : 2) : 1), btl: [1,3,4,1,1,2,2,3,5][i] ?? 1 }));
+
+    const questionBtl: Record<string, number | ''> = typeof data.questionBtl === 'object' && data.questionBtl ? data.questionBtl : {};
+
+    // rowsByStudentId is the primary data source
+    const rowsByStudentId: Record<string, any> = typeof data.rowsByStudentId === 'object' && data.rowsByStudentId ? data.rowsByStudentId : {};
+
+    // Model sheet uses theorySheet (main theory student marks)
+    const theorySheet: Record<string, any> = typeof data.theorySheet === 'object' && data.theorySheet ? data.theorySheet : {};
+    const theoryQBtl = typeof data.theoryQuestionBtl === 'object' && data.theoryQuestionBtl ? data.theoryQuestionBtl : {};
+    const effectiveQBtl = Object.keys(questionBtl).length > 0 ? questionBtl : theoryQBtl;
+    const effectiveRows = Object.keys(rowsByStudentId).length > 0 ? rowsByStudentId : theorySheet;
+
+    const isModel = assessmentKey === 'model';
+    const aval = assessmentKey === 'cia2' ? 'cia2' : 'cia1';
+    const coPair = aval === 'cia2' ? { a: 3, b: 4 } : { a: 1, b: 2 };
+
+    let coMaxA = 0, coMaxB = 0;
+    for (let qi = 0; qi < questions.length; qi++) {
+      const q = questions[qi];
+      // Legacy fallback: last question is split if no other split question exists
+      const hasAnySplit = questions.some((x: any) => { const s = String(x.co??''); return s==='both'||s==='1&2'||s==='3&4'; });
+      const isLast = qi === questions.length - 1;
+      let w = _ciaCoWeights(q.co, coPair);
+      if (!hasAnySplit && isLast && (String(q.key||'').toLowerCase()==='q9'||String(q.label||'').toLowerCase().includes('q9'))) {
+        w = {a: 0.5, b: 0.5};
+      }
+      coMaxA += q.max * w.a;
+      coMaxB += q.max * w.b;
+    }
+
+    const btlMaxMap: Record<number, number> = {};
+    for (const q of questions) {
+      const btlVal = Number((effectiveQBtl as any)[q.key] ?? q.btl);
+      if (btlVal >= 1 && btlVal <= 6) btlMaxMap[btlVal] = (btlMaxMap[btlVal] || 0) + q.max;
+    }
+    const visibleBtls = [1,2,3,4,5,6].filter(n => (btlMaxMap[n] || 0) > 0);
+    const maxTotal = questions.reduce((sum: number, q: any) => sum + (q.max || 0), 0);
+
+    const sheetRows: any[] = Object.entries(effectiveRows).map(([sid, row]: [string, any]) => {
+      const stu = studentMap.get(sid);
+      const rosterStu = rosterStudents.find(s => String(s.id) === sid);
+      const regNo = String(row.reg_no || row.registerNo || stu?.reg_no || rosterStu?.reg_no || `(${sid})`);
+      const name = stu?.name || rosterStu?.name || String(row.name || '—');
+      // theorySheet rows use row.q, model rows may also use row.q; lab total under row.lab
+      const qData = row.q || {};
+      return { studentId: sid, reg_no: regNo, name, absent: Boolean(row.absent), q: qData };
+    });
+    sheetRows.sort((a: any, b: any) => a.reg_no.localeCompare(b.reg_no));
+
+    return {
+      termLabel: data.termLabel || '',
+      batchLabel: data.batchLabel || '',
+      assessmentLabel: isModel ? 'MODEL' : (aval === 'cia2' ? 'CIA 2' : 'CIA 1'),
+      questions,
+      questionBtl: effectiveQBtl,
+      rows: sheetRows,
+      coPair,
+      maxTotal,
+      coMax: { a: coMaxA, b: coMaxB },
+      btlMax: btlMaxMap,
+      visibleBtls,
+    };
+  };
+
+  // Handler: open the read-only marks modal when a chip is clicked
+  const handleChipClick = async (
+    ta: ObeProgressTeachingAssignment,
+    ex: ObeProgressExam,
+    staffName: string,
+    sectionName: string,
+  ) => {
+    if (!ta.subject_code) return;
+    const label = (ex.label ? String(ex.label) : String(ex.assessment)).trim().toUpperCase();
+    setProgressModal({
+      taId: ta.id,
+      subjectCode: ta.subject_code,
+      subjectName: ta.subject_name || ta.subject_code,
+      assessment: ex.assessment,
+      label,
+      staffName,
+      sectionName,
+      published: ex.published,
+    });
+    setModalLoading(true);
+    setModalRows(null);
+    setModalCiaSheet(null);
+    setModalError(null);
+    setModalMarkCols([]);
+
+    try {
+      const taId = typeof ta.id === 'number' ? ta.id : undefined;
+      const code = ta.subject_code;
+      const akey = ex.assessment.toLowerCase();
+
+      // Fetch roster to get student names/reg_nos (best effort)
+      let rosterStudents: Array<{ id: number; reg_no: string; name: string }> = [];
+      if (taId) {
+        try {
+          const r = await fetchTeachingAssignmentRoster(taId);
+          rosterStudents = r.students || [];
+        } catch {
+          // non-fatal
+        }
+      }
+      const studentMap = new Map(rosterStudents.map((s) => [String(s.id), s]));
+
+      // Helper to build rows from a flat marks record (studentId → value string)
+      const buildFlatRows = (marks: Record<string, string | null>, colName: string) => {
+        const cols = [colName];
+        const rows = Object.entries(marks).map(([sid, val]) => {
+          const stu = studentMap.get(sid);
+          return { student_id: sid, reg_no: stu?.reg_no ?? `(${sid})`, name: stu?.name ?? '—', values: [val ?? '—'] as (string|null)[] };
+        });
+        rows.sort((a, b) => a.reg_no.localeCompare(b.reg_no));
+        return { cols, rows };
+      };
+
+      if (akey === 'cia1' || akey === 'cia2') {
+        const aval: 'cia1' | 'cia2' = akey as 'cia1' | 'cia2';
+        // Try published sheet first for full per-question view
+        let sheetData: any = null;
+        try {
+          const resp = await fetchPublishedCiaSheet(aval, code, taId);
+          sheetData = resp?.data;
+        } catch {
+          // not published yet → try draft
+        }
+        if (!sheetData) {
+          try {
+            const dr = await fetchDraft<any>(aval, code, taId);
+            sheetData = dr?.draft;
+          } catch { /* ignore */ }
+        }
+        const parsed = _parseCiaSheetData(sheetData, aval, studentMap, rosterStudents);
+        if (parsed && parsed.questions.length > 0) {
+          setModalCiaSheet(parsed);
+          setModalRows(null);
+        } else {
+          // absolute fallback: simple total marks
+          const resp = await fetchCiaMarks(aval, code, taId);
+          const rows = (resp.students || []).map((s) => ({
+            student_id: String(s.id), reg_no: s.reg_no || `(${s.id})`, name: s.name || '—',
+            values: [resp.marks[String(s.id)] ?? '—'] as (string|null)[],
+          }));
+          rows.sort((a, b) => a.reg_no.localeCompare(b.reg_no));
+          setModalMarkCols([akey === 'cia2' ? 'CIA 2 Total' : 'CIA 1 Total']);
+          setModalRows(rows);
+          setModalCiaSheet(null);
+        }
+      } else if (akey === 'model') {
+        let sheetData: any = null;
+        try {
+          const resp = await fetchPublishedModelSheet(code, taId);
+          sheetData = resp?.data;
+        } catch { /* ignore */ }
+        if (!sheetData) {
+          try {
+            const dr = await fetchDraft<any>('model', code, taId);
+            sheetData = dr?.draft;
+          } catch { /* ignore */ }
+        }
+        const parsed = _parseCiaSheetData(sheetData, 'model', studentMap, rosterStudents);
+        if (parsed && parsed.questions.length > 0) {
+          setModalCiaSheet(parsed);
+          setModalRows(null);
+        } else {
+          const rows = rosterStudents.map((s) => ({ student_id: String(s.id), reg_no: s.reg_no, name: s.name, values: ['—'] as (string|null)[] }));
+          rows.sort((a, b) => a.reg_no.localeCompare(b.reg_no));
+          setModalMarkCols(['Model Mark']);
+          setModalRows(rows);
+          setModalCiaSheet(null);
+        }
+      } else if (akey === 'ssa1') {
+        const resp = await fetchPublishedSsa1(code, taId);
+        const { cols, rows } = buildFlatRows(resp.marks, 'SSA1 Mark');
+        setModalMarkCols(cols);
+        setModalRows(rows);
+      } else if (akey === 'ssa2') {
+        const resp = await fetchPublishedSsa2(code, taId);
+        const { cols, rows } = buildFlatRows(resp.marks, 'SSA2 Mark');
+        setModalMarkCols(cols);
+        setModalRows(rows);
+      } else if (akey === 'review1') {
+        const resp = await fetchPublishedReview1(code);
+        const { cols, rows } = buildFlatRows(resp.marks, 'Review 1');
+        setModalMarkCols(cols);
+        setModalRows(rows);
+      } else if (akey === 'review2') {
+        const resp = await fetchPublishedReview2(code);
+        const { cols, rows } = buildFlatRows(resp.marks, 'Review 2');
+        setModalMarkCols(cols);
+        setModalRows(rows);
+      } else if (akey === 'formative1' || akey === 'formative2') {
+        const aval: 'formative1' | 'formative2' = akey as 'formative1' | 'formative2';
+        const resp = await fetchPublishedFormative(aval, code, taId);
+        const cols = ['Skill 1', 'Skill 2', 'Att 1', 'Att 2', 'Total'];
+        const rows = Object.entries(resp.marks).map(([sid, m]) => {
+          const stu = studentMap.get(sid);
+          return {
+            student_id: sid,
+            reg_no: stu?.reg_no ?? `(${sid})`,
+            name: stu?.name ?? '—',
+            values: [m?.skill1 ?? '—', m?.skill2 ?? '—', m?.att1 ?? '—', m?.att2 ?? '—', m?.total ?? '—'] as (string|null)[],
+          };
+        });
+        rows.sort((a, b) => a.reg_no.localeCompare(b.reg_no));
+        setModalMarkCols(cols);
+        setModalRows(rows);
+      } else {
+        // Generic fallback: show roster with no marks
+        const rows = rosterStudents.map((s) => ({
+          student_id: String(s.id), reg_no: s.reg_no, name: s.name, values: ['—'] as (string|null)[],
+        }));
+        rows.sort((a, b) => a.reg_no.localeCompare(b.reg_no));
+        setModalMarkCols(['Mark']);
+        setModalRows(rows);
+      }
+    } catch (err: any) {
+      setModalError(String(err?.message || 'Failed to load marks data'));
+      setModalRows([]);
+      setModalCiaSheet(null);
+    } finally {
+      setModalLoading(false);
+    }
+  };
 
   const parsePercent = (s: string) => {
     const n = parseFloat(s.replace(/[^0-9.\-]/g, ''));
@@ -279,6 +612,7 @@ export default function OBEPage(): JSX.Element {
   // Fetch progress when switching to Progress tab (lazy-load)
   useEffect(() => {
     if (activeTab !== 'progress') return;
+    if (!canViewProgress) return;
     if (progressLoading || progressData) return;
 
     (async () => {
@@ -537,23 +871,25 @@ export default function OBEPage(): JSX.Element {
                 >
                   📝 Exam Management
                 </button>
-                <button
-                  onClick={() => setActiveTab('progress')}
-                  style={{
-                    padding: '10px 24px',
-                    borderRadius: 8,
-                    border: 'none',
-                    background: activeTab === 'progress' ? 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)' : 'transparent',
-                    color: activeTab === 'progress' ? '#fff' : '#64748b',
-                    cursor: 'pointer',
-                    fontWeight: activeTab === 'progress' ? 600 : 500,
-                    fontSize: 15,
-                    transition: 'all 0.2s ease',
-                    boxShadow: activeTab === 'progress' ? '0 2px 8px rgba(22,163,74,0.25)' : 'none'
-                  }}
-                >
-                  📈 Progress
-                </button>
+                {canViewProgress && (
+                  <button
+                    onClick={() => setActiveTab('progress')}
+                    style={{
+                      padding: '10px 24px',
+                      borderRadius: 8,
+                      border: 'none',
+                      background: activeTab === 'progress' ? 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)' : 'transparent',
+                      color: activeTab === 'progress' ? '#fff' : '#64748b',
+                      cursor: 'pointer',
+                      fontWeight: activeTab === 'progress' ? 600 : 500,
+                      fontSize: 15,
+                      transition: 'all 0.2s ease',
+                      boxShadow: activeTab === 'progress' ? '0 2px 8px rgba(22,163,74,0.25)' : 'none'
+                    }}
+                  >
+                    📈 Progress
+                  </button>
+                )}
               </div>
 
               {/* Courses tab content */}
@@ -889,72 +1225,105 @@ export default function OBEPage(): JSX.Element {
               )}
 
               {/* Progress overview tab */}
-              {activeTab === 'progress' && (
-                <section aria-label="OBE progress overview" style={{ background: '#fff', padding: 24, borderRadius: 16, boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)' }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                      <div>
-                        <div style={{ fontSize: 18, fontWeight: 700, color: '#0f172a' }}>Section-wise Exam Progress</div>
-                        <div style={{ fontSize: 13, color: '#64748b', marginTop: 4 }}>
-                          {progressData?.role === 'HOD' && progressData.department
-                            ? `HOD view • Department: ${progressData.department.short_name || progressData.department.code || progressData.department.name || ''}`
-                            : progressData?.role === 'ADVISOR'
-                              ? 'Advisor view • Your advised sections'
-                              : 'Faculty view • Your sections'}
-                        </div>
+              {activeTab === 'progress' && canViewProgress && (
+                <section aria-label="OBE progress overview" style={{ background: '#f8fafc', padding: 0, borderRadius: 16 }}>
+                  {/* ── Header bar ── */}
+                  <div style={{ background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)', borderRadius: '16px 16px 0 0', padding: '20px 28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+                    <div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: '#f1f5f9', letterSpacing: '-0.3px' }}>
+                        📊 Section-wise Exam Progress
                       </div>
-                      <div style={{ fontSize: 12, color: '#94a3b8' }}>
-                        {progressData?.academic_year?.name ? `Academic Year: ${progressData.academic_year.name}` : 'Academic Year: —'}
+                      <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 4 }}>
+                        {progressData?.role === 'HOD' && progressData.department
+                          ? `HOD view • ${progressData.department.short_name || progressData.department.code || progressData.department.name || ''}`
+                          : progressData?.role === 'ADVISOR'
+                            ? 'Advisor view • Your advised sections'
+                            : 'Faculty view • Your sections'}
                       </div>
                     </div>
+                    {progressData?.academic_year?.name && (
+                      <span style={{ padding: '4px 14px', borderRadius: 999, background: 'rgba(255,255,255,0.1)', color: '#cbd5e1', fontSize: 12, fontWeight: 600, backdropFilter: 'blur(8px)' }}>
+                        AY {progressData.academic_year.name}
+                      </span>
+                    )}
+                  </div>
 
+                  <div style={{ padding: '20px 28px 28px', display: 'flex', flexDirection: 'column', gap: 16 }}>
                     {progressLoading && (
-                      <div style={{ padding: 40, textAlign: 'center', color: '#64748b', fontSize: 15 }}>⏳ Loading progress…</div>
+                      <div style={{ padding: 48, textAlign: 'center', color: '#64748b', fontSize: 15 }}>
+                        <div style={{ fontSize: 28, marginBottom: 10 }}>⏳</div>
+                        Loading progress data…
+                      </div>
                     )}
 
                     {progressError && !progressLoading && (
-                      <div style={{ padding: 16, borderRadius: 10, border: '1px solid #fecaca', background: '#fef2f2', color: '#b91c1c', fontSize: 14 }}>
-                        ❌ {progressError}
+                      <div style={{ padding: 16, borderRadius: 12, border: '1px solid #fecaca', background: '#fef2f2', color: '#b91c1c', fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: 18 }}>❌</span> {progressError}
                       </div>
                     )}
 
                     {!progressLoading && !progressError && progressData && (
-                      <div style={{ display: 'grid', gridTemplateColumns: '260px 1fr', gap: 20 }}>
-                        {/* Left column: section picker */}
-                        <div>
-                          <div style={{ fontSize: 13, color: '#64748b', marginBottom: 8, fontWeight: 600 }}>Sections</div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', gap: 20, alignItems: 'start' }}>
+
+                        {/* ── Left: section picker ── */}
+                        <div style={{ position: 'sticky', top: 16 }}>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10, paddingLeft: 4 }}>
+                            Sections ({progressData.sections?.length ?? 0})
+                          </div>
                           {(!progressData.sections || progressData.sections.length === 0) && (
-                            <div style={{ padding: 20, borderRadius: 10, border: '1px dashed #e2e8f0', background: '#f8fafc', fontSize: 13, color: '#64748b' }}>
-                              No sections found for this context.
+                            <div style={{ padding: 20, borderRadius: 12, border: '1px dashed #e2e8f0', background: '#fff', fontSize: 13, color: '#94a3b8', textAlign: 'center' }}>
+                              No sections found
                             </div>
                           )}
                           {progressData.sections && progressData.sections.length > 0 && (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                               {progressData.sections.map((sec) => {
                                 const sid = sec.id ?? -1;
                                 const selected = selectedSectionId === sid;
-                                const label = `${sec.batch?.name ?? ''} ${sec.name ?? ''}`.trim() || sec.name || 'Unnamed section';
+                                const secLabel = `${sec.batch?.name ?? ''} ${sec.name ?? ''}`.trim() || sec.name || 'Unnamed section';
+                                const totalTAs = sec.staff.reduce((a, s) => a + s.teaching_assignments.length, 0);
+                                const totalPublished = sec.staff.reduce((a, s) =>
+                                  a + s.teaching_assignments.reduce((b, ta) =>
+                                    b + ta.exam_progress.filter((e) => e.published).length, 0), 0);
+                                const totalExams = sec.staff.reduce((a, s) =>
+                                  a + s.teaching_assignments.reduce((b, ta) =>
+                                    b + ta.exam_progress.length, 0), 0);
                                 return (
                                   <button
                                     key={sid}
                                     onClick={() => setSelectedSectionId(sid)}
                                     style={{
                                       textAlign: 'left',
-                                      padding: '10px 12px',
-                                      borderRadius: 10,
+                                      padding: '12px 14px',
+                                      borderRadius: 12,
                                       border: selected ? '2px solid #22c55e' : '1px solid #e2e8f0',
-                                      background: selected ? 'linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%)' : '#fff',
+                                      background: selected ? 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)' : '#fff',
                                       cursor: 'pointer',
                                       fontSize: 13,
                                       color: '#0f172a',
                                       display: 'flex',
                                       flexDirection: 'column',
-                                      gap: 2,
+                                      gap: 4,
+                                      boxShadow: selected ? '0 0 0 3px rgba(34,197,94,0.15)' : '0 1px 2px rgba(0,0,0,0.04)',
+                                      transition: 'all 0.15s ease',
                                     }}
                                   >
-                                    <span style={{ fontWeight: 600 }}>{label}</span>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 4 }}>
+                                      <span style={{ fontWeight: 700, lineHeight: 1.3 }}>{secLabel}</span>
+                                      {selected && <span style={{ fontSize: 14, flexShrink: 0 }}>✓</span>}
+                                    </div>
                                     {sec.course?.name && (
-                                      <span style={{ fontSize: 11, color: '#64748b' }}>{sec.course.name}</span>
+                                      <span style={{ fontSize: 11, color: '#64748b', lineHeight: 1.3 }}>{sec.course.name}</span>
+                                    )}
+                                    {totalExams > 0 && (
+                                      <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        <div style={{ flex: 1, height: 4, borderRadius: 999, background: '#e2e8f0', overflow: 'hidden' }}>
+                                          <div style={{ height: '100%', width: `${totalExams > 0 ? (totalPublished / totalExams) * 100 : 0}%`, background: 'linear-gradient(90deg, #22c55e, #16a34a)', borderRadius: 999, transition: 'width 0.4s ease' }} />
+                                        </div>
+                                        <span style={{ fontSize: 10, color: '#64748b', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                                          {totalPublished}/{totalExams}
+                                        </span>
+                                      </div>
                                     )}
                                   </button>
                                 );
@@ -963,101 +1332,166 @@ export default function OBEPage(): JSX.Element {
                           )}
                         </div>
 
-                        {/* Right column: section details */}
+                        {/* ── Right: section detail ── */}
                         <div>
                           {(() => {
                             const current = progressData.sections.find((s) => (s.id ?? -1) === (selectedSectionId ?? -1));
                             if (!current) {
                               return (
-                                <div style={{ padding: 24, borderRadius: 12, border: '1px dashed #e2e8f0', background: '#f9fafb', color: '#64748b', fontSize: 14 }}>
-                                  Select a section on the left to view staff-wise exam progress.
+                                <div style={{ padding: 32, borderRadius: 16, border: '2px dashed #e2e8f0', background: '#fff', color: '#94a3b8', fontSize: 14, textAlign: 'center' }}>
+                                  <div style={{ fontSize: 32, marginBottom: 10 }}>←</div>
+                                  Select a section to view staff-wise exam progress
                                 </div>
                               );
                             }
 
+                            const secLabel = `${current.batch?.name ?? ''} ${current.name ?? ''}`.trim() || current.name || 'Section';
                             return (
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                                {/* Section header */}
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '14px 18px', borderRadius: 14, background: '#fff', border: '1px solid #e5e7eb', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
                                   <div>
-                                    <div style={{ fontSize: 16, fontWeight: 700, color: '#0f172a' }}>
-                                      {`${current.batch?.name ?? ''} ${current.name ?? ''}`.trim() || current.name || 'Section'}
-                                    </div>
+                                    <div style={{ fontSize: 17, fontWeight: 800, color: '#0f172a' }}>{secLabel}</div>
                                     {current.course?.name && (
                                       <div style={{ fontSize: 13, color: '#64748b', marginTop: 2 }}>{current.course.name}</div>
                                     )}
                                   </div>
-                                  <div style={{ fontSize: 12, color: '#a1a1aa' }}>
-                                    {current.department?.short_name || current.department?.code || current.department?.name || ''}
+                                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                    {(current.department?.short_name || current.department?.code) && (
+                                      <span style={{ padding: '3px 10px', borderRadius: 999, background: '#f1f5f9', color: '#475569', fontSize: 12, fontWeight: 600 }}>
+                                        {current.department.short_name || current.department.code}
+                                      </span>
+                                    )}
+                                    <span style={{ padding: '3px 10px', borderRadius: 999, background: '#eff6ff', color: '#2563eb', fontSize: 12, fontWeight: 600 }}>
+                                      {current.staff.length} staff
+                                    </span>
                                   </div>
                                 </div>
 
                                 {current.staff.length === 0 && (
-                                  <div style={{ padding: 20, borderRadius: 12, border: '1px dashed #e2e8f0', background: '#f9fafb', fontSize: 13, color: '#64748b' }}>
+                                  <div style={{ padding: 20, borderRadius: 12, border: '1px dashed #e2e8f0', background: '#fff', fontSize: 13, color: '#94a3b8', textAlign: 'center' }}>
                                     No teaching assignments found for this section.
                                   </div>
                                 )}
 
-                                {current.staff.length > 0 && (
-                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                                    {current.staff.map((st) => (
-                                      <div key={st.id} style={{ borderRadius: 12, border: '1px solid #e5e7eb', background: '#fff', padding: 14, boxShadow: '0 1px 2px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                            <div style={{ width: 32, height: 32, borderRadius: '999px', background: '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, color: '#0f172a' }}>
-                                              {st.name ? String(st.name).slice(0, 1).toUpperCase() : 'S'}
-                                            </div>
-                                            <div>
-                                              <div style={{ fontSize: 14, fontWeight: 600, color: '#0f172a' }}>{st.name}</div>
-                                              <div style={{ fontSize: 11, color: '#9ca3af' }}>Teaching assignments: {st.teaching_assignments.length}</div>
-                                            </div>
+                                {/* Staff cards */}
+                                {current.staff.map((st) => {
+                                  const staffInitial = st.name ? String(st.name).charAt(0).toUpperCase() : 'S';
+                                  const allExams = st.teaching_assignments.flatMap((ta) => ta.exam_progress);
+                                  const publishedCount = allExams.filter((e) => e.published).length;
+                                  const totalCount = allExams.length;
+                                  const staffColors = ['#6366f1', '#0ea5e9', '#f59e0b', '#10b981', '#f43f5e', '#8b5cf6'];
+                                  const staffColor = staffColors[Math.abs(st.id % staffColors.length)];
+
+                                  return (
+                                    <div key={st.id} style={{ borderRadius: 14, border: '1px solid #e5e7eb', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', overflow: 'hidden' }}>
+                                      {/* Staff card header */}
+                                      <div style={{ padding: '12px 16px', background: '#f8fafc', borderBottom: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                          <div style={{ width: 38, height: 38, borderRadius: '50%', background: staffColor, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 800, color: '#fff', flexShrink: 0, boxShadow: `0 2px 8px ${staffColor}40` }}>
+                                            {staffInitial}
+                                          </div>
+                                          <div>
+                                            <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a' }}>{st.name}</div>
+                                            <div style={{ fontSize: 11, color: '#94a3b8' }}>{st.teaching_assignments.length} course{st.teaching_assignments.length !== 1 ? 's' : ''}</div>
                                           </div>
                                         </div>
-
-                                        {st.teaching_assignments.length > 0 && (
-                                          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
-                                            {st.teaching_assignments.map((ta, idxTa) => (
-                                              <div key={`${ta.id ?? idxTa}`} style={{ borderRadius: 10, border: '1px solid #e5e7eb', padding: 10, background: '#f9fafb', display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                                                  <div>
-                                                    <div style={{ fontSize: 13, fontWeight: 600, color: '#111827' }}>{ta.subject_name || 'Course'}</div>
-                                                    {ta.subject_code && (
-                                                      <div style={{ fontSize: 11, color: '#3b82f6' }}>{ta.subject_code}</div>
-                                                    )}
-                                                  </div>
-                                                </div>
-                                                {ta.exam_progress.length === 0 && (
-                                                  <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>No enabled assessments for this course.</div>
-                                                )}
-                                                {ta.exam_progress.length > 0 && (
-                                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
-                                                    {ta.exam_progress.map((ex) => {
-                                                      const label = (ex.label ? String(ex.label) : String(ex.assessment)).trim();
-                                                      const pctLabel = `${ex.percentage.toFixed(1)}%`;
-                                                      const filledLabel = `${ex.rows_filled}/${ex.total_students}`;
-                                                      const color = ex.published ? '#16a34a' : '#2563eb';
-                                                      const bg = ex.published ? '#dcfce7' : '#eff6ff';
-                                                      const border = ex.published ? '#4ade80' : '#bfdbfe';
-                                                      return (
-                                                        <div key={ex.assessment} style={{ padding: '6px 10px', borderRadius: 999, border: `1px solid ${border}`, background: bg, display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#0f172a' }}>
-                                                          <span style={{ fontWeight: 700, textTransform: 'uppercase', color }}>{label}</span>
-                                                          <span style={{ color: '#4b5563' }}>{filledLabel}</span>
-                                                          <span style={{ fontWeight: 700, color }}>{pctLabel}</span>
-                                                          <span style={{ padding: '2px 6px', borderRadius: 999, background: ex.published ? '#22c55e' : '#e5e7eb', color: ex.published ? '#fff' : '#4b5563', fontSize: 10 }}>
-                                                            {ex.published ? 'Published' : 'Draft'}
-                                                          </span>
-                                                        </div>
-                                                      );
-                                                    })}
-                                                  </div>
-                                                )}
-                                              </div>
-                                            ))}
+                                        {totalCount > 0 && (
+                                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                            <div style={{ width: 80, height: 6, borderRadius: 999, background: '#e2e8f0', overflow: 'hidden' }}>
+                                              <div style={{ height: '100%', width: `${(publishedCount / totalCount) * 100}%`, background: 'linear-gradient(90deg, #22c55e, #16a34a)', borderRadius: 999 }} />
+                                            </div>
+                                            <span style={{ fontSize: 12, fontWeight: 700, color: publishedCount === totalCount ? '#16a34a' : '#64748b' }}>
+                                              {publishedCount}/{totalCount}
+                                            </span>
                                           </div>
                                         )}
                                       </div>
-                                    ))}
-                                  </div>
-                                )}
+
+                                      {/* Teaching assignments */}
+                                      <div style={{ padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                        {st.teaching_assignments.map((ta, idxTa) => (
+                                          <div key={`${ta.id ?? idxTa}`} style={{ borderRadius: 12, border: '1px solid #f1f5f9', padding: '10px 14px', background: '#fafbff', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                            {/* Course header */}
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                                              <div>
+                                                <div style={{ fontSize: 13, fontWeight: 700, color: '#0f172a', lineHeight: 1.4 }}>{ta.subject_name || 'Course'}</div>
+                                                {ta.subject_code && (
+                                                  <div style={{ fontSize: 11, color: '#3b82f6', fontWeight: 600, marginTop: 1 }}>{ta.subject_code}</div>
+                                                )}
+                                              </div>
+                                              {ta.exam_progress.length > 0 && (
+                                                <div style={{ fontSize: 11, color: '#64748b', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                                                  <span style={{ fontWeight: 700, color: '#22c55e' }}>
+                                                    {ta.exam_progress.filter((e) => e.published).length}
+                                                  </span>
+                                                  /{ta.exam_progress.length} published
+                                                </div>
+                                              )}
+                                            </div>
+
+                                            {ta.exam_progress.length === 0 && (
+                                              <div style={{ fontSize: 11, color: '#cbd5e1' }}>No assessments configured.</div>
+                                            )}
+
+                                            {/* Exam chips — clickable */}
+                                            {ta.exam_progress.length > 0 && (
+                                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+                                                {ta.exam_progress.map((ex) => {
+                                                  const chipLabel = (ex.label ? String(ex.label) : String(ex.assessment)).trim().toUpperCase();
+                                                  const pct = ex.total_students > 0 ? (ex.rows_filled / ex.total_students) * 100 : 0;
+                                                  const isPublished = ex.published;
+                                                  return (
+                                                    <button
+                                                      key={ex.assessment}
+                                                      title={`Click to view ${chipLabel} marks table`}
+                                                      onClick={() => handleChipClick(ta, ex, st.name, secLabel)}
+                                                      style={{
+                                                        display: 'inline-flex',
+                                                        flexDirection: 'column',
+                                                        alignItems: 'stretch',
+                                                        minWidth: 90,
+                                                        padding: '7px 10px',
+                                                        borderRadius: 10,
+                                                        border: `1.5px solid ${isPublished ? '#4ade80' : '#bfdbfe'}`,
+                                                        background: isPublished ? 'linear-gradient(135deg, #f0fdf4, #dcfce7)' : 'linear-gradient(135deg, #eff6ff, #dbeafe)',
+                                                        cursor: 'pointer',
+                                                        boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+                                                        transition: 'all 0.15s ease',
+                                                        textAlign: 'left',
+                                                      }}
+                                                      onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.12)'; }}
+                                                      onMouseLeave={(e) => { e.currentTarget.style.transform = ''; e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.06)'; }}
+                                                    >
+                                                      {/* Assessment name */}
+                                                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 4, marginBottom: 5 }}>
+                                                        <span style={{ fontSize: 11, fontWeight: 800, color: isPublished ? '#15803d' : '#1d4ed8', letterSpacing: '0.03em' }}>
+                                                          {chipLabel}
+                                                        </span>
+                                                        <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 999, background: isPublished ? '#22c55e' : '#93c5fd', color: isPublished ? '#fff' : '#1e3a8a', fontWeight: 700 }}>
+                                                          {isPublished ? '✓ Published' : 'Draft'}
+                                                        </span>
+                                                      </div>
+                                                      {/* Progress bar */}
+                                                      <div style={{ width: '100%', height: 4, borderRadius: 999, background: isPublished ? '#bbf7d0' : '#bfdbfe', overflow: 'hidden' }}>
+                                                        <div style={{ height: '100%', width: `${pct}%`, background: isPublished ? 'linear-gradient(90deg,#22c55e,#16a34a)' : 'linear-gradient(90deg,#60a5fa,#3b82f6)', borderRadius: 999 }} />
+                                                      </div>
+                                                      {/* Count */}
+                                                      <div style={{ marginTop: 4, fontSize: 10, color: '#64748b', display: 'flex', justifyContent: 'space-between' }}>
+                                                        <span>{ex.rows_filled}/{ex.total_students} students</span>
+                                                        <span style={{ fontWeight: 700, color: isPublished ? '#16a34a' : '#2563eb' }}>{pct.toFixed(0)}%</span>
+                                                      </div>
+                                                    </button>
+                                                  );
+                                                })}
+                                              </div>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
                               </div>
                             );
                           })()}
@@ -1066,6 +1500,252 @@ export default function OBEPage(): JSX.Element {
                     )}
                   </div>
                 </section>
+              )}
+
+              {/* ── Progress: Read-only Marks Table Modal ── */}
+              {progressModal && (
+                <div
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label={`${progressModal.label} marks for ${progressModal.subjectName}`}
+                  onClick={() => setProgressModal(null)}
+                  style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.65)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999, padding: '20px 16px' }}
+                >
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ width: 'min(780px,100%)', maxHeight: '90vh', background: '#fff', borderRadius: 20, boxShadow: '0 24px 60px rgba(0,0,0,0.32)', overflow: 'hidden', display: 'flex', flexDirection: 'column', border: '1px solid #e2e8f0' }}
+                  >
+                    {/* Modal header */}
+                    <div style={{ padding: '18px 24px', borderBottom: '1px solid #f1f5f9', background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexShrink: 0 }}>
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                          <span style={{ fontSize: 18, fontWeight: 800, color: '#f1f5f9' }}>{progressModal.label}</span>
+                          <span style={{ padding: '2px 10px', borderRadius: 999, fontSize: 11, fontWeight: 700, background: progressModal.published ? '#22c55e' : '#60a5fa', color: progressModal.published ? '#fff' : '#1e3a8a' }}>
+                            {progressModal.published ? '✓ Published' : 'Draft'}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 14, color: '#94a3b8', lineHeight: 1.5 }}>
+                          <span style={{ color: '#cbd5e1', fontWeight: 600 }}>{progressModal.subjectName}</span>
+                          {progressModal.subjectCode !== progressModal.subjectName && (
+                            <span style={{ color: '#64748b' }}> ({progressModal.subjectCode})</span>
+                          )}
+                          {' · '}
+                          <span>{progressModal.staffName}</span>
+                          {' · '}
+                          <span>{progressModal.sectionName}</span>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setProgressModal(null)}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = '#334155'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.08)'; }}
+                        style={{ width: 36, height: 36, borderRadius: 10, border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(255,255,255,0.08)', color: '#94a3b8', cursor: 'pointer', fontSize: 16, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'background 0.15s' }}
+                        aria-label="Close"
+                      >
+                        ✕
+                      </button>
+                    </div>
+
+                    {/* Modal body */}
+                    <div style={{ flex: 1, overflowY: 'auto', padding: 0 }}>
+                      {modalLoading && (
+                        <div style={{ padding: 48, textAlign: 'center', color: '#64748b', fontSize: 14 }}>
+                          <div style={{ fontSize: 28, marginBottom: 10 }}>⏳</div>
+                          Loading marks…
+                        </div>
+                      )}
+
+                      {!modalLoading && modalError && (
+                        <div style={{ margin: 24, padding: 16, borderRadius: 12, border: '1px solid #fecaca', background: '#fef2f2', color: '#b91c1c', fontSize: 13 }}>
+                          <strong>Error:</strong> {modalError}
+                        </div>
+                      )}
+
+                      {/* CIA1 / CIA2 / Model — full per-question table with CO & BTL columns */}
+                      {!modalLoading && !modalError && modalCiaSheet !== null && (() => {
+                        const cs = modalCiaSheet;
+                        const thStyle: React.CSSProperties = { padding: '6px 8px', border: '1px solid #cbd5e1', background: '#1e293b', color: '#f1f5f9', fontWeight: 700, fontSize: 11, textAlign: 'center', whiteSpace: 'nowrap' };
+                        const tdStyle: React.CSSProperties = { padding: '5px 8px', border: '1px solid #e2e8f0', fontSize: 12, textAlign: 'center', color: '#0f172a' };
+                        const totalCols = 4 + cs.questions.length + 1 + 4 + cs.visibleBtls.length * 2;
+                        return (
+                          <div style={{ overflowX: 'auto', padding: 16 }}>
+                            <table style={{ borderCollapse: 'collapse', fontSize: 12, width: 'max-content', minWidth: '100%' }}>
+                              <thead>
+                                {/* Row 1: title */}
+                                <tr>
+                                  <th colSpan={totalCols} style={{ ...thStyle, background: '#0f172a', fontSize: 13, padding: '8px 12px', textAlign: 'center' }}>
+                                    {cs.termLabel} &nbsp;|&nbsp; {cs.batchLabel} &nbsp;|&nbsp; {cs.assessmentLabel}
+                                  </th>
+                                </tr>
+                                {/* Row 2: group headers */}
+                                <tr>
+                                  <th rowSpan={3} style={thStyle}>S.No</th>
+                                  <th rowSpan={3} style={thStyle}>R.No</th>
+                                  <th rowSpan={3} style={{ ...thStyle, minWidth: 130 }}>Name of Students</th>
+                                  <th rowSpan={3} style={thStyle}>AB</th>
+                                  <th colSpan={cs.questions.length} style={{ ...thStyle, background: '#1d4ed8' }}>QUESTIONS</th>
+                                  <th rowSpan={3} style={thStyle}>Total</th>
+                                  <th colSpan={4} style={{ ...thStyle, background: '#065f46' }}>CO ATTAINMENT</th>
+                                  {cs.visibleBtls.length > 0 && (
+                                    <th colSpan={cs.visibleBtls.length * 2} style={{ ...thStyle, background: '#7c2d12' }}>BTL ATTAINMENT</th>
+                                  )}
+                                </tr>
+                                {/* Row 3: Q labels + CO-a/CO-b labels + BTL-n labels */}
+                                <tr>
+                                  {cs.questions.map(q => (
+                                    <th key={q.key} style={{ ...thStyle, background: '#1e40af' }}>{q.label}</th>
+                                  ))}
+                                  <th colSpan={2} style={{ ...thStyle, background: '#047857' }}>CO-{cs.coPair.a}</th>
+                                  <th colSpan={2} style={{ ...thStyle, background: '#047857' }}>CO-{cs.coPair.b}</th>
+                                  {cs.visibleBtls.map(n => (
+                                    <th key={n} colSpan={2} style={{ ...thStyle, background: '#9a3412' }}>BTL-{n}</th>
+                                  ))}
+                                </tr>
+                                {/* Row 4: max marks */}
+                                <tr>
+                                  {cs.questions.map(q => (
+                                    <th key={q.key} style={{ ...thStyle, background: '#334155', color: '#fbbf24' }}>{q.max}</th>
+                                  ))}
+                                  <th style={{ ...thStyle, background: '#334155', color: '#fbbf24' }}>{cs.coMax.a}</th>
+                                  <th style={{ ...thStyle, background: '#334155', color: '#94a3b8' }}>%</th>
+                                  <th style={{ ...thStyle, background: '#334155', color: '#fbbf24' }}>{cs.coMax.b}</th>
+                                  <th style={{ ...thStyle, background: '#334155', color: '#94a3b8' }}>%</th>
+                                  {cs.visibleBtls.map(n => (
+                                    <React.Fragment key={n}>
+                                      <th style={{ ...thStyle, background: '#334155', color: '#fbbf24' }}>{cs.btlMax[n] ?? 0}</th>
+                                      <th style={{ ...thStyle, background: '#334155', color: '#94a3b8' }}>%</th>
+                                    </React.Fragment>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {/* BTL row */}
+                                <tr style={{ background: '#fef9c3' }}>
+                                  <td colSpan={3} style={{ ...tdStyle, background: '#fef9c3' }} />
+                                  <td style={{ ...tdStyle, fontWeight: 700, background: '#fef9c3', color: '#92400e' }}>BTL</td>
+                                  {cs.questions.map(q => (
+                                    <td key={q.key} style={{ ...tdStyle, fontWeight: 700, background: '#fef9c3', color: '#b45309' }}>
+                                      {cs.questionBtl[q.key] ?? q.btl}
+                                    </td>
+                                  ))}
+                                  <td colSpan={1 + 4 + cs.visibleBtls.length * 2} style={{ ...tdStyle, background: '#fef9c3' }} />
+                                </tr>
+                                {/* Student rows */}
+                                {cs.rows.map((row, idx) => {
+                                  let total = 0, coA = 0, coB = 0;
+                                  const btlTotals: Record<number, number> = {};
+                                  cs.questions.forEach(q => {
+                                    const mark = row.absent ? 0 : Number(row.q[q.key] || 0);
+                                    total += mark;
+                                    const w = _ciaCoWeights(q.co, cs.coPair);
+                                    coA += mark * w.a;
+                                    coB += mark * w.b;
+                                    const bv = Number(cs.questionBtl[q.key] ?? q.btl);
+                                    btlTotals[bv] = (btlTotals[bv] || 0) + mark;
+                                  });
+                                  const rowBg = idx % 2 === 0 ? '#fff' : '#f8fafc';
+                                  return (
+                                    <tr key={row.studentId} style={{ background: rowBg }}>
+                                      <td style={{ ...tdStyle, background: rowBg, color: '#94a3b8', fontWeight: 600 }}>{idx + 1}</td>
+                                      <td style={{ ...tdStyle, background: rowBg, color: '#3b82f6', fontWeight: 600, whiteSpace: 'nowrap' }}>{row.reg_no}</td>
+                                      <td style={{ ...tdStyle, background: rowBg, textAlign: 'left' }}>{row.name}</td>
+                                      <td style={{ ...tdStyle, background: rowBg, color: '#dc2626', fontWeight: 700 }}>{row.absent ? '✗' : ''}</td>
+                                      {cs.questions.map(q => (
+                                        <td key={q.key} style={{ ...tdStyle, background: rowBg, color: row.absent ? '#94a3b8' : '#0f172a' }}>
+                                          {row.absent ? '—' : (row.q[q.key] !== '' && row.q[q.key] != null ? row.q[q.key] : '—')}
+                                        </td>
+                                      ))}
+                                      <td style={{ ...tdStyle, background: rowBg, fontWeight: 700, color: '#0f172a' }}>
+                                        {row.absent ? 0 : total}
+                                      </td>
+                                      <td style={{ ...tdStyle, background: rowBg }}>{Math.round(coA)}</td>
+                                      <td style={{ ...tdStyle, background: rowBg, color: '#047857' }}>
+                                        {cs.coMax.a > 0 ? `${((coA / cs.coMax.a) * 100).toFixed(0)}%` : '—'}
+                                      </td>
+                                      <td style={{ ...tdStyle, background: rowBg }}>{Math.round(coB)}</td>
+                                      <td style={{ ...tdStyle, background: rowBg, color: '#047857' }}>
+                                        {cs.coMax.b > 0 ? `${((coB / cs.coMax.b) * 100).toFixed(0)}%` : '—'}
+                                      </td>
+                                      {cs.visibleBtls.map(n => (
+                                        <React.Fragment key={n}>
+                                          <td style={{ ...tdStyle, background: rowBg }}>{btlTotals[n] || 0}</td>
+                                          <td style={{ ...tdStyle, background: rowBg, color: '#9a3412' }}>
+                                            {(cs.btlMax[n] ?? 0) > 0 ? `${(((btlTotals[n] || 0) / cs.btlMax[n]) * 100).toFixed(0)}%` : '—'}
+                                          </td>
+                                        </React.Fragment>
+                                      ))}
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Flat marks table for SSA / Formative / Review etc. */}
+                      {!modalLoading && !modalError && modalCiaSheet === null && modalRows !== null && (
+                        <>
+                          {modalRows.length === 0 ? (
+                            <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8', fontSize: 14 }}>
+                              No mark data found for this assessment.
+                            </div>
+                          ) : (
+                            <div style={{ overflowX: 'auto' }}>
+                              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                                <thead>
+                                  <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e5e7eb' }}>
+                                    <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 700, color: '#475569', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap', width: 44 }}>S.No</th>
+                                    <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 700, color: '#475569', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>Reg No</th>
+                                    <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 700, color: '#475569', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Student Name</th>
+                                    {modalMarkCols.map((col) => (
+                                      <th key={col} style={{ padding: '10px 16px', textAlign: 'center', fontWeight: 700, color: '#475569', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>{col}</th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {modalRows.map((row, idx) => (
+                                    <tr
+                                      key={row.student_id}
+                                      style={{ borderBottom: '1px solid #f1f5f9', background: idx % 2 === 0 ? '#fff' : '#fafbff' }}
+                                    >
+                                      <td style={{ padding: '9px 16px', color: '#94a3b8', fontWeight: 600, fontSize: 12 }}>{idx + 1}</td>
+                                      <td style={{ padding: '9px 16px', color: '#3b82f6', fontWeight: 600, whiteSpace: 'nowrap' }}>{row.reg_no}</td>
+                                      <td style={{ padding: '9px 16px', color: '#0f172a' }}>{row.name}</td>
+                                      {row.values.map((v, vi) => (
+                                        <td key={vi} style={{ padding: '9px 16px', textAlign: 'center', fontWeight: 600, color: v === '—' || v == null ? '#cbd5e1' : '#0f172a' }}>
+                                          {v ?? '—'}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+
+                    {/* Footer */}
+                    <div style={{ padding: '12px 24px', borderTop: '1px solid #f1f5f9', background: '#f8fafc', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+                      <span style={{ fontSize: 12, color: '#94a3b8' }}>
+                        {modalCiaSheet !== null
+                          ? `${modalCiaSheet.rows.length} student${modalCiaSheet.rows.length !== 1 ? 's' : ''}`
+                          : modalRows !== null
+                            ? `${modalRows.length} student${modalRows.length !== 1 ? 's' : ''}`
+                            : ''}
+                        &nbsp;•&nbsp; Read-only view
+                      </span>
+                      <button
+                        onClick={() => setProgressModal(null)}
+                        style={{ padding: '7px 20px', borderRadius: 8, border: '1px solid #e2e8f0', background: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: 13, color: '#334155' }}
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </div>
+                </div>
               )}
 
               {/* Question Import Wizard Modal */}

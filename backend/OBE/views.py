@@ -136,7 +136,22 @@ def _get_students_for_teaching_assignment(ta):
                 .select_related('student__user', 'student__section')
             )
             if getattr(ta, 'academic_year_id', None):
-                eqs = eqs.filter(academic_year_id=ta.academic_year_id)
+                # Prefer exact academic_year_id match.
+                year_qs = eqs.filter(academic_year_id=ta.academic_year_id)
+                if not year_qs.exists():
+                    # Fallback: some deployments store elective choices under a
+                    # different AcademicYear row (e.g., ODD/EVEN parity split)
+                    # but with the same year name.
+                    try:
+                        ay_name = str(getattr(getattr(ta, 'academic_year', None), 'name', '') or '').strip()
+                    except Exception:
+                        ay_name = ''
+                    if ay_name:
+                        year_qs = eqs.filter(academic_year__name=ay_name)
+                # As a last resort, allow NULL year choices.
+                if not year_qs.exists():
+                    year_qs = eqs.filter(academic_year__isnull=True)
+                eqs = year_qs
             for c in eqs:
                 sp = getattr(c, 'student', None)
                 if not sp:
@@ -3030,8 +3045,9 @@ def obe_progress_overview(request):
     }
 
     HODs see all sections in their department for the active AcademicYear;
-    Advisors see only their advised sections; other staff see their own
-    teaching-assignments grouped by section.
+    Advisors see only their advised sections.
+
+    Access is restricted to HOD/AHOD/Advisor users (superusers allowed).
     """
 
     from academics.models import AcademicYear, DepartmentRole, SectionAdvisor, TeachingAssignment, Subject
@@ -3052,8 +3068,10 @@ def obe_progress_overview(request):
     if not user or not getattr(user, 'is_authenticated', False):
         return Response({'detail': 'Authentication required.'}, status=status.HTTP_401_UNAUTHORIZED)
 
-    # Resolve active academic year (fallback to latest)
-    ay = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.order_by('-id').first()
+    # Resolve active academic year (fallback to latest).
+    # Use latest active year deterministically; some DBs may have multiple active rows.
+    active_ay = AcademicYear.objects.filter(is_active=True).order_by('-id').first()
+    ay = active_ay or AcademicYear.objects.order_by('-id').first()
 
     # Helper: normalize role names for this user
     role_names: set[str] = set()
@@ -3068,7 +3086,53 @@ def obe_progress_overview(request):
             role_names = set()
 
     has_hod = 'HOD' in role_names or 'AHOD' in role_names
+
+    # Advisors are primarily represented by academics.SectionAdvisor mappings.
+    # Some deployments may not assign an explicit 'ADVISOR' role, so detect via DB too.
+    staff_profile = None
+    try:
+        staff_profile = getattr(user, 'staff_profile', None)
+    except Exception:
+        staff_profile = None
+
+    advisor_rows = None
+    advisor_year = None
+    try:
+        advisor_rows_base = SectionAdvisor.objects.filter(is_active=True)
+        if staff_profile is not None:
+            advisor_rows_base = advisor_rows_base.filter(advisor=staff_profile)
+        else:
+            # Fallback for inconsistent data: try through user relation
+            advisor_rows_base = advisor_rows_base.filter(advisor__user=user)
+
+        # Prefer SectionAdvisor mappings for the current active year (most common).
+        if active_ay is not None and advisor_rows_base.filter(academic_year=active_ay).exists():
+            advisor_year = active_ay
+        else:
+            # Otherwise, prefer any mapping where the academic year is marked active.
+            active_rows = advisor_rows_base.filter(academic_year__is_active=True).select_related('academic_year')
+            if active_rows.exists():
+                advisor_year = active_rows.order_by('-academic_year_id').first().academic_year
+            else:
+                # Last resort: use the most recent mapping's academic year.
+                last_row = advisor_rows_base.select_related('academic_year').order_by('-academic_year_id').first()
+                advisor_year = last_row.academic_year if last_row else None
+
+        advisor_rows = advisor_rows_base.filter(academic_year=advisor_year) if advisor_year is not None else advisor_rows_base.none()
+    except Exception:
+        advisor_rows = None
+        advisor_year = None
+
     has_advisor = 'ADVISOR' in role_names
+    if not has_advisor and advisor_rows is not None:
+        try:
+            has_advisor = bool(advisor_rows.exists())
+        except Exception:
+            has_advisor = False
+
+    # Enforce access control: only HOD/AHOD/Advisor can view this aggregated progress.
+    if not getattr(user, 'is_superuser', False) and not has_hod and not has_advisor:
+        return Response({'detail': 'Progress view is only available for HOD/Advisor.'}, status=status.HTTP_403_FORBIDDEN)
 
     # Determine primary context: HOD > ADVISOR > FACULTY
     primary_role = 'FACULTY'
@@ -3089,16 +3153,28 @@ def obe_progress_overview(request):
                 .filter(batch__course__department=department)
             )
 
-    if sections_qs is None and has_advisor and ay is not None:
+    if sections_qs is None and has_advisor:
         # Advisor sees only their advised sections for the year
         primary_role = 'ADVISOR'
-        advisor_rows = (
-            SectionAdvisor.objects.select_related('section', 'section__batch', 'section__batch__course', 'section__batch__course__department')
-            .filter(advisor__user=user, academic_year=ay, is_active=True)
-        )
+        # Use the advisor mapping year (can differ from global ay if AcademicYear flags are inconsistent)
+        if advisor_year is not None:
+            ay = advisor_year
+        if advisor_rows is None:
+            # Very defensive fallback
+            if staff_profile is not None:
+                advisor_rows = SectionAdvisor.objects.filter(advisor=staff_profile, is_active=True)
+            else:
+                advisor_rows = SectionAdvisor.objects.filter(advisor__user=user, is_active=True)
+            if ay is not None:
+                advisor_rows = advisor_rows.filter(academic_year=ay)
+            else:
+                advisor_rows = advisor_rows.filter(academic_year__is_active=True)
+
+        advisor_rows = advisor_rows.select_related('section', 'section__batch', 'section__batch__course', 'section__batch__course__department', 'academic_year')
         from academics.models import Section
 
-        sections_qs = Section.objects.filter(id__in=[s.section_id for s in advisor_rows])
+        section_ids = list(advisor_rows.values_list('section_id', flat=True))
+        sections_qs = Section.objects.filter(id__in=section_ids).select_related('batch', 'batch__course', 'batch__course__department')
         # Derive department from the first section if not already set
         if department is None:
             first_sec = advisor_rows.first()
@@ -3395,7 +3471,11 @@ def obe_progress_overview(request):
     section_results = []
 
     for sec in sections:
-        # Teaching assignments in this section for the academic year
+        # Teaching assignments in this section for the academic year.
+        # Note: electives are often stored as sectionless teaching assignments.
+        # To avoid missing courses in section-wise progress, we also include
+        # elective teaching assignments that apply to students in this section
+        # (based on curriculum.ElectiveChoice mappings).
         ta_qs = TeachingAssignment.objects.select_related(
             'staff',
             'staff__user',
@@ -3405,15 +3485,65 @@ def obe_progress_overview(request):
             'curriculum_row',
             'curriculum_row__master',
             'elective_subject',
-        ).filter(
-            section=sec,
-            is_active=True,
-        )
+        ).filter(is_active=True)
         if ay is not None:
             ta_qs = ta_qs.filter(academic_year=ay)
 
+        ta_filter = Q(section=sec)
+        try:
+            from curriculum.models import ElectiveChoice
+
+            # Elective choices can be stored on StudentProfile.section or via StudentSectionAssignment.
+            choice_qs = ElectiveChoice.objects.filter(is_active=True).exclude(elective_subject__isnull=True).filter(
+                Q(student__section=sec)
+                | Q(student__section_assignments__section=sec, student__section_assignments__end_date__isnull=True)
+            )
+            if ay is not None:
+                # Some data uses ODD/EVEN parity-split AcademicYear rows. Prefer exact match,
+                # but fall back to matching by AcademicYear.name so electives don't disappear.
+                ay_name = str(getattr(ay, 'name', '') or '').strip()
+                name_q = Q()
+                if ay_name:
+                    name_q = Q(academic_year__name=ay_name)
+                # Some older data may have academic_year NULL; include it so we don't hide electives.
+                choice_qs = choice_qs.filter(Q(academic_year=ay) | name_q | Q(academic_year__isnull=True))
+
+            elective_subject_ids = list(choice_qs.values_list('elective_subject_id', flat=True).distinct())
+            if elective_subject_ids:
+                ta_filter |= Q(section__isnull=True, elective_subject_id__in=elective_subject_ids)
+        except Exception:
+            pass
+
+        ta_qs = ta_qs.filter(ta_filter)
+
         tas = list(ta_qs)
         if not tas:
+            # For Advisor view, still include sections even if no TAs are configured yet.
+            if primary_role == 'ADVISOR':
+                batch = getattr(sec, 'batch', None)
+                course = getattr(batch, 'course', None) if batch is not None else None
+                course_dept = getattr(course, 'department', None) if course is not None else None
+                section_results.append(
+                    {
+                        'id': getattr(sec, 'id', None),
+                        'name': getattr(sec, 'name', None),
+                        'batch': {
+                            'id': getattr(batch, 'id', None) if batch is not None else None,
+                            'name': getattr(batch, 'name', None) if batch is not None else None,
+                        },
+                        'course': {
+                            'id': getattr(course, 'id', None) if course is not None else None,
+                            'name': getattr(course, 'name', None) if course is not None else None,
+                        },
+                        'department': {
+                            'id': getattr(course_dept, 'id', None) if course_dept is not None else None,
+                            'code': getattr(course_dept, 'code', None) if course_dept is not None else None,
+                            'name': getattr(course_dept, 'name', None) if course_dept is not None else None,
+                            'short_name': getattr(course_dept, 'short_name', None) if course_dept is not None else None,
+                        },
+                        'staff': [],
+                    }
+                )
             continue
 
         # Group by staff
@@ -5938,6 +6068,31 @@ def edit_request_create(request):
     )
     if not hod_name:
         hod_name = str(getattr(hod_u, 'username', '') or '').strip() if hod_u else ''
+
+    # Resolve the submitting staff's display name for the approver message
+    _staff_display = (
+        ' '.join([
+            str(getattr(request.user, 'first_name', '') or '').strip(),
+            str(getattr(request.user, 'last_name', '') or '').strip(),
+        ]).strip()
+        or str(getattr(request.user, 'username', '') or '').strip()
+    )
+    sp = getattr(staff_profile, 'name', None) or getattr(staff_profile, 'full_name', None) if staff_profile else None
+    if sp:
+        _staff_display = str(sp).strip() or _staff_display
+
+    # Notify the HOD (or IQAC) via WhatsApp using their profile mobile number
+    try:
+        from OBE.services.edit_request_notifications import notify_approver_of_new_request
+        notify_approver_of_new_request(
+            req,
+            hod_user=hod_u,
+            routed_to=routed_to,
+            department=dept,
+            staff_name=_staff_display,
+        )
+    except Exception:
+        logger.exception('Failed to send approver WhatsApp notification for edit_request=%s', req.id)
 
     return Response(
         {

@@ -410,16 +410,18 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   const markManagerLocked = Boolean(sheet.markManagerLocked);
   const showNameList = Boolean(sheet.markManagerSnapshot != null);
 
-  // Restore publishedAt from backend when markLock indicates the table was published
+  // Restore publishedAt from backend when markLock indicates the table was published.
+  // Avoid gating on `!publishedAt` so it still updates after refresh/poll.
   useEffect(() => {
-    if (markLock?.is_published && markLock?.updated_at && !publishedAt) {
-      try {
-        setPublishedAt(new Date(String(markLock.updated_at)).toLocaleString());
-      } catch {
-        setPublishedAt(String(markLock.updated_at));
-      }
+    if (!markLock?.is_published || !markLock?.updated_at) return;
+    let next: string;
+    try {
+      next = new Date(String(markLock.updated_at)).toLocaleString();
+    } catch {
+      next = String(markLock.updated_at);
     }
-  }, [markLock?.is_published, markLock?.updated_at]);
+    if (next !== (publishedAt || '')) setPublishedAt(next);
+  }, [markLock?.is_published, markLock?.updated_at, publishedAt]);
 
   const markEntryApprovalUntil = markEntryEditWindow?.approval_until ? String(markEntryEditWindow.approval_until) : null;
   const markManagerApprovalUntil = markManagerEditWindow?.approval_until ? String(markManagerEditWindow.approval_until) : null;
