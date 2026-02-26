@@ -49,7 +49,7 @@ export default function QueriesPage() {
                   : 'text-slate-600 hover:bg-slate-100'
               }`}
             >
-              My Queries
+              My Tokens
             </button>
             <button
               onClick={() => setActiveTab('all-queries')}
@@ -59,13 +59,13 @@ export default function QueriesPage() {
                   : 'text-slate-600 hover:bg-slate-100'
               }`}
             >
-              All Queries (Admin)
+              All Tokens (Admin)
             </button>
           </div>
         )}
 
         {activeTab === 'my-queries' ? (
-          <UserQueriesComponent />
+          <UserQueriesComponent user={user} />
         ) : (
           <QueriesReceiverComponent />
         )}

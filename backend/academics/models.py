@@ -215,11 +215,18 @@ class Subject(models.Model):
         return f"{self.code} - {self.name}"
 
 
-PROFILE_STATUS_CHOICES = (
+STAFF_STATUS_CHOICES = (
     ('ACTIVE', 'Active'),
     ('INACTIVE', 'Inactive'),
     ('ALUMNI', 'Alumni'),
     ('RESIGNED', 'Resigned'),
+)
+
+STUDENT_STATUS_CHOICES = (
+    ('ACTIVE', 'Active'),
+    ('INACTIVE', 'Inactive'),
+    ('ALUMNI', 'Alumni'),
+    ('DEBAR', 'Debar'),
 )
 
 
@@ -232,7 +239,7 @@ class StudentProfile(models.Model):
     reg_no = models.CharField(max_length=64, unique=True, db_index=True)
     section = models.ForeignKey(Section, on_delete=models.SET_NULL, null=True, blank=True, related_name='students')
     batch = models.CharField(max_length=32, blank=True)
-    status = models.CharField(max_length=16, choices=PROFILE_STATUS_CHOICES, default='ACTIVE')
+    status = models.CharField(max_length=16, choices=STUDENT_STATUS_CHOICES, default='ACTIVE')
 
     # Optional mobile number for OTP verification (kept on profile as requested)
     mobile_number = models.CharField(max_length=32, blank=True, default='')
@@ -267,7 +274,7 @@ class StudentProfile(models.Model):
             raise ValidationError('User already has a staff profile; cannot create a student profile.')
         # Student-specific status rules
         if hasattr(self, 'status') and self.status == 'RESIGNED':
-            raise ValidationError({'status': 'Student cannot have status RESIGNED.'})
+            raise ValidationError({'status': 'Student cannot have status RESIGNED. Use DEBAR instead.'})
 
     def save(self, *args, **kwargs):
         # Immutable reg_no after creation
@@ -328,7 +335,7 @@ class StaffProfile(models.Model):
     staff_id = models.CharField(max_length=64, unique=True, db_index=True)
     department = models.ForeignKey(Department, on_delete=models.SET_NULL, null=True, blank=True, related_name='staff')
     designation = models.CharField(max_length=128, blank=True)
-    status = models.CharField(max_length=16, choices=PROFILE_STATUS_CHOICES, default='ACTIVE')
+    status = models.CharField(max_length=16, choices=STAFF_STATUS_CHOICES, default='ACTIVE')
 
     # Optional mobile number for OTP verification (kept on profile as requested)
     mobile_number = models.CharField(max_length=32, blank=True, default='')

@@ -6,6 +6,7 @@ export type Master = {
   mnemonic?: string | null;
   course_name?: string | null;
   class_type?: string;
+  qp_type?: string;
   enabled_assessments?: string[];
   category?: string;
   is_elective?: boolean;
@@ -27,6 +28,7 @@ export type DeptRow = {
   course_code?: string | null;
   course_name?: string | null;
   class_type?: string | null;
+  qp_type?: string | null;
   enabled_assessments?: string[];
   l?: number; t?: number; p?: number; s?: number; c?: number;
   internal_mark?: number | null;

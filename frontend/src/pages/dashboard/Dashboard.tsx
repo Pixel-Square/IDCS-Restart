@@ -19,7 +19,7 @@ export default function DashboardPage() {
         
         {/* User Queries Section */}
         <div className="mt-8">
-          <UserQueriesComponent />
+          <UserQueriesComponent user={user} />
         </div>
       </div>
     </DashboardLayout>

@@ -21,7 +21,7 @@ import { fetchPendingPublishRequestCount } from '../../services/obe';
   hod_advisors: Users,
   hod_teaching: BookOpen,
   staffs: Users,
-  advisor_students: GraduationCap,
+  staff_students: GraduationCap,
   mentor_assign: Users,
   timetable_templates: Calendar,
   timetable_assignments: Calendar,
@@ -29,7 +29,6 @@ import { fetchPendingPublishRequestCount } from '../../services/obe';
   staff_timetable: Calendar,
   student_attendance: ClipboardList,
   student_academics: GraduationCap,
-  my_mentees: Users,
   period_attendance: ClipboardList,
   obe: BookOpen,
   obe_master: BookOpen,
@@ -143,8 +142,12 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'staffs', label: 'Staff Directory', to: '/staffs' });
   }
 
+  // Students page: require explicit view permission  
+  if (permsLower.includes('students.view_students')) {
+    items.push({ key: 'staff_students', label: 'Students', to: '/staff/students' });
+  }
+
   // Advisor pages: require ADVISOR role or explicit permission
-  if (entry.advisor_students && (rolesUpper.includes('ADVISOR') || permsLower.includes('academics.view_my_students'))) items.push({ key: 'advisor_students', label: 'My Students', to: '/advisor/students' });
   // Mentor assignment: advisors with assign permission
   if (rolesUpper.includes('ADVISOR') || permsLower.includes('academics.assign_mentor')) items.push({ key: 'mentor_assign', label: 'Mentor Assign', to: '/advisor/mentor' });
 
@@ -170,11 +173,6 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'assigned_subjects', label: 'Assigned Subjects', to: '/staff/assigned-subjects' });
   }
 
-  // Staff: view my mentees - requires permission
-  if (flags.is_staff && permsLower.includes('academics.view_mentees')) {
-    items.push({ key: 'my_mentees', label: 'My Mentees', to: '/staff/mentees' });
-  }
-
   // Period attendance for staff
   if (flags.is_staff && (permsLower.includes('academics.mark_attendance') || rolesUpper.includes('HOD') || rolesUpper.includes('ADVISOR'))) {
     items.push({ key: 'period_attendance', label: 'Mark Attendance', to: '/staff/period-attendance' });
@@ -195,9 +193,6 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // fallback: always show profile
   items.unshift({ key: 'profile', label: 'Profile', to: '/profile' });
   
-  // Add Queries for all users (no permission check needed)
-  items.push({ key: 'queries', label: 'Support Queries', to: '/queries' });
-
   // Show notifications for IQAC role only
   if (isIqac) {
     items.push({ key: 'notifications', label: 'Notifications', to: '/notifications' });
@@ -218,6 +213,9 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   if (canObeMaster && !items.some(item => item.key === 'obe_requests')) {
     items.push({ key: 'obe_requests', label: 'OBE: Requests', to: '/obe/master/requests' });
   }
+
+  // Add Token Raise for all users at the end (no permission check needed)
+  items.push({ key: 'queries', label: 'Token Raise', to: '/queries' });
 
   return (
     <>

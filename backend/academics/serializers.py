@@ -1086,6 +1086,9 @@ class StaffProfileSerializer(serializers.ModelSerializer):
         if roles:
             role_objects = Role.objects.filter(name__in=roles)
             user.roles.set(role_objects)
+            
+            # Handle DepartmentRole synchronization for HOD/AHOD roles in new staff
+            self._sync_department_roles(staff_profile, set(), set(roles))
         
         return staff_profile
     
@@ -1131,7 +1134,16 @@ class StaffProfileSerializer(serializers.ModelSerializer):
         # Update roles if provided
         if roles is not None:
             role_objects = Role.objects.filter(name__in=roles)
+            
+            # Get current roles before update for comparison
+            old_role_names = set(user.roles.values_list('name', flat=True))
+            new_role_names = set(roles)
+            
+            # Update user roles
             user.roles.set(role_objects)
+            
+            # Handle DepartmentRole synchronization for HOD/AHOD roles
+            self._sync_department_roles(instance, old_role_names, new_role_names)
         
         # Update staff profile fields
         for attr, value in validated_data.items():
@@ -1139,4 +1151,97 @@ class StaffProfileSerializer(serializers.ModelSerializer):
         instance.save()
         
         return instance
+    
+    def _sync_department_roles(self, staff_instance, old_roles, new_roles):
+        """
+        Synchronize DepartmentRole table when HOD/AHOD roles are assigned or removed.
+        """
+        from academics.models import DepartmentRole, AcademicYear
+        import logging
+        
+        logger = logging.getLogger(__name__)
+        
+        # Define which roles should create department roles
+        dept_role_mapping = {
+            'HOD': DepartmentRole.DeptRole.HOD,
+            'AHOD': DepartmentRole.DeptRole.AHOD,
+            'Head of Department': DepartmentRole.DeptRole.HOD,
+            'Assistant HOD': DepartmentRole.DeptRole.AHOD,
+        }
+        
+        # Get active academic year
+        active_academic_year = AcademicYear.objects.filter(is_active=True).first()
+        if not active_academic_year:
+            active_academic_year = AcademicYear.objects.order_by('-id').first()
+        
+        if not active_academic_year:
+            logger.warning(f"No academic year found for department role sync - Staff: {staff_instance.staff_id}")
+            return
+        
+        # Get staff's department (prefer current assignment, fallback to profile department)
+        staff_department = staff_instance.get_current_department()
+        if not staff_department:
+            logger.warning(f"No department assigned for staff {staff_instance.staff_id} - skipping department role sync")
+            return
+        
+        logger.info(f"Syncing department roles for staff {staff_instance.staff_id} in department {staff_department.code}")
+        
+        # Handle newly added HOD/AHOD roles
+        added_roles = new_roles - old_roles
+        for role_name in added_roles:
+            if role_name in dept_role_mapping:
+                dept_role_type = dept_role_mapping[role_name]
+                
+                # Check if there's already an active role of this type for this staff in this department
+                existing_role = DepartmentRole.objects.filter(
+                    staff=staff_instance,
+                    department=staff_department,
+                    role=dept_role_type,
+                    academic_year=active_academic_year,
+                    is_active=True
+                ).first()
+                
+                if not existing_role:
+                    # If HOD role, deactivate any existing HOD for this department (only one HOD per dept)
+                    if dept_role_type == DepartmentRole.DeptRole.HOD:
+                        old_hods = DepartmentRole.objects.filter(
+                            department=staff_department,
+                            role=DepartmentRole.DeptRole.HOD,
+                            academic_year=active_academic_year,
+                            is_active=True
+                        )
+                        if old_hods.exists():
+                            logger.info(f"Deactivating previous HOD(s) for department {staff_department.code}")
+                            old_hods.update(is_active=False)
+                    
+                    # Create new department role
+                    new_dept_role = DepartmentRole.objects.create(
+                        staff=staff_instance,
+                        department=staff_department,
+                        role=dept_role_type,
+                        academic_year=active_academic_year,
+                        is_active=True
+                    )
+                    logger.info(f"Created department role: {new_dept_role}")
+                else:
+                    logger.info(f"Department role {dept_role_type} already exists for staff {staff_instance.staff_id} in {staff_department.code}")
+        
+        # Handle removed HOD/AHOD roles
+        removed_roles = old_roles - new_roles
+        for role_name in removed_roles:
+            if role_name in dept_role_mapping:
+                dept_role_type = dept_role_mapping[role_name]
+                
+                # Deactivate existing department roles of this type for this staff
+                deactivated_roles = DepartmentRole.objects.filter(
+                    staff=staff_instance,
+                    department=staff_department,
+                    role=dept_role_type,
+                    academic_year=active_academic_year,
+                    is_active=True
+                )
+                
+                if deactivated_roles.exists():
+                    logger.info(f"Deactivating department role {dept_role_type} for staff {staff_instance.staff_id} in {staff_department.code}")
+                    deactivated_roles.update(is_active=False)
  

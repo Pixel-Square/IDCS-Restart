@@ -2,6 +2,7 @@
 {% load i18n %}
 
 {% block object-tools %}
+  {% if not is_popup %}
   <div class="object-tools">
     {% url 'admin:academics_staff_import' as import_url %}
     <ul class="object-tools">
@@ -10,5 +11,56 @@
       </li>
     </ul>
   </div>
+  {% endif %}
+  {{ block.super }}
+{% endblock %}
+
+{% block result_list %}
+  {% if is_popup %}
+    <style>
+      /* Make popup list items clickable for selection */
+      .change-list .results tbody tr {
+        cursor: pointer;
+      }
+      .change-list .results tbody tr:hover {
+        background-color: #f0f0f0;
+      }
+    </style>
+    
+    <script>
+      django.jQuery(document).ready(function($) {
+        // Make table rows clickable in popup mode
+        $('.change-list .results tbody tr').click(function(e) {
+          e.preventDefault();
+          var pk = $(this).find('th a').attr('href').match(/\/(\d+)\//);
+          if (pk && pk[1]) {
+            var value = pk[1];
+            var repr = $(this).find('th').text().trim();
+            
+            // Close popup and send selection back
+            if (window.opener) {
+              window.opener.dismissRelatedLookupPopup(window, value);
+              window.close();
+            }
+          }
+        });
+        
+        // Also handle direct link clicks
+        $('.change-list .results tbody tr th a').click(function(e) {
+          e.preventDefault();
+          var pk = $(this).attr('href').match(/\/(\d+)\//);
+          if (pk && pk[1]) {
+            var value = pk[1];
+            
+            if (window.opener) {
+              window.opener.dismissRelatedLookupPopup(window, value);
+              window.close();
+            }
+          }
+        });
+      });
+    </script>
+  {% endif %}
+  
   {{ block.super }}
 {% endblock %}

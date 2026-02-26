@@ -179,11 +179,14 @@ class UserQuerySerializer(serializers.ModelSerializer):
     serial_number = serializers.SerializerMethodField()
     user_roles = serializers.SerializerMethodField()
     user_department = serializers.SerializerMethodField()
+    dept_serial_number = serializers.SerializerMethodField()
+    mobile_number = serializers.SerializerMethodField()
+    mobile_verified = serializers.SerializerMethodField()
     
     class Meta:
         model = UserQuery
-        fields = ('id', 'serial_number', 'user', 'username', 'user_roles', 'user_department', 'query_text', 'status', 'created_at', 'updated_at', 'admin_notes')
-        read_only_fields = ('id', 'serial_number', 'user', 'username', 'user_roles', 'user_department', 'created_at', 'updated_at', 'admin_notes', 'status')
+        fields = ('id', 'serial_number', 'user', 'username', 'user_roles', 'user_department', 'dept_serial_number', 'mobile_number', 'mobile_verified', 'query_text', 'status', 'created_at', 'updated_at', 'admin_notes')
+        read_only_fields = ('id', 'serial_number', 'user', 'username', 'user_roles', 'user_department', 'dept_serial_number', 'mobile_number', 'mobile_verified', 'created_at', 'updated_at', 'admin_notes', 'status')
     
     def get_serial_number(self, obj):
         """Calculate serial number based on creation order (oldest = 1)."""
@@ -211,6 +214,57 @@ class UserQuerySerializer(serializers.ModelSerializer):
         except Exception:
             pass
         return None
+    
+    def get_dept_serial_number(self, obj):
+        """Calculate department-wise serial number for the token."""
+        try:
+            dept_id = None
+            if hasattr(obj.user, 'staff_profile'):
+                dept = obj.user.staff_profile.current_department
+                if dept:
+                    dept_id = dept.id
+            elif hasattr(obj.user, 'student_profile'):
+                student = obj.user.student_profile
+                section = student.current_section or student.section
+                if section and hasattr(section, 'batch') and section.batch:
+                    dept = section.batch.course.department
+                    if dept:
+                        dept_id = dept.id
+            
+            if dept_id:
+                # Count tokens from same department created before this one
+                from django.db.models import Q
+                count = UserQuery.objects.filter(
+                    Q(user__staff_profile__current_department_id=dept_id) | 
+                    Q(user__student_profile__section__batch__course__department_id=dept_id),
+                    created_at__lt=obj.created_at
+                ).count()
+                return count + 1
+        except Exception:
+            pass
+        return None
+    
+    def get_mobile_number(self, obj):
+        """Get user's mobile number from their profile."""
+        try:
+            if hasattr(obj.user, 'staff_profile'):
+                return obj.user.staff_profile.mobile_number or None
+            elif hasattr(obj.user, 'student_profile'):
+                return obj.user.student_profile.mobile_number or None
+        except Exception:
+            pass
+        return None
+    
+    def get_mobile_verified(self, obj):
+        """Get user's mobile verification status from their profile."""
+        try:
+            if hasattr(obj.user, 'staff_profile'):
+                return bool(obj.user.staff_profile.mobile_verified)
+            elif hasattr(obj.user, 'student_profile'):
+                return bool(obj.user.student_profile.mobile_verified)
+        except Exception:
+            pass
+        return False
     
     def create(self, validated_data):
         # Set the user from context
@@ -288,6 +342,14 @@ class IdentifierTokenObtainPairSerializer(serializers.Serializer):
 
         if not getattr(user, 'is_active', True):
             raise serializers.ValidationError('User account is disabled.')
+
+        # Check for inactive or debarred students
+        if hasattr(user, 'student_profile') and user.student_profile:
+            student_status = getattr(user.student_profile, 'status', 'ACTIVE')
+            if student_status == 'INACTIVE':
+                raise serializers.ValidationError('Your student account is inactive. Please contact administration.')
+            if student_status == 'DEBAR':
+                raise serializers.ValidationError('Your student account has been debarred. Please contact administration.')
 
         # Build tokens
         refresh = RefreshToken.for_user(user)

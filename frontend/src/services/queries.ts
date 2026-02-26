@@ -6,8 +6,8 @@ export interface UserQuery {
   user: number;
   username: string;
   user_roles: string[];
-  user_department: { id: number; code: string; name: string; short_name: string } | null;
-  query_text: string;
+  user_department: { id: number; code: string; name: string; short_name: string } | null;  mobile_number?: string | null;
+  mobile_verified?: boolean;  query_text: string;
   status: 'SENT' | 'VIEWED' | 'REVIEWED' | 'PENDING' | 'IN_PROGRESS' | 'FIXED' | 'LATER' | 'CLOSED';
   created_at: string;
   updated_at: string;

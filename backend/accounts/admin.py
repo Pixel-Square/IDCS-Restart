@@ -346,8 +346,13 @@ class UserAdmin(DjangoUserAdmin):
                     errs.append('reg_no is required for STUDENT')
                 if profile_type == 'STAFF' and not staff_id:
                     errs.append('staff_id is required for STAFF')
-                if status not in ('ACTIVE', 'INACTIVE', 'ALUMNI', 'RESIGNED'):
-                    errs.append('status must be one of ACTIVE/INACTIVE/ALUMNI/RESIGNED')
+                # Validate status based on profile type
+                if profile_type == 'STUDENT':
+                    if status not in ('ACTIVE', 'INACTIVE', 'ALUMNI', 'DEBAR'):
+                        errs.append('status for STUDENT must be one of ACTIVE/INACTIVE/ALUMNI/DEBAR')
+                elif profile_type == 'STAFF':
+                    if status not in ('ACTIVE', 'INACTIVE', 'ALUMNI', 'RESIGNED'):
+                        errs.append('status for STAFF must be one of ACTIVE/INACTIVE/ALUMNI/RESIGNED')
 
                 rows.append({
                     'row_num': idx,

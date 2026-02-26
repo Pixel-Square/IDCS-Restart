@@ -182,10 +182,22 @@ class SectionTimetableView(APIView):
 
             # Avoid duplicate entries for the same period: prefer student-specific batch
             # or resolved elective entry over a generic unbatched assignment.
+            # IMPORTANT: Allow multiple entries for the same period if they have different batches
             replaced = False
             for i, exist in enumerate(lst):
                 try:
                     if exist.get('period_id') == new_entry.get('period_id'):
+                        # Check if this is the SAME assignment (same batch and curriculum)
+                        exist_batch_id = exist.get('subject_batch', {}).get('id') if exist.get('subject_batch') else None
+                        new_batch_id = new_entry.get('subject_batch', {}).get('id') if new_entry.get('subject_batch') else None
+                        exist_curriculum_id = exist.get('curriculum_row', {}).get('id') if exist.get('curriculum_row') else None
+                        new_curriculum_id = new_entry.get('curriculum_row', {}).get('id') if new_entry.get('curriculum_row') else None
+                        
+                        # If different batches or different curriculums, this is a separate assignment - don't replace
+                        if exist_batch_id != new_batch_id or exist_curriculum_id != new_curriculum_id:
+                            continue  # Skip to next existing entry, don't replace
+                        
+                        # Same period, same batch, same curriculum - check if we should replace
                         # If existing has no subject_batch but new has one -> replace
                         if (exist.get('subject_batch') is None) and (new_entry.get('subject_batch') is not None):
                             lst[i] = new_entry
@@ -333,17 +345,29 @@ class SectionTimetableView(APIView):
         # Cleanup: for any day where a special entry exists for a given period,
         # remove the normal (non-special) assignment for that period so the
         # timetable shows only the special period on that date.
+        # IMPORTANT: When comparing, consider both period AND batch to allow
+        # multiple batch assignments for the same period
         try:
             for daynum, assignments in out.items():
-                # find period_ids that have a special entry
-                special_period_ids = {a.get('period_id') for a in assignments if a.get('is_special')}
-                if not special_period_ids:
+                # Build a set of (period_id, batch_id) tuples for special entries
+                special_keys = {
+                    (
+                        a.get('period_id'), 
+                        a.get('subject_batch', {}).get('id') if a.get('subject_batch') else None
+                    )
+                    for a in assignments if a.get('is_special')
+                }
+                if not special_keys:
                     continue
                 filtered = []
                 for a in assignments:
-                    if (a.get('period_id') in special_period_ids) and (not a.get('is_special')):
-                        # skip normal assignment when a special for same period exists
-                        continue
+                    if not a.get('is_special'):
+                        # Check if there's a special entry for same period AND same batch
+                        a_batch_id = a.get('subject_batch', {}).get('id') if a.get('subject_batch') else None
+                        a_key = (a.get('period_id'), a_batch_id)
+                        if a_key in special_keys:
+                            # skip normal assignment when a special for same period+batch exists
+                            continue
                     filtered.append(a)
                 out[daynum] = filtered
         except Exception:
@@ -416,9 +440,11 @@ class PeriodSwapView(APIView):
     """Create or undo a date-specific period swap for a section.
 
     POST  /api/timetable/section/<id>/swap-periods/
-        Body: { date, from_period_id, to_period_id }
+        Body: { from_date, to_date, from_period_id, to_period_id }
         Creates two SpecialTimetableEntry records that swap the subjects/staff
-        of the two periods on that exact date only.
+        of the two periods. Supports same-day swaps (from_date == to_date) or
+        cross-day swaps within the same week (to_date must be >= from_date).
+        Both dates must be in the same calendar week (Monday-Sunday).
 
     DELETE /api/timetable/section/<id>/swap-periods/
         Body/params: { date }  – undoes all swaps for that section on that date.
@@ -435,19 +461,19 @@ class PeriodSwapView(APIView):
         except Exception:
             return Response({'error': 'Section not found'}, status=404)
 
-        date_str = request.data.get('date')
+        # Support both same-day and cross-day swaps within the same week
+        from_date_str = request.data.get('from_date') or request.data.get('date')
+        to_date_str = request.data.get('to_date') or request.data.get('date')
         from_period_id = request.data.get('from_period_id')
         to_period_id = request.data.get('to_period_id')
 
-        if not date_str or not from_period_id or not to_period_id:
-            return Response({'error': 'date, from_period_id and to_period_id are required'}, status=400)
+        if not from_date_str or not to_date_str or not from_period_id or not to_period_id:
+            return Response({'error': 'from_date, to_date, from_period_id and to_period_id are required'}, status=400)
         try:
             from_period_id = int(from_period_id)
             to_period_id = int(to_period_id)
         except Exception:
             return Response({'error': 'period ids must be integers'}, status=400)
-        if from_period_id == to_period_id:
-            return Response({'error': 'Cannot swap a period with itself'}, status=400)
         
         # Validate that neither period is a break or lunch
         from .models import TimetableSlot
@@ -466,18 +492,28 @@ class PeriodSwapView(APIView):
             return Response({'error': f'Period not found: {str(e)}'}, status=404)
         
         try:
-            swap_date = datetime.date.fromisoformat(date_str)
+            from_date = datetime.date.fromisoformat(from_date_str)
+            to_date = datetime.date.fromisoformat(to_date_str)
         except Exception:
             return Response({'error': 'Invalid date format, use YYYY-MM-DD'}, status=400)
 
+        # Validate dates are in the same week and to_date is on or after from_date
+        from_week_start = from_date - datetime.timedelta(days=from_date.weekday())
+        to_week_start = to_date - datetime.timedelta(days=to_date.weekday())
+        if from_week_start != to_week_start:
+            return Response({'error': 'Swap dates must be in the same week'}, status=400)
+        if to_date < from_date:
+            return Response({'error': 'Target swap date cannot be before the source date'}, status=400)
+
         # day of week: isoweekday() 1=Mon … 7=Sun (matches TimetableAssignment.day)
-        day_of_week = swap_date.isoweekday()
+        from_day_of_week = from_date.isoweekday()
+        to_day_of_week = to_date.isoweekday()
 
         from_assigns = list(TimetableAssignment.objects.filter(
-            section=sec, period_id=from_period_id, day=day_of_week
+            section=sec, period_id=from_period_id, day=from_day_of_week
         ).select_related('staff', 'curriculum_row', 'subject_batch').order_by('id'))
         to_assigns = list(TimetableAssignment.objects.filter(
-            section=sec, period_id=to_period_id, day=day_of_week
+            section=sec, period_id=to_period_id, day=to_day_of_week
         ).select_related('staff', 'curriculum_row', 'subject_batch').order_by('id'))
 
         # If exact period_id lookup fails, fall back to matching by period index
@@ -490,7 +526,7 @@ class PeriodSwapView(APIView):
                 ).values_list('period__index', flat=True).first()
                 if from_slot_index is not None:
                     from_assigns = list(TimetableAssignment.objects.filter(
-                        section=sec, period__index=from_slot_index, day=day_of_week
+                        section=sec, period__index=from_slot_index, day=from_day_of_week
                     ).select_related('staff', 'curriculum_row', 'subject_batch').order_by('id'))
             except Exception:
                 pass
@@ -501,15 +537,15 @@ class PeriodSwapView(APIView):
                 ).values_list('period__index', flat=True).first()
                 if to_slot_index is not None:
                     to_assigns = list(TimetableAssignment.objects.filter(
-                        section=sec, period__index=to_slot_index, day=day_of_week
+                        section=sec, period__index=to_slot_index, day=to_day_of_week
                     ).select_related('staff', 'curriculum_row', 'subject_batch').order_by('id'))
             except Exception:
                 pass
 
         if not from_assigns:
-            return Response({'error': f'No assignment found for period {from_period_id} on day {day_of_week} in section {sec.name}'}, status=400)
+            return Response({'error': f'No assignment found for period {from_period_id} on day {from_day_of_week} in section {sec.name}'}, status=400)
         if not to_assigns:
-            return Response({'error': f'No assignment found for period {to_period_id} on day {day_of_week} in section {sec.name}'}, status=400)
+            return Response({'error': f'No assignment found for period {to_period_id} on day {to_day_of_week} in section {sec.name}'}, status=400)
 
         from_a = from_assigns[0]
         to_a = to_assigns[0]
@@ -533,29 +569,59 @@ class PeriodSwapView(APIView):
         )
         if same_subject and same_staff:
             return Response({'error': 'Cannot swap a period with itself (same subject and same staff)'}, status=400)
+        
+        # Validate that the requesting staff is teaching at least one of the periods being swapped
+        staff_profile = getattr(request.user, 'staff_profile', None)
+        if staff_profile:
+            from_staff_id = from_a.staff_id if from_a.staff else None
+            to_staff_id = to_a.staff_id if to_a.staff else None
+            requesting_staff_id = staff_profile.id
+            
+            if from_staff_id != requesting_staff_id and to_staff_id != requesting_staff_id:
+                return Response({'error': 'You can only swap periods where you are assigned as the teaching staff'}, status=403)
         # ────────────────────────────────────────────────────────────────────────
 
-        staff_profile = getattr(request.user, 'staff_profile', None)
-
-        # Deactivate any existing swap entries for these two periods on this date
+        # Deactivate any existing swap entries for these periods on their respective dates
         SpecialTimetableEntry.objects.filter(
             timetable__section=sec,
             timetable__name__startswith='[SWAP]',
-            date=swap_date,
-            period_id__in=[from_period_id, to_period_id],
+            date=from_date,
+            period_id=from_period_id,
+            is_active=True,
+        ).update(is_active=False)
+        SpecialTimetableEntry.objects.filter(
+            timetable__section=sec,
+            timetable__name__startswith='[SWAP]',
+            date=to_date,
+            period_id=to_period_id,
             is_active=True,
         ).update(is_active=False)
 
-        # Get or create the swap SpecialTimetable for this section+date
-        swap_name = f'[SWAP] {date_str}'
-        st, _ = SpecialTimetable.objects.get_or_create(
+        # Get or create swap SpecialTimetables for each date (may be same or different)
+        swap_name_from = f'[SWAP] {from_date_str}'
+        swap_name_to = f'[SWAP] {to_date_str}'
+        
+        st_from, _ = SpecialTimetable.objects.get_or_create(
             section=sec,
-            name=swap_name,
+            name=swap_name_from,
             defaults={'created_by': staff_profile, 'is_active': True},
         )
-        if not st.is_active:
-            st.is_active = True
-            st.save(update_fields=['is_active'])
+        if not st_from.is_active:
+            st_from.is_active = True
+            st_from.save(update_fields=['is_active'])
+        
+        # Only create second timetable if dates differ
+        if from_date == to_date:
+            st_to = st_from
+        else:
+            st_to, _ = SpecialTimetable.objects.get_or_create(
+                section=sec,
+                name=swap_name_to,
+                defaults={'created_by': staff_profile, 'is_active': True},
+            )
+            if not st_to.is_active:
+                st_to.is_active = True
+                st_to.save(update_fields=['is_active'])
 
         # Auto-deactivate any expired swap entries (date < today) to keep the DB tidy
         import datetime as _dt_cleanup
@@ -571,33 +637,38 @@ class PeriodSwapView(APIView):
         ).exclude(
             entries__date__gte=_today,
         ).update(is_active=False)
-        SpecialTimetableEntry.objects.filter(timetable=st, date=swap_date, period_id=from_period_id).delete()
+        
+        # Delete any existing conflicting entries
+        SpecialTimetableEntry.objects.filter(timetable=st_from, date=from_date, period_id=from_period_id).delete()
+        SpecialTimetableEntry.objects.filter(timetable=st_to, date=to_date, period_id=to_period_id).delete()
+        
         # subject_text stores the ORIGINAL (displaced) subject code so the UI can show "new ⇄ orig"
         from_orig_text = getattr(from_a.curriculum_row, 'course_code', None) or getattr(from_a.curriculum_row, 'course_name', None) or (from_a.subject_text or '') if from_a.curriculum_row else (from_a.subject_text or '')
         to_orig_text = getattr(to_a.curriculum_row, 'course_code', None) or getattr(to_a.curriculum_row, 'course_name', None) or (to_a.subject_text or '') if to_a.curriculum_row else (to_a.subject_text or '')
         
-        logger.info(f"Creating swap for section {sec.name} on {date_str}:")
-        logger.info(f"  Period {from_period_id}: {from_orig_text} (staff={from_a.staff_id if from_a.staff else None}) → {to_orig_text} (staff={to_a.staff_id if to_a.staff else None})")
-        logger.info(f"  Period {to_period_id}: {to_orig_text} (staff={to_a.staff_id if to_a.staff else None}) → {from_orig_text} (staff={from_a.staff_id if from_a.staff else None})")
+        logger.info(f"Creating cross-day swap for section {sec.name}:")
+        logger.info(f"  {from_date_str} Period {from_period_id}: {from_orig_text} (staff={from_a.staff_id if from_a.staff else None}) → {to_orig_text} (staff={to_a.staff_id if to_a.staff else None})")
+        logger.info(f"  {to_date_str} Period {to_period_id}: {to_orig_text} (staff={to_a.staff_id if to_a.staff else None}) → {from_orig_text} (staff={from_a.staff_id if from_a.staff else None})")
         
+        # Entry A: from_period on from_date now carries to_a's subject/staff
         SpecialTimetableEntry.objects.create(
-            timetable=st, date=swap_date, period_id=from_period_id,
+            timetable=st_from, date=from_date, period_id=from_period_id,
             staff=to_a.staff, curriculum_row=to_a.curriculum_row,
             subject_batch=to_a.subject_batch, subject_text=from_orig_text,
             is_active=True,
         )
-        # Entry B: to_period now carries from_a's subject/staff
-        SpecialTimetableEntry.objects.filter(timetable=st, date=swap_date, period_id=to_period_id).delete()
+        # Entry B: to_period on to_date now carries from_a's subject/staff
         SpecialTimetableEntry.objects.create(
-            timetable=st, date=swap_date, period_id=to_period_id,
+            timetable=st_to, date=to_date, period_id=to_period_id,
             staff=from_a.staff, curriculum_row=from_a.curriculum_row,
             subject_batch=from_a.subject_batch, subject_text=to_orig_text,
             is_active=True,
         )
 
         return Response({
-            'swap_id': st.id,
-            'date': date_str,
+            'swap_id': st_from.id,
+            'from_date': from_date_str,
+            'to_date': to_date_str,
             'from_period_id': from_period_id,
             'to_period_id': to_period_id,
             'message': 'Periods swapped successfully',

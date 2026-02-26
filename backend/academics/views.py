@@ -662,54 +662,6 @@ class MentorUnmapView(APIView):
         return Response({'unmapped': updated})
 
 
-class MentorMyMenteesView(APIView):
-    permission_classes = (IsAuthenticated,)
-
-    def get(self, request):
-        user = request.user
-        perms = get_user_permissions(user)
-        
-        # Check for view_mentees permission
-        if not ('academics.view_mentees' in perms or user.has_perm('academics.view_studentmentormap') or user.is_superuser):
-            return Response({'detail': 'You do not have permission to view mentees'}, status=status.HTTP_403_FORBIDDEN)
-        
-        staff_profile = getattr(user, 'staff_profile', None)
-        if not staff_profile:
-            return Response({'results': []})
-
-        # return active mentees mapped to the current staff
-        from .models import StudentMentorMap
-        maps = StudentMentorMap.objects.filter(mentor=staff_profile, is_active=True).select_related('student__user', 'student__section', 'student__section__batch__course')
-        results = []
-        for m in maps:
-            st = m.student
-            results.append({
-                'id': getattr(st, 'id', None),
-                'reg_no': getattr(st, 'reg_no', None),
-                'username': getattr(getattr(st, 'user', None), 'username', None),
-                'section_id': getattr(st, 'section_id', None),
-                'section_name': str(getattr(st, 'section', '')),
-                'mentor_id': getattr(getattr(m, 'mentor', None), 'id', None),
-                'mentor_name': getattr(getattr(m, 'mentor', None), 'user', None) and getattr(m.mentor.user, 'username', None),
-            })
-
-        return Response({'results': results})
-
-    def perform_update(self, serializer):
-        user = self.request.user
-        perms = get_user_permissions(user)
-        if not (('academics.change_sectionadvisor' in perms) or user.has_perm('academics.change_sectionadvisor')):
-            raise PermissionDenied('You do not have permission to change advisor assignments.')
-        serializer.save()
-
-    def perform_destroy(self, instance):
-        user = self.request.user
-        perms = get_user_permissions(user)
-        if not (('academics.delete_sectionadvisor' in perms) or user.has_perm('academics.delete_sectionadvisor')):
-            raise PermissionDenied('You do not have permission to remove advisor assignments.')
-        instance.delete()
-
-
 class TeachingAssignmentViewSet(viewsets.ModelViewSet):
     queryset = TeachingAssignment.objects.select_related('staff', 'subject', 'section', 'academic_year')
     serializer_class = TeachingAssignmentSerializer
@@ -1739,6 +1691,9 @@ class StaffsPageView(APIView):
 
         # Check if user can edit staff
         can_edit = user.is_superuser or 'academics.edit_staff' in perms
+        
+        # Check if user can view all staff (determines if role filter should be shown)
+        can_view_all = user.is_superuser or 'academics.view_all_staff' in perms
 
         # determine departments to include
         if user.is_superuser or ('academics.view_all_staff' in perms):
@@ -1760,10 +1715,11 @@ class StaffsPageView(APIView):
 
         results = []
         for d in dept_qs.order_by('code'):
-            # collect staff for department (current FK or active department assignment)
+            # collect staff for department (current FK or active department assignment OR active department role)
             staff_qs = StaffProfile.objects.filter(
                 Q(department_id=d.id) |
-                Q(department_assignments__department_id=d.id, department_assignments__end_date__isnull=True)
+                Q(department_assignments__department_id=d.id, department_assignments__end_date__isnull=True) |
+                Q(department_roles__department_id=d.id, department_roles__is_active=True)
             ).select_related('user').distinct()
 
             staffs = []
@@ -1783,6 +1739,37 @@ class StaffsPageView(APIView):
                     except Exception:
                         user_roles = []
                 
+                # Get department roles (HOD, AHOD, etc.)
+                department_roles = []
+                dept_role_mappings = []
+                try:
+                    from .models import DepartmentRole
+                    dept_roles = DepartmentRole.objects.filter(
+                        staff=s, 
+                        is_active=True
+                    ).select_related('department', 'academic_year')
+                    
+                    for dept_role in dept_roles:
+                        role_display = dept_role.get_role_display()
+                        department_roles.append(role_display)
+                        dept_role_mappings.append({
+                            'department': {
+                                'id': dept_role.department.id,
+                                'code': dept_role.department.code,
+                                'name': dept_role.department.name,
+                                'short_name': dept_role.department.short_name,
+                            },
+                            'role': role_display,
+                            'role_code': dept_role.role,
+                            'academic_year': dept_role.academic_year.name if dept_role.academic_year else None,
+                        })
+                except Exception:
+                    department_roles = []
+                    dept_role_mappings = []
+                
+                # Combine all roles for filtering
+                all_roles = user_roles + department_roles
+                
                 staffs.append({
                     'id': s.id,
                     'staff_id': s.staff_id,
@@ -1791,7 +1778,10 @@ class StaffsPageView(APIView):
                     'designation': getattr(s, 'designation', None),
                     'status': getattr(s, 'status', None),
                     'department': s.department_id if s.department_id else None,
-                    'roles': user_roles,
+                    'roles': all_roles,  # Combined user roles + department roles
+                    'user_roles': user_roles,  # Original user-assigned roles
+                    'department_roles': department_roles,  # Department-specific roles
+                    'department_role_mappings': dept_role_mappings,  # Detailed role-department mapping
                 })
 
             results.append({
@@ -1802,7 +1792,7 @@ class StaffsPageView(APIView):
                 'staffs': staffs,
             })
 
-        return Response({'results': results, 'can_edit': can_edit})
+        return Response({'results': results, 'can_edit': can_edit, 'can_view_all': can_view_all})
 
 
 class StaffProfileCreateView(APIView):
@@ -3397,6 +3387,14 @@ class StaffPeriodsView(APIView):
                 except Exception:
                     present_count = absent_count = leave_count = od_count = late_count = None
 
+            # Get batch label if subject_batch_id exists
+            batch_label = None
+            if getattr(a, 'subject_batch_id', None):
+                try:
+                    batch_label = getattr(a.subject_batch, 'name', None)
+                except Exception:
+                    batch_label = None
+
             results.append({
                 'id': a.id,
                 'section_id': a.section_id,
@@ -3409,6 +3407,7 @@ class StaffPeriodsView(APIView):
                 'elective_subject_id': resolved_elective_id,
                 'elective_subject_name': resolved_elective_name,
                 'subject_batch_id': getattr(a, 'subject_batch_id', None),
+                'subject_batch_label': batch_label,
                 'attendance_session_id': getattr(session, 'id', None),
                 'attendance_session_locked': getattr(session, 'is_locked', False) if session else False,
                 # include latest unlock request status (if any) so frontend can show pending/approved/rejected
@@ -3513,6 +3512,14 @@ class StaffPeriodsView(APIView):
                     special_unlock_status = None
                     special_unlock_id = None
 
+                # Get batch label for special entry if subject_batch_id exists
+                special_batch_label = None
+                if getattr(se, 'subject_batch_id', None):
+                    try:
+                        special_batch_label = getattr(se.subject_batch, 'name', None)
+                    except Exception:
+                        special_batch_label = None
+
                 results.append({
                     'id': -(se.id),
                     'section_id': se.timetable.section.id,
@@ -3524,6 +3531,7 @@ class StaffPeriodsView(APIView):
                     'elective_subject_id': elective_id,
                     'elective_subject_name': elective_name,
                     'subject_batch_id': getattr(se, 'subject_batch_id', None),
+                    'subject_batch_label': special_batch_label,
                     'attendance_session_id': getattr(sess, 'id', None),
                     'attendance_session_locked': getattr(sess, 'is_locked', False) if sess else False,
                     'unlock_request_status': special_unlock_status,
@@ -3540,9 +3548,10 @@ class StaffPeriodsView(APIView):
 
 class AdvisorMyStudentsView(APIView):
     """Return students for sections where the current user is an active advisor.
+    Used by the Mentor Assignment page to load the advisor's students.
 
     Response format:
-    { results: [ { section_id, section_name, students: [ { id, reg_no, username } ] } ] }
+    { results: [ { section_id, section_name, batch, students: [...] } ] }
     """
     permission_classes = (IsAuthenticated,)
 
@@ -3554,44 +3563,39 @@ class AdvisorMyStudentsView(APIView):
             if not staff_profile:
                 return Response({'results': []})
 
-            # find active advisor mappings for current active academic year(s)
-            advisor_qs = SectionAdvisor.objects.filter(advisor=staff_profile, is_active=True, academic_year__is_active=True).select_related('section', 'section__batch', 'section__batch__course', 'section__batch__regulation')
+            advisor_qs = SectionAdvisor.objects.filter(
+                advisor=staff_profile, is_active=True, academic_year__is_active=True
+            ).select_related('section', 'section__batch', 'section__batch__course', 'section__batch__regulation')
             sections = [a.section for a in advisor_qs]
             if not sections:
                 return Response({'results': []})
 
-            # collect student profiles via current StudentSectionAssignment (preferred) and legacy StudentProfile.section
             from .models import StudentSectionAssignment, StudentProfile
 
             section_ids = [s.id for s in sections]
-            # current assignments
-            assign_qs = StudentSectionAssignment.objects.filter(section_id__in=section_ids, end_date__isnull=True).select_related('student__user', 'section')
-            students_by_section = {}
+            assign_qs = StudentSectionAssignment.objects.filter(
+                section_id__in=section_ids, end_date__isnull=True
+            ).select_related('student__user', 'section')
+            students_by_section: dict = {}
             for a in assign_qs:
-                sid = a.section_id
-                students_by_section.setdefault(sid, []).append(a.student)
+                students_by_section.setdefault(a.section_id, []).append(a.student)
 
-            # legacy section field
             legacy_qs = StudentProfile.objects.filter(section_id__in=section_ids).select_related('user', 'section')
             for s in legacy_qs:
-                sid = s.section_id
-                # avoid duplicates
-                present = students_by_section.setdefault(sid, [])
+                present = students_by_section.setdefault(s.section_id, [])
                 if not any(x.pk == s.pk for x in present):
                     present.append(s)
 
-            # annotate mentor info for students (active mappings)
             try:
-                student_ids = []
-                for v in students_by_section.values():
-                    for st in v:
-                        student_ids.append(st.pk)
-                mentor_map = {}
+                student_ids = [st.pk for v in students_by_section.values() for st in v]
+                mentor_map: dict = {}
                 if student_ids:
-                    mm_qs = StudentMentorMap.objects.filter(student_id__in=student_ids, is_active=True).select_related('mentor')
-                    for mm in mm_qs:
+                    for mm in StudentMentorMap.objects.filter(student_id__in=student_ids, is_active=True).select_related('mentor'):
                         try:
-                            mentor_map[mm.student_id] = {'mentor_id': getattr(mm.mentor, 'id', None), 'mentor_name': getattr(getattr(mm.mentor, 'user', None), 'username', None)}
+                            mentor_map[mm.student_id] = {
+                                'mentor_id': getattr(mm.mentor, 'id', None),
+                                'mentor_name': getattr(getattr(mm.mentor, 'user', None), 'username', None),
+                            }
                         except Exception:
                             pass
             except Exception:
@@ -3616,31 +3620,20 @@ class AdvisorMyStudentsView(APIView):
                 batch = getattr(sec, 'batch', None)
                 course = getattr(batch, 'course', None) if batch is not None else None
                 dept = getattr(course, 'department', None) if course is not None else None
-                # serialize semester to a JSON-safe value (number or string)
-                sem_obj = getattr(sec, 'semester', None)
-                if sem_obj is None:
-                    sem_val = None
-                else:
-                    sem_val = getattr(sem_obj, 'number', str(sem_obj))
-
                 reg = getattr(batch, 'regulation', None) if batch else None
                 results.append({
                     'section_id': sec.id,
-                    'section_name': str(sec),
+                    'section_name': sec.name,
                     'batch': getattr(batch, 'name', None),
-                    'batch_regulation': {'id': getattr(reg, 'id', None), 'code': getattr(reg, 'code', None), 'name': getattr(reg, 'name', None)} if reg else None,
-                    'department_id': getattr(course, 'department_id', None) if course is not None else None,
-                    'department': {'id': getattr(dept, 'id', None), 'code': getattr(dept, 'code', None)} if dept else None,
-                    'semester': sem_val,
+                    'batch_regulation': {'id': getattr(reg, 'id', None), 'code': getattr(reg, 'code', None)} if reg else None,
+                    'department_short_name': (getattr(dept, 'short_name', None) or getattr(dept, 'code', None)) if dept else None,
                     'students': ser.data,
                 })
 
             return Response({'results': results})
         except Exception as e:
             logging.getLogger(__name__).exception('AdvisorMyStudentsView error: %s', e)
-            tb = traceback.format_exc()
-            return Response({'detail': 'Internal server error', 'error': str(e), 'trace': tb}, status=500)
-
+            return Response({'detail': 'Internal server error', 'error': str(e)}, status=500)
 
 
 # DayAttendance endpoints removed as part of attendance feature removal.
@@ -4110,4 +4103,238 @@ class StudentMarksView(APIView):
         }
 
         return Response(resp)
+
+
+class DepartmentStudentsView(APIView):
+    """Return students from the same department as the current user.
+    
+    Requires 'students.view_department_students' permission.
+
+    Without ?section_id  → returns section list (metadata, no students)
+    With    ?section_id=X → returns students for that one section only
+    """
+    permission_classes = (IsAuthenticated,)
+    
+    def get(self, request):
+        import traceback, logging
+        try:
+            user = request.user
+            
+            from accounts.utils import get_user_permissions
+            perms = get_user_permissions(user)
+            
+            if not ('students.view_department_students' in perms or user.has_perm('students.view_department_students')):
+                return Response({'error': 'Permission denied'}, status=403)
+                
+            staff_profile = getattr(user, 'staff_profile', None)
+            if not staff_profile:
+                return Response({'sections': [], 'results': []})
+
+            from .models import Section, StudentSectionAssignment, StudentProfile
+
+            # Collect all departments the user is associated with:
+            # primary department + any active DepartmentRole entries (HOD/AHOD of multiple depts)
+            dept_ids = set()
+            user_dept = getattr(staff_profile, 'department', None)
+            if user_dept:
+                dept_ids.add(user_dept.id)
+            role_dept_ids = DepartmentRole.objects.filter(
+                staff=staff_profile, is_active=True
+            ).values_list('department_id', flat=True)
+            dept_ids.update(role_dept_ids)
+
+            if not dept_ids:
+                return Response({'sections': [], 'results': []})
+
+            sections = Section.objects.filter(
+                batch__course__department_id__in=dept_ids
+            ).select_related('batch', 'batch__course', 'batch__course__department').order_by(
+                'batch__course__department__code', 'batch__name', 'name'
+            )
+
+            section_id_param = request.query_params.get('section_id')
+
+            # ── Section list mode (no section_id param) ──────────────────────
+            if not section_id_param:
+                # Return lightweight section metadata only
+                section_list = []
+                for sec in sections:
+                    batch = getattr(sec, 'batch', None)
+                    course = getattr(batch, 'course', None) if batch else None
+                    dept = getattr(course, 'department', None) if course else None
+                    section_list.append({
+                        'section_id': sec.id,
+                        'section_name': sec.name,
+                        'batch_name': getattr(batch, 'name', None),
+                        'department_code': getattr(dept, 'code', None) if dept else None,
+                        'department_short_name': (getattr(dept, 'short_name', None) or getattr(dept, 'code', None)) if dept else None,
+                        'department_name': getattr(dept, 'name', None) if dept else None,
+                    })
+                return Response({'sections': section_list})
+
+            # ── Single section students mode ─────────────────────────────────
+            try:
+                section_id_int = int(section_id_param)
+            except ValueError:
+                return Response({'error': 'Invalid section_id'}, status=400)
+
+            sec = sections.filter(id=section_id_int).first()
+            if not sec:
+                return Response({'error': 'Section not found or not in your departments'}, status=404)
+
+            batch = getattr(sec, 'batch', None)
+            course = getattr(batch, 'course', None) if batch else None
+            dept = getattr(course, 'department', None) if course else None
+
+            studs = []
+            assign_qs = StudentSectionAssignment.objects.filter(
+                section_id=section_id_int, end_date__isnull=True
+            ).select_related('student__user')
+            for a in assign_qs:
+                studs.append(a.student)
+
+            # Legacy section field
+            legacy_qs = StudentProfile.objects.filter(section_id=section_id_int).select_related('user')
+            present_pks = {s.pk for s in studs}
+            for s in legacy_qs:
+                if s.pk not in present_pks:
+                    studs.append(s)
+
+            students_out = []
+            for st in studs:
+                user_obj = getattr(st, 'user', None)
+                students_out.append({
+                    'id': st.pk,
+                    'reg_no': st.reg_no,
+                    'username': getattr(user_obj, 'username', None),
+                    'first_name': getattr(user_obj, 'first_name', '') if user_obj else '',
+                    'last_name': getattr(user_obj, 'last_name', '') if user_obj else '',
+                    'email': getattr(user_obj, 'email', '') if user_obj else '',
+                    'status': getattr(st, 'status', 'ACTIVE').lower(),
+                    'section_id': sec.id,
+                    'section_name': sec.name,
+                    'department_code': getattr(dept, 'code', None) if dept else None,
+                    'department_name': getattr(dept, 'name', None) if dept else None,
+                    'batch': getattr(batch, 'name', None),
+                })
+
+            return Response({
+                'section_id': sec.id,
+                'section_name': sec.name,
+                'batch_name': getattr(batch, 'name', None),
+                'department_code': getattr(dept, 'code', None) if dept else None,
+                'department_name': getattr(dept, 'name', None) if dept else None,
+                'students': sorted(students_out, key=lambda x: x['reg_no'] or ''),
+            })
+            
+        except Exception as e:
+            logging.getLogger(__name__).exception('DepartmentStudentsView error: %s', e)
+            return Response({'error': 'Server error', 'detail': str(e)}, status=500)
+
+
+class AllStudentsView(APIView):
+    """Return students from all departments.
+    
+    Requires 'students.view_all_students' permission.
+
+    Without ?section_id  → returns section list (metadata, no students)
+    With    ?section_id=X → returns students for that one section only
+    """
+    permission_classes = (IsAuthenticated,)
+    
+    def get(self, request):
+        import logging
+        try:
+            user = request.user
+            
+            from accounts.utils import get_user_permissions
+            perms = get_user_permissions(user)
+            
+            if not ('students.view_all_students' in perms or user.has_perm('students.view_all_students')):
+                return Response({'error': 'Permission denied'}, status=403)
+                
+            from .models import Section, StudentSectionAssignment, StudentProfile
+            
+            sections = Section.objects.filter(
+                batch__course__department__isnull=False
+            ).select_related('batch', 'batch__course', 'batch__course__department').order_by(
+                'batch__course__department__code', 'batch__name', 'name'
+            )
+
+            section_id_param = request.query_params.get('section_id')
+
+            # ── Section list mode ────────────────────────────────────────────
+            if not section_id_param:
+                section_list = []
+                for sec in sections:
+                    batch = getattr(sec, 'batch', None)
+                    course = getattr(batch, 'course', None) if batch else None
+                    dept = getattr(course, 'department', None) if course else None
+                    section_list.append({
+                        'section_id': sec.id,
+                        'section_name': sec.name,
+                        'batch_name': getattr(batch, 'name', None),
+                        'department_code': getattr(dept, 'code', None) if dept else None,
+                        'department_short_name': (getattr(dept, 'short_name', None) or getattr(dept, 'code', None)) if dept else None,
+                        'department_name': getattr(dept, 'name', None) if dept else None,
+                    })
+                return Response({'sections': section_list})
+
+            # ── Single section students mode ─────────────────────────────────
+            try:
+                section_id_int = int(section_id_param)
+            except ValueError:
+                return Response({'error': 'Invalid section_id'}, status=400)
+
+            sec = sections.filter(id=section_id_int).first()
+            if not sec:
+                return Response({'error': 'Section not found'}, status=404)
+
+            batch = getattr(sec, 'batch', None)
+            course = getattr(batch, 'course', None) if batch else None
+            dept = getattr(course, 'department', None) if course else None
+
+            studs = []
+            assign_qs = StudentSectionAssignment.objects.filter(
+                section_id=section_id_int, end_date__isnull=True
+            ).select_related('student__user')
+            for a in assign_qs:
+                studs.append(a.student)
+
+            legacy_qs = StudentProfile.objects.filter(section_id=section_id_int).select_related('user')
+            present_pks = {s.pk for s in studs}
+            for s in legacy_qs:
+                if s.pk not in present_pks:
+                    studs.append(s)
+
+            students_out = []
+            for st in studs:
+                user_obj = getattr(st, 'user', None)
+                students_out.append({
+                    'id': st.pk,
+                    'reg_no': st.reg_no,
+                    'username': getattr(user_obj, 'username', None),
+                    'first_name': getattr(user_obj, 'first_name', '') if user_obj else '',
+                    'last_name': getattr(user_obj, 'last_name', '') if user_obj else '',
+                    'email': getattr(user_obj, 'email', '') if user_obj else '',
+                    'status': getattr(st, 'status', 'ACTIVE').lower(),
+                    'section_id': sec.id,
+                    'section_name': sec.name,
+                    'department_code': getattr(dept, 'code', None) if dept else None,
+                    'department_name': getattr(dept, 'name', None) if dept else None,
+                    'batch': getattr(batch, 'name', None),
+                })
+
+            return Response({
+                'section_id': sec.id,
+                'section_name': sec.name,
+                'batch_name': getattr(batch, 'name', None),
+                'department_code': getattr(dept, 'code', None) if dept else None,
+                'department_name': getattr(dept, 'name', None) if dept else None,
+                'students': sorted(students_out, key=lambda x: x['reg_no'] or ''),
+            })
+            
+        except Exception as e:
+            logging.getLogger(__name__).exception('AllStudentsView error: %s', e)
+            return Response({'error': 'Server error', 'detail': str(e)}, status=500)
 

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { MessageSquare, Send, CheckCircle, Clock, Eye, AlertCircle, Loader2 } from 'lucide-react';
+import { MessageSquare, Send, CheckCircle, Clock, Eye, AlertCircle, Loader2, Phone } from 'lucide-react';
 import { fetchMyQueries, createQuery, UserQueryListItem } from '../services/queries';
+import { Link } from 'react-router-dom';
 
 const STATUS_CONFIG = {
   SENT: { label: 'Sent', icon: Send, color: 'bg-blue-100 text-blue-700' },
@@ -13,7 +14,11 @@ const STATUS_CONFIG = {
   CLOSED: { label: 'Closed', icon: CheckCircle, color: 'bg-slate-100 text-slate-700' },
 };
 
-export default function UserQueriesComponent() {
+interface UserQueriesComponentProps {
+  user?: any;
+}
+
+export default function UserQueriesComponent({ user }: UserQueriesComponentProps) {
   const [queries, setQueries] = useState<UserQueryListItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -21,6 +26,9 @@ export default function UserQueriesComponent() {
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+
+  // Check if user's phone is verified
+  const isPhoneVerified = Boolean(user?.profile?.mobile_verified);
 
   useEffect(() => {
     loadQueries();
@@ -33,17 +41,31 @@ export default function UserQueriesComponent() {
       const data = await fetchMyQueries();
       setQueries(data);
     } catch (err) {
-      setError('Failed to load queries. Please try again.');
+      setError('Failed to load tokens. Please try again.');
     } finally {
       setLoading(false);
     }
   }
 
+  function handleNewTokenClick() {
+    if (!isPhoneVerified) {
+      setError('Please verify your phone number before raising a token.');
+      return;
+    }
+    setShowForm(true);
+    setError('');
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     
+    if (!isPhoneVerified) {
+      setError('Please verify your phone number before raising a token.');
+      return;
+    }
+    
     if (!newQuery.trim()) {
-      setError('Please enter your query');
+      setError('Please enter your token details');
       return;
     }
 
@@ -53,7 +75,7 @@ export default function UserQueriesComponent() {
 
     try {
       await createQuery(newQuery.trim());
-      setSuccess('Query submitted successfully!');
+      setSuccess('Token raised successfully!');
       setNewQuery('');
       setShowForm(false);
       await loadQueries();
@@ -61,7 +83,7 @@ export default function UserQueriesComponent() {
       // Clear success message after 3 seconds
       setTimeout(() => setSuccess(''), 3000);
     } catch (err) {
-      setError('Failed to submit query. Please try again.');
+      setError('Failed to raise token. Please try again.');
     } finally {
       setSubmitting(false);
     }
@@ -103,19 +125,39 @@ export default function UserQueriesComponent() {
               <MessageSquare className="w-5 h-5 text-indigo-600" />
             </div>
             <div>
-              <h2 className="text-lg font-bold text-slate-900">Support Queries</h2>
+              <h2 className="text-lg font-bold text-slate-900">Token Raise</h2>
               <p className="text-sm text-slate-600">Submit queries, doubts, errors, or bug reports</p>
             </div>
           </div>
           <button
-            onClick={() => setShowForm(!showForm)}
+            onClick={handleNewTokenClick}
             className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2 text-sm font-medium"
           >
             <Send className="w-4 h-4" />
-            New Query
+            Raise Token
           </button>
         </div>
       </div>
+
+      {/* Phone Verification Warning */}
+      {!isPhoneVerified && (
+        <div className="mx-6 mt-4 p-4 bg-amber-50 border border-amber-300 rounded-lg">
+          <div className="flex items-start gap-3">
+            <Phone className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <h3 className="text-sm font-semibold text-amber-900 mb-1">Phone Verification Required</h3>
+              <p className="text-sm text-amber-800 mb-2">You need to verify your phone number before you can raise a token.</p>
+              <Link
+                to="/profile"
+                className="inline-flex items-center gap-2 px-3 py-1.5 bg-amber-600 text-white rounded-md hover:bg-amber-700 transition-colors text-sm font-medium"
+              >
+                <Phone className="w-4 h-4" />
+                Go to Profile to Verify
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Success Message */}
       {success && (
@@ -133,12 +175,12 @@ export default function UserQueriesComponent() {
         </div>
       )}
 
-      {/* New Query Form */}
-      {showForm && (
+      {/* New Token Form */}
+      {showForm && isPhoneVerified && (
         <div className="px-6 py-4 border-b border-slate-200 bg-slate-50">
           <form onSubmit={handleSubmit}>
             <label className="block text-sm font-medium text-slate-700 mb-2">
-              Your Query
+              Your Token Details
             </label>
             <textarea
               value={newQuery}
@@ -157,12 +199,12 @@ export default function UserQueriesComponent() {
                 {submitting ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    Submitting...
+                    Raising...
                   </>
                 ) : (
                   <>
                     <Send className="w-4 h-4" />
-                    Submit Query
+                    Raise Token
                   </>
                 )}
               </button>
@@ -183,21 +225,23 @@ export default function UserQueriesComponent() {
         </div>
       )}
 
-      {/* Queries List */}
+      {/* Tokens List */}
       <div className="p-6">
         {loading ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
-            <span className="ml-3 text-slate-600">Loading queries...</span>
+            <span className="ml-3 text-slate-600">Loading tokens...</span>
           </div>
         ) : queries.length === 0 ? (
           <div className="text-center py-12">
             <div className="inline-flex items-center justify-center w-16 h-16 bg-slate-100 rounded-full mb-4">
               <MessageSquare className="w-8 h-8 text-slate-400" />
             </div>
-            <h3 className="text-lg font-medium text-slate-900 mb-2">No Queries Yet</h3>
+            <h3 className="text-lg font-medium text-slate-900 mb-2">No Tokens Yet</h3>
             <p className="text-slate-600 text-sm mb-4">
-              You haven't submitted any queries. Click "New Query" to get started.
+              {isPhoneVerified 
+                ? 'You haven\'t raised any tokens. Click "Raise Token" to get started.'
+                : 'Verify your phone number to start raising tokens.'}
             </p>
           </div>
         ) : (
@@ -239,7 +283,7 @@ export default function UserQueriesComponent() {
                   )}
                   
                   <div className="flex items-center justify-between text-xs text-slate-500">
-                    <span>Query #{query.serial_number}</span>
+                    <span>Token #{query.serial_number}</span>
                     <span>{formatDate(query.created_at)}</span>
                   </div>
                 </div>

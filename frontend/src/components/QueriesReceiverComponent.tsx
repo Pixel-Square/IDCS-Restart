@@ -12,7 +12,9 @@ import {
   X,
   Filter,
   User,
-  Shield
+  Shield,
+  Phone,
+  XCircle
 } from 'lucide-react';
 import { fetchAllQueries, updateQuery, UserQuery, AllQueriesResponse } from '../services/queries';
 
@@ -293,7 +295,24 @@ export default function QueriesReceiverComponent() {
                           {query.user_department && (
                             <>
                               <span>•</span>
-                              <span className="font-medium">{query.user_department.short_name || query.user_department.code}</span>
+                              <span className="font-medium">
+                                {query.user_department.short_name || query.user_department.code}
+                                {query.dept_serial_number && String(query.dept_serial_number).padStart(2, '0')}
+                              </span>
+                            </>
+                          )}
+                          {query.mobile_number && (
+                            <>
+                              <span>•</span>
+                              <span className="inline-flex items-center gap-1">
+                                <Phone className="w-3 h-3" />
+                                {query.mobile_number}
+                                {query.mobile_verified ? (
+                                  <CheckCircle className="w-3 h-3 text-green-600" title="Phone Verified" />
+                                ) : (
+                                  <XCircle className="w-3 h-3 text-red-500" title="Phone Not Verified" />
+                                )}
+                              </span>
                             </>
                           )}
                         </div>

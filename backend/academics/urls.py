@@ -10,16 +10,15 @@ from .views import (
     StaffProfileDeleteView,
     HODSectionsView,
     TeachingAssignmentViewSet,
-    AdvisorMyStudentsView,
     AdvisorStaffListView,
     MyTeachingAssignmentsView,
+    AdvisorMyStudentsView,
     TeachingAssignmentStudentsView,
     DepartmentsListView,
     MentorStaffListView,
     MentorStudentsForStaffView,
     MentorMapCreateView,
     MentorUnmapView,
-    MentorMyMenteesView,
     SpecialCourseAssessmentEditRequestViewSet,
     AcademicYearViewSet,
     StaffAssignedSubjectsView,
@@ -35,7 +34,7 @@ from .views import (
     StudentMarksView,
 )
 from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView, ClassAttendanceReportView, TodayPeriodAttendanceView, PeriodAttendanceReportView, OverallSectionView, MyClassStudentsView, DailyAttendanceView, DailyAttendanceLockView, DailyAttendanceUnlockView, DailyAttendanceUnlockRequestView, MyClassAttendanceAnalyticsView, DailyAttendanceSessionDetailView, SectionStudentAttendanceDayView
-from .views import UnifiedUnlockRequestsView
+from .views import UnifiedUnlockRequestsView, DepartmentStudentsView, AllStudentsView
 
 router = DefaultRouter()
 router.register(r'section-advisors', SectionAdvisorViewSet, basename='section-advisor')
@@ -70,7 +69,6 @@ urlpatterns = [
     path('mentor/staff/<int:staff_id>/students/', MentorStudentsForStaffView.as_view()),
     path('mentor/map/', MentorMapCreateView.as_view()),
     path('mentor/unmap/', MentorUnmapView.as_view()),
-    path('mentor/my-mentees/', MentorMyMenteesView.as_view()),
     path('departments/', DepartmentsListView.as_view()),
     path('sections/', HODSectionsView.as_view()),
     path('sections/<int:section_id>/students/', SectionStudentsView.as_view()),
@@ -83,8 +81,10 @@ urlpatterns = [
     # SPECIAL course helpers
     path('special-courses/<str:course_code>/enabled_assessments/', SpecialCourseEnabledAssessmentsView.as_view()),
 
-    # Advisor / attendance endpoints
-    path('my-students/', AdvisorMyStudentsView.as_view()),
+    # department / all students endpoints
+    path('my-students/', AdvisorMyStudentsView.as_view()),  # used by MentorAssign
+    path('department-students/', DepartmentStudentsView.as_view()),
+    path('all-students/', AllStudentsView.as_view()),
     path('staff/periods/', StaffPeriodsView.as_view()),
     path('student/attendance/', StudentAttendanceView.as_view()),
     path('student/marks/', StudentMarksView.as_view()),

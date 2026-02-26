@@ -183,9 +183,9 @@ export default function DeptList() {
   );
 
   async function saveAllVisible() {
-    const visible = rows.filter(r => (!currentDept || r.department.id === currentDept) && (!selectedReg || r.regulation === selectedReg) && (!selectedSem || r.semester === selectedSem));
-    if (visible.length === 0) return alert('No visible rows to save');
-    if (!confirm(`Save ${visible.length} visible rows?`)) return;
+    const visible = rows.filter(r => (!currentDept || r.department.id === currentDept) && (!selectedReg || r.regulation === selectedReg) && (!selectedSem || r.semester === selectedSem) && r.editable);
+    if (visible.length === 0) return alert('No editable rows to save');
+    if (!confirm(`Save ${visible.length} editable rows?`)) return;
     try {
       setSavingAll(true);
       const promises = visible.map(r => updateDeptRow(r.id, r).catch(e => ({ __error: String(e), id: r.id })));
@@ -199,7 +199,7 @@ export default function DeptList() {
         alert(`${errors.length} rows failed to save. Check console for details.`);
         console.error('SaveAll errors', errors);
       } else {
-        alert('All visible rows saved');
+        alert('All editable rows saved');
         setEditAll(false);
       }
     } catch (e:any) {
@@ -312,7 +312,7 @@ export default function DeptList() {
           <tbody className="bg-white divide-y divide-gray-200">
             {rows.filter(r => (!currentDept || r.department.id === currentDept) && (!selectedReg || r.regulation === selectedReg) && (!selectedSem || r.semester === selectedSem)).map(r => (
               <tr key={r.id} className={`hover:bg-gray-50 transition-colors ${r.editable ? 'bg-slate-50' : ''}`}>
-                {(editingRow === r.id || editAll) ? (
+                {(editingRow === r.id || (editAll && r.editable)) ? (
                   <>
                     <td className="px-3 py-2 whitespace-nowrap"><input value={r.course_code || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, course_code: e.target.value } : row))} className="w-full min-w-[160px] px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
                     <td className="px-3 py-2 whitespace-nowrap"><input value={r.mnemonic || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, mnemonic: e.target.value } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>

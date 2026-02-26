@@ -345,6 +345,16 @@ export default function StaffFormModal({ isOpen, onClose, onSuccess, staffId, in
                   </button>
                 ))}
               </div>
+              
+              {/* Note about department role sync */}
+              {(formData.roles.includes('HOD') || formData.roles.includes('AHOD')) && (
+                <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded-md">
+                  <p className="text-xs text-blue-700">
+                    💡 <strong>Auto-sync:</strong> Assigning HOD/AHOD roles will automatically create corresponding 
+                    department leadership records for the staff member's assigned department.
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* Submit Buttons */}

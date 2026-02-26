@@ -35,6 +35,14 @@ export default function AssignedSubjectsPage() {
   const [pickerStudents, setPickerStudents] = useState<any[]>([])
   const [pickerItem, setPickerItem] = useState<any | null>(null)
   const [pickerSelectedIds, setPickerSelectedIds] = useState<number[]>([])
+  const [selectionFilter, setSelectionFilter] = useState<'all' | 'first-half' | 'second-half' | 'custom' | 'range'>('all')
+  const [customNumbers, setCustomNumbers] = useState('')
+  const [rangeStart, setRangeStart] = useState('')
+  const [rangeEnd, setRangeEnd] = useState('')
+  const [editSelectionFilter, setEditSelectionFilter] = useState<'all' | 'first-half' | 'second-half' | 'custom' | 'range'>('all')
+  const [editCustomNumbers, setEditCustomNumbers] = useState('')
+  const [editRangeStart, setEditRangeStart] = useState('')
+  const [editRangeEnd, setEditRangeEnd] = useState('')
 
   useEffect(() => { load() }, [])
 
@@ -107,13 +115,37 @@ export default function AssignedSubjectsPage() {
     setPickerItem(item)
     setBatchNamesById(prev => ({ ...prev, [item.id]: name }))
     try{
-      const sres = await fetchWithAuth(`/api/academics/sections/${item.section_id}/students/`)
-      if (!sres.ok) {
-        const txt = await sres.text()
-        throw new Error(txt || 'Failed to load students')
+      let sdata
+      if (item.section_id) {
+        // Regular subject with section
+        const sres = await fetchWithAuth(`/api/academics/sections/${item.section_id}/students/`)
+        if (!sres.ok) {
+          const txt = await sres.text()
+          throw new Error(txt || 'Failed to load students')
+        }
+        sdata = await sres.json()
+      } else if (item.elective_subject_id) {
+        // Elective subject
+        const sres = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${item.elective_subject_id}`)
+        if (!sres.ok) {
+          const txt = await sres.text()
+          throw new Error(txt || 'Failed to load students')
+        }
+        sdata = await sres.json()
+      } else {
+        throw new Error('No student mapping available for this assignment')
       }
-      const sdata = await sres.json()
-      let studs = (sdata.results || sdata)
+      
+      const raw = (sdata.results || sdata) || []
+      let studs = raw.map((s:any) => ({
+        id: Number(s.id),
+        reg_no: String(s.reg_no ?? s.regno ?? ''),
+        username: String(s.username ?? s.name ?? s.full_name ?? ''),
+        full_name: String(s.username ?? s.name ?? s.full_name ?? ''),
+        section: s.section_name ?? s.section ?? null,
+        section_id: s.section_id ?? null,
+      }))
+      
       // exclude students already assigned to batches for this curriculum_row
       const crId = item.curriculum_row_id || item.curriculum_row?.id
       if (crId) {
@@ -127,6 +159,10 @@ export default function AssignedSubjectsPage() {
       }
       setPickerStudents(studs)
       setPickerSelectedIds(studs.map((s:any)=>s.id))
+      setSelectionFilter('all')
+      setCustomNumbers('')
+      setRangeStart('')
+      setRangeEnd('')
       setPickerOpen(true)
     }catch(e:any){
       console.error('openPickerForAssignment error', e)
@@ -135,46 +171,109 @@ export default function AssignedSubjectsPage() {
     }
   }
 
-  // Open a read-only list of students for an assignment (section or elective)
-  async function openListStudents(item: any){
-    setError(null)
-    setPickerItem(item)
-    setPickerStudents([])
-    setPickerSelectedIds([])
-    try{
-      let sdata
-      if (item.section_id) {
-        const sres = await fetchWithAuth(`/api/academics/sections/${item.section_id}/students/`)
-        if (!sres.ok) throw new Error(await sres.text())
-        sdata = await sres.json()
-      } else if (item.elective_subject_id) {
-        const sres = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${item.elective_subject_id}`)
-        if (!sres.ok) throw new Error(await sres.text())
-        sdata = await sres.json()
-      } else {
-        throw new Error('No student mapping available for this assignment')
-      }
-      const raw = (sdata.results || sdata) || []
-      const studs = raw.map((s:any) => ({
-        id: Number(s.id),
-        reg_no: String(s.reg_no ?? s.regno ?? ''),
-        name: String(s.username ?? s.name ?? s.full_name ?? ''),
-        section: s.section_name ?? s.section ?? null,
-        section_id: s.section_id ?? null,
-      }))
-      setPickerStudents(studs)
-      setPickerSelectedIds(studs.map((s:any)=>s.id))
-      setPickerOpen(true)
-    }catch(e:any){
-      console.error('openListStudents error', e)
-      setError(e?.message || String(e))
-      alert('Failed to load students: ' + (e?.message || e))
-    }
-  }
+
 
   function togglePickerSelect(id: number){
     setPickerSelectedIds(prev => prev.includes(id) ? prev.filter(x=>x!==id) : [...prev, id])
   }
+
+  function applySelectionFilter() {
+    // Sort students alphabetically by name for consistent ordering
+    const sortedStudents = [...pickerStudents].sort((a, b) => {
+      const nameA = (a.username || a.full_name || a.reg_no || '').toLowerCase()
+      const nameB = (b.username || b.full_name || b.reg_no || '').toLowerCase()
+      return nameA.localeCompare(nameB)
+    })
+
+    let selectedIds: number[] = []
+
+    switch (selectionFilter) {
+      case 'all':
+        selectedIds = sortedStudents.map(s => s.id)
+        break
+      case 'first-half':
+        const firstHalf = Math.ceil(sortedStudents.length / 2)
+        selectedIds = sortedStudents.slice(0, firstHalf).map(s => s.id)
+        break
+      case 'second-half':
+        const secondHalf = Math.floor(sortedStudents.length / 2)
+        selectedIds = sortedStudents.slice(secondHalf).map(s => s.id)
+        break
+      case 'custom':
+        if (customNumbers.trim()) {
+          const numbers = customNumbers.split(',')
+            .map(n => parseInt(n.trim()))
+            .filter(n => !isNaN(n) && n > 0 && n <= sortedStudents.length)
+          selectedIds = numbers.map(n => sortedStudents[n - 1]?.id).filter(Boolean)
+        }
+        break
+      case 'range':
+        const start = parseInt(rangeStart)
+        const end = parseInt(rangeEnd)
+        if (!isNaN(start) && !isNaN(end) && start > 0 && end <= sortedStudents.length && start <= end) {
+          selectedIds = sortedStudents.slice(start - 1, end).map(s => s.id)
+        }
+        break
+    }
+
+    setPickerSelectedIds(selectedIds)
+  }
+
+  // Apply filter when filter type or values change
+  React.useEffect(() => {
+    if (pickerStudents.length > 0) {
+      applySelectionFilter()
+    }
+  }, [selectionFilter, customNumbers, rangeStart, rangeEnd, pickerStudents])
+
+  function applyEditSelectionFilter() {
+    // Sort students alphabetically by name for consistent ordering
+    const sortedStudents = [...editingBatchStudents].sort((a, b) => {
+      const nameA = (a.username || a.full_name || a.reg_no || '').toLowerCase()
+      const nameB = (b.username || b.full_name || b.reg_no || '').toLowerCase()
+      return nameA.localeCompare(nameB)
+    })
+
+    let selectedIds: number[] = []
+
+    switch (editSelectionFilter) {
+      case 'all':
+        selectedIds = sortedStudents.map(s => s.id)
+        break
+      case 'first-half':
+        const firstHalf = Math.ceil(sortedStudents.length / 2)
+        selectedIds = sortedStudents.slice(0, firstHalf).map(s => s.id)
+        break
+      case 'second-half':
+        const secondHalf = Math.floor(sortedStudents.length / 2)
+        selectedIds = sortedStudents.slice(secondHalf).map(s => s.id)
+        break
+      case 'custom':
+        if (editCustomNumbers.trim()) {
+          const numbers = editCustomNumbers.split(',')
+            .map(n => parseInt(n.trim()))
+            .filter(n => !isNaN(n) && n > 0 && n <= sortedStudents.length)
+          selectedIds = numbers.map(n => sortedStudents[n - 1]?.id).filter(Boolean)
+        }
+        break
+      case 'range':
+        const start = parseInt(editRangeStart)
+        const end = parseInt(editRangeEnd)
+        if (!isNaN(start) && !isNaN(end) && start > 0 && end <= sortedStudents.length && start <= end) {
+          selectedIds = sortedStudents.slice(start - 1, end).map(s => s.id)
+        }
+        break
+    }
+
+    setEditingSelectedStudentIds(selectedIds)
+  }
+
+  // Apply edit filter when filter type or values change
+  React.useEffect(() => {
+    if (editingBatchStudents.length > 0 && editingBatchId) {
+      applyEditSelectionFilter()
+    }
+  }, [editSelectionFilter, editCustomNumbers, editRangeStart, editRangeEnd, editingBatchStudents, editingBatchId])
 
   async function submitPicker(){
     if (!pickerItem) return
@@ -194,6 +293,10 @@ export default function AssignedSubjectsPage() {
       setPickerOpen(false)
       setPickerStudents([])
       setPickerItem(null)
+      setSelectionFilter('all')
+      setCustomNumbers('')
+      setRangeStart('')
+      setRangeEnd('')
       alert('Batch created for subject')
     }catch(e:any){
       console.error(e)
@@ -206,19 +309,48 @@ export default function AssignedSubjectsPage() {
     setEditingBatchName(b.name || '')
     setEditingBatch(b)
     setEditingSelectedStudentIds((b.students || []).map((s:any) => s.id))
+    setEditSelectionFilter('all')
+    setEditCustomNumbers('')
+    setEditRangeStart('')
+    setEditRangeEnd('')
     
     // Load all available students for the batch's curriculum_row
     if (b.curriculum_row && b.curriculum_row.id) {
       try {
         // Find the subject/item that corresponds to this curriculum_row
         const matchingItem = items.find(item => item.curriculum_row_id === b.curriculum_row.id)
-        if (matchingItem && matchingItem.section_id) {
-          const sres = await fetchWithAuth(`/api/academics/sections/${matchingItem.section_id}/students/`)
-          if (sres.ok) {
-            const sdata = await sres.json()
-            const allStudents = (sdata.results || sdata)
-            setEditingBatchStudents(allStudents)
+        if (matchingItem) {
+          let sdata
+          if (matchingItem.section_id) {
+            // Regular subject with section
+            const sres = await fetchWithAuth(`/api/academics/sections/${matchingItem.section_id}/students/`)
+            if (sres.ok) {
+              sdata = await sres.json()
+            }
+          } else if (matchingItem.elective_subject_id) {
+            // Elective subject
+            const sres = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${matchingItem.elective_subject_id}`)
+            if (sres.ok) {
+              sdata = await sres.json()
+            }
           }
+          
+          if (sdata) {
+            const raw = (sdata.results || sdata) || []
+            const allStudents = raw.map((s:any) => ({
+              id: Number(s.id),
+              reg_no: String(s.reg_no ?? s.regno ?? ''),
+              username: String(s.username ?? s.name ?? s.full_name ?? ''),
+              full_name: String(s.username ?? s.name ?? s.full_name ?? ''),
+              section: s.section_name ?? s.section ?? null,
+              section_id: s.section_id ?? null,
+            }))
+            setEditingBatchStudents(allStudents)
+          } else {
+            setEditingBatchStudents(b.students || [])
+          }
+        } else {
+          setEditingBatchStudents(b.students || [])
         }
       } catch (e: any) {
         console.error('Failed to load students for batch editing:', e)
@@ -254,6 +386,10 @@ export default function AssignedSubjectsPage() {
     setEditingBatch(null)
     setEditingBatchStudents([])
     setEditingSelectedStudentIds([])
+    setEditSelectionFilter('all')
+    setEditCustomNumbers('')
+    setEditRangeStart('')
+    setEditRangeEnd('')
   }
 
   function toggleEditingStudentSelect(id: number){
@@ -373,34 +509,15 @@ export default function AssignedSubjectsPage() {
                           )}
                         </div>
                         <div className="flex flex-wrap gap-2">
-                          {item.section_id ? (
-                            <>
-                              <button 
-                                type="button" 
-                                className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors" 
-                                onClick={() => openPickerForAssignment(item)}
-                              >
-                                Create Batch
-                              </button>
-                              <button 
-                                type="button" 
-                                className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors" 
-                                onClick={() => openListStudents(item)}
-                              >
-                                List Students
-                              </button>
-                            </>
-                          ) : (
-                            <>
-                              <button 
-                                type="button" 
-                                className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors" 
-                                onClick={() => openListStudents(item)}
-                              >
-                                List Students
-                              </button>
-                              <span className="text-xs text-gray-500 px-2 py-1">Department-wide elective</span>
-                            </>
+                          <button 
+                            type="button" 
+                            className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors" 
+                            onClick={() => openPickerForAssignment(item)}
+                          >
+                            Create Batch
+                          </button>
+                          {!item.section_id && (
+                            <span className="text-xs text-gray-500 px-2 py-1">Department-wide elective</span>
                           )}
                         </div>
                       </div>
@@ -561,7 +678,15 @@ export default function AssignedSubjectsPage() {
                   <button 
                     type="button" 
                     className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded-lg font-medium transition-colors" 
-                    onClick={() => { setPickerOpen(false); setPickerStudents([]); setPickerItem(null); }}
+                    onClick={() => { 
+                      setPickerOpen(false); 
+                      setPickerStudents([]); 
+                      setPickerItem(null);
+                      setSelectionFilter('all');
+                      setCustomNumbers('');
+                      setRangeStart('');
+                      setRangeEnd('');
+                    }}
                   >
                     Cancel
                   </button>
@@ -579,32 +704,158 @@ export default function AssignedSubjectsPage() {
             <div className="p-6">
               <div className="mb-4">
                 <h4 className="font-semibold text-gray-900 mb-2">Students ({pickerStudents.length})</h4>
-                <p className="text-sm text-gray-600">Select students to include in this batch</p>
+                <p className="text-sm text-gray-600 mb-4">Select students to include in this batch</p>
+                
+                {/* Selection Filters */}
+                <div className="bg-gray-50 rounded-lg p-4 mb-4">
+                  <h5 className="font-medium text-gray-900 mb-3">Selection Options</h5>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div>
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          name="selectionFilter"
+                          value="all"
+                          checked={selectionFilter === 'all'}
+                          onChange={(e) => setSelectionFilter(e.target.value as any)}
+                          className="w-4 h-4 text-blue-600"
+                        />
+                        <span className="text-sm font-medium">All Students</span>
+                      </label>
+                    </div>
+                    
+                    <div>
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          name="selectionFilter"
+                          value="first-half"
+                          checked={selectionFilter === 'first-half'}
+                          onChange={(e) => setSelectionFilter(e.target.value as any)}
+                          className="w-4 h-4 text-blue-600"
+                        />
+                        <span className="text-sm font-medium">First Half</span>
+                      </label>
+                    </div>
+                    
+                    <div>
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          name="selectionFilter"
+                          value="second-half"
+                          checked={selectionFilter === 'second-half'}
+                          onChange={(e) => setSelectionFilter(e.target.value as any)}
+                          className="w-4 h-4 text-blue-600"
+                        />
+                        <span className="text-sm font-medium">Second Half</span>
+                      </label>
+                    </div>
+                  </div>
+                  
+                  <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="flex items-center gap-2 mb-2">
+                        <input
+                          type="radio"
+                          name="selectionFilter"
+                          value="custom"
+                          checked={selectionFilter === 'custom'}
+                          onChange={(e) => setSelectionFilter(e.target.value as any)}
+                          className="w-4 h-4 text-blue-600"
+                        />
+                        <span className="text-sm font-medium">Custom Numbers</span>
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g., 1,3,5,7"
+                        value={customNumbers}
+                        onChange={(e) => setCustomNumbers(e.target.value)}
+                        disabled={selectionFilter !== 'custom'}
+                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                      />
+                    </div>
+                    
+                    <div>
+                      <label className="flex items-center gap-2 mb-2">
+                        <input
+                          type="radio"
+                          name="selectionFilter"
+                          value="range"
+                          checked={selectionFilter === 'range'}
+                          onChange={(e) => setSelectionFilter(e.target.value as any)}
+                          className="w-4 h-4 text-blue-600"
+                        />
+                        <span className="text-sm font-medium">Range</span>
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          placeholder="From"
+                          value={rangeStart}
+                          onChange={(e) => setRangeStart(e.target.value)}
+                          disabled={selectionFilter !== 'range'}
+                          className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                          min="1"
+                          max={pickerStudents.length}
+                        />
+                        <span className="self-center text-sm text-gray-500">to</span>
+                        <input
+                          type="number"
+                          placeholder="To"
+                          value={rangeEnd}
+                          onChange={(e) => setRangeEnd(e.target.value)}
+                          disabled={selectionFilter !== 'range'}
+                          className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                          min="1"
+                          max={pickerStudents.length}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="mt-3 text-xs text-gray-600">
+                    Selected: {pickerSelectedIds.length} of {pickerStudents.length} students
+                  </div>
+                </div>
               </div>
               
               <div className="max-h-96 overflow-y-auto">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {pickerStudents.map((s:any) => (
-                    <label 
-                      key={s.id} 
-                      className="flex items-center gap-3 p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors"
-                    >
-                      <input 
-                        type="checkbox" 
-                        checked={pickerSelectedIds.includes(s.id)} 
-                        onChange={() => togglePickerSelect(s.id)} 
-                        className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                      />
-                      <div>
-                        <div className="font-medium text-gray-900">
-                          {s.username || s.full_name || s.reg_no}
+                  {(() => {
+                    // Sort students alphabetically by name for display
+                    const sortedStudents = [...pickerStudents].sort((a, b) => {
+                      const nameA = (a.username || a.full_name || a.reg_no || '').toLowerCase()
+                      const nameB = (b.username || b.full_name || b.reg_no || '').toLowerCase()
+                      return nameA.localeCompare(nameB)
+                    })
+                    
+                    return sortedStudents.map((s, index) => (
+                      <label 
+                        key={s.id} 
+                        className="flex items-center gap-3 p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors"
+                      >
+                        <input 
+                          type="checkbox" 
+                          checked={pickerSelectedIds.includes(s.id)} 
+                          onChange={() => togglePickerSelect(s.id)} 
+                          className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                        />
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-gray-400 w-6">{index + 1}.</span>
+                          <div>
+                            <div className="font-medium text-gray-900">
+                              {s.username || s.full_name || s.reg_no}
+                            </div>
+                            {s.reg_no && (
+                              <div className="text-xs text-gray-500">{s.reg_no}</div>
+                            )}
+                          </div>
                         </div>
-                        {s.reg_no && (
-                          <div className="text-xs text-gray-500">{s.reg_no}</div>
-                        )}
-                      </div>
-                    </label>
-                  ))}
+                      </label>
+                    ))
+                  })()}
                 </div>
               </div>
             </div>
@@ -669,6 +920,120 @@ export default function AssignedSubjectsPage() {
                   </div>
                 </h4>
                 
+                {/* Edit Selection Filters */}
+                <div className="bg-gray-50 rounded-lg p-4 mb-4">
+                  <h5 className="font-medium text-gray-900 mb-3">Selection Options</h5>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div>
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          name="editSelectionFilter"
+                          value="all"
+                          checked={editSelectionFilter === 'all'}
+                          onChange={(e) => setEditSelectionFilter(e.target.value as any)}
+                          className="w-4 h-4 text-blue-600"
+                        />
+                        <span className="text-sm font-medium">All Students</span>
+                      </label>
+                    </div>
+                    
+                    <div>
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          name="editSelectionFilter"
+                          value="first-half"
+                          checked={editSelectionFilter === 'first-half'}
+                          onChange={(e) => setEditSelectionFilter(e.target.value as any)}
+                          className="w-4 h-4 text-blue-600"
+                        />
+                        <span className="text-sm font-medium">First Half</span>
+                      </label>
+                    </div>
+                    
+                    <div>
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          name="editSelectionFilter"
+                          value="second-half"
+                          checked={editSelectionFilter === 'second-half'}
+                          onChange={(e) => setEditSelectionFilter(e.target.value as any)}
+                          className="w-4 h-4 text-blue-600"
+                        />
+                        <span className="text-sm font-medium">Second Half</span>
+                      </label>
+                    </div>
+                  </div>
+                  
+                  <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="flex items-center gap-2 mb-2">
+                        <input
+                          type="radio"
+                          name="editSelectionFilter"
+                          value="custom"
+                          checked={editSelectionFilter === 'custom'}
+                          onChange={(e) => setEditSelectionFilter(e.target.value as any)}
+                          className="w-4 h-4 text-blue-600"
+                        />
+                        <span className="text-sm font-medium">Custom Numbers</span>
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g., 1,3,5,7"
+                        value={editCustomNumbers}
+                        onChange={(e) => setEditCustomNumbers(e.target.value)}
+                        disabled={editSelectionFilter !== 'custom'}
+                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                      />
+                    </div>
+                    
+                    <div>
+                      <label className="flex items-center gap-2 mb-2">
+                        <input
+                          type="radio"
+                          name="editSelectionFilter"
+                          value="range"
+                          checked={editSelectionFilter === 'range'}
+                          onChange={(e) => setEditSelectionFilter(e.target.value as any)}
+                          className="w-4 h-4 text-blue-600"
+                        />
+                        <span className="text-sm font-medium">Range</span>
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          placeholder="From"
+                          value={editRangeStart}
+                          onChange={(e) => setEditRangeStart(e.target.value)}
+                          disabled={editSelectionFilter !== 'range'}
+                          className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                          min="1"
+                          max={editingBatchStudents.length}
+                        />
+                        <span className="self-center text-sm text-gray-500">to</span>
+                        <input
+                          type="number"
+                          placeholder="To"
+                          value={editRangeEnd}
+                          onChange={(e) => setEditRangeEnd(e.target.value)}
+                          disabled={editSelectionFilter !== 'range'}
+                          className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                          min="1"
+                          max={editingBatchStudents.length}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="mt-3 text-xs text-gray-600">
+                    Selected: {editingSelectedStudentIds.length} of {editingBatchStudents.length} students
+                  </div>
+                </div>
+                
                 <div className="max-h-80 overflow-y-auto border border-gray-200 rounded-lg p-4">
                   {editingBatchStudents.length === 0 ? (
                     <div className="text-center text-gray-500 py-4">
@@ -677,31 +1042,43 @@ export default function AssignedSubjectsPage() {
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      {editingBatchStudents.map((s:any) => (
-                        <label 
-                          key={s.id} 
-                          className={`flex items-center gap-3 p-3 border rounded-lg cursor-pointer transition-colors ${
-                            editingSelectedStudentIds.includes(s.id) 
-                              ? 'border-blue-300 bg-blue-50' 
-                              : 'border-gray-200 hover:bg-gray-50'
-                          }`}
-                        >
-                          <input 
-                            type="checkbox" 
-                            checked={editingSelectedStudentIds.includes(s.id)} 
-                            onChange={() => toggleEditingStudentSelect(s.id)} 
-                            className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                          />
-                          <div>
-                            <div className="font-medium text-gray-900">
-                              {s.username || s.full_name || s.reg_no}
+                      {(() => {
+                        // Sort students alphabetically by name for display
+                        const sortedStudents = [...editingBatchStudents].sort((a, b) => {
+                          const nameA = (a.username || a.full_name || a.reg_no || '').toLowerCase()
+                          const nameB = (b.username || b.full_name || b.reg_no || '').toLowerCase()
+                          return nameA.localeCompare(nameB)
+                        })
+                        
+                        return sortedStudents.map((s, index) => (
+                          <label 
+                            key={s.id} 
+                            className={`flex items-center gap-3 p-3 border rounded-lg cursor-pointer transition-colors ${
+                              editingSelectedStudentIds.includes(s.id) 
+                                ? 'border-blue-300 bg-blue-50' 
+                                : 'border-gray-200 hover:bg-gray-50'
+                            }`}
+                          >
+                            <input 
+                              type="checkbox" 
+                              checked={editingSelectedStudentIds.includes(s.id)} 
+                              onChange={() => toggleEditingStudentSelect(s.id)} 
+                              className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                            />
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-gray-400 w-6">{index + 1}.</span>
+                              <div>
+                                <div className="font-medium text-gray-900">
+                                  {s.username || s.full_name || s.reg_no}
+                                </div>
+                                {s.reg_no && (
+                                  <div className="text-xs text-gray-500">{s.reg_no}</div>
+                                )}
+                              </div>
                             </div>
-                            {s.reg_no && (
-                              <div className="text-xs text-gray-500">{s.reg_no}</div>
-                            )}
-                          </div>
-                        </label>
-                      ))}
+                          </label>
+                        ))
+                      })()}
                     </div>
                   )}
                 </div>

@@ -1652,6 +1652,7 @@ class DailyAttendanceView(APIView):
                     return Response({'error': 'Attendance is locked for this date'}, status=403)
                 
                 # Update or create records
+                updated_students = []
                 for item in attendance_data:
                     student_id = item.get('student_id')
                     status = item.get('status', 'P')
@@ -1667,12 +1668,51 @@ class DailyAttendanceView(APIView):
                                 'marked_by': staff_profile
                             }
                         )
+                        updated_students.append({'student_id': student_id, 'status': status})
+                
+                # ── Update existing period attendance records ──────────────────────────
+                # After saving daily attendance, update all existing period attendance records
+                # for the same students on the same date to reflect daily attendance overrides:
+                #   OD/LEAVE → force same status in all period records
+                #   LATE     → force Present ('P') in all period records  
+                #   P/A      → no override needed for period records
+                from .models import PeriodAttendanceSession, PeriodAttendanceRecord
+                
+                period_sessions = PeriodAttendanceSession.objects.filter(
+                    section_id=section_id,
+                    date=target_date
+                )
+                
+                period_records_updated = 0
+                for student_info in updated_students:
+                    student_id = student_info['student_id']
+                    daily_status = student_info['status']
+                    
+                    # Determine what the period status should be
+                    period_status = None
+                    if daily_status in ('OD', 'LEAVE'):
+                        # Force OD/LEAVE in all period records
+                        period_status = daily_status
+                    elif daily_status == 'LATE':
+                        # Force Present in all period records
+                        period_status = 'P'
+                    # For 'P' or 'A' daily status, don't override period records
+                    
+                    if period_status:
+                        # Update all period records for this student on this date
+                        updated = PeriodAttendanceRecord.objects.filter(
+                            session__in=period_sessions,
+                            student_id=student_id
+                        ).update(status=period_status)
+                        period_records_updated += updated
+                # ───────────────────────────────────────────────────────────────────────
                 
                 return Response({
                     'success': True,
                     'message': 'Attendance saved successfully',
                     'session_id': session.id,
-                    'records_updated': len(attendance_data)
+                    'records_updated': len(attendance_data),
+                    'period_records_updated': period_records_updated
                 })
         
         except Exception as e:

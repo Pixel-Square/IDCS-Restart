@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react'
-import { Users, Building2, AlertCircle, Edit, Trash2, UserPlus } from 'lucide-react'
+import React, { useEffect, useState, useMemo } from 'react'
+import { Users, Building2, AlertCircle, Edit, Trash2, UserPlus, Filter } from 'lucide-react'
 import fetchWithAuth from '../services/fetchAuth'
 import StaffFormModal from '../components/StaffFormModal'
 
@@ -17,6 +17,19 @@ type StaffMember = {
   status: string | null
   department: number | null
   roles: string[]
+  user_roles?: string[]
+  department_roles?: string[]
+  department_role_mappings?: {
+    department: {
+      id: number
+      code: string
+      name: string
+      short_name?: string
+    }
+    role: string
+    role_code: string
+    academic_year?: string
+  }[]
 }
 
 type Department = {
@@ -36,11 +49,13 @@ export default function StaffsPage() {
   const [departments, setDepartments] = useState<Department[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [currentDeptId, setCurrentDeptId] = useState<number | null>(null)
+  const [currentDeptId, setCurrentDeptId] = useState<number | 'all' | null>(null)
+  const [selectedRole, setSelectedRole] = useState<string>('')
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingStaff, setEditingStaff] = useState<StaffMember | null>(null)
   const [selectedDeptId, setSelectedDeptId] = useState<number | null>(null)
   const [canEdit, setCanEdit] = useState(false)
+  const [canViewAllStaff, setCanViewAllStaff] = useState(false)
 
   useEffect(() => {
     fetchStaffs()
@@ -65,10 +80,15 @@ export default function StaffsPage() {
       const depts = data.results || []
       setDepartments(depts)
       setCanEdit(data.can_edit || false)
+      setCanViewAllStaff(data.can_view_all || false)
       
-      // Set first department as default
+      // Set first department as default (or 'all' if user can view all staff)
       if (depts.length > 0 && currentDeptId === null) {
-        setCurrentDeptId(depts[0].id)
+        if (data.can_view_all) {
+          setCurrentDeptId('all')
+        } else {
+          setCurrentDeptId(depts[0].id)
+        }
       }
     } catch (err) {
       console.error('Error fetching staffs:', err)
@@ -76,6 +96,23 @@ export default function StaffsPage() {
     } finally {
       setLoading(false)
     }
+  }
+
+  // Get all unique roles across all departments for filtering
+  const allRoles = useMemo(() => {
+    const roleSet = new Set<string>()
+    departments.forEach(dept => {
+      dept.staffs?.forEach(staff => {
+        staff.roles?.forEach(role => roleSet.add(role))
+      })
+    })
+    return Array.from(roleSet).sort()
+  }, [departments])
+
+  // Filter staff based on selected role
+  const getFilteredStaffs = (staffs: StaffMember[]) => {
+    if (!selectedRole) return staffs
+    return staffs.filter(staff => staff.roles?.includes(selectedRole))
   }
 
   const handleEdit = (staff: StaffMember) => {
@@ -177,34 +214,254 @@ export default function StaffsPage() {
 
         {/* Department Button Navigation */}
         <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
-          <h3 className="text-lg font-medium text-gray-900 mb-4">Filter by Department</h3>
-          <div className="flex flex-wrap gap-2">
-            {departments.map((dept) => {
-              const isActive = currentDeptId === dept.id
-              const displayName = dept.short_name || dept.code || dept.name || `Dept ${dept.id}`
-              return (
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-4">
+            <h3 className="text-lg font-medium text-gray-900">Filter Options</h3>
+            {canViewAllStaff && allRoles.length > 0 && (
+              <div className="flex items-center gap-2">
+                <Filter className="h-4 w-4 text-gray-500" />
+                <label htmlFor="role-filter" className="text-sm font-medium text-gray-700">
+                  Filter by Role:
+                </label>
+                <select
+                  id="role-filter"
+                  value={selectedRole}
+                  onChange={(e) => setSelectedRole(e.target.value)}
+                  className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                >
+                  <option value="">All Roles</option>
+                  {allRoles.map((role) => (
+                    <option key={role} value={role}>
+                      {role}
+                    </option>
+                  ))}
+                </select>
+                {selectedRole && (
+                  <button
+                    onClick={() => setSelectedRole('')}
+                    className="px-2 py-1 text-xs text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+          <div>
+            <h4 className="text-sm font-medium text-gray-700 mb-2">Department:</h4>
+            <div className="flex flex-wrap gap-2">
+              {canViewAllStaff && (
                 <button
-                  key={dept.id}
-                  onClick={() => setCurrentDeptId(dept.id)}
+                  onClick={() => setCurrentDeptId('all')}
                   className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
-                    isActive
-                      ? 'bg-blue-100 text-blue-700'
+                    currentDeptId === 'all'
+                      ? 'bg-indigo-100 text-indigo-700 border-2 border-indigo-200'
                       : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                   }`}
                 >
-                  {displayName}
+                  All Departments
                 </button>
-              )
-            })}
+              )}
+              {departments.map((dept) => {
+                const isActive = currentDeptId === dept.id
+                const displayName = dept.short_name || dept.code || dept.name || `Dept ${dept.id}`
+                return (
+                  <button
+                    key={dept.id}
+                    onClick={() => setCurrentDeptId(dept.id)}
+                    className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
+                      isActive
+                        ? 'bg-blue-100 text-blue-700'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    {displayName}
+                  </button>
+                )
+              })}
+            </div>
           </div>
         </div>
 
-        {/* Staff Table for Selected Department */}
+        {/* Staff Table for Selected Department(s) */}
         {currentDeptId !== null && (() => {
+          if (currentDeptId === 'all') {
+            // Show all staff across all departments
+            const allStaffs = departments.flatMap(d => 
+              (d.staffs || []).map(staff => ({ ...staff, departmentInfo: d }))
+            )
+            const filteredStaffs = getFilteredStaffs(allStaffs)
+            const staffCount = filteredStaffs.length
+            const totalStaffCount = allStaffs.length
+
+            return (
+              <div className="bg-white rounded-lg shadow-md overflow-hidden">
+                {/* All Departments Header */}
+                <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+                  <div className="flex items-center space-x-4">
+                    <Building2 className="h-6 w-6 text-indigo-600" />
+                    <div>
+                      <h2 className="text-lg font-semibold text-gray-900">
+                        All Departments
+                      </h2>
+                      <p className="text-sm text-gray-600">
+                        {staffCount} staff member{staffCount !== 1 ? 's' : ''}
+                        {selectedRole && totalStaffCount !== staffCount && (
+                          <span className="text-gray-500 ml-1">
+                            (of {totalStaffCount} total, filtered by {selectedRole})
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Staff List */}
+                {staffCount === 0 ? (
+                  <div className="px-6 py-8 text-center text-gray-500">
+                    <Users className="h-10 w-10 mx-auto mb-2 text-gray-300" />
+                    <p>
+                      {selectedRole 
+                        ? `No staff members with role "${selectedRole}" found`
+                        : 'No staff members found'
+                      }
+                    </p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Department
+                          </th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Staff ID
+                          </th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Name
+                          </th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Designation
+                          </th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            User & Department Roles
+                          </th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Status
+                          </th>
+                          {canEdit && (
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                              Actions
+                            </th>
+                          )}
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-gray-200">
+                        {filteredStaffs.map((staff) => (
+                          <tr key={`${staff.departmentInfo.id}-${staff.id}`} className="hover:bg-gray-50 transition-colors">
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                              <span className="inline-flex px-2 py-1 text-xs font-medium rounded bg-gray-100 text-gray-800">
+                                {staff.departmentInfo.short_name || staff.departmentInfo.code || staff.departmentInfo.name}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                              {staff.staff_id}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
+                              {getStaffDisplayName(staff)}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                              {staff.designation || '—'}
+                            </td>
+                            <td className="px-6 py-4 text-sm text-gray-600">
+                              <div className="space-y-1">
+                                {/* User Roles */}
+                                {staff.user_roles && staff.user_roles.length > 0 && (
+                                  <div className="flex flex-wrap gap-1">
+                                    {staff.user_roles.map((role, idx) => (
+                                      <span
+                                        key={`user-${idx}`}
+                                        className="inline-flex px-2 py-0.5 text-xs font-medium rounded bg-blue-100 text-blue-800"
+                                      >
+                                        {role}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                                {/* Department Roles */}
+                                {staff.department_role_mappings && staff.department_role_mappings.length > 0 && (
+                                  <div className="flex flex-wrap gap-1">
+                                    {staff.department_role_mappings.map((deptRole, idx) => (
+                                      <span
+                                        key={`dept-${idx}`}
+                                        className="inline-flex px-2 py-0.5 text-xs font-medium rounded bg-green-100 text-green-800 border border-green-200"
+                                        title={`${deptRole.role} of ${deptRole.department.code}${deptRole.academic_year ? ` (${deptRole.academic_year})` : ''}`}
+                                      >
+                                        {deptRole.role} - {deptRole.department.short_name || deptRole.department.code}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                                {/* No roles */}
+                                {(!staff.user_roles || staff.user_roles.length === 0) && 
+                                 (!staff.department_role_mappings || staff.department_role_mappings.length === 0) && (
+                                  <span className="text-gray-400">—</span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <span
+                                className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                                  staff.status === 'ACTIVE'
+                                    ? 'bg-green-100 text-green-800'
+                                    : staff.status === 'INACTIVE'
+                                    ? 'bg-gray-100 text-gray-800'
+                                    : staff.status === 'RESIGNED'
+                                    ? 'bg-red-100 text-red-800'
+                                    : 'bg-gray-100 text-gray-600'
+                                }`}
+                              >
+                                {staff.status || 'Unknown'}
+                              </span>
+                            </td>
+                            {canEdit && (
+                              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                <div className="flex items-center space-x-2">
+                                  <button
+                                    onClick={() => handleEdit(staff)}
+                                    className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                                    title="Edit Staff"
+                                  >
+                                    <Edit className="h-4 w-4" />
+                                  </button>
+                                  <button
+                                    onClick={() => handleDelete(staff.id, getStaffDisplayName(staff))}
+                                    className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                    title="Delete Staff"
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </button>
+                                </div>
+                              </td>
+                            )}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )
+          }
+
+          // Single department view
           const currentDept = departments.find(d => d.id === currentDeptId)
           if (!currentDept) return null
 
-          const staffCount = currentDept.staffs?.length || 0
+          const allStaffs = currentDept.staffs || []
+          const filteredStaffs = getFilteredStaffs(allStaffs)
+          const staffCount = filteredStaffs.length
+          const totalStaffCount = allStaffs.length
 
           return (
             <div className="bg-white rounded-lg shadow-md overflow-hidden">
@@ -221,7 +478,14 @@ export default function StaffsPage() {
                         </span>
                       )}
                     </h2>
-                    <p className="text-sm text-gray-600">{staffCount} staff member{staffCount !== 1 ? 's' : ''}</p>
+                    <p className="text-sm text-gray-600">
+                      {staffCount} staff member{staffCount !== 1 ? 's' : ''}
+                      {selectedRole && totalStaffCount !== staffCount && (
+                        <span className="text-gray-500 ml-1">
+                          (of {totalStaffCount} total, filtered by {selectedRole})
+                        </span>
+                      )}
+                    </p>
                   </div>
                 </div>
                 {canEdit && (
@@ -240,7 +504,12 @@ export default function StaffsPage() {
               {staffCount === 0 ? (
                 <div className="px-6 py-8 text-center text-gray-500">
                   <Users className="h-10 w-10 mx-auto mb-2 text-gray-300" />
-                  <p>No staff members in this department</p>
+                  <p>
+                    {selectedRole 
+                      ? `No staff members with role "${selectedRole}" in this department`
+                      : 'No staff members in this department'
+                    }
+                  </p>
                 </div>
               ) : (
                 <div className="overflow-x-auto">
@@ -257,7 +526,7 @@ export default function StaffsPage() {
                           Designation
                         </th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Roles
+                          User & Department Roles
                         </th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                           Status
@@ -270,7 +539,7 @@ export default function StaffsPage() {
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
-                      {currentDept.staffs.map((staff) => (
+                      {filteredStaffs.map((staff) => (
                         <tr key={staff.id} className="hover:bg-gray-50 transition-colors">
                           <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                             {staff.staff_id}
@@ -282,20 +551,40 @@ export default function StaffsPage() {
                             {staff.designation || '—'}
                           </td>
                           <td className="px-6 py-4 text-sm text-gray-600">
-                            {staff.roles && staff.roles.length > 0 ? (
-                              <div className="flex flex-wrap gap-1">
-                                {staff.roles.map((role, idx) => (
-                                  <span
-                                    key={idx}
-                                    className="inline-flex px-2 py-0.5 text-xs font-medium rounded bg-blue-100 text-blue-800"
-                                  >
-                                    {role}
-                                  </span>
-                                ))}
-                              </div>
-                            ) : (
-                              '—'
-                            )}
+                            <div className="space-y-1">
+                              {/* User Roles */}
+                              {staff.user_roles && staff.user_roles.length > 0 && (
+                                <div className="flex flex-wrap gap-1">
+                                  {staff.user_roles.map((role, idx) => (
+                                    <span
+                                      key={`user-${idx}`}
+                                      className="inline-flex px-2 py-0.5 text-xs font-medium rounded bg-blue-100 text-blue-800"
+                                    >
+                                      {role}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                              {/* Department Roles */}
+                              {staff.department_role_mappings && staff.department_role_mappings.length > 0 && (
+                                <div className="flex flex-wrap gap-1">
+                                  {staff.department_role_mappings.map((deptRole, idx) => (
+                                    <span
+                                      key={`dept-${idx}`}
+                                      className="inline-flex px-2 py-0.5 text-xs font-medium rounded bg-green-100 text-green-800 border border-green-200"
+                                      title={`${deptRole.role} of ${deptRole.department.code}${deptRole.academic_year ? ` (${deptRole.academic_year})` : ''}`}
+                                    >
+                                      {deptRole.role} - {deptRole.department.short_name || deptRole.department.code}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                              {/* No roles */}
+                              {(!staff.user_roles || staff.user_roles.length === 0) && 
+                               (!staff.department_role_mappings || staff.department_role_mappings.length === 0) && (
+                                <span className="text-gray-400">—</span>
+                              )}
+                            </div>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
                             <span

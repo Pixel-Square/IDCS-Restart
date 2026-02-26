@@ -32,7 +32,7 @@ import OBERequestPage from './pages/obe/OBERequestPage';
 import AdvisorAssignments from './pages/hod/AdvisorAssignments';
 import TeachingAssignmentsPage from './pages/hod/TeachingAssignments';
 import ObeEditRequestsPage from './pages/hod/ObeEditRequestsPage';
-import MyStudentsPage from './pages/advisor/MyStudents';
+import StudentsPage from './pages/staff/Students';
 import StudentTimetable from './pages/student/TimetableView';
 import StaffTimetable from './pages/staff/TimetableView';
 import AssignedSubjectsPage from './pages/staff/AssignedSubjects';
@@ -41,7 +41,6 @@ import AttendanceAnalytics from './pages/staff/AttendanceAnalytics';
 import StudentAttendancePage from './pages/student/Attendance';
 import StudentAcademics from './pages/student/Academics';
 import MentorAssign from './pages/advisor/MentorAssign';
-import MyMentees from './pages/staff/MyMentees';
 import NotificationsPage from './pages/Notifications';
 import QueriesPage from './pages/queries/QueriesPage';
 import StaffsPage from './pages/StaffsPage';
@@ -194,10 +193,6 @@ export default function App() {
                   element={<ProtectedRoute user={user} requiredRoles={["ADVISOR"]} requiredPermissions={["timetable.assign"]} element={<TimetableEditor />} />}
                 />
                 <Route
-                  path="/advisor/students"
-                  element={<ProtectedRoute user={user} requiredRoles={["ADVISOR"]} requiredPermissions={["academics.view_my_students"]} element={<MyStudentsPage />} />}
-                />
-                <Route
                   path="/advisor/mentor"
                   element={<ProtectedRoute user={user} requiredRoles={["ADVISOR"]} requiredPermissions={["academics.assign_mentor"]} element={<MentorAssign />} />}
                 />
@@ -223,6 +218,10 @@ export default function App() {
                   element={<ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={["academics.view_assigned_subjects"]} element={<AssignedSubjectsPage />} />}
                 />
                 <Route
+                  path="/staff/students"
+                  element={<ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={["students.view_students"]} element={<StudentsPage user={user} />} />}
+                />
+                <Route
                   path="/staff/period-attendance"
                   element={<ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={['academics.mark_attendance']} element={<PeriodAttendance />} />}
                 />
@@ -244,10 +243,6 @@ export default function App() {
                       element={<AttendanceAnalytics />}
                     />
                   }
-                />
-                <Route
-                  path="/staff/mentees"
-                  element={<ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={['academics.view_mentees']} element={<MyMentees />} />}
                 />
                 <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
               </Routes>

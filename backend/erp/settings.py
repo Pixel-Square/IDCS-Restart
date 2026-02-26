@@ -161,7 +161,11 @@ STATICFILES_DIRS = [
 # In production use ManifestStaticFilesStorage so static filenames are
 # hashed for long-term caching. If you hit ManifestMissingFileError
 # run collectstatic with the non-manifest storage to find missing refs.
-STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.ManifestStaticFilesStorage'
+# Temporarily using standard storage for better admin popup compatibility
+if DEBUG:
+    STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.StaticFilesStorage'
+else:
+    STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.ManifestStaticFilesStorage'
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'

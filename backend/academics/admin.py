@@ -15,7 +15,8 @@ from .models import (
     Section,
     Batch,
     Subject,
-    PROFILE_STATUS_CHOICES,
+    STAFF_STATUS_CHOICES,
+    STUDENT_STATUS_CHOICES,
     StudentProfile,
     StaffProfile,
     StudentSectionAssignment,
@@ -109,7 +110,6 @@ class StaffProfileForm(forms.ModelForm):
 @admin.register(StudentProfile)
 class StudentProfileAdmin(admin.ModelAdmin):
     form = StudentProfileForm
-    change_list_template = 'admin/academics/studentprofile_change_list.html'
     list_display = ('user', 'reg_no', 'get_department', 'batch', 'current_section_display', 'status')
     search_fields = ('reg_no', 'user__username', 'user__email')
     # filter by the department through the section->semester->course relation
@@ -118,15 +118,6 @@ class StudentProfileAdmin(admin.ModelAdmin):
 
     change_list_template = 'admin/academics/studentprofile/change_list.html'
 
-    def get_urls(self):
-        urls = super().get_urls()
-        custom = [
-            path('sheets/', self.admin_site.admin_view(self.sheets_view), name='academics_studentprofile_sheets'),
-            path('sheets/data/', self.admin_site.admin_view(self.sheets_data_view), name='academics_studentprofile_sheets_data'),
-            path('sheets/save/', self.admin_site.admin_view(self.sheets_save_view), name='academics_studentprofile_sheets_save'),
-        ]
-        return custom + urls
-
     def sheets_view(self, request):
         if not self.has_add_permission(request):
             messages.error(request, 'You do not have permission to use Sheets.')
@@ -134,7 +125,7 @@ class StudentProfileAdmin(admin.ModelAdmin):
                 **self.admin_site.each_context(request),
                 'title': 'Student Profiles Sheets',
                 'sections': [],
-                'status_choices': list(PROFILE_STATUS_CHOICES),
+                'status_choices': list(STUDENT_STATUS_CHOICES),
                 'data_url': reverse('admin:academics_studentprofile_sheets_data'),
                 'save_url': reverse('admin:academics_studentprofile_sheets_save'),
             })
@@ -218,7 +209,7 @@ class StudentProfileAdmin(admin.ModelAdmin):
                 failed.append({'index': idx, 'user_id': user_id, 'error': 'reg_no is required'})
                 continue
 
-            if status not in {c[0] for c in PROFILE_STATUS_CHOICES}:
+            if status not in {c[0] for c in STUDENT_STATUS_CHOICES}:
                 failed.append({'index': idx, 'user_id': user_id, 'error': f'Invalid status: {status}'})
                 continue
 
@@ -376,8 +367,8 @@ class StudentProfileAdmin(admin.ModelAdmin):
                     email = str(email).strip() if email else ''
                     first_name = str(first_name).strip() if first_name else ''
                     last_name = str(last_name).strip() if last_name else ''
-                    batch_name = str(batch_name).strip() if batch_name else None
-                    section_name = str(section_name).strip() if section_name else None
+                    batch_name = str(batch_name).strip() if batch_name and str(batch_name) != 'None' else None
+                    section_name = str(section_name).strip() if section_name and str(section_name) != 'None' else None
                     password = str(password) if password else reg_no
 
                     # Parse batch_name if it's in the format "DEPT :: BATCH_NAME" (extract just the batch name)
@@ -472,8 +463,13 @@ class StudentProfileAdmin(admin.ModelAdmin):
                         # section may be provided as one of:
                         #  - 'Batch :: Section'
                         #  - 'DEPT_SHORT :: Batch :: Section'  (new template format)
+                        #  - Just 'Section' name (will try to match with batch_name_only)
                         sec = None
+                        section_search_attempted = False
+                        section_not_found_reason = None
+                        
                         if section_name:
+                            section_search_attempted = True
                             if '::' in section_name:
                                 parts = [p.strip() for p in section_name.split('::')]
                                 if len(parts) == 3:
@@ -483,30 +479,53 @@ class StudentProfileAdmin(admin.ModelAdmin):
                                         name=spart,
                                         batch__name=bpart,
                                         batch__course__department__short_name__iexact=dept_short,
-                                    ).select_related('batch').first()
+                                    ).select_related('batch', 'batch__course', 'batch__course__department').first()
+                                    if not sec:
+                                        section_not_found_reason = f"No section '{spart}' in batch '{bpart}' for department '{dept_short}'"
                                 elif len(parts) == 2:
                                     bpart, spart = parts
-                                    sec = Section.objects.filter(name=spart, batch__name=bpart).select_related('batch').first()
+                                    sec = Section.objects.filter(name=spart, batch__name=bpart).select_related('batch', 'batch__course', 'batch__course__department').first()
+                                    if not sec:
+                                        section_not_found_reason = f"No section '{spart}' in batch '{bpart}'"
                                 else:
                                     # unexpected format; try best-effort match by section name
-                                    sec = Section.objects.filter(name=parts[-1]).select_related('batch').first()
+                                    sec = Section.objects.filter(name=parts[-1]).select_related('batch', 'batch__course', 'batch__course__department').first()
+                                    if not sec:
+                                        section_not_found_reason = f"No section named '{parts[-1]}'"
                             else:
                                 # fallback: if batch provided, try match by both
                                 if batch_name_only:
-                                    sec = Section.objects.filter(name=section_name, batch__name=batch_name_only).select_related('batch').first()
+                                    sec = Section.objects.filter(name=section_name, batch__name=batch_name_only).select_related('batch', 'batch__course', 'batch__course__department').first()
+                                    if not sec:
+                                        section_not_found_reason = f"No section '{section_name}' in batch '{batch_name_only}'"
                                 else:
-                                    sec = Section.objects.filter(name=section_name).select_related('batch').first()
+                                    sec = Section.objects.filter(name=section_name).select_related('batch', 'batch__course', 'batch__course__department').first()
+                                    if not sec:
+                                        section_not_found_reason = f"No section named '{section_name}' (no batch specified)"
+                        
                         if sec:
+                            # Update section on student profile
                             sp.section = sec
                             sp.save(update_fields=['section'])
                             # create or update a StudentSectionAssignment for this student
                             try:
                                 today = timezone.now().date()
                                 existing = StudentSectionAssignment.objects.filter(student=sp, end_date__isnull=True).first()
-                                if not existing:
+                                if existing:
+                                    # If existing assignment is for a different section, close it and create new one
+                                    if existing.section_id != sec.id:
+                                        existing.end_date = today
+                                        existing.save(update_fields=['end_date'])
+                                        StudentSectionAssignment.objects.create(student=sp, section=sec, start_date=today)
+                                else:
+                                    # No active assignment, create new one
                                     StudentSectionAssignment.objects.create(student=sp, section=sec, start_date=today)
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                # Log the error but continue with import
+                                errors.append(f'Row {i}: Section assignment warning - {str(e)}')
+                        elif section_search_attempted and section_not_found_reason:
+                            # Log that section was not found so user knows why it's empty
+                            errors.append(f'Row {i}: {section_not_found_reason} - student created without section')
 
                         # ensure user is in 'students' group
                         try:
@@ -534,8 +553,11 @@ class StudentProfileAdmin(admin.ModelAdmin):
 
             msg = f'Import completed: created_or_updated={created} skipped={skipped} errors={len(errors)}'
             if errors:
-                for err in errors[:10]:
+                # Show more errors to help with debugging section assignment issues
+                for err in errors[:20]:
                     messages.error(request, err)
+                if len(errors) > 20:
+                    messages.warning(request, f'... and {len(errors) - 20} more errors (check log for details)')
             messages.success(request, msg)
             return redirect(request.path)
 
@@ -611,9 +633,16 @@ class StudentProfileAdmin(admin.ModelAdmin):
 class StaffProfileAdmin(admin.ModelAdmin):
     form = StaffProfileForm
     change_list_template = 'admin/academics/staffprofile_change_list.html'
-    list_display = ('user', 'staff_id', 'current_department_display', 'designation', 'status')
-    search_fields = ('staff_id', 'user__username', 'user__email')
+    list_display = ('staff_id', 'get_full_name', 'current_department_display', 'designation', 'status')
+    search_fields = ('staff_id', 'user__username', 'user__email', 'user__first_name', 'user__last_name')
     list_filter = ('department', 'designation')
+    
+    def get_full_name(self, obj):
+        if obj.user:
+            return f"{obj.user.first_name} {obj.user.last_name}".strip() or obj.user.username
+        return "No User"
+    get_full_name.short_description = 'Name'
+    get_full_name.admin_order_field = 'user__first_name'
 
     def has_delete_permission(self, request, obj=None):
         return False
@@ -1230,7 +1259,7 @@ class SectionAdvisorAdmin(admin.ModelAdmin):
 class DepartmentRoleAdmin(admin.ModelAdmin):
     list_display = ('department', 'role', 'staff', 'academic_year', 'is_active')
     list_filter = ('academic_year', 'is_active', 'department', 'role')
-    search_fields = ('staff__staff_id', 'staff__user__username')
+    search_fields = ('staff__staff_id', 'staff__user__username', 'staff__user__first_name', 'staff__user__last_name')
     raw_id_fields = ('staff', 'academic_year')
 
 

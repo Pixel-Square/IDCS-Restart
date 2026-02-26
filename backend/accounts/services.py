@@ -31,6 +31,9 @@ def deactivate_user(user, profile_status: Optional[str] = None, reason: Optional
             # students cannot be RESIGNED; map invalid to INACTIVE
             if final_status == 'RESIGNED':
                 final_status = 'INACTIVE'
+            # Ensure only valid student statuses (ACTIVE, INACTIVE, ALUMNI, DEBAR)
+            if final_status not in ('ACTIVE', 'INACTIVE', 'ALUMNI', 'DEBAR'):
+                final_status = 'INACTIVE'
             sp.status = final_status
             sp.save(update_fields=['status'])
         elif st is not None:

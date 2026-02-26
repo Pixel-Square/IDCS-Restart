@@ -5,5 +5,8 @@
   <li>
     <a href="{% url 'admin:academics_studentprofile_sheets' %}" class="addlink">{% trans "Sheets" %}</a>
   </li>
+  <li>
+    <a href="{% url 'admin:academics_student_import' %}" class="addlink">{% trans "Import Students" %}</a>
+  </li>
   {{ block.super }}
 {% endblock %}

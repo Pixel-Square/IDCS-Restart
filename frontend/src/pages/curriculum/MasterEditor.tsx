@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import CurriculumLayout from './CurriculumLayout';
-import CLASS_TYPES, { normalizeClassType } from '../../constants/classTypes';
+import CLASS_TYPES, { normalizeClassType, QP_TYPES } from '../../constants/classTypes';
 import { createMaster, updateMaster, fetchMasters, fetchDeptRows } from '../../services/curriculum';
 import { BookOpen, Save, X as CancelIcon } from 'lucide-react';
 
@@ -141,7 +141,7 @@ export default function MasterEditor() {
               />
             </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">CAT</label>
               <input 
@@ -152,13 +152,28 @@ export default function MasterEditor() {
               />
             </div>
             <div>
-              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">Class</label>
-              <input 
+              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">Class Type</label>
+              <select 
                 className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
-                value={form.class_type || ''} 
+                value={form.class_type || 'THEORY'} 
                 onChange={e => setForm({...form, class_type: e.target.value})} 
-                placeholder="e.g. Theory" 
-              />
+              >
+                {CLASS_TYPES.map(type => (
+                  <option key={type.value} value={type.value}>{type.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">QP Type</label>
+              <select 
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
+                value={form.qp_type || 'QP1'} 
+                onChange={e => setForm({...form, qp_type: e.target.value})} 
+              >
+                {QP_TYPES.map(type => (
+                  <option key={type.value} value={type.value}>{type.label}</option>
+                ))}
+              </select>
             </div>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
@@ -323,164 +338,6 @@ export default function MasterEditor() {
           </div>
         </form>
       </div>
-      <form
-        onSubmit={e => { e.preventDefault(); save(); }}
-        style={{
-          background: '#fff',
-          borderRadius: 10,
-          boxShadow: '0 2px 8px #e5e7eb',
-          padding: 32,
-          maxWidth: 700,
-          margin: '0 auto',
-          display: 'grid',
-          gap: 22
-        }}
-        autoComplete="off"
-      >
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>Regulation</label>
-            <input className="input" value={form.regulation || ''} onChange={e => setForm({...form, regulation: e.target.value})} required style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
-          </div>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>Semester</label>
-            <input className="input" type="number" min={1} value={form.semester || 1} onChange={e => setForm({...form, semester: Number(e.target.value)})} required style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
-          </div>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>Course Code</label>
-            <input className="input" value={form.course_code ?? ''} onChange={e => setForm({...form, course_code: e.target.value})} placeholder="Optional" style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
-          </div>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>Course Name</label>
-            <input className="input" value={form.course_name || ''} onChange={e => setForm({...form, course_name: e.target.value})} required style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
-          </div>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>CAT</label>
-            <input className="input" value={form.category || ''} onChange={e => setForm({...form, category: e.target.value})} placeholder="e.g. CORE" style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
-          </div>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>Class</label>
-            <select className="input" value={form.class_type || ''} onChange={e => setForm({...form, class_type: e.target.value})} style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }}>
-              <option value="">Select class type</option>
-              {CLASS_TYPES.map((ct) => {
-                const key = normalizeClassType(String(ct));
-                const label = String(ct).charAt(0).toUpperCase() + String(ct).slice(1);
-                return <option key={key} value={key}>{label}</option>;
-              })}
-            </select>
-          </div>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 18 }}>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>L</label>
-            <input className="input" type="number" min={0} value={form.l || 0} onChange={e => setForm({...form, l: Number(e.target.value)})} style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
-          </div>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>T</label>
-            <input className="input" type="number" min={0} value={form.t || 0} onChange={e => setForm({...form, t: Number(e.target.value)})} style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
-          </div>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>P</label>
-            <input className="input" type="number" min={0} value={form.p || 0} onChange={e => setForm({...form, p: Number(e.target.value)})} style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
-          </div>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>S</label>
-            <input className="input" type="number" min={0} value={form.s || 0} onChange={e => setForm({...form, s: Number(e.target.value)})} style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
-          </div>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>C</label>
-            <input className="input" type="number" min={0} value={form.c || 0} onChange={e => setForm({...form, c: Number(e.target.value)})} style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }} />
-          </div>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>Internal Mark</label>
-            <input
-              className="input"
-              type="number"
-              min={0}
-              value={form.internal_mark ?? ''}
-              onChange={e => setForm({...form, internal_mark: e.target.value === '' ? '' : Number(e.target.value)})}
-              style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }}
-            />
-          </div>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>External Mark</label>
-            <input
-              className="input"
-              type="number"
-              min={0}
-              value={form.external_mark ?? ''}
-              onChange={e => setForm({...form, external_mark: e.target.value === '' ? '' : Number(e.target.value)})}
-              style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #d1d5db', marginTop: 4 }}
-            />
-          </div>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
-            <input type="checkbox" checked={!!form.for_all_departments} onChange={e => setForm({...form, for_all_departments: e.target.checked})} id="forAllDepts" />
-            <label htmlFor="forAllDepts" style={{ fontWeight: 600, color: '#3730a3', marginBottom: 0 }}>For All Departments</label>
-          </div>
-          <div>
-            <label style={{ fontWeight: 600, color: '#3730a3' }}>Departments</label>
-            {form.for_all_departments ? (
-              <div style={{ marginTop: 6, color: '#6b7280' }}>Applies to all departments</div>
-            ) : (
-              <div style={{ marginTop: 6, maxHeight: 220, overflowY: 'auto', padding: 6, border: '1px solid #e5e7eb', borderRadius: 6 }}>
-                {departments.length === 0 && <div style={{ color: '#9ca3af' }}>No departments available</div>}
-                {departments.map(d => (
-                  <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                    <input
-                      type="checkbox"
-                      checked={Array.isArray(form.departments) ? form.departments.includes(d.id) : false}
-                      onChange={e => {
-                        const cur = Array.isArray(form.departments) ? [...form.departments] : [];
-                        if (e.target.checked) {
-                          if (!cur.includes(d.id)) cur.push(d.id);
-                        } else {
-                          const idx = cur.indexOf(d.id); if (idx >= 0) cur.splice(idx, 1);
-                        }
-                        setForm({ ...form, departments: cur });
-                      }}
-                      id={`dept-${d.id}`}
-                    />
-                    <label htmlFor={`dept-${d.id}`} style={{ marginBottom: 0 }}>{d.code} — {d.name}</label>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
-          <input type="checkbox" checked={!!form.editable} onChange={e => setForm({...form, editable: e.target.checked})} id="editable" />
-          <label htmlFor="editable" style={{ fontWeight: 600, color: '#3730a3', marginBottom: 0 }}>Editable</label>
-        </div>
-        {savedMessage && (
-          <div style={{ background: '#ecfccb', color: '#365314', padding: '8px 12px', borderRadius: 8, fontWeight: 600, display: 'inline-block' }}>{savedMessage}</div>
-        )}
-        <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
-          <button
-            type="submit"
-            className="btn-primary"
-            style={{ padding: '6px 18px', borderRadius: 8, fontWeight: 600, fontSize: 16, minWidth: 100 }}
-            disabled={loading}
-          >
-            {loading ? 'Saving…' : 'Save'}
-          </button>
-          <button
-            type="button"
-            className="btn-secondary"
-            style={{ padding: '6px 18px', borderRadius: 8, fontWeight: 600, fontSize: 16, minWidth: 100 }}
-            onClick={() => navigate('/curriculum/master')}
-          >
-            Cancel
-          </button>
-        </div>
-      </form>
     </CurriculumLayout>
   );
 }

@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react'
 import fetchWithAuth from '../../services/fetchAuth'
 import { Calendar, Clock, Users, CheckCircle2, XCircle, Loader2, Save, X, ChevronDown, AlertCircle, Lock, Unlock, GraduationCap, Check } from 'lucide-react'
 
+type ViewMode = 'period' | 'daily'
+
 type PeriodItem = {
   id: number
   section_id: number
@@ -10,6 +12,7 @@ type PeriodItem = {
   subject?: string | null
   subject_display?: string | null
   subject_batch_id?: number | null
+  subject_batch_label?: string | null
   teaching_assignment_id?: number | null
   attendance_session_id?: number | null
   attendance_session_locked?: boolean
@@ -39,6 +42,7 @@ type Student = {
 }
 
 export default function PeriodAttendance(){
+  const [viewMode, setViewMode] = useState<ViewMode>('period')
   const [date, setDate] = useState<string>(new Date().toISOString().slice(0,10))
   const [periods, setPeriods] = useState<PeriodItem[]>([])
   const [loading, setLoading] = useState(false)
@@ -79,8 +83,23 @@ export default function PeriodAttendance(){
   const [loadingDaily, setLoadingDaily] = useState(false)
   const [lockingDaily, setLockingDaily] = useState(false)
 
+  // Check user permissions for attendance marking
+  const userPerms = (() => {
+    try { return JSON.parse(localStorage.getItem('permissions') || '[]') as string[] } catch { return [] }
+  })()
+  const hasMarkAttendancePermission = Array.isArray(userPerms) && (userPerms.includes('academics.mark_attendance') || userPerms.includes('MARK_ATTENDANCE'))
+  const hasClassAdvisorPermission = myClassSections && myClassSections.length > 0
+
   useEffect(()=>{ fetchPeriods(); loadMyClassSections() }, [date])
   useEffect(()=>{ if (selectedSection && dailyMode) loadDailyAttendance() }, [selectedSection, date, dailyMode])
+
+  // Reset daily mode when switching to period view
+  useEffect(() => {
+    if (viewMode === 'period' && dailyMode) {
+      setDailyMode(false)
+      setSelectedSection(null)
+    }
+  }, [viewMode])
 
   // Group periods by canonical subject key so same-subject same-period across
   // multiple sections appear as a single card.
@@ -895,8 +914,40 @@ export default function PeriodAttendance(){
         </div>
       </div>
 
+      {/* Navigation Tabs */}
+      <div className="mb-6 border-b border-gray-200 bg-white rounded-xl shadow-sm border border-slate-200">
+        <div className="flex items-center gap-1 p-4">
+          {hasMarkAttendancePermission && (
+            <button
+              onClick={() => setViewMode('period')}
+              className={`px-4 py-3 font-medium text-sm flex items-center gap-2 border-b-2 transition-colors ${
+                viewMode === 'period'
+                  ? 'border-indigo-600 text-indigo-600' 
+                  : 'border-transparent text-gray-600 hover:text-gray-900 hover:border-gray-300'
+              }`}
+            >
+              <Clock className="w-4 h-4" />
+              Period Wise
+            </button>
+          )}
+          {hasClassAdvisorPermission && (
+            <button
+              onClick={() => setViewMode('daily')}
+              className={`px-4 py-3 font-medium text-sm flex items-center gap-2 border-b-2 transition-colors ${
+                viewMode === 'daily'
+                  ? 'border-indigo-600 text-indigo-600' 
+                  : 'border-transparent text-gray-600 hover:text-gray-900 hover:border-gray-300'
+              }`}
+            >
+              <Calendar className="w-4 h-4" />
+              Daily
+            </button>
+          )}
+        </div>
+      </div>
+
       {/* Daily Attendance Section */}
-      {!dailyMode && myClassSections && myClassSections.length > 0 && (
+      {viewMode === 'daily' && !dailyMode && myClassSections && myClassSections.length > 0 && (
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-6">
           <div className="px-6 py-4 border-b border-slate-200 bg-gradient-to-r from-emerald-50 to-teal-50">
             <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
@@ -942,6 +993,7 @@ export default function PeriodAttendance(){
       )}
 
       {/* Assigned Periods */}
+      {viewMode === 'period' && (
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-6">
         <div className="px-6 py-4 border-b border-slate-200 bg-slate-50">
           <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
@@ -978,6 +1030,14 @@ export default function PeriodAttendance(){
                         </span>
                       </div>
                       <div className="text-sm italic text-slate-600">{p.subject_display || p.subject || 'No subject'}</div>
+                      {/* Display batch label if available */}
+                      {p.subject_batch_label && (
+                        <div className="mt-1">
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800 border border-purple-300">
+                            {p.subject_batch_label}
+                          </span>
+                        </div>
+                      )}
                       {/* Unlock request status label */}
                       {p.unlock_request_status && (
                         <div className="mt-2">
@@ -1047,6 +1107,7 @@ export default function PeriodAttendance(){
           )}
         </div>
       </div>
+      )}
 
       {/* Daily Attendance Marking Panel */}
       {dailyMode && selectedSection && (
@@ -1128,10 +1189,9 @@ export default function PeriodAttendance(){
                   <table className="w-full">
                     <thead>
                       <tr className="border-b border-slate-200">
-                        <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700 bg-slate-50">Reg No</th>
-                        <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700 bg-slate-50">Student</th>
-                        <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700 bg-slate-50">Status</th>
-                        <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700 bg-slate-50">Remarks</th>
+                        <th className="text-left py-3 px-2 sm:px-4 text-sm font-semibold text-slate-700 bg-slate-50">Student</th>
+                        <th className="text-left py-3 px-2 sm:px-4 text-sm font-semibold text-slate-700 bg-slate-50">Status</th>
+                        <th className="text-left py-3 px-2 sm:px-4 text-sm font-semibold text-slate-700 bg-slate-50 hidden sm:table-cell">Remarks</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200">
@@ -1146,22 +1206,35 @@ export default function PeriodAttendance(){
                         }
                         return (
                           <tr key={student.student_id} className="hover:bg-slate-50">
-                            <td className="py-3 px-4 text-sm text-slate-700">{student.reg_no}</td>
-                            <td className="py-3 px-4 text-sm text-slate-900 font-medium">{student.username}</td>
-                            <td className="py-3 px-4">
+                            <td className="py-3 px-2 sm:px-4 text-sm">
+                              <div className="font-medium text-slate-900">{student.username}</div>
+                              <div className="text-xs text-slate-500 mt-0.5">{student.reg_no}</div>
+                            </td>
+                            <td className="py-3 px-2 sm:px-4">
                               <select
                                 value={status}
                                 onChange={(e) => setAttendanceStatus(prev => ({ ...prev, [student.student_id]: e.target.value }))}
                                 disabled={dailySessionData?.is_locked}
-                                className={`px-3 py-1.5 rounded-lg border text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500 ${statusClasses[status]} ${dailySessionData?.is_locked ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''}`}
+                                className={`px-2 sm:px-3 py-1.5 rounded-lg border text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500 w-full ${statusClasses[status]} ${dailySessionData?.is_locked ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''}`}
                               >
                                 <option value="P">Present</option>
                                 <option value="OD">On Duty</option>
                                 <option value="LATE">Late</option>
                                 <option value="LEAVE">Leave</option>
                               </select>
+                              {/* Mobile remarks input */}
+                              <div className="mt-2 sm:hidden">
+                                <input
+                                  type="text"
+                                  value={attendanceRemarks[student.student_id] || ''}
+                                  onChange={(e) => setAttendanceRemarks(prev => ({ ...prev, [student.student_id]: e.target.value }))}
+                                  disabled={dailySessionData?.is_locked}
+                                  placeholder="Remarks (optional)"
+                                  className={`px-2 py-1.5 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 w-full ${dailySessionData?.is_locked ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''}`}
+                                />
+                              </div>
                             </td>
-                            <td className="py-3 px-4">
+                            <td className="py-3 px-2 sm:px-4 hidden sm:table-cell">
                               <input
                                 type="text"
                                 value={attendanceRemarks[student.student_id] || ''}
@@ -1221,6 +1294,11 @@ export default function PeriodAttendance(){
             <div className="flex items-center gap-3">
               <h3 className="text-lg font-semibold text-slate-900">
                 {(selected as any).combined_period_label || (selected.period.label || `Period ${selected.period.index}`)} — {selected.section_name}
+                {selected.subject_batch_label && (
+                  <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-sm font-medium bg-purple-100 text-purple-800 border border-purple-300">
+                    {selected.subject_batch_label}
+                  </span>
+                )}
                 <span className="ml-3 inline-flex items-center px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-sm font-medium">{students.length} student{students.length !== 1 ? 's' : ''}</span>
               </h3>
               {selected.attendance_session_locked && (
@@ -1259,11 +1337,10 @@ export default function PeriodAttendance(){
           <div className="p-6">
             <div className="overflow-x-auto">
               <table className="w-full">
-                <thead>
+                <thead className="bg-slate-50">
                   <tr className="border-b border-slate-200">
-                    <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700 bg-slate-50">Reg No</th>
-                    <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700 bg-slate-50">Student</th>
-                    <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700 bg-slate-50">Status</th>
+                    <th className="text-left py-3 px-2 sm:px-4 text-sm font-semibold text-slate-700">Student</th>
+                    <th className="text-left py-3 px-2 sm:px-4 text-sm font-semibold text-slate-700">Status</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
@@ -1290,31 +1367,31 @@ export default function PeriodAttendance(){
 
                     return (
                       <tr key={s.id} className={`transition-colors ${isLocked ? 'bg-slate-50' : 'hover:bg-slate-50'}`}>
-                        <td className="py-3 px-4 text-sm font-medium text-slate-900">{s.reg_no}</td>
-                        <td className="py-3 px-4 text-sm text-slate-700">
-                          {s.username}
+                        <td className="py-3 px-2 sm:px-4 text-sm">
+                          <div className="font-medium text-slate-900">{s.username}</div>
+                          <div className="text-xs text-slate-500 mt-0.5">{s.reg_no}</div>
                           {dailyLock === 'LATE' && (
-                            <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700" title="Marked LATE in daily attendance — counted Present for this period">
+                            <span className="mt-1 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700" title="Marked LATE in daily attendance — counted Present for this period">
                               Late→P
                             </span>
                           )}
                         </td>
-                        <td className="py-3 px-4">
+                        <td className="py-3 px-2 sm:px-4">
                           <div className="flex items-center gap-2">
                             <span className={`inline-block w-3 h-3 rounded-full ${badgeCls}`} />
                             {isLocked && dailyLock ? (
                               /* OD / LEAVE locked from daily attendance */
-                              <div className="flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-sm font-medium bg-slate-100 text-slate-600 border-slate-300" title={`Locked by daily attendance (${dailyLock})`}>
+                              <div className="flex items-center gap-1.5 px-2 sm:px-3 py-1.5 border rounded-lg text-sm font-medium bg-slate-100 text-slate-600 border-slate-300 w-full" title={`Locked by daily attendance (${dailyLock})`}>
                                 <Lock className="w-3 h-3 text-slate-400" />
                                 {dailyLock === 'OD' ? 'On Duty' : 'Leave'}
                               </div>
                             ) : (
-                            <div className="relative inline-block">
+                            <div className="relative inline-block w-full">
                               <select 
                                 value={marks[s.id] || 'P'} 
                                 onChange={e=> setMark(s.id, e.target.value)}
                                 disabled={isLocked}
-                                className={`appearance-none px-3 py-1.5 pr-8 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent ${statusCls} ${isLocked ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''}`}
+                                className={`appearance-none px-2 sm:px-3 py-1.5 pr-8 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent w-full ${statusCls} ${isLocked ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''}`}
                               >
                                 <option value="P">Present</option>
                                 <option value="A">Absent</option>

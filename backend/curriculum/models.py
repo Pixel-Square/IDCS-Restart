@@ -6,13 +6,21 @@ from django.core.exceptions import ValidationError
 
 CLASS_TYPE_CHOICES = (
     ('THEORY', 'Theory'),
+    ('THEORY_PMBL', 'Theory (PMBL)'),
     ('LAB', 'Lab'),
     ('TCPL', 'Tcpl'),
     ('TCPR', 'Tcpr'),
     ('PRACTICAL', 'Practical'),
+    ('PRBL', 'PRBL'),
     ('PROJECT', 'Project'),
     ('AUDIT', 'Audit'),
     ('SPECIAL', 'Special'),
+)
+
+QP_TYPE_CHOICES = (
+    ('QP1', 'QP1'),
+    ('QP2', 'QP2'),
+    ('ASPR', 'ASPR'),
 )
 
 
@@ -86,6 +94,7 @@ class CurriculumMaster(models.Model):
     course_code = models.CharField(max_length=64, blank=True, null=True)
     course_name = models.CharField(max_length=255, blank=True, null=True)
     class_type = models.CharField(max_length=16, choices=CLASS_TYPE_CHOICES, default='THEORY')
+    qp_type = models.CharField(max_length=16, choices=QP_TYPE_CHOICES, default='QP1', blank=True, null=True)
     category = models.CharField(max_length=64, blank=True)
     is_elective = models.BooleanField(default=False)
 
@@ -190,7 +199,7 @@ class CurriculumDepartment(models.Model):
     total_mark = models.PositiveSmallIntegerField(null=True, blank=True)
 
     total_hours = models.PositiveIntegerField(null=True, blank=True)
-    question_paper_type = models.CharField(max_length=64, default='QP1', blank=True)
+    question_paper_type = models.CharField(max_length=64, choices=QP_TYPE_CHOICES, default='QP1', blank=True)
     editable = models.BooleanField(default=False)
     overridden = models.BooleanField(default=False)
 
@@ -309,7 +318,7 @@ class ElectiveSubject(models.Model):
     total_mark = models.PositiveSmallIntegerField(null=True, blank=True)
 
     total_hours = models.PositiveIntegerField(null=True, blank=True)
-    question_paper_type = models.CharField(max_length=64, default='QP1', blank=True)
+    question_paper_type = models.CharField(max_length=64, choices=QP_TYPE_CHOICES, default='QP1', blank=True)
 
     editable = models.BooleanField(default=False)
     overridden = models.BooleanField(default=False)

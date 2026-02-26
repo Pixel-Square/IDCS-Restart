@@ -19,7 +19,7 @@ class CurriculumMasterSerializer(serializers.ModelSerializer):
     class Meta:
         model = CurriculumMaster
         fields = [
-            'id', 'regulation', 'semester', 'semester_id', 'course_code', 'course_name', 'class_type', 'category',
+            'id', 'regulation', 'semester', 'semester_id', 'course_code', 'course_name', 'class_type', 'qp_type', 'category',
             'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark', 'is_elective', 'enabled_assessments',
             'for_all_departments', 'departments', 'departments_display', 'editable', 'created_by', 'created_at', 'updated_at'
         ]

@@ -14,4 +14,5 @@ def get_user_permissions(user) -> Set[str]:
 
     # RolePermission -> role -> user_roles -> user
     qs = RolePermission.objects.filter(role__user_roles__user=user).values_list('permission__code', flat=True).distinct()
-    return set(qs)
+    # Strip trailing periods/whitespace that may have been entered incorrectly in the DB
+    return {str(p).strip().rstrip('.') for p in qs if p}
