@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+{% load static %}
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BI Portal — IDCS</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+      *{box-sizing:border-box}
+      body{
+        font-family:'Inter','Segoe UI',sans-serif;
+        background:#F8F9FA;margin:0;padding:0;min-height:100vh;
+        display:flex;flex-direction:column;
+        background-image:
+          radial-gradient(ellipse at 20% 10%,rgba(245,197,24,0.07) 0%,transparent 55%),
+          radial-gradient(ellipse at 80% 80%,rgba(245,197,24,0.05) 0%,transparent 50%);
+      }
+      .top-bar{
+        height:56px;background:#fff;border-bottom:1px solid #E2E8F0;
+        display:flex;align-items:center;padding:0 32px;
+        box-shadow:0 1px 4px rgba(0,0,0,0.05)
+      }
+      .top-logo{font-size:15px;font-weight:700;color:#1E293B;display:flex;align-items:center;gap:8px}
+      .top-logo-mark{
+        width:28px;height:28px;border-radius:7px;
+        background:linear-gradient(135deg,#F5C518,#E5A500);
+        flex-shrink:0
+      }
+      .hero{flex:1;display:flex;align-items:center;justify-content:center;padding:40px 24px}
+      .card{
+        background:#fff;border:1px solid #E2E8F0;
+        border-radius:20px;padding:48px 44px;
+        max-width:500px;width:100%;
+        box-shadow:0 12px 40px rgba(0,0,0,0.08),0 3px 10px rgba(0,0,0,0.04);
+        text-align:center
+      }
+      .badge-row{
+        display:inline-flex;align-items:center;gap:6px;
+        background:rgba(245,197,24,0.12);border:1px solid rgba(245,197,24,0.35);
+        color:#92400E;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;
+        padding:5px 12px;border-radius:20px;margin-bottom:20px
+      }
+      .badge-dot{width:6px;height:6px;border-radius:50%;background:#F5C518}
+      .logo-row{display:flex;align-items:center;justify-content:center;gap:18px;margin:10px 0 18px}
+      .logo-row img{height:34px;max-width:160px;width:auto;object-fit:contain;display:block}
+      @media (min-width:720px){
+        .logo-row img{height:38px;max-width:190px}
+      }
+      h1{font-size:30px;font-weight:800;color:#1E293B;margin:0 0 12px;letter-spacing:-0.5px;line-height:1.2}
+      h1 span{color:#D4930A}
+      .desc{color:#64748B;font-size:15px;line-height:1.7;margin:0 0 32px}
+      .btn-cta{
+        display:inline-flex;align-items:center;gap:8px;
+        padding:14px 32px;border:none;
+        background:linear-gradient(135deg,#F5C518 0%,#E5A500 100%);
+        color:#1E293B;border-radius:12px;text-decoration:none;
+        font-weight:700;font-size:15px;
+        box-shadow:0 4px 16px rgba(213,148,10,0.30);
+        transition:all 0.2s;font-family:'Inter',sans-serif
+      }
+      .btn-cta:hover{transform:translateY(-2px);box-shadow:0 6px 24px rgba(213,148,10,0.40)}
+      .features{
+        display:grid;grid-template-columns:repeat(3,1fr);
+        gap:12px;margin-top:32px;text-align:left
+      }
+      .feat-item{padding:12px;background:#F8F9FA;border-radius:10px;border:1px solid #E2E8F0}
+      .feat-icon{font-size:18px;margin-bottom:6px}
+      .feat-label{font-size:11px;font-weight:600;color:#475569}
+      .feat-desc{font-size:11px;color:#94A3B8;margin-top:2px}
+      .footer{text-align:center;padding:20px;color:#94A3B8;font-size:12px}
+    </style>
+  </head>
+  <body>
+    <div class="top-bar">
+      <div class="top-logo">
+        <div class="top-logo-mark"></div>
+        Business Intelligence Portal
+      </div>
+    </div>
+
+    <div class="hero">
+      <div class="card">
+        <div class="badge-row"><span class="badge-dot"></span> Live Data Access</div>
+
+        <div class="logo-row" aria-label="Logos">
+          <img src="{% static 'powerbi_portal/bilogo.png' %}" alt="BI Logo" />
+          <img src="{% static 'powerbi_portal/idcslogo.png' %}" alt="IDCS Logo" />
+        </div>
+
+        <h1>IDCS <span>BI Portal</span></h1>
+        <p class="desc">Explore live business intelligence reports, build custom datasheets, and collaborate in shared analysis rooms.</p>
+
+        <a class="btn-cta" href="/powerbi/login/?next=/powerbi/dashboard/">
+          Get Started &rarr;
+        </a>
+
+        <div class="features">
+          <div class="feat-item">
+            <div class="feat-icon">📊</div>
+            <div class="feat-label">Components</div>
+            <div class="feat-desc">Browse live BI views</div>
+          </div>
+          <div class="feat-item">
+            <div class="feat-icon">📋</div>
+            <div class="feat-label">Sheets</div>
+            <div class="feat-desc">Custom datasheets</div>
+          </div>
+          <div class="feat-item">
+            <div class="feat-icon">🤝</div>
+            <div class="feat-label">Rooms</div>
+            <div class="feat-desc">Collaborate &amp; share</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="footer">Powered by IDCS KR Team</div>
+  </body>
+</html>

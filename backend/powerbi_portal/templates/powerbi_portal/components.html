@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Components — BI Portal</title>
+    <style>
+      .view-item{
+        display:flex;align-items:center;gap:12px;
+        padding:13px 16px;background:#fff;
+        border:1px solid #E2E8F0;border-radius:10px;
+        transition:all 0.15s;margin-bottom:8px
+      }
+      .view-item:hover{border-color:rgba(245,197,24,0.5);box-shadow:0 2px 8px rgba(0,0,0,0.07);transform:translateX(3px)}
+      .view-dot{width:8px;height:8px;border-radius:50%;background:linear-gradient(135deg,#F5C518,#E5A500);flex-shrink:0}
+    </style>
+  </head>
+  <body>
+    {% include 'powerbi_portal/_header.html' %}
+
+    <div class="container">
+      <div style="margin-bottom:24px">
+        <h1 class="page-title">Components</h1>
+        <p class="page-subtitle">Live BI views available for browsing (read-only)</p>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h2 style="margin:0">Available Views <span class="badge badge-primary" style="margin-left:8px">{{ views|length }}</span></h2>
+          <a class="btn btn-secondary btn-small" href="/powerbi/dashboard/">← Dashboard</a>
+        </div>
+
+        {% if views %}
+          <div style="margin-top:4px">
+            {% for v in views %}
+              <div class="view-item">
+                <span class="view-dot"></span>
+              <a class="link" style="font-size:14px;flex:1;color:#1D4ED8" href="/powerbi/components/{{ v }}/">{{ v }}</a>
+                <a class="btn btn-small btn-secondary" href="/powerbi/components/{{ v }}/">Browse →</a>
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="empty-state">
+            <div class="empty-state-icon">📭</div>
+            <div>No BI views found.</div>
+            <div class="muted">Run migrations to create BI views.</div>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </body>
+</html>

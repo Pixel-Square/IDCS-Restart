@@ -1,6 +1,7 @@
 ﻿# Added 'OBE.apps.ObeConfig', on 2026-01-27
 # Added backend.OBE.apps.ObeConfig on 2026-01-27
 import os
+import sys
 from pathlib import Path
 from datetime import timedelta
 
@@ -18,6 +19,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'dev-secret')
 
 DEBUG = os.getenv('DEBUG', '0') == '1'
+RUNNING_RUNSERVER = 'runserver' in sys.argv
 
 ALLOWED_HOSTS = (
     ['*'] if DEBUG else [
@@ -50,11 +52,13 @@ INSTALLED_APPS = [
     'curriculum',
     'college',
     'applications',
+    'academic_calendar',
     'OBE.apps.ObeConfig',
     'template_api.apps.TemplateApiConfig',
     'question_bank.apps.QuestionBankConfig',
     'timetable',
     'bi.apps.BiConfig',
+    'powerbi_portal.apps.PowerbiPortalConfig',
 ]
 
 MIDDLEWARE = [
@@ -83,6 +87,7 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'powerbi_portal.context_processors.powerbi_notifications',
             ],
         },
     },
@@ -130,6 +135,26 @@ else:
         }
     }
 
+# Optional: read-only reporting DB connection for BI portal.
+# If BI_DB_NAME is set, the portal will query using DATABASES['bi'].
+BI_DB_NAME = os.getenv('BI_DB_NAME')
+if BI_DB_NAME:
+    DATABASES['bi'] = {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': BI_DB_NAME,
+        'USER': os.getenv('BI_DB_USER'),
+        'PASSWORD': os.getenv('BI_DB_PASS'),
+        'HOST': os.getenv('BI_DB_HOST', DB_HOST),
+        'PORT': os.getenv('BI_DB_PORT', DB_PORT),
+        'DISABLE_SERVER_SIDE_CURSORS': True,
+        'CONN_MAX_AGE': int(os.getenv('BI_DB_CONN_MAX_AGE', os.getenv('DB_CONN_MAX_AGE', '60'))),
+        'CONN_HEALTH_CHECKS': True,
+        'OPTIONS': {
+            'server_side_binding': False,
+            'connect_timeout': int(os.getenv('BI_DB_CONNECT_TIMEOUT', os.getenv('DB_CONNECT_TIMEOUT', '5'))),
+        },
+    }
+
 # Django cache config using Redis (used by sessions, caching, etc.)
 CACHES = {
     'default': {
@@ -159,9 +184,15 @@ STATICFILES_DIRS = [
 ]
 
 # In production use ManifestStaticFilesStorage so static filenames are
-# hashed for long-term caching. If you hit ManifestMissingFileError
-# run collectstatic with the non-manifest storage to find missing refs.
-STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.ManifestStaticFilesStorage'
+# hashed for long-term caching.
+#
+# During local development, prefer the non-manifest storage so missing
+# collectstatic doesn't crash template rendering.
+STATICFILES_STORAGE = (
+    'django.contrib.staticfiles.storage.StaticFilesStorage'
+    if (DEBUG or RUNNING_RUNSERVER)
+    else 'django.contrib.staticfiles.storage.ManifestStaticFilesStorage'
+)
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
@@ -169,6 +200,11 @@ MEDIA_ROOT = BASE_DIR / 'media'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 AUTH_USER_MODEL = 'accounts.User'
+
+AUTHENTICATION_BACKENDS = [
+    'powerbi_portal.auth_backends.PowerBIIdentifierBackend',
+    'django.contrib.auth.backends.ModelBackend',
+]
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (

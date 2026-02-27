@@ -6,14 +6,19 @@ import sys
 import erp.admin_customization
 from erp import admin_views
 from django.conf.urls.static import static
-from django.views.generic import RedirectView
 from django.http import HttpResponse
+from django.shortcuts import render
+
+
+def welcome(request):
+    return render(request, 'welcome.html', {})
 
 urlpatterns = [
-    path('', RedirectView.as_view(url='/admin/', permanent=False), name='db-dashboard'),
+    path('', welcome, name='welcome'),
     path('favicon.ico', lambda request: HttpResponse(status=204), name='favicon'),
     # path('grappelli/', include('grappelli.urls')),
     path('admin/', admin.site.urls),
+    path('', include('powerbi_portal.urls')),
     path('api/accounts/', include('accounts.urls')),
     # also expose the same endpoints under /api/auth/ for compatibility
     path('api/auth/', include('accounts.urls')),
@@ -25,6 +30,7 @@ urlpatterns = [
     path('api/template/', include('template_api.urls')),
     path('api/import/', include('question_bank.urls')),
     path('api/timetable/', include('timetable.urls')),
+    path('api/academic-calendar/', include('academic_calendar.api_urls')),
 ]
 
 # Admin dashboard data endpoint (counts for models) - always available

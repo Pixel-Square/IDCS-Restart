@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PowerBI - IDCS</title>
+    <style>
+      body{font-family:Arial,sans-serif;background:#f5f6f8;margin:0;padding:24px}
+      .top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}
+      .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px}
+      a{color:#2563eb;text-decoration:none}
+      .muted{color:#6b7280;font-size:13px}
+      ul{margin:8px 0 0 0;padding-left:18px}
+      li{margin:6px 0}
+      .btn{display:inline-block;padding:8px 10px;border:1px solid #d1d5db;border-radius:10px;background:#fff}
+    </style>
+  </head>
+  <body>
+    <div class="top">
+      <div>
+        <div style="font-size:18px;font-weight:700;">PowerBI - IDCS</div>
+        <div class="muted">Live, read-only datasheet views</div>
+      </div>
+      <div>
+        <form method="post" action="/powerbi/logout/" style="display:inline;">
+          {% csrf_token %}
+          <button class="btn" type="submit">Logout</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="card">
+      {% if error %}
+        <div style="color:#b91c1c;font-size:13px;">Error loading views: {{ error }}</div>
+      {% endif %}
+
+      <div class="muted">Available BI views (public schema, name starts with <b>bi_</b>):</div>
+      {% if views %}
+        <ul>
+          {% for v in views %}
+            <li><a href="/powerbi/view/{{ v }}/">{{ v }}</a></li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <div class="muted" style="margin-top:8px;">No BI views found. Ensure BI migrations ran.</div>
+      {% endif %}
+
+      <div class="muted" style="margin-top:14px;">
+        Access control: user must be in group <b>{{ group_name }}</b>.
+      </div>
+    </div>
+  </body>
+</html>

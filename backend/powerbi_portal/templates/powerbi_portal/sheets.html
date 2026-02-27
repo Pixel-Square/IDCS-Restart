@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sheets — BI Portal</title>
+    <style>
+      .sheet-row{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid #F1F5F9}
+      .sheet-row:last-child{border-bottom:none}
+      .push-inline{display:flex;gap:6px;align-items:center}
+    </style>
+  </head>
+  <body>
+    {% include 'powerbi_portal/_header.html' %}
+
+    <div class="container container-full">
+      <div style="margin-bottom:24px">
+        <h1 class="page-title">Sheets</h1>
+        <p class="page-subtitle">Create and manage your custom datasheets</p>
+      </div>
+
+      <!-- Create Sheet -->
+      <div class="card" style="margin-bottom:20px">
+        <h2 style="margin:0 0 16px">New Sheet</h2>
+        <form method="post" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="create" />
+          <div style="flex:1;min-width:220px">
+            <label>Sheet name</label>
+            <input name="name" placeholder="e.g. CO Results Q1" required />
+          </div>
+          <button class="btn" type="submit" style="margin-bottom:1px">+ Create Sheet</button>
+        </form>
+      </div>
+
+      <!-- Sheet List -->
+      <div class="card">
+        <div class="card-header">
+          <h2 style="margin:0">My Sheets <span class="badge badge-primary" style="margin-left:8px">{{ sheets|length }}</span></h2>
+        </div>
+
+        {% if sheets %}
+          {% for s in sheets %}
+            <div class="sheet-row">
+              <div style="flex:1">
+                <a class="link" href="/powerbi/sheets/{{ s.id }}/" style="color:#1D4ED8">{{ s.name }}</a>
+                <div class="muted" style="margin-top:2px">{{ s.columns.count }} columns</div>
+              </div>
+              <div class="push-inline">
+                <a class="btn btn-small" href="/powerbi/sheets/{{ s.id }}/">Open</a>
+              </div>
+            </div>
+          {% endfor %}
+        {% else %}
+          <div class="empty-state" style="padding:32px 0">
+            <div class="empty-state-icon">📋</div>
+            <div>No sheets yet.</div>
+            <div class="muted">Create your first sheet above.</div>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </body>
+</html>

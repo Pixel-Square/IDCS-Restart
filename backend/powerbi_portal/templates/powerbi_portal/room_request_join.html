@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Request Access — {{ room.name }}</title>
+  </head>
+  <body>
+    {% include 'powerbi_portal/_header.html' %}
+
+    <div class="container">
+      <div style="margin-bottom:24px">
+        <h1 class="page-title">Request Room Access</h1>
+        <p class="page-subtitle">Send a request to the room leader to join the team.</p>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h2 style="margin:0">🤝 {{ room.name }}</h2>
+          <a class="btn btn-small btn-secondary" href="/powerbi/collaboration/">← Back</a>
+        </div>
+
+        <div class="muted" style="margin-bottom:14px">
+          Leader: <strong style="color:#1E293B">{{ room.leader.username }}</strong>
+        </div>
+
+        {% if join_request %}
+          <div style="margin-bottom:14px">
+            {% if join_request.status == 'PENDING' %}
+              <span class="badge badge-member">Request Pending</span>
+            {% elif join_request.status == 'APPROVED' %}
+              <span class="badge badge-leader">Approved</span>
+            {% else %}
+              <span class="badge badge-member">Rejected</span>
+            {% endif %}
+            {% if join_request.decided_reason %}
+              <div class="muted" style="margin-top:8px">Decision note: {{ join_request.decided_reason }}</div>
+            {% endif %}
+          </div>
+        {% endif %}
+
+        <form method="post" style="max-width:860px">
+          {% csrf_token %}
+          <div class="form-row">
+            <label>Reason</label>
+            <textarea name="reason" rows="5" placeholder="Explain why you need access to this room…">{% if join_request %}{{ join_request.reason }}{% endif %}</textarea>
+            <div class="form-hint">This message will be visible to the room leader in Notifications.</div>
+          </div>
+
+          <button class="btn" type="submit">Send Request</button>
+        </form>
+      </div>
+    </div>
+  </body>
+</html>

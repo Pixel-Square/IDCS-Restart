@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sign In — BI Portal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+      *{box-sizing:border-box}
+      body{font-family:'Inter','Segoe UI',Arial,sans-serif;background:#F8F9FA;margin:0;padding:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background-image:radial-gradient(ellipse at 60% 20%,rgba(245,197,24,0.08) 0%,transparent 60%)}
+      .wrap{width:100%;max-width:440px;padding:24px}
+      .brand{text-align:center;margin-bottom:28px;display:flex;flex-direction:column;align-items:center;gap:10px}
+      .brand-mark{width:52px;height:52px;border-radius:14px;background:linear-gradient(135deg,#F5C518 0%,#E5A500 100%);display:flex;align-items:center;justify-content:center;box-shadow:0 6px 20px rgba(213,148,10,0.28);font-size:22px}
+      .brand-name{font-size:15px;font-weight:700;color:#1E293B;letter-spacing:-0.2px}
+      .brand-sub{font-size:12px;color:#64748B}
+      .card{background:#FFFFFF;border:1px solid #E2E8F0;border-radius:16px;padding:32px;box-shadow:0 8px 32px rgba(0,0,0,0.09),0 2px 6px rgba(0,0,0,0.04)}
+      .card-title{font-size:19px;font-weight:700;color:#1E293B;margin:0 0 4px}
+      .card-sub{font-size:13px;color:#64748B;margin:0 0 24px}
+      .frow{margin-bottom:18px}
+      label{display:block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#475569;margin-bottom:6px}
+      input{padding:10px 13px;border:1.5px solid #E2E8F0;border-radius:8px;font-size:14px;width:100%;font-family:'Inter',sans-serif;color:#1E293B;transition:border-color 0.15s,box-shadow 0.15s}
+      input::placeholder{color:#94A3B8}
+      input:focus{outline:none;border-color:#F5C518;box-shadow:0 0 0 3px rgba(245,197,24,0.15)}
+      .btn-login{padding:12px;width:100%;border:none;background:linear-gradient(135deg,#F5C518 0%,#E5A500 100%);color:#1E293B;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;transition:all 0.2s;box-shadow:0 2px 8px rgba(213,148,10,0.25);font-family:'Inter',sans-serif}
+      .btn-login:hover{transform:translateY(-1px);box-shadow:0 4px 16px rgba(213,148,10,0.35)}
+      .err{font-size:13px;margin-bottom:16px;padding:11px 14px;background:#FEF2F2;color:#991B1B;border:1px solid #FECACA;border-radius:8px}
+      .help{color:#94A3B8;font-size:12px;margin-top:20px;line-height:1.7;text-align:center}
+      .admin-link{color:#D4930A;text-decoration:none;font-weight:600}
+      .admin-link:hover{text-decoration:underline}
+      .divider{border:none;border-top:1px solid #E2E8F0;margin:20px 0}
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="brand">
+        <div class="brand-mark">📊</div>
+        <div>
+          <div class="brand-name">Business Intelligence Portal</div>
+          <div class="brand-sub">IDCS — KR Team</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <p class="card-title">Sign in to your account</p>
+        <p class="card-sub">Use your Register No or Staff ID</p>
+
+        {% if form.errors %}
+          <div class="err">⚠️ Invalid credentials. Please try again.</div>
+        {% endif %}
+
+        <form method="post" action="{% url 'powerbi_login' %}">
+          {% csrf_token %}
+          <input type="hidden" name="next" value="{{ next|default:'/powerbi/dashboard/' }}" />
+
+          <div class="frow">
+            <label for="id_username">Register No / Staff ID</label>
+            <input id="id_username" name="username" type="text" autocomplete="username" placeholder="e.g. 21IT001 or STF001" required />
+          </div>
+
+          <div class="frow">
+            <label for="id_password">Password</label>
+            <input id="id_password" name="password" type="password" autocomplete="current-password" placeholder="••••••••" required />
+          </div>
+
+          <button class="btn-login" type="submit">Sign in →</button>
+        </form>
+
+        <hr class="divider" />
+        <div class="help">
+          Access is restricted to users in the <strong>powerbi_viewer</strong> group.<br>
+          Contact admin if you need access.
+          <div style="margin-top:10px">
+            <a class="admin-link" href="/admin/">Admin Panel ↗</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

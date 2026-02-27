@@ -45,6 +45,8 @@ import MyMentees from './pages/staff/MyMentees';
 import NotificationsPage from './pages/Notifications';
 import QueriesPage from './pages/queries/QueriesPage';
 import StaffsPage from './pages/StaffsPage';
+import AcademicCalendarRedirect from './pages/academicCalendar/AcademicCalendarRedirect';
+import AcademicCalendarPage from './pages/academicCalendar/AcademicCalendarPage';
 
 type RoleObj = { name: string };
 type Me = {
@@ -125,6 +127,19 @@ export default function App() {
                 <Route path="/profile" element={<ProfilePage user={user} />} />
                 <Route path="/queries" element={<QueriesPage />} />
                 <Route path="/notifications" element={<NotificationsPage />} />
+                <Route path="/academic-calendar" element={<AcademicCalendarRedirect user={user} />} />
+                <Route
+                  path="/iqac/calendar"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<AcademicCalendarPage mode="iqac" />} />}
+                />
+                <Route
+                  path="/hod/calendar"
+                  element={<ProtectedRoute user={user} requiredRoles={['HOD']} element={<AcademicCalendarPage mode="hod" />} />}
+                />
+                <Route
+                  path="/student/calendar"
+                  element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} element={<AcademicCalendarPage mode="student" />} />}
+                />
                 <Route path="/import/questions" element={<QuestionImportPage />} />
                 <Route path="/curriculum/master" element={<MasterList />} />
                 <Route path="/curriculum/master/:id" element={<MasterEditor />} />

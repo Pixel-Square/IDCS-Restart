@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KRGI • Welcome</title>
+  <style>
+    :root{
+      --bg:#F8F9FA;
+      --card:#fff;
+      --border:#E2E8F0;
+      --text:#0F172A;
+      --muted:#64748B;
+      --accent:#F2B705;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family: system-ui,-apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+      background:var(--bg);
+      color:var(--text);
+      min-height:100vh;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding:24px;
+    }
+    .wrap{width:100%;max-width:920px}
+    .card{
+      background:var(--card);
+      border:1px solid var(--border);
+      border-radius:16px;
+      padding:28px;
+      box-shadow:0 10px 30px rgba(15,23,42,0.06);
+    }
+    h1{margin:0 0 8px;font-size:22px;letter-spacing:-0.01em}
+    p{margin:0 0 18px;color:var(--muted);font-size:14px;line-height:1.4}
+    .grid{display:grid;grid-template-columns:1fr;gap:12px}
+    @media (min-width: 720px){.grid{grid-template-columns:1fr 1fr}}
+    .tile{
+      border:1px solid var(--border);
+      border-radius:14px;
+      padding:18px;
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:14px;
+      background:#fff;
+    }
+    .tile h2{margin:0 0 6px;font-size:16px}
+    .tile .desc{margin:0;color:var(--muted);font-size:13px}
+    .btn{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      gap:8px;
+      padding:10px 14px;
+      border-radius:12px;
+      border:1px solid #d6a300;
+      background:var(--accent);
+      color:#1F2937;
+      font-weight:700;
+      text-decoration:none;
+      white-space:nowrap;
+    }
+    .btn.secondary{
+      background:#fff;
+      border:1px solid var(--border);
+      color:#0F172A;
+      font-weight:700;
+    }
+    .footer{margin-top:14px;color:var(--muted);font-size:12px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Welcome</h1>
+      <p>Select where you want to go.</p>
+
+      <div class="grid">
+        <div class="tile">
+          <div>
+            <h2>KR DATABASE</h2>
+            <p class="desc">Admin portal (database & management)</p>
+          </div>
+          <a class="btn" href="/admin/login/">Open</a>
+        </div>
+
+        <div class="tile">
+          <div>
+            <h2>Power BI</h2>
+            <p class="desc">Read-only BI portal (components, sheets, rooms)</p>
+          </div>
+          <a class="btn secondary" href="/powerbi/">Open</a>
+        </div>
+      </div>
+
+      <div class="footer">Tip: If you are not signed in, you’ll be asked to log in.</div>
+    </div>
+  </div>
+</body>
+</html>

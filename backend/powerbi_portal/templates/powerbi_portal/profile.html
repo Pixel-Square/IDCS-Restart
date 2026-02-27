@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Profile — BI Portal</title>
+  </head>
+  <body>
+    {% include 'powerbi_portal/_header.html' %}
+
+    <div class="container">
+      <div style="margin-bottom:24px">
+        <h1 class="page-title">Profile</h1>
+        <p class="page-subtitle">Your BI Portal account details</p>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h2 style="margin:0">👤 {{ user.username }}</h2>
+          <a class="btn btn-small btn-secondary" href="/powerbi/dashboard/">Dashboard</a>
+        </div>
+
+        <table>
+          <tbody>
+            <tr>
+              <th style="width:220px">Username</th>
+              <td>{{ user.username }}</td>
+            </tr>
+            <tr>
+              <th>Email</th>
+              <td>{{ user.email|default:"" }}</td>
+            </tr>
+            <tr>
+              <th>Register No</th>
+              <td>{{ user.reg_no|default:"" }}</td>
+            </tr>
+            <tr>
+              <th>Staff ID</th>
+              <td>{{ user.staff_id|default:"" }}</td>
+            </tr>
+            <tr>
+              <th>Role</th>
+              <td>
+                {% if user.is_superuser %}
+                  <span class="badge badge-leader">Superuser</span>
+                {% else %}
+                  <span class="badge badge-member">User</span>
+                {% endif %}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </body>
+</html>

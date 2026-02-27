@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ room.name }} - Room</title>
+  </head>
+  <body>
+    {% include 'powerbi_portal/_header.html' %}
+    {% include 'powerbi_portal/_modal.html' %}
+    
+    <div class="container">
+      <div class="card">
+        <div class="card-header">
+          <h1>🤝 {{ room.name }}</h1>
+          <div style="display:flex;gap:10px">
+            <a class="btn btn-small" href="/powerbi/collaboration/">← Back</a>
+            <a class="btn btn-small btn-secondary" href="/powerbi/dashboard/">Dashboard</a>
+          </div>
+        </div>
+        
+        <div style="margin-bottom:20px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+          <span class="badge badge-leader">Leader: {{ room.leader.username }}</span>
+          {% if can_manage_members %}
+            <button class="btn btn-small btn-ghost" onclick="openModal('assignMembersModal')">&#128101; Manage Members</button>
+          {% endif %}
+        </div>
+        
+        <h3>Members ({{ memberships|length }})</h3>
+        <table style="margin-top:12px">
+          <thead>
+            <tr><th>User</th><th>Role</th></tr>
+          </thead>
+          <tbody>
+            {% for m in memberships %}
+              <tr>
+                <td>{{ m.user.username }}</td>
+                <td>
+                  {% if m.role == 'LEADER' %}
+                    <span class="badge badge-leader">Leader</span>
+                  {% elif m.role == 'CO_LEADER' %}
+                    <span class="badge badge-co-leader">Co-Leader</span>
+                  {% else %}
+                    <span class="badge badge-member">Member</span>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      
+      {% if can_manage_members %}
+        <!-- Member Assignment Modal -->
+        <div id="assignMembersModal" class="modal-overlay">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h2 class="modal-title">👥 Assign Co-Leaders & Members</h2>
+              <button class="modal-close" onclick="closeModal('assignMembersModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+              <form id="memberForm" method="post" action="/powerbi/collaboration/rooms/{{ room.id }}/members/">
+                {% csrf_token %}
+                <div class="form-row">
+                  <label>Co-Leaders</label>
+                  <select name="co_leaders" multiple size="10" style="width:100%;height:200px">
+                    {% for u in powerbi_users %}
+                      {% if u.id != room.leader_id %}
+                        <option value="{{ u.id }}" {% for m in memberships %}{% if m.user_id == u.id and m.role == 'CO_LEADER' %}selected{% endif %}{% endfor %}>{{ u.username }}</option>
+                      {% endif %}
+                    {% endfor %}
+                  </select>
+                  <div class="muted" style="margin-top:4px">Hold Ctrl/Cmd to select multiple</div>
+                </div>
+                
+                <div class="form-row">
+                  <label>Members</label>
+                  <select name="members" multiple size="10" style="width:100%;height:200px">
+                    {% for u in powerbi_users %}
+                      {% if u.id != room.leader_id %}
+                        <option value="{{ u.id }}" {% for m in memberships %}{% if m.user_id == u.id and m.role == 'MEMBER' %}selected{% endif %}{% endfor %}>{{ u.username }}</option>
+                      {% endif %}
+                    {% endfor %}
+                  </select>
+                  <div class="muted" style="margin-top:4px">Hold Ctrl/Cmd to select multiple</div>
+                </div>
+              </form>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-secondary" onclick="closeModal('assignMembersModal')">Cancel</button>
+              <button class="btn" onclick="document.getElementById('memberForm').submit()">💾 Save Changes</button>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+
+    <div class="card" style="margin-top:16px">
+      <div class="card-header">
+        <h2 style="margin:0">Room Sheets</h2>
+      </div>
+
+      {% if can_manage_sheets %}
+        <div style="margin-bottom:14px">
+          <form method="post" action="/powerbi/collaboration/rooms/{{ room.id }}/sheets/create/" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+            {% csrf_token %}
+            <div style="flex:1;min-width:220px">
+              <label>New Room Sheet</label>
+              <input name="name" placeholder="e.g. Dept KPI - Q1" required />
+            </div>
+            <button class="btn btn-small" type="submit">+ Create</button>
+          </form>
+          <div class="muted" style="margin-top:6px">Leader-only: create/delete room sheets. Members can push columns into them.</div>
+        </div>
+      {% endif %}
+
+      {% if room_sheets %}
+        {% for s in room_sheets %}
+          <div style="display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid #F1F5F9">
+            <span style="width:6px;height:6px;border-radius:50%;background:#F5C518;flex-shrink:0"></span>
+            <a class="link" href="/powerbi/collaboration/rooms/{{ room.id }}/sheets/{{ s.id }}/" style="flex:1">{{ s.name }}</a>
+
+            {% if can_manage_sheets %}
+              <form method="post" action="/powerbi/collaboration/rooms/{{ room.id }}/sheets/{{ s.id }}/delete/" style="margin:0" onsubmit="return confirm('Delete this room sheet?')">
+                {% csrf_token %}
+                <button class="btn btn-small btn-danger" type="submit">Delete</button>
+              </form>
+            {% endif %}
+          </div>
+        {% endfor %}
+      {% else %}
+        <div class="empty-state" style="padding:24px 0">
+          <div class="empty-state-icon">📤</div>
+          <div>No sheets pushed yet.</div>
+          <div class="muted">Open a sheet and push individual columns into a room sheet.</div>
+        </div>
+      {% endif %}
+    </div>
+  </body>
+</html>

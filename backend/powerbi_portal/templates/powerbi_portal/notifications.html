@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Notifications — BI Portal</title>
+    <style>
+      .req-row{display:flex;gap:12px;align-items:flex-start;justify-content:space-between;padding:12px 0;border-bottom:1px solid #F1F5F9}
+      .req-row:last-child{border-bottom:none}
+      .req-meta{flex:1;min-width:260px}
+      .req-actions{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap}
+      .mini{font-size:12px;color:#64748B}
+      .pill{display:inline-flex;align-items:center;gap:8px}
+      .reason{background:#F8FAFC;border:1px solid #E2E8F0;border-radius:10px;padding:10px 12px;margin-top:8px;color:#1E293B}
+    </style>
+  </head>
+  <body>
+    {% include 'powerbi_portal/_header.html' %}
+
+    <div class="container">
+      <div style="margin-bottom:24px">
+        <h1 class="page-title">Notifications</h1>
+        <p class="page-subtitle">Approve or reject room access requests.</p>
+      </div>
+
+      {% if is_leader %}
+        <div class="card">
+          <div class="card-header">
+            <h2 style="margin:0">Pending Requests</h2>
+            <a class="btn btn-small btn-secondary" href="/powerbi/collaboration/">Rooms</a>
+          </div>
+
+          {% if pending_for_leader %}
+            {% for jr in pending_for_leader %}
+              <div class="req-row">
+                <div class="req-meta">
+                  <div class="pill">
+                    <strong style="color:#1E293B">{{ jr.user.username }}</strong>
+                    <span class="badge badge-member">Pending</span>
+                  </div>
+                  <div class="mini" style="margin-top:4px">Room: <strong>{{ jr.room.name }}</strong> • {{ jr.updated_at }}</div>
+                  {% if jr.reason %}
+                    <div class="reason">{{ jr.reason }}</div>
+                  {% else %}
+                    <div class="muted" style="margin-top:8px;font-style:italic">No reason provided.</div>
+                  {% endif %}
+                </div>
+
+                <div class="req-actions">
+                  <form method="post" action="/powerbi/notifications/" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+                    {% csrf_token %}
+                    <input type="hidden" name="request_id" value="{{ jr.id }}" />
+                    <input type="hidden" name="action" value="approve" />
+                    <div style="min-width:220px">
+                      <label>Decision Note (optional)</label>
+                      <input name="decided_reason" placeholder="e.g. Approved for Q1 review" />
+                    </div>
+                    <button class="btn btn-small" type="submit">Approve</button>
+                  </form>
+
+                  <form method="post" action="/powerbi/notifications/" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+                    {% csrf_token %}
+                    <input type="hidden" name="request_id" value="{{ jr.id }}" />
+                    <input type="hidden" name="action" value="reject" />
+                    <div style="min-width:220px">
+                      <label>Rejection Reason</label>
+                      <input name="decided_reason" placeholder="e.g. Not part of this team" />
+                    </div>
+                    <button class="btn btn-small btn-danger" type="submit">Reject</button>
+                  </form>
+                </div>
+              </div>
+            {% endfor %}
+          {% else %}
+            <div class="empty-state" style="padding:26px 0">
+              <div class="empty-state-icon">🔔</div>
+              <div>No pending requests.</div>
+              <div class="muted">You’re all caught up.</div>
+            </div>
+          {% endif %}
+        </div>
+      {% endif %}
+
+      <div class="card" style="margin-top:20px">
+        <div class="card-header">
+          <h2 style="margin:0">My Requests</h2>
+        </div>
+
+        {% if my_requests %}
+          <table>
+            <thead>
+              <tr>
+                <th>Room</th>
+                <th>Status</th>
+                <th>Reason</th>
+                <th>Decision Note</th>
+                <th>Updated</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for jr in my_requests %}
+                <tr>
+                  <td>{{ jr.room.name }}</td>
+                  <td>
+                    {% if jr.status == 'PENDING' %}
+                      <span class="badge badge-member">Pending</span>
+                    {% elif jr.status == 'APPROVED' %}
+                      <span class="badge badge-leader">Approved</span>
+                    {% else %}
+                      <span class="badge badge-member">Rejected</span>
+                    {% endif %}
+                  </td>
+                  <td>{{ jr.reason|default:"" }}</td>
+                  <td>{{ jr.decided_reason|default:"" }}</td>
+                  <td>{{ jr.updated_at }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <div class="muted" style="font-style:italic">No requests sent yet.</div>
+        {% endif %}
+      </div>
+    </div>
+  </body>
+</html>

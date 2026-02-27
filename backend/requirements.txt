@@ -16,6 +16,7 @@ PyJWT==2.11.0
 python-docx==1.2.0
 python-dotenv==1.2.1
 requests==2.32.3
+reportlab
 twilio
 whitenoise==6.5.0
 sqlparse==0.5.5

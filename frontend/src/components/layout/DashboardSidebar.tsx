@@ -38,6 +38,7 @@ import { fetchPendingPublishRequestCount } from '../../services/obe';
   hod_obe_requests: Bell,
   academic_controller: Layout,
   notifications: Bell,
+  academic_calendar: Calendar,
 
 };
 
@@ -194,6 +195,9 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
 
   // fallback: always show profile
   items.unshift({ key: 'profile', label: 'Profile', to: '/profile' });
+
+  // Academic calendar is available for all authenticated users
+  items.push({ key: 'academic_calendar', label: 'Academic Calendar', to: '/academic-calendar' });
   
   // Add Queries for all users (no permission check needed)
   items.push({ key: 'queries', label: 'Support Queries', to: '/queries' });
