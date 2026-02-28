@@ -59,10 +59,6 @@ export default function TeachingAssignmentsPage(){
   const [loading, setLoading] = useState(true)
   const [editingAssignments, setEditingAssignments] = useState<Set<string>>(new Set())
   const [editingElectives, setEditingElectives] = useState<Set<string>>(new Set())
-  const [isBulkEditMode, setIsBulkEditMode] = useState(false)
-  const [isBulkElectiveEditMode, setIsBulkElectiveEditMode] = useState(false)
-  const [selectedElectiveRegulation, setSelectedElectiveRegulation] = useState<string | null>(null)
-  const [selectedElectiveSemester, setSelectedElectiveSemester] = useState<number | null>(null)
 
   // derive staff list for elective dropdowns: prefer elective-specific filter, else top filter
   const getFilteredStaffForElective = () => {

@@ -82,6 +82,16 @@ export default function PeriodAttendance(){
   const [savingDaily, setSavingDaily] = useState(false)
   const [loadingDaily, setLoadingDaily] = useState(false)
   const [lockingDaily, setLockingDaily] = useState(false)
+  const [autoSavingStudentId, setAutoSavingStudentId] = useState<number | null>(null)
+  const [removingBadgeStudentId, setRemovingBadgeStudentId] = useState<number | null>(null)
+
+  // Date range attendance marking state
+  const [showDateRangeSection, setShowDateRangeSection] = useState(false)
+  const [dateRangeStartDate, setDateRangeStartDate] = useState<string>('')
+  const [dateRangeEndDate, setDateRangeEndDate] = useState<string>('')
+  const [dateRangeAttendanceType, setDateRangeAttendanceType] = useState<'OD' | 'LEAVE'>('OD')
+  const [savingDateRange, setSavingDateRange] = useState(false)
+  const [selectedStudentsForDateRange, setSelectedStudentsForDateRange] = useState<Set<number>>(new Set())
 
   // Check user permissions for attendance marking
   const userPerms = (() => {
@@ -808,12 +818,146 @@ export default function PeriodAttendance(){
     }
   }
 
+  // Auto-save individual student attendance when dropdown changes
+  async function autoSaveStudentAttendance(studentId: number, newStatus: string) {
+    if (!selectedSection) return
+    
+    // Check if session is locked
+    if (dailySessionData?.is_locked) {
+      return
+    }
+    
+    setAutoSavingStudentId(studentId)
+    try {
+      const records = [{
+        student_id: studentId,
+        status: newStatus,
+        remarks: attendanceRemarks[studentId] || ''
+      }]
+
+      const response = await fetchWithAuth('/api/academics/analytics/daily-attendance/', {
+        method: 'POST',
+        body: JSON.stringify({
+          section_id: selectedSection.section_id,
+          date: date,
+          attendance: records
+        })
+      })
+
+      if (!response.ok) throw new Error('Failed to save attendance')
+      
+      // Reload to get updated badge display
+      await loadDailyAttendance()
+    } catch (error) {
+      console.error('Error auto-saving attendance:', error)
+      alert('Failed to save attendance. Please try again.')
+      // Revert the change on error
+      setAttendanceStatus(prev => {
+        const newState = { ...prev }
+        // Revert to original value from dailyAttendance
+        const originalStudent = dailyAttendance.find(s => s.student_id === studentId)
+        if (originalStudent) {
+          newState[studentId] = originalStudent.status || 'P'
+        }
+        return newState
+      })
+    } finally {
+      setAutoSavingStudentId(null)
+    }
+  }
+
+  // Handle attendance status change with auto-save
+  function handleAttendanceStatusChange(studentId: number, newStatus: string) {
+    // Update local state immediately for responsive UI
+    setAttendanceStatus(prev => ({ ...prev, [studentId]: newStatus }))
+    
+    // Auto-save to backend
+    autoSaveStudentAttendance(studentId, newStatus)
+  }
+
+  // Remove OD/Leave badge and records
+  async function removeODLeaveBadge(studentId: number, startDate: string, endDate: string) {
+    if (!selectedSection) return
+    
+    // Check if session is locked
+    if (dailySessionData?.is_locked) {
+      alert('Daily attendance is locked and cannot be modified')
+      return
+    }
+    
+    const confirmed = window.confirm(
+      `Are you sure you want to remove the OD/Leave record for this date range?\n\n` +
+      `This will delete records from ${startDate} to ${endDate}.`
+    )
+    
+    if (!confirmed) return
+    
+    setRemovingBadgeStudentId(studentId)
+    try {
+      const response = await fetchWithAuth('/api/academics/analytics/daily-attendance-remove-od-leave/', {
+        method: 'DELETE',
+        body: JSON.stringify({
+          section_id: selectedSection.section_id,
+          student_id: studentId,
+          start_date: startDate,
+          end_date: endDate
+        })
+      })
+
+      if (!response.ok) throw new Error('Failed to remove attendance records')
+      
+      // Update local state to set student to Present
+      setAttendanceStatus(prev => ({ ...prev, [studentId]: 'P' }))
+      
+      // Reload to get updated badge display
+      await loadDailyAttendance()
+    } catch (error) {
+      console.error('Error removing OD/Leave records:', error)
+      alert('Failed to remove attendance records. Please try again.')
+    } finally {
+      setRemovingBadgeStudentId(null)
+    }
+  }
+
   function markAllDaily(status: string) {
     const newStatus: Record<number, string> = {}
     dailyAttendance.forEach(student => {
       newStatus[student.student_id] = status
     })
     setAttendanceStatus(newStatus)
+  }
+
+  // Helper functions for date range student selection
+  function toggleStudentForDateRange(studentId: number) {
+    setSelectedStudentsForDateRange(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(studentId)) {
+        newSet.delete(studentId)
+      } else {
+        newSet.add(studentId)
+      }
+      return newSet
+    })
+  }
+
+  function toggleAllStudentsForDateRange() {
+    if (selectedStudentsForDateRange.size === dailyAttendance.length) {
+      // If all selected, deselect all
+      setSelectedStudentsForDateRange(new Set())
+    } else {
+      // Select all
+      const allIds = dailyAttendance.map(s => s.student_id)
+      setSelectedStudentsForDateRange(new Set(allIds))
+    }
+  }
+
+  // Handle start date change and clear end date if it becomes invalid
+  function handleStartDateChange(newStartDate: string) {
+    setDateRangeStartDate(newStartDate)
+    // If end date is set and is before the new start date, clear it
+    if (dateRangeEndDate && newStartDate && dateRangeEndDate < newStartDate) {
+      setDateRangeEndDate('')
+    }
   }
 
   // Daily attendance lock/unlock functions
@@ -880,6 +1024,101 @@ export default function PeriodAttendance(){
       alert('Failed to perform lock/unlock: ' + (e instanceof Error ? e.message : String(e)))
     } finally {
       setLockingDaily(false)
+    }
+  }
+
+  // Date range attendance marking function
+  async function saveDateRangeAttendance() {
+    if (!selectedSection) {
+      alert('No section selected')
+      return
+    }
+
+    if (!dateRangeStartDate || !dateRangeEndDate) {
+      alert('Please select both start and end dates')
+      return
+    }
+
+    // Validate that at least one student is selected
+    if (selectedStudentsForDateRange.size === 0) {
+      alert('Please select at least one student for date range marking')
+      return
+    }
+
+    // Validate dates
+    if (dateRangeEndDate < dateRangeStartDate) {
+      alert('End date cannot be before start date')
+      return
+    }
+
+    // Calculate number of days
+    const startDate = new Date(dateRangeStartDate)
+    const endDate = new Date(dateRangeEndDate)
+    const daysDiff = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1
+
+    // Confirm before proceeding
+    const confirmed = window.confirm(
+      `Are you sure you want to mark ${selectedStudentsForDateRange.size} selected student(s) as ${dateRangeAttendanceType} for ${daysDiff} day(s) from ${dateRangeStartDate} to ${dateRangeEndDate}?\n\n` +
+      `Section: ${selectedSection.section_name}`
+    )
+
+    if (!confirmed) return
+
+    setSavingDateRange(true)
+    try {
+      const response = await fetchWithAuth('/api/academics/analytics/daily-attendance-date-range/', {
+        method: 'POST',
+        body: JSON.stringify({
+          section_id: selectedSection.section_id,
+          start_date: dateRangeStartDate,
+          end_date: dateRangeEndDate,
+          attendance_type: dateRangeAttendanceType,
+          student_ids: Array.from(selectedStudentsForDateRange)
+        })
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || 'Failed to mark attendance by date range')
+      }
+
+      const result = await response.json()
+      
+      // Build detailed success message
+      let message = `Success!\n\n${result.message}\n\n`
+      message += `Date Range: ${result.start_date} to ${result.end_date}\n`
+      message += `Total Days in Range: ${result.days_in_range}\n`
+      message += `Days Processed: ${result.days_processed}\n`
+      
+      if (result.dates_processed && result.dates_processed.length > 0) {
+        message += `\nProcessed Dates:\n${result.dates_processed.join(', ')}\n`
+      }
+      
+      message += `\nSessions Updated: ${result.sessions_updated}\n`
+      if (result.sessions_locked > 0) {
+        message += `Sessions Locked (skipped): ${result.sessions_locked}\n`
+      }
+      message += `Student Records Updated: ${result.records_updated}\n`
+      message += `Students Affected: ${result.students_count}`
+      
+      alert(message)
+
+      // Reset form and reload daily attendance if current date is in range
+      setDateRangeStartDate('')
+      setDateRangeEndDate('')
+      setSelectedStudentsForDateRange(new Set())
+      setShowDateRangeSection(false)
+      
+      // Reload daily attendance if current date is within the marked range
+      if (date >= dateRangeStartDate && date <= dateRangeEndDate) {
+        await loadDailyAttendance()
+      }
+
+    } catch (error) {
+      console.error('Error marking date range attendance:', error)
+      alert('Failed to mark attendance: ' + (error instanceof Error ? error.message : String(error)))
+    } finally {
+      setSavingDateRange(false)
     }
   }
 
@@ -1164,7 +1403,7 @@ export default function PeriodAttendance(){
             </div>
           </div>
 
-          <div className="p-6">
+          <div className="p-6 overflow-visible">
             {loadingDaily ? (
               <div className="flex items-center justify-center py-12">
                 <Loader2 className="w-8 h-8 text-emerald-600 animate-spin" />
@@ -1209,19 +1448,70 @@ export default function PeriodAttendance(){
                             <td className="py-3 px-2 sm:px-4 text-sm">
                               <div className="font-medium text-slate-900">{student.username}</div>
                               <div className="text-xs text-slate-500 mt-0.5">{student.reg_no}</div>
+                              {/* Display most recent OD/LEAVE record with date range */}
+                              {student.latest_record && (
+                                <div className="mt-2">
+                                  <div 
+                                    className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                                      student.latest_record.type === 'OD' 
+                                        ? 'bg-blue-100 text-blue-800 border border-blue-300' 
+                                        : 'bg-purple-100 text-purple-800 border border-purple-300'
+                                    }`}
+                                  >
+                                    <span className="font-semibold">{student.latest_record.type}</span>
+                                    <span className="mx-1">-</span>
+                                    <span>{student.latest_record.start_date}</span>
+                                    {student.latest_record.start_date !== student.latest_record.end_date && (
+                                      <>
+                                        <span className="mx-1">to</span>
+                                        <span>{student.latest_record.end_date}</span>
+                                      </>
+                                    )}
+                                    {/* Remove button */}
+                                    {!dailySessionData?.is_locked && (
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          removeODLeaveBadge(
+                                            student.student_id,
+                                            student.latest_record.start_date,
+                                            student.latest_record.end_date
+                                          )
+                                        }}
+                                        disabled={removingBadgeStudentId === student.student_id}
+                                        className="ml-1.5 hover:bg-white/30 rounded-full p-0.5 transition-colors disabled:opacity-50"
+                                        title="Remove OD/Leave record"
+                                      >
+                                        {removingBadgeStudentId === student.student_id ? (
+                                          <Loader2 className="w-3 h-3 animate-spin" />
+                                        ) : (
+                                          <X className="w-3 h-3" />
+                                        )}
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
                             </td>
                             <td className="py-3 px-2 sm:px-4">
-                              <select
-                                value={status}
-                                onChange={(e) => setAttendanceStatus(prev => ({ ...prev, [student.student_id]: e.target.value }))}
-                                disabled={dailySessionData?.is_locked}
-                                className={`px-2 sm:px-3 py-1.5 rounded-lg border text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500 w-full ${statusClasses[status]} ${dailySessionData?.is_locked ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''}`}
-                              >
-                                <option value="P">Present</option>
-                                <option value="OD">On Duty</option>
-                                <option value="LATE">Late</option>
-                                <option value="LEAVE">Leave</option>
-                              </select>
+                              <div className="relative">
+                                <select
+                                  value={status}
+                                  onChange={(e) => handleAttendanceStatusChange(student.student_id, e.target.value)}
+                                  disabled={dailySessionData?.is_locked || autoSavingStudentId === student.student_id}
+                                  className={`px-2 sm:px-3 py-1.5 rounded-lg border text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500 w-full ${statusClasses[status]} ${dailySessionData?.is_locked || autoSavingStudentId === student.student_id ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''}`}
+                                >
+                                  <option value="P">Present</option>
+                                  <option value="OD">On Duty</option>
+                                  <option value="LATE">Late</option>
+                                  <option value="LEAVE">Leave</option>
+                                </select>
+                                {autoSavingStudentId === student.student_id && (
+                                  <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none">
+                                    <Loader2 className="w-4 h-4 text-emerald-600 animate-spin" />
+                                  </div>
+                                )}
+                              </div>
                               {/* Mobile remarks input */}
                               <div className="mt-2 sm:hidden">
                                 <input
@@ -1249,6 +1539,170 @@ export default function PeriodAttendance(){
                       })}
                     </tbody>
                   </table>
+                </div>
+
+                {/* Date Range Attendance Marking Section */}
+                <div className="mt-6 border-t border-slate-200 pt-6 relative">
+                  <button
+                    onClick={() => setShowDateRangeSection(!showDateRangeSection)}
+                    className="flex items-center gap-2 text-indigo-600 hover:text-indigo-700 font-medium text-sm mb-4"
+                  >
+                    <ChevronDown className={`w-4 h-4 transition-transform ${showDateRangeSection ? 'rotate-180' : ''}`} />
+                    {showDateRangeSection ? 'Hide' : 'Show'} Date Range Marking (OD/Leave)
+                  </button>
+
+                  {showDateRangeSection && (
+                    <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg p-4 border border-indigo-200 relative overflow-visible" style={{ zIndex: 20 }}>
+                      <div className="flex items-center gap-2 mb-4">
+                        <AlertCircle className="w-5 h-5 text-indigo-600" />
+                        <h4 className="font-semibold text-slate-900">Mark by Date Range</h4>
+                      </div>
+                      
+                      <p className="text-sm text-slate-600 mb-4">
+                        Select students and a date range to mark them as OD or Leave for multiple days at once.
+                        This feature is optional and separate from the day-by-day marking above.
+                      </p>
+
+                      {/* Student Selection Table */}
+                      <div className="mb-4 bg-white rounded-lg border border-slate-200 relative" style={{ zIndex: 1 }}>
+                        <div className="px-4 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                          <span className="text-sm font-semibold text-slate-700">
+                            Select Students ({selectedStudentsForDateRange.size} selected)
+                          </span>
+                          <button
+                            onClick={toggleAllStudentsForDateRange}
+                            className="text-xs text-indigo-600 hover:text-indigo-700 font-medium"
+                          >
+                            {selectedStudentsForDateRange.size === dailyAttendance.length ? 'Deselect All' : 'Select All'}
+                          </button>
+                        </div>
+                        <div className="max-h-64 overflow-y-auto overflow-x-hidden">
+                          <table className="w-full">
+                            <thead className="bg-slate-50 sticky top-0 z-10">
+                              <tr className="border-b border-slate-200">
+                                <th className="text-left py-2 px-3 text-xs font-semibold text-slate-700 w-10">
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedStudentsForDateRange.size === dailyAttendance.length && dailyAttendance.length > 0}
+                                    onChange={toggleAllStudentsForDateRange}
+                                    className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-2 focus:ring-indigo-500"
+                                  />
+                                </th>
+                                <th className="text-left py-2 px-3 text-xs font-semibold text-slate-700">Student</th>
+                                <th className="text-left py-2 px-3 text-xs font-semibold text-slate-700">Reg No</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-200">
+                              {dailyAttendance.map(student => (
+                                <tr key={student.student_id} className="hover:bg-slate-50">
+                                  <td className="py-2 px-3">
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedStudentsForDateRange.has(student.student_id)}
+                                      onChange={() => toggleStudentForDateRange(student.student_id)}
+                                      className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-2 focus:ring-indigo-500"
+                                    />
+                                  </td>
+                                  <td className="py-2 px-3 text-sm text-slate-900">{student.username || student.name}</td>
+                                  <td className="py-2 px-3 text-xs text-slate-600">{student.reg_no}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4 relative">
+                        <div className="relative" style={{ zIndex: 30 }}>
+                          <label htmlFor="dateRangeStartDate" className="block text-sm font-medium text-slate-700 mb-2">
+                            Start Date <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            id="dateRangeStartDate"
+                            type="date"
+                            value={dateRangeStartDate}
+                            onChange={(e) => handleStartDateChange(e.target.value)}
+                            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white cursor-pointer"
+                            style={{ position: 'relative', zIndex: 30 }}
+                          />
+                        </div>
+
+                        <div className="relative" style={{ zIndex: 30 }}>
+                          <label htmlFor="dateRangeEndDate" className="block text-sm font-medium text-slate-700 mb-2">
+                            End Date <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            id="dateRangeEndDate"
+                            type="date"
+                            value={dateRangeEndDate}
+                            onChange={(e) => setDateRangeEndDate(e.target.value)}
+                            {...(dateRangeStartDate ? { min: dateRangeStartDate } : {})}
+                            disabled={!dateRangeStartDate}
+                            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white cursor-pointer disabled:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-500"
+                            style={{ position: 'relative', zIndex: 30 }}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="mb-4">
+                        <label className="block text-sm font-medium text-slate-700 mb-2">
+                          Attendance Type
+                        </label>
+                        <div className="flex gap-3">
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="dateRangeType"
+                              value="OD"
+                              checked={dateRangeAttendanceType === 'OD'}
+                              onChange={() => setDateRangeAttendanceType('OD')}
+                              className="w-4 h-4 text-indigo-600"
+                            />
+                            <span className="text-sm font-medium text-slate-700">On Duty (OD)</span>
+                          </label>
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="dateRangeType"
+                              value="LEAVE"
+                              checked={dateRangeAttendanceType === 'LEAVE'}
+                              onChange={() => setDateRangeAttendanceType('LEAVE')}
+                              className="w-4 h-4 text-purple-600"
+                            />
+                            <span className="text-sm font-medium text-slate-700">Leave</span>
+                          </label>
+                        </div>
+                      </div>
+
+                      <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
+                        <div className="flex gap-2">
+                          <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                          <div className="text-xs text-amber-800">
+                            <strong>Note:</strong> This will mark the selected {selectedStudentsForDateRange.size} student(s) as {dateRangeAttendanceType} for the selected date range.
+                            Locked sessions will be skipped. A confirmation will be shown before applying.
+                          </div>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={saveDateRangeAttendance}
+                        disabled={savingDateRange || !dateRangeStartDate || !dateRangeEndDate || selectedStudentsForDateRange.size === 0}
+                        className="w-full px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium disabled:bg-slate-300 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                      >
+                        {savingDateRange ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            Applying Date Range...
+                          </>
+                        ) : (
+                          <>
+                            <Calendar className="w-4 h-4" />
+                            Apply Date Range Marking
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/* Save Button */}
