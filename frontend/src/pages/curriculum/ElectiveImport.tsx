@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Upload, Download, FileSpreadsheet, AlertCircle, CheckCircle, Filter, Users } from 'lucide-react';
 import fetchWithAuth from '../../services/fetchAuth';
 import { fetchElectives } from '../../services/curriculum';
+import { downloadExcel } from '../../utils/downloadFile';
 
 type Department = { id: number; code: string; name: string; short_name: string };
 type Elective = {
@@ -80,47 +81,14 @@ export default function ElectiveImport() {
 
   const downloadTemplate = async () => {
     try {
-      const response = await fetchWithAuth('/api/curriculum/elective-choices/template/');
-      if (!response.ok) {
-        alert('Failed to download template');
-        return;
-      }
-
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'elective_choices_template.csv';
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
+      await downloadExcel(
+        '/api/curriculum/elective-choices/template/',
+        'elective_choices_template.xlsx',
+        fetchWithAuth
+      );
     } catch (error) {
-      console.error('Download error:', error);
-      alert('Failed to download template');
-    }
-  };
-
-  const downloadExcelTemplate = async () => {
-    try {
-      const response = await fetchWithAuth('/api/curriculum/elective-choices/template/?format=excel');
-      if (!response.ok) {
-        alert('Failed to download Excel template');
-        return;
-      }
-
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'elective_choices_template.xlsx';
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-    } catch (error) {
-      console.error('Download error:', error);
-      alert('Failed to download Excel template');
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      alert(`Failed to download template: ${errorMsg}`);
     }
   };
 
@@ -216,22 +184,13 @@ export default function ElectiveImport() {
                 <p className="text-sm text-gray-600">Import student elective choices from CSV or Excel</p>
               </div>
             </div>
-            <div className="flex gap-2">
-              <button
-                onClick={downloadTemplate}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 transition-colors"
-              >
-                <Download className="h-5 w-5" />
-                CSV Template
-              </button>
-              <button
-                onClick={downloadExcelTemplate}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white font-medium rounded-lg hover:bg-emerald-700 transition-colors"
-              >
-                <Download className="h-5 w-5" />
-                Excel Template
-              </button>
-            </div>
+            <button
+              onClick={downloadTemplate}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 transition-colors"
+            >
+              <Download className="h-5 w-5" />
+              Download Template
+            </button>
           </div>
 
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Upload File</h2>
