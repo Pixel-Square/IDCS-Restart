@@ -7,6 +7,76 @@
 {# Inject custom admin CSS into the head #}
 {% block extrahead %}
   <link rel="stylesheet" type="text/css" href="{% static 'css/admin_custom.css' %}">
+  <script>
+    // Fix for Django admin popup error: "Cannot read properties of null (reading 'dismissAddRelatedObjectPopup')"
+    // This happens when the popup tries to access the parent window but it's null
+    (function() {
+      // Wait for the DOM to be ready
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', fixPopupErrors);
+      } else {
+        fixPopupErrors();
+      }
+      
+      function fixPopupErrors() {
+        // Check if this is a popup window
+        if (window.opener === null && window.name.indexOf('__') !== -1) {
+          // This is likely a popup that has lost its opener reference
+          // Override the dismissAddRelatedObjectPopup function globally
+          window.dismissAddRelatedObjectPopup = function(win, newId, newRepr) {
+            // Try to close the window if possible
+            try {
+              if (win && !win.closed) {
+                win.close();
+              } else {
+                window.close();
+              }
+            } catch(e) {
+              console.warn('Could not close popup window:', e);
+            }
+          };
+          
+          window.dismissChangeRelatedObjectPopup = function(win, objId, newRepr, newId) {
+            try {
+              if (win && !win.closed) {
+                win.close();
+              } else {
+                window.close();
+              }
+            } catch(e) {
+              console.warn('Could not close popup window:', e);
+            }
+          };
+          
+          window.dismissDeleteRelatedObjectPopup = function(win, objId) {
+            try {
+              if (win && !win.closed) {
+                win.close();
+              } else {
+                window.close();
+              }
+            } catch(e) {
+              console.warn('Could not close popup window:', e);
+            }
+          };
+        }
+        
+        // Also patch the Django admin's popup response handler
+        if (typeof django !== 'undefined' && django.jQuery) {
+          var $ = django.jQuery;
+          $(window).on('load', function() {
+            // Find all popup response forms and handle them
+            if (window.opener === null && $('body').hasClass('popup')) {
+              // If we're in a popup with no opener, redirect after save
+              setTimeout(function() {
+                window.close();
+              }, 500);
+            }
+          });
+        }
+      }
+    })();
+  </script>
   {{ block.super }}
 {% endblock %}
 

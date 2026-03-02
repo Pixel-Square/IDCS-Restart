@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import fetchWithAuth from '../services/fetchAuth';
+import { getCachedMe } from '../services/auth';
 import logoUrl from '../assets/idcs-logo.png';
 
 const DEFAULT_COLLEGE_NAME = 'K RAMAKRISHNAN COLLEGE OF TECHNOLOGY, Autonomous';
@@ -60,9 +61,9 @@ function saveBlobAs(filename: string, blob: Blob) {
 
 async function getCurrentStaffDisplayName(): Promise<string> {
   try {
-    const res = await fetchWithAuth('/api/accounts/me/', { method: 'GET' });
-    if (!res.ok) return '';
-    const me = (await res.json()) as { username?: unknown; profile?: { staff_id?: unknown } };
+    // Use cached user data instead of making API call
+    const me = getCachedMe() as { username?: unknown; profile?: { staff_id?: unknown } } | null;
+    if (!me) return '';
     const username = String(me?.username ?? '').trim();
     const staffId = String(me?.profile?.staff_id ?? '').trim();
     return username || staffId || '';

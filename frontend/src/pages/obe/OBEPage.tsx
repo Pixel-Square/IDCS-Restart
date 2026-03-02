@@ -7,7 +7,7 @@ import MarkEntryPage from '../MarkEntryPage';
 import '../../styles/obe-theme.css';
 
 // OBE/marks/COAttainment fetch and types removed
-import { getMe } from '../../services/auth';
+import { getCachedMe } from '../../services/auth';
 import { fetchMyTeachingAssignments, TeachingAssignmentItem } from '../../services/obe';
 
 function apiBase() {
@@ -163,10 +163,9 @@ export default function OBEPage(): JSX.Element {
   // OBE/marks/COAttainment effect removed
 
   useEffect(() => {
-    // Fetch current user for Faculty ID display
-    getMe()
-      .then((u) => setMe(u as Me))
-      .catch(() => setMe(null));
+    // Use cached user data for Faculty ID display
+    const cachedUser = getCachedMe();
+    setMe(cachedUser as Me);
 
     // load teaching assignments (non-blocking; 401 treated as empty)
     (async () => {

@@ -4,13 +4,28 @@ import fetchWithAuth from '../../services/fetchAuth'
 export default function AttendanceRequests(){
   const [loading, setLoading] = useState(false)
   const [requests, setRequests] = useState<any[]>([])
+  const [permissionLevel, setPermissionLevel] = useState<string | null>(null)
 
-  useEffect(()=>{ loadRequests() }, [])
+  useEffect(()=>{ loadPermissionLevel() }, [])
+  useEffect(()=>{ if(permissionLevel) loadRequests() }, [permissionLevel])
+
+  async function loadPermissionLevel(){
+    try{
+      const res = await fetchWithAuth('/api/academics/analytics/filters/')
+      if (!res.ok) return
+      const data = await res.json().catch(()=>null)
+      setPermissionLevel(data?.permission_level || null)
+    }catch(e){ console.error('Failed to load permission level', e) }
+  }
 
   async function loadRequests(){
     setLoading(true)
     try{
-      const res = await fetchWithAuth('/api/academics/unified-unlock-requests/')
+      // HODs get their department's pending requests, admins get all HOD-approved requests
+      const endpoint = permissionLevel === 'department' 
+        ? '/api/academics/hod-unlock-requests/'
+        : '/api/academics/unified-unlock-requests/'
+      const res = await fetchWithAuth(endpoint)
       if(!res.ok) throw new Error('Failed')
       const j = await res.json()
       setRequests(j.results || j || [])
@@ -19,16 +34,30 @@ export default function AttendanceRequests(){
   }
 
   async function handleAction(id:number, action:'approve'|'reject', requestType: string = 'period'){
-    if(!window.confirm(`Are you sure you want to ${action} this request?`)) return
+    const isHOD = permissionLevel === 'department'
+    const actionText = isHOD 
+      ? `${action} this request as HOD` 
+      : `${action} this request and unlock the session`
+    if(!window.confirm(`Are you sure you want to ${actionText}?`)) return
     try{
-      const body = { id, action, request_type: requestType }
-      const res = await fetchWithAuth('/api/academics/unified-unlock-requests/', { 
-        method: 'PATCH', 
+      const body = { id, action, request_type: requestType, note: '' }
+      const endpoint = isHOD 
+        ? '/api/academics/hod-unlock-requests/'
+        : '/api/academics/unified-unlock-requests/'
+      const method = isHOD ? 'POST' : 'PATCH'
+      const res = await fetchWithAuth(endpoint, { 
+        method, 
         body: JSON.stringify(body) 
       })
-      if(!res.ok){ const err = await res.json().catch(()=>({})); throw new Error(err.detail || 'Failed') }
+      if(!res.ok){ 
+        const err = await res.json().catch(()=>({}))
+        throw new Error(err.error || err.detail || 'Failed') 
+      }
       await loadRequests()
-      alert(`Request ${action}ed`)
+      const successMsg = action === 'approve' && isHOD 
+        ? 'Request approved and forwarded to final approver' 
+        : `Request ${action}ed successfully`
+      alert(successMsg)
     }catch(e){ console.error(action, e); alert('Failed: '+(e instanceof Error? e.message: String(e))) }
   }
 
@@ -47,31 +76,43 @@ export default function AttendanceRequests(){
 
   return (
     <div className="p-4">
-      <h2 className="text-xl font-semibold mb-4">Unlock Requests (Period & Daily Attendance)</h2>
+      <h2 className="text-xl font-semibold mb-4">
+        {permissionLevel === 'department' ? 'HOD Approval Requests' : 'Unlock Requests (Final Approval)'}
+      </h2>
+      {permissionLevel === 'department' && (
+        <p className="text-sm text-gray-600 mb-4">
+          Review unlock requests from staff in your department. Approved requests will be forwarded to the attendance administrator.
+        </p>
+      )}
       {loading && <p>Loading...</p>}
-      {!loading && requests.length === 0 && <p>No requests found.</p>}
+      {!loading && requests.length === 0 && (
+        <p className="text-gray-600">
+          {permissionLevel === 'department' 
+            ? 'No pending HOD approval requests found.' 
+            : 'No requests pending final approval found.'}
+        </p>
+      )}
       {!loading && requests.length > 0 && (
         <div className="overflow-x-auto">
-          <table className="min-w-full bg-white">
-            <thead>
+          <table className="min-w-full bg-white border rounded-lg">
+            <thead className="bg-gray-50">
               <tr>
-                <th className="px-4 py-2">No.</th>
-                <th className="px-4 py-2">Type</th>
-                <th className="px-4 py-2">Session</th>
-                <th className="px-4 py-2">Section</th>
-                <th className="px-4 py-2">Requested By</th>
-                <th className="px-4 py-2">Requested At</th>
-                <th className="px-4 py-2">Reason</th>
-                <th className="px-4 py-2">Status</th>
-                <th className="px-4 py-2">Actions</th>
+                <th className="px-4 py-2 text-left text-sm font-medium text-gray-700">No.</th>
+                <th className="px-4 py-2 text-left text-sm font-medium text-gray-700">Type</th>
+                <th className="px-4 py-2 text-left text-sm font-medium text-gray-700">Session</th>
+                <th className="px-4 py-2 text-left text-sm font-medium text-gray-700">Requested By</th>
+                <th className="px-4 py-2 text-left text-sm font-medium text-gray-700">Requested At</th>
+                <th className="px-4 py-2 text-left text-sm font-medium text-gray-700">Reason</th>
+                <th className="px-4 py-2 text-left text-sm font-medium text-gray-700">Status</th>
+                <th className="px-4 py-2 text-left text-sm font-medium text-gray-700">Actions</th>
               </tr>
             </thead>
             <tbody>
               {requests.map((r, idx) => (
-                <tr key={r.id} className="border-t">
+                <tr key={r.id} className="border-t hover:bg-gray-50">
                   <td className="px-4 py-2">{idx+1}</td>
                   <td className="px-4 py-2">
-                    <span className={`px-2 py-1 rounded text-sm ${
+                    <span className={`px-2 py-1 rounded text-sm font-medium ${
                       r.request_type === 'daily' 
                         ? 'bg-emerald-100 text-emerald-800' 
                         : 'bg-indigo-100 text-indigo-800'
@@ -79,19 +120,46 @@ export default function AttendanceRequests(){
                       {r.request_type === 'daily' ? 'Daily' : 'Period'}
                     </span>
                   </td>
-                  <td className="px-4 py-2">{r.session_display || getPeriod(r) || ''}</td>
-                  <td className="px-4 py-2">{r.section_name || (r.session && r.session.section && r.session.section.name) || ''}</td>
-                  <td className="px-4 py-2">{r.requested_by_display || (r.requested_by && (r.requested_by.username || r.requested_by.staff_id || r.requested_by.id)) || ''}</td>
-                  <td className="px-4 py-2">{r.requested_at || ''}</td>
-                  <td className="px-4 py-2">{r.note || r.reason || r.reason_text || ''}</td>
-                  <td className="px-4 py-2">{r.status}</td>
+                  <td className="px-4 py-2 text-sm">
+                    <div>{r.department || r.session_display?.split(' | ')[0] || 'N/A'}</div>
+                    <div className="text-gray-500 text-xs">{r.session_display || ''}</div>
+                  </td>
+                  <td className="px-4 py-2 text-sm">
+                    <div>{r.requested_by?.name || r.requested_by_display || 'Unknown'}</div>
+                    <div className="text-gray-500 text-xs">{r.requested_by?.staff_id || (r.requested_by && r.requested_by.staff_id) || ''}</div>
+                  </td>
+                  <td className="px-4 py-2 text-sm">{r.requested_at ? new Date(r.requested_at).toLocaleString() : ''}</td>
+                  <td className="px-4 py-2 text-sm max-w-xs truncate" title={r.note || r.reason || r.reason_text || ''}>{r.note || r.reason || r.reason_text || '-'}</td>
                   <td className="px-4 py-2">
-                    {String(r.status || '').toLowerCase().includes('pend') ? (
-                      <>
-                        <button className="mr-2 px-3 py-1 bg-green-600 text-white rounded" onClick={()=>handleAction(r.id, 'approve', r.request_type || 'period')}>Approve</button>
-                        <button className="px-3 py-1 bg-red-600 text-white rounded" onClick={()=>handleAction(r.id, 'reject', r.request_type || 'period')}>Reject</button>
-                      </>
-                    ) : (<span>-</span>)}
+                    <span className={`px-2 py-1 rounded text-sm font-medium ${
+                      (r.hod_status === 'PENDING' || r.status === 'PENDING')
+                        ? 'bg-yellow-100 text-yellow-800' 
+                        : r.status === 'HOD_APPROVED'
+                        ? 'bg-blue-100 text-blue-800'
+                        : r.status === 'APPROVED'
+                        ? 'bg-green-100 text-green-800'
+                        : 'bg-red-100 text-red-800'
+                    }`}>
+                      {r.hod_status || r.status || 'PENDING'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2">
+                    {(r.hod_status === 'PENDING' || r.status === 'PENDING' || r.status === 'HOD_APPROVED') ? (
+                      <div className="flex gap-2">
+                        <button 
+                          className="px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700 transition-colors" 
+                          onClick={()=>handleAction(r.id, 'approve', r.request_type || 'period')}
+                        >
+                          Approve
+                        </button>
+                        <button 
+                          className="px-3 py-1 bg-red-600 text-white text-sm rounded hover:bg-red-700 transition-colors" 
+                          onClick={()=>handleAction(r.id, 'reject', r.request_type || 'period')}
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    ) : (<span className="text-gray-500">-</span>)}
                   </td>
                 </tr>
               ))}

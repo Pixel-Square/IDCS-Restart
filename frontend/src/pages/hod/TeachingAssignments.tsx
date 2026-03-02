@@ -17,6 +17,10 @@ type TeachingAssignment = {
   staff_details?: { id: number; user: string | { username?: string; first_name?: string; last_name?: string }; staff_id: string }
 }
 
+// Cache key and expiry time (5 minutes)
+const CACHE_KEY = 'teaching_assignments_cache'
+const CACHE_EXPIRY_MS = 5 * 60 * 1000
+
 // Helper function to get display name from user
 const getStaffDisplayName = (staff: Staff) => {
   if (typeof staff.user === 'string') {
@@ -107,11 +111,70 @@ export default function TeachingAssignmentsPage(){
     });
   }
 
+  // Cache helper functions
+  const getCachedData = () => {
+    try {
+      const cached = sessionStorage.getItem(CACHE_KEY)
+      if (!cached) return null
+      const { data, timestamp } = JSON.parse(cached)
+      const age = Date.now() - timestamp
+      if (age > CACHE_EXPIRY_MS) {
+        sessionStorage.removeItem(CACHE_KEY)
+        return null
+      }
+      return data
+    } catch {
+      return null
+    }
+  }
+
+  const setCachedData = (data: any) => {
+    try {
+      sessionStorage.setItem(CACHE_KEY, JSON.stringify({
+        data,
+        timestamp: Date.now()
+      }))
+    } catch (e) {
+      console.warn('Failed to cache teaching assignments data', e)
+    }
+  }
+
+  const clearCache = () => {
+    try {
+      sessionStorage.removeItem(CACHE_KEY)
+    } catch {}
+  }
+
   useEffect(() => { fetchData() }, [])
 
-  async function fetchData(){
+  async function fetchData(forceRefresh = false){
     try{
       setLoading(true)
+      
+      // Clear cache if force refresh
+      if (forceRefresh) {
+        clearCache()
+      }
+      
+      // Check cache first unless force refresh
+      if (!forceRefresh) {
+        const cached = getCachedData()
+        if (cached) {
+          console.log('Loading teaching assignments from cache')
+          setSections(cached.sections || [])
+          setStaff(cached.staff || [])
+          setCurriculum(cached.curriculum || [])
+          setElectiveParents(cached.electiveParents || [])
+          setElectiveOptions(cached.electiveOptions || [])
+          setAssignments(cached.assignments || [])
+          setDepartments(cached.departments || [])
+          setUserDepartments(cached.userDepartments || [])
+          setLoading(false)
+          return
+        }
+      }
+
+      console.log('Fetching teaching assignments from API')
       // Always load only the logged-in user's assigned advisor sections (my-students)
       // so Course Assignments never shows unrelated dept/HOD sections
       const sectionsEndpoint = '/api/academics/my-students/'
@@ -140,10 +203,20 @@ export default function TeachingAssignmentsPage(){
         return r.json()
       }
 
+      // Store data in local variables for caching
+      let sectionsData: Section[] = []
+      let staffData: Staff[] = []
+      let curriculumData: CurriculumRow[] = []
+      let electiveParentsData: any[] = []
+      let electiveOptionsData: any[] = []
+      let assignmentsData: TeachingAssignment[] = []
+      let departmentsData: any[] = []
+      let userDepartmentsData: any[] = []
+
       if (sres.ok){
         const d = await safeJson(sres)
         const raw = d.results || d
-        const secs = raw.map((r: any) => {
+        sectionsData = raw.map((r: any) => {
           // HODSectionsView format has `id`, advisor my-students format has `section_id`
           if (r.section_id !== undefined) {
             return { id: r.section_id, name: r.section_name, batch: r.batch, batch_regulation: r.batch_regulation, department_id: r.department_id, department_short_name: r.department_short_name, semester: r.semester, department: r.department }
@@ -151,17 +224,24 @@ export default function TeachingAssignmentsPage(){
             return { id: r.id, name: r.name, batch: r.batch_name, batch_regulation: r.batch_regulation, department_id: r.department_id, semester: r.semester, department: { id: r.department_id, code: r.department_code } }
           }
         })
-        setSections(secs)
+        setSections(sectionsData)
       }
-      if (staffRes.ok){ const d = await safeJson(staffRes); let staffList = (d.results || d) as Staff[]; // if backend didn't filter, apply client-side filter
-        if (selectedDept){ staffList = staffList.filter(s => (s.department && s.department.id === selectedDept) || (s as any).department === selectedDept) }
-        setStaff(staffList)
+      if (staffRes.ok){ 
+        const d = await safeJson(staffRes); 
+        staffData = (d.results || d) as Staff[]
+        // if backend didn't filter, apply client-side filter
+        if (selectedDept){ 
+          staffData = staffData.filter(s => (s.department && s.department.id === selectedDept) || (s as any).department === selectedDept) 
+        }
+        setStaff(staffData)
       }
       if (curRes.ok){ 
         const d = await safeJson(curRes); 
         const rows = (d.results || d); 
-        setCurriculum(rows); 
-        setElectiveParents(rows.filter((r:any)=> r.is_elective));
+        curriculumData = rows
+        electiveParentsData = rows.filter((r:any)=> r.is_elective)
+        setCurriculum(curriculumData); 
+        setElectiveParents(electiveParentsData);
 
         // Derive departments visible to this user from curriculum rows (user-mapped departments)
         const deptMap = new Map();
@@ -170,7 +250,10 @@ export default function TeachingAssignmentsPage(){
             deptMap.set(r.department.id, r.department);
           }
         });
-        if (deptMap.size > 0) setUserDepartments(Array.from(deptMap.values()));
+        if (deptMap.size > 0) {
+          userDepartmentsData = Array.from(deptMap.values())
+          setUserDepartments(userDepartmentsData)
+        }
 
         // Prefer fetching the canonical departments list from the academics API (for the top filter).
         try {
@@ -179,19 +262,46 @@ export default function TeachingAssignmentsPage(){
             const depsJson = await safeJson(depsRes)
             const deps = depsJson.results || depsJson
             if (Array.isArray(deps) && deps.length > 0) {
-              setDepartments(deps)
+              departmentsData = deps
+              setDepartments(departmentsData)
             }
           } else {
             // fallback: use the curriculum-derived set for top filter too
-            if (deptMap.size > 0) setDepartments(Array.from(deptMap.values()));
+            if (deptMap.size > 0) {
+              departmentsData = Array.from(deptMap.values())
+              setDepartments(departmentsData)
+            }
           }
         } catch (e) {
           // fallback to curriculum-derived departments on error
-          if (deptMap.size > 0) setDepartments(Array.from(deptMap.values()));
+          if (deptMap.size > 0) {
+            departmentsData = Array.from(deptMap.values())
+            setDepartments(departmentsData)
+          }
         }
       }
-      if (electRes.ok){ const d = await safeJson(electRes); setElectiveOptions(d.results || d) }
-      if (taRes.ok){ const d = await safeJson(taRes); setAssignments(d.results || d) }
+      if (electRes.ok){ 
+        const d = await safeJson(electRes); 
+        electiveOptionsData = d.results || d
+        setElectiveOptions(electiveOptionsData) 
+      }
+      if (taRes.ok){ 
+        const d = await safeJson(taRes); 
+        assignmentsData = d.results || d
+        setAssignments(assignmentsData) 
+      }
+      
+      // Cache the loaded data for faster subsequent loads
+      setCachedData({
+        sections: sectionsData,
+        staff: staffData,
+        curriculum: curriculumData,
+        electiveParents: electiveParentsData,
+        electiveOptions: electiveOptionsData,
+        assignments: assignmentsData,
+        departments: departmentsData,
+        userDepartments: userDepartmentsData
+      })
     }catch(e){ console.error(e); alert('Failed to load teaching assignment data') }
     finally{ setLoading(false) }
   }

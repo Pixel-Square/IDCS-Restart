@@ -7,6 +7,12 @@ export type AssignedSubject = {
   section_name?: string | null
   batch?: string | null
   semester?: number | null
+  department?: {
+    id: number
+    code?: string | null
+    name?: string | null
+    short_name?: string | null
+  } | null
 }
 
 export async function fetchAssignedSubjects(staffId?: number): Promise<AssignedSubject[]> {

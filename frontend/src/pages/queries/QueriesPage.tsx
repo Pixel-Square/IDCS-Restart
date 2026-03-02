@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import UserQueriesComponent from '../../components/UserQueriesComponent';
 import QueriesReceiverComponent from '../../components/QueriesReceiverComponent';
-import { getMe } from '../../services/auth';
+import { getCachedMe } from '../../services/auth';
 import { Loader2 } from 'lucide-react';
 
 export default function QueriesPage() {
@@ -10,17 +10,10 @@ export default function QueriesPage() {
   const [activeTab, setActiveTab] = useState<'my-queries' | 'all-queries'>('my-queries');
 
   useEffect(() => {
-    async function loadUser() {
-      try {
-        const userData = await getMe();
-        setUser(userData);
-      } catch (err) {
-        console.error('Failed to load user:', err);
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadUser();
+    // Use cached user data instead of making API call
+    const cachedUser = getCachedMe();
+    setUser(cachedUser);
+    setLoading(false);
   }, []);
 
   if (loading) {

@@ -62,6 +62,15 @@ export default function App() {
   const { collapsed } = useSidebar();
 
   useEffect(() => {
+    // Check if user has an access token before attempting to fetch profile
+    const token = localStorage.getItem('access')
+    if (!token) {
+      // No token means user is not logged in, skip API call
+      setUser(null)
+      setLoading(false)
+      return
+    }
+
     // Add a short timeout so the app doesn't stay on the Loading... screen
     // indefinitely if the backend is unavailable.
     let cancelled = false

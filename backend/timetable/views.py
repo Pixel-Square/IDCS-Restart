@@ -579,6 +579,38 @@ class PeriodSwapView(APIView):
             
             if from_staff_id != requesting_staff_id and to_staff_id != requesting_staff_id:
                 return Response({'error': 'You can only swap periods where you are assigned as the teaching staff'}, status=403)
+        
+        # Prevent swapping elective periods
+        if from_cr and getattr(from_cr, 'is_elective', False):
+            return Response({'error': 'Cannot swap elective periods'}, status=400)
+        if to_cr and getattr(to_cr, 'is_elective', False):
+            return Response({'error': 'Cannot swap elective periods'}, status=400)
+        
+        # Prevent swapping custom subject periods (those with subject_text but no curriculum_row)
+        if not from_cr and from_text:
+            return Response({'error': 'Cannot swap custom subject periods'}, status=400)
+        if not to_cr and to_text:
+            return Response({'error': 'Cannot swap custom subject periods'}, status=400)
+        
+        # Prevent swapping periods that already have non-swap special entries
+        existing_from_special = SpecialTimetableEntry.objects.filter(
+            timetable__section=sec,
+            date=from_date,
+            period_id=from_period_id,
+            is_active=True
+        ).exclude(timetable__name__startswith='[SWAP]').exists()
+        
+        existing_to_special = SpecialTimetableEntry.objects.filter(
+            timetable__section=sec,
+            date=to_date,
+            period_id=to_period_id,
+            is_active=True
+        ).exclude(timetable__name__startswith='[SWAP]').exists()
+        
+        if existing_from_special:
+            return Response({'error': 'Cannot swap a period that has a special timetable entry'}, status=400)
+        if existing_to_special:
+            return Response({'error': 'Cannot swap a period that has a special timetable entry'}, status=400)
         # ────────────────────────────────────────────────────────────────────────
 
         # Deactivate any existing swap entries for these periods on their respective dates

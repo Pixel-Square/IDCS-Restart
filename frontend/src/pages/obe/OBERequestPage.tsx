@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { createPublishRequest } from '../../services/obe';
 import fetchWithAuth from '../../services/fetchAuth';
+import { getCachedMe } from '../../services/auth';
 import { fetchTeachingAssignmentRoster } from '../../services/roster';
 import { ModalPortal } from '../../components/ModalPortal';
 
@@ -50,9 +51,10 @@ export default function OBERequestPage(): JSX.Element {
     setViewReasonError(null);
     try {
       if (!viewReasonMe) {
-        const meRes = await fetchWithAuth('/api/accounts/me/', { method: 'GET' });
-        if (meRes.ok) {
-          setViewReasonMe(await meRes.json());
+        // Use cached user data instead of making API call
+        const me = getCachedMe();
+        if (me) {
+          setViewReasonMe(me);
         }
       }
 

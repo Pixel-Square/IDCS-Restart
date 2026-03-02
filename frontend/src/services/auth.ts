@@ -74,13 +74,25 @@ apiClient.interceptors.response.use(
         originalRequest.headers = new AxiosHeaders(headers)
         return apiClient(originalRequest)
       } catch (refreshErr) {
-        // refresh failed -> logout
+        // refresh failed -> logout silently
+        // Only log in development mode
+        if (import.meta.env.DEV) {
+          console.warn('Token refresh failed, logging out')
+        }
         logout()
+        // Redirect to login page
+        if (typeof window !== 'undefined') {
+          setTimeout(() => {
+            try { window.location.href = '/login' } catch (_) {}
+          }, 50)
+        }
         return Promise.reject(refreshErr)
       } finally {
         isRefreshing = false
       }
     }
+    // Don't log 401 errors - they're handled by the refresh mechanism
+    // For production, only reject without noisy console logs
     return Promise.reject(err)
   }
 )

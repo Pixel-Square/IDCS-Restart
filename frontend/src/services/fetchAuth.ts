@@ -82,38 +82,30 @@ export async function fetchWithAuth(input: RequestInfo | URL, init: RequestInit 
 
   const res = await fetch(finalInput, { ...init, headers })
 
-  // Debug: log 400/401/403 errors with response body and request details
-  if (res.status === 400) {
-    const text = await res.clone().text()
-    console.error('400 Bad Request:', { url: finalInput, token, response: text })
-  }
-  if (res.status === 401 || res.status === 403) {
-    let text = ''
-    try {
-      text = await res.clone().text()
-    } catch (e) {
-      /* ignore */
-    }
-    const respHeaders: Record<string, string> = {}
-    try {
-      res.headers.forEach((v, k) => { respHeaders[k] = v })
-    } catch (_) {}
-    if (res.status === 401) {
-      console.error('Auth error from fetchWithAuth', {
-        url: String(finalInput),
-        status: res.status,
-        requestHeaders: headers,
-        responseHeaders: respHeaders,
-        token,
-        responseText: text,
-      })
+  // Handle 401: Only log detailed errors if not a retry scenario
+  if (res.status === 401) {
+    // If we have a token and this is the first attempt, we'll try to refresh
+    // Don't log errors yet - let the refresh mechanism handle it
+    if (retry && token) {
+      // Silently proceed to token refresh logic below
     } else {
-      // 403: permission denied - warn rather than error to avoid noisy logs
-      console.warn('Permission denied (403) from fetchWithAuth', {
-        url: String(finalInput),
-        status: res.status,
-        token,
-      })
+      // Log only when retry is disabled or no token was present
+      console.warn('Authentication required:', String(finalInput))
+    }
+  }
+
+  // Handle 403: permission denied - warn with minimal details
+  if (res.status === 403) {
+    console.warn('Permission denied:', String(finalInput))
+  }
+
+  // Handle 400: Bad Request - log with response details for debugging
+  if (res.status === 400) {
+    try {
+      const text = await res.clone().text()
+      console.error('Bad Request (400):', { url: String(finalInput), response: text })
+    } catch (e) {
+      console.error('Bad Request (400):', String(finalInput))
     }
   }
 
@@ -129,11 +121,26 @@ export async function fetchWithAuth(input: RequestInfo | URL, init: RequestInit 
     }
     headers2['Authorization'] = `Bearer ${newAccess}`
     // retry the same resolved URL (finalInput) so we don't accidentally hit the Vite dev server
-    return fetch(finalInput, { ...init, headers: headers2 })
+    const retryRes = await fetch(finalInput, { ...init, headers: headers2 })
+    
+    // If retry also fails with 401, the session is truly expired
+    if (retryRes.status === 401) {
+      console.error('Session expired - redirecting to login')
+      try { window.localStorage.removeItem('access'); window.localStorage.removeItem('refresh'); } catch (_) {}
+      try {
+        if (typeof window !== 'undefined') {
+          setTimeout(() => {
+            try { window.location.href = '/login'; } catch (_) {}
+          }, 50);
+        }
+      } catch (_) {}
+    }
+    
+    return retryRes
   } catch (e) {
-    // failed to refresh -> clear tokens, log and redirect to login
+    // failed to refresh -> clear tokens and redirect to login
+    console.error('Token refresh failed - redirecting to login')
     try { window.localStorage.removeItem('access'); window.localStorage.removeItem('refresh'); } catch (_) {}
-    console.error('Token refresh failed:', e);
     try {
       if (typeof window !== 'undefined') {
         setTimeout(() => {

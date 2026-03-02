@@ -28,8 +28,8 @@ from .models import (
 from .models import TeachingAssignment
 from .models import StudentMentorMap, SectionAdvisor, DepartmentRole
 from .models import StudentSubjectBatch
-from .models import PeriodAttendanceSession, PeriodAttendanceRecord, AttendanceUnlockRequest
-from .models import DailyAttendanceSession, DailyAttendanceRecord
+from .models import PeriodAttendanceSession, PeriodAttendanceRecord, AttendanceUnlockRequest, PeriodAttendanceSwapRecord
+from .models import DailyAttendanceSession, DailyAttendanceRecord, DailyAttendanceSwapRecord, DailyAttendanceUnlockRequest
 from django import forms
 from django.db import models
 from django.core.exceptions import ValidationError
@@ -130,8 +130,8 @@ class StudentProfileAdmin(admin.ModelAdmin):
                 'save_url': reverse('admin:academics_studentprofile_sheets_save'),
             })
 
-        sections_qs = Section.objects.select_related('semester__course__department').all().order_by(
-            'semester__course__department__code', 'semester__course__name', 'semester__number', 'name'
+        sections_qs = Section.objects.select_related('batch__course__department', 'semester').all().order_by(
+            'batch__course__department__short_name', 'batch__course__name', 'semester__number', 'name'
         )
         sections = [{'id': s.pk, 'label': str(s)} for s in sections_qs]
 
@@ -1308,6 +1308,29 @@ class AttendanceUnlockRequestAdmin(admin.ModelAdmin):
     date_hierarchy = 'requested_at'
 
 
+@admin.register(PeriodAttendanceSwapRecord)
+class PeriodAttendanceSwapRecordAdmin(admin.ModelAdmin):
+    list_display = ('session', 'assigned_by', 'assigned_to', 'assigned_at', 'reason')
+    search_fields = ('assigned_by__staff_id', 'assigned_by__user__username', 'assigned_to__staff_id', 'assigned_to__user__username')
+    list_filter = ('assigned_at',)
+    raw_id_fields = ('session', 'assigned_by', 'assigned_to')
+    readonly_fields = ('assigned_at',)
+    date_hierarchy = 'assigned_at'
+
+    def has_add_permission(self, request):
+        return False
+
+
+@admin.register(DailyAttendanceUnlockRequest)
+class DailyAttendanceUnlockRequestAdmin(admin.ModelAdmin):
+    list_display = ('id', 'session', 'requested_by', 'requested_at', 'status', 'hod_status', 'hod_reviewed_by', 'hod_reviewed_at', 'reviewed_by', 'reviewed_at')
+    list_filter = ('status', 'hod_status', 'requested_at')
+    search_fields = ('requested_by__user__username', 'requested_by__staff_id', 'reviewed_by__user__username', 'session__section__name')
+    raw_id_fields = ('session', 'requested_by', 'hod_reviewed_by', 'reviewed_by')
+    readonly_fields = ('requested_at', 'hod_reviewed_at', 'reviewed_at')
+    date_hierarchy = 'requested_at'
+
+
 class DailyAttendanceRecordInline(admin.TabularInline):
     model = DailyAttendanceRecord
     extra = 0
@@ -1315,15 +1338,27 @@ class DailyAttendanceRecordInline(admin.TabularInline):
     fields = ('student', 'status', 'marked_by', 'remarks', 'marked_at')
 
 
+class DailyAttendanceSwapRecordInline(admin.TabularInline):
+    model = DailyAttendanceSwapRecord
+    extra = 0
+    readonly_fields = ('assigned_at',)
+    fields = ('assigned_by', 'assigned_to', 'assigned_at', 'reason')
+    can_delete = False
+    
+    def has_add_permission(self, request, obj=None):
+        # Swap records are created automatically via the API
+        return False
+
+
 @admin.register(DailyAttendanceSession)
 class DailyAttendanceSessionAdmin(admin.ModelAdmin):
-    list_display = ('section', 'date', 'created_by', 'is_locked', 'created_at', 'updated_at')
+    list_display = ('section', 'date', 'created_by', 'assigned_to', 'is_locked', 'created_at', 'updated_at')
     list_filter = ('date', 'is_locked')
     search_fields = ('section__name',)
-    raw_id_fields = ('section', 'created_by')
+    raw_id_fields = ('section', 'created_by', 'assigned_to')
     readonly_fields = ('created_at', 'updated_at')
     date_hierarchy = 'date'
-    inlines = (DailyAttendanceRecordInline,)
+    inlines = (DailyAttendanceSwapRecordInline, DailyAttendanceRecordInline,)
 
 
 @admin.register(DailyAttendanceRecord)
@@ -1334,6 +1369,21 @@ class DailyAttendanceRecordAdmin(admin.ModelAdmin):
     raw_id_fields = ('session', 'student', 'marked_by')
     readonly_fields = ('marked_at',)
     date_hierarchy = 'session__date'
+
+
+@admin.register(DailyAttendanceSwapRecord)
+class DailyAttendanceSwapRecordAdmin(admin.ModelAdmin):
+    list_display = ('session', 'assigned_by', 'assigned_to', 'assigned_at', 'reason')
+    search_fields = ('assigned_by__staff_id', 'assigned_by__user__username', 'assigned_to__staff_id', 'assigned_to__user__username', 'session__section__name')
+    list_filter = ('assigned_at',)
+    raw_id_fields = ('session', 'assigned_by', 'assigned_to')
+    readonly_fields = ('assigned_at',)
+    date_hierarchy = 'assigned_at'
+    
+    def has_add_permission(self, request):
+        # Swap records are created automatically via the API, not manually
+        return False
+
 
 class SpecialCourseAssessmentEditRequestInline(admin.TabularInline):
     model = SpecialCourseAssessmentEditRequest

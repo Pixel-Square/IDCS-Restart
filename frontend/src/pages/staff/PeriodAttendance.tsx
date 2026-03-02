@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import fetchWithAuth from '../../services/fetchAuth'
-import { Calendar, Clock, Users, CheckCircle2, XCircle, Loader2, Save, X, ChevronDown, AlertCircle, Lock, Unlock, GraduationCap, Check } from 'lucide-react'
+import { Calendar, Clock, Users, CheckCircle2, XCircle, Loader2, Save, X, ChevronDown, AlertCircle, Lock, Unlock, GraduationCap, Check, ArrowLeftRight } from 'lucide-react'
 
 type ViewMode = 'period' | 'daily'
 
@@ -20,6 +20,10 @@ type PeriodItem = {
   unlock_request_id?: number | null
   elective_subject_id?: number | null
   elective_subject_name?: string | null
+
+  // Swap/assignment
+  assigned_to?: { id: number; name: string; staff_id: string } | null
+  original_staff?: { id: number; name: string; staff_id: string } | null
 
   // UI-only/grouping fields
   section_ids?: number[]
@@ -43,6 +47,7 @@ type Student = {
 
 export default function PeriodAttendance(){
   const [viewMode, setViewMode] = useState<ViewMode>('period')
+  const viewModeInitialized = useRef(false)
   const [date, setDate] = useState<string>(new Date().toISOString().slice(0,10))
   const [periods, setPeriods] = useState<PeriodItem[]>([])
   const [loading, setLoading] = useState(false)
@@ -82,6 +87,16 @@ export default function PeriodAttendance(){
   const [savingDaily, setSavingDaily] = useState(false)
   const [loadingDaily, setLoadingDaily] = useState(false)
   const [lockingDaily, setLockingDaily] = useState(false)
+  const [revertingAssignment, setRevertingAssignment] = useState(false)
+
+  // Swap attendance state
+  const [swapModalOpen, setSwapModalOpen] = useState(false)
+  const [swapFor, setSwapFor] = useState<'daily' | 'period'>('daily')  // which context the modal is for
+  const [selectedPeriodForSwap, setSelectedPeriodForSwap] = useState<any>(null)  // period card being assigned
+  const [departmentStaff, setDepartmentStaff] = useState<any[]>([])
+  const [loadingStaff, setLoadingStaff] = useState(false)
+  const [selectedSwapStaff, setSelectedSwapStaff] = useState<any>(null)
+  const [actualMarkedBy, setActualMarkedBy] = useState<any>(null) // Who actually marked the saved attendance
 
   // Check user permissions for attendance marking
   const userPerms = (() => {
@@ -89,6 +104,11 @@ export default function PeriodAttendance(){
   })()
   const hasMarkAttendancePermission = Array.isArray(userPerms) && (userPerms.includes('academics.mark_attendance') || userPerms.includes('MARK_ATTENDANCE'))
   const hasClassAdvisorPermission = myClassSections && myClassSections.length > 0
+  
+  // Check if user has sections assigned via swap
+  const hasAssignedSections = myClassSections && myClassSections.some((section: any) => section.is_assigned_via_swap)
+  // Class advisors always have daily attendance access regardless of mark_attendance permission
+  const canAccessDailyAttendance = hasClassAdvisorPermission
 
   useEffect(()=>{ fetchPeriods(); loadMyClassSections() }, [date])
   useEffect(()=>{ if (selectedSection && dailyMode) loadDailyAttendance() }, [selectedSection, date, dailyMode])
@@ -226,6 +246,8 @@ export default function PeriodAttendance(){
   // Open single period
   async function openPeriod(p: PeriodItem | any){
     setSelected(p)
+    setDailyMode(false)
+    setSelectedSection(null)
     setStudents([])
     setMarks({})
     setDailyLocks({})
@@ -525,6 +547,8 @@ export default function PeriodAttendance(){
       const allPeriodsInChain = [pendingPeriod, ...consecutivePeriods].sort((a, b) => (a.period?.index ?? 0) - (b.period?.index ?? 0))
       const combinedLabel = allPeriodsInChain.map(pp => pp.period?.label || `Period ${pp.period?.index}`).join(' & ')
       const consecutivePeriodsPayload = allPeriodsInChain.map(pp => ({ period_id: pp.period.id, label: pp.period?.label || '' }))
+      setDailyMode(false)
+      setSelectedSection(null)
       setSelected({ ...pendingPeriod, consecutive_periods: consecutivePeriodsPayload, combined_period_label: combinedLabel, section_name: sectionNames, section_ids: p.section_ids || [p.section_id] })
       // Do not auto-save: allow user to review/edit then click Save
     } catch(e) {
@@ -729,16 +753,28 @@ export default function PeriodAttendance(){
   async function loadMyClassSections() {
     setLoadingDaily(true)
     try {
-      const response = await fetchWithAuth('/api/academics/analytics/my-class-students/')
+      const response = await fetchWithAuth(`/api/academics/analytics/my-class-students/?date=${date}`)
       if (!response.ok) throw new Error('Failed to load sections')
       const data = await response.json()
-      setMyClassSections(data.sections || [])
-      if (data.sections && data.sections.length > 0 && !selectedSection) {
-        setSelectedSection(data.sections[0])
+      const sections = data.sections || []
+      setMyClassSections(sections)
+      // Auto-select default tab on first load only
+      if (!viewModeInitialized.current) {
+        viewModeInitialized.current = true
+        // If user has daily sections, default to 'daily' tab
+        if (sections.length > 0) {
+          setViewMode('daily')
+        }
+      }
+      if (sections.length > 0 && !selectedSection) {
+        setSelectedSection(sections[0])
       }
     } catch (error) {
       console.error('Error loading sections:', error)
       setMyClassSections([])
+      if (!viewModeInitialized.current) {
+        viewModeInitialized.current = true
+      }
     } finally {
       setLoadingDaily(false)
     }
@@ -756,16 +792,26 @@ export default function PeriodAttendance(){
       
       const statusMap: Record<number, string> = {}
       const remarksMap: Record<number, string> = {}
-      data.students.forEach((student: any) => {
+      let markedByInfo = null
+      
+      data.students.forEach((student: any, index: number) => {
         statusMap[student.student_id] = student.status || 'P'
         remarksMap[student.student_id] = student.remarks || ''
+        
+        // Extract marked_by from first student that has it
+        if (index === 0 && student.marked_by) {
+          markedByInfo = student.marked_by
+        }
       })
+      
       setAttendanceStatus(statusMap)
       setAttendanceRemarks(remarksMap)
+      setActualMarkedBy(markedByInfo)
     } catch (error) {
       console.error('Error loading daily attendance:', error)
       setDailyAttendance([])
       setDailySessionData(null)
+      setActualMarkedBy(null)
     } finally {
       setLoadingDaily(false)
     }
@@ -788,17 +834,21 @@ export default function PeriodAttendance(){
         remarks: attendanceRemarks[student.student_id] || ''
       }))
 
+      const payload: any = {
+        section_id: selectedSection.section_id,
+        date: date,
+        attendance: records
+      }
+
       const response = await fetchWithAuth('/api/academics/analytics/daily-attendance/', {
         method: 'POST',
-        body: JSON.stringify({
-          section_id: selectedSection.section_id,
-          date: date,
-          attendance: records
-        })
+        body: JSON.stringify(payload)
       })
 
       if (!response.ok) throw new Error('Failed to save attendance')
+      
       alert('Daily attendance saved successfully!')
+      
       await loadDailyAttendance()
     } catch (error) {
       console.error('Error saving daily attendance:', error)
@@ -816,6 +866,157 @@ export default function PeriodAttendance(){
     setAttendanceStatus(newStatus)
   }
 
+  // Load department staff for swap
+  async function loadDepartmentStaff() {
+    setLoadingStaff(true)
+    try {
+      const res = await fetchWithAuth('/api/academics/department-staff/')
+      if (!res.ok) throw new Error('Failed to load staff')
+      const data = await res.json()
+      setDepartmentStaff(data.results || [])
+    } catch (error) {
+      console.error('Error loading department staff:', error)
+      alert('Failed to load staff from your department')
+    } finally {
+      setLoadingStaff(false)
+    }
+  }
+
+  // Open swap modal
+  function openSwapModal() {
+    setSwapFor('daily')
+    setSwapModalOpen(true)
+    loadDepartmentStaff()
+  }
+
+  function openPeriodSwapModal(period: any) {
+    setSwapFor('period')
+    setSelectedPeriodForSwap(period)
+    setSwapModalOpen(true)
+    loadDepartmentStaff()
+  }
+
+  // Handle staff selection for swap - IMMEDIATELY assigns on backend
+  async function handleSwapStaff(staff: any) {
+    if (swapFor === 'period') {
+      await handlePeriodSwapStaff(staff)
+      return
+    }
+    if (!confirm(`Assign attendance taking to ${staff.name}? This will immediately transfer responsibility for marking attendance to them. You will no longer be able to access this attendance session.`)) {
+      return
+    }
+    
+    setSwapModalOpen(false)
+    setSavingDaily(true)
+    
+    try {
+      // Immediately send assignment to backend
+      const response = await fetchWithAuth('/api/academics/analytics/daily-attendance/', {
+        method: 'POST',
+        body: JSON.stringify({
+          section_id: selectedSection.section_id,
+          date: date,
+          attendance: [],  // Empty array - we're only assigning, not marking attendance yet
+          taken_by_staff_id: staff.id
+        })
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || 'Failed to assign attendance')
+      }
+      
+      alert(`Attendance successfully assigned to ${staff.name}! They will now see this section in their daily attendance list. You will be redirected back to the section list.`)
+      
+      // Close the panel and go back to section list since advisor no longer has access
+      setDailyMode(false)
+      setSelectedSection(null)
+      setSelectedSwapStaff(null)
+      setActualMarkedBy(null)
+      
+      // Reload sections in case there are other assigned sections
+      await loadMyClassSections()
+    } catch (error) {
+      console.error('Error assigning attendance:', error)
+      alert('Failed to assign attendance: ' + (error instanceof Error ? error.message : String(error)))
+    } finally {
+      setSavingDaily(false)
+    }
+  }
+
+  // Assign period attendance to another staff
+  async function handlePeriodSwapStaff(staff: any) {
+    const p = selectedPeriodForSwap || selected
+    if (!p) return
+
+    if (!confirm(`Assign ${p.period?.label || 'this period'} attendance to ${staff.name}? They will be responsible for marking this period's attendance.`)) {
+      setSwapModalOpen(false)
+      return
+    }
+
+    setSwapModalOpen(false)
+    setSaving(true)
+    try {
+      const body: any = {
+        section_id: p.section_id,
+        period_id: p.period?.id,
+        date: date,
+        taken_by_staff_id: staff.id,
+      }
+      if (p.teaching_assignment_id) body.teaching_assignment_id = p.teaching_assignment_id
+
+      const res = await fetchWithAuth('/api/academics/analytics/period-attendance-swap/', {
+        method: 'POST',
+        body: JSON.stringify(body)
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || 'Failed to assign')
+      }
+      const data = await res.json()
+      // Update local period card to reflect assignment
+      setPeriods(prev => prev.map(pp =>
+        pp.id === p.id ? { ...pp, assigned_to: data.assigned_to, attendance_session_id: data.session_id } : pp
+      ))
+      if (selected && selected.id === p.id) {
+        setSelected((s: any) => s ? { ...s, assigned_to: data.assigned_to, attendance_session_id: data.session_id } : s)
+      }
+      alert(`Period attendance assigned to ${staff.name}. They can now mark attendance for this period.`)
+    } catch (e) {
+      console.error('Period swap error:', e)
+      alert('Failed to assign: ' + (e instanceof Error ? e.message : String(e)))
+    } finally {
+      setSaving(false)
+      setSelectedPeriodForSwap(null)
+    }
+  }
+
+  // Revert period attendance assignment
+  async function revertPeriodAssignment(sessionId: number, periodId: any) {
+    const assignedName = selected?.assigned_to?.name || selected?.assigned_to?.staff_id || 'assigned staff'
+    if (!confirm(`Revert assignment from ${assignedName}? This is only possible if they haven't marked attendance yet.`)) return
+
+    setSaving(true)
+    try {
+      const res = await fetchWithAuth(`/api/academics/analytics/period-attendance-revert/${sessionId}/`, { method: 'POST' })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || 'Failed to revert')
+      }
+      // Clear assigned_to locally
+      setPeriods(prev => prev.map(pp =>
+        pp.attendance_session_id === sessionId ? { ...pp, assigned_to: null } : pp
+      ))
+      setSelected((s: any) => s ? { ...s, assigned_to: null } : s)
+      alert('Assignment reverted. You can now mark attendance for this period.')
+    } catch (e) {
+      console.error('Period revert error:', e)
+      alert('Failed to revert: ' + (e instanceof Error ? e.message : String(e)))
+    } finally {
+      setSaving(false)
+    }
+  }
+
   // Daily attendance lock/unlock functions
   async function toggleDailyLock() {
     if (!dailySessionData || !dailySessionData.session_id) {
@@ -825,6 +1026,7 @@ export default function PeriodAttendance(){
 
     const isLocked = dailySessionData.is_locked
     const sessionId = dailySessionData.session_id
+    const action = isLocked ? 'unlock' : 'lock'
     const confirmed = window.confirm(
       isLocked
         ? 'Are you sure you want to request an unlock for this daily attendance session? Unlocking requires approval.'
@@ -837,42 +1039,37 @@ export default function PeriodAttendance(){
     try {
       if (isLocked) {
         // Create an unlock request instead of immediately unlocking
-        const reqRes = await fetchWithAuth('/api/academics/analytics/daily-attendance-unlock-request/', {
+        const reqRes = await fetchWithAuth('/api/academics/daily-attendance-unlock-request/', {
           method: 'POST',
           body: JSON.stringify({ session: sessionId, note: '' }),
         })
         if (!reqRes.ok) {
           const err = await reqRes.json().catch(() => ({}))
-          if (reqRes.status === 400 && err.error?.includes('already pending')) {
-            alert('An unlock request for this session already exists and is pending approval.')
+          if (reqRes.status === 400 && (err.error?.includes('already pending') || err.error?.includes('already hod_approved'))) {
+            alert('An unlock request for this session already exists and is pending approval. Please check with your HOD or administrator.')
           } else {
-            throw new Error(err.error || 'Failed to create unlock request')
+            throw new Error(err.error || err.detail || 'Failed to create unlock request')
           }
         } else {
           const reqData = await reqRes.json()
           console.log('Daily unlock request created:', reqData)
-          alert('Unlock request submitted successfully!')
-          // Update local state to reflect pending status
-          setDailySessionData(prev => prev ? ({ 
-            ...prev, 
-            unlock_request_status: reqData.status, 
-            unlock_request_id: reqData.id 
-          }) : prev)
+          alert('Unlock request submitted successfully! It will first be reviewed by your HOD, then by the attendance administrator.')
+          // Optionally update UI to reflect pending state
+          setDailySessionData(prev => prev ? ({ ...prev, unlock_request_status: reqData.status }) : prev)
         }
         // Do not change locked state until approval
       } else {
         // Lock immediately
-        const res = await fetchWithAuth(
-          `/api/academics/analytics/daily-attendance-lock/${sessionId}/`,
-          { method: 'POST' }
-        )
+        const res = await fetchWithAuth(`/api/academics/analytics/daily-attendance-lock/${sessionId}/`, { method: 'POST' })
+        
         if (!res.ok) {
           const errorData = await res.json().catch(() => ({}))
           throw new Error(errorData.error || `Failed to lock session`)
         }
+        
         const sessionData = await res.json()
         console.log('Daily session locked successfully:', sessionData)
-        setDailySessionData(prev => prev ? ({ ...prev, is_locked: true }) : prev)
+        setDailySessionData(prev => prev ? ({ ...prev, is_locked: !isLocked }) : prev)
         alert('Daily attendance session locked successfully!')
       }
     } catch (e) {
@@ -880,6 +1077,47 @@ export default function PeriodAttendance(){
       alert('Failed to perform lock/unlock: ' + (e instanceof Error ? e.message : String(e)))
     } finally {
       setLockingDaily(false)
+    }
+  }
+
+  // Revert assignment function
+  async function revertAssignment() {
+    if (!dailySessionData || !dailySessionData.session_id || !dailySessionData.assigned_to) {
+      alert('No assignment to revert')
+      return
+    }
+
+    const confirmed = window.confirm(
+      `Are you sure you want to revert the assignment from ${dailySessionData.assigned_to.name}? ` +
+      'This will give you back control over marking attendance for this section. ' +
+      'This is only possible if they haven\'t marked any attendance yet.'
+    )
+
+    if (!confirmed) return
+
+    setRevertingAssignment(true)
+    
+    try {
+      const response = await fetchWithAuth(`/api/academics/analytics/daily-attendance-revert/${dailySessionData.session_id}/`, {
+        method: 'POST'
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || 'Failed to revert assignment')
+      }
+
+      const data = await response.json()
+      alert(data.message || 'Assignment successfully reverted!')
+      
+      // Reload the attendance data to reflect the reverted assignment
+      await loadDailyAttendance()
+      
+    } catch (error) {
+      console.error('Error reverting assignment:', error)
+      alert('Failed to revert assignment: ' + (error instanceof Error ? error.message : String(error)))
+    } finally {
+      setRevertingAssignment(false)
     }
   }
 
@@ -917,22 +1155,9 @@ export default function PeriodAttendance(){
       {/* Navigation Tabs */}
       <div className="mb-6 border-b border-gray-200 bg-white rounded-xl shadow-sm border border-slate-200">
         <div className="flex items-center gap-1 p-4">
-          {hasMarkAttendancePermission && (
+          {canAccessDailyAttendance && (
             <button
-              onClick={() => setViewMode('period')}
-              className={`px-4 py-3 font-medium text-sm flex items-center gap-2 border-b-2 transition-colors ${
-                viewMode === 'period'
-                  ? 'border-indigo-600 text-indigo-600' 
-                  : 'border-transparent text-gray-600 hover:text-gray-900 hover:border-gray-300'
-              }`}
-            >
-              <Clock className="w-4 h-4" />
-              Period Wise
-            </button>
-          )}
-          {hasClassAdvisorPermission && (
-            <button
-              onClick={() => setViewMode('daily')}
+              onClick={() => { setViewMode('daily'); setSelected(null); }}
               className={`px-4 py-3 font-medium text-sm flex items-center gap-2 border-b-2 transition-colors ${
                 viewMode === 'daily'
                   ? 'border-indigo-600 text-indigo-600' 
@@ -941,6 +1166,19 @@ export default function PeriodAttendance(){
             >
               <Calendar className="w-4 h-4" />
               Daily
+            </button>
+          )}
+          {hasMarkAttendancePermission && (
+            <button
+              onClick={() => { setViewMode('period'); setDailyMode(false); setSelectedSection(null); }}
+              className={`px-4 py-3 font-medium text-sm flex items-center gap-2 border-b-2 transition-colors ${
+                viewMode === 'period'
+                  ? 'border-indigo-600 text-indigo-600' 
+                  : 'border-transparent text-gray-600 hover:text-gray-900 hover:border-gray-300'
+              }`}
+            >
+              <Clock className="w-4 h-4" />
+              Period Wise
             </button>
           )}
         </div>
@@ -964,26 +1202,91 @@ export default function PeriodAttendance(){
                     <div className="flex-1">
                       <h3 className="font-semibold text-slate-900 mb-1 flex items-center gap-2">
                         <GraduationCap className="w-4 h-4 text-emerald-600" />
-                        {sec.section_name}
+                        {[sec.department_short_name, sec.batch_name, sec.section_name].filter(Boolean).join(' · ')}
                       </h3>
-                      <div className="text-sm text-slate-600 mb-1">
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-md bg-emerald-100 text-emerald-800 font-medium">
+                      
+                      <div className="flex flex-wrap items-center gap-2 mb-1">
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-md bg-emerald-100 text-emerald-800 font-medium text-sm">
                           {sec.students?.length || 0} Student{sec.students?.length !== 1 ? 's' : ''}
                         </span>
-                      </div>
-                      <div className="text-sm text-slate-600">
-                        {sec.batch_name || 'Batch'}
+                        {sec.is_assigned_via_swap && (
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-md bg-indigo-100 text-indigo-800 font-medium text-xs">
+                            <ArrowLeftRight className="w-3 h-3 mr-1" />
+                            Assigned to you
+                          </span>
+                        )}
+                        {/* Unlock request status badge */}
+                        {(() => {
+                          const unlockStatus = sec.session_status?.unlock_request_status
+                          const hodStatus = sec.session_status?.unlock_request_hod_status
+                          if (!unlockStatus) return null
+                          if (unlockStatus === 'APPROVED')
+                            return <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-100 text-green-800 border border-green-300 rounded-md text-xs font-medium"><Unlock className="w-3 h-3" />Approved</span>
+                          if (unlockStatus === 'REJECTED')
+                            return <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-100 text-red-800 border border-red-300 rounded-md text-xs font-medium"><Lock className="w-3 h-3" />Rejected</span>
+                          if (hodStatus === 'HOD_APPROVED')
+                            return <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-100 text-blue-800 border border-blue-300 rounded-md text-xs font-medium"><Clock className="w-3 h-3" />Pending Admin</span>
+                          if (unlockStatus === 'PENDING')
+                            return <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-100 text-amber-800 border border-amber-300 rounded-md text-xs font-medium"><Clock className="w-3 h-3" />Pending Approval</span>
+                          return null
+                        })()}
                       </div>
                     </div>
                   </div>
                   <div className="mt-3">
-                    <button 
-                      onClick={() => { setSelectedSection(sec); setDailyMode(true) }}
-                      className="w-full px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
-                    >
-                      <Calendar className="w-4 h-4" />
-                      Mark Daily Attendance
-                    </button>
+                    {(() => {
+                      const sessionStatus = sec.session_status || {}
+                      const isLocked = sessionStatus.is_locked
+                      const hasAttendance = sessionStatus.has_attendance
+                      const assignedTo = sessionStatus.assigned_to
+                      const isAssignedToOthers = assignedTo && !sec.is_assigned_via_swap
+                      
+                      // Determine button state and styling
+                      if (isLocked) {
+                        return (
+                          <button 
+                            onClick={() => { setSelected(null); setSelectedSection(sec); setDailyMode(true) }}
+                            className="w-full px-3 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
+                          >
+                            <Lock className="w-4 h-4" />
+                            Locked Session
+                          </button>
+                        )
+                      } else if (hasAttendance) {
+                        return (
+                          <button 
+                            onClick={() => { setSelected(null); setSelectedSection(sec); setDailyMode(true) }}
+                            className="w-full px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
+                          >
+                            <CheckCircle2 className="w-4 h-4" />
+                            View Attendance
+                          </button>
+                        )
+                      } else if (isAssignedToOthers) {
+                        const assignedName = assignedTo.name || assignedTo.staff_id || 'Someone'
+                        const truncatedName = assignedName.length > 12 ? `${assignedName.substring(0, 12)}...` : assignedName
+                        return (
+                          <button 
+                            onClick={() => { setSelected(null); setSelectedSection(sec); setDailyMode(true) }}
+                            className="w-full px-3 py-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
+                            title={`Assigned to ${assignedName}`}
+                          >
+                            <ArrowLeftRight className="w-4 h-4" />
+                            Assigned to {truncatedName}
+                          </button>
+                        )
+                      } else {
+                        return (
+                          <button 
+                            onClick={() => { setSelected(null); setSelectedSection(sec); setDailyMode(true) }}
+                            className="w-full px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
+                          >
+                            <Calendar className="w-4 h-4" />
+                            Mark Daily Attendance
+                          </button>
+                        )
+                      }
+                    })()}
                   </div>
                 </div>
               ))}
@@ -1052,6 +1355,24 @@ export default function PeriodAttendance(){
                           )}
                         </div>
                       )}
+                      {/* Assigned-to badge on period card */}
+                      {(p as any).original_staff ? (
+                        /* Assignee view: "Assigned by X" */
+                        <div className="mt-1">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800 border border-orange-300">
+                            <ArrowLeftRight className="w-3 h-3" />
+                            Assigned by: {(p as any).original_staff.name || (p as any).original_staff.staff_id}
+                          </span>
+                        </div>
+                      ) : p.assigned_to ? (
+                        /* Assigner view: "Assigned to X" */
+                        <div className="mt-1">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800 border border-orange-300">
+                            <ArrowLeftRight className="w-3 h-3" />
+                            Assigned to: {p.assigned_to.name || p.assigned_to.staff_id}
+                          </span>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                   <div className="mt-3">
@@ -1063,10 +1384,19 @@ export default function PeriodAttendance(){
                         <Lock className="w-4 h-4" />
                         {p.attendance_session_id ? 'View Locked Session' : 'View Locked Period'}
                       </button>
+                    ) : p.assigned_to && !(p as any).original_staff ? (
+                      /* Assigner view-only: session is now assigned to someone else */
+                      <button
+                        onClick={() => handlePeriodClick(p)}
+                        className="w-full px-3 py-2 bg-slate-100 text-slate-600 border border-slate-300 rounded-lg text-sm font-medium hover:bg-slate-200 flex items-center justify-center gap-2"
+                      >
+                        <ArrowLeftRight className="w-4 h-4" />
+                        View Only
+                      </button>
                     ) : (
                       <button 
                         onClick={()=> handlePeriodClick(p)}
-                        className={`w-full px-3 py-2 text-white rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 ${p.is_swap ? 'bg-green-600 hover:bg-green-700' : p.is_special ? 'bg-amber-500 hover:bg-amber-600' : 'bg-indigo-600 hover:bg-indigo-700'}`}
+                        className={`w-full px-3 py-2 text-white rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 ${(p as any).original_staff ? 'bg-orange-500 hover:bg-orange-600' : p.is_swap ? 'bg-green-600 hover:bg-green-700' : p.is_special ? 'bg-amber-500 hover:bg-amber-600' : 'bg-indigo-600 hover:bg-indigo-700'}`}
                       >
                         {p.attendance_session_id ? (
                           <>
@@ -1112,55 +1442,140 @@ export default function PeriodAttendance(){
       {/* Daily Attendance Marking Panel */}
       {dailyMode && selectedSection && (
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-6">
-          <div className="px-6 py-4 border-b border-slate-200 bg-gradient-to-r from-emerald-50 to-teal-50 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <GraduationCap className="w-5 h-5 text-emerald-600" />
-              <h3 className="text-lg font-semibold text-slate-900">
-                Daily Attendance - {selectedSection.section_name}
-                <span className="ml-3 inline-flex items-center px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-sm font-medium">
-                  {dailyAttendance.length} student{dailyAttendance.length !== 1 ? 's' : ''}
-                </span>
-              </h3>
-              {dailySessionData?.is_locked && (
-                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-amber-100 text-amber-800 border border-amber-300 rounded-md text-xs font-medium">
-                  <Lock className="w-3 h-3" />
-                  Locked
-                </span>
-              )}
-              {dailySessionData?.unlock_request_status === 'PENDING' && (
-                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-blue-100 text-blue-800 border border-blue-300 rounded-md text-xs font-medium">
-                  Unlock Pending
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              {dailySessionData?.session_id && (
-                <button 
-                  onClick={toggleDailyLock}
-                  disabled={lockingDaily}
-                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
-                    dailySessionData?.is_locked 
-                      ? 'bg-amber-100 hover:bg-amber-200 text-amber-800 border border-amber-300' 
-                      : 'bg-red-100 hover:bg-red-200 text-red-800 border border-red-300'
-                  } ${lockingDaily ? 'disabled:opacity-50' : ''}`}
-                >
-                  {lockingDaily ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : dailySessionData?.is_locked ? (
-                    <Unlock className="w-4 h-4" />
-                  ) : (
-                    <Lock className="w-4 h-4" />
+          <div className="px-4 sm:px-6 py-4 border-b border-slate-200 bg-gradient-to-r from-emerald-50 to-teal-50">
+            {/* Header - Mobile First Layout */}
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+                <div className="flex items-center gap-3">
+                  <GraduationCap className="w-5 h-5 text-emerald-600" />
+                  <h3 className="text-base sm:text-lg font-semibold text-slate-900">
+                    Daily Attendance - {selectedSection.section_name}
+                  </h3>
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-xs sm:text-sm font-medium">
+                    {dailyAttendance.length} student{dailyAttendance.length !== 1 ? 's' : ''}
+                  </span>
+                </div>
+                {/* Status Badges */}
+                <div className="flex flex-wrap items-center gap-2">
+                  {dailySessionData?.assigned_to && (
+                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-indigo-100 text-indigo-800 border border-indigo-300 rounded-md text-xs font-medium">
+                      <ArrowLeftRight className="w-3 h-3" />
+                      Assigned to: {dailySessionData.assigned_to.name}
+                    </span>
                   )}
-                  {dailySessionData?.is_locked ? 'Request Unlock' : 'Lock Session'}
+                  {dailySessionData?.is_locked && (
+                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-amber-100 text-amber-800 border border-amber-300 rounded-md text-xs font-medium">
+                      <Lock className="w-3 h-3" />
+                      Locked
+                    </span>
+                  )}
+                </div>
+              </div>
+              {/* Action Buttons */}
+              <div className="flex flex-wrap items-center gap-2">
+                {selectedSwapStaff && (
+                  <span className="px-3 py-1.5 bg-indigo-100 text-indigo-800 border border-indigo-300 rounded-lg text-xs font-medium flex items-center gap-2">
+                    Will be assigned to: {selectedSwapStaff.name}
+                  </span>
+                )}
+                {!selectedSwapStaff && actualMarkedBy && (
+                  <span className="px-3 py-1.5 bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-xs font-medium flex items-center gap-2">
+                    Marked by: {actualMarkedBy.name}
+                  </span>
+                )}
+                {dailySessionData?.session_id && !dailySessionData?.is_read_only && (
+                  <button 
+                    onClick={toggleDailyLock}
+                    disabled={lockingDaily}
+                    className={`px-2 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-colors flex items-center gap-1 sm:gap-2 ${
+                      dailySessionData?.is_locked 
+                        ? 'bg-amber-100 hover:bg-amber-200 text-amber-800 border border-amber-300' 
+                        : 'bg-red-100 hover:bg-red-200 text-red-800 border border-red-300'
+                    } ${lockingDaily ? 'disabled:opacity-50' : ''}`}
+                  >
+                    {lockingDaily ? (
+                      <Loader2 className="w-3 sm:w-4 h-3 sm:h-4 animate-spin" />
+                    ) : dailySessionData?.is_locked ? (
+                      <Unlock className="w-3 sm:w-4 h-3 sm:h-4" />
+                    ) : (
+                      <Lock className="w-3 sm:w-4 h-3 sm:h-4" />
+                    )}
+                    <span className="hidden sm:inline">
+                      {dailySessionData?.is_locked ? 'Unlock Session' : 'Lock Session'}
+                    </span>
+                    <span className="sm:hidden">
+                      {dailySessionData?.is_locked ? 'Unlock' : 'Lock'}
+                    </span>
+                  </button>
+                )}
+                {/* Unlock Request Status Badge */}
+                {dailySessionData?.unlock_request_status && (
+                  <span className={`px-2 sm:px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 border ${
+                    dailySessionData.unlock_request_status === 'APPROVED'
+                      ? 'bg-green-50 text-green-800 border-green-300'
+                      : dailySessionData.unlock_request_status === 'REJECTED'
+                      ? 'bg-red-50 text-red-800 border-red-300'
+                      : dailySessionData.unlock_request_hod_status === 'HOD_APPROVED'
+                      ? 'bg-blue-50 text-blue-800 border-blue-300'
+                      : 'bg-yellow-50 text-yellow-800 border-yellow-300'
+                  }`} title="Status of unlock request for this session">
+                    <Clock className="w-3 h-3" />
+                    <span className="hidden sm:inline">
+                      {dailySessionData.unlock_request_status === 'APPROVED' && 'Unlock: Approved'}
+                      {dailySessionData.unlock_request_status === 'REJECTED' && 'Unlock: Rejected'}
+                      {dailySessionData.unlock_request_status !== 'APPROVED' && dailySessionData.unlock_request_status !== 'REJECTED' && dailySessionData.unlock_request_hod_status === 'HOD_APPROVED' && 'Unlock: Pending Admin Approval'}
+                      {dailySessionData.unlock_request_status !== 'APPROVED' && dailySessionData.unlock_request_status !== 'REJECTED' && dailySessionData.unlock_request_hod_status !== 'HOD_APPROVED' && 'Unlock: Pending Approval'}
+                    </span>
+                    <span className="sm:hidden">
+                      {dailySessionData.unlock_request_status === 'APPROVED' && 'Approved'}
+                      {dailySessionData.unlock_request_status === 'REJECTED' && 'Rejected'}
+                      {dailySessionData.unlock_request_status !== 'APPROVED' && dailySessionData.unlock_request_status !== 'REJECTED' && dailySessionData.unlock_request_hod_status === 'HOD_APPROVED' && 'Pending Admin'}
+                      {dailySessionData.unlock_request_status !== 'APPROVED' && dailySessionData.unlock_request_status !== 'REJECTED' && dailySessionData.unlock_request_hod_status !== 'HOD_APPROVED' && 'Pending'}
+                    </span>
+                  </span>
+                )}
+                {!dailySessionData?.assigned_to && (
+                  <button 
+                    onClick={openSwapModal}
+                    disabled={dailySessionData?.is_locked}
+                    className="px-2 sm:px-3 py-1.5 bg-indigo-100 hover:bg-indigo-200 text-indigo-800 border border-indigo-300 rounded-lg text-xs sm:text-sm font-medium transition-colors flex items-center gap-1 sm:gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={dailySessionData?.is_locked ? 'Cannot swap locked session' : 'Assign attendance to another staff member'}
+                  >
+                    <ArrowLeftRight className="w-3 sm:w-4 h-3 sm:h-4" />
+                    <span className="hidden sm:inline">Assign to Staff</span>
+                    <span className="sm:hidden">Assign</span>
+                  </button>
+                )}
+                {dailySessionData?.is_read_only && dailySessionData?.assigned_to && (
+                  <button 
+                    onClick={revertAssignment}
+                    disabled={revertingAssignment || dailySessionData?.is_locked}
+                    className="px-2 sm:px-3 py-1.5 bg-orange-100 hover:bg-orange-200 text-orange-800 border border-orange-300 rounded-lg text-xs sm:text-sm font-medium transition-colors flex items-center gap-1 sm:gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={dailySessionData?.is_locked ? 'Cannot revert locked session' : 'Revert assignment back to you (only if no attendance marked by assigned staff)'}
+                  >
+                    {revertingAssignment ? (
+                      <>
+                        <Loader2 className="w-3 sm:w-4 h-3 sm:h-4 animate-spin" />
+                        <span className="hidden sm:inline">Reverting...</span>
+                        <span className="sm:hidden">...</span>
+                      </>
+                    ) : (
+                      <>
+                        <ArrowLeftRight className="w-3 sm:w-4 h-3 sm:h-4 rotate-180" />
+                        <span className="hidden sm:inline">Revert Assignment</span>
+                        <span className="sm:hidden">Revert</span>
+                      </>
+                    )}
+                  </button>
+                )}
+                <button 
+                  onClick={() => { setDailyMode(false); setSelectedSection(null); setSelectedSwapStaff(null); setActualMarkedBy(null) }}
+                  className="px-2 sm:px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-xs sm:text-sm font-medium transition-colors flex items-center gap-1 sm:gap-2"
+                >
+                  <X className="w-3 sm:w-4 h-3 sm:h-4" />
+                  <span className="hidden sm:inline">Close</span>
                 </button>
-              )}
-              <button 
-                onClick={() => { setDailyMode(false); setSelectedSection(null) }}
-                className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
-              >
-                <X className="w-4 h-4" />
-                Close
-              </button>
+              </div>
             </div>
           </div>
 
@@ -1172,15 +1587,57 @@ export default function PeriodAttendance(){
               </div>
             ) : (
               <>
+                {/* Swap History */}
+                {dailySessionData?.swap_history && dailySessionData.swap_history.length > 0 && (
+                  <div className="mb-4 p-4 bg-indigo-50 border border-indigo-200 rounded-lg">
+                    <h4 className="text-sm font-semibold text-indigo-900 mb-3 flex items-center gap-2">
+                      <ArrowLeftRight className="w-4 h-4" />
+                      Assignment History
+                    </h4>
+                    <div className="space-y-2">
+                      {dailySessionData.swap_history.map((swap: any) => (
+                        <div key={swap.id} className="text-sm text-indigo-800 bg-white p-3 rounded border border-indigo-200">
+                          <div className="flex items-center justify-between">
+                            <div className="flex-1">
+                              <span className="font-medium">
+                                {swap.assigned_by?.name || swap.assigned_by?.staff_id || 'Unknown Staff'}
+                              </span>
+                              <span className="mx-2">→</span>
+                              <span className={`font-medium ${!swap.assigned_to ? 'text-green-700' : ''}`}>
+                                {swap.assigned_to ? 
+                                  (swap.assigned_to.name || swap.assigned_to.staff_id || 'Unknown Staff') : 
+                                  'Original Advisor (Reverted)'
+                                }
+                              </span>
+                            </div>
+                            <span className="text-xs text-slate-600 ml-3">
+                              {new Date(swap.assigned_at).toLocaleString('en-US', {
+                                month: 'short',
+                                day: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                              })}
+                            </span>
+                          </div>
+                          {swap.reason && (
+                            <div className="text-xs text-slate-600 mt-1 italic">{swap.reason}</div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* Bulk Actions */}
-                <div className="mb-4 flex gap-2">
+                <div className="mb-4 flex flex-wrap gap-2">
                   <button
                     onClick={() => markAllDaily('P')}
                     disabled={dailySessionData?.is_locked}
-                    className={`px-4 py-2 bg-green-100 hover:bg-green-200 text-green-800 rounded-lg text-sm font-medium border border-green-300 flex items-center gap-2 ${dailySessionData?.is_locked ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed disabled:border-slate-300' : ''}`}
+                    className={`px-3 sm:px-4 py-2 bg-green-100 hover:bg-green-200 text-green-800 rounded-lg text-xs sm:text-sm font-medium border border-green-300 flex items-center gap-1 sm:gap-2 ${dailySessionData?.is_locked ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed disabled:border-slate-300' : ''}`}
                   >
-                    <Check className="w-4 h-4" />
-                    Mark All Present
+                    <Check className="w-3 sm:w-4 h-3 sm:h-4" />
+                    <span className="hidden sm:inline">Mark All Present</span>
+                    <span className="sm:hidden">All Present</span>
                   </button>
                 </div>
 
@@ -1214,8 +1671,8 @@ export default function PeriodAttendance(){
                               <select
                                 value={status}
                                 onChange={(e) => setAttendanceStatus(prev => ({ ...prev, [student.student_id]: e.target.value }))}
-                                disabled={dailySessionData?.is_locked}
-                                className={`px-2 sm:px-3 py-1.5 rounded-lg border text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500 w-full ${statusClasses[status]} ${dailySessionData?.is_locked ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''}`}
+                                disabled={dailySessionData?.is_locked || dailySessionData?.is_read_only}
+                                className={`px-2 sm:px-3 py-1.5 rounded-lg border text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500 w-full ${statusClasses[status]} ${(dailySessionData?.is_locked || dailySessionData?.is_read_only) ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''}`}
                               >
                                 <option value="P">Present</option>
                                 <option value="OD">On Duty</option>
@@ -1228,9 +1685,9 @@ export default function PeriodAttendance(){
                                   type="text"
                                   value={attendanceRemarks[student.student_id] || ''}
                                   onChange={(e) => setAttendanceRemarks(prev => ({ ...prev, [student.student_id]: e.target.value }))}
-                                  disabled={dailySessionData?.is_locked}
+                                  disabled={dailySessionData?.is_locked || dailySessionData?.is_read_only}
                                   placeholder="Remarks (optional)"
-                                  className={`px-2 py-1.5 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 w-full ${dailySessionData?.is_locked ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''}`}
+                                  className={`px-2 py-1.5 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 w-full ${(dailySessionData?.is_locked || dailySessionData?.is_read_only) ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''}`}
                                 />
                               </div>
                             </td>
@@ -1239,9 +1696,9 @@ export default function PeriodAttendance(){
                                 type="text"
                                 value={attendanceRemarks[student.student_id] || ''}
                                 onChange={(e) => setAttendanceRemarks(prev => ({ ...prev, [student.student_id]: e.target.value }))}
-                                disabled={dailySessionData?.is_locked}
+                                disabled={dailySessionData?.is_locked || dailySessionData?.is_read_only}
                                 placeholder="Optional remarks"
-                                className={`px-3 py-1.5 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 w-full ${dailySessionData?.is_locked ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''}`}
+                                className={`px-3 py-1.5 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 w-full ${(dailySessionData?.is_locked || dailySessionData?.is_read_only) ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''}`}
                               />
                             </td>
                           </tr>
@@ -1252,30 +1709,40 @@ export default function PeriodAttendance(){
                 </div>
 
                 {/* Save Button */}
-                <div className="mt-6 flex justify-end">
+                <div className="mt-6 flex justify-center sm:justify-end">
                   {dailySessionData?.is_locked ? (
                     <button
                       disabled
-                      className="px-6 py-3 bg-slate-300 text-slate-500 rounded-lg font-medium cursor-not-allowed flex items-center gap-2"
+                      className="w-full sm:w-auto px-4 sm:px-6 py-3 bg-slate-300 text-slate-500 rounded-lg font-medium cursor-not-allowed flex items-center justify-center gap-2"
                     >
-                      <Lock className="w-5 h-5" />
-                      Session Locked
+                      <Lock className="w-4 sm:w-5 h-4 sm:h-5" />
+                      <span className="text-sm sm:text-base">Session Locked</span>
+                    </button>
+                  ) : dailySessionData?.is_read_only ? (
+                    <button
+                      disabled
+                      className="w-full sm:w-auto px-4 sm:px-6 py-3 bg-amber-300 text-amber-700 rounded-lg font-medium cursor-not-allowed flex items-center justify-center gap-2"
+                      title="This attendance has been assigned to another staff member"
+                    >
+                      <ArrowLeftRight className="w-4 sm:w-5 h-4 sm:h-5" />
+                      <span className="text-sm sm:text-base">Read-Only (Assigned to Others)</span>
                     </button>
                   ) : (
                     <button
                       onClick={saveDailyAttendance}
                       disabled={savingDaily}
-                      className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium disabled:bg-slate-300 disabled:cursor-not-allowed flex items-center gap-2 shadow-lg"
+                      className="w-full sm:w-auto px-4 sm:px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium disabled:bg-slate-300 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg"
                     >
                       {savingDaily ? (
                         <>
-                          <Loader2 className="w-5 h-5 animate-spin" />
-                          Saving...
+                          <Loader2 className="w-4 sm:w-5 h-4 sm:h-5 animate-spin" />
+                          <span className="text-sm sm:text-base">Saving...</span>
                         </>
                       ) : (
                         <>
-                          <Save className="w-5 h-5" />
-                          Save Daily Attendance
+                          <Save className="w-4 sm:w-5 h-4 sm:h-5" />
+                          <span className="text-sm sm:text-base hidden sm:inline">Save Daily Attendance</span>
+                          <span className="text-sm sm:text-base sm:hidden">Save Attendance</span>
                         </>
                       )}
                     </button>
@@ -1325,16 +1792,65 @@ export default function PeriodAttendance(){
                 </>
               )}
             </div>
-            <button 
-              onClick={()=> setSelected(null)}
-              className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
-            >
-              <X className="w-4 h-4" />
-              Close
-            </button>
+            <div className="flex items-center gap-2">
+              {/* Assigned-to info + assign/revert controls */}
+              {(selected as any).original_staff ? (
+                /* Current user is the ASSIGNEE — show who assigned this to them */
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-orange-100 text-orange-800 border border-orange-300 rounded-lg text-sm font-medium">
+                  <ArrowLeftRight className="w-3.5 h-3.5" />
+                  Assigned by: {(selected as any).original_staff.name || (selected as any).original_staff.staff_id}
+                </span>
+              ) : (selected as any).assigned_to ? (
+                /* Current user is the ASSIGNER — show who they assigned to + allow revert */
+                <>
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-orange-100 text-orange-800 border border-orange-300 rounded-lg text-sm font-medium">
+                    <ArrowLeftRight className="w-3.5 h-3.5" />
+                    Assigned to: {(selected as any).assigned_to.name || (selected as any).assigned_to.staff_id}
+                  </span>
+                  {(selected as any).attendance_session_id && (
+                    <button
+                      onClick={() => revertPeriodAssignment((selected as any).attendance_session_id, (selected as any).period?.id)}
+                      disabled={saving}
+                      className="px-3 py-1.5 bg-red-100 hover:bg-red-200 text-red-700 border border-red-300 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      <ArrowLeftRight className="w-3.5 h-3.5" />
+                      Revert Assignment
+                    </button>
+                  )}
+                </>
+              ) : (
+                /* No assignment yet — allow assigning to another staff */
+                !selected.attendance_session_locked && (
+                  <button
+                    onClick={() => openPeriodSwapModal(selected)}
+                    disabled={saving}
+                    className="px-3 py-1.5 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 border border-indigo-300 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    <ArrowLeftRight className="w-3.5 h-3.5" />
+                    Assign to Staff
+                  </button>
+                )
+              )}
+              <button 
+                onClick={()=> setSelected(null)}
+                className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
+              >
+                <X className="w-4 h-4" />
+                Close
+              </button>
+            </div>
           </div>
 
           <div className="p-6">
+            {/* View-only notice when period is assigned to another staff */}
+            {(selected as any).assigned_to && !(selected as any).original_staff && (
+              <div className="mb-4 flex items-center gap-2 px-4 py-3 bg-amber-50 border border-amber-300 rounded-lg text-amber-800 text-sm">
+                <Lock className="w-4 h-4 flex-shrink-0" />
+                <span>
+                  This period has been assigned to <strong>{(selected as any).assigned_to.name || (selected as any).assigned_to.staff_id}</strong>. You can view existing records but cannot modify them.
+                </span>
+              </div>
+            )}
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead className="bg-slate-50">
@@ -1347,7 +1863,9 @@ export default function PeriodAttendance(){
                   {students.map(s=> {
                     const status = marks[s.id] || 'P'
                     const dailyLock = dailyLocks[s.id] || null  // 'OD' | 'LEAVE' | 'LATE' | null
-                    const isLocked = selected.attendance_session_locked || dailyLock === 'OD' || dailyLock === 'LEAVE'
+                    // assigned to someone else = view only for the original staff
+                    const isAssignedToOther = !!(selected as any).assigned_to && !(selected as any).original_staff
+                    const isLocked = selected.attendance_session_locked || dailyLock === 'OD' || dailyLock === 'LEAVE' || isAssignedToOther
                     const statusSelectClasses: Record<string,string> = {
                       P: 'bg-green-50 text-green-800 border-green-300',
                       A: 'bg-red-50 text-red-800 border-red-300',
@@ -1409,55 +1927,60 @@ export default function PeriodAttendance(){
             </div>
 
             <div className="mt-6 flex flex-wrap gap-3">
-              <button 
-                onClick={saveMarks} 
-                disabled={saving || selected.attendance_session_locked}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
-              >
-                {saving ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  <>
-                    <Save className="w-4 h-4" />
-                    Save Attendance
-                  </>
-                )}
-              </button>
-              
-              {selected.attendance_session_id && (
-                <button 
-                  onClick={toggleLock} 
-                  disabled={locking}
-                  className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${
-                    selected.attendance_session_locked
-                      ? 'bg-amber-600 hover:bg-amber-700 disabled:bg-amber-300 text-white'
-                      : 'bg-slate-600 hover:bg-slate-700 disabled:bg-slate-300 text-white'
-                  }`}
-                >
-                  {locking ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      {selected.attendance_session_locked ? 'Unlocking...' : 'Locking...'}
-                    </>
-                  ) : (
-                    <>
-                      {selected.attendance_session_locked ? (
+              {/* Hide save/lock controls when period is assigned to another staff */}
+              {!((selected as any).assigned_to && !(selected as any).original_staff) && (
+                <>
+                  <button 
+                    onClick={saveMarks} 
+                    disabled={saving || selected.attendance_session_locked}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
+                  >
+                    {saving ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Saving...
+                      </>
+                    ) : (
+                      <>
+                        <Save className="w-4 h-4" />
+                        Save Attendance
+                      </>
+                    )}
+                  </button>
+                  
+                  {selected.attendance_session_id && (
+                    <button 
+                      onClick={toggleLock} 
+                      disabled={locking}
+                      className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${
+                        selected.attendance_session_locked
+                          ? 'bg-amber-600 hover:bg-amber-700 disabled:bg-amber-300 text-white'
+                          : 'bg-slate-600 hover:bg-slate-700 disabled:bg-slate-300 text-white'
+                      }`}
+                    >
+                      {locking ? (
                         <>
-                          <Unlock className="w-4 h-4" />
-                          Unlock Session
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          {selected.attendance_session_locked ? 'Unlocking...' : 'Locking...'}
                         </>
                       ) : (
                         <>
-                          <Lock className="w-4 h-4" />
-                          Lock Session
+                          {selected.attendance_session_locked ? (
+                            <>
+                              <Unlock className="w-4 h-4" />
+                              Unlock Session
+                            </>
+                          ) : (
+                            <>
+                              <Lock className="w-4 h-4" />
+                              Lock Session
+                            </>
+                          )}
                         </>
                       )}
-                    </>
+                    </button>
                   )}
-                </button>
+                </>
               )}
             </div>
           </div>
@@ -1804,6 +2327,74 @@ export default function PeriodAttendance(){
           </div>
         )
       })()}
+
+      {/* Staff Swap Modal */}
+      {swapModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full max-h-[80vh] flex flex-col">
+            <div className="px-6 py-4 border-b border-slate-200 bg-gradient-to-r from-indigo-50 to-purple-50 flex items-center justify-between rounded-t-xl">
+              <div className="flex items-center gap-3">
+                <Users className="w-5 h-5 text-indigo-600" />
+                <h3 className="text-lg font-semibold text-slate-900">Select Staff Member</h3>
+              </div>
+              <button
+                onClick={() => setSwapModalOpen(false)}
+                className="p-1 hover:bg-slate-200 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5 text-slate-600" />
+              </button>
+            </div>
+            
+            <div className="p-6 overflow-y-auto flex-1">
+              {loadingStaff ? (
+                <div className="flex flex-col items-center justify-center py-8">
+                  <Loader2 className="w-8 h-8 animate-spin text-indigo-600 mb-3" />
+                  <p className="text-sm text-slate-600">Loading staff from your department...</p>
+                </div>
+              ) : departmentStaff.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-8 text-center">
+                  <div className="bg-slate-100 p-4 rounded-full mb-4">
+                    <Users className="w-12 h-12 text-slate-400" />
+                  </div>
+                  <h4 className="text-lg font-medium text-slate-900 mb-1">No Staff Found</h4>
+                  <p className="text-slate-600 text-sm">No other staff from your department are available</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-sm text-slate-600 mb-4">
+                    Select a staff member to assign attendance taking for this class:
+                  </p>
+                  {departmentStaff.map((staff: any) => (
+                    <button
+                      key={staff.id}
+                      onClick={() => handleSwapStaff(staff)}
+                      className="w-full p-4 border border-slate-200 rounded-lg hover:bg-indigo-50 hover:border-indigo-300 transition-colors text-left"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="font-medium text-slate-900">{staff.name}</p>
+                          <p className="text-sm text-slate-600">{staff.designation || 'Staff'}</p>
+                          <p className="text-xs text-slate-500 mt-1">ID: {staff.staff_id}</p>
+                        </div>
+                        <ArrowLeftRight className="w-5 h-5 text-indigo-600" />
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 rounded-b-xl">
+              <button
+                onClick={() => setSwapModalOpen(false)}
+                className="w-full px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-sm font-medium transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   )

@@ -851,6 +851,7 @@ class PeriodAttendanceSession(models.Model):
     timetable_assignment = models.ForeignKey('timetable.TimetableAssignment', on_delete=models.SET_NULL, null=True, blank=True, related_name='attendance_sessions')
     teaching_assignment = models.ForeignKey('academics.TeachingAssignment', on_delete=models.SET_NULL, null=True, blank=True, related_name='period_attendance_sessions')
     created_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    assigned_to = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='assigned_period_sessions', help_text='Staff assigned to take attendance for this period (via swap)')
     is_locked = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -863,6 +864,23 @@ class PeriodAttendanceSession(models.Model):
 
     def __str__(self):
         return f"PeriodAttendance {self.section} | {self.period} @ {self.date}"
+
+
+class PeriodAttendanceSwapRecord(models.Model):
+    """Audit trail of period attendance swap/assignment actions."""
+    session = models.ForeignKey(PeriodAttendanceSession, on_delete=models.CASCADE, related_name='swap_records')
+    assigned_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='period_swaps_assigned')
+    assigned_to = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='period_swaps_received')
+    assigned_at = models.DateTimeField(auto_now_add=True)
+    reason = models.TextField(blank=True)
+
+    class Meta:
+        verbose_name = 'Period Attendance Swap Record'
+        verbose_name_plural = 'Period Attendance Swap Records'
+        ordering = ('-assigned_at',)
+
+    def __str__(self):
+        return f"{self.session} assigned by {self.assigned_by} to {self.assigned_to} @ {self.assigned_at.strftime('%Y-%m-%d %H:%M')}"
 
 
 
@@ -884,7 +902,8 @@ class PeriodAttendanceRecord(models.Model):
 
 class AttendanceUnlockRequest(models.Model):
     STATUS_CHOICES = (
-        ('PENDING', 'Pending'),
+        ('PENDING', 'Pending HOD Approval'),
+        ('HOD_APPROVED', 'HOD Approved - Pending Final Approval'),
         ('APPROVED', 'Approved'),
         ('REJECTED', 'Rejected')
     )
@@ -892,10 +911,19 @@ class AttendanceUnlockRequest(models.Model):
     session = models.ForeignKey(PeriodAttendanceSession, on_delete=models.CASCADE, related_name='unlock_requests')
     requested_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='attendance_unlock_requests')
     requested_at = models.DateTimeField(auto_now_add=True)
+    note = models.TextField(blank=True, help_text='Staff request reason')
+    
+    # HOD approval stage
+    hod_status = models.CharField(max_length=16, choices=STATUS_CHOICES, default='PENDING')
+    hod_reviewed_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='attendance_hod_reviews')
+    hod_reviewed_at = models.DateTimeField(null=True, blank=True)
+    hod_note = models.TextField(blank=True, help_text='HOD review comments')
+    
+    # Final approval stage
     status = models.CharField(max_length=16, choices=STATUS_CHOICES, default='PENDING')
-    reviewed_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='attendance_unlock_reviews')
+    reviewed_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='attendance_final_reviews')
     reviewed_at = models.DateTimeField(null=True, blank=True)
-    note = models.TextField(blank=True)
+    final_note = models.TextField(blank=True, help_text='Final reviewer comments')
 
     class Meta:
         verbose_name = 'Attendance Unlock Request'
@@ -908,7 +936,8 @@ class AttendanceUnlockRequest(models.Model):
 
 class DailyAttendanceUnlockRequest(models.Model):
     STATUS_CHOICES = (
-        ('PENDING', 'Pending'),
+        ('PENDING', 'Pending HOD Approval'),
+        ('HOD_APPROVED', 'HOD Approved - Pending Final Approval'),
         ('APPROVED', 'Approved'),
         ('REJECTED', 'Rejected')
     )
@@ -916,10 +945,19 @@ class DailyAttendanceUnlockRequest(models.Model):
     session = models.ForeignKey('DailyAttendanceSession', on_delete=models.CASCADE, related_name='unlock_requests')
     requested_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='daily_attendance_unlock_requests')
     requested_at = models.DateTimeField(auto_now_add=True)
+    note = models.TextField(blank=True, help_text='Staff request reason')
+    
+    # HOD approval stage
+    hod_status = models.CharField(max_length=16, choices=STATUS_CHOICES, default='PENDING')
+    hod_reviewed_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='daily_hod_reviews')
+    hod_reviewed_at = models.DateTimeField(null=True, blank=True)
+    hod_note = models.TextField(blank=True, help_text='HOD review comments')
+    
+    # Final approval stage
     status = models.CharField(max_length=16, choices=STATUS_CHOICES, default='PENDING')
-    reviewed_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='daily_attendance_unlock_reviews')
+    reviewed_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='daily_final_reviews')
     reviewed_at = models.DateTimeField(null=True, blank=True)
-    note = models.TextField(blank=True)
+    final_note = models.TextField(blank=True, help_text='Final reviewer comments')
 
     class Meta:
         verbose_name = 'Daily Attendance Unlock Request'
@@ -939,6 +977,7 @@ class DailyAttendanceSession(models.Model):
     section = models.ForeignKey('academics.Section', on_delete=models.PROTECT, related_name='daily_attendance_sessions')
     date = models.DateField(default=timezone.now)
     created_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='created_daily_sessions')
+    assigned_to = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='assigned_daily_sessions', help_text='Staff member who was assigned to take attendance (via swap)')
     is_locked = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -978,6 +1017,27 @@ class DailyAttendanceRecord(models.Model):
 
     def __str__(self):
         return f"{self.student.reg_no} -> {self.get_status_display()} @ {self.session.date}"
+
+
+class DailyAttendanceSwapRecord(models.Model):
+    """Records when daily attendance sessions are swapped/assigned to different staff.
+    
+    Similar to how period swaps are tracked via SpecialTimetableEntry,
+    this maintains an audit trail of who assigned attendance to whom and when.
+    """
+    session = models.ForeignKey(DailyAttendanceSession, on_delete=models.CASCADE, related_name='swap_records')
+    assigned_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='initiated_daily_swaps', help_text='Staff who assigned the attendance (original advisor)')
+    assigned_to = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='received_daily_swaps', help_text='Staff who received the attendance assignment')
+    assigned_at = models.DateTimeField(auto_now_add=True)
+    reason = models.CharField(max_length=500, blank=True, null=True, help_text='Optional reason for assignment')
+    
+    class Meta:
+        verbose_name = 'Daily Attendance Swap Record'
+        verbose_name_plural = 'Daily Attendance Swap Records'
+        ordering = ('-assigned_at',)
+    
+    def __str__(self):
+        return f"{self.session} assigned by {self.assigned_by} to {self.assigned_to} @ {self.assigned_at.strftime('%Y-%m-%d %H:%M')}"
 
 
 # Historically the code deleted users when profiles were removed.

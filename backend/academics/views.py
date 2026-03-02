@@ -39,7 +39,7 @@ from OBE.models import (
     InternalMarkMapping,
 )
 from .models import PeriodAttendanceSession, PeriodAttendanceRecord
-from .models import AttendanceUnlockRequest, DailyAttendanceUnlockRequest
+from .models import AttendanceUnlockRequest
 
 from .serializers import (
     SectionAdvisorSerializer,
@@ -47,7 +47,7 @@ from .serializers import (
     StudentSimpleSerializer,
 )
 from .serializers import AcademicYearSerializer
-from .serializers import PeriodAttendanceSessionSerializer, BulkPeriodAttendanceSerializer, AttendanceUnlockRequestSerializer, DailyAttendanceUnlockRequestSerializer
+from .serializers import PeriodAttendanceSessionSerializer, BulkPeriodAttendanceSerializer, AttendanceUnlockRequestSerializer
 from accounts.utils import get_user_permissions
 from .utils import get_user_effective_departments
 from .serializers import TeachingAssignmentInfoSerializer
@@ -256,7 +256,7 @@ class TeachingAssignmentStudentsView(APIView):
             except Exception:
                 students = []
         else:
-            s_qs = StudentSectionAssignment.objects.filter(section=ta.section, end_date__isnull=True).select_related('student__user')
+            s_qs = StudentSectionAssignment.objects.filter(section=ta.section, end_date__isnull=True).exclude(student__status__in=['INACTIVE', 'DEBAR']).select_related('student__user')
             for a in s_qs:
                 sp = a.student
                 u = getattr(sp, 'user', None)
@@ -269,7 +269,7 @@ class TeachingAssignmentStudentsView(APIView):
 
         # fallback: include legacy StudentProfile.section entries if none found (section-based only)
         if not students and getattr(ta, 'section', None) is not None:
-            sp_qs = StudentProfile.objects.filter(section=ta.section).select_related('user')
+            sp_qs = StudentProfile.objects.filter(section=ta.section).exclude(status__in=['INACTIVE', 'DEBAR']).select_related('user')
             for sp in sp_qs:
                 u = getattr(sp, 'user', None)
                 students.append({
@@ -555,7 +555,7 @@ class MentorStudentsForStaffView(APIView):
         from .models import StudentMentorMap, StudentSectionAssignment, StudentProfile
 
         # base mentor mappings
-        mentor_maps = StudentMentorMap.objects.filter(mentor=staff, is_active=True).select_related('student__user')
+        mentor_maps = StudentMentorMap.objects.filter(mentor=staff, is_active=True).exclude(student__status__in=['INACTIVE', 'DEBAR']).select_related('student__user')
 
         # Determine target department for the staff (if available)
         target_dept = getattr(getattr(staff, 'current_department', None), 'id', None) or getattr(getattr(staff, 'department', None), 'id', None)
@@ -1800,6 +1800,47 @@ class StaffsPageView(APIView):
         return Response({'results': results, 'can_edit': can_edit, 'can_view_all': can_view_all})
 
 
+class DepartmentStaffListView(APIView):
+    """Return staff from the same department for attendance swap purposes.
+    
+    Returns staff members from the requesting user's department who can be assigned to take attendance.
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        user = request.user
+        
+        # Get the staff profile of the requesting user
+        staff_profile = getattr(user, 'staff_profile', None)
+        if not staff_profile:
+            return Response({'detail': 'You must be a staff member to access this endpoint.'}, status=403)
+        
+        # Get the user's department
+        current_dept = staff_profile.get_current_department()
+        if not current_dept:
+            return Response({'results': []})
+        
+        from .models import StaffProfile
+        
+        # Get all active staff from the same department, excluding the requesting user
+        staff_qs = StaffProfile.objects.filter(
+            department=current_dept,
+            status='ACTIVE'
+        ).exclude(id=staff_profile.id).select_related('user').order_by('user__first_name', 'user__last_name')
+        
+        results = []
+        for s in staff_qs:
+            results.append({
+                'id': s.id,
+                'staff_id': s.staff_id,
+                'name': f"{s.user.first_name} {s.user.last_name}".strip() or s.user.username,
+                'username': s.user.username,
+                'designation': s.designation or '',
+            })
+        
+        return Response({'results': results})
+
+
 class StaffProfileCreateView(APIView):
     """Create a new staff profile with user account."""
     permission_classes = (IsAuthenticated,)
@@ -2040,11 +2081,11 @@ class SectionStudentsView(APIView):
 
         # current assignments
         from .models import StudentSectionAssignment, StudentProfile
-        assign_qs = StudentSectionAssignment.objects.filter(section_id=sid, end_date__isnull=True).select_related('student__user')
+        assign_qs = StudentSectionAssignment.objects.filter(section_id=sid, end_date__isnull=True).exclude(student__status__in=['INACTIVE', 'DEBAR']).select_related('student__user')
         students = [a.student for a in assign_qs]
 
         # legacy field
-        legacy = StudentProfile.objects.filter(section_id=sid).select_related('user')
+        legacy = StudentProfile.objects.filter(section_id=sid).exclude(status__in=['INACTIVE', 'DEBAR']).select_related('user')
         for s in legacy:
             if not any(x.pk == s.pk for x in students):
                 students.append(s)
@@ -2441,9 +2482,21 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                 from .models import TeachingAssignment as _TA
                 ta_obj = _TA.objects.filter(pk=int(teaching_assignment_id), is_active=True, staff=staff_profile).first()
                 if not ta_obj:
-                    raise PermissionDenied('Invalid teaching_assignment_id for current staff')
+                    # Check if this is a swap-assigned session: the TA belongs to the original staff,
+                    # but current staff has been assigned to take attendance for it.
+                    swap_exists = (
+                        section is not None and period is not None and date is not None and
+                        PeriodAttendanceSession.objects.filter(
+                            section=section, period=period, date=date, assigned_to=staff_profile
+                        ).exists()
+                    )
+                    if swap_exists:
+                        # Use the TA as-is (belongs to original staff) — swap grants permission
+                        ta_obj = _TA.objects.filter(pk=int(teaching_assignment_id), is_active=True).first()
+                    else:
+                        raise PermissionDenied('Invalid teaching_assignment_id for current staff')
                 # Allow section-scoped or department-wide assignments; reject mismatched section.
-                if section is not None and getattr(ta_obj, 'section_id', None) not in (None, getattr(section, 'id', None)):
+                if ta_obj and section is not None and getattr(ta_obj, 'section_id', None) not in (None, getattr(section, 'id', None)):
                     raise PermissionDenied('teaching_assignment_id does not match section')
                 teach_assign = ta_obj
             except PermissionDenied:
@@ -2487,7 +2540,15 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
 
         perms = get_user_permissions(user)
         if not (ta or teach_assign or 'academics.mark_attendance' in perms or user.is_superuser):
-            raise PermissionDenied('You are not allowed to mark attendance for this period')
+            # Also allow if there's a swap-assigned session for this staff
+            is_swap_assigned = (
+                section and period and date and staff_profile and
+                PeriodAttendanceSession.objects.filter(
+                    section=section, period=period, date=date, assigned_to=staff_profile
+                ).exists()
+            )
+            if not is_swap_assigned:
+                raise PermissionDenied('You are not allowed to mark attendance for this period')
 
         with transaction.atomic():
             # Optionally create a temporary special timetable entry for this date/period
@@ -2508,10 +2569,34 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                 # timetable entries), use created_by as discriminator to avoid cross-staff session sharing.
                 lookup['created_by'] = staff_profile
                 # Also include timetable_assignment for metadata, but not as unique key.
-            session, created = PeriodAttendanceSession.objects.get_or_create(
-                **lookup,
-                defaults={'created_by': staff_profile, 'timetable_assignment': ta, 'teaching_assignment': teach_assign}
-            )
+
+            # Before get_or_create: if a session exists that is ASSIGNED to this staff
+            # (swap scenario), use that session regardless of created_by, to avoid creating a duplicate.
+            assigned_to_me_sess = PeriodAttendanceSession.objects.filter(
+                section=section, period=period, date=date, assigned_to=staff_profile
+            ).order_by('-id').first()
+
+            if assigned_to_me_sess:
+                session, created = assigned_to_me_sess, False
+            else:
+                session, created = PeriodAttendanceSession.objects.get_or_create(
+                    **lookup,
+                    defaults={'created_by': staff_profile, 'timetable_assignment': ta, 'teaching_assignment': teach_assign}
+                )
+
+            # Enforce assigned_to: if session is assigned to someone else, block the original staff
+            if not created and session.assigned_to_id and session.assigned_to_id != getattr(staff_profile, 'id', None):
+                if not (user.is_superuser or 'analytics.edit_all_analytics' in perms):
+                    assigned_name = ''
+                    try:
+                        session.refresh_from_db(fields=['assigned_to'])
+                        assigned_name = session.assigned_to.user.get_full_name() if session.assigned_to and session.assigned_to.user else session.assigned_to.staff_id
+                    except Exception:
+                        pass
+                    return Response({
+                        'error': f'This period attendance has been assigned to {assigned_name}. You cannot mark attendance.',
+                        'assigned_to': {'name': assigned_name, 'staff_id': getattr(session.assigned_to, 'staff_id', '')}
+                    }, status=403)
             # Keep metadata up to date
             dirty_fields = []
             if staff_profile and session.created_by_id is None:
@@ -2870,9 +2955,9 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                     if not target_students:
                         try:
                             from .models import StudentSectionAssignment, StudentProfile as _StudentProfile
-                            assign_qs = StudentSectionAssignment.objects.filter(section=section_obj, end_date__isnull=True).select_related('student__user')
+                            assign_qs = StudentSectionAssignment.objects.filter(section=section_obj, end_date__isnull=True).exclude(student__status__in=['INACTIVE', 'DEBAR']).select_related('student__user')
                             sts = [a.student for a in assign_qs]
-                            legacy = _StudentProfile.objects.filter(section=section_obj).select_related('user')
+                            legacy = _StudentProfile.objects.filter(section=section_obj).exclude(status__in=['INACTIVE', 'DEBAR']).select_related('user')
                             for s in legacy:
                                 if not any(x.pk == s.pk for x in sts):
                                     sts.append(s)
@@ -2990,17 +3075,17 @@ class AttendanceUnlockRequestViewSet(viewsets.ModelViewSet):
         if not session:
             return Response({'detail': 'Session not found'}, status=404)
 
-        # Check if there's already a pending request for this session
+        # Check if there's already a pending/in-progress request for this session
         existing_pending = AttendanceUnlockRequest.objects.filter(
             session=session,
-            status='PENDING'
+            status__in=['PENDING', 'HOD_APPROVED']
         ).first()
         
         if existing_pending:
             # Return existing request instead of creating duplicate
             ser = AttendanceUnlockRequestSerializer(existing_pending, context={'request': request})
             return Response({
-                'detail': 'An unlock request for this session is already pending',
+                'detail': f'An unlock request for this session is already {existing_pending.status.lower().replace("_", " ")}',
                 'existing_request': ser.data
             }, status=400)
 
@@ -3011,6 +3096,11 @@ class AttendanceUnlockRequestViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='approve')
     def approve(self, request, pk=None):
+        """
+        Approve unlock request. Superusers can bypass two-stage approval.
+        Regular admins with analytics permission should use the unified-unlock-requests endpoint
+        which enforces two-stage approval (HOD first, then final approval).
+        """
         user = request.user
         perms = get_user_permissions(user)
         if not ('analytics.view_all_analytics' in perms or user.is_superuser):
@@ -3022,13 +3112,23 @@ class AttendanceUnlockRequestViewSet(viewsets.ModelViewSet):
         except AttendanceUnlockRequest.DoesNotExist:
             return Response({'detail': f'Request with ID {pk} not found'}, status=404)
         
-        self.logger.info(f"User {user.username} approving request #{req.id} (status: {req.status}, requested_by: {req.requested_by_id})")
-        if req.status != 'PENDING':
-            return Response({'detail': 'Request already processed'}, status=400)
+        self.logger.info(f"User {user.username} approving request #{req.id} (status: {req.status}, hod_status: {req.hod_status}, requested_by: {req.requested_by_id})")
+        
+        # Allow approval if status is PENDING (direct approval) or HOD_APPROVED (final approval)
+        if req.status not in ['PENDING', 'HOD_APPROVED']:
+            return Response({'detail': f'Request already processed (status: {req.status})'}, status=400)
+        
         req.status = 'APPROVED'
         req.reviewed_by = getattr(user, 'staff_profile', None)
         import django.utils.timezone as tz
         req.reviewed_at = tz.now()
+        
+        # If bypassing HOD approval (superuser direct approval), also update hod_status
+        if req.hod_status == 'PENDING':
+            req.hod_status = 'APPROVED'
+            req.hod_reviewed_by = getattr(user, 'staff_profile', None)
+            req.hod_reviewed_at = tz.now()
+        
         req.save()
         self.logger.info(f"Request #{req.id} approved successfully")
 
@@ -3044,6 +3144,9 @@ class AttendanceUnlockRequestViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='reject')
     def reject(self, request, pk=None):
+        """
+        Reject unlock request. Can reject at any stage before final approval.
+        """
         user = request.user
         perms = get_user_permissions(user)
         if not ('analytics.view_all_analytics' in perms or user.is_superuser):
@@ -3055,13 +3158,23 @@ class AttendanceUnlockRequestViewSet(viewsets.ModelViewSet):
         except AttendanceUnlockRequest.DoesNotExist:
             return Response({'detail': f'Request with ID {pk} not found'}, status=404)
         
-        self.logger.info(f"User {user.username} rejecting request #{req.id} (status: {req.status}, requested_by: {req.requested_by_id})")
-        if req.status != 'PENDING':
-            return Response({'detail': 'Request already processed'}, status=400)
+        self.logger.info(f"User {user.username} rejecting request #{req.id} (status: {req.status}, hod_status: {req.hod_status}, requested_by: {req.requested_by_id})")
+        
+        # Can reject if not already processed as APPROVED or REJECTED
+        if req.status in ['APPROVED', 'REJECTED']:
+            return Response({'detail': f'Request already {req.status.lower()}'}, status=400)
+        
         req.status = 'REJECTED'
         req.reviewed_by = getattr(user, 'staff_profile', None)
         import django.utils.timezone as tz
         req.reviewed_at = tz.now()
+        
+        # Also update hod_status if it's still pending
+        if req.hod_status == 'PENDING':
+            req.hod_status = 'REJECTED'
+            req.hod_reviewed_by = getattr(user, 'staff_profile', None)
+            req.hod_reviewed_at = tz.now()
+        
         req.save()
         self.logger.info(f"Request #{req.id} rejected successfully, new status: {req.status}")
         ser = AttendanceUnlockRequestSerializer(req, context={'request': request})
@@ -3073,6 +3186,9 @@ class UnifiedUnlockRequestsView(APIView):
     permission_classes = (IsAuthenticated,)
     
     def get(self, request):
+        from .models import DailyAttendanceUnlockRequest
+        from .serializers import DailyAttendanceUnlockRequestSerializer
+        
         user = request.user
         perms = get_user_permissions(user)
         
@@ -3080,45 +3196,56 @@ class UnifiedUnlockRequestsView(APIView):
         can_view_all = 'analytics.view_all_analytics' in perms or user.is_superuser
         staff_profile = getattr(user, 'staff_profile', None)
         
+        # Get period attendance unlock requests
         if can_view_all:
-            # Admin: get all requests
+            # Admin: get all HOD_APPROVED requests (final approval stage)
             period_requests = AttendanceUnlockRequest.objects.select_related(
-                'session__section', 'requested_by', 'reviewed_by'
-            ).order_by('-requested_at')
-            
-            daily_requests = DailyAttendanceUnlockRequest.objects.select_related(
-                'session__section', 'requested_by', 'reviewed_by'
-            ).order_by('-requested_at')
+                'session__section', 'requested_by', 'reviewed_by', 'hod_reviewed_by'
+            ).filter(hod_status='HOD_APPROVED').order_by('-requested_at')
         elif staff_profile:
             # Staff: get only their requests
             period_requests = AttendanceUnlockRequest.objects.select_related(
-                'session__section', 'requested_by', 'reviewed_by'
-            ).filter(requested_by=staff_profile).order_by('-requested_at')
-            
-            daily_requests = DailyAttendanceUnlockRequest.objects.select_related(
-                'session__section', 'requested_by', 'reviewed_by'
+                'session__section', 'requested_by', 'reviewed_by', 'hod_reviewed_by'
             ).filter(requested_by=staff_profile).order_by('-requested_at')
         else:
             period_requests = AttendanceUnlockRequest.objects.none()
+        
+        # Get daily attendance unlock requests
+        if can_view_all:
+            # Admin: get all pending daily requests (PENDING or HOD_APPROVED) — daily attendance
+            # does not require a mandatory HOD step, so admin sees requests at any pending stage
+            daily_requests = DailyAttendanceUnlockRequest.objects.select_related(
+                'session__section', 'requested_by', 'reviewed_by', 'hod_reviewed_by'
+            ).filter(status__in=['PENDING', 'HOD_APPROVED']).order_by('-requested_at')
+        elif staff_profile:
+            # Staff: get only their requests
+            daily_requests = DailyAttendanceUnlockRequest.objects.select_related(
+                'session__section', 'requested_by', 'reviewed_by', 'hod_reviewed_by'
+            ).filter(requested_by=staff_profile).order_by('-requested_at')
+        else:
             daily_requests = DailyAttendanceUnlockRequest.objects.none()
         
-        # Serialize both types
+        # Serialize period requests
         period_serializer = AttendanceUnlockRequestSerializer(period_requests, many=True, context={'request': request})
-        daily_serializer = DailyAttendanceUnlockRequestSerializer(daily_requests, many=True, context={'request': request})
-        
-        # Add request_type field to period requests for frontend differentiation
         period_data = period_serializer.data
         for item in period_data:
             item['request_type'] = 'period'
         
-        # Combine and sort by requested_at
-        combined_data = period_data + daily_serializer.data
-        combined_data.sort(key=lambda x: x['requested_at'], reverse=True)
+        # Serialize daily requests
+        daily_serializer = DailyAttendanceUnlockRequestSerializer(daily_requests, many=True, context={'request': request})
+        daily_data = daily_serializer.data
+        for item in daily_data:
+            item['request_type'] = 'daily'
+        
+        # Combine both types
+        combined_data = list(period_data) + list(daily_data)
+        # Sort by requested_at descending
+        combined_data.sort(key=lambda x: x.get('requested_at', ''), reverse=True)
         
         return Response({
             'results': combined_data,
             'total_period_requests': len(period_data),
-            'total_daily_requests': len(daily_serializer.data),
+            'total_daily_requests': len(daily_data),
             'total_requests': len(combined_data)
         })
     
@@ -3131,28 +3258,33 @@ class UnifiedUnlockRequestsView(APIView):
             return Response({'detail': 'Permission denied'}, status=403)
         
         request_id = request.data.get('id')
-        request_type = request.data.get('request_type')  # 'period' or 'daily'
+        request_type = request.data.get('request_type', 'period')  # 'period' or 'daily'
         action = request.data.get('action')  # 'approve' or 'reject'
+        final_note = request.data.get('note', '')
         
-        if not all([request_id, request_type, action]):
-            return Response({'detail': 'Missing required fields: id, request_type, action'}, status=400)
+        if not all([request_id, action]):
+            return Response({'detail': 'Missing required fields: id, action'}, status=400)
         
         if action not in ['approve', 'reject']:
             return Response({'detail': 'Invalid action. Must be approve or reject'}, status=400)
-            
-        if request_type not in ['period', 'daily']:
-            return Response({'detail': 'Invalid request_type. Must be period or daily'}, status=400)
         
         try:
             if request_type == 'period':
                 unlock_req = AttendanceUnlockRequest.objects.select_related('session').get(id=request_id)
-                serializer_class = AttendanceUnlockRequestSerializer
-            else:  # daily
+            else:
+                from .models import DailyAttendanceUnlockRequest
                 unlock_req = DailyAttendanceUnlockRequest.objects.select_related('session').get(id=request_id)
-                serializer_class = DailyAttendanceUnlockRequestSerializer
                 
-            if unlock_req.status != 'PENDING':
-                return Response({'detail': 'Request has already been processed'}, status=400)
+            # For period requests, HOD must have approved first.
+            # For daily requests, admin can approve directly (HOD step is optional).
+            if request_type == 'period' and unlock_req.status != 'HOD_APPROVED':
+                return Response({
+                    'detail': f'Request must be approved by HOD first. Current status: {unlock_req.status}'
+                }, status=400)
+            if request_type == 'daily' and unlock_req.status not in ['PENDING', 'HOD_APPROVED']:
+                return Response({
+                    'detail': f'Request has already been finalized. Current status: {unlock_req.status}'
+                }, status=400)
             
             staff_profile = getattr(user, 'staff_profile', None)
             
@@ -3160,6 +3292,7 @@ class UnifiedUnlockRequestsView(APIView):
                 unlock_req.status = 'APPROVED'
                 unlock_req.reviewed_by = staff_profile
                 unlock_req.reviewed_at = timezone.now()
+                unlock_req.final_note = final_note
                 unlock_req.save()
                 
                 # Unlock the session
@@ -3172,11 +3305,16 @@ class UnifiedUnlockRequestsView(APIView):
                 unlock_req.status = 'REJECTED'
                 unlock_req.reviewed_by = staff_profile
                 unlock_req.reviewed_at = timezone.now()
+                unlock_req.final_note = final_note
                 unlock_req.save()
                 
                 response_message = f'{request_type.title()} unlock request rejected'
-                
-            serializer = serializer_class(unlock_req, context={'request': request})
+
+            if request_type == 'daily':
+                from .serializers import DailyAttendanceUnlockRequestSerializer
+                serializer = DailyAttendanceUnlockRequestSerializer(unlock_req, context={'request': request})
+            else:
+                serializer = AttendanceUnlockRequestSerializer(unlock_req, context={'request': request})
             return Response({
                 'success': True,
                 'message': response_message,
@@ -3327,7 +3465,7 @@ class StaffPeriodsView(APIView):
                 resolved_elective_name = None
 
             # find existing session for this section/period/date (+ teaching_assignment when available)
-            sess_qs = PeriodAttendanceSession.objects.filter(section=a.section, period=a.period, date=date)
+            sess_qs = PeriodAttendanceSession.objects.select_related('assigned_to', 'assigned_to__user').filter(section=a.section, period=a.period, date=date)
             if teach_assign is not None:
                 sess_qs = sess_qs.filter(teaching_assignment=teach_assign)
             else:
@@ -3415,6 +3553,12 @@ class StaffPeriodsView(APIView):
                 'subject_batch_label': batch_label,
                 'attendance_session_id': getattr(session, 'id', None),
                 'attendance_session_locked': getattr(session, 'is_locked', False) if session else False,
+                # assigned_to: staff member assigned to take this period's attendance (via swap)
+                'assigned_to': {
+                    'id': session.assigned_to.id,
+                    'name': session.assigned_to.user.get_full_name() if session.assigned_to.user else '',
+                    'staff_id': session.assigned_to.staff_id,
+                } if session and session.assigned_to else None,
                 # include latest unlock request status (if any) so frontend can show pending/approved/rejected
                 'unlock_request_status': unlock_status,
                 'unlock_request_id': unlock_id,
@@ -3548,6 +3692,109 @@ class StaffPeriodsView(APIView):
             # non-fatal: if special entries cannot be included, return the standard results
             pass
 
+        # Include sessions that have been ASSIGNED (swapped) to the current staff by another staff member.
+        # These won't appear via timetable assignments, so we query PeriodAttendanceSession directly.
+        try:
+            if staff_profile is not None:
+                from .models import PeriodAttendanceSession as _SPAS
+                # Collect session IDs already in results to avoid duplicates
+                existing_session_ids = {r['attendance_session_id'] for r in results if r.get('attendance_session_id')}
+                assigned_sessions = (
+                    _SPAS.objects.filter(assigned_to=staff_profile, date=date)
+                    .exclude(id__in=existing_session_ids)
+                    .select_related(
+                        'section', 'period',
+                        'teaching_assignment',
+                        'teaching_assignment__curriculum_row',
+                        'teaching_assignment__elective_subject',
+                        'timetable_assignment',
+                        'created_by', 'created_by__user',
+                        'assigned_to', 'assigned_to__user',
+                    )
+                )
+                for asess in assigned_sessions:
+                    ta = getattr(asess, 'teaching_assignment', None)
+                    # subject display
+                    subj_disp = None
+                    subj_id = None
+                    elective_id = None
+                    elective_name = None
+                    batch_label = None
+                    batch_id = None
+                    try:
+                        if ta is not None:
+                            cr = getattr(ta, 'curriculum_row', None)
+                            if cr:
+                                subj_id = cr.id
+                                subj_disp = getattr(cr, 'course_code', None) or getattr(cr, 'course_name', None)
+                            es = getattr(ta, 'elective_subject', None)
+                            if es:
+                                subj_disp = getattr(es, 'course_code', None) or getattr(es, 'course_name', None)
+                                elective_id = getattr(es, 'id', None)
+                                elective_name = getattr(es, 'course_name', None) or subj_disp
+                        # batch info lives on TimetableAssignment, not TeachingAssignment
+                        tma = getattr(asess, 'timetable_assignment', None)
+                        if tma is not None:
+                            sb = getattr(tma, 'subject_batch', None)
+                            if sb:
+                                batch_id = getattr(sb, 'id', None)
+                                batch_label = getattr(sb, 'name', None)
+                            # fallback subject from timetable assignment if teaching_assignment had none
+                            if subj_disp is None:
+                                subj_disp = getattr(tma, 'subject_text', None)
+                    except Exception:
+                        pass
+                    # unlock request
+                    unlock_status = None
+                    unlock_id = None
+                    try:
+                        req = AttendanceUnlockRequest.objects.filter(session=asess).order_by('-requested_at').first()
+                        if req:
+                            unlock_status = getattr(req, 'status', None)
+                            unlock_id = getattr(req, 'id', None)
+                    except Exception:
+                        pass
+                    # assigned_to info (current staff is the assignee; show who originally created)
+                    assignee = asess.assigned_to
+                    creator = asess.created_by
+                    results.append({
+                        'id': -(asess.id + 10000000),  # synthetic negative id to avoid clash with TA ids
+                        'section_id': asess.section_id,
+                        'section_name': str(asess.section),
+                        'period': {
+                            'id': asess.period.id,
+                            'index': asess.period.index,
+                            'label': asess.period.label,
+                            'start_time': getattr(asess.period, 'start_time', None),
+                            'end_time': getattr(asess.period, 'end_time', None),
+                        },
+                        'subject_id': subj_id,
+                        'subject_display': subj_disp,
+                        'teaching_assignment_id': getattr(ta, 'id', None),
+                        'elective_subject_id': elective_id,
+                        'elective_subject_name': elective_name,
+                        'subject_batch_id': batch_id,
+                        'subject_batch_label': batch_label,
+                        'attendance_session_id': asess.id,
+                        'attendance_session_locked': asess.is_locked,
+                        'assigned_to': {
+                            'id': assignee.id,
+                            'name': assignee.user.get_full_name() if assignee and assignee.user else '',
+                            'staff_id': getattr(assignee, 'staff_id', ''),
+                        } if assignee else None,
+                        'original_staff': {
+                            'id': creator.id,
+                            'name': creator.user.get_full_name() if creator and creator.user else '',
+                            'staff_id': getattr(creator, 'staff_id', ''),
+                        } if creator else None,
+                        'unlock_request_status': unlock_status,
+                        'unlock_request_id': unlock_id,
+                        'is_swap': True,
+                    })
+        except Exception:
+            # non-fatal: assigned sessions block; standard results are still valid
+            pass
+
         return Response({'results': results})
 
 
@@ -3580,12 +3827,12 @@ class AdvisorMyStudentsView(APIView):
             section_ids = [s.id for s in sections]
             assign_qs = StudentSectionAssignment.objects.filter(
                 section_id__in=section_ids, end_date__isnull=True
-            ).select_related('student__user', 'section')
+            ).exclude(student__status__in=['INACTIVE', 'DEBAR']).select_related('student__user', 'section')
             students_by_section: dict = {}
             for a in assign_qs:
                 students_by_section.setdefault(a.section_id, []).append(a.student)
 
-            legacy_qs = StudentProfile.objects.filter(section_id__in=section_ids).select_related('user', 'section')
+            legacy_qs = StudentProfile.objects.filter(section_id__in=section_ids).exclude(status__in=['INACTIVE', 'DEBAR']).select_related('user', 'section')
             for s in legacy_qs:
                 present = students_by_section.setdefault(s.section_id, [])
                 if not any(x.pk == s.pk for x in present):
@@ -3670,7 +3917,7 @@ class MentorMyMenteesView(APIView):
             from .models import StudentMentorMap
             mentee_maps = StudentMentorMap.objects.filter(
                 mentor=staff_profile, is_active=True
-            ).select_related(
+            ).exclude(student__status__in=['INACTIVE', 'DEBAR']).select_related(
                 'student__user',
                 'student__section__batch__course__department',
                 'student__section__batch__regulation',

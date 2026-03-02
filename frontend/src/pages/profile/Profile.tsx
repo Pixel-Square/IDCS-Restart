@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { getMe, requestMobileOtp, verifyMobileOtp, removeMobileNumber, changePassword } from '../../services/auth';
+import { getMe, requestMobileOtp, verifyMobileOtp, removeMobileNumber, changePassword, getCachedMe } from '../../services/auth';
 import { User, Mail, Shield, Building, Briefcase, School, Phone, CheckCircle2, Trash2, Key, Eye, EyeOff, Edit2, Save, X } from 'lucide-react';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import { ModalPortal } from '../../components/ModalPortal';
@@ -110,6 +110,22 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
 
   useEffect(() => {
     if (initialUser) return;
+    
+    // Try to use cached user data first to prevent unnecessary API calls
+    const cached = getCachedMe();
+    if (cached) {
+      const normalized = {
+        ...cached,
+        roles: Array.isArray(cached.roles)
+          ? cached.roles.map((role: string | RoleObj) => (typeof role === 'string' ? role : role.name))
+          : [],
+      } as Me;
+      setUser(normalized);
+      setLoading(false);
+      return;
+    }
+    
+    // If no cache, fetch from API
     let mounted = true;
     setLoading(true);
     getMe()

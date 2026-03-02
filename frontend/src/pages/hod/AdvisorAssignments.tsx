@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { User, Edit, BookOpen, Save, X, Trash2, Edit2 } from 'lucide-react'
 import fetchWithAuth from '../../services/fetchAuth'
+import { getCachedMe } from '../../services/auth'
 
 type Section = { id: number; name: string; batch: string; department_id?: number; department_code?: string; department_short_name?: string }
 type Staff = { id: number; user: string; staff_id: string; department?: number }
@@ -26,8 +27,8 @@ export default function AdvisorAssignments() {
       const ares = await fetchWithAuth('/api/academics/sections/?page_size=0')
       // use HOD-limited staff endpoint (backend/academics/hod-staff)
       const staffRes = await fetchWithAuth('/api/academics/hod-staff/?page_size=0')
-      // fetch current user to get permissions
-      const meRes = await fetchWithAuth('/api/accounts/me/')
+      // fetch current user to get permissions - use cached data
+      const md = getCachedMe()
       async function safeJson(res: Response) {
         const ct = res.headers.get('content-type') || ''
         if (!ct.includes('application/json')) {
@@ -48,8 +49,7 @@ export default function AdvisorAssignments() {
         const d = await safeJson(staffRes); setStaff(d.results || d)
       }
       // no curriculum fetch needed for advisor assignment
-      if (meRes.ok) {
-        const md = await safeJson(meRes);
+      if (md) {
         setCanAssign(Boolean(md.permissions && (md.permissions.includes('academics.assign_advisor') || md.permissions.includes('academics.add_sectionadvisor'))))
       }
     } catch (e) {

@@ -3,7 +3,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from .models import TeachingAssignment
-from .models import SpecialCourseAssessmentEditRequest, DailyAttendanceUnlockRequest
+from .models import SpecialCourseAssessmentEditRequest
 from academics.models import Subject, Section
 from accounts.utils import get_user_permissions
 from academics.models import SectionAdvisor, StaffProfile
@@ -653,66 +653,49 @@ class SectionAdvisorSerializer(serializers.ModelSerializer):
 
 
 class AttendanceUnlockRequestSerializer(serializers.ModelSerializer):
-    session_id = serializers.IntegerField(source='session.id', read_only=True)
+    session_id = serializers.SerializerMethodField(read_only=True)
     session_display = serializers.SerializerMethodField(read_only=True)
     requested_by = serializers.SerializerMethodField(read_only=True)
     requested_by_display = serializers.SerializerMethodField(read_only=True)
     reviewed_by_display = serializers.SerializerMethodField(read_only=True)
-
-    class Meta:
-        model = AttendanceUnlockRequest
-        fields = ('id', 'session', 'session_id', 'session_display', 'requested_by', 'requested_by_display', 'requested_at', 'status', 'reviewed_by', 'reviewed_by_display', 'reviewed_at', 'note')
-        read_only_fields = ('requested_at',)
-
-    def get_session_display(self, obj):
-        try:
-            sess = obj.session
-            return f"{getattr(sess, 'section', '')} | {getattr(sess, 'period', '')} @ {getattr(sess, 'date', '')}"
-        except Exception:
-            return None
-
-    def get_requested_by(self, obj):
-        try:
-            sb = obj.requested_by
-            return {'id': getattr(sb, 'id', None), 'staff_id': getattr(sb, 'staff_id', None), 'username': getattr(getattr(sb, 'user', None), 'username', None)}
-        except Exception:
-            return None
-
-    def get_requested_by_display(self, obj):
-        try:
-            sb = obj.requested_by
-            return getattr(getattr(sb, 'user', None), 'username', None) or getattr(sb, 'staff_id', None) or str(getattr(sb, 'id', ''))
-        except Exception:
-            return None
-
-    def get_reviewed_by_display(self, obj):
-        try:
-            rb = obj.reviewed_by
-            return getattr(getattr(rb, 'user', None), 'username', None) or getattr(rb, 'staff_id', None) or str(getattr(rb, 'id', ''))
-        except Exception:
-            return None
-
-
-class DailyAttendanceUnlockRequestSerializer(serializers.ModelSerializer):
-    session_id = serializers.IntegerField(source='session.id', read_only=True)
-    session_display = serializers.SerializerMethodField(read_only=True)
-    requested_by = serializers.SerializerMethodField(read_only=True)
-    requested_by_display = serializers.SerializerMethodField(read_only=True)
-    reviewed_by_display = serializers.SerializerMethodField(read_only=True)
+    hod_reviewed_by_display = serializers.SerializerMethodField(read_only=True)
+    department = serializers.SerializerMethodField(read_only=True)
     request_type = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
-        model = DailyAttendanceUnlockRequest
-        fields = ('id', 'session', 'session_id', 'session_display', 'requested_by', 'requested_by_display', 'requested_at', 'status', 'reviewed_by', 'reviewed_by_display', 'reviewed_at', 'note', 'request_type')
+        model = AttendanceUnlockRequest
+        fields = ('id', 'session', 'session_id', 'session_display', 'requested_by', 'requested_by_display', 
+                 'requested_at', 'status', 'reviewed_by', 'reviewed_by_display', 'reviewed_at', 
+                 'hod_status', 'hod_reviewed_by', 'hod_reviewed_by_display', 'hod_reviewed_at', 'hod_note',
+                 'note', 'final_note', 'department', 'request_type')
         read_only_fields = ('requested_at',)
 
+    def get_session_id(self, obj):
+        """Get the ID of the session"""
+        try:
+            return obj.session.id
+        except Exception:
+            return None
+
     def get_request_type(self, obj):
-        return 'daily'
+        """AttendanceUnlockRequest is always period attendance"""
+        return 'period'
+    
+    def get_department(self, obj):
+        """Get the department for this request via section -> batch -> course -> department"""
+        try:
+            return obj.session.section.batch.course.department.name
+        except Exception:
+            return None
 
     def get_session_display(self, obj):
+        """Format session display for period attendance"""
         try:
             sess = obj.session
-            return f"{getattr(sess.section, 'name', '')} | Daily Attendance @ {getattr(sess, 'date', '')}"
+            section_name = str(sess.section) if sess.section else ''
+            period_name = str(sess.period) if sess.period else ''
+            date_str = str(sess.date) if sess.date else ''
+            return f"{section_name} | {period_name} @ {date_str}"
         except Exception:
             return None
 
@@ -739,87 +722,96 @@ class DailyAttendanceUnlockRequestSerializer(serializers.ModelSerializer):
             pass
         return None
 
-    def get_department_id(self, obj):
+    def get_hod_reviewed_by_display(self, obj):
         try:
-            return obj.section.batch.course.department_id
+            hrb = obj.hod_reviewed_by
+            if hrb:
+                return getattr(getattr(hrb, 'user', None), 'username', None) or getattr(hrb, 'staff_id', None) or str(getattr(hrb, 'id', ''))
+        except Exception:
+            pass
+        return None
+
+
+class DailyAttendanceUnlockRequestSerializer(serializers.ModelSerializer):
+    session_id = serializers.SerializerMethodField(read_only=True)
+    session_display = serializers.SerializerMethodField(read_only=True)
+    requested_by = serializers.SerializerMethodField(read_only=True)
+    requested_by_display = serializers.SerializerMethodField(read_only=True)
+    reviewed_by_display = serializers.SerializerMethodField(read_only=True)
+    hod_reviewed_by_display = serializers.SerializerMethodField(read_only=True)
+    department = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        from .models import DailyAttendanceUnlockRequest
+        model = DailyAttendanceUnlockRequest
+        fields = ('id', 'session', 'session_id', 'session_display', 'requested_by', 'requested_by_display', 
+                 'requested_at', 'status', 'reviewed_by', 'reviewed_by_display', 'reviewed_at', 
+                 'hod_status', 'hod_reviewed_by', 'hod_reviewed_by_display', 'hod_reviewed_at', 'hod_note',
+                 'note', 'final_note', 'department')
+        read_only_fields = ('requested_at',)
+
+    def get_session_id(self, obj):
+        """Get the ID of the daily attendance session"""
+        try:
+            return getattr(obj.session, 'id', None)
         except Exception:
             return None
 
-    def __init__(self, *args, **kwargs):
-        # Remove UniqueTogetherValidator for (section, academic_year) so we can
-        # handle updates of existing active mappings in `create()` instead.
-        super().__init__(*args, **kwargs)
-        new_validators = []
-        for v in list(self.validators):
-            if isinstance(v, UniqueTogetherValidator):
-                fields = getattr(v, 'fields', None)
-                if fields and set(fields) == {'section', 'academic_year'}:
-                    # skip this validator
-                    continue
-            new_validators.append(v)
-        self.validators = new_validators
-
-    def validate(self, attrs):
-        request = self.context.get('request')
-        user = getattr(request, 'user', None)
-        section = attrs.get('section') or getattr(self.instance, 'section', None)
-        advisor = attrs.get('advisor') or getattr(self.instance, 'advisor', None)
-        academic_year = attrs.get('academic_year') or getattr(self.instance, 'academic_year', None)
-
-        # If client omitted academic_year, default to the active AcademicYear
-        if not academic_year:
-            ay = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.order_by('-id').first()
-            if ay:
-                attrs['academic_year'] = ay
-                academic_year = ay
-
-        # Basic presence
-        if not section or not advisor or not academic_year:
-            raise ValidationError('section, advisor and academic_year are required')
-
-        # advisor must belong to the same department as section
-        # Advisor department membership is not enforced here; HOD checks
-        # and DepartmentRole determine who may assign advisors.
-
-        # user must be HOD for the department
-        sec_dept = None
+    def get_department(self, obj):
+        """Get the department for this request via section -> batch -> course -> department"""
         try:
-            sec_dept = section.batch.course.department if section and section.batch and section.batch.course else None
+            return obj.session.section.batch.course.department.name
         except Exception:
-            sec_dept = None
-        hod_depts = []
-        if user and getattr(user, 'staff_profile', None):
-            from academics.models import DepartmentRole
-            hod_depts = list(DepartmentRole.objects.filter(staff=user.staff_profile, role='HOD', is_active=True).values_list('department_id', flat=True))
-        if not hod_depts or (sec_dept and sec_dept.id not in hod_depts):
-            raise ValidationError('Only HODs of the section department may assign advisors')
+            return None
 
-        return attrs
+    def get_session_display(self, obj):
+        """Format session display for daily attendance"""
+        try:
+            sess = obj.session
+            return f"{sess.section.name} | Daily Attendance @ {sess.date}"
+        except Exception:
+            return None
 
-    def create(self, validated_data):
-        SectionAdvisorModel = self.Meta.model
-        section = validated_data.get('section')
-        academic_year = validated_data.get('academic_year')
-        advisor = validated_data.get('advisor')
-        is_active = validated_data.get('is_active', True)
+    def get_requested_by(self, obj):
+        try:
+            sb = obj.requested_by
+            user = getattr(sb, 'user', None)
+            full_name = getattr(user, 'get_full_name', lambda: None)() if user else None
+            name = full_name or getattr(user, 'username', None) or getattr(sb, 'staff_id', None)
+            return {
+                'id': getattr(sb, 'id', None),
+                'staff_id': getattr(sb, 'staff_id', None),
+                'username': getattr(user, 'username', None),
+                'name': name,
+            }
+        except Exception:
+            return None
 
-        if section and academic_year and advisor:
-            # update existing active mapping for the exact year if present
-            existing = SectionAdvisorModel.objects.filter(section=section, academic_year=academic_year, is_active=True).first()
-            if existing:
-                existing.advisor = advisor
-                existing.is_active = is_active
-                existing.save()
-            else:
-                existing = SectionAdvisorModel.objects.create(section=section, academic_year=academic_year, advisor=advisor, is_active=is_active)
+    def get_requested_by_display(self, obj):
+        try:
+            sb = obj.requested_by
+            return getattr(getattr(sb, 'user', None), 'username', None) or getattr(sb, 'staff_id', None) or str(getattr(sb, 'id', ''))
+        except Exception:
+            return None
 
+    def get_reviewed_by_display(self, obj):
+        try:
+            rb = obj.reviewed_by
+            if rb:
+                return getattr(getattr(rb, 'user', None), 'username', None) or getattr(rb, 'staff_id', None) or str(getattr(rb, 'id', ''))
+        except Exception:
+            pass
+        return None
 
-            return existing
+    def get_hod_reviewed_by_display(self, obj):
+        try:
+            hrb = obj.hod_reviewed_by
+            if hrb:
+                return getattr(getattr(hrb, 'user', None), 'username', None) or getattr(hrb, 'staff_id', None) or str(getattr(hrb, 'id', ''))
+        except Exception:
+            pass
+        return None
 
-        return super().create(validated_data)
-
-    def update(self, instance, validated_data):
-        return super().update(instance, validated_data)
 
 class StudentSimpleSerializer(serializers.Serializer):
     id = serializers.IntegerField()

@@ -43,19 +43,19 @@ function formatSectionInfo(assignment: any[]) {
   return parts.length ? parts.join(' + ') : '—'
 }
 
-/** Return the ISO date string (YYYY-MM-DD) for a given day-index in the current week.
+/** Return the ISO date string (YYYY-MM-DD) for a given day-index relative to a base date.
  *  dayIndex: 0=Mon, 1=Tue, ..., 6=Sun 
- *  Always returns dates within the CURRENT week (Mon-Sun of this week)
+ *  baseDate: The reference date to calculate from (defaults to today)
+ *  Returns dates within the SAME week as baseDate (Mon-Sun of that week)
  *  Uses LOCAL timezone to avoid date shifting issues
  */
-function getDateForDayIndex(dayIndex: number): string {
-  const today = new Date()
-  const dow = today.getDay() // 0=Sun, 1=Mon, ..., 6=Sat
+function getDateForDayIndex(dayIndex: number, baseDate: Date = new Date()): string {
+  const dow = baseDate.getDay() // 0=Sun, 1=Mon, ..., 6=Sat
   // Calculate days from Monday (Mon=0, Tue=1, ..., Sun=6)
   const daysFromMon = dow === 0 ? 6 : dow - 1
-  // Get Monday of current week
-  const mon = new Date(today)
-  mon.setDate(today.getDate() - daysFromMon)
+  // Get Monday of the week containing baseDate
+  const mon = new Date(baseDate)
+  mon.setDate(baseDate.getDate() - daysFromMon)
   // Get target day (dayIndex: 0=Mon, ..., 6=Sun)
   const target = new Date(mon)
   target.setDate(mon.getDate() + dayIndex)
@@ -71,13 +71,41 @@ export default function StaffTimetable(){
   const [timetable, setTimetable] = useState<any[]>([])
   const [periods, setPeriods] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
-  // Auto-detect current day: 0=Mon, 1=Tue, ..., 6=Sun
-  const getCurrentDay = () => {
-    const today = new Date()
-    const dow = today.getDay() // 0=Sun, 1=Mon, ..., 6=Sat
+  
+  // Date selector state
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date())
+  
+  // Calculate day of week from selected date: 0=Mon, 1=Tue, ..., 6=Sun
+  const getDayFromDate = (date: Date) => {
+    const dow = date.getDay() // 0=Sun, 1=Mon, ..., 6=Sat
     return dow === 0 ? 6 : dow - 1 // Convert to Mon=0, ..., Sun=6
   }
-  const [selectedDay, setSelectedDay] = useState(getCurrentDay())
+  
+  const [selectedDay, setSelectedDay] = useState(getDayFromDate(new Date()))
+  
+  // Update selected day when date changes
+  useEffect(() => {
+    setSelectedDay(getDayFromDate(selectedDate))
+  }, [selectedDate])
+  
+  // Format date for display
+  const formatDate = (date: Date) => {
+    return date.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
+  }
+  
+  // Convert Date to YYYY-MM-DD string in LOCAL timezone (not UTC)
+  const dateToInputValue = (date: Date): string => {
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
+  }
+  
+  // Parse YYYY-MM-DD string to Date in LOCAL timezone
+  const inputValueToDate = (value: string): Date => {
+    const [year, month, day] = value.split('-').map(Number)
+    return new Date(year, month - 1, day)
+  }
 
   // Section timetable drawer state
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -116,13 +144,13 @@ export default function StaffTimetable(){
     }
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [selectedDate])
 
   async function load(){
     setLoading(true)
     try{
-      const today = new Date().toISOString().slice(0,10)
-      const res = await fetchWithAuth(`/api/timetable/staff/?week_date=${today}`)
+      const dateParam = dateToInputValue(selectedDate)
+      const res = await fetchWithAuth(`/api/timetable/staff/?week_date=${dateParam}`)
       if(!res.ok) throw new Error(await res.text())
       const data = await res.json()
       setTimetable(data.results || [])
@@ -151,7 +179,7 @@ export default function StaffTimetable(){
   async function openSectionDrawer(sectionId: number, sectionName: string, batchName: string | undefined, subjectLabel: string, fromDay?: number, fromPeriodId?: number) {
     if (fromDay !== undefined && fromPeriodId !== undefined) {
       // Validate: Don't allow starting swap from past periods
-      const fromDate = getDateForDayIndex(fromDay)
+      const fromDate = getDateForDayIndex(fromDay, selectedDate)
       const today = new Date().toISOString().slice(0, 10)
       
       // If the selected day is in the past, don't allow swap
@@ -298,13 +326,34 @@ export default function StaffTimetable(){
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-7xl mx-auto">
         <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
-          <div className="flex items-center gap-3">
-            <div className="p-3 bg-blue-50 rounded-lg">
-              <Calendar className="h-6 w-6 text-blue-600" />
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-blue-50 rounded-lg">
+                <Calendar className="h-6 w-6 text-blue-600" />
+              </div>
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900">My Timetable</h1>
+                <p className="text-gray-600">Schedule for {formatDate(selectedDate)}</p>
+              </div>
             </div>
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">My Timetable</h1>
-              <p className="text-gray-600">View your assigned teaching schedule</p>
+            
+            {/* Date Selector */}
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+              <label className="text-sm font-medium text-gray-700 whitespace-nowrap">Select Date:</label>
+              <div className="flex gap-2">
+                <input
+                  type="date"
+                  value={dateToInputValue(selectedDate)}
+                  onChange={(e) => setSelectedDate(inputValueToDate(e.target.value))}
+                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                />
+                <button
+                  onClick={() => setSelectedDate(new Date())}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors whitespace-nowrap"
+                >
+                  Today
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -320,11 +369,13 @@ export default function StaffTimetable(){
           </div>
         ) : (
           <div className="bg-white rounded-lg shadow-sm p-6">
-            <div className="flex items-center gap-2 mb-1">
-              <Clock className="h-5 w-5 text-blue-600" />
-              <h3 className="text-lg font-semibold text-gray-900">Weekly Schedule</h3>
+            <div className="mb-4">
+              <div className="flex items-center gap-2 mb-1">
+                <Clock className="h-5 w-5 text-blue-600" />
+                <h3 className="text-lg font-semibold text-gray-900">Schedule for {DAYS[selectedDay]}, {formatDate(selectedDate)}</h3>
+              </div>
+              <p className="text-xs text-gray-400">Click any period card to view that section's full timetable — then click another period on the same day to swap</p>
             </div>
-            <p className="text-xs text-gray-400 mb-4">Click any period card to view that section’s full timetable — then click another period on the same day to swap</p>
 
             {/* Desktop view: Horizontal table */}
             <div className="hidden md:block w-full">
@@ -389,22 +440,31 @@ export default function StaffTimetable(){
                                       : a.is_special
                                         ? (a.timetable_name || 'Special')
                                         : shortLabel(a.elective_subject || a.curriculum_row || a.subject_text)
-                                    const isElective = !!(a.elective_subject || a.elective_subject_id)
+                                    const isElective = !!(a.elective_subject || a.elective_subject_id || a.curriculum_row?.is_elective)
+                                    const isCustomSubject = !a.curriculum_row && !!a.subject_text
                                     // Check if this period has passed (only for non-swap, non-special periods)
                                     const periodDetails = periods.find(p => p.id === a.period_id)
-                                    const dayDate = getDateForDayIndex(di)
+                                    const dayDate = getDateForDayIndex(di, selectedDate)
                                     const today = new Date().toISOString().slice(0, 10)
                                     const isPastDay = dayDate < today
                                     const isPastPeriod = dayDate === today && periodDetails && isPeriodPassed(periodDetails.end_time)
                                     const canStartSwap = !isPastDay && !isPastPeriod
-                                    // swap periods are is_special but should still open the section drawer
-                                    const clickable = (a.is_swap || !a.is_special) && !isElective && !!sectionId && (a.is_swap || canStartSwap)
+                                    // Only swap periods can be clicked if special, regular periods and electives cannot be swapped
+                                    const isNonSwapSpecial = a.is_special && !a.is_swap
+                                    const clickable = a.is_swap ? !!sectionId : (!isElective && !isNonSwapSpecial && !isCustomSubject && !!sectionId && canStartSwap)
                                     return (
                                       <div
                                         key={idx}
                                         onClick={() => clickable && openSectionDrawer(sectionId!, sectionName, batchName, subjLabel, a.is_swap ? undefined : di, a.is_swap ? undefined : a.period_id)}
-                                        title={clickable ? `Click to view ${sectionName} full timetable` : (isPastDay || isPastPeriod) ? 'Period has already passed' : undefined}
-                                        className={`rounded p-1.5 ${bgClass} ${clickable ? 'cursor-pointer hover:shadow-md hover:scale-[1.02] transition-all group' : (isPastDay || isPastPeriod) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                        title={
+                                          clickable ? `Click to view ${sectionName} full timetable` : 
+                                          isElective ? 'Elective periods cannot be swapped' :
+                                          isNonSwapSpecial ? 'Special periods cannot be swapped' :
+                                          isCustomSubject ? 'Custom subject periods cannot be swapped' :
+                                          (isPastDay || isPastPeriod) ? 'Period has already passed' : 
+                                          undefined
+                                        }
+                                        className={`rounded p-1.5 ${bgClass} ${clickable ? 'cursor-pointer hover:shadow-md hover:scale-[1.02] transition-all group' : (isElective || isNonSwapSpecial || isCustomSubject || isPastDay || isPastPeriod) ? 'opacity-70 cursor-not-allowed' : ''}`}
                                       >
                                         <div className="font-semibold text-gray-900 text-xs leading-tight flex items-center justify-between gap-1">
                                           <span className={a.is_swap ? 'text-green-800' : ''}>
@@ -460,21 +520,45 @@ export default function StaffTimetable(){
 
             {/* Mobile view: Day tabs + Period/Subject columns */}
             <div className="md:hidden">
+              {/* Current Day Highlight */}
+              <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                <div className="text-center">
+                  <div className="text-sm font-medium text-blue-900">Viewing: {DAYS[selectedDay]}</div>
+                  <div className="text-xs text-blue-700 mt-1">{formatDate(selectedDate)}</div>
+                </div>
+              </div>
+              
               {/* Day tabs */}
               <div className="grid grid-cols-7 gap-1 mb-4">
-                {DAYS.map((d, di) => (
-                  <button
-                    key={d}
-                    onClick={() => setSelectedDay(di)}
-                    className={`px-2 py-2 rounded-lg text-xs font-medium transition-colors ${
-                      selectedDay === di
-                        ? 'bg-blue-600 text-white shadow-md'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                    }`}
-                  >
-                    {d}
-                  </button>
-                ))}
+                {DAYS.map((d, di) => {
+                  // Calculate date for this day
+                  const dayDiff = di - getDayFromDate(selectedDate)
+                  const dayDate = new Date(selectedDate)
+                  dayDate.setDate(selectedDate.getDate() + dayDiff)
+                  const isToday = dayDate.toDateString() === new Date().toDateString()
+                  
+                  return (
+                    <button
+                      key={d}
+                      onClick={() => {
+                        setSelectedDate(dayDate)
+                        setSelectedDay(di)
+                      }}
+                      className={`px-2 py-2 rounded-lg text-xs font-medium transition-colors relative ${
+                        selectedDay === di
+                          ? 'bg-blue-600 text-white shadow-md'
+                          : isToday
+                            ? 'bg-green-100 text-green-800 hover:bg-green-200'
+                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      {d}
+                      {isToday && selectedDay !== di && (
+                        <div className="absolute -top-1 -right-1 w-2 h-2 bg-green-500 rounded-full"></div>
+                      )}
+                    </button>
+                  )
+                })}
               </div>
 
               {/* Period/Subject table for selected day */}
@@ -543,22 +627,31 @@ export default function StaffTimetable(){
                                         : a.is_special
                                           ? (a.timetable_name || 'Special')
                                           : shortLabel(a.elective_subject || a.curriculum_row || a.subject_text)
-                                      const isElective = !!(a.elective_subject || a.elective_subject_id)
+                                      const isElective = !!(a.elective_subject || a.elective_subject_id || a.curriculum_row?.is_elective)
+                                      const isCustomSubject = !a.curriculum_row && !!a.subject_text
                                       // Check if this period has passed
                                       const periodDetails = periods.find(p => p.id === a.period_id)
-                                      const dayDate = getDateForDayIndex(selectedDay)
+                                      const dayDate = getDateForDayIndex(selectedDay, selectedDate)
                                       const today = new Date().toISOString().slice(0, 10)
                                       const isPastDay = dayDate < today
                                       const isPastPeriod = dayDate === today && periodDetails && isPeriodPassed(periodDetails.end_time)
                                       const canStartSwap = !isPastDay && !isPastPeriod
-                                      const clickable = (a.is_swap || !a.is_special) && !isElective && !!sectionId && (a.is_swap || canStartSwap)
+                                      const isNonSwapSpecial = a.is_special && !a.is_swap
+                                      const clickable = a.is_swap ? !!sectionId : (!isElective && !isNonSwapSpecial && !isCustomSubject && !!sectionId && canStartSwap)
                                       
                                       return (
                                         <div
                                           key={idx}
                                           onClick={() => clickable && openSectionDrawer(sectionId!, sectionName, batchName, subjLabel, a.is_swap ? undefined : selectedDay, a.is_swap ? undefined : a.period_id)}
-                                          title={clickable ? `Click to view ${sectionName} full timetable` : (isPastDay || isPastPeriod) ? 'Period has already passed' : undefined}
-                                          className={`rounded p-1.5 ${bgClass} ${clickable ? 'cursor-pointer hover:shadow-md hover:scale-[1.02] transition-all group' : (isPastDay || isPastPeriod) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                          title={
+                                            clickable ? `Click to view ${sectionName} full timetable` : 
+                                            isElective ? 'Elective periods cannot be swapped' :
+                                            isNonSwapSpecial ? 'Special periods cannot be swapped' :
+                                            isCustomSubject ? 'Custom subject periods cannot be swapped' :
+                                            (isPastDay || isPastPeriod) ? 'Period has already passed' : 
+                                            undefined
+                                          }
+                                          className={`rounded p-1.5 ${bgClass} ${clickable ? 'cursor-pointer hover:shadow-md hover:scale-[1.02] transition-all group' : (isElective || isNonSwapSpecial || isCustomSubject || isPastDay || isPastPeriod) ? 'opacity-70 cursor-not-allowed' : ''}`}
                                         >
                                           <div className="font-semibold text-gray-900 text-sm leading-tight">
                                             <span className={a.is_swap ? 'text-green-800' : ''}>
@@ -660,7 +753,7 @@ export default function StaffTimetable(){
               </div>
             )}
             {/* Sticky header */}
-            <div className="sticky top-0 z-10 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+            <div className="sticky top-0 z-20 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="p-2 bg-indigo-50 rounded-lg">
                   <Users className="w-5 h-5 text-indigo-600" />
@@ -700,7 +793,7 @@ export default function StaffTimetable(){
                   <table className="w-full text-xs border-collapse">
                     <thead>
                       <tr className="bg-gradient-to-r from-indigo-50 to-blue-50">
-                        <th className="border border-gray-200 px-3 py-2 text-left font-semibold text-indigo-700 sticky left-0 bg-indigo-50 z-10">Day</th>
+                        <th className="border border-gray-200 px-3 py-2 text-left font-semibold text-indigo-700 sticky left-0 bg-indigo-50 z-[11]">Day</th>
                         {secPeriods.map((p: any) => (
                           <th key={p.id} className="border border-gray-200 px-3 py-2 text-center font-semibold text-indigo-700 min-w-[90px]">
                             <div>{p.label || `P${p.index}`}</div>
@@ -724,7 +817,7 @@ export default function StaffTimetable(){
                         const isSelectedDay = !!swapFrom && di === swapFrom.day
                         return (
                           <tr key={d} className={`${isValidSwapDay ? 'bg-green-50/40' : 'hover:bg-gray-50'}`}>
-                            <td className={`border border-gray-200 px-3 py-2 font-semibold sticky left-0 z-10 ${
+                            <td className={`border border-gray-200 px-3 py-2 font-semibold sticky left-0 z-[1] ${
                               isSelectedDay ? 'bg-green-100 text-green-800' : isValidSwapDay ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-800'
                             }`}>{d}{isSelectedDay && <span className="ml-1 text-xs">⇔</span>}</td>
                             {secPeriods.map((p: any) => {
@@ -749,9 +842,25 @@ export default function StaffTimetable(){
                               // Check if target period has already passed (only relevant if target day is today)
                               const isPeriodAlreadyPassed = isToday && isPeriodPassed(p.end_time)
                               
+                              // Check if any assignment in the cell is an elective or non-swap special
+                              const hasElective = cell.some((a: any) => {
+                                if (a.elective_subject || a.elective_subject_id) return true
+                                if (a.curriculum_row?.is_elective) return true
+                                // Also check if the curriculum_row course_code or course_name contains elective indicators
+                                const courseCode = a.curriculum_row?.course_code || ''
+                                const courseName = a.curriculum_row?.course_name || ''
+                                return courseCode.toLowerCase().includes('elective') || courseName.toLowerCase().includes('elective')
+                              })
+                              const hasNonSwapSpecial = cell.some((a: any) => a.is_special && !a.is_swap)
+                              // Check if any assignment is a custom subject (subject_text without curriculum_row)
+                              const hasCustomSubject = cell.some((a: any) => !a.curriculum_row && a.subject_text)
+                              
                               // If selected day is today, only allow swapping with current/future periods on same day or later days
                               // If selected day is in future, allow swapping with any period on that day or later
-                              let canSwapWithThisPeriod = isValidSwapDay && !isSameSwapPeriod && cell.length > 0 && !cell.some((a: any) => a.is_swap) && !isSameSubjectAsSwap
+                              let canSwapWithThisPeriod = isValidSwapDay && !isSameSwapPeriod && cell.length > 0 && !cell.some((a: any) => a.is_swap) && !isSameSubjectAsSwap && !hasElective && !hasNonSwapSpecial && !hasCustomSubject
+                              
+                              // Show clear messaging for why a period cannot be swapped
+                              const cannotSwapReason = hasElective ? 'Elective period' : hasNonSwapSpecial ? 'Special period' : hasCustomSubject ? 'Custom subject' : isSameSubjectAsSwap ? 'Same subject' : isPeriodAlreadyPassed ? 'Past period' : null
                               
                               // Additional check: if target is on same day as selected AND selected day is today, 
                               // only allow if target period hasn't passed yet
@@ -792,8 +901,15 @@ export default function StaffTimetable(){
                                   } : undefined}
                                   className={`border border-gray-200 px-2 py-1.5 align-top transition-colors ${
                                     isSameSwapPeriod ? 'bg-indigo-50 ring-2 ring-inset ring-indigo-400' :
-                                    isSwapCandidate ? 'cursor-pointer hover:bg-green-100 bg-green-50/60' : ''
+                                    isSwapCandidate ? 'cursor-pointer hover:bg-green-100 bg-green-50/60' : 
+                                    (isValidSwapDay && cannotSwapReason) ? 'bg-gray-100 opacity-60' : ''
                                   }`}
+                                  title={
+                                    isSameSwapPeriod ? 'This is the selected period' :
+                                    isSwapCandidate ? 'Click to swap with the selected period' :
+                                    cannotSwapReason ? `Cannot swap: ${cannotSwapReason}` :
+                                    undefined
+                                  }
                                 >
                                   {isSameSwapPeriod && (
                                     <div className="text-indigo-600 text-xs font-bold mb-1 flex items-center gap-1">
@@ -803,6 +919,11 @@ export default function StaffTimetable(){
                                   {isSwapCandidate && (
                                     <div className="text-green-700 text-xs font-bold mb-1 flex items-center gap-1">
                                       <ArrowRightLeft className="w-3 h-3" /> Click to swap
+                                    </div>
+                                  )}
+                                  {!isSwapCandidate && !isSameSwapPeriod && isValidSwapDay && cannotSwapReason && cell.length > 0 && (
+                                    <div className="text-red-600 text-xs font-medium mb-1 flex items-center gap-1 bg-red-50 px-1.5 py-0.5 rounded">
+                                      <X className="w-3 h-3" /> {cannotSwapReason}
                                     </div>
                                   )}
                                   {cell.map((a: any, ai: number) => {

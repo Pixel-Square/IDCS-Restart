@@ -5,6 +5,7 @@ from .views import (
     SectionAdvisorViewSet,
     HODStaffListView,
     StaffsPageView,
+    DepartmentStaffListView,
     StaffProfileCreateView,
     StaffProfileUpdateView,
     StaffProfileDeleteView,
@@ -33,7 +34,7 @@ from .views import (
     StudentAttendanceView,
     StudentMarksView,
 )
-from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView, ClassAttendanceReportView, TodayPeriodAttendanceView, PeriodAttendanceReportView, OverallSectionView, MyClassStudentsView, DailyAttendanceView, DailyAttendanceLockView, DailyAttendanceUnlockView, DailyAttendanceUnlockRequestView, MyClassAttendanceAnalyticsView, DailyAttendanceSessionDetailView, SectionStudentAttendanceDayView
+from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView, ClassAttendanceReportView, TodayPeriodAttendanceView, PeriodAttendanceReportView, OverallSectionView, MyClassStudentsView, DailyAttendanceView, DailyAttendanceLockView, DailyAttendanceUnlockView, MyClassAttendanceAnalyticsView, DailyAttendanceSessionDetailView, SectionStudentAttendanceDayView, DailyAttendanceRevertAssignmentView, DailyAttendanceUnlockRequestView, PeriodAttendanceUnlockRequestView, HODUnlockRequestsView, PeriodAttendanceSwapView, PeriodAttendanceRevertAssignmentView
 from .views import UnifiedUnlockRequestsView, DepartmentStudentsView, AllStudentsView, MentorMyMenteesView
 
 router = DefaultRouter()
@@ -61,6 +62,7 @@ urlpatterns = [
     # HOD / staff endpoints
     path('hod-staff/', HODStaffListView.as_view()),
     path('staffs-page/', StaffsPageView.as_view()),
+    path('department-staff/', DepartmentStaffListView.as_view()),
     path('staffs/', StaffProfileCreateView.as_view()),
     path('staffs/<int:pk>/', StaffProfileUpdateView.as_view()),
     path('staffs/<int:pk>/delete/', StaffProfileDeleteView.as_view()),
@@ -101,8 +103,15 @@ urlpatterns = [
     path('analytics/daily-attendance/<int:session_id>/', DailyAttendanceSessionDetailView.as_view()),
     path('analytics/daily-attendance-lock/<int:session_id>/', DailyAttendanceLockView.as_view()),
     path('analytics/daily-attendance-unlock/<int:session_id>/', DailyAttendanceUnlockView.as_view()),
-    path('analytics/daily-attendance-unlock-request/', DailyAttendanceUnlockRequestView.as_view()),
+    path('analytics/daily-attendance-revert/<int:session_id>/', DailyAttendanceRevertAssignmentView.as_view()),
+    path('analytics/period-attendance-swap/', PeriodAttendanceSwapView.as_view()),
+    path('analytics/period-attendance-revert/<int:session_id>/', PeriodAttendanceRevertAssignmentView.as_view()),
     path('analytics/section-student-day/', SectionStudentAttendanceDayView.as_view()),
     path('attendance-analytics/', MyClassAttendanceAnalyticsView.as_view()),  # My Class endpoint
+    
+    # Two-stage unlock request endpoints
+    path('daily-attendance-unlock-request/', DailyAttendanceUnlockRequestView.as_view()),
+    path('period-attendance-unlock-request/', PeriodAttendanceUnlockRequestView.as_view()),
+    path('hod-unlock-requests/', HODUnlockRequestsView.as_view()),
     path('unified-unlock-requests/', UnifiedUnlockRequestsView.as_view()),
 ]

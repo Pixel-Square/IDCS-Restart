@@ -1,0 +1,83 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Popup Response</title>
+</head>
+<body>
+<script>
+(function() {
+    'use strict';
+    
+    // Function to safely close the popup and notify the parent
+    function closePopup() {
+        try {
+            // Check if we're in a popup window
+            if (window.opener && !window.opener.closed) {
+                // Try to dismiss the popup using Django's built-in function
+                {% if action_type == 'delete' %}
+                if (typeof window.opener.dismissDeleteRelatedObjectPopup === 'function') {
+                    window.opener.dismissDeleteRelatedObjectPopup(window, '{{ escaped_object_id }}');
+                }
+                {% elif action_type == 'change' %}
+                if (typeof window.opener.dismissChangeRelatedObjectPopup === 'function') {
+                    window.opener.dismissChangeRelatedObjectPopup(window, '{{ escaped_object_id }}', '{{ escaped_object_repr }}', '{{ new_value }}');
+                }
+                {% else %}
+                if (typeof window.opener.dismissAddRelatedObjectPopup === 'function') {
+                    window.opener.dismissAddRelatedObjectPopup(window, '{{ new_value }}', '{{ escaped_object_repr }}');
+                }
+                {% endif %}
+                
+                // Close the popup window
+                window.close();
+            } else {
+                // Opener is null or closed, just close this window
+                console.warn('Parent window (opener) is not available. Closing popup.');
+                window.close();
+            }
+        } catch (e) {
+            console.error('Error closing popup:', e);
+            // Fallback: Try to close anyway
+            try {
+                window.close();
+            } catch (closeError) {
+                console.error('Could not close window:', closeError);
+                // Display a message to the user if we can't close the window
+                document.body.innerHTML = '<div style="padding: 20px; text-align: center; font-family: Arial, sans-serif;">' +
+                    '<h2>Operation Complete</h2>' +
+                    '<p>You can close this window manually.</p>' +
+                    '<button onclick="window.close()" style="padding: 10px 20px; font-size: 14px; cursor: pointer;">Close Window</button>' +
+                    '</div>';
+            }
+        }
+    }
+    
+    // Execute closePopup when DOM is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', closePopup);
+    } else {
+        closePopup();
+    }
+})();
+</script>
+
+<div style="padding: 20px; text-align: center; font-family: Arial, sans-serif; display: none;" id="fallback">
+    <h2>Operation Complete</h2>
+    <p>If this window doesn't close automatically, you can close it manually.</p>
+    <button onclick="window.close()" style="padding: 10px 20px; font-size: 14px; cursor: pointer; background: #417690; color: white; border: none; border-radius: 4px;">Close Window</button>
+</div>
+
+<script>
+// Show fallback message if window doesn't close in 2 seconds
+setTimeout(function() {
+    var fallback = document.getElementById('fallback');
+    if (fallback) {
+        fallback.style.display = 'block';
+    }
+}, 2000);
+</script>
+</body>
+</html>

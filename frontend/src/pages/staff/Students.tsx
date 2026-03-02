@@ -2,6 +2,10 @@ import React, { useEffect, useState } from 'react'
 import fetchWithAuth from '../../services/fetchAuth'
 import { Users, GraduationCap, Mail, Loader2, UserCircle2, ChevronLeft, ChevronRight, Building2, Globe, UserCheck, Heart } from 'lucide-react'
 
+// Cache key and expiry time (5 minutes)
+const CACHE_KEY = 'students_page_cache'
+const CACHE_EXPIRY_MS = 5 * 60 * 1000
+
 type Student = { 
   id: number; 
   reg_no: string; 
@@ -98,6 +102,51 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
     }
   ].filter(view => hasPermission(view.permission))
 
+  // Cache helper functions
+  const getCachedData = (viewKey: ViewMode) => {
+    try {
+      const cacheKey = `${CACHE_KEY}_${viewKey}`
+      const cached = sessionStorage.getItem(cacheKey)
+      if (!cached) return null
+      const { data, timestamp } = JSON.parse(cached)
+      const age = Date.now() - timestamp
+      if (age > CACHE_EXPIRY_MS) {
+        sessionStorage.removeItem(cacheKey)
+        return null
+      }
+      return data
+    } catch {
+      return null
+    }
+  }
+
+  const setCachedData = (viewKey: ViewMode, data: any) => {
+    try {
+      const cacheKey = `${CACHE_KEY}_${viewKey}`
+      sessionStorage.setItem(cacheKey, JSON.stringify({
+        data,
+        timestamp: Date.now()
+      }))
+    } catch (e) {
+      console.warn('Failed to cache students data', e)
+    }
+  }
+
+  const clearCache = (viewKey?: ViewMode) => {
+    try {
+      if (viewKey) {
+        sessionStorage.removeItem(`${CACHE_KEY}_${viewKey}`)
+      } else {
+        // Clear all students cache
+        Object.keys(sessionStorage).forEach(key => {
+          if (key.startsWith(CACHE_KEY)) {
+            sessionStorage.removeItem(key)
+          }
+        })
+      }
+    } catch {}
+  }
+
   // Set default view mode to the first available view
   useEffect(() => {
     if (availableViews.length > 0 && !availableViews.find(v => v.key === viewMode)) {
@@ -153,6 +202,29 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
   async function fetchSectionsOrStudents() {
     // Don't call the API if the current view isn't available to this user
     if (availableViews.length === 0 || !availableViews.find(v => v.key === viewMode)) return
+    
+    // Check cache first
+    const cached = getCachedData(viewMode)
+    if (cached) {
+      console.log(`Loading ${viewMode} from cache`)
+      if (viewMode === 'my-students') {
+        setStudentsCache(prev => ({ ...prev, ...cached.studentsCache }))
+        setMyStudentsSections(cached.sections)
+        if (cached.sections.length > 0) setSelectedSection(cached.sections[0].section_id)
+      } else if (viewMode === 'my-mentees') {
+        setStudentsCache(prev => ({ ...prev, ...cached.studentsCache }))
+        setMyMenteesSections(cached.sections)
+        if (cached.sections.length > 0) setSelectedSection(cached.sections[0].section_id)
+      } else if (viewMode === 'department-students') {
+        setDeptSections(cached.sections)
+        if (cached.sections.length > 0) setSelectedSection(cached.sections[0].section_id)
+      } else if (viewMode === 'all-students') {
+        setAllSections(cached.sections)
+        if (cached.sections.length > 0) setSelectedSection(cached.sections[0].section_id)
+      }
+      return
+    }
+    
     setLoading(true)
     try {
       if (viewMode === 'my-students') {
@@ -168,6 +240,8 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
         setStudentsCache(prev => ({ ...prev, ...cache }))
         setMyStudentsSections(sections)
         if (sections.length > 0) setSelectedSection(sections[0].section_id)
+        // Cache the data
+        setCachedData(viewMode, { sections, studentsCache: cache })
 
       } else if (viewMode === 'my-mentees') {
         const res = await fetchWithAuth('/api/academics/mentor/my-mentees/')
@@ -182,6 +256,8 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
         setStudentsCache(prev => ({ ...prev, ...cache }))
         setMyMenteesSections(sections)
         if (sections.length > 0) setSelectedSection(sections[0].section_id)
+        // Cache the data
+        setCachedData(viewMode, { sections, studentsCache: cache })
 
       } else if (viewMode === 'department-students') {
         const res = await fetchWithAuth('/api/academics/department-students/')
@@ -193,6 +269,8 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
         }))
         setDeptSections(sections)
         if (sections.length > 0) setSelectedSection(sections[0].section_id)
+        // Cache the data
+        setCachedData(viewMode, { sections })
 
       } else if (viewMode === 'all-students') {
         const res = await fetchWithAuth('/api/academics/all-students/')
@@ -204,6 +282,8 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
         }))
         setAllSections(sections)
         if (sections.length > 0) setSelectedSection(sections[0].section_id)
+        // Cache the data
+        setCachedData(viewMode, { sections })
       }
     } catch (e) {
       console.error('fetchSectionsOrStudents error:', e)
@@ -213,6 +293,21 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
   }
 
   async function fetchSectionStudents(sectionId: number) {
+    // Check cache for this specific section
+    const sectionCacheKey = `${CACHE_KEY}_section_${sectionId}_${viewMode}`
+    try {
+      const cached = sessionStorage.getItem(sectionCacheKey)
+      if (cached) {
+        const { data, timestamp } = JSON.parse(cached)
+        const age = Date.now() - timestamp
+        if (age <= CACHE_EXPIRY_MS) {
+          console.log(`Loading section ${sectionId} students from cache`)
+          setLazyStudents(data)
+          return
+        }
+      }
+    } catch {}
+
     const endpoint = viewMode === 'department-students'
       ? `/api/academics/department-students/?section_id=${sectionId}`
       : `/api/academics/all-students/?section_id=${sectionId}`
@@ -221,7 +316,15 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
       const res = await fetchWithAuth(endpoint)
       if (!res.ok) throw new Error(await res.text())
       const data = await res.json()
-      setLazyStudents(data.students || [])
+      const students = data.students || []
+      setLazyStudents(students)
+      // Cache the section students
+      try {
+        sessionStorage.setItem(sectionCacheKey, JSON.stringify({
+          data: students,
+          timestamp: Date.now()
+        }))
+      } catch {}
     } catch (e) {
       console.error('fetchSectionStudents error:', e)
       setLazyStudents([])

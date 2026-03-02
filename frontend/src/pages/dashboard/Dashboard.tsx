@@ -2,13 +2,15 @@ import React from 'react';
 import DashboardEntryPoints from '../../components/layout/DashboardEntryPoints';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import UserQueriesComponent from '../../components/UserQueriesComponent';
-import { getMe } from '../../services/auth';
+import { getCachedMe } from '../../services/auth';
 
 export default function DashboardPage() {
   const [user, setUser] = React.useState<any>(null);
 
   React.useEffect(() => {
-    getMe().then(setUser).catch(console.error);
+    // Use cached user data instead of making API call
+    const cachedUser = getCachedMe();
+    setUser(cachedUser);
   }, []);
 
   return (

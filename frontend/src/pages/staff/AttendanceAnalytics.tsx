@@ -59,6 +59,7 @@ const AttendanceAnalytics: React.FC = () => {
   const [pendingRequests, setPendingRequests] = useState<any[]>([])
   const [completedRequests, setCompletedRequests] = useState<Record<string, string>>({})
   const [showRequestsModal, setShowRequestsModal] = useState(false)
+  const [showHODRequestsModal, setShowHODRequestsModal] = useState(false)
   const [reportModalOpen, setReportModalOpen] = useState(false)
   const [reportData, setReportData] = useState<any | null>(null)
   const [reportLoading, setReportLoading] = useState(false)
@@ -833,16 +834,11 @@ const AttendanceAnalytics: React.FC = () => {
           </div>
           { (permissionLevel === 'all' || permissionLevel === 'department') && (
             <button 
-              onClick={() => { loadUnlockRequests(); setShowRequestsModal(true); }} 
+              onClick={() => { setShowRequestsModal(true); }} 
               className="relative px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2 shadow-sm"
             >
               <Lock className="w-4 h-4" />
-              Unlock Requests
-              {unlockRequests.length > 0 && (
-                <span className="ml-1 inline-flex items-center justify-center px-2 py-0.5 text-xs font-bold rounded-full bg-white text-indigo-700">
-                  {unlockRequests.length}
-                </span>
-              )}
+              {permissionLevel === 'department' ? 'HOD Approval Requests' : 'Unlock Requests'}
             </button>
           )}
         </div>
@@ -2094,7 +2090,9 @@ const AttendanceAnalytics: React.FC = () => {
                 <div className="p-2 bg-white/20 rounded-lg">
                   <Lock className="w-5 h-5 text-white" />
                 </div>
-                <h3 className="text-xl font-semibold text-white">Unlock Requests (Period & Daily)</h3>
+                <h3 className="text-xl font-semibold text-white">
+                  {permissionLevel === 'department' ? 'HOD Approval Requests' : 'Unlock Requests (Final Approval)'}
+                </h3>
               </div>
               <button 
                 onClick={() => setShowRequestsModal(false)} 

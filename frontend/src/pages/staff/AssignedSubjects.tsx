@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { fetchAssignedSubjects } from '../../services/staff'
 import { fetchSubjectBatches, createSubjectBatch } from '../../services/subjectBatches'
 import fetchWithAuth from '../../services/fetchAuth'
-import { BookOpen, Users, Calendar, AlertCircle, FileText, RotateCcw } from 'lucide-react'
+import { BookOpen, Users, AlertCircle, FileText, RotateCcw } from 'lucide-react'
 
 type AssignedSubject = {
   id: number
@@ -15,6 +15,12 @@ type AssignedSubject = {
   section_id?: number | null
   elective_subject_id?: number | null
   curriculum_row?: any
+  department?: {
+    id: number
+    code?: string | null
+    name?: string | null
+    short_name?: string | null
+  } | null
 }
 
 
@@ -421,23 +427,23 @@ export default function AssignedSubjectsPage() {
   })
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-blue-50 via-white to-gray-50 p-6">
+    <div className="min-h-screen bg-gradient-to-b from-blue-50 via-white to-gray-50 p-3 md:p-6">
       {/* Header Section */}
-      <div className="bg-gradient-to-r from-white to-blue-50 rounded-xl shadow-lg p-6 mb-6">
-        <div className="flex justify-between items-center">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-gradient-to-br from-blue-100 to-indigo-200 rounded-xl flex items-center justify-center">
-              <BookOpen className="w-6 h-6 text-blue-700" />
+      <div className="bg-gradient-to-r from-white to-blue-50 rounded-xl shadow-lg p-4 md:p-6 mb-4 md:mb-6">
+        <div className="flex flex-col gap-3 md:flex-row md:justify-between md:items-center">
+          <div className="flex items-center gap-3 md:gap-4">
+            <div className="w-10 h-10 md:w-12 md:h-12 bg-gradient-to-br from-blue-100 to-indigo-200 rounded-xl flex items-center justify-center flex-shrink-0">
+              <BookOpen className="w-5 h-5 md:w-6 md:h-6 text-blue-700" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">Assigned Subjects</h1>
-              <p className="text-sm text-gray-600 mt-1">View all subjects assigned to you for the current academic session</p>
+              <h1 className="text-lg md:text-2xl font-bold text-gray-900">Assigned Subjects</h1>
+              <p className="text-xs md:text-sm text-gray-600 mt-1 hidden sm:block">View all subjects assigned to you</p>
             </div>
           </div>
           {!loading && !error && items.length > 0 && (
-            <div className="flex items-center gap-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-4 py-2 rounded-full">
-              <span className="text-sm font-medium">Total Subjects</span>
-              <span className="bg-white/20 text-white px-3 py-1 rounded-full text-sm font-semibold">{items.length}</span>
+            <div className="flex items-center gap-2 md:gap-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-3 md:px-4 py-1.5 md:py-2 rounded-full self-start md:self-auto">
+              <span className="text-xs md:text-sm font-medium">Total</span>
+              <span className="bg-white/20 text-white px-2 md:px-3 py-0.5 md:py-1 rounded-full text-xs md:text-sm font-semibold">{items.length}</span>
             </div>
           )}
         </div>
@@ -478,27 +484,26 @@ export default function AssignedSubjectsPage() {
         </div>
       )}
 
-      {/* Table View */}
+      {/* Table View - Desktop */}
       {!loading && !error && items.length > 0 && (
         <div className="bg-white rounded-xl shadow-lg overflow-hidden">
-          <div className="overflow-x-auto">
+          {/* Desktop Table */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr className="bg-gradient-to-r from-gray-50 to-blue-50 border-b-2 border-gray-200">
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-blue-700">S.No</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-blue-700">Subject</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-blue-700">Section</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-blue-700">Batch</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-blue-700">Semester</th>
+                  <th className="px-4 lg:px-6 py-4 text-left text-sm font-semibold text-blue-700">S.No</th>
+                  <th className="px-4 lg:px-6 py-4 text-left text-sm font-semibold text-blue-700">Subject</th>
+                  <th className="px-4 lg:px-6 py-4 text-left text-sm font-semibold text-blue-700">Class Details</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {items.map((item, index) => (
                   <tr key={item.id} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-6 py-4">
+                    <td className="px-4 lg:px-6 py-4">
                       <span className="text-sm font-medium text-gray-900">{index + 1}</span>
                     </td>
-                    <td className="px-6 py-4">
+                    <td className="px-4 lg:px-6 py-4">
                       <div className="space-y-3">
                         <div>
                           <div className="font-semibold text-gray-900">
@@ -522,40 +527,141 @@ export default function AssignedSubjectsPage() {
                         </div>
                       </div>
                     </td>
-                    <td className="px-6 py-4">
-                      {item.section_name ? (
-                        <div className="flex items-center gap-2 bg-blue-50 text-blue-700 px-3 py-1 rounded-full w-fit">
-                          <Users className="w-4 h-4" />
-                          <span className="text-sm font-medium">{item.section_name}</span>
-                        </div>
-                      ) : (
-                        <span className="text-gray-400">—</span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4">
-                      {item.batch ? (
-                        <div className="flex items-center gap-2 bg-green-50 text-green-700 px-3 py-1 rounded-full w-fit">
-                          <Calendar className="w-4 h-4" />
-                          <span className="text-sm font-medium">{item.batch}</span>
-                        </div>
-                      ) : (
-                        <span className="text-gray-400">—</span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4">
-                      {item.semester != null ? (
-                        <span className="bg-purple-100 text-purple-800 px-3 py-1 rounded-full text-sm font-semibold">
-                          Sem {item.semester}
-                        </span>
-                      ) : (
-                        <span className="text-gray-400">—</span>
-                      )}
+                    <td className="px-4 lg:px-6 py-4">
+                      {(() => {
+                        const parts: string[] = []
+                        if (item.department) {
+                          parts.push(item.department.short_name || item.department.name || '')
+                        }
+                        if (item.section_name) parts.push(item.section_name)
+                        if (item.batch) parts.push(item.batch)
+                        if (item.semester != null) parts.push(`Sem ${item.semester}`)
+                        
+                        if (parts.length > 0) {
+                          return (
+                            <div className="inline-flex items-center gap-1.5 bg-gradient-to-r from-blue-50 to-purple-50 text-gray-800 px-3 py-1.5 rounded-full border border-blue-200">
+                              <Users className="w-3.5 h-3.5 text-blue-600" />
+                              <span className="text-xs font-medium">{parts.join(' • ')}</span>
+                            </div>
+                          )
+                        }
+                        return <span className="text-gray-400 text-xs">—</span>
+                      })()}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+
+          {/* Mobile Card View */}
+          <div className="md:hidden divide-y divide-gray-100">
+            {items.map((item, index) => (
+              <div key={item.id} className="p-4 hover:bg-gray-50 transition-colors">
+                <div className="flex items-start gap-3">
+                  <div className="flex-shrink-0 w-8 h-8 bg-blue-100 text-blue-700 rounded-full flex items-center justify-center text-sm font-semibold">
+                    {index + 1}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-gray-900 text-sm mb-1">
+                      {item.subject_name || 'Unnamed Subject'}
+                    </div>
+                    {item.subject_code && (
+                      <div className="text-xs text-blue-600 font-medium mb-2">{item.subject_code}</div>
+                    )}
+                    
+                    {/* Class Details */}
+                    {(() => {
+                      const parts: string[] = []
+                      if (item.department) {
+                        parts.push(item.department.short_name || item.department.name || '')
+                      }
+                      if (item.section_name) parts.push(item.section_name)
+                      if (item.batch) parts.push(item.batch)
+                      if (item.semester != null) parts.push(`Sem ${item.semester}`)
+                      
+                      if (parts.length > 0) {
+                        return (
+                          <div className="inline-flex items-center gap-1.5 bg-gradient-to-r from-blue-50 to-purple-50 text-gray-800 px-2.5 py-1 rounded-full border border-blue-200 mb-3">
+                            <Users className="w-3 h-3 text-blue-600" />
+                            <span className="text-xs font-medium">{parts.join(' • ')}</span>
+                          </div>
+                        )
+                      }
+                      return null
+                    })()}
+
+                    {/* Actions */}
+                    <div className="flex flex-wrap gap-2">
+                      <button 
+                        type="button" 
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors" 
+                        onClick={() => openPickerForAssignment(item)}
+                      >
+                        Create Batch
+                      </button>
+                      {!item.section_id && (
+                        <span className="text-xs text-gray-500 px-2 py-1">Dept-wide elective</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Continue with batches section - keeping it as is for now */}
+      {!loading && !error && items.length > 0 && (
+        <div className="mt-6">
+          {items.map((item, index) => {
+            const crId = item.curriculum_row_id || item.curriculum_row?.id
+            if (!crId) return null
+            const relatedBatches = batchesByCurriculum[crId] || []
+            if (relatedBatches.length === 0) return null
+            return (
+              <div key={`${item.id}-batches`} className="bg-white rounded-xl shadow-lg p-4 md:p-6 mb-4">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h3 className="text-base md:text-lg font-semibold text-gray-900">{item.subject_name || 'Subject'}</h3>
+                    {item.subject_code && <p className="text-xs md:text-sm text-gray-600">{item.subject_code}</p>}
+                  </div>
+                  <span className="text-xs md:text-sm text-gray-500">{relatedBatches.length} batch{relatedBatches.length !== 1 ? 'es' : ''}</span>
+                </div>
+                <div className="space-y-3">
+                  {relatedBatches.map(b => (
+                    <div key={b.id} className="border border-gray-200 rounded-lg p-3 md:p-4 hover:border-blue-300 transition-colors">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
+                        <div className="font-medium text-gray-900 text-sm md:text-base">{b.name}</div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs md:text-sm text-gray-600">{(b.students || []).length} students</span>
+                          <button 
+                            className="text-blue-600 hover:text-blue-700 text-xs md:text-sm font-medium"
+                            onClick={() => openEditBatchModal(b)}
+                          >
+                            Edit
+                          </button>
+                          <button 
+                            className="text-red-600 hover:text-red-700 text-xs md:text-sm font-medium"
+                            onClick={() => deleteBatch(b.id)}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                      {b.students && b.students.length > 0 && (
+                        <div className="text-xs md:text-sm text-gray-600">
+                          {b.students.slice(0, 3).map((s: any) => s.reg_no || s.username).join(', ')}
+                          {b.students.length > 3 && ` +${b.students.length - 3} more`}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          })}
         </div>
       )}
 

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import fetchWithAuth from '../../services/fetchAuth'
+import { getCachedMe } from '../../services/auth'
 import { Calendar, Clock, BookOpen, Users, AlertCircle, Loader2 } from 'lucide-react'
 
 const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
@@ -28,21 +29,52 @@ export default function StudentTimetable(){
   const [periods, setPeriods] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [studentId, setStudentId] = useState<number | null>(null)
-  // Auto-detect current day: 0=Mon, 1=Tue, ..., 6=Sun
-  const getCurrentDay = () => {
-    const today = new Date()
-    const dow = today.getDay() // 0=Sun, 1=Mon, ..., 6=Sat
+  
+  // Date selector state
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date())
+  
+  // Calculate day of week from selected date: 0=Mon, 1=Tue, ..., 6=Sun
+  const getDayFromDate = (date: Date) => {
+    const dow = date.getDay() // 0=Sun, 1=Mon, ..., 6=Sat
     return dow === 0 ? 6 : dow - 1 // Convert to Mon=0, ..., Sun=6
   }
-  const [selectedDay, setSelectedDay] = useState(getCurrentDay())
+  
+  const [selectedDay, setSelectedDay] = useState(getDayFromDate(new Date()))
+  
+  // Update selected day when date changes
+  useEffect(() => {
+    setSelectedDay(getDayFromDate(selectedDate))
+  }, [selectedDate])
+  
+  // Format date for display
+  const formatDate = (date: Date) => {
+    return date.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
+  }
+  
+  // Convert Date to YYYY-MM-DD string in LOCAL timezone (not UTC)
+  const dateToInputValue = (date: Date): string => {
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
+  }
+  
+  // Parse YYYY-MM-DD string to Date in LOCAL timezone
+  const inputValueToDate = (value: string): Date => {
+    const [year, month, day] = value.split('-').map(Number)
+    return new Date(year, month - 1, day)
+  }
 
   useEffect(()=>{ fetchProfile() }, [])
 
   async function fetchProfile(){
     try{
-      const res = await fetchWithAuth('/api/accounts/me/')
-      if(!res.ok) throw new Error(await res.text())
-      const me = await res.json()
+      // Use cached user data instead of making API call
+      const me = getCachedMe()
+      if (!me) {
+        console.warn('No cached user profile found')
+        return
+      }
       const prof = me.profile || {}
       setStudentId(me.id)
       if(prof.section_id) setSectionId(prof.section_id)
@@ -54,7 +86,9 @@ export default function StudentTimetable(){
     setLoading(true)
     ;(async ()=>{
       try{
-        const res = await fetchWithAuth(`/api/timetable/section/${sectionId}/timetable/`)
+        // Pass selectedDate to backend to fetch special periods for that week
+        const dateParam = selectedDate ? `?date=${selectedDate}` : ''
+        const res = await fetchWithAuth(`/api/timetable/section/${sectionId}/timetable/${dateParam}`)
         if(!res.ok) throw new Error(await res.text())
         const data = await res.json()
         const tt = data.results || []
@@ -73,20 +107,41 @@ export default function StudentTimetable(){
       }catch(e){ console.error(e) }
       finally{ setLoading(false) }
     })()
-  },[sectionId])
+  },[sectionId, selectedDate])
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 p-6">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="bg-white rounded-xl shadow-sm p-6 mb-6 border border-gray-100">
-          <div className="flex items-center gap-3">
-            <div className="p-3 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl">
-              <Calendar className="h-6 w-6 text-white" />
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl">
+                <Calendar className="h-6 w-6 text-white" />
+              </div>
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900">My Timetable</h1>
+                <p className="text-gray-600">View your class schedule for {formatDate(selectedDate)}</p>
+              </div>
             </div>
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">My Timetable</h1>
-              <p className="text-gray-600">View your class schedule for the week</p>
+            
+            {/* Date Selector */}
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+              <label className="text-sm font-medium text-gray-700 whitespace-nowrap">Select Date:</label>
+              <div className="flex gap-2">
+                <input
+                  type="date"
+                  value={dateToInputValue(selectedDate)}
+                  onChange={(e) => setSelectedDate(inputValueToDate(e.target.value))}
+                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm"
+                />
+                <button
+                  onClick={() => setSelectedDate(new Date())}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition-colors whitespace-nowrap"
+                >
+                  Today
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -115,9 +170,11 @@ export default function StudentTimetable(){
         {!loading && sectionId && (
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
             <div className="p-6 border-b border-gray-100">
-              <div className="flex items-center gap-2">
-                <Clock className="h-5 w-5 text-indigo-600" />
-                <h3 className="text-lg font-semibold text-gray-900">Weekly Schedule</h3>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <Clock className="h-5 w-5 text-indigo-600" />
+                  <h3 className="text-lg font-semibold text-gray-900">Schedule for {DAYS[selectedDay]}, {formatDate(selectedDate)}</h3>
+                </div>
               </div>
             </div>
 
@@ -230,21 +287,45 @@ export default function StudentTimetable(){
 
             {/* Mobile view: Day tabs + Period/Subject columns */}
             <div className="md:hidden p-4">
+              {/* Current Day Highlight */}
+              <div className="mb-4 p-3 bg-indigo-50 border border-indigo-200 rounded-lg">
+                <div className="text-center">
+                  <div className="text-sm font-medium text-indigo-900">Viewing: {DAYS[selectedDay]}</div>
+                  <div className="text-xs text-indigo-700 mt-1">{formatDate(selectedDate)}</div>
+                </div>
+              </div>
+              
               {/* Day tabs */}
               <div className="grid grid-cols-7 gap-1 mb-4">
-                {DAYS.map((d, di) => (
-                  <button
-                    key={d}
-                    onClick={() => setSelectedDay(di)}
-                    className={`px-2 py-2 rounded-lg text-xs font-medium transition-colors ${
-                      selectedDay === di
-                        ? 'bg-indigo-600 text-white shadow-md'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                    }`}
-                  >
-                    {d}
-                  </button>
-                ))}
+                {DAYS.map((d, di) => {
+                  // Calculate date for this day
+                  const dayDiff = di - getDayFromDate(selectedDate)
+                  const dayDate = new Date(selectedDate)
+                  dayDate.setDate(selectedDate.getDate() + dayDiff)
+                  const isToday = dayDate.toDateString() === new Date().toDateString()
+                  
+                  return (
+                    <button
+                      key={d}
+                      onClick={() => {
+                        setSelectedDate(dayDate)
+                        setSelectedDay(di)
+                      }}
+                      className={`px-2 py-2 rounded-lg text-xs font-medium transition-colors relative ${
+                        selectedDay === di
+                          ? 'bg-indigo-600 text-white shadow-md'
+                          : isToday
+                            ? 'bg-green-100 text-green-800 hover:bg-green-200'
+                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      {d}
+                      {isToday && selectedDay !== di && (
+                        <div className="absolute -top-1 -right-1 w-2 h-2 bg-green-500 rounded-full"></div>
+                      )}
+                    </button>
+                  )
+                })}
               </div>
 
               {/* Period/Subject table for selected day */}

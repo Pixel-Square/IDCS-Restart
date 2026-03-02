@@ -1221,41 +1221,49 @@ export default function TimetableEditor(){
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 p-6">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
-        <div className="bg-white rounded-xl shadow-sm p-6 mb-6 border border-gray-100">
-          <div className="flex items-center justify-between">
+        <div className="bg-white rounded-xl shadow-sm p-4 md:p-6 mb-6 border border-gray-100">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
             <div className="flex items-center gap-4">
               <div className="p-3 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl">
                 <Calendar className="h-7 w-7 text-white" />
               </div>
               <div>
-                <h1 className="text-2xl font-bold text-gray-900">Timetable Editor</h1>
-                <p className="text-gray-600">Manage class schedules and assignments</p>
+                <h1 className="text-xl md:text-2xl font-bold text-gray-900">Timetable Editor</h1>
+                <p className="text-sm md:text-base text-gray-600">Manage class schedules and assignments</p>
               </div>
             </div>
             
-            <div className="flex items-center gap-3">
-              <div className="px-4 py-2 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg border border-indigo-200">
-                <div className="flex items-center gap-2">
-                  <GraduationCap className="h-4 w-4 text-indigo-600" />
-                  <span className="font-semibold text-indigo-900">
-                    {(sections.find(x=>x.id===sectionId)||{name:'Section'}).name}
-                  </span>
-                </div>
-              </div>
+            <div className="flex flex-col sm:flex-row sm:flex-wrap items-start sm:items-center gap-2 sm:gap-3">
+              {(() => {
+                const section = sections.find(x=>x.id===sectionId) || {name:'Section', batch:'', semester:null}
+                return (
+                  <div className="px-3 md:px-4 py-2 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg border border-indigo-200 w-full sm:w-auto">
+                    <div className="flex items-center gap-2">
+                      <GraduationCap className="h-4 w-4 text-indigo-600 flex-shrink-0" />
+                      <span className="font-semibold text-indigo-900 text-sm md:text-base">
+                        {section.name}
+                        {section.batch && ` • ${section.batch}`}
+                        {section.semester && ` • Sem ${section.semester}`}
+                      </span>
+                    </div>
+                  </div>
+                )
+              })()}
               {currentSectionRegulation && (
-                <div className="px-4 py-2 bg-gradient-to-r from-emerald-50 to-teal-50 rounded-lg border border-emerald-200">
+                <div className="px-3 md:px-4 py-2 bg-gradient-to-r from-emerald-50 to-teal-50 rounded-lg border border-emerald-200 w-full sm:w-auto">
                   <div className="flex items-center gap-2">
-                    <BookOpen className="h-4 w-4 text-emerald-600" />
-                    <span className="font-semibold text-emerald-900">
-                      Regulation: {currentSectionRegulation.code}
+                    <BookOpen className="h-4 w-4 text-emerald-600 flex-shrink-0" />
+                    <span className="font-semibold text-emerald-900 text-sm md:text-base">
+                      {currentSectionRegulation.code}
+                      {currentSectionRegulation.semester && ` • Sem ${currentSectionRegulation.semester}`}
                     </span>
                   </div>
                 </div>
               )}
               {templateId && (
-                <div className="px-4 py-2 bg-gray-50 rounded-lg border border-gray-200">
+                <div className="px-3 md:px-4 py-2 bg-gray-50 rounded-lg border border-gray-200 w-full sm:w-auto">
                   <div className="flex items-center gap-2">
-                    <Clock className="h-4 w-4 text-gray-600" />
+                    <Clock className="h-4 w-4 text-gray-600 flex-shrink-0" />
                     <span className="text-sm font-medium text-gray-700">
                       {(templates.find(t=>t.id===templateId)||{name:'Template'}).name}
                     </span>
