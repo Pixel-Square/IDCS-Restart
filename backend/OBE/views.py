@@ -4420,7 +4420,52 @@ def cdap_revision(request, subject_id):
     if body is None:
         return Response({'detail': 'Invalid JSON'}, status=status.HTTP_400_BAD_REQUEST)
 
-    # Enforce lock after first save unless an IQAC approval window is active.
+    incoming_status = str(body.get('status', 'draft') or 'draft').strip().lower()
+
+    # Fetch existing revision early so we can correct legacy lock rows.
+    obj = CdapRevision.objects.filter(subject_id=subject_id).first()
+
+    # Legacy safety: older logic incorrectly marked CDAP as "published" (lock row) even for draft saves.
+    # If the stored revision isn't actually published, clear any stale CDAP lock BEFORE enforcing gates.
+    try:
+        current_status = str(getattr(obj, 'status', '') or '').strip().lower() if obj else ''
+        if current_status != 'published':
+            ta = _resolve_staff_teaching_assignment(
+                request,
+                subject_code=str(subject_id),
+                teaching_assignment_id=_get_teaching_assignment_id_from_request(request, body),
+            )
+            academic_year = getattr(ta, 'academic_year', None) if ta else None
+            section_name = _resolve_section_name_from_ta(ta)
+            lock = _get_mark_table_lock_if_exists(
+                staff_user=getattr(request, 'user', None),
+                subject_code=str(subject_id),
+                assessment='cdap',
+                teaching_assignment=ta,
+                academic_year=academic_year,
+                section_name=section_name,
+            )
+            if lock is not None and bool(getattr(lock, 'is_published', False)):
+                lock.is_published = False
+                lock.mark_manager_locked = False
+                lock.mark_entry_unblocked_until = None
+                lock.mark_manager_unlocked_until = None
+                lock.recompute_blocks()
+                lock.save(
+                    update_fields=[
+                        'is_published',
+                        'published_blocked',
+                        'mark_entry_blocked',
+                        'mark_manager_locked',
+                        'mark_entry_unblocked_until',
+                        'mark_manager_unlocked_until',
+                        'updated_at',
+                    ]
+                )
+    except Exception:
+        pass
+
+    # Enforce lock after publish unless an IQAC approval window is active.
     try:
         subject = _get_subject(subject_id, request)
         gate = _enforce_mark_entry_not_blocked(
@@ -4440,11 +4485,10 @@ def cdap_revision(request, subject_id):
         'rows': body.get('rows', []),
         'books': body.get('books', {}),
         'active_learning': body.get('active_learning', {}),
-        'status': body.get('status', 'draft'),
+        'status': incoming_status or 'draft',
         'updated_by': getattr(request.user, 'id', None),
     }
 
-    obj = CdapRevision.objects.filter(subject_id=subject_id).first()
     if obj:
         for k, v in defaults.items():
             setattr(obj, k, v)
@@ -4453,17 +4497,18 @@ def cdap_revision(request, subject_id):
         obj = CdapRevision(subject_id=subject_id, created_by=getattr(request.user, 'id', None), **defaults)
         obj.save()
 
-    # Lock after save.
-    try:
-        _touch_lock_after_publish(
-            request,
-            subject_code=str(subject_id),
-            subject_name=str(subject_id),
-            assessment='cdap',
-            teaching_assignment_id=_get_teaching_assignment_id_from_request(request, body),
-        )
-    except Exception:
-        pass
+    # Lock only on publish (draft saves should remain editable).
+    if incoming_status == 'published':
+        try:
+            _touch_lock_after_publish(
+                request,
+                subject_code=str(subject_id),
+                subject_name=str(subject_id),
+                assessment='cdap',
+                teaching_assignment_id=_get_teaching_assignment_id_from_request(request, body),
+            )
+        except Exception:
+            pass
 
     return Response({
         'subject_id': str(obj.subject_id),

@@ -94,7 +94,7 @@ export default function CDAPPage({ courseId, showHeader = true, showCourseInput 
         <div
           style={{
             marginBottom: 12,
-            fontSize: 12,
+            fontSize: 14,
             color: autoSaveStatus === 'error' ? '#b91c1c' : '#166534',
           }}
         >

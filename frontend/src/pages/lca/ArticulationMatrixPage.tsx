@@ -9,11 +9,13 @@ const styles = {
   container: {
     minHeight: '100vh',
     background: 'linear-gradient(135deg, #f5f7fa 0%, #e9ecef 100%)',
-    padding: '2rem',
+    padding: '20px 24px',
+    width: '100%',
+    boxSizing: 'border-box',
   },
   card: {
-    maxWidth: '1400px',
-    margin: '0 auto',
+    width: '100%',
+    margin: '0',
     background: '#ffffff',
     borderRadius: '12px',
     boxShadow: '0 4px 6px rgba(0, 0, 0, 0.07), 0 1px 3px rgba(0, 0, 0, 0.06)',

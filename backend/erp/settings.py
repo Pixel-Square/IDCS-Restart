@@ -266,11 +266,13 @@ CORS_ALLOWED_ORIGINS = [
     'http://localhost:82',
     'http://localhost:81',
     'http://localhost:8000',
+    'http://localhost:83',
     'http://127.0.0.1:3000',
     'http://127.0.0.1:5173',
     'http://127.0.0.1:4173',
     'http://127.0.0.1:82',
     'http://127.0.0.1:8000',
+    'http://127.0.0.1:83',
     # Production/front-end hosts
     'https://idcs.krgi.co.in',
     'https://db.krgi.co.in',
@@ -296,6 +298,8 @@ if DEBUG:
         'http://127.0.0.1',
         'http://localhost:82',
         'http://127.0.0.1:82',
+        'http://localhost:83',
+        'http://127.0.0.1:83',
     ]
 # Always allow the production dashboard hostname if not already present
 if 'https://db.krgi.co.in' not in CSRF_TRUSTED_ORIGINS:
