@@ -11,13 +11,14 @@ import io
 
 try:
     from openpyxl import Workbook, load_workbook
+    from openpyxl.worksheet.datavalidation import DataValidation
     EXCEL_SUPPORT = True
 except ImportError:
     EXCEL_SUPPORT = False
 
 
 class ElectiveChoiceTemplateDownloadView(APIView):
-    """Download a CSV or Excel template for importing elective student mappings."""
+    """Download an Excel template for importing elective student mappings with department dropdown."""
     permission_classes = (IsAuthenticated,)
 
     def get(self, request):
@@ -29,21 +30,51 @@ class ElectiveChoiceTemplateDownloadView(APIView):
             return Response({'error': 'You do not have permission to download elective import template'}, 
                           status=status.HTTP_403_FORBIDDEN)
         
-        # Check if Excel format is requested
-        format_type = request.query_params.get('format', 'csv').lower()
+        if not EXCEL_SUPPORT:
+            return Response({'error': 'Excel support not available. Please install openpyxl.'}, 
+                          status=status.HTTP_400_BAD_REQUEST)
         
-        if format_type == 'excel' and EXCEL_SUPPORT:
-            # Create Excel template
+        try:
+            # Get all departments
+            from academics.models import Department
+            departments = Department.objects.all().order_by('short_name')
+            dept_names = [dept.short_name for dept in departments if dept.short_name]
+            
+            # Create Excel workbook
             wb = Workbook()
             ws = wb.active
             ws.title = "Elective Choices"
             
             # Headers
-            headers = ['student_reg_no', 'elective_subject_code', 'academic_year', 'is_active']
+            headers = ['student_reg_no', 'elective_subject_code', 'department', 'academic_year', 'is_active']
             ws.append(headers)
             
             # Sample row
-            ws.append(['REG001', 'ELEC001', '2025-2026', 'TRUE'])
+            sample_dept = dept_names[0] if dept_names else 'AI&DS'
+            ws.append(['REG001', 'ELEC001', sample_dept, '2025-2026', 'TRUE'])
+            
+            # Add data validation (dropdown) for department column (column C)
+            if dept_names:
+                # Create a comma-separated list of department names
+                dept_list = ','.join(dept_names)
+                
+                # Create data validation for department column
+                dv = DataValidation(type="list", formula1=f'"{dept_list}"', allow_blank=True)
+                dv.error = 'Please select a department from the dropdown'
+                dv.errorTitle = 'Invalid Department'
+                dv.prompt = 'Select a department'
+                dv.promptTitle = 'Department'
+                
+                # Apply validation to department column (C2:C1000)
+                ws.add_data_validation(dv)
+                dv.add(f'C2:C1000')
+            
+            # Adjust column widths
+            ws.column_dimensions['A'].width = 20  # student_reg_no
+            ws.column_dimensions['B'].width = 25  # elective_subject_code
+            ws.column_dimensions['C'].width = 15  # department
+            ws.column_dimensions['D'].width = 20  # academic_year
+            ws.column_dimensions['E'].width = 12  # is_active
             
             # Save to bytes
             from io import BytesIO
@@ -57,28 +88,10 @@ class ElectiveChoiceTemplateDownloadView(APIView):
             )
             response['Content-Disposition'] = 'attachment; filename="elective_choices_template.xlsx"'
             return response
-        else:
-            # Create CSV template (default)
-            response = HttpResponse(content_type='text/csv')
-            response['Content-Disposition'] = 'attachment; filename="elective_choices_template.csv"'
             
-            writer = csv.writer(response)
-            writer.writerow([
-                'student_reg_no',
-                'elective_subject_code',
-                'academic_year',
-                'is_active'
-            ])
-            
-            # Add sample row
-            writer.writerow([
-                'REG001',
-                'ELEC001',
-                '2025-2026',
-                'TRUE'
-            ])
-            
-            return response
+        except Exception as e:
+            return Response({'error': f'Failed to generate template: {str(e)}'}, 
+                          status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class ElectiveChoiceBulkImportView(APIView):

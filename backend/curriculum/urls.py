@@ -6,6 +6,8 @@ from .views import (
     ElectiveSubjectViewSet, 
     ElectiveChoicesView, 
     MasterImportView,
+)
+from .elective_import_views import (
     ElectiveChoiceTemplateDownloadView,
     ElectiveChoiceBulkImportView
 )
