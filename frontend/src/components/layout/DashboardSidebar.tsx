@@ -39,6 +39,8 @@ import { fetchPendingPublishRequestCount } from '../../services/obe';
   academic_controller: Layout,
   notifications: Bell,
   academic_calendar: Calendar,
+  pbas: ClipboardList,
+  pbas_manager: Layout,
 
 };
 
@@ -125,6 +127,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   const rolesUpper = (data.roles || []).map(r => (r || '').toString().toUpperCase());
   const flags = data.flags || {};
   const isIqac = rolesUpper.includes('IQAC');
+  const canPbasManage = rolesUpper.some((r) => ['IQAC', 'ADMIN', 'PRINCIPAL', 'PS'].includes(r));
 
   
 
@@ -164,11 +167,17 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   if (flags.is_student) {
     items.push({ key: 'student_academics', label: 'Academics', to: '/student/academics' });
     items.push({ key: 'student_attendance', label: 'My Attendance', to: '/student/attendance' });
+    items.push({ key: 'pbas', label: 'My Progress', to: '/student/pbas' });
   }
 
   // Staff assigned subjects page
   if (flags.is_staff && (permsLower.includes('academics.view_assigned_subjects') || rolesUpper.includes('HOD'))) {
     items.push({ key: 'assigned_subjects', label: 'Assigned Subjects', to: '/staff/assigned-subjects' });
+  }
+
+  // PBAS submission for staff
+  if (flags.is_staff) {
+    items.push({ key: 'pbas', label: 'PBAS', to: '/staff/pbas' });
   }
 
   // Staff: view my mentees - requires permission
@@ -215,6 +224,9 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   }
   if (isIqac && !items.some((item) => item.key === 'academic_controller')) {
     items.push({ key: 'academic_controller', label: 'Academic Controller', to: '/iqac/academic-controller' });
+  }
+  if (canPbasManage && !items.some((item) => item.key === 'pbas_manager')) {
+    items.push({ key: 'pbas_manager', label: 'PBAS Manager', to: '/iqac/pbas' });
   }
   if (canObeMaster && !isIqac && !items.some(item => item.key === 'obe_due_dates')) {
     items.push({ key: 'obe_due_dates', label: 'OBE: Due Dates', to: '/obe/master/due-dates' });

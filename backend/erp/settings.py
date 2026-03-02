@@ -59,6 +59,7 @@ INSTALLED_APPS = [
     'timetable',
     'bi.apps.BiConfig',
     'powerbi_portal.apps.PowerbiPortalConfig',
+    'pbas.apps.PbasConfig',
 ]
 
 MIDDLEWARE = [
@@ -260,17 +261,26 @@ CORS_ALLOWED_ORIGINS = [
     # Local dev origins (common ports) so frontend at localhost can call API
     'http://localhost',
     'http://localhost:3000',
+    'http://localhost:5173',
+    'http://localhost:4173',
     'http://localhost:82',
     'http://localhost:81',
     'http://localhost:8000',
     'http://127.0.0.1:3000',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:4173',
     'http://127.0.0.1:82',
     'http://127.0.0.1:8000',
     # Production/front-end hosts
     'https://idcs.krgi.co.in',
     'https://db.krgi.co.in',
     'https://cloud.krgi.co.in',
+    # Local LAN frontend host (when served on :80)
+    'http://192.168.40.253',
+    'http://192.168.40.253:80',
     'http://192.168.40.253:81',
+    'http://192.168.40.253:5173',
+    'http://192.168.40.253:4173',
 ]
 # Allow browser to include credentials (cookies or HTTP auth) in cross-origin requests
 CORS_ALLOW_CREDENTIALS = True

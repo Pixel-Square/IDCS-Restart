@@ -2,7 +2,7 @@ from typing import List
 
 from django.db.models import QuerySet
 
-from .models import DepartmentRole, StaffProfile
+from .models import DepartmentRole, StaffProfile, SectionAdvisor
 
 
 def get_user_hod_department_ids(user) -> List[int]:
@@ -39,6 +39,20 @@ def get_user_effective_departments(user) -> List[int]:
                     depts.append(getattr(staff_profile.department, 'id', None))
             except Exception:
                 pass
+
+        # Advisors should be able to act for the departments of the sections
+        # they advise, even when their StaffProfile.department/current_department
+        # is not populated.
+        try:
+            advisor_dept_ids = (
+                SectionAdvisor.objects
+                .filter(advisor=staff_profile, is_active=True, academic_year__is_active=True)
+                .values_list('section__batch__course__department_id', flat=True)
+                .distinct()
+            )
+            depts += [d for d in advisor_dept_ids if d]
+        except Exception:
+            pass
 
     # include HOD/AHOD mapped departments
     depts += get_user_hod_department_ids(user)

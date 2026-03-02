@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+{% load static %}
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KRGI Portal – Welcome</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root{
+      --primary:#0F5CA8;
+      --primary-dark:#0A4A8A;
+      --secondary:#2563EB;
+      --bg-main:#F1F5F9;
+      --bg-card:#FFFFFF;
+      --text-primary:#1E293B;
+      --text-secondary:#475569;
+      --text-muted:#64748B;
+      --border-light:#E2E8F0;
+      --border-medium:#CBD5E1;
+      --accent-blue:#3B82F6;
+      --accent-green:#10B981;
+      --shadow-sm:0 1px 3px rgba(15,23,42,0.08);
+      --shadow-md:0 4px 6px -1px rgba(15,23,42,0.08), 0 2px 4px -1px rgba(15,23,42,0.04);
+      --shadow-lg:0 10px 15px -3px rgba(15,23,42,0.10), 0 4px 6px -2px rgba(15,23,42,0.05);
+      --shadow-xl:0 20px 25px -5px rgba(15,23,42,0.12), 0 10px 10px -5px rgba(15,23,42,0.04);
+    }
+    *{
+      box-sizing:border-box;
+      margin:0;
+      padding:0;
+    }
+    body{
+      font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+      background:linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%);
+      color:var(--text-primary);
+      min-height:100vh;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding:32px 20px;
+      line-height:1.6;
+      position:relative;
+    }
+    body::before{
+      content:'';
+      position:absolute;
+      top:0;
+      left:0;
+      right:0;
+      height:280px;
+      background:linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+      z-index:0;
+    }
+    .wrap{
+      width:100%;
+      max-width:1000px;
+      position:relative;
+      z-index:1;
+    }
+    .card{
+      background:var(--bg-card);
+      border:1px solid var(--border-light);
+      border-radius:20px;
+      overflow:hidden;
+      box-shadow:var(--shadow-xl);
+    }
+    .header{
+      background:linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+      padding:48px 40px 36px;
+      text-align:center;
+      color:#fff;
+      position:relative;
+      overflow:hidden;
+    }
+    .header::before{
+      content:'';
+      position:absolute;
+      top:-50%;
+      right:-10%;
+      width:400px;
+      height:400px;
+      background:rgba(255,255,255,0.05);
+      border-radius:50%;
+    }
+    .logo-row{
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      gap:32px;
+      margin-bottom:24px;
+      position:relative;
+      z-index:1;
+    }
+    .logo-row img{
+      height:52px;
+      max-width:200px;
+      width:auto;
+      object-fit:contain;
+      display:block;
+      filter:brightness(0) invert(1);
+      opacity:0.95;
+    }
+    @media (min-width:720px){
+      .logo-row img{height:60px;max-width:220px}
+    }
+    .header h1{
+      font-size:32px;
+      font-weight:700;
+      letter-spacing:-0.02em;
+      margin:0 0 10px;
+      position:relative;
+      z-index:1;
+    }
+    .header p{
+      font-size:16px;
+      opacity:0.92;
+      font-weight:400;
+      margin:0;
+      position:relative;
+      z-index:1;
+    }
+    .content{
+      padding:48px 40px;
+    }
+    .section-title{
+      font-size:14px;
+      font-weight:600;
+      color:var(--text-muted);
+      text-transform:uppercase;
+      letter-spacing:0.8px;
+      margin:0 0 20px;
+    }
+    .grid{
+      display:grid;
+      grid-template-columns:1fr;
+      gap:20px;
+    }
+    @media (min-width:720px){
+      .grid{grid-template-columns:1fr 1fr}
+    }
+    .tile{
+      border:1px solid var(--border-light);
+      border-radius:16px;
+      padding:28px;
+      background:var(--bg-card);
+      transition:all 0.3s cubic-bezier(0.4,0,0.2,1);
+      position:relative;
+      overflow:hidden;
+    }
+    .tile::before{
+      content:'';
+      position:absolute;
+      top:0;
+      left:0;
+      right:0;
+      height:4px;
+      background:linear-gradient(90deg, var(--primary) 0%, var(--secondary) 100%);
+      transform:scaleX(0);
+      transform-origin:left;
+      transition:transform 0.3s cubic-bezier(0.4,0,0.2,1);
+    }
+    .tile:hover{
+      transform:translateY(-4px);
+      box-shadow:var(--shadow-lg);
+      border-color:var(--border-medium);
+    }
+    .tile:hover::before{
+      transform:scaleX(1);
+    }
+    .tile-icon{
+      width:48px;
+      height:48px;
+      border-radius:12px;
+      background:linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      margin-bottom:20px;
+      font-size:24px;
+      color:#fff;
+    }
+    .tile h2{
+      font-size:20px;
+      font-weight:700;
+      color:var(--text-primary);
+      margin:0 0 8px;
+      letter-spacing:-0.01em;
+    }
+    .tile .desc{
+      font-size:14px;
+      color:var(--text-secondary);
+      line-height:1.6;
+      margin:0 0 24px;
+    }
+    .btn{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      gap:8px;
+      padding:12px 28px;
+      border-radius:10px;
+      border:2px solid transparent;
+      background:linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+      color:#fff;
+      font-weight:600;
+      font-size:15px;
+      text-decoration:none;
+      white-space:nowrap;
+      transition:all 0.2s cubic-bezier(0.4,0,0.2,1);
+      box-shadow:var(--shadow-sm);
+    }
+    .btn:hover{
+      transform:translateY(-2px);
+      box-shadow:var(--shadow-md);
+    }
+    .btn.secondary{
+      background:#fff;
+      border-color:var(--border-medium);
+      color:var(--primary);
+      font-weight:600;
+    }
+    .btn.secondary:hover{
+      border-color:var(--primary);
+      background:var(--primary);
+      color:#fff;
+    }
+    .footer{
+      padding:24px 40px;
+      background:#F8FAFC;
+      border-top:1px solid var(--border-light);
+      text-align:center;
+      color:var(--text-muted);
+      font-size:13px;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      gap:8px;
+    }
+    .footer-icon{
+      font-size:16px;
+    }
+    @media (max-width:719px){
+      .header{padding:36px 24px 28px}
+      .content{padding:32px 24px}
+      .footer{padding:20px 24px}
+      .header h1{font-size:26px}
+      .header p{font-size:14px}
+      .tile{padding:24px}
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="logo-row" aria-label="Logos">
+        <img src="{% static 'powerbi_portal/bilogo.png' %}" alt="BI Logo" />
+        <img src="{% static 'powerbi_portal/idcslogo.png' %}" alt="IDCS Logo" />
+      </div>
+      
+      <h1>Welcome</h1>
+      <p>Select where you want to go.</p>
+
+      <div class="grid">
+        <div class="tile">
+          <div>
+            <h2>KR DATABASE</h2>
+            <p class="desc">Admin portal (database & management)</p>
+          </div>
+          <a class="btn" href="/admin/login/">Open</a>
+        </div>
+
+        <div class="tile">
+          <div>
+            <h2>Power BI</h2>
+            <p class="desc">Read-only BI portal (components, sheets, rooms)</p>
+          </div>
+          <a class="btn secondary" href="/powerbi/">Open</a>
+        </div>
+      </div>
+
+      <div class="footer">Tip: If you are not signed in, you’ll be asked to log in.</div>
+    </div>
+  </div>
+</body>
+</html>

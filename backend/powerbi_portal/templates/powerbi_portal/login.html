@@ -1,5 +1,6 @@
 <!doctype html>
 <html lang="en">
+{% load static %}
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -34,9 +35,12 @@
   <body>
     <div class="wrap">
       <div class="brand">
-        <div class="brand-mark">📊</div>
+        <div style="display:flex;gap:12px;align-items:center">
+          <img src="{% static 'powerbi_portal/bilogo.png' %}" alt="BI Logo" style="height:52px;width:auto" />
+          <img src="{% static 'powerbi_portal/idcslogo.png' %}" alt="IDCS Logo" style="height:52px;width:auto" />
+        </div>
         <div>
-          <div class="brand-name">Business Intelligence Portal</div>
+          <div class="brand-name">BI Portal</div>
           <div class="brand-sub">IDCS — KR Team</div>
         </div>
       </div>

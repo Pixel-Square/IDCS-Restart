@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from io import BytesIO, StringIO
 import csv
+import secrets
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from django.contrib import messages
@@ -673,9 +674,158 @@ def room_detail(request: HttpRequest, room_id: int) -> HttpResponse:
             'room_sheets': room_sheets,
             'can_manage_members': _is_room_leader(room, request.user),
             'can_manage_sheets': _is_room_leader(room, request.user),
+            'can_manage_connection': _is_room_leader(room, request.user),
             'powerbi_users': powerbi_users,
+            'public_bi_url': (
+                request.build_absolute_uri(f'/powerbi/public/rooms/{room.public_bi_token}/')
+                if room.public_bi_token
+                else ''
+            ),
         },
     )
+
+
+@login_required(login_url='/powerbi/login/')
+@_powerbi_protect
+def room_bi_connect(request: HttpRequest, room_id: int) -> HttpResponse:
+    room = get_object_or_404(Room, id=room_id)
+    if not getattr(request.user, 'is_superuser', False):
+        is_member = RoomMember.objects.filter(room=room, user=request.user).exists() or (room.leader_id == request.user.id)
+        if not is_member:
+            return HttpResponse('Forbidden', status=403)
+
+    if request.method != 'POST':
+        return redirect(f'/powerbi/collaboration/rooms/{room.id}/')
+
+    if not room.public_bi_token:
+        # Unguessable token for a public, no-login feed page.
+        room.public_bi_token = secrets.token_hex(24)
+        room.save(update_fields=['public_bi_token'])
+
+    return redirect(f'/powerbi/public/rooms/{room.public_bi_token}/')
+
+
+def public_room_bi(request: HttpRequest, token: str) -> HttpResponse:
+    room = get_object_or_404(Room, public_bi_token=token)
+    room_sheets = RoomSheet.objects.filter(room=room).order_by('-updated_at')
+
+    sheets = []
+    for s in room_sheets:
+        csv_url = request.build_absolute_uri(f'/powerbi/public/rooms/{token}/sheets/{s.id}.csv')
+        sheets.append({'id': s.id, 'name': s.name, 'csv_url': csv_url})
+
+    return render(
+        request,
+        'powerbi_portal/public_room_bi.html',
+        {
+            'room': room,
+            'sheets': sheets,
+        },
+    )
+
+
+def public_room_sheet_csv(request: HttpRequest, token: str, room_sheet_id: int) -> HttpResponse:
+    room = get_object_or_404(Room, public_bi_token=token)
+    room_sheet = get_object_or_404(RoomSheet, id=room_sheet_id, room=room)
+
+    # Public feed: keep response bounded.
+    try:
+        limit = int(request.GET.get('limit') or 50000)
+    except Exception:
+        limit = 50000
+    limit = max(1, min(limit, 50000))
+
+    cols_meta = list(room_sheet.columns.all())
+    _maybe_autofix_base_view_from_columns(room_sheet, cols_meta)
+    selected = [(c.source_view, c.source_column, c.header_label) for c in cols_meta]
+    sql, _headers = _build_sheet_query_plan(room_sheet.base_view, selected)
+
+    from django.db import connections
+
+    conn = connections['bi'] if 'bi' in connections.databases else connections['default']
+    with conn.cursor() as cursor:
+        cursor.execute(f"{sql} LIMIT %s", [limit])
+        rows = cursor.fetchall()
+        cols = [d[0] for d in cursor.description] if cursor.description else []
+
+    data = _csv_bytes(cols, rows)
+
+    try:
+        PowerBIExportLog.objects.create(
+            user=None,
+            view_name=room_sheet.base_view,
+            limit=limit,
+            row_count=len(rows),
+            ip_address=_client_ip(request),
+            user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:2000],
+            export_type='csv',
+            room=room,
+            room_sheet=room_sheet,
+        )
+    except Exception:
+        pass
+
+    resp = HttpResponse(data, content_type='text/csv; charset=utf-8')
+    resp['Content-Disposition'] = f'inline; filename="{room_sheet.name}.csv"'
+    return resp
+
+
+@login_required(login_url='/powerbi/login/')
+@_powerbi_protect
+def room_connection_update(request: HttpRequest, room_id: int) -> HttpResponse:
+    room = get_object_or_404(Room, id=room_id, memberships__user=request.user)
+    if not _is_room_leader(room, request.user):
+        return HttpResponse('Forbidden', status=403)
+
+    if request.method != 'POST':
+        return redirect(f'/powerbi/collaboration/rooms/{room.id}/')
+
+    # Prefer PostgreSQL form keys (pg_*). Keep sql_* as a backward-compatible fallback.
+    host = str(request.POST.get('pg_host') or request.POST.get('sql_host') or '').strip()
+    port_raw = str(request.POST.get('pg_port') or request.POST.get('sql_port') or '').strip()
+    database = str(request.POST.get('pg_database') or request.POST.get('sql_database') or '').strip()
+    username = str(request.POST.get('pg_username') or request.POST.get('sql_username') or '').strip()
+    password = str(request.POST.get('pg_password') or request.POST.get('sql_password') or '').strip()
+
+    port = None
+    if port_raw:
+        try:
+            port = int(port_raw)
+        except Exception:
+            messages.error(request, 'Port must be a number.')
+            return redirect(f'/powerbi/collaboration/rooms/{room.id}/')
+
+    has_any = bool(host or port_raw or database or username or password)
+    if has_any:
+        if not host:
+            messages.error(request, 'Host is required for a PostgreSQL connection.')
+            return redirect(f'/powerbi/collaboration/rooms/{room.id}/')
+        if not database:
+            messages.error(request, 'Database name is required for a PostgreSQL connection.')
+            return redirect(f'/powerbi/collaboration/rooms/{room.id}/')
+        if not username:
+            messages.error(request, 'Username is required for a PostgreSQL connection.')
+            return redirect(f'/powerbi/collaboration/rooms/{room.id}/')
+        if port is None:
+            port = 5432
+
+    room.postgres_host = host[:255]
+    room.postgres_port = port
+    room.postgres_database = database[:255]
+    room.postgres_username = username[:255]
+    room.postgres_password = password[:255]
+    room.save(
+        update_fields=[
+            'postgres_host',
+            'postgres_port',
+            'postgres_database',
+            'postgres_username',
+            'postgres_password',
+        ]
+    )
+
+    messages.success(request, 'Room PostgreSQL connection updated.')
+    return redirect(f'/powerbi/collaboration/rooms/{room.id}/')
 
 
 @login_required(login_url='/powerbi/login/')

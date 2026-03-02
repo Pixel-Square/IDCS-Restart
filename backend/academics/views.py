@@ -497,18 +497,66 @@ class SectionAdvisorViewSet(viewsets.ModelViewSet):
 class MentorStaffListView(APIView):
     permission_classes = (IsAuthenticated,)
 
+    def _has_role(self, user, role_name: str) -> bool:
+        try:
+            return user and user.is_authenticated and user.roles.filter(name__iexact=role_name).exists()
+        except Exception:
+            return False
+
+    def _get_allowed_depts_for_assignment(self, user):
+        """Derive department IDs the caller is allowed to manage mentor mappings for.
+
+        Primary source: staff current dept + HOD/AHOD (get_user_effective_departments).
+        Fallback: departments of sections the staff advises (common when staff
+        profiles are missing department/current_department assignments).
+        """
+        allowed_depts = get_user_effective_departments(user)
+        if allowed_depts:
+            return allowed_depts
+
+        staff_profile = getattr(user, 'staff_profile', None)
+        if not staff_profile:
+            return []
+
+        try:
+            base_qs = SectionAdvisor.objects.filter(advisor=staff_profile, is_active=True)
+            active_year_qs = base_qs.filter(academic_year__is_active=True)
+            qs = active_year_qs if active_year_qs.exists() else base_qs
+
+            dept_ids = list(
+                qs.exclude(section__batch__course__department_id__isnull=True)
+                .values_list('section__batch__course__department_id', flat=True)
+                .distinct()
+            )
+            return [int(d) for d in dept_ids if d]
+        except Exception:
+            return []
+
     def get(self, request):
         user = request.user
         # only allow users with assign_mentor permission or superuser
         perms = get_user_permissions(user)
-        if not (user.is_superuser or 'academics.assign_mentor' in perms):
+        # Advisors are allowed to use mentor assignment.
+        if not (user.is_superuser or ('academics.assign_mentor' in perms) or self._has_role(user, 'ADVISOR')):
             return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
 
-        allowed_depts = get_user_effective_departments(user)
-        if not allowed_depts:
-            return Response({'results': []})
+        allowed_depts = self._get_allowed_depts_for_assignment(user)
 
-        staffs = StaffProfile.objects.filter(department__id__in=allowed_depts).select_related('user')
+        # If we cannot derive departments (common in partially configured data),
+        # don't hide the entire screen; fall back to all staff.
+        if not allowed_depts:
+            staffs = StaffProfile.objects.all().select_related('user')
+        else:
+            # Include staff whose legacy department matches OR who has an active
+            # department assignment matching.
+            staffs = (
+                StaffProfile.objects.filter(
+                    Q(department__id__in=allowed_depts)
+                    | Q(department_assignments__end_date__isnull=True, department_assignments__department_id__in=allowed_depts)
+                )
+                .select_related('user')
+                .distinct()
+            )
         data = []
         for s in staffs:
             data.append({'id': s.id, 'user_id': getattr(getattr(s, 'user', None), 'id', None), 'username': getattr(getattr(s, 'user', None), 'username', None), 'staff_id': s.staff_id})
@@ -592,10 +640,39 @@ class MentorStudentsForStaffView(APIView):
 class MentorMapCreateView(APIView):
     permission_classes = (IsAuthenticated,)
 
+    def _has_role(self, user, role_name: str) -> bool:
+        try:
+            return user and user.is_authenticated and user.roles.filter(name__iexact=role_name).exists()
+        except Exception:
+            return False
+
+    def _get_allowed_depts_for_assignment(self, user):
+        allowed_depts = get_user_effective_departments(user)
+        if allowed_depts:
+            return allowed_depts
+
+        staff_profile = getattr(user, 'staff_profile', None)
+        if not staff_profile:
+            return []
+
+        try:
+            base_qs = SectionAdvisor.objects.filter(advisor=staff_profile, is_active=True)
+            active_year_qs = base_qs.filter(academic_year__is_active=True)
+            qs = active_year_qs if active_year_qs.exists() else base_qs
+
+            dept_ids = list(
+                qs.exclude(section__batch__course__department_id__isnull=True)
+                .values_list('section__batch__course__department_id', flat=True)
+                .distinct()
+            )
+            return [int(d) for d in dept_ids if d]
+        except Exception:
+            return []
+
     def post(self, request):
         user = request.user
         perms = get_user_permissions(user)
-        if not (user.is_superuser or 'academics.assign_mentor' in perms):
+        if not (user.is_superuser or ('academics.assign_mentor' in perms) or self._has_role(user, 'ADVISOR')):
             return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
 
         mentor_id = request.data.get('mentor_id')
@@ -609,9 +686,12 @@ class MentorMapCreateView(APIView):
         if not mentor:
             return Response({'detail': 'Mentor not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        allowed_depts = get_user_effective_departments(user)
+        allowed_depts = self._get_allowed_depts_for_assignment(user)
         target_dept = getattr(getattr(mentor, 'current_department', None), 'id', None) or getattr(getattr(mentor, 'department', None), 'id', None)
-        if not user.is_superuser and target_dept not in allowed_depts:
+
+        # If we can't derive allowed departments for the caller, allow mapping
+        # (otherwise the UI becomes unusable in partially configured setups).
+        if not user.is_superuser and allowed_depts and target_dept not in allowed_depts:
             return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
 
         results = {'created': 0, 'skipped': 0, 'errors': []}
@@ -638,10 +718,16 @@ class MentorMapCreateView(APIView):
 class MentorUnmapView(APIView):
     permission_classes = (IsAuthenticated,)
 
+    def _has_role(self, user, role_name: str) -> bool:
+        try:
+            return user and user.is_authenticated and user.roles.filter(name__iexact=role_name).exists()
+        except Exception:
+            return False
+
     def post(self, request):
         user = request.user
         perms = get_user_permissions(user)
-        if not (user.is_superuser or 'academics.assign_mentor' in perms):
+        if not (user.is_superuser or ('academics.assign_mentor' in perms) or self._has_role(user, 'ADVISOR')):
             return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
 
         mentor_id = request.data.get('mentor_id')
@@ -670,7 +756,12 @@ class MentorMyMenteesView(APIView):
         perms = get_user_permissions(user)
         
         # Check for view_mentees permission
-        if not ('academics.view_mentees' in perms or user.has_perm('academics.view_studentmentormap') or user.is_superuser):
+        if not (
+            ('academics.view_mentees' in perms)
+            or ('academics.view_my_mentees' in perms)
+            or user.has_perm('academics.view_studentmentormap')
+            or user.is_superuser
+        ):
             return Response({'detail': 'You do not have permission to view mentees'}, status=status.HTTP_403_FORBIDDEN)
         
         staff_profile = getattr(user, 'staff_profile', None)

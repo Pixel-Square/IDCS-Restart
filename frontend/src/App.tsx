@@ -47,6 +47,8 @@ import QueriesPage from './pages/queries/QueriesPage';
 import StaffsPage from './pages/StaffsPage';
 import AcademicCalendarRedirect from './pages/academicCalendar/AcademicCalendarRedirect';
 import AcademicCalendarPage from './pages/academicCalendar/AcademicCalendarPage';
+import PBASSubmissionPage from './pages/staff/PBASSubmissionPage';
+import PBASManagerPage from './pages/iqac/PBASManagerPage';
 
 type RoleObj = { name: string };
 type Me = {
@@ -205,6 +207,10 @@ export default function App() {
                   element={<ProtectedRoute user={user} requiredPermissions={["obe.master.manage"]} element={<ObeRequestsPage />} />}
                 />
                 <Route
+                  path="/iqac/pbas"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC', 'ADMIN', 'PRINCIPAL', 'PS']} element={<PBASManagerPage />} />}
+                />
+                <Route
                   path="/advisor/timetable"
                   element={<ProtectedRoute user={user} requiredRoles={["ADVISOR"]} requiredPermissions={["timetable.assign"]} element={<TimetableEditor />} />}
                 />
@@ -228,6 +234,10 @@ export default function App() {
                   path="/student/academics"
                   element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} element={<StudentAcademics />} />}
                 />
+                <Route
+                  path="/student/pbas"
+                  element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} element={<PBASSubmissionPage viewer="student" />} />}
+                />
                 {/* Attendance pages removed */}
                 <Route
                   path="/staff/timetable"
@@ -236,6 +246,10 @@ export default function App() {
                 <Route
                   path="/staff/assigned-subjects"
                   element={<ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={["academics.view_assigned_subjects"]} element={<AssignedSubjectsPage />} />}
+                />
+                <Route
+                  path="/staff/pbas"
+                  element={<ProtectedRoute user={user} requiredProfile={'STAFF'} element={<PBASSubmissionPage viewer="faculty" />} />}
                 />
                 <Route
                   path="/staff/period-attendance"

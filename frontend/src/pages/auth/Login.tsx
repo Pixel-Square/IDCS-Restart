@@ -26,6 +26,19 @@ export default function Login() {
     return null;
   }
 
+  function extractNetworkMessage(err: unknown): string | null {
+    if (typeof err !== "object" || err === null) return null;
+    const e = err as Record<string, any>;
+    const code = String(e.code || "");
+    // Axios timeout
+    if (code === "ECONNABORTED") return "Login request timed out. Please check server connectivity and try again.";
+    // Axios network error (no response)
+    if (!e.response && typeof e.message === "string" && e.message.toLowerCase().includes("network")) {
+      return "Network error while contacting server. Please check the API URL and network.";
+    }
+    return null;
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -36,7 +49,7 @@ export default function Login() {
       // Redirect to dashboard after successful login
       nav("/dashboard");
     } catch (err) {
-      const serverMsg = extractServerMessage(err) || "Login failed";
+      const serverMsg = extractServerMessage(err) || extractNetworkMessage(err) || "Login failed";
       setError(serverMsg);
     } finally {
       setLoading(false);

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ room.name }} - Power BI Web Feeds</title>
+  </head>
+  <body>
+    <div class="container" style="max-width:980px;margin:24px auto;padding:0 16px">
+      <div class="card">
+        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+          <h1 style="margin:0">Power BI Web Feeds</h1>
+          <div class="muted" style="margin:0">Room: <b>{{ room.name }}</b></div>
+        </div>
+
+        <div class="muted" style="margin:12px 0 16px">
+          In Power BI Desktop: <b>Get Data</b> → <b>Web</b> → paste a CSV URL from below. Schedule refresh can be set in Power BI Service.
+        </div>
+
+        {% if sheets %}
+          <table style="width:100%;margin-top:10px">
+            <thead>
+              <tr>
+                <th style="text-align:left">Room Sheet</th>
+                <th style="text-align:left">CSV URL (Web)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for s in sheets %}
+                <tr>
+                  <td style="vertical-align:top">{{ s.name }}</td>
+                  <td style="vertical-align:top">
+                    <code style="word-break:break-all">{{ s.csv_url }}</code>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <div class="empty-state" style="padding:22px 0">
+            <div class="empty-state-icon">📄</div>
+            <div>No room sheets yet.</div>
+            <div class="muted" style="margin-top:6px">Create a room sheet and push columns into it, then refresh this page.</div>
+          </div>
+        {% endif %}
+
+        <div class="subtle" style="margin-top:16px">
+          Note: This page is public (no login). Anyone with this link can access these feeds.
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

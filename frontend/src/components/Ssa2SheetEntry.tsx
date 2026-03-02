@@ -38,6 +38,10 @@ type Ssa2Row = {
   registerNo: string;
   name: string;
   total: number | '';
+  reviewCoMarks?: {
+    co3?: Array<number | ''>;
+    co4?: Array<number | ''>;
+  };
 };
 
 type Ssa2Sheet = {
@@ -166,7 +170,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
     termLabel: 'KRCT AY25-26',
     batchLabel: subjectId,
     rows: [],
-    coSplitMax: isReview ? { co3: [''], co4: [''] } : undefined,
+    coSplitMax: isReview ? { co3: [], co4: [] } : undefined,
     // Default: locked until Mark Manager is confirmed (saved)
     markManagerLocked: false,
     markManagerSnapshot: null,
@@ -384,7 +388,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
     return [1, 2, 3, 4, 5, 6].filter((n) => set.has(n));
   }, [selectedBtls]);
 
-  const totalTableCols = useMemo(() => {
+  const publishedTableCols = useMemo(() => {
     // Layout matching the Excel header template, but BTL columns are dynamic.
     // S.No, RegNo, Name, SSA2 = 4 (and optional Total = +1)
     // CO Attainment (CO-3 Mark/% + CO-4 Mark/%) = 4
@@ -392,6 +396,15 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
     const base = showTotalColumn ? 9 : 8;
     return base + visibleBtlIndices.length * 2;
   }, [showTotalColumn, visibleBtlIndices.length]);
+
+  const totalTableCols = useMemo(() => {
+    if (!isReview) return publishedTableCols;
+    const raw = ((sheet as any)?.coSplitMax || {}) as { co3?: Array<number | ''>; co4?: Array<number | ''> };
+    const co3Cols = Math.max(1, Array.isArray(raw.co3) ? Math.min(raw.co3.length, 15) : 0);
+    const co4Cols = Math.max(1, Array.isArray(raw.co4) ? Math.min(raw.co4.length, 15) : 0);
+    const fixed = showTotalColumn ? 5 : 4;
+    return fixed + (co3Cols + co4Cols) * 2 + visibleBtlIndices.length * 2;
+  }, [isReview, publishedTableCols, sheet, showTotalColumn, visibleBtlIndices.length]);
 
   useEffect(() => {
     if (!subjectId) return;
@@ -428,7 +441,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
         termLabel: masterCfg?.termLabel ? String(masterCfg.termLabel) : String((stored as any).termLabel || 'KRCT AY25-26'),
         batchLabel: subjectId,
         rows: (stored as any).rows,
-        coSplitMax: (stored as any).coSplitMax ?? (isReview ? { co3: [''], co4: [''] } : undefined),
+        coSplitMax: (stored as any).coSplitMax ?? (isReview ? { co3: [], co4: [] } : undefined),
         markManagerSnapshot: (stored as any)?.markManagerSnapshot ?? null,
         markManagerApprovalUntil: (stored as any)?.markManagerApprovalUntil ?? null,
         markManagerLocked: typeof (stored as any)?.markManagerLocked === 'boolean' ? (stored as any).markManagerLocked : Boolean((stored as any)?.markManagerSnapshot),
@@ -438,7 +451,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
         termLabel: masterTermLabel || 'KRCT AY25-26',
         batchLabel: subjectId,
         rows: [],
-        coSplitMax: isReview ? { co3: [''], co4: [''] } : undefined,
+        coSplitMax: isReview ? { co3: [], co4: [] } : undefined,
         markManagerLocked: false,
         markManagerSnapshot: null,
         markManagerApprovalUntil: null,
@@ -463,7 +476,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
             termLabel: String((draftSheet as any).termLabel || masterTermLabel || 'KRCT AY25-26'),
             batchLabel: subjectId,
             rows: (draftSheet as any).rows,
-            coSplitMax: (draftSheet as any)?.coSplitMax ?? prevSheet.coSplitMax ?? (isReview ? { co3: [''], co4: [''] } : undefined),
+            coSplitMax: (draftSheet as any)?.coSplitMax ?? prevSheet.coSplitMax ?? (isReview ? { co3: [], co4: [] } : undefined),
             markManagerSnapshot: (draftSheet as any)?.markManagerSnapshot ?? prevSheet.markManagerSnapshot ?? null,
             markManagerApprovalUntil: (draftSheet as any)?.markManagerApprovalUntil ?? prevSheet.markManagerApprovalUntil ?? null,
             markManagerLocked:
@@ -490,7 +503,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
                 termLabel: String((draftSheet as any).termLabel || masterTermLabel || 'KRCT AY25-26'),
                 batchLabel: subjectId,
                 rows: (draftSheet as any).rows,
-                coSplitMax: (draftSheet as any)?.coSplitMax ?? (isReview ? { co3: [''], co4: [''] } : undefined),
+                coSplitMax: (draftSheet as any)?.coSplitMax ?? (isReview ? { co3: [], co4: [] } : undefined),
               });
           } catch {
             // ignore
@@ -577,6 +590,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
                 : (prevRow as any)?.total === ''
                   ? ''
                   : '',
+            reviewCoMarks: (prevRow as any)?.reviewCoMarks,
           };
         });
 
@@ -844,10 +858,10 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
     if (isReview) {
       const a = safeSplitArr((sheet as any)?.coSplitMax?.co3, CO_MAX.co3);
       const b = safeSplitArr((sheet as any)?.coSplitMax?.co4, CO_MAX.co4);
-      const ok1 = Math.abs(sumSplit(a) - CO_MAX.co3) < 1e-6;
-      const ok2 = Math.abs(sumSplit(b) - CO_MAX.co4) < 1e-6;
+      const ok1 = sumSplit(a) <= CO_MAX.co3 + 1e-6;
+      const ok2 = sumSplit(b) <= CO_MAX.co4 + 1e-6;
       if (!ok1 || !ok2) {
-        alert('CO split totals must equal 15 for both CO-3 and CO-4 before publishing.');
+        alert('CO split totals must not exceed 15 for CO-3 and CO-4.');
         return;
       }
     }
@@ -1285,7 +1299,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
 
   const coSplitMax = (sheet as any).coSplitMax as { co3?: Array<number | ''>; co4?: Array<number | ''> } | undefined;
   const safeSplitArr = (raw: any, fallbackMax: number): Array<number | ''> => {
-    if (!Array.isArray(raw) || raw.length === 0) return [''];
+    if (!Array.isArray(raw) || raw.length === 0) return [];
     const mapped = raw
       .map((v) => {
         if (v === '') return '';
@@ -1303,48 +1317,119 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
       return next;
     });
   };
-  const sumSplit = (arr: Array<number | ''>) => arr.reduce((a, b) => a + (typeof b === 'number' && Number.isFinite(b) ? b : 0), 0);
+  const sumSplit = (arr: Array<number | ''>) =>
+    arr.reduce((a: number, b) => a + (typeof b === 'number' && Number.isFinite(b) ? b : 0), 0);
   const padTo = <T,>(arr: T[], len: number, fill: T) => (arr.length >= len ? arr.slice(0, len) : arr.concat(Array.from({ length: len - arr.length }, () => fill)));
 
-  // Review-only CO split rows (shared row count across CO-3 and CO-4)
+  // Review-only CO split rows
   // Split config is a header-level setting; keep it editable even if the
   // student mark table is blocked by Mark Manager gating.
-  const splitEditDisabled = Boolean(globalLocked || publishedEditLocked || (markManagerLocked && sheet.markManagerSnapshot != null));
-  const co3SplitsRaw = isReview ? safeSplitArr((coSplitMax as any)?.co3, CO_MAX.co3) : [''];
-  const co4SplitsRaw = isReview ? safeSplitArr((coSplitMax as any)?.co4, CO_MAX.co4) : [''];
-  const coSplitRowCount = isReview ? Math.max(1, co3SplitsRaw.length, co4SplitsRaw.length) : 0;
-  const co3Splits = isReview ? padTo(co3SplitsRaw, coSplitRowCount, '' as const) : ([] as Array<number | ''>);
-  const co4Splits = isReview ? padTo(co4SplitsRaw, coSplitRowCount, '' as const) : ([] as Array<number | ''>);
+  const splitEditDisabled = Boolean(globalLocked || publishedEditLocked);
+  const co3Splits = isReview ? safeSplitArr((coSplitMax as any)?.co3, CO_MAX.co3) : ([] as Array<number | ''>);
+  const co4Splits = isReview ? safeSplitArr((coSplitMax as any)?.co4, CO_MAX.co4) : ([] as Array<number | ''>);
+  const co3SplitRowCount = isReview ? co3Splits.length : 0;
+  const co4SplitRowCount = isReview ? co4Splits.length : 0;
+  const reviewCo3ColumnCount = isReview ? Math.max(1, co3SplitRowCount) : 1;
+  const reviewCo4ColumnCount = isReview ? Math.max(1, co4SplitRowCount) : 1;
+  const reviewCoAttainmentCols = isReview ? (reviewCo3ColumnCount + reviewCo4ColumnCount) * 2 : 4;
   const co3TotalSplit = isReview ? sumSplit(co3Splits) : 0;
   const co4TotalSplit = isReview ? sumSplit(co4Splits) : 0;
-  const reviewSplitsOk =
-    !isReview || (Math.abs(co3TotalSplit - CO_MAX.co3) < 1e-6 && Math.abs(co4TotalSplit - CO_MAX.co4) < 1e-6);
+  const reviewSplitsOk = !isReview || (co3TotalSplit <= CO_MAX.co3 + 1e-6 && co4TotalSplit <= CO_MAX.co4 + 1e-6);
 
-  const addCoSplitRow = () => {
+  const normalizeReviewMarks = (raw: any, count: number, coMax: number): Array<number | ''> => {
+    const arr = padTo(
+      (Array.isArray(raw) ? raw.slice(0, count) : []).map((v) => {
+        if (v === '') return '';
+        const n = Number(v);
+        return Number.isFinite(n) ? Math.trunc(n) : '';
+      }),
+      count,
+      '' as const,
+    );
+
+    let used = 0;
+    return arr.map((v) => {
+      if (v === '') return '';
+      const n = Number(v);
+      if (!Number.isFinite(n)) return '';
+      const clamped = clamp(Math.trunc(n), 0, Math.max(0, coMax - used));
+      used += clamped;
+      return clamped;
+    });
+  };
+
+  const addCoSplitRow = (coKey: 'co3' | 'co4') => {
     if (!isReview || splitEditDisabled) return;
     setSheet((prev) => {
       const raw = (prev as any).coSplitMax || {};
       const a0 = safeSplitArr(raw.co3, CO_MAX.co3);
       const b0 = safeSplitArr(raw.co4, CO_MAX.co4);
-      const len = Math.max(1, a0.length, b0.length);
-      if (len >= 15) return prev;
-      const nextA = padTo(a0, len, '' as const).concat(['']);
-      const nextB = padTo(b0, len, '' as const).concat(['']);
+      const target = coKey === 'co3' ? a0 : b0;
+      if (target.length >= 15) return prev;
+      const nextA = coKey === 'co3' ? a0.concat(['']) : a0;
+      const nextB = coKey === 'co4' ? b0.concat(['']) : b0;
       return { ...prev, coSplitMax: { ...(prev as any).coSplitMax, co3: nextA, co4: nextB } };
     });
   };
 
-  const removeCoSplitRow = () => {
+  const removeCoSplitRow = (coKey: 'co3' | 'co4') => {
     if (!isReview || splitEditDisabled) return;
     setSheet((prev) => {
       const raw = (prev as any).coSplitMax || {};
       const a0 = safeSplitArr(raw.co3, CO_MAX.co3);
       const b0 = safeSplitArr(raw.co4, CO_MAX.co4);
-      const len = Math.max(1, a0.length, b0.length);
-      if (len <= 1) return prev;
-      const nextA = padTo(a0, len, '' as const).slice(0, -1);
-      const nextB = padTo(b0, len, '' as const).slice(0, -1);
+      const target = coKey === 'co3' ? a0 : b0;
+      if (target.length <= 0) return prev;
+      const nextA = coKey === 'co3' ? a0.slice(0, -1) : a0;
+      const nextB = coKey === 'co4' ? b0.slice(0, -1) : b0;
       return { ...prev, coSplitMax: { ...(prev as any).coSplitMax, co3: nextA, co4: nextB } };
+    });
+  };
+
+  const updateReviewCoMark = (rowIdx: number, coKey: 'co3' | 'co4', splitIdx: number, rawVal: string) => {
+    if (!isReview || marksEditDisabled) return;
+    setSheet((prev) => {
+      const nextRows = prev.rows.slice();
+      const existing = (nextRows[rowIdx] || { studentId: 0, section: '', registerNo: '', name: '', total: '' }) as Ssa2Row;
+      const row: Ssa2Row = { ...existing };
+
+      const review = { ...((row as any).reviewCoMarks || {}) } as { co3?: Array<number | ''>; co4?: Array<number | ''> };
+      const count = coKey === 'co3' ? reviewCo3ColumnCount : reviewCo4ColumnCount;
+      const coMax = coKey === 'co3' ? CO_MAX.co3 : CO_MAX.co4;
+      const base = normalizeReviewMarks(review[coKey], count, coMax);
+      const arr = padTo(base, count, '' as const).slice(0, count);
+      const splitCfgRaw = ((prev as any)?.coSplitMax || {}) as { co3?: Array<number | ''>; co4?: Array<number | ''> };
+      const splitCfg = coKey === 'co3' ? safeSplitArr(splitCfgRaw.co3, CO_MAX.co3) : safeSplitArr(splitCfgRaw.co4, CO_MAX.co4);
+
+      if (rawVal === '') {
+        arr[splitIdx] = '';
+      } else {
+        const parsed = Number(rawVal);
+        const nextN = Number.isFinite(parsed) ? Math.trunc(parsed) : NaN;
+        const others = arr.reduce((acc, v, i) => {
+          if (i === splitIdx) return acc;
+          return acc + (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+        }, 0);
+        const remaining = clamp(coMax - others, 0, coMax);
+        const splitCapRaw = splitCfg[splitIdx];
+        const splitCap = typeof splitCapRaw === 'number' && Number.isFinite(splitCapRaw) ? clamp(splitCapRaw, 0, coMax) : coMax;
+        if (!Number.isFinite(nextN)) {
+          arr[splitIdx] = '';
+        } else {
+          const nextVal = Math.max(0, nextN);
+          const allowedMax = Math.min(remaining, splitCap);
+          if (nextVal > allowedMax) return prev;
+          arr[splitIdx] = nextVal;
+        }
+      }
+
+      const nextCo3 = normalizeReviewMarks(coKey === 'co3' ? arr : review.co3, reviewCo3ColumnCount, CO_MAX.co3);
+      const nextCo4 = normalizeReviewMarks(coKey === 'co4' ? arr : review.co4, reviewCo4ColumnCount, CO_MAX.co4);
+
+      row.reviewCoMarks = { co3: nextCo3, co4: nextCo4 };
+      row.total = clamp(round1(sumSplit(nextCo3) + sumSplit(nextCo4)), 0, MAX_ASMT2);
+      nextRows[rowIdx] = row;
+      return { ...prev, rows: nextRows };
     });
   };
 
@@ -1354,35 +1439,56 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
       const raw = (prev as any).coSplitMax || {};
       const a0 = safeSplitArr(raw.co3, CO_MAX.co3);
       const b0 = safeSplitArr(raw.co4, CO_MAX.co4);
-      const len = Math.max(1, a0.length, b0.length, idx + 1);
-      const a = padTo(a0, len, '' as const);
-      const b = padTo(b0, len, '' as const);
+      const target0 = coKey === 'co3' ? a0 : b0;
+      const target = padTo<number | ''>(target0, Math.max(target0.length, idx + 1), '');
 
-      const target = coKey === 'co3' ? a : b;
       if (rawVal === '') {
         target[idx] = '';
-        return { ...prev, coSplitMax: { ...(prev as any).coSplitMax, co3: a, co4: b } };
+        return {
+          ...prev,
+          coSplitMax: {
+            ...(prev as any).coSplitMax,
+            co3: coKey === 'co3' ? target : a0,
+            co4: coKey === 'co4' ? target : b0,
+          },
+        };
       }
 
-      const n = Number(rawVal);
-      const otherSum = target.reduce((acc, v, j) => {
+      const parsed = Number(rawVal);
+      const n = Number.isFinite(parsed) ? Math.trunc(parsed) : NaN;
+      const otherSum = target.reduce((acc: number, v, j) => {
         if (j === idx) return acc;
         return acc + (typeof v === 'number' && Number.isFinite(v) ? v : 0);
       }, 0);
       const coMax = coKey === 'co3' ? CO_MAX.co3 : CO_MAX.co4;
       const remaining = clamp(coMax - otherSum, 0, coMax);
-      const nextVal = Number.isFinite(n) ? clamp(n, 0, remaining) : '';
+      const nextVal = Number.isFinite(n)
+        ? (() => {
+            const candidate = Math.max(0, n);
+            if (candidate > remaining) return null;
+            return candidate;
+          })()
+        : '';
+      if (nextVal === null) return prev;
       target[idx] = nextVal as any;
-      return { ...prev, coSplitMax: { ...(prev as any).coSplitMax, co3: a, co4: b } };
+      return {
+        ...prev,
+        coSplitMax: {
+          ...(prev as any).coSplitMax,
+          co3: coKey === 'co3' ? target : a0,
+          co4: coKey === 'co4' ? target : b0,
+        },
+      };
     });
   };
 
   const renderCoSplitHeaderCell = (coKey: 'co3' | 'co4', coMax: number, total: number) => {
     const arr = coKey === 'co3' ? co3Splits : co4Splits;
+    const rowCount = coKey === 'co3' ? reviewCo3ColumnCount : reviewCo4ColumnCount;
     const last = arr.length ? arr[arr.length - 1] : '';
     const lastFilled = typeof last === 'number' && Number.isFinite(last) && last > 0;
-    const canAdd = Boolean(!splitEditDisabled && coSplitRowCount > 0 && coSplitRowCount < 15 && lastFilled && total < coMax - 1e-6);
-    const canRemove = Boolean(!splitEditDisabled && coSplitRowCount > 1);
+    const canAdd = Boolean(!splitEditDisabled && rowCount < 15 && (rowCount === 1 || lastFilled || arr.length === 0 || total < coMax - 1e-6));
+    const canRemove = Boolean(!splitEditDisabled && rowCount > 1);
     const remaining = round1(coMax - total);
     const ok = Math.abs(remaining) < 1e-6;
 
@@ -1393,7 +1499,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
           <button
             type="button"
             disabled={!canAdd}
-            onClick={addCoSplitRow}
+            onClick={() => addCoSplitRow(coKey)}
             style={{ ...splitButtonStyle, opacity: canAdd ? 1 : 0.6, cursor: canAdd ? 'pointer' : 'not-allowed' }}
             aria-label={`Add split row for ${coKey}`}
           >
@@ -1402,7 +1508,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
           <button
             type="button"
             disabled={!canRemove}
-            onClick={removeCoSplitRow}
+            onClick={() => removeCoSplitRow(coKey)}
             style={{ ...splitButtonStyle, opacity: canRemove ? 1 : 0.6, cursor: canRemove ? 'pointer' : 'not-allowed' }}
             aria-label={`Remove split row for ${coKey}`}
           >
@@ -1654,14 +1760,14 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
               </th>
             </tr>
             <tr>
-              <th style={{ ...cellTh, width: 42, minWidth: 42 }} rowSpan={isReview ? 4 + coSplitRowCount : 4}>S.No</th>
-              <th style={cellTh} rowSpan={isReview ? 4 + coSplitRowCount : 4}>Register No.</th>
+              <th style={{ ...cellTh, width: 42, minWidth: 42 }} rowSpan={4}>S.No</th>
+              <th style={cellTh} rowSpan={4}>Register No.</th>
               <th style={cellTh} rowSpan={3}>Name of the Students</th>
 
               <th style={cellTh}>{displayLabel}</th>
               {showTotalColumn ? <th style={cellTh}>Total</th> : null}
 
-              <th style={cellTh} colSpan={4}>CO ATTAINMENT</th>
+              <th style={cellTh} colSpan={isReview ? reviewCoAttainmentCols : 4}>CO ATTAINMENT</th>
               {visibleBtlIndices.length ? <th style={cellTh} colSpan={visibleBtlIndices.length * 2}>BTL ATTAINMENT</th> : null}
             </tr>
             <tr>
@@ -1671,8 +1777,12 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
               </th>
               {showTotalColumn ? <th style={cellTh} /> : null}
 
-              <th style={cellTh} colSpan={2}>CO-3</th>
-              <th style={cellTh} colSpan={2}>CO-4</th>
+              <th style={cellTh} colSpan={isReview ? reviewCo3ColumnCount * 2 : 2}>
+                {isReview ? renderCoSplitHeaderCell('co3', CO_MAX.co3, co3TotalSplit) : 'CO-3'}
+              </th>
+              <th style={cellTh} colSpan={isReview ? reviewCo4ColumnCount * 2 : 2}>
+                {isReview ? renderCoSplitHeaderCell('co4', CO_MAX.co4, co4TotalSplit) : 'CO-4'}
+              </th>
 
               {visibleBtlIndices.map((n) => (
                 <th key={`btl-head-${n}`} style={cellTh} colSpan={2}>
@@ -1687,7 +1797,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
               </th>
               {showTotalColumn ? <th style={cellTh} /> : null}
 
-              {Array.from({ length: 2 + visibleBtlIndices.length }).flatMap((_, i) => (
+              {Array.from({ length: (isReview ? reviewCo3ColumnCount + reviewCo4ColumnCount : 2) + visibleBtlIndices.length }).flatMap((_, i) => (
                 <React.Fragment key={i}>
                   <th style={cellTh}>Mark</th>
                   <th style={cellTh}>%</th>
@@ -1698,10 +1808,54 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
               <th style={cellTh}>Name / Max Marks</th>
               <th style={cellTh}>{MAX_ASMT2}</th>
               {showTotalColumn ? <th style={cellTh}>{MAX_ASMT2}</th> : null}
-              <th style={cellTh}>{isReview ? renderCoSplitHeaderCell('co3', CO_MAX.co3, co3TotalSplit) : CO_MAX.co3}</th>
-              <th style={cellTh}>%</th>
-              <th style={cellTh}>{isReview ? renderCoSplitHeaderCell('co4', CO_MAX.co4, co4TotalSplit) : CO_MAX.co4}</th>
-              <th style={cellTh}>%</th>
+              {isReview
+                ? Array.from({ length: reviewCo3ColumnCount }).flatMap((_, i) => {
+                    const v = i < co3Splits.length ? co3Splits[i] : CO_MAX.co3;
+                    return [
+                      <th key={`co3-max-${i}`} style={cellTh}>
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          min={0}
+                          max={CO_MAX.co3}
+                          step={1}
+                          disabled={splitEditDisabled}
+                          value={v === '' ? '' : String(v)}
+                          onChange={(e) => updateCoSplitAt('co3', i, e.target.value)}
+                          style={splitInputStyle}
+                        />
+                      </th>,
+                      <th key={`co3-pct-${i}`} style={cellTh}>%</th>,
+                    ];
+                  })
+                : [
+                    <th key="co3-max" style={cellTh}>{CO_MAX.co3}</th>,
+                    <th key="co3-pct" style={cellTh}>%</th>,
+                  ]}
+              {isReview
+                ? Array.from({ length: reviewCo4ColumnCount }).flatMap((_, i) => {
+                    const v = i < co4Splits.length ? co4Splits[i] : CO_MAX.co4;
+                    return [
+                      <th key={`co4-max-${i}`} style={cellTh}>
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          min={0}
+                          max={CO_MAX.co4}
+                          step={1}
+                          disabled={splitEditDisabled}
+                          value={v === '' ? '' : String(v)}
+                          onChange={(e) => updateCoSplitAt('co4', i, e.target.value)}
+                          style={splitInputStyle}
+                        />
+                      </th>,
+                      <th key={`co4-pct-${i}`} style={cellTh}>%</th>,
+                    ];
+                  })
+                : [
+                    <th key="co4-max" style={cellTh}>{CO_MAX.co4}</th>,
+                    <th key="co4-pct" style={cellTh}>%</th>,
+                  ]}
               {visibleBtlIndices.flatMap((n) => [
                 <th key={`btl-max-${n}`} style={cellTh}>
                   {isReview
@@ -1711,50 +1865,6 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
                 <th key={`btl-pct-${n}`} style={cellTh}>%</th>,
               ])}
             </tr>
-
-            {isReview
-              ? Array.from({ length: coSplitRowCount }).map((_, splitIdx) => (
-                  <tr key={`co-split-row-${splitIdx}`}>
-                    <th style={cellTh}>{`Split ${splitIdx + 1}`}</th>
-                    <th style={cellTh} />
-                    {showTotalColumn ? <th style={cellTh} /> : null}
-                    <th style={cellTh}>
-                      <input
-                        key={`co3_split_input_${splitIdx}`}
-                        type="number"
-                        inputMode="decimal"
-                        min={0}
-                        max={CO_MAX.co3}
-                        step="0.5"
-                        disabled={splitEditDisabled}
-                        value={co3Splits[splitIdx] === '' ? '' : String(co3Splits[splitIdx])}
-                        onChange={(e) => updateCoSplitAt('co3', splitIdx, e.target.value)}
-                        style={splitInputStyle}
-                      />
-                    </th>
-                    <th style={cellTh} />
-                    <th style={cellTh}>
-                      <input
-                        key={`co4_split_input_${splitIdx}`}
-                        type="number"
-                        inputMode="decimal"
-                        min={0}
-                        max={CO_MAX.co4}
-                        step="0.5"
-                        disabled={splitEditDisabled}
-                        value={co4Splits[splitIdx] === '' ? '' : String(co4Splits[splitIdx])}
-                        onChange={(e) => updateCoSplitAt('co4', splitIdx, e.target.value)}
-                        style={splitInputStyle}
-                      />
-                    </th>
-                    <th style={cellTh} />
-                    {visibleBtlIndices.flatMap((n) => [
-                      <th key={`btl-split-mark-${splitIdx}-${n}`} style={cellTh} />,
-                      <th key={`btl-split-pct-${splitIdx}-${n}`} style={cellTh} />,
-                    ])}
-                  </tr>
-                ))
-              : null}
           </thead>
           <tbody>
             {sheet.rows.length === 0 ? (
@@ -1771,11 +1881,29 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
               </tr>
             ) : (
               sheet.rows.map((r, idx) => {
-                const totalRaw = typeof r.total === 'number' ? clamp(Number(r.total), 0, MAX_ASMT2) : null;
+                const reviewCo3MaxByCol = isReview
+                  ? Array.from({ length: reviewCo3ColumnCount }).map((_, splitIdx) => {
+                      const v = splitIdx < co3Splits.length ? co3Splits[splitIdx] : CO_MAX.co3;
+                      return typeof v === 'number' && Number.isFinite(v) ? clamp(v, 0, CO_MAX.co3) : CO_MAX.co3;
+                    })
+                  : [];
+                const reviewCo4MaxByCol = isReview
+                  ? Array.from({ length: reviewCo4ColumnCount }).map((_, splitIdx) => {
+                      const v = splitIdx < co4Splits.length ? co4Splits[splitIdx] : CO_MAX.co4;
+                      return typeof v === 'number' && Number.isFinite(v) ? clamp(v, 0, CO_MAX.co4) : CO_MAX.co4;
+                    })
+                  : [];
 
-                const coShare = totalRaw == null ? null : round1(totalRaw / 2);
-                const co3 = coShare == null ? null : clamp(coShare, 0, CO_MAX.co3);
-                const co4 = coShare == null ? null : clamp(coShare, 0, CO_MAX.co4);
+                const reviewCo3Marks = isReview ? normalizeReviewMarks((r as any)?.reviewCoMarks?.co3, reviewCo3ColumnCount, CO_MAX.co3) : [];
+                const reviewCo4Marks = isReview ? normalizeReviewMarks((r as any)?.reviewCoMarks?.co4, reviewCo4ColumnCount, CO_MAX.co4) : [];
+                const reviewCo3Total = isReview ? sumSplit(reviewCo3Marks) : 0;
+                const reviewCo4Total = isReview ? sumSplit(reviewCo4Marks) : 0;
+                const reviewTotal = isReview ? clamp(round1(reviewCo3Total + reviewCo4Total), 0, MAX_ASMT2) : null;
+                const totalRaw = isReview ? reviewTotal : typeof r.total === 'number' ? clamp(Number(r.total), 0, MAX_ASMT2) : null;
+
+                const coShare = isReview ? null : totalRaw == null ? null : round1(totalRaw / 2);
+                const co3 = isReview ? null : coShare == null ? null : clamp(coShare, 0, CO_MAX.co3);
+                const co4 = isReview ? null : coShare == null ? null : clamp(coShare, 0, CO_MAX.co4);
 
                 const visibleIndicesZeroBased = visibleBtlIndices.map((n) => n - 1);
                 const rawBtlMaxByIndex = [BTL_MAX.btl1, BTL_MAX.btl2, BTL_MAX.btl3, BTL_MAX.btl4, BTL_MAX.btl5, BTL_MAX.btl6];
@@ -1797,7 +1925,9 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
                     <td style={cellTd}>{shortenRegisterNo(r.registerNo)}</td>
                     <td style={cellTd}>{r.name}</td>
                     <td style={{ ...cellTd, width: 90, background: '#fff7ed' }}>
-                      {marksEditDisabled ? (
+                      {isReview ? (
+                        <div style={inputStyle}>{totalRaw == null ? '' : round1(totalRaw)}</div>
+                      ) : marksEditDisabled ? (
                         <div style={inputStyle}>{typeof r.total === 'number' ? round1(r.total) : ''}</div>
                       ) : (
                         <input
@@ -1826,10 +1956,52 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
                       )}
                     </td>
                     {showTotalColumn ? <td style={{ ...cellTd, textAlign: 'center' }}>{totalRaw ?? ''}</td> : null}
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{co3 ?? ''}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{pct(co3, CO_MAX.co3)}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{co4 ?? ''}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{pct(co4, CO_MAX.co4)}</td>
+                    {isReview
+                      ? reviewCo3Marks.flatMap((mark, splitIdx) => [
+                          <td key={`co3-mark-${idx}-${splitIdx}`} style={{ ...cellTd, textAlign: 'center', minWidth: 86 }}>
+                            {marksEditDisabled ? (
+                              mark === '' ? '' : mark
+                            ) : (
+                              <input
+                                style={inputStyle}
+                                type="number"
+                                min={0}
+                                max={CO_MAX.co3}
+                                step={1}
+                                value={mark}
+                                onChange={(e) => updateReviewCoMark(idx, 'co3', splitIdx, e.target.value)}
+                              />
+                            )}
+                          </td>,
+                          <td key={`co3-pct-${idx}-${splitIdx}`} style={{ ...cellTd, textAlign: 'center' }}>{pct(mark === '' ? null : Number(mark), reviewCo3MaxByCol[splitIdx] || CO_MAX.co3)}</td>,
+                        ])
+                      : [
+                          <td key={`co3-single-${idx}`} style={{ ...cellTd, textAlign: 'center' }}>{co3 ?? ''}</td>,
+                          <td key={`co3-single-pct-${idx}`} style={{ ...cellTd, textAlign: 'center' }}>{pct(co3, CO_MAX.co3)}</td>,
+                        ]}
+                    {isReview
+                      ? reviewCo4Marks.flatMap((mark, splitIdx) => [
+                          <td key={`co4-mark-${idx}-${splitIdx}`} style={{ ...cellTd, textAlign: 'center', minWidth: 86 }}>
+                            {marksEditDisabled ? (
+                              mark === '' ? '' : mark
+                            ) : (
+                              <input
+                                style={inputStyle}
+                                type="number"
+                                min={0}
+                                max={CO_MAX.co4}
+                                step={1}
+                                value={mark}
+                                onChange={(e) => updateReviewCoMark(idx, 'co4', splitIdx, e.target.value)}
+                              />
+                            )}
+                          </td>,
+                          <td key={`co4-pct-${idx}-${splitIdx}`} style={{ ...cellTd, textAlign: 'center' }}>{pct(mark === '' ? null : Number(mark), reviewCo4MaxByCol[splitIdx] || CO_MAX.co4)}</td>,
+                        ])
+                      : [
+                          <td key={`co4-single-${idx}`} style={{ ...cellTd, textAlign: 'center' }}>{co4 ?? ''}</td>,
+                          <td key={`co4-single-pct-${idx}`} style={{ ...cellTd, textAlign: 'center' }}>{pct(co4, CO_MAX.co4)}</td>,
+                        ]}
 
                     {visibleBtlIndices.map((btl) => {
                       const idx0 = btl - 1;
@@ -1984,7 +2156,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
               <table className="ssa-modern-table" style={{ borderCollapse: 'separate', borderSpacing: 0, width: '100%', minWidth: 920 }}>
                 <thead>
                   <tr>
-                    <th style={cellTh} colSpan={totalTableCols}>
+                    <th style={cellTh} colSpan={publishedTableCols}>
                       {sheet.termLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {sheet.batchLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {displayLabel}
                     </th>
                   </tr>
@@ -2050,7 +2222,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
                 <tbody>
                   {sheet.rows.length === 0 ? (
                     <tr>
-                      <td colSpan={totalTableCols} style={{ padding: 14, color: '#6b7280', fontSize: 13 }}>
+                      <td colSpan={publishedTableCols} style={{ padding: 14, color: '#6b7280', fontSize: 13 }}>
                         No students loaded yet. Choose a Teaching Assignment above, then click “Load/Refresh Roster”.
                       </td>
                     </tr>

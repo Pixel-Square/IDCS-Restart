@@ -39,6 +39,8 @@ urlpatterns = [
     # Collaboration / Rooms
     path('powerbi/collaboration/', views.collaboration, name='powerbi_collaboration'),
     path('powerbi/collaboration/rooms/<int:room_id>/', views.room_detail, name='powerbi_room_detail'),
+    path('powerbi/collaboration/rooms/<int:room_id>/bi-connect/', views.room_bi_connect, name='powerbi_room_bi_connect'),
+    path('powerbi/collaboration/rooms/<int:room_id>/connection/', views.room_connection_update, name='powerbi_room_connection_update'),
     path('powerbi/collaboration/rooms/<int:room_id>/request/', views.room_request_join, name='powerbi_room_request_join'),
     path('powerbi/collaboration/rooms/<int:room_id>/members/', views.room_members, name='powerbi_room_members'),
     path('powerbi/collaboration/rooms/<int:room_id>/sheets/create/', views.room_sheet_create, name='powerbi_room_sheet_create'),
@@ -47,4 +49,12 @@ urlpatterns = [
     path('powerbi/collaboration/rooms/<int:room_id>/sheets/<int:room_sheet_id>/rename-column/', views.room_sheet_rename_column, name='powerbi_room_sheet_rename_column'),
     path('powerbi/collaboration/rooms/<int:room_id>/sheets/<int:room_sheet_id>/delete-column/', views.room_sheet_delete_column, name='powerbi_room_sheet_delete_column'),
     path('powerbi/collaboration/rooms/<int:room_id>/sheets/<int:room_sheet_id>/export/', views.room_sheet_export, name='powerbi_room_sheet_export'),
+
+    # Public (no-login) Power BI Web feeds
+    path('powerbi/public/rooms/<str:token>/', views.public_room_bi, name='powerbi_public_room_bi'),
+    path(
+        'powerbi/public/rooms/<str:token>/sheets/<int:room_sheet_id>.csv',
+        views.public_room_sheet_csv,
+        name='powerbi_public_room_sheet_csv',
+    ),
 ]

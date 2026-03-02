@@ -59,6 +59,27 @@ class Room(models.Model):
         on_delete=models.PROTECT,
         related_name='powerbi_led_rooms',
     )
+
+    # Public (no-login) Power BI Web feed access.
+    # Use an unguessable token so Power BI can fetch without interactive auth.
+    public_bi_token = models.CharField(max_length=64, null=True, blank=True, unique=True)
+
+    # Optional: per-room SQL Server connection details (for Power BI).
+    # NOTE: Storing passwords in the DB is sensitive; restrict access in views/templates.
+    sql_server_host = models.CharField(max_length=255, blank=True, default='')
+    sql_server_port = models.PositiveIntegerField(null=True, blank=True)
+    sql_server_database = models.CharField(max_length=255, blank=True, default='')
+    sql_server_username = models.CharField(max_length=255, blank=True, default='')
+    sql_server_password = models.CharField(max_length=255, blank=True, default='')
+
+    # Optional: per-room PostgreSQL connection details (for Power BI).
+    # NOTE: Storing passwords in the DB is sensitive; restrict access in views/templates.
+    postgres_host = models.CharField(max_length=255, blank=True, default='')
+    postgres_port = models.PositiveIntegerField(null=True, blank=True)
+    postgres_database = models.CharField(max_length=255, blank=True, default='')
+    postgres_username = models.CharField(max_length=255, blank=True, default='')
+    postgres_password = models.CharField(max_length=255, blank=True, default='')
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
