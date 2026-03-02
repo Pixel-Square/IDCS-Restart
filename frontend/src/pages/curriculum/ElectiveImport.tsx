@@ -103,13 +103,20 @@ export default function ElectiveImport() {
 
   const downloadExcelTemplate = async () => {
     try {
+      console.log('[Excel Download] Starting...');
       const response = await fetchWithAuth('/api/curriculum/elective-choices/template/?format=excel');
+      console.log('[Excel Download] Response status:', response.status);
+      console.log('[Excel Download] Response headers:', Object.fromEntries(response.headers.entries()));
+      
       if (!response.ok) {
-        alert('Failed to download Excel template');
+        const errorText = await response.text();
+        console.error('[Excel Download] Error response:', errorText);
+        alert(`Failed to download Excel template (${response.status}): ${errorText.substring(0, 100)}`);
         return;
       }
 
       const blob = await response.blob();
+      console.log('[Excel Download] Blob size:', blob.size, 'type:', blob.type);
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -118,9 +125,10 @@ export default function ElectiveImport() {
       a.click();
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
+      console.log('[Excel Download] Complete!');
     } catch (error) {
-      console.error('Download error:', error);
-      alert('Failed to download Excel template');
+      console.error('[Excel Download] Exception:', error);
+      alert('Failed to download Excel template: ' + (error instanceof Error ? error.message : String(error)));
     }
   };
 
