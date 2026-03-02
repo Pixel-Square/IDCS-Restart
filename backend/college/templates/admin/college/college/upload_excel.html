@@ -1,0 +1,27 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+  <h1>{% trans "Upload Colleges Excel" %}</h1>
+
+  <div class="module aligned">
+    <p>
+      {% trans "Upload an .xlsx file where:" %}
+      <br />
+      <strong>{% trans "Column A" %}</strong>: {% trans "College code" %}
+      <br />
+      <strong>{% trans "Column B" %}</strong>: {% trans "College name" %}
+    </p>
+
+    <form method="post" enctype="multipart/form-data" novalidate>
+      {% csrf_token %}
+      <fieldset class="module aligned">
+        {{ form.as_p }}
+      </fieldset>
+      <div class="submit-row">
+        <input type="submit" value="{% trans 'Upload' %}" class="default" />
+        <a href="{% url 'admin:college_college_changelist' %}" class="button cancel-link">{% trans "Back" %}</a>
+      </div>
+    </form>
+  </div>
+{% endblock %}

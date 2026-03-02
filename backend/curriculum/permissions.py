@@ -23,13 +23,20 @@ class IsIQACOrReadOnly(permissions.BasePermission):
             return False
         if user.is_superuser:
             return True
-        # group-based shortcuts
-        if user.groups.filter(name__in=['IQAC', 'HAA']).exists():
-            return True
+        
+        # group-based shortcuts with error handling
+        try:
+            if user.groups.filter(name__in=['IQAC', 'HAA']).exists():
+                return True
+        except Exception:
+            pass
 
         # check role-permissions assigned via accounts.RolePermission
-        perms = get_user_permissions(user)
-        if perms & self.WRITE_PERMS:
-            return True
+        try:
+            perms = get_user_permissions(user)
+            if perms & self.WRITE_PERMS:
+                return True
+        except Exception:
+            pass
 
         return False

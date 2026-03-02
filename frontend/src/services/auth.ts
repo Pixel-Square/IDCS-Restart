@@ -1,25 +1,19 @@
 import axios, { AxiosHeaders } from 'axios'
+import { getApiBase } from './apiBase'
 
-function apiBase() {
-  const fromEnv = import.meta.env.VITE_API_BASE
-  if (fromEnv) return String(fromEnv).replace(/\/+$/, '')
+const BASE = `${getApiBase()}/api/accounts/`
 
-  // Default to same-origin so `/api/...` works behind nginx/proxy setups.
-  if (typeof window !== 'undefined' && window.location?.origin) {
-    const host = String(window.location.hostname || '').trim().toLowerCase()
-    if (host === 'localhost' || host === '127.0.0.1') return 'http://localhost:8000'
-    return String(window.location.origin).replace(/\/+$/, '')
-  }
-
-  return 'https://db.krgi.co.in'
+if (import.meta.env.DEV) {
+  // Helps diagnose login issues caused by incorrect API host/port.
+  // Example: opening the UI on a different machine while API base points to localhost.
+  console.info('[auth] API base:', BASE)
 }
-
-const BASE = `${apiBase()}/api/accounts/`
 
 // Create an axios instance used across the app so we can centrally handle
 // automatic access-token refresh on 401 responses.
 // Default request timeout (ms) for API calls — configurable via VITE_API_TIMEOUT.
-const DEFAULT_API_TIMEOUT = Number(import.meta.env.VITE_API_TIMEOUT) || 5000
+// Keep this reasonably high so login doesn't show '(canceled)' on slightly slow backends.
+const DEFAULT_API_TIMEOUT = Number(import.meta.env.VITE_API_TIMEOUT) || 20000
 export const apiClient = axios.create({ baseURL: BASE, timeout: DEFAULT_API_TIMEOUT })
 
 let isRefreshing = false

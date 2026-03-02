@@ -18,6 +18,7 @@ export type TeachingAssignmentItem = {
 // Safe fetch for teaching assignments: use axios apiClient so automatic refresh runs
 import { apiClient } from './auth';
 import axios from 'axios';
+import { getApiBase } from './apiBase';
 
 export async function fetchMyTeachingAssignments(): Promise<TeachingAssignmentItem[]> {
   const url = `${apiBase()}/api/academics/my-teaching-assignments/`;
@@ -49,17 +50,7 @@ export type DraftAssessmentKey = 'ssa1' | 'review1' | 'ssa2' | 'review2' | 'cia1
 export type DueAssessmentKey = DraftAssessmentKey;
 
 function apiBase() {
-  const fromEnv = import.meta.env.VITE_API_BASE;
-  if (fromEnv) return String(fromEnv).replace(/\/+$/, '');
-
-  // Default to same-origin so `/api/...` works behind nginx/proxy setups.
-  if (typeof window !== 'undefined' && window.location?.origin) {
-    const host = String(window.location.hostname || '').trim().toLowerCase();
-    if (host === 'localhost' || host === '127.0.0.1') return 'http://localhost:8000';
-    return String(window.location.origin).replace(/\/+$/, '');
-  }
-
-  return 'https://db.krgi.co.in';
+  return getApiBase();
 }
 
 function authHeader(): Record<string, string> {
@@ -1343,8 +1334,7 @@ export async function fetchCia1Marks(subjectId: string, teachingAssignmentId?: n
     return cleaned.slice(0, limit) + '… (truncated)';
   };
 
-  const DEFAULT_API_BASE = 'https://db.krgi.co.in';
-  const API_BASE = import.meta.env.VITE_API_BASE || (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://localhost:8000' : DEFAULT_API_BASE);
+  const API_BASE = getApiBase();
   const qp = teachingAssignmentId ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
   const url = `${API_BASE}/api/obe/cia1-marks/${encodeURIComponent(subjectId)}${qp}`;
   const token = window.localStorage.getItem('access');
@@ -1395,8 +1385,7 @@ export async function saveCia1Marks(subjectId: string, marks: Record<number, num
     return cleaned.slice(0, limit) + '… (truncated)';
   };
 
-  const DEFAULT_API_BASE = 'https://db.krgi.co.in';
-  const API_BASE = import.meta.env.VITE_API_BASE || (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://localhost:8000' : DEFAULT_API_BASE);
+  const API_BASE = getApiBase();
   const url = `${API_BASE}/api/obe/cia1-marks/${encodeURIComponent(subjectId)}`;
   const token = window.localStorage.getItem('access');
 

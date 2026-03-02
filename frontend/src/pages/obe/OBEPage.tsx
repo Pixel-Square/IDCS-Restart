@@ -7,8 +7,22 @@ import MarkEntryPage from '../MarkEntryPage';
 import '../../styles/obe-theme.css';
 
 // OBE/marks/COAttainment fetch and types removed
+
 import { getCachedMe } from '../../services/auth';
-import { fetchMyTeachingAssignments, TeachingAssignmentItem } from '../../services/obe';
+import {
+  fetchMyTeachingAssignments,
+  TeachingAssignmentItem,
+  fetchPublishedSsa1,
+  fetchPublishedSsa2,
+  fetchPublishedReview1,
+  fetchPublishedReview2,
+  fetchPublishedFormative,
+  fetchCiaMarks,
+  fetchPublishedModelSheet,
+  fetchPublishedCiaSheet,
+  fetchDraft,
+} from '../../services/obe';
+import { fetchTeachingAssignmentRoster } from '../../services/roster';
 
 function apiBase() {
   const fromEnv = import.meta.env.VITE_API_BASE;
@@ -60,6 +74,8 @@ type Me = {
   faculty_id?: string | number;
   staff_id?: string | number;
   employee_id?: string | number;
+  roles?: string[];
+  permissions?: string[];
 };
 
 type ParsedQuestion = {
@@ -90,7 +106,47 @@ type OBEItem = {
   achieved: string;
 };
 
-type TabKey = 'courses' | 'exam';
+type TabKey = 'courses' | 'exam' | 'progress';
+
+type ObeProgressExam = {
+  assessment: string;
+  label?: string | null;
+  rows_filled: number;
+  total_students: number;
+  percentage: number;
+  published: boolean;
+};
+
+type ObeProgressTeachingAssignment = {
+  id: number | null;
+  subject_code: string | null;
+  subject_name: string | null;
+  enabled_assessments: string[];
+  exam_progress: ObeProgressExam[];
+};
+
+type ObeProgressStaff = {
+  id: number;
+  name: string;
+  user_id: number | null;
+  teaching_assignments: ObeProgressTeachingAssignment[];
+};
+
+type ObeProgressSection = {
+  id: number | null;
+  name: string | null;
+  batch: { id: number | null; name: string | null };
+  course: { id: number | null; name: string | null };
+  department: { id: number | null; code: string | null; name: string | null; short_name: string | null };
+  staff: ObeProgressStaff[];
+};
+
+type ObeProgressResponse = {
+  role: 'HOD' | 'ADVISOR' | 'FACULTY' | string;
+  academic_year: { id: number | null; name: string | null } | null;
+  department: { id: number | null; code: string | null; name: string | null; short_name: string | null } | null;
+  sections: ObeProgressSection[];
+};
 
 export default function OBEPage(): JSX.Element {
   const [data, setData] = useState<OBEItem[]>([]);
@@ -99,6 +155,27 @@ export default function OBEPage(): JSX.Element {
   const [activeTab, setActiveTab] = useState<TabKey>('courses');
 
   const [me, setMe] = useState<Me | null>(null);
+
+  const cachedRoles = useMemo((): string[] => {
+    try {
+      const raw = window.localStorage.getItem('roles');
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.map((r) => String(r)) : [];
+    } catch {
+      return [];
+    }
+  }, []);
+
+  const effectiveRoles = useMemo((): string[] => {
+    const fromMe = (me as any)?.roles;
+    if (Array.isArray(fromMe)) return fromMe.map((r) => String(r));
+    return cachedRoles;
+  }, [me, cachedRoles]);
+
+  const canViewProgress = useMemo(() => {
+    const rolesUpper = new Set(effectiveRoles.map((r) => String(r || '').trim().toUpperCase()));
+    return rolesUpper.has('HOD') || rolesUpper.has('AHOD') || rolesUpper.has('ADVISOR');
+  }, [effectiveRoles]);
 
   const [assignments, setAssignments] = useState<TeachingAssignmentItem[]>([]);
   const [loadingAssignments, setLoadingAssignments] = useState(false);
@@ -129,6 +206,47 @@ export default function OBEPage(): JSX.Element {
   const [previewUpload, setPreviewUpload] = useState<any | null>(null);
   const [previewQuestions, setPreviewQuestions] = useState<any[] | null>(null);
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+
+  // Progress overview state
+  const [progressLoading, setProgressLoading] = useState(false);
+  const [progressError, setProgressError] = useState<string | null>(null);
+  const [progressData, setProgressData] = useState<ObeProgressResponse | null>(null);
+  const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
+
+  // Progress chip modal state
+  type ProgressModalMeta = {
+    taId: number | null;
+    subjectCode: string;
+    subjectName: string;
+    assessment: string;
+    label: string;
+    staffName: string;
+    sectionName: string;
+    published: boolean;
+  };
+  type ProgressModalRow = { student_id: string; reg_no: string; name: string; values: (string | null)[] };
+  // CIA / Model-style per-question sheet
+  type CiaQDef = { key: string; label: string; max: number; co: any; btl: number };
+  type CiaSheetRow = { studentId: string; reg_no: string; name: string; absent: boolean; q: Record<string, number | ''> };
+  type CiaSheetForModal = {
+    termLabel: string;
+    batchLabel: string;
+    assessmentLabel: string;
+    questions: CiaQDef[];
+    questionBtl: Record<string, number | ''>;
+    rows: CiaSheetRow[];
+    coPair: { a: number; b: number };
+    maxTotal: number;
+    coMax: { a: number; b: number };
+    btlMax: Record<number, number>;
+    visibleBtls: number[];
+  };
+  const [progressModal, setProgressModal] = useState<ProgressModalMeta | null>(null);
+  const [modalLoading, setModalLoading] = useState(false);
+  const [modalMarkCols, setModalMarkCols] = useState<string[]>([]);
+  const [modalRows, setModalRows] = useState<ProgressModalRow[] | null>(null);
+  const [modalCiaSheet, setModalCiaSheet] = useState<CiaSheetForModal | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
 
   function normalizeImageSrc(img: any): string | null {
     try {
@@ -195,6 +313,13 @@ export default function OBEPage(): JSX.Element {
     })();
   }, []);
 
+  // Guard: Progress is only for HOD / Advisor.
+  useEffect(() => {
+    if (activeTab === 'progress' && !canViewProgress) {
+      setActiveTab('courses');
+    }
+  }, [activeTab, canViewProgress]);
+
   const facultyId = useMemo(() => {
     if (!me) return null;
     return me.faculty_id ?? me.staff_id ?? me.employee_id ?? me.id ?? null;
@@ -204,7 +329,262 @@ export default function OBEPage(): JSX.Element {
   // OBE/marks/COAttainment course selection removed
   const selectedCourse = null;
 
- 
+  // Helper: CO weights for a question in CIA table
+  const _ciaCoWeights = (co: any, pair: {a: number; b: number}): {a: number; b: number} => {
+    const s = String(co ?? '1').trim();
+    if (s === 'both' || s === '1&2' || s === '3&4') return { a: 0.5, b: 0.5 };
+    const n = Number(s);
+    if (n === pair.a || (pair.a === 3 && n === 1)) return { a: 1, b: 0 };
+    if (n === pair.b || (pair.b === 4 && n === 2)) return { a: 0, b: 1 };
+    return { a: 0, b: 0 };
+  };
+
+  // Parse a CIA/Model published sheet data object into CiaSheetForModal
+  const _parseCiaSheetData = (
+    data: any,
+    assessmentKey: string,
+    studentMap: Map<string, {id: number; reg_no: string; name: string}>,
+    rosterStudents: Array<{id: number; reg_no: string; name: string}>,
+  ): any => {
+    if (!data || typeof data !== 'object') return null;
+
+    // Questions may be stored directly or under a legacy key
+    const rawQuestions = Array.isArray(data.questions) ? data.questions : [];
+    const DEFAULT_Q_KEYS = ['q1','q2','q3','q4','q5','q6','q7','q8','q9'];
+    const questions = rawQuestions.length > 0
+      ? rawQuestions.map((q: any) => ({
+          key: String(q.key || ''),
+          label: String(q.label || q.key || ''),
+          max: Number(q.max || 0),
+          co: q.co ?? 1,
+          btl: Number(q.btl || 1),
+        }))
+      : DEFAULT_Q_KEYS.map((k, i) => ({ key: k, label: k.toUpperCase(), max: i < 6 ? 2 : 16, co: i < 3 ? 1 : i < 6 ? 2 : (i === 8 ? '1&2' : i < 8 ? (i < 7 ? 1 : 2) : 1), btl: [1,3,4,1,1,2,2,3,5][i] ?? 1 }));
+
+    const questionBtl: Record<string, number | ''> = typeof data.questionBtl === 'object' && data.questionBtl ? data.questionBtl : {};
+
+    // rowsByStudentId is the primary data source
+    const rowsByStudentId: Record<string, any> = typeof data.rowsByStudentId === 'object' && data.rowsByStudentId ? data.rowsByStudentId : {};
+
+    // Model sheet uses theorySheet (main theory student marks)
+    const theorySheet: Record<string, any> = typeof data.theorySheet === 'object' && data.theorySheet ? data.theorySheet : {};
+    const theoryQBtl = typeof data.theoryQuestionBtl === 'object' && data.theoryQuestionBtl ? data.theoryQuestionBtl : {};
+    const effectiveQBtl = Object.keys(questionBtl).length > 0 ? questionBtl : theoryQBtl;
+    const effectiveRows = Object.keys(rowsByStudentId).length > 0 ? rowsByStudentId : theorySheet;
+
+    const isModel = assessmentKey === 'model';
+    const aval = assessmentKey === 'cia2' ? 'cia2' : 'cia1';
+    const coPair = aval === 'cia2' ? { a: 3, b: 4 } : { a: 1, b: 2 };
+
+    let coMaxA = 0, coMaxB = 0;
+    for (let qi = 0; qi < questions.length; qi++) {
+      const q = questions[qi];
+      // Legacy fallback: last question is split if no other split question exists
+      const hasAnySplit = questions.some((x: any) => { const s = String(x.co??''); return s==='both'||s==='1&2'||s==='3&4'; });
+      const isLast = qi === questions.length - 1;
+      let w = _ciaCoWeights(q.co, coPair);
+      if (!hasAnySplit && isLast && (String(q.key||'').toLowerCase()==='q9'||String(q.label||'').toLowerCase().includes('q9'))) {
+        w = {a: 0.5, b: 0.5};
+      }
+      coMaxA += q.max * w.a;
+      coMaxB += q.max * w.b;
+    }
+
+    const btlMaxMap: Record<number, number> = {};
+    for (const q of questions) {
+      const btlVal = Number((effectiveQBtl as any)[q.key] ?? q.btl);
+      if (btlVal >= 1 && btlVal <= 6) btlMaxMap[btlVal] = (btlMaxMap[btlVal] || 0) + q.max;
+    }
+    const visibleBtls = [1,2,3,4,5,6].filter(n => (btlMaxMap[n] || 0) > 0);
+    const maxTotal = questions.reduce((sum: number, q: any) => sum + (q.max || 0), 0);
+
+    const sheetRows: any[] = Object.entries(effectiveRows).map(([sid, row]: [string, any]) => {
+      const stu = studentMap.get(sid);
+      const rosterStu = rosterStudents.find(s => String(s.id) === sid);
+      const regNo = String(row.reg_no || row.registerNo || stu?.reg_no || rosterStu?.reg_no || `(${sid})`);
+      const name = stu?.name || rosterStu?.name || String(row.name || '—');
+      // theorySheet rows use row.q, model rows may also use row.q; lab total under row.lab
+      const qData = row.q || {};
+      return { studentId: sid, reg_no: regNo, name, absent: Boolean(row.absent), q: qData };
+    });
+    sheetRows.sort((a: any, b: any) => a.reg_no.localeCompare(b.reg_no));
+
+    return {
+      termLabel: data.termLabel || '',
+      batchLabel: data.batchLabel || '',
+      assessmentLabel: isModel ? 'MODEL' : (aval === 'cia2' ? 'CIA 2' : 'CIA 1'),
+      questions,
+      questionBtl: effectiveQBtl,
+      rows: sheetRows,
+      coPair,
+      maxTotal,
+      coMax: { a: coMaxA, b: coMaxB },
+      btlMax: btlMaxMap,
+      visibleBtls,
+    };
+  };
+
+  // Handler: open the read-only marks modal when a chip is clicked
+  const handleChipClick = async (
+    ta: ObeProgressTeachingAssignment,
+    ex: ObeProgressExam,
+    staffName: string,
+    sectionName: string,
+  ) => {
+    if (!ta.subject_code) return;
+    const label = (ex.label ? String(ex.label) : String(ex.assessment)).trim().toUpperCase();
+    setProgressModal({
+      taId: ta.id,
+      subjectCode: ta.subject_code,
+      subjectName: ta.subject_name || ta.subject_code,
+      assessment: ex.assessment,
+      label,
+      staffName,
+      sectionName,
+      published: ex.published,
+    });
+    setModalLoading(true);
+    setModalRows(null);
+    setModalCiaSheet(null);
+    setModalError(null);
+    setModalMarkCols([]);
+
+    try {
+      const taId = typeof ta.id === 'number' ? ta.id : undefined;
+      const code = ta.subject_code;
+      const akey = ex.assessment.toLowerCase();
+
+      // Fetch roster to get student names/reg_nos (best effort)
+      let rosterStudents: Array<{ id: number; reg_no: string; name: string }> = [];
+      if (taId) {
+        try {
+          const r = await fetchTeachingAssignmentRoster(taId);
+          rosterStudents = r.students || [];
+        } catch {
+          // non-fatal
+        }
+      }
+      const studentMap = new Map(rosterStudents.map((s) => [String(s.id), s]));
+
+      // Helper to build rows from a flat marks record (studentId → value string)
+      const buildFlatRows = (marks: Record<string, string | null>, colName: string) => {
+        const cols = [colName];
+        const rows = Object.entries(marks).map(([sid, val]) => {
+          const stu = studentMap.get(sid);
+          return { student_id: sid, reg_no: stu?.reg_no ?? `(${sid})`, name: stu?.name ?? '—', values: [val ?? '—'] as (string|null)[] };
+        });
+        rows.sort((a, b) => a.reg_no.localeCompare(b.reg_no));
+        return { cols, rows };
+      };
+
+      if (akey === 'cia1' || akey === 'cia2') {
+        const aval: 'cia1' | 'cia2' = akey as 'cia1' | 'cia2';
+        // Try published sheet first for full per-question view
+        let sheetData: any = null;
+        try {
+          const resp = await fetchPublishedCiaSheet(aval, code, taId);
+          sheetData = resp?.data;
+        } catch {
+          // not published yet → try draft
+        }
+        if (!sheetData) {
+          try {
+            const dr = await fetchDraft<any>(aval, code, taId);
+            sheetData = dr?.draft;
+          } catch { /* ignore */ }
+        }
+        const parsed = _parseCiaSheetData(sheetData, aval, studentMap, rosterStudents);
+        if (parsed && parsed.questions.length > 0) {
+          setModalCiaSheet(parsed);
+          setModalRows(null);
+        } else {
+          // absolute fallback: simple total marks
+          const resp = await fetchCiaMarks(aval, code, taId);
+          const rows = (resp.students || []).map((s) => ({
+            student_id: String(s.id), reg_no: s.reg_no || `(${s.id})`, name: s.name || '—',
+            values: [resp.marks[String(s.id)] ?? '—'] as (string|null)[],
+          }));
+          rows.sort((a, b) => a.reg_no.localeCompare(b.reg_no));
+          setModalMarkCols([akey === 'cia2' ? 'CIA 2 Total' : 'CIA 1 Total']);
+          setModalRows(rows);
+          setModalCiaSheet(null);
+        }
+      } else if (akey === 'model') {
+        let sheetData: any = null;
+        try {
+          const resp = await fetchPublishedModelSheet(code, taId);
+          sheetData = resp?.data;
+        } catch { /* ignore */ }
+        if (!sheetData) {
+          try {
+            const dr = await fetchDraft<any>('model', code, taId);
+            sheetData = dr?.draft;
+          } catch { /* ignore */ }
+        }
+        const parsed = _parseCiaSheetData(sheetData, 'model', studentMap, rosterStudents);
+        if (parsed && parsed.questions.length > 0) {
+          setModalCiaSheet(parsed);
+          setModalRows(null);
+        } else {
+          const rows = rosterStudents.map((s) => ({ student_id: String(s.id), reg_no: s.reg_no, name: s.name, values: ['—'] as (string|null)[] }));
+          rows.sort((a, b) => a.reg_no.localeCompare(b.reg_no));
+          setModalMarkCols(['Model Mark']);
+          setModalRows(rows);
+          setModalCiaSheet(null);
+        }
+      } else if (akey === 'ssa1') {
+        const resp = await fetchPublishedSsa1(code, taId);
+        const { cols, rows } = buildFlatRows(resp.marks, 'SSA1 Mark');
+        setModalMarkCols(cols);
+        setModalRows(rows);
+      } else if (akey === 'ssa2') {
+        const resp = await fetchPublishedSsa2(code, taId);
+        const { cols, rows } = buildFlatRows(resp.marks, 'SSA2 Mark');
+        setModalMarkCols(cols);
+        setModalRows(rows);
+      } else if (akey === 'review1') {
+        const resp = await fetchPublishedReview1(code);
+        const { cols, rows } = buildFlatRows(resp.marks, 'Review 1');
+        setModalMarkCols(cols);
+        setModalRows(rows);
+      } else if (akey === 'review2') {
+        const resp = await fetchPublishedReview2(code);
+        const { cols, rows } = buildFlatRows(resp.marks, 'Review 2');
+        setModalMarkCols(cols);
+        setModalRows(rows);
+      } else if (akey === 'formative1' || akey === 'formative2') {
+        const aval: 'formative1' | 'formative2' = akey as 'formative1' | 'formative2';
+        const resp = await fetchPublishedFormative(aval, code, taId);
+        const cols = ['Skill 1', 'Skill 2', 'Att 1', 'Att 2', 'Total'];
+        const rows = Object.entries(resp.marks).map(([sid, m]) => {
+          const stu = studentMap.get(sid);
+          return {
+            student_id: sid,
+            reg_no: stu?.reg_no ?? `(${sid})`,
+            name: stu?.name ?? '—',
+            values: [m?.skill1 ?? '—', m?.skill2 ?? '—', m?.att1 ?? '—', m?.att2 ?? '—', m?.total ?? '—'] as (string|null)[],
+          };
+        });
+        rows.sort((a, b) => a.reg_no.localeCompare(b.reg_no));
+        setModalMarkCols(cols);
+        setModalRows(rows);
+      } else {
+        // Generic fallback: show roster with no marks
+        const rows = rosterStudents.map((s) => ({
+          student_id: String(s.id), reg_no: s.reg_no, name: s.name, values: ['—'] as (string|null)[],
+        }));
+        rows.sort((a, b) => a.reg_no.localeCompare(b.reg_no));
+        setModalMarkCols(['Mark']);
+        setModalRows(rows);
+      }
+    } catch (err: any) {
+      setModalError(String(err?.message || 'Failed to load marks data'));
+      setModalRows([]);
+      setModalCiaSheet(null);
+    } finally {
+      setModalLoading(false);
+    }
+  };
 
   const parsePercent = (s: string) => {
     const n = parseFloat(s.replace(/[^0-9.\-]/g, ''));
@@ -228,6 +608,42 @@ export default function OBEPage(): JSX.Element {
 
   const [examUploadStatus, setExamUploadStatus] = useState<'idle'|'uploading'|'success'|'error'>('idle');
   const [examUploadMessage, setExamUploadMessage] = useState<string | null>(null);
+
+  // Fetch progress when switching to Progress tab (lazy-load)
+  useEffect(() => {
+    if (activeTab !== 'progress') return;
+    if (!canViewProgress) return;
+    if (progressLoading || progressData) return;
+
+    (async () => {
+      try {
+        setProgressLoading(true);
+        setProgressError(null);
+        const res = await fetchWithFallback('/api/obe/progress', {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            ...authHeaders(),
+          },
+        });
+        if (!res.ok) {
+          const txt = await res.text();
+          throw new Error(txt || `Failed to load progress (${res.status})`);
+        }
+        const js = (await res.json()) as ObeProgressResponse;
+        setProgressData(js);
+        // Default selected section: first section (if any)
+        if (js.sections && js.sections.length > 0) {
+          const first = js.sections[0];
+          if (first && first.id != null) setSelectedSectionId(first.id);
+        }
+      } catch (e: any) {
+        setProgressError(e?.message || 'Failed to load progress');
+      } finally {
+        setProgressLoading(false);
+      }
+    })();
+  }, [activeTab, progressLoading, progressData]);
 
   async function handleExamUploadFile(f: File) {
     setExamUploadStatus('uploading');
@@ -455,6 +871,25 @@ export default function OBEPage(): JSX.Element {
                 >
                   📝 Exam Management
                 </button>
+                {canViewProgress && (
+                  <button
+                    onClick={() => setActiveTab('progress')}
+                    style={{
+                      padding: '10px 24px',
+                      borderRadius: 8,
+                      border: 'none',
+                      background: activeTab === 'progress' ? 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)' : 'transparent',
+                      color: activeTab === 'progress' ? '#fff' : '#64748b',
+                      cursor: 'pointer',
+                      fontWeight: activeTab === 'progress' ? 600 : 500,
+                      fontSize: 15,
+                      transition: 'all 0.2s ease',
+                      boxShadow: activeTab === 'progress' ? '0 2px 8px rgba(22,163,74,0.25)' : 'none'
+                    }}
+                  >
+                    📈 Progress
+                  </button>
+                )}
               </div>
 
               {/* Courses tab content */}
@@ -787,6 +1222,596 @@ export default function OBEPage(): JSX.Element {
                     )}
                   </div>
                 </section>
+              )}
+
+              {/* Progress overview tab */}
+              {activeTab === 'progress' && canViewProgress && (
+                <section aria-label="OBE progress overview" style={{ background: '#f8fafc', padding: 0, borderRadius: 16 }}>
+                  {/* ── Header bar ── */}
+                  <div style={{ background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)', borderRadius: '16px 16px 0 0', padding: '20px 28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+                    <div>
+                      <div style={{ fontSize: 22, fontWeight: 800, color: '#f1f5f9', letterSpacing: '-0.3px' }}>
+                        📊 Section-wise Exam Progress
+                      </div>
+                      <div style={{ fontSize: 14, color: '#94a3b8', marginTop: 4 }}>
+                        {progressData?.role === 'HOD' && progressData.department
+                          ? `HOD view • ${progressData.department.short_name || progressData.department.code || progressData.department.name || ''}`
+                          : progressData?.role === 'ADVISOR'
+                            ? 'Advisor view • Your advised sections'
+                            : 'Faculty view • Your sections'}
+                      </div>
+                    </div>
+                    {progressData?.academic_year?.name && (
+                      <span style={{ padding: '4px 14px', borderRadius: 999, background: 'rgba(255,255,255,0.1)', color: '#cbd5e1', fontSize: 13, fontWeight: 600, backdropFilter: 'blur(8px)' }}>
+                        AY {progressData.academic_year.name}
+                      </span>
+                    )}
+                  </div>
+
+                  <div style={{ padding: '20px 28px 28px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+                    {progressLoading && (
+                      <div style={{ padding: 48, textAlign: 'center', color: '#64748b', fontSize: 15 }}>
+                        <div style={{ fontSize: 28, marginBottom: 10 }}>⏳</div>
+                        Loading progress data…
+                      </div>
+                    )}
+
+                    {progressError && !progressLoading && (
+                      <div style={{ padding: 16, borderRadius: 12, border: '1px solid #fecaca', background: '#fef2f2', color: '#b91c1c', fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: 18 }}>❌</span> {progressError}
+                      </div>
+                    )}
+
+                    {!progressLoading && !progressError && progressData && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+
+                        {/* ── Top: section picker ── */}
+                        <div style={{ borderRadius: 14, border: '1px solid #e5e7eb', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', overflow: 'hidden' }}>
+                          <div style={{ padding: '10px 14px', borderBottom: '1px solid #f1f5f9', background: '#f8fafc', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                            <div style={{ fontSize: 12, fontWeight: 900, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                              Sections ({progressData.sections?.length ?? 0})
+                            </div>
+                            <div style={{ fontSize: 13, color: '#64748b' }}>Select a section to view analysis</div>
+                          </div>
+
+                          {(!progressData.sections || progressData.sections.length === 0) ? (
+                            <div style={{ padding: 18, fontSize: 14, color: '#94a3b8', textAlign: 'center' }}>No sections found</div>
+                          ) : (
+                            <div style={{ padding: 12, overflowX: 'auto' }}>
+                              <div style={{ display: 'inline-flex', gap: 10, alignItems: 'stretch' }}>
+                                {progressData.sections.map((sec) => {
+                                  const sid = sec.id ?? -1;
+                                  const selected = selectedSectionId === sid;
+                                  const secLabel = `${sec.batch?.name ?? ''} ${sec.name ?? ''}`.trim() || sec.name || 'Unnamed section';
+
+                                  const totalPublished = sec.staff.reduce((a, s) =>
+                                    a + s.teaching_assignments.reduce((b, ta) => b + ta.exam_progress.filter((e) => e.published).length, 0), 0);
+                                  const totalExams = sec.staff.reduce((a, s) =>
+                                    a + s.teaching_assignments.reduce((b, ta) => b + ta.exam_progress.length, 0), 0);
+
+                                  return (
+                                    <button
+                                      key={sid}
+                                      onClick={() => setSelectedSectionId(sid)}
+                                      style={{
+                                        textAlign: 'left',
+                                        padding: '12px 14px',
+                                        borderRadius: 14,
+                                        border: selected ? '2px solid #22c55e' : '1px solid #e2e8f0',
+                                        background: selected ? 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)' : '#fff',
+                                        cursor: 'pointer',
+                                        minWidth: 240,
+                                        maxWidth: 320,
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        gap: 6,
+                                        boxShadow: selected ? '0 0 0 3px rgba(34,197,94,0.15)' : '0 1px 2px rgba(0,0,0,0.04)',
+                                        transition: 'all 0.15s ease',
+                                      }}
+                                    >
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                                        <span style={{ fontWeight: 900, lineHeight: 1.25, fontSize: 15, color: '#0f172a' }}>{secLabel}</span>
+                                        {selected && <span style={{ fontSize: 16, flexShrink: 0 }}>✓</span>}
+                                      </div>
+                                      {sec.course?.name && (
+                                        <span style={{ fontSize: 13, color: '#64748b', lineHeight: 1.25 }}>{sec.course.name}</span>
+                                      )}
+                                      {totalExams > 0 ? (
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                          <div style={{ flex: 1, height: 6, borderRadius: 999, background: '#e2e8f0', overflow: 'hidden' }}>
+                                            <div style={{ height: '100%', width: `${(totalPublished / totalExams) * 100}%`, background: 'linear-gradient(90deg, #22c55e, #16a34a)', borderRadius: 999, transition: 'width 0.4s ease' }} />
+                                          </div>
+                                          <span style={{ fontSize: 12, color: '#64748b', fontWeight: 800, whiteSpace: 'nowrap' }}>
+                                            {totalPublished}/{totalExams}
+                                          </span>
+                                        </div>
+                                      ) : (
+                                        <span style={{ fontSize: 12, color: '#94a3b8' }}>No assessments</span>
+                                      )}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* ── Section detail ── */}
+                        <div>
+                          {(() => {
+                            const current = progressData.sections.find((s) => (s.id ?? -1) === (selectedSectionId ?? -1));
+                            if (!current) {
+                              return (
+                                <div style={{ padding: 24, borderRadius: 16, border: '2px dashed #e2e8f0', background: '#fff', color: '#94a3b8', fontSize: 15, textAlign: 'center' }}>
+                                  Select a section above to view analysis
+                                </div>
+                              );
+                            }
+
+                            const secLabel = `${current.batch?.name ?? ''} ${current.name ?? ''}`.trim() || current.name || 'Section';
+                            return (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                                {/* Section header */}
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '14px 18px', borderRadius: 14, background: '#fff', border: '1px solid #e5e7eb', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+                                  <div>
+                                    <div style={{ fontSize: 18, fontWeight: 900, color: '#0f172a' }}>{secLabel}</div>
+                                    {current.course?.name && (
+                                      <div style={{ fontSize: 14, color: '#64748b', marginTop: 2 }}>{current.course.name}</div>
+                                    )}
+                                  </div>
+                                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                    {(current.department?.short_name || current.department?.code) && (
+                                      <span style={{ padding: '3px 10px', borderRadius: 999, background: '#f1f5f9', color: '#475569', fontSize: 13, fontWeight: 700 }}>
+                                        {current.department.short_name || current.department.code}
+                                      </span>
+                                    )}
+                                    <span style={{ padding: '3px 10px', borderRadius: 999, background: '#eff6ff', color: '#2563eb', fontSize: 13, fontWeight: 700 }}>
+                                      {current.staff.length} staff
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {current.staff.length === 0 && (
+                                  <div style={{ padding: 20, borderRadius: 12, border: '1px dashed #e2e8f0', background: '#fff', fontSize: 13, color: '#94a3b8', textAlign: 'center' }}>
+                                    No teaching assignments found for this section.
+                                  </div>
+                                )}
+
+                                {/* Progress analysis — Table view */}
+                                {current.staff.length > 0 && (
+                                  (() => {
+                                    const tableRows: Array<{ st: ObeProgressStaff; ta: ObeProgressTeachingAssignment; rowKey: string }> = [];
+                                    for (const st of current.staff) {
+                                      for (let idxTa = 0; idxTa < st.teaching_assignments.length; idxTa++) {
+                                        const ta = st.teaching_assignments[idxTa];
+                                        tableRows.push({ st, ta, rowKey: `${st.id}-${ta.id ?? idxTa}` });
+                                      }
+                                    }
+                                    if (tableRows.length === 0) return null;
+
+                                    const assessmentKeySet = new Set<string>();
+                                    const assessmentLabel = new Map<string, string>();
+                                    for (const r of tableRows) {
+                                      for (const ex of r.ta.exam_progress || []) {
+                                        const key = String(ex.assessment || '').trim().toLowerCase();
+                                        if (!key) continue;
+                                        assessmentKeySet.add(key);
+                                        const lbl = (ex.label ? String(ex.label) : String(ex.assessment)).trim().toUpperCase();
+                                        if (lbl && !assessmentLabel.has(key)) assessmentLabel.set(key, lbl);
+                                      }
+                                    }
+
+                                    const ORDER = ['cia1', 'cia2', 'model', 'ssa1', 'ssa2', 'review1', 'review2', 'formative1', 'formative2'];
+                                    const assessmentKeys = Array.from(assessmentKeySet);
+                                    assessmentKeys.sort((a, b) => {
+                                      const ai = ORDER.indexOf(a);
+                                      const bi = ORDER.indexOf(b);
+                                      const aKnown = ai !== -1;
+                                      const bKnown = bi !== -1;
+                                      if (aKnown && bKnown) return ai - bi;
+                                      if (aKnown && !bKnown) return -1;
+                                      if (!aKnown && bKnown) return 1;
+                                      return a.localeCompare(b);
+                                    });
+
+                                    const thStyle: React.CSSProperties = {
+                                      position: 'sticky',
+                                      top: 0,
+                                      zIndex: 2,
+                                      padding: '10px 12px',
+                                      borderBottom: '1px solid #e2e8f0',
+                                      background: '#f8fafc',
+                                      fontSize: 12,
+                                      fontWeight: 800,
+                                      color: '#334155',
+                                      textTransform: 'uppercase',
+                                      letterSpacing: '0.06em',
+                                      whiteSpace: 'nowrap',
+                                    };
+
+                                    const tdBase: React.CSSProperties = {
+                                      padding: '10px 12px',
+                                      borderBottom: '1px solid #f1f5f9',
+                                      fontSize: 14,
+                                      color: '#0f172a',
+                                      verticalAlign: 'middle',
+                                      background: '#fff',
+                                    };
+
+                                    return (
+                                      <div style={{ borderRadius: 14, border: '1px solid #e5e7eb', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', overflow: 'hidden' }}>
+                                        <div style={{ padding: '10px 14px', borderBottom: '1px solid #f1f5f9', background: '#f8fafc', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                                          <div style={{ fontWeight: 800, color: '#0f172a', fontSize: 13 }}>Analysis (Table View)</div>
+                                          <div style={{ fontSize: 12, color: '#64748b' }}>Click any cell to open marks</div>
+                                        </div>
+
+                                        <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 520 }}>
+                                          <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, minWidth: 820 }}>
+                                            <thead>
+                                              <tr>
+                                                <th style={{ ...thStyle, left: 0, zIndex: 3 }}>Staff</th>
+                                                <th style={thStyle}>Course</th>
+                                                {assessmentKeys.map((k) => (
+                                                  <th key={k} style={{ ...thStyle, textAlign: 'center' }}>
+                                                    {assessmentLabel.get(k) || k.toUpperCase()}
+                                                  </th>
+                                                ))}
+                                              </tr>
+                                            </thead>
+                                            <tbody>
+                                              {tableRows.map((r, idxRow) => {
+                                                const st = r.st;
+                                                const ta = r.ta;
+                                                const staffColors = ['#6366f1', '#0ea5e9', '#f59e0b', '#10b981', '#f43f5e', '#8b5cf6'];
+                                                const staffColor = staffColors[Math.abs(st.id % staffColors.length)];
+                                                const baseBg = idxRow % 2 === 0 ? '#fff' : '#fcfdff';
+                                                const examByKey = new Map<string, ObeProgressExam>();
+                                                for (const ex of ta.exam_progress || []) {
+                                                  const key = String(ex.assessment || '').trim().toLowerCase();
+                                                  if (key) examByKey.set(key, ex);
+                                                }
+
+                                                return (
+                                                  <tr key={r.rowKey}>
+                                                    <td style={{ ...tdBase, background: baseBg, whiteSpace: 'nowrap', maxWidth: 220 }}>
+                                                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                                        <span style={{ width: 10, height: 10, borderRadius: 999, background: staffColor, flexShrink: 0, boxShadow: `0 0 0 3px ${staffColor}22` }} />
+                                                        <span style={{ fontWeight: 700, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis' }}>{st.name}</span>
+                                                      </div>
+                                                    </td>
+
+                                                    <td style={{ ...tdBase, background: baseBg, minWidth: 260 }}>
+                                                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                                        <span style={{ fontWeight: 800, color: '#0f172a', lineHeight: 1.2 }}>{ta.subject_name || 'Course'}</span>
+                                                        <span style={{ fontSize: 11, color: '#3b82f6', fontWeight: 700 }}>{ta.subject_code || '—'}</span>
+                                                      </div>
+                                                    </td>
+
+                                                    {assessmentKeys.map((k) => {
+                                                      const ex = examByKey.get(k);
+                                                      if (!ex) {
+                                                        return (
+                                                          <td key={k} style={{ ...tdBase, background: baseBg, textAlign: 'center', color: '#cbd5e1' }}>—</td>
+                                                        );
+                                                      }
+
+                                                      const pct = ex.total_students > 0 ? (ex.rows_filled / ex.total_students) * 100 : 0;
+                                                      const isPublished = Boolean(ex.published);
+                                                      const publishedIncomplete = Boolean(isPublished && ex.total_students > 0 && ex.rows_filled < ex.total_students);
+                                                      const label = (ex.label ? String(ex.label) : String(ex.assessment)).trim().toUpperCase();
+                                                      const cellBorder = publishedIncomplete ? '#f59e0b' : (isPublished ? '#4ade80' : '#bfdbfe');
+                                                      const cellBg = publishedIncomplete
+                                                        ? 'linear-gradient(135deg, #fffbeb, #fef3c7)'
+                                                        : (isPublished ? 'linear-gradient(135deg, #f0fdf4, #dcfce7)' : 'linear-gradient(135deg, #eff6ff, #dbeafe)');
+                                                      const pctColor = publishedIncomplete ? '#b45309' : (isPublished ? '#16a34a' : '#2563eb');
+
+                                                      return (
+                                                        <td key={k} style={{ ...tdBase, background: baseBg, textAlign: 'center', padding: 8 }}>
+                                                          <button
+                                                            title={publishedIncomplete ? `Published but incomplete • ${label} marks` : `View ${label} marks table`}
+                                                            onClick={() => handleChipClick(ta, ex, st.name, secLabel)}
+                                                            style={{
+                                                              width: '100%',
+                                                              minWidth: 92,
+                                                              padding: '8px 10px',
+                                                              borderRadius: 12,
+                                                              border: `1.5px solid ${cellBorder}`,
+                                                              background: cellBg,
+                                                              cursor: 'pointer',
+                                                              boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+                                                              transition: 'transform 0.12s ease, box-shadow 0.12s ease',
+                                                            }}
+                                                            onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = '0 6px 16px rgba(0,0,0,0.12)'; }}
+                                                            onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.06)'; }}
+                                                          >
+                                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                                                              <span style={{ fontSize: 10, fontWeight: 900, color: isPublished ? '#15803d' : '#1d4ed8', letterSpacing: '0.04em' }}>{label}</span>
+                                                              <span
+                                                                style={{
+                                                                  fontSize: 9,
+                                                                  padding: '1px 6px',
+                                                                  borderRadius: 999,
+                                                                  background: publishedIncomplete ? '#f59e0b' : (isPublished ? '#22c55e' : '#93c5fd'),
+                                                                  color: publishedIncomplete ? '#111827' : (isPublished ? '#fff' : '#1e3a8a'),
+                                                                  fontWeight: 900,
+                                                                }}
+                                                              >
+                                                                {publishedIncomplete ? 'P!' : (isPublished ? 'P' : 'D')}
+                                                              </span>
+                                                            </div>
+                                                            <div style={{ fontSize: 15, fontWeight: 900, color: pctColor, lineHeight: 1.1 }}>{pct.toFixed(0)}%</div>
+                                                            <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>{ex.rows_filled}/{ex.total_students}</div>
+                                                            {publishedIncomplete && (
+                                                              <div style={{ marginTop: 2, fontSize: 11, fontWeight: 800, color: '#b45309' }}>Published • not complete</div>
+                                                            )}
+                                                          </button>
+                                                        </td>
+                                                      );
+                                                    })}
+                                                  </tr>
+                                                );
+                                              })}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      </div>
+                                    );
+                                  })()
+                                )}
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </section>
+              )}
+
+              {/* ── Progress: Read-only Marks Table Modal ── */}
+              {progressModal && (
+                <div
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label={`${progressModal.label} marks for ${progressModal.subjectName}`}
+                  onClick={() => setProgressModal(null)}
+                  style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.65)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999, padding: '20px 16px' }}
+                >
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ width: 'min(780px,100%)', maxHeight: '90vh', background: '#fff', borderRadius: 20, boxShadow: '0 24px 60px rgba(0,0,0,0.32)', overflow: 'hidden', display: 'flex', flexDirection: 'column', border: '1px solid #e2e8f0' }}
+                  >
+                    {/* Modal header */}
+                    <div style={{ padding: '18px 24px', borderBottom: '1px solid #f1f5f9', background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexShrink: 0 }}>
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                          <span style={{ fontSize: 18, fontWeight: 800, color: '#f1f5f9' }}>{progressModal.label}</span>
+                          <span style={{ padding: '2px 10px', borderRadius: 999, fontSize: 11, fontWeight: 700, background: progressModal.published ? '#22c55e' : '#60a5fa', color: progressModal.published ? '#fff' : '#1e3a8a' }}>
+                            {progressModal.published ? '✓ Published' : 'Draft'}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 14, color: '#94a3b8', lineHeight: 1.5 }}>
+                          <span style={{ color: '#cbd5e1', fontWeight: 600 }}>{progressModal.subjectName}</span>
+                          {progressModal.subjectCode !== progressModal.subjectName && (
+                            <span style={{ color: '#64748b' }}> ({progressModal.subjectCode})</span>
+                          )}
+                          {' · '}
+                          <span>{progressModal.staffName}</span>
+                          {' · '}
+                          <span>{progressModal.sectionName}</span>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setProgressModal(null)}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = '#334155'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.08)'; }}
+                        style={{ width: 36, height: 36, borderRadius: 10, border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(255,255,255,0.08)', color: '#94a3b8', cursor: 'pointer', fontSize: 16, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'background 0.15s' }}
+                        aria-label="Close"
+                      >
+                        ✕
+                      </button>
+                    </div>
+
+                    {/* Modal body */}
+                    <div style={{ flex: 1, overflowY: 'auto', padding: 0 }}>
+                      {modalLoading && (
+                        <div style={{ padding: 48, textAlign: 'center', color: '#64748b', fontSize: 14 }}>
+                          <div style={{ fontSize: 28, marginBottom: 10 }}>⏳</div>
+                          Loading marks…
+                        </div>
+                      )}
+
+                      {!modalLoading && modalError && (
+                        <div style={{ margin: 24, padding: 16, borderRadius: 12, border: '1px solid #fecaca', background: '#fef2f2', color: '#b91c1c', fontSize: 13 }}>
+                          <strong>Error:</strong> {modalError}
+                        </div>
+                      )}
+
+                      {/* CIA1 / CIA2 / Model — full per-question table with CO & BTL columns */}
+                      {!modalLoading && !modalError && modalCiaSheet !== null && (() => {
+                        const cs = modalCiaSheet;
+                        const thStyle: React.CSSProperties = { padding: '6px 8px', border: '1px solid #cbd5e1', background: '#1e293b', color: '#f1f5f9', fontWeight: 700, fontSize: 11, textAlign: 'center', whiteSpace: 'nowrap' };
+                        const tdStyle: React.CSSProperties = { padding: '5px 8px', border: '1px solid #e2e8f0', fontSize: 12, textAlign: 'center', color: '#0f172a' };
+                        const totalCols = 4 + cs.questions.length + 1 + 4 + cs.visibleBtls.length * 2;
+                        return (
+                          <div style={{ overflowX: 'auto', padding: 16 }}>
+                            <table style={{ borderCollapse: 'collapse', fontSize: 12, width: 'max-content', minWidth: '100%' }}>
+                              <thead>
+                                {/* Row 1: title */}
+                                <tr>
+                                  <th colSpan={totalCols} style={{ ...thStyle, background: '#0f172a', fontSize: 13, padding: '8px 12px', textAlign: 'center' }}>
+                                    {cs.termLabel} &nbsp;|&nbsp; {cs.batchLabel} &nbsp;|&nbsp; {cs.assessmentLabel}
+                                  </th>
+                                </tr>
+                                {/* Row 2: group headers */}
+                                <tr>
+                                  <th rowSpan={3} style={thStyle}>S.No</th>
+                                  <th rowSpan={3} style={thStyle}>R.No</th>
+                                  <th rowSpan={3} style={{ ...thStyle, minWidth: 130 }}>Name of Students</th>
+                                  <th rowSpan={3} style={thStyle}>AB</th>
+                                  <th colSpan={cs.questions.length} style={{ ...thStyle, background: '#1d4ed8' }}>QUESTIONS</th>
+                                  <th rowSpan={3} style={thStyle}>Total</th>
+                                  <th colSpan={4} style={{ ...thStyle, background: '#065f46' }}>CO ATTAINMENT</th>
+                                  {cs.visibleBtls.length > 0 && (
+                                    <th colSpan={cs.visibleBtls.length * 2} style={{ ...thStyle, background: '#7c2d12' }}>BTL ATTAINMENT</th>
+                                  )}
+                                </tr>
+                                {/* Row 3: Q labels + CO-a/CO-b labels + BTL-n labels */}
+                                <tr>
+                                  {cs.questions.map(q => (
+                                    <th key={q.key} style={{ ...thStyle, background: '#1e40af' }}>{q.label}</th>
+                                  ))}
+                                  <th colSpan={2} style={{ ...thStyle, background: '#047857' }}>CO-{cs.coPair.a}</th>
+                                  <th colSpan={2} style={{ ...thStyle, background: '#047857' }}>CO-{cs.coPair.b}</th>
+                                  {cs.visibleBtls.map(n => (
+                                    <th key={n} colSpan={2} style={{ ...thStyle, background: '#9a3412' }}>BTL-{n}</th>
+                                  ))}
+                                </tr>
+                                {/* Row 4: max marks */}
+                                <tr>
+                                  {cs.questions.map(q => (
+                                    <th key={q.key} style={{ ...thStyle, background: '#334155', color: '#fbbf24' }}>{q.max}</th>
+                                  ))}
+                                  <th style={{ ...thStyle, background: '#334155', color: '#fbbf24' }}>{cs.coMax.a}</th>
+                                  <th style={{ ...thStyle, background: '#334155', color: '#94a3b8' }}>%</th>
+                                  <th style={{ ...thStyle, background: '#334155', color: '#fbbf24' }}>{cs.coMax.b}</th>
+                                  <th style={{ ...thStyle, background: '#334155', color: '#94a3b8' }}>%</th>
+                                  {cs.visibleBtls.map(n => (
+                                    <React.Fragment key={n}>
+                                      <th style={{ ...thStyle, background: '#334155', color: '#fbbf24' }}>{cs.btlMax[n] ?? 0}</th>
+                                      <th style={{ ...thStyle, background: '#334155', color: '#94a3b8' }}>%</th>
+                                    </React.Fragment>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {/* BTL row */}
+                                <tr style={{ background: '#fef9c3' }}>
+                                  <td colSpan={3} style={{ ...tdStyle, background: '#fef9c3' }} />
+                                  <td style={{ ...tdStyle, fontWeight: 700, background: '#fef9c3', color: '#92400e' }}>BTL</td>
+                                  {cs.questions.map(q => (
+                                    <td key={q.key} style={{ ...tdStyle, fontWeight: 700, background: '#fef9c3', color: '#b45309' }}>
+                                      {cs.questionBtl[q.key] ?? q.btl}
+                                    </td>
+                                  ))}
+                                  <td colSpan={1 + 4 + cs.visibleBtls.length * 2} style={{ ...tdStyle, background: '#fef9c3' }} />
+                                </tr>
+                                {/* Student rows */}
+                                {cs.rows.map((row, idx) => {
+                                  let total = 0, coA = 0, coB = 0;
+                                  const btlTotals: Record<number, number> = {};
+                                  cs.questions.forEach(q => {
+                                    const mark = row.absent ? 0 : Number(row.q[q.key] || 0);
+                                    total += mark;
+                                    const w = _ciaCoWeights(q.co, cs.coPair);
+                                    coA += mark * w.a;
+                                    coB += mark * w.b;
+                                    const bv = Number(cs.questionBtl[q.key] ?? q.btl);
+                                    btlTotals[bv] = (btlTotals[bv] || 0) + mark;
+                                  });
+                                  const rowBg = idx % 2 === 0 ? '#fff' : '#f8fafc';
+                                  return (
+                                    <tr key={row.studentId} style={{ background: rowBg }}>
+                                      <td style={{ ...tdStyle, background: rowBg, color: '#94a3b8', fontWeight: 600 }}>{idx + 1}</td>
+                                      <td style={{ ...tdStyle, background: rowBg, color: '#3b82f6', fontWeight: 600, whiteSpace: 'nowrap' }}>{row.reg_no}</td>
+                                      <td style={{ ...tdStyle, background: rowBg, textAlign: 'left' }}>{row.name}</td>
+                                      <td style={{ ...tdStyle, background: rowBg, color: '#dc2626', fontWeight: 700 }}>{row.absent ? '✗' : ''}</td>
+                                      {cs.questions.map(q => (
+                                        <td key={q.key} style={{ ...tdStyle, background: rowBg, color: row.absent ? '#94a3b8' : '#0f172a' }}>
+                                          {row.absent ? '—' : (row.q[q.key] !== '' && row.q[q.key] != null ? row.q[q.key] : '—')}
+                                        </td>
+                                      ))}
+                                      <td style={{ ...tdStyle, background: rowBg, fontWeight: 700, color: '#0f172a' }}>
+                                        {row.absent ? 0 : total}
+                                      </td>
+                                      <td style={{ ...tdStyle, background: rowBg }}>{Math.round(coA)}</td>
+                                      <td style={{ ...tdStyle, background: rowBg, color: '#047857' }}>
+                                        {cs.coMax.a > 0 ? `${((coA / cs.coMax.a) * 100).toFixed(0)}%` : '—'}
+                                      </td>
+                                      <td style={{ ...tdStyle, background: rowBg }}>{Math.round(coB)}</td>
+                                      <td style={{ ...tdStyle, background: rowBg, color: '#047857' }}>
+                                        {cs.coMax.b > 0 ? `${((coB / cs.coMax.b) * 100).toFixed(0)}%` : '—'}
+                                      </td>
+                                      {cs.visibleBtls.map(n => (
+                                        <React.Fragment key={n}>
+                                          <td style={{ ...tdStyle, background: rowBg }}>{btlTotals[n] || 0}</td>
+                                          <td style={{ ...tdStyle, background: rowBg, color: '#9a3412' }}>
+                                            {(cs.btlMax[n] ?? 0) > 0 ? `${(((btlTotals[n] || 0) / cs.btlMax[n]) * 100).toFixed(0)}%` : '—'}
+                                          </td>
+                                        </React.Fragment>
+                                      ))}
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Flat marks table for SSA / Formative / Review etc. */}
+                      {!modalLoading && !modalError && modalCiaSheet === null && modalRows !== null && (
+                        <>
+                          {modalRows.length === 0 ? (
+                            <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8', fontSize: 14 }}>
+                              No mark data found for this assessment.
+                            </div>
+                          ) : (
+                            <div style={{ overflowX: 'auto' }}>
+                              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                                <thead>
+                                  <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e5e7eb' }}>
+                                    <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 700, color: '#475569', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap', width: 44 }}>S.No</th>
+                                    <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 700, color: '#475569', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>Reg No</th>
+                                    <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 700, color: '#475569', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Student Name</th>
+                                    {modalMarkCols.map((col) => (
+                                      <th key={col} style={{ padding: '10px 16px', textAlign: 'center', fontWeight: 700, color: '#475569', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>{col}</th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {modalRows.map((row, idx) => (
+                                    <tr
+                                      key={row.student_id}
+                                      style={{ borderBottom: '1px solid #f1f5f9', background: idx % 2 === 0 ? '#fff' : '#fafbff' }}
+                                    >
+                                      <td style={{ padding: '9px 16px', color: '#94a3b8', fontWeight: 600, fontSize: 12 }}>{idx + 1}</td>
+                                      <td style={{ padding: '9px 16px', color: '#3b82f6', fontWeight: 600, whiteSpace: 'nowrap' }}>{row.reg_no}</td>
+                                      <td style={{ padding: '9px 16px', color: '#0f172a' }}>{row.name}</td>
+                                      {row.values.map((v, vi) => (
+                                        <td key={vi} style={{ padding: '9px 16px', textAlign: 'center', fontWeight: 600, color: v === '—' || v == null ? '#cbd5e1' : '#0f172a' }}>
+                                          {v ?? '—'}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+
+                    {/* Footer */}
+                    <div style={{ padding: '12px 24px', borderTop: '1px solid #f1f5f9', background: '#f8fafc', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+                      <span style={{ fontSize: 12, color: '#94a3b8' }}>
+                        {modalCiaSheet !== null
+                          ? `${modalCiaSheet.rows.length} student${modalCiaSheet.rows.length !== 1 ? 's' : ''}`
+                          : modalRows !== null
+                            ? `${modalRows.length} student${modalRows.length !== 1 ? 's' : ''}`
+                            : ''}
+                        &nbsp;•&nbsp; Read-only view
+                      </span>
+                      <button
+                        onClick={() => setProgressModal(null)}
+                        style={{ padding: '7px 20px', borderRadius: 8, border: '1px solid #e2e8f0', background: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: 13, color: '#334155' }}
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </div>
+                </div>
               )}
 
               {/* Question Import Wizard Modal */}

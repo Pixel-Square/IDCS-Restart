@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ view_name }}.{{ column_name }} - Column</title>
+  </head>
+  <body>
+    {% include 'powerbi_portal/_header.html' %}
+    
+    <div class="container">
+      <div class="card">
+        <div class="card-header">
+          <h1>{{ view_name }}.{{ column_name }}</h1>
+          <div style="display:flex;gap:10px">
+            <a class="btn btn-small" href="/powerbi/components/{{ view_name }}/">← Back</a>
+            <a class="btn btn-small btn-secondary" href="/powerbi/dashboard/">Dashboard</a>
+          </div>
+        </div>
+        
+        <div class="muted" style="margin-bottom:20px">Structure and sample values</div>
+        
+        <div style="margin-bottom:20px;padding:16px;background:rgba(245,197,24,0.07);border-left:3px solid #F5C518;border-radius:10px;border:1px solid rgba(245,197,24,0.2)">
+          <div class="muted" style="margin-bottom:8px;font-weight:600;color:#475569">Example SQL</div>
+          <code style="font-family:monospace">SELECT {{ column_name }} FROM {{ view_name }} LIMIT 5;</code>
+        </div>
+        
+        <h3>Sample Values</h3>
+        <table style="margin-top:12px">
+          <thead>
+            <tr>
+              {% for c in preview_cols %}<th>{{ c }}</th>{% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in preview_rows %}
+              <tr>
+                {% for cell in r %}<td>{{ cell }}</td>{% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </body>
+</html>

@@ -1,17 +1,6 @@
-function apiBase() {
-  const fromEnv = import.meta.env.VITE_API_BASE
-  if (fromEnv) return String(fromEnv).replace(/\/+$/, '')
+import { getApiBase } from './apiBase'
 
-  if (typeof window !== 'undefined' && window.location?.origin) {
-    const host = String(window.location.hostname || '').trim().toLowerCase()
-    if (host === 'localhost' || host === '127.0.0.1') return 'http://localhost:8000'
-    return String(window.location.origin).replace(/\/+$/, '')
-  }
-
-  return 'https://db.krgi.co.in'
-}
-
-const API_BASE = apiBase()
+const API_BASE = getApiBase()
 
 let isRefreshing = false
 let refreshPromise: Promise<string> | null = null
@@ -74,7 +63,7 @@ export async function fetchWithAuth(input: RequestInfo | URL, init: RequestInit 
   let finalInput: RequestInfo | URL = input
   try {
     if (typeof input === 'string' && input.startsWith('/api')) {
-      finalInput = `${apiBase()}${input}`
+      finalInput = `${getApiBase()}${input}`
     }
   } catch (e) {
     // ignore if import.meta not available in some runtimes

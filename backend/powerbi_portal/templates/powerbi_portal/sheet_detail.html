@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+  {% load powerbi_extras %}
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ sheet.name }} - Sheet</title>
+    <style>
+      .scroll{overflow:auto;max-height:60vh;border:1px solid #E2E8F0;border-radius:10px;background:#FAFAFA}
+      details{border:1px solid #E2E8F0;border-radius:10px;padding:14px 16px;background:#fff;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
+      details[open]{border-color:rgba(245,197,24,0.4);box-shadow:0 2px 8px rgba(245,197,24,0.1)}
+      summary{cursor:pointer;font-weight:600;color:#1E293B;font-size:14px;list-style:none;display:flex;align-items:center;gap:8px}
+      summary::before{content:'▶';font-size:10px;color:#F5C518;transition:transform 0.2s;display:inline-block}
+      details[open] summary::before{transform:rotate(90deg)}
+      .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px;margin-top:12px}
+      .colrow{display:flex;justify-content:space-between;align-items:center;gap:10px;border-top:1px solid #F1F5F9;padding-top:8px;margin-top:8px}
+      .column-item{
+        display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 14px;
+        background:#fff;border:1px solid #E2E8F0;border-radius:10px;
+        border-left:3px solid #F5C518;box-shadow:0 1px 3px rgba(0,0,0,0.04);
+        transition:box-shadow 0.15s
+      }
+      .column-item:hover{box-shadow:0 3px 10px rgba(0,0,0,0.08)}
+      .column-actions{display:flex;gap:6px;flex-wrap:wrap}
+      .room-select-item{
+        padding:12px 14px;background:#fff;border:1.5px solid #E2E8F0;
+        border-radius:8px;cursor:pointer;transition:all 0.15s;margin-bottom:8px;
+        display:flex;align-items:center;gap:10px
+      }
+      .room-select-item:hover{border-color:#F5C518;background:rgba(245,197,24,0.04)}
+      .room-select-item input[type="radio"]{margin:0;accent-color:#F5C518}
+    </style>
+  </head>
+  <body>
+    {% include 'powerbi_portal/_header.html' %}
+    {% include 'powerbi_portal/_modal.html' %}
+    
+    <div class="container container-full">
+      <div class="card">
+        <div class="card-header">
+          <h1>📋 {{ sheet.name }}</h1>
+          <div style="display:flex;gap:10px">
+            <a class="btn btn-small" href="/powerbi/sheets/">← Back</a>
+            <a class="btn btn-small btn-secondary" href="/powerbi/dashboard/">Dashboard</a>
+          </div>
+        </div>
+        
+        <div class="muted" style="margin-bottom:20px">Live data from DB views (read-only)</div>
+        
+        <div style="margin-bottom:20px">
+          <h3>Selected Columns ({{ cols_meta|length }})</h3>
+          {% if cols_meta %}
+            <div style="margin-top:12px;display:grid;gap:10px;">
+              {% for c in cols_meta %}
+                <div class="column-item">
+        <div class="muted" style="min-width:240px;font-weight:600;flex:0 0 auto;color:#475569">{{ c.source_view }}.{{ c.source_column }}</div>
+                  
+                  <form method="post" action="/powerbi/sheets/{{ sheet.id }}/rename-column/" style="display:flex;gap:6px;align-items:center;flex:1;min-width:250px">
+                    {% csrf_token %}
+                    <input type="hidden" name="col_id" value="{{ c.id }}" />
+                    <input name="header" value="{{ c.header_label }}" placeholder="Header name" style="flex:1;min-width:180px" oninput="liveUpdateHeader({{ c.id }}, this.value)" />
+                    <button class="btn btn-small" type="submit">💾</button>
+                  </form>
+                  
+                  <div class="column-actions">
+                    <form method="post" action="/powerbi/sheets/{{ sheet.id }}/delete-column/" style="display:inline" onsubmit="return confirm('Delete this column?')">
+                      {% csrf_token %}
+                      <input type="hidden" name="col_id" value="{{ c.id }}" />
+                      <button class="btn btn-small btn-danger" type="submit">🗑️</button>
+                    </form>
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+          {% else %}
+            <div class="muted" style="margin-top:8px;font-style:italic">No columns selected yet. Add columns from components below.</div>
+          {% endif %}
+        </div>
+
+    <div class="card" style="margin-bottom:12px;">
+      <details>
+        <summary>Add columns</summary>
+        <div class="muted" style="margin-top:8px;">Choose a component view, then add a column. (A column is only addable if it can be joined safely to the base view.)</div>
+        <div class="cols">
+          {% for v in available_views_with_columns %}
+            <details>
+              <summary>{{ v.name }}</summary>
+              {% for col in v.columns %}
+                <div class="colrow">
+                  <div>{{ col }}</div>
+                  <div class="row" style="gap:6px;">
+                    <a class="btn" href="/powerbi/components/{{ v.name }}/{{ col }}/">View</a>
+                    <form method="post" action="/powerbi/sheets/{{ sheet.id }}/add-column/" style="display:inline;">
+                      {% csrf_token %}
+                      <input type="hidden" name="view" value="{{ v.name }}" />
+                      <input type="hidden" name="column" value="{{ col }}" />
+                      <input type="hidden" name="header" value="{{ col }}" />
+                      <button class="btn" type="submit">Add</button>
+                    </form>
+                  </div>
+                </div>
+              {% endfor %}
+            </details>
+          {% endfor %}
+        </div>
+      </details>
+    </div>
+
+    <div class="card" style="margin-bottom:12px;">
+      <form method="get" class="row">
+        <label class="muted">Limit</label>
+        <input name="limit" type="number" min="0" value="{{ limit|default_if_none:'' }}" placeholder="0 = all" />
+        <button class="btn" type="submit">Reload</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:48px;min-width:48px;text-align:center">#</th>
+              {% for c in cols %}
+                <th>
+                  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+                    {% with cid=push_colid_by_header|get_item:c %}
+                      {% if cid %}
+                        <span id="colHeaderLabel_{{ cid }}">{{ c }}</span>
+                      {% else %}
+                        <span>{{ c }}</span>
+                      {% endif %}
+                    {% endwith %}
+                    {% with cid=push_colid_by_header|get_item:c %}
+                      {% if cid %}
+                        <button class="btn btn-icon btn-ghost btn-small" type="button" title="Push this column" onclick="pushFromHeader({{ cid }})">⤴️</button>
+                      {% endif %}
+                    {% endwith %}
+                  </div>
+                </th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in rows %}
+              <tr>
+                <td style="text-align:center;color:#94A3B8;font-size:12px">{{ forloop.counter }}</td>
+                {% for cell in r %}
+                  <td>{% if cell is None or cell == '' %}-{% else %}{{ cell }}{% endif %}</td>
+                {% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if not rows %}
+        <div class="muted" style="margin-top:10px;">No rows returned.</div>
+      {% endif %}
+    </div>
+    
+    <!-- Push Column to Room Modal -->
+    <div id="pushColumnModal" class="modal-overlay">
+      <div class="modal-content" style="max-width:600px">
+        <div class="modal-header">
+          <h2 class="modal-title">📤 Push Column to Room</h2>
+          <button class="modal-close" onclick="closeModal('pushColumnModal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="muted" style="margin-bottom:16px">
+            Pushing column: <strong style="color:#1E293B" id="pushingColumnName"></strong>
+          </div>
+          <div class="muted" style="margin:-6px 0 16px">
+            Note: the column header is copied (snapshot) at push time. The data stays live. If you change the header in this sheet later, it won’t affect the room unless you push again.
+          </div>
+          
+          <form id="pushColumnForm" method="post" action="/powerbi/sheets/{{ sheet.id }}/push-column/">
+            {% csrf_token %}
+            <input type="hidden" name="col_id" id="pushColumnId" value="" />
+            
+            <div class="form-row">
+              <label>Select Room</label>
+              {% if user_rooms %}
+                <select name="room_id" id="pushRoomId" required onchange="updateRoomSheetOptions()">
+                  <option value="" selected disabled>Choose a room…</option>
+                  {% for room in user_rooms %}
+                    <option value="{{ room.id }}">{{ room.name }}</option>
+                  {% endfor %}
+                </select>
+              {% else %}
+                <div class="muted" style="font-style:italic;padding:14px;background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;color:#991B1B">
+                  You are not a member of any rooms. Create or join a room first.
+                </div>
+              {% endif %}
+            </div>
+
+            {% if user_rooms %}
+              <div class="form-row">
+                <label>Select Room Sheet</label>
+                <select name="room_sheet_id" id="pushRoomSheetId">
+                  <option value="0" selected>Auto (create/use “{{ sheet.name }}”)</option>
+                </select>
+                <div class="muted" style="margin-top:6px">Leader can create/delete room sheets inside the Room.</div>
+              </div>
+            {% endif %}
+          </form>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal('pushColumnModal')">Cancel</button>
+          {% if user_rooms %}
+            <button class="btn" onclick="document.getElementById('pushColumnForm').submit()">📤 Push to Room</button>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    
+    <script>
+      function liveUpdateHeader(colId, nextLabel) {
+        try {
+          const el = document.getElementById('colHeaderLabel_' + String(colId));
+          if (!el) return;
+          el.textContent = String(nextLabel || '');
+        } catch {}
+      }
+
+      function pushFromHeader(colId) {
+        let label = '';
+        try {
+          const el = document.getElementById('colHeaderLabel_' + String(colId));
+          label = el ? String(el.textContent || '') : '';
+        } catch {}
+        openPushColumnModal(colId, label || '');
+      }
+
+      const ROOM_SHEETS = {
+        {% for room in user_rooms %}
+          "{{ room.id }}": [
+            {% for rs in room.room_sheets.all %}
+              { id: {{ rs.id }}, name: "{{ rs.name|escapejs }}" },
+            {% endfor %}
+          ],
+        {% endfor %}
+      };
+
+      function updateRoomSheetOptions() {
+        const roomSel = document.getElementById('pushRoomId');
+        const sheetSel = document.getElementById('pushRoomSheetId');
+        if (!roomSel || !sheetSel) return;
+
+        const roomId = String(roomSel.value || '');
+        const items = ROOM_SHEETS[roomId] || [];
+
+        // Reset
+        sheetSel.innerHTML = '';
+        const opt0 = document.createElement('option');
+        opt0.value = '0';
+        opt0.textContent = 'Auto (create/use “{{ sheet.name|escapejs }}”)';
+        sheetSel.appendChild(opt0);
+
+        for (const it of items) {
+          const opt = document.createElement('option');
+          opt.value = String(it.id);
+          opt.textContent = it.name;
+          sheetSel.appendChild(opt);
+        }
+      }
+
+      function openPushColumnModal(colId, colName) {
+        document.getElementById('pushColumnId').value = colId;
+        document.getElementById('pushingColumnName').textContent = colName;
+        const roomSel = document.getElementById('pushRoomId');
+        if (roomSel) {
+          roomSel.value = '';
+        }
+        updateRoomSheetOptions();
+        openModal('pushColumnModal');
+      }
+    </script>
+  </body>
+</html>

@@ -44,6 +44,10 @@ import MentorAssign from './pages/advisor/MentorAssign';
 import NotificationsPage from './pages/Notifications';
 import QueriesPage from './pages/queries/QueriesPage';
 import StaffsPage from './pages/StaffsPage';
+import AcademicCalendarRedirect from './pages/academicCalendar/AcademicCalendarRedirect';
+import AcademicCalendarPage from './pages/academicCalendar/AcademicCalendarPage';
+import PBASSubmissionPage from './pages/staff/PBASSubmissionPage';
+import PBASManagerPage from './pages/iqac/PBASManagerPage';
 
 type RoleObj = { name: string };
 type Me = {
@@ -133,6 +137,19 @@ export default function App() {
                 <Route path="/profile" element={<ProfilePage user={user} />} />
                 <Route path="/queries" element={<QueriesPage />} />
                 <Route path="/notifications" element={<NotificationsPage />} />
+                <Route path="/academic-calendar" element={<AcademicCalendarRedirect user={user} />} />
+                <Route
+                  path="/iqac/calendar"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<AcademicCalendarPage mode="iqac" />} />}
+                />
+                <Route
+                  path="/hod/calendar"
+                  element={<ProtectedRoute user={user} requiredRoles={['HOD']} element={<AcademicCalendarPage mode="hod" />} />}
+                />
+                <Route
+                  path="/student/calendar"
+                  element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} element={<AcademicCalendarPage mode="student" />} />}
+                />
                 <Route path="/import/questions" element={<QuestionImportPage />} />
                 <Route path="/curriculum/master" element={<MasterList />} />
                 <Route path="/curriculum/master/:id" element={<MasterEditor />} />
@@ -198,6 +215,10 @@ export default function App() {
                   element={<ProtectedRoute user={user} requiredPermissions={["obe.master.manage"]} element={<ObeRequestsPage />} />}
                 />
                 <Route
+                  path="/iqac/pbas"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC', 'ADMIN', 'PRINCIPAL', 'PS']} element={<PBASManagerPage />} />}
+                />
+                <Route
                   path="/advisor/timetable"
                   element={<ProtectedRoute user={user} requiredRoles={["ADVISOR"]} requiredPermissions={["timetable.assign"]} element={<TimetableEditor />} />}
                 />
@@ -217,6 +238,10 @@ export default function App() {
                   path="/student/academics"
                   element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} element={<StudentAcademics />} />}
                 />
+                <Route
+                  path="/student/pbas"
+                  element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} element={<PBASSubmissionPage viewer="student" />} />}
+                />
                 {/* Attendance pages removed */}
                 <Route
                   path="/staff/timetable"
@@ -227,8 +252,14 @@ export default function App() {
                   element={<ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={["academics.view_assigned_subjects"]} element={<AssignedSubjectsPage />} />}
                 />
                 <Route
+
                   path="/staff/students"
                   element={<ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={["students.view_students"]} element={<StudentsPage user={user} />} />}
+                />
+                <Route
+                  path="/staff/pbas"
+                  element={<ProtectedRoute user={user} requiredProfile={'STAFF'} element={<PBASSubmissionPage viewer="faculty" />} />}
+
                 />
                 <Route
                   path="/staff/period-attendance"

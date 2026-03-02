@@ -189,7 +189,7 @@ export default function CDAPUploader({ subjectId, onUpload }: { subjectId?: stri
         >
           {status === 'uploading' ? 'Uploading...' : 'Upload Excel'}
         </button>
-        {file && <span style={{ fontSize: 12, color: '#555' }}>{file.name}</span>}
+        {file && <span style={{ fontSize: 14, color: '#555' }}>{file.name}</span>}
       </div>
       {status === 'success' && lastRevision && Array.isArray(lastRevision.rows) && lastRevision.rows.length > 0 && (
         <div style={{ marginTop: 10 }}>
@@ -215,7 +215,7 @@ export default function CDAPUploader({ subjectId, onUpload }: { subjectId?: stri
         <div
           style={{
             marginTop: 8,
-            fontSize: 12,
+            fontSize: 14,
             color: status === 'error' ? '#b91c1c' : '#166534',
           }}
         >

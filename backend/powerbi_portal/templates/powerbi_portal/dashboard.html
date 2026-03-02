@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dashboard — BI Portal</title>
+  </head>
+  <body>
+    {% include 'powerbi_portal/_header.html' %}
+
+    <div class="container">
+
+      <!-- Page Title -->
+      <div style="margin-bottom:28px;padding-bottom:20px;border-bottom:1px solid #E2E8F0">
+        <h1 class="page-title" style="color:#1E293B">Dashboard</h1>
+        <p class="page-subtitle">Welcome back, {{ user.username }} &mdash; your BI workspace overview</p>
+      </div>
+
+      <!-- Stats Row -->
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:28px">
+        <div style="background:#fff;border:1px solid #E2E8F0;border-radius:12px;padding:18px 20px;box-shadow:0 1px 4px rgba(0,0,0,0.05);border-top:3px solid #F5C518">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;color:#94A3B8;margin-bottom:6px">BI Components</div>
+          <div style="font-size:28px;font-weight:700;color:#1E293B">{{ total_components }}</div>
+          <div style="font-size:12px;color:#64748B;margin-top:4px">views available</div>
+        </div>
+        <div style="background:#fff;border:1px solid #E2E8F0;border-radius:12px;padding:18px 20px;box-shadow:0 1px 4px rgba(0,0,0,0.05);border-top:3px solid #F5C518">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;color:#94A3B8;margin-bottom:6px">My Sheets</div>
+          <div style="font-size:28px;font-weight:700;color:#1E293B">{{ total_sheets }}</div>
+          <div style="font-size:12px;color:#64748B;margin-top:4px">created by you</div>
+        </div>
+        <div style="background:#fff;border:1px solid #E2E8F0;border-radius:12px;padding:18px 20px;box-shadow:0 1px 4px rgba(0,0,0,0.05);border-top:3px solid #F5C518">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;color:#94A3B8;margin-bottom:6px">Rooms</div>
+          <div style="font-size:28px;font-weight:700;color:#1E293B">{{ total_rooms }}</div>
+          <div style="font-size:12px;color:#64748B;margin-top:4px">you&apos;re a member of</div>
+        </div>
+      </div>
+
+      <!-- Cards Grid -->
+      <div class="grid">
+
+        <!-- Components -->
+        <div class="card">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+            <span style="width:34px;height:34px;border-radius:9px;background:rgba(245,197,24,0.15);display:inline-flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">📊</span>
+            <h2 style="margin:0;font-size:16px;font-weight:700;color:#1E293B">Components</h2>
+          </div>
+          <p class="muted" style="margin:0 0 16px;font-size:13px;color:#64748B">Browse live BI views and their columns</p>
+          <hr style="border:none;border-top:1px solid #F1F5F9;margin:0 0 14px" />
+
+          {% if recent_components %}
+            <div class="section-label" style="color:#475569">Recent Views</div>
+            {% for view in recent_components %}
+              <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #F1F5F9">
+                <span style="width:6px;height:6px;border-radius:50%;background:#F5C518;flex-shrink:0"></span>
+                <a class="link" href="/powerbi/components/{{ view }}/" style="font-size:13px;color:#1D4ED8">{{ view }}</a>
+              </div>
+            {% endfor %}
+          {% else %}
+            <div class="empty-state" style="padding:24px 0">
+              <div class="empty-state-icon">📭</div>
+              <div>No views found</div>
+            </div>
+          {% endif %}
+
+          <div style="margin-top:16px">
+            <a class="btn btn-small" href="/powerbi/components/">View all {{ total_components }} components</a>
+          </div>
+        </div>
+
+        <!-- Sheets -->
+        <div class="card">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+            <span style="width:34px;height:34px;border-radius:9px;background:rgba(245,197,24,0.15);display:inline-flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">📋</span>
+            <h2 style="margin:0;font-size:16px;font-weight:700;color:#1E293B">Sheets</h2>
+          </div>
+          <p class="muted" style="margin:0 0 16px;font-size:13px;color:#64748B">Custom datasheets built from BI columns</p>
+          <hr style="border:none;border-top:1px solid #F1F5F9;margin:0 0 14px" />
+
+          {% if recent_sheets %}
+            <div class="section-label" style="color:#475569">Recent Sheets</div>
+            {% for sheet in recent_sheets %}
+              <div style="display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid #F1F5F9">
+                <div style="display:flex;align-items:center;gap:10px">
+                  <span style="width:6px;height:6px;border-radius:50%;background:#F5C518;flex-shrink:0"></span>
+                  <a class="link" href="/powerbi/sheets/{{ sheet.id }}/" style="font-size:13px;color:#1D4ED8">{{ sheet.name }}</a>
+                </div>
+                <span style="font-size:11px;color:#64748B">{{ sheet.columns.count }} cols</span>
+              </div>
+            {% endfor %}
+          {% else %}
+            <div class="empty-state" style="padding:24px 0">
+              <div class="empty-state-icon">📝</div>
+              <div>No sheets yet</div>
+            </div>
+          {% endif %}
+
+          <div style="margin-top:16px;display:flex;gap:8px">
+            <a class="btn btn-small" href="/powerbi/sheets/">View all {{ total_sheets }} sheets</a>
+          </div>
+        </div>
+
+        <!-- Collaboration -->
+        <div class="card">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+            <span style="width:34px;height:34px;border-radius:9px;background:rgba(245,197,24,0.15);display:inline-flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">🤝</span>
+            <h2 style="margin:0;font-size:16px;font-weight:700;color:#1E293B">Rooms</h2>
+          </div>
+          <p class="muted" style="margin:0 0 16px;font-size:13px;color:#64748B">Shared rooms for team sheet analysis</p>
+          <hr style="border:none;border-top:1px solid #F1F5F9;margin:0 0 14px" />
+
+          {% if recent_rooms %}
+            <div class="section-label" style="color:#475569">Recent Rooms</div>
+            {% for room in recent_rooms %}
+              <div style="display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid #F1F5F9">
+                <div style="display:flex;align-items:center;gap:10px">
+                  <span style="width:6px;height:6px;border-radius:50%;background:#F5C518;flex-shrink:0"></span>
+                  <a class="link" href="/powerbi/collaboration/{{ room.id }}/" style="font-size:13px;color:#1D4ED8">{{ room.name }}</a>
+                </div>
+                <span style="font-size:11px;color:#64748B">{{ room.memberships.count }} members</span>
+              </div>
+            {% endfor %}
+          {% else %}
+            <div class="empty-state" style="padding:24px 0">
+              <div class="empty-state-icon">🏠</div>
+              <div>No rooms joined yet</div>
+            </div>
+          {% endif %}
+
+          <div style="margin-top:16px;display:flex;gap:10px">
+            <a class="btn btn-small" href="/powerbi/collaboration/">View all {{ total_rooms }} rooms</a>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </body>
+</html>

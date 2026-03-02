@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ view_name }} - Components</title>
+    <style>
+      .scroll{overflow:auto;max-height:70vh;border:1px solid #E2E8F0;border-radius:10px;background:#FAFAFA}
+    </style>
+  </head>
+  <body>
+    {% include 'powerbi_portal/_header.html' %}
+    
+    <div class="container">
+      <div class="card">
+        <div class="card-header">
+          <h1>{{ view_name }}</h1>
+          <div style="display:flex;gap:10px">
+            <a class="btn btn-small" href="/powerbi/components/">← Back</a>
+            <a class="btn btn-small btn-secondary" href="/powerbi/dashboard/">Dashboard</a>
+          </div>
+        </div>
+        
+        <div class="muted" style="margin-bottom:20px">Showing first {{ limit }} rows (live data)</div>
+        
+        <div style="margin-bottom:20px">
+          <form method="get" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <div class="form-row" style="margin:0">
+              <label>View</label>
+              <select name="_" onchange="location.href='/powerbi/components/' + this.value + '/';">
+                {% for v in available_views %}
+                  <option value="{{ v }}" {% if v == view_name %}selected{% endif %}>{{ v }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            
+            <div class="form-row" style="margin:0">
+              <label>Limit</label>
+              <input name="limit" type="number" min="1" max="2000" value="{{ limit }}" style="width:120px" />
+            </div>
+            
+            <button class="btn btn-small" type="submit">Reload</button>
+          </form>
+        </div>
+        
+        <div class="scroll">
+        <table>
+          <thead>
+            <tr>
+              {% for c in cols %}
+                <th><a href="/powerbi/components/{{ view_name }}/{{ c }}/" style="color:#1D4ED8;text-decoration:none;font-weight:600">{{ c }}</a></th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in rows %}
+              <tr>
+                {% for cell in r %}
+                  <td>{{ cell }}</td>
+                {% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if not rows %}
+        <div class="muted" style="margin-top:10px;">No rows returned.</div>
+      {% endif %}
+    </div>
+  </body>
+</html>

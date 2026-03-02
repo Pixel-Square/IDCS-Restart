@@ -1,6 +1,7 @@
 ﻿# Added 'OBE.apps.ObeConfig', on 2026-01-27
 # Added backend.OBE.apps.ObeConfig on 2026-01-27
 import os
+import sys
 from pathlib import Path
 from datetime import timedelta
 
@@ -18,6 +19,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'dev-secret')
 
 DEBUG = os.getenv('DEBUG', '0') == '1'
+RUNNING_RUNSERVER = 'runserver' in sys.argv
 
 ALLOWED_HOSTS = (
     ['*'] if DEBUG else [
@@ -50,11 +52,14 @@ INSTALLED_APPS = [
     'curriculum',
     'college',
     'applications',
+    'academic_calendar',
     'OBE.apps.ObeConfig',
     'template_api.apps.TemplateApiConfig',
     'question_bank.apps.QuestionBankConfig',
     'timetable',
     'bi.apps.BiConfig',
+    'powerbi_portal.apps.PowerbiPortalConfig',
+    'pbas.apps.PbasConfig',
 ]
 
 MIDDLEWARE = [
@@ -83,6 +88,7 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'powerbi_portal.context_processors.powerbi_notifications',
             ],
         },
     },
@@ -130,6 +136,26 @@ else:
         }
     }
 
+# Optional: read-only reporting DB connection for BI portal.
+# If BI_DB_NAME is set, the portal will query using DATABASES['bi'].
+BI_DB_NAME = os.getenv('BI_DB_NAME')
+if BI_DB_NAME:
+    DATABASES['bi'] = {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': BI_DB_NAME,
+        'USER': os.getenv('BI_DB_USER'),
+        'PASSWORD': os.getenv('BI_DB_PASS'),
+        'HOST': os.getenv('BI_DB_HOST', DB_HOST),
+        'PORT': os.getenv('BI_DB_PORT', DB_PORT),
+        'DISABLE_SERVER_SIDE_CURSORS': True,
+        'CONN_MAX_AGE': int(os.getenv('BI_DB_CONN_MAX_AGE', os.getenv('DB_CONN_MAX_AGE', '60'))),
+        'CONN_HEALTH_CHECKS': True,
+        'OPTIONS': {
+            'server_side_binding': False,
+            'connect_timeout': int(os.getenv('BI_DB_CONNECT_TIMEOUT', os.getenv('DB_CONNECT_TIMEOUT', '5'))),
+        },
+    }
+
 # Django cache config using Redis (used by sessions, caching, etc.)
 CACHES = {
     'default': {
@@ -173,6 +199,11 @@ MEDIA_ROOT = BASE_DIR / 'media'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 AUTH_USER_MODEL = 'accounts.User'
+
+AUTHENTICATION_BACKENDS = [
+    'powerbi_portal.auth_backends.PowerBIIdentifierBackend',
+    'django.contrib.auth.backends.ModelBackend',
+]
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
@@ -228,17 +259,28 @@ CORS_ALLOWED_ORIGINS = [
     # Local dev origins (common ports) so frontend at localhost can call API
     'http://localhost',
     'http://localhost:3000',
+    'http://localhost:5173',
+    'http://localhost:4173',
     'http://localhost:82',
     'http://localhost:81',
     'http://localhost:8000',
+    'http://localhost:83',
     'http://127.0.0.1:3000',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:4173',
     'http://127.0.0.1:82',
     'http://127.0.0.1:8000',
+    'http://127.0.0.1:83',
     # Production/front-end hosts
     'https://idcs.krgi.co.in',
     'https://db.krgi.co.in',
     'https://cloud.krgi.co.in',
+    # Local LAN frontend host (when served on :80)
+    'http://192.168.40.253',
+    'http://192.168.40.253:80',
     'http://192.168.40.253:81',
+    'http://192.168.40.253:5173',
+    'http://192.168.40.253:4173',
 ]
 # Allow browser to include credentials (cookies or HTTP auth) in cross-origin requests
 CORS_ALLOW_CREDENTIALS = True
@@ -254,6 +296,8 @@ if DEBUG:
         'http://127.0.0.1',
         'http://localhost:82',
         'http://127.0.0.1:82',
+        'http://localhost:83',
+        'http://127.0.0.1:83',
     ]
 # Always allow the production dashboard hostname if not already present
 if 'https://db.krgi.co.in' not in CSRF_TRUSTED_ORIGINS:

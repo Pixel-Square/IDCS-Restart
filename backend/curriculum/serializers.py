@@ -14,7 +14,13 @@ class CurriculumMasterSerializer(serializers.ModelSerializer):
     departments_display = DepartmentSmallSerializer(source='departments', many=True, read_only=True)
     # expose semester number for frontend convenience and accept semester_id on writes
     semester = serializers.IntegerField(source='semester.number', read_only=True)
-    semester_id = serializers.PrimaryKeyRelatedField(queryset=Semester.objects.all(), source='semester', write_only=True, required=False)
+    semester_id = serializers.PrimaryKeyRelatedField(
+        queryset=Semester.objects.all(), 
+        source='semester', 
+        write_only=True, 
+        required=False,
+        allow_null=True
+    )
 
     class Meta:
         model = CurriculumMaster
@@ -24,11 +30,41 @@ class CurriculumMasterSerializer(serializers.ModelSerializer):
             'for_all_departments', 'departments', 'departments_display', 'editable', 'created_by', 'created_at', 'updated_at'
         ]
         read_only_fields = ('created_by', 'created_at', 'updated_at')
+    
+    def validate(self, attrs):
+        # For create operations, semester is required - try to get it from semester_id or infer from semester number
+        if not self.instance and 'semester' not in attrs:
+            # Check if there's a semester number we can use
+            request = self.context.get('request')
+            if request and request.data:
+                sem_num = request.data.get('semester')
+                if sem_num:
+                    try:
+                        # Get or create the Semester object
+                        sem_obj, _ = Semester.objects.get_or_create(number=int(sem_num))
+                        attrs['semester'] = sem_obj
+                    except (ValueError, TypeError):
+                        pass
+            
+            # If still no semester, raise validation error
+            if 'semester' not in attrs:
+                raise serializers.ValidationError({
+                    'semester': 'Semester is required. Provide either semester_id (Semester PK) or semester (semester number).'
+                })
+        return attrs
 
     def create(self, validated_data):
         deps = validated_data.pop('departments', [])
-        user = self.context['request'].user
-        validated_data['created_by'] = user
+        # created_by will be set by perform_create in the viewset
+        # so don't override it here if it's already in validated_data
+        if 'created_by' not in validated_data:
+            try:
+                user = self.context.get('request').user if self.context.get('request') else None
+                if user:
+                    validated_data['created_by'] = user
+            except Exception:
+                pass
+        
         master = CurriculumMaster.objects.create(**validated_data)
         if deps:
             master.departments.set(deps)

@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ room.name }} / {{ room_sheet.name }}</title>
+    <style>
+      .scroll{overflow:auto;max-height:60vh;border:1px solid #E2E8F0;border-radius:10px;background:#FAFAFA}
+    </style>
+  </head>
+  <body>
+    {% include 'powerbi_portal/_header.html' %}
+    
+    <div class="container container-full">
+      <div class="card">
+        <div class="card-header">
+          <h1>🤝 {{ room.name }} / {{ room_sheet.name }}</h1>
+          <div style="display:flex;gap:10px">
+            <a class="btn btn-small" href="/powerbi/collaboration/rooms/{{ room.id }}/">← Back</a>
+            <a class="btn btn-small btn-secondary" href="/powerbi/dashboard/">Dashboard</a>
+          </div>
+        </div>
+        
+        <div class="muted" style="margin-bottom:20px">Room sheet (no direct import from Components)</div>
+        
+        {% if can_export %}
+          <div style="margin-bottom:24px;padding:18px;background:rgba(245,197,24,0.06);border:1px solid rgba(245,197,24,0.25);border-radius:10px">
+            <h3 style="margin-top:0;color:#1E293B">Export Data</h3>
+            <form method="get" action="/powerbi/collaboration/rooms/{{ room.id }}/sheets/{{ room_sheet.id }}/export/" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px">
+              <input type="hidden" name="limit" value="{{ limit }}" />
+              <div class="form-row" style="margin:0">
+                <label>Format</label>
+                <select name="format" style="min-width:150px">
+                  <option value="xlsx" selected>Excel (.xlsx)</option>
+                  <option value="csv">CSV (.csv)</option>
+                  <option value="pdf" {% if not has_reportlab %}disabled{% endif %}>PDF (.pdf)</option>
+                </select>
+              </div>
+              <button class="btn" type="submit">Download</button>
+              {% if not has_reportlab %}
+                <span class="muted">PDF not available (missing dependency)</span>
+              {% endif %}
+            </form>
+          </div>
+        {% endif %}
+        
+        <div style="margin-bottom:24px">
+          <form method="get" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <div class="form-row" style="margin:0">
+              <label>Rows Limit</label>
+              <input name="limit" type="number" min="0" value="{{ limit|default_if_none:'' }}" placeholder="0 = all" style="width:120px" />
+            </div>
+            <button class="btn btn-small" type="submit">Reload</button>
+          </form>
+        </div>
+        
+        <h3>Columns</h3>
+        {% if cols_meta %}
+          <div style="margin-top:12px;display:grid;gap:10px;">
+            {% for c in cols_meta %}
+              <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 14px;background:#fff;border:1px solid #E2E8F0;border-radius:10px;border-left:3px solid #F5C518">
+                <div class="muted" style="min-width:260px;font-weight:600">{{ c.source_view }}.{{ c.source_column }}</div>
+
+                <form method="post" action="/powerbi/collaboration/rooms/{{ room.id }}/sheets/{{ room_sheet.id }}/rename-column/" style="display:flex;gap:10px;align-items:center;flex:1;min-width:260px">
+                  {% csrf_token %}
+                  <input type="hidden" name="col_id" value="{{ c.id }}" />
+                  <input name="header" value="{{ c.header_label }}" style="flex:1;min-width:200px" {% if not can_edit %}disabled{% endif %} />
+                  <button class="btn btn-small" type="submit" {% if not can_edit %}disabled{% endif %}>Save</button>
+                </form>
+
+                {% if can_edit %}
+                  <form method="post" action="/powerbi/collaboration/rooms/{{ room.id }}/sheets/{{ room_sheet.id }}/delete-column/" style="margin:0" onsubmit="return confirm('Delete this column from the room sheet?')">
+                    {% csrf_token %}
+                    <input type="hidden" name="col_id" value="{{ c.id }}" />
+                    <button class="btn btn-small btn-danger" type="submit">Delete</button>
+                  </form>
+                {% else %}
+                  <span class="muted">(Leader/Co-Leader only)</span>
+                {% endif %}
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="muted" style="margin-top:12px;font-style:italic">No columns in this sheet.</div>
+        {% endif %}
+      </div>
+      
+      <div class="card" style="margin-top:20px">
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:48px;min-width:48px;text-align:center">#</th>
+              {% for c in cols %}
+                <th>{{ c }}</th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in rows %}
+              <tr>
+                <td style="text-align:center;color:#94A3B8;font-size:12px">{{ forloop.counter }}</td>
+                {% for cell in r %}
+                  <td>{% if cell is None or cell == '' %}-{% else %}{{ cell }}{% endif %}</td>
+                {% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if not rows %}
+        <div class="muted" style="margin-top:10px;">No rows returned.</div>
+      {% endif %}
+    </div>
+  </body>
+</html>

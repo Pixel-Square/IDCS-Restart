@@ -12,10 +12,10 @@ import ReviewEntry from './ReviewEntry';
 import ReviewCourseMarkEntery from './ReviewCourseMarkEntery';
 import Review1Entry from './Review1Entry';
 import Review2Entry from './Review2Entry';
+import Review1SheetEntry from './Review1SheetEntry';
+import Review2SheetEntry from './Review2SheetEntry';
 import Ssa1Entry from './Ssa1Entry';
 import Ssa2Entry from './Ssa2Entry';
-import Ssa1SheetEntry from './Ssa1SheetEntry';
-import Ssa2SheetEntry from './Ssa2SheetEntry';
 import CQIEntry from '../pages/staff/CQIEntry';
 import DashboardWidgets from './layout/DashboardWidgets';
 import { DraftAssessmentKey, DueAssessmentKey, fetchMyTeachingAssignments, fetchPublishWindow, iqacResetAssessment, TeachingAssignmentItem } from '../services/obe';
@@ -1008,7 +1008,7 @@ export default function MarkEntryTabs({
                 if (active === 'ssa1') return <Ssa1Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />;
                 if (active === 'review1') {
                   return normalizedEffectiveClassType === 'TCPR' ? (
-                    <Ssa1SheetEntry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} assessmentKey="review1" label="Review 1" />
+                    <Review1SheetEntry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} label="Review 1" />
                   ) : (
                     <Review1Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
                   );
@@ -1016,7 +1016,7 @@ export default function MarkEntryTabs({
                 if (active === 'ssa2') return <Ssa2Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />;
                 if (active === 'review2') {
                   return normalizedEffectiveClassType === 'TCPR' ? (
-                    <Ssa2SheetEntry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} assessmentKey="review2" label="Review 2" />
+                    <Review2SheetEntry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} label="Review 2" />
                   ) : (
                     <Review2Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
                   );

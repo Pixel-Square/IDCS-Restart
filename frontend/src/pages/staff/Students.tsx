@@ -102,10 +102,20 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
     }
   ].filter(view => hasPermission(view.permission))
 
+  // Get current username for user-specific caching
+  const getCurrentUsername = () => {
+    try {
+      return user?.username || localStorage.getItem('username') || 'anonymous'
+    } catch {
+      return 'anonymous'
+    }
+  }
+
   // Cache helper functions
   const getCachedData = (viewKey: ViewMode) => {
     try {
-      const cacheKey = `${CACHE_KEY}_${viewKey}`
+      const username = getCurrentUsername()
+      const cacheKey = `${CACHE_KEY}_${username}_${viewKey}`
       const cached = sessionStorage.getItem(cacheKey)
       if (!cached) return null
       const { data, timestamp } = JSON.parse(cached)
@@ -122,7 +132,8 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
 
   const setCachedData = (viewKey: ViewMode, data: any) => {
     try {
-      const cacheKey = `${CACHE_KEY}_${viewKey}`
+      const username = getCurrentUsername()
+      const cacheKey = `${CACHE_KEY}_${username}_${viewKey}`
       sessionStorage.setItem(cacheKey, JSON.stringify({
         data,
         timestamp: Date.now()
@@ -134,12 +145,13 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
 
   const clearCache = (viewKey?: ViewMode) => {
     try {
+      const username = getCurrentUsername()
       if (viewKey) {
-        sessionStorage.removeItem(`${CACHE_KEY}_${viewKey}`)
+        sessionStorage.removeItem(`${CACHE_KEY}_${username}_${viewKey}`)
       } else {
-        // Clear all students cache
+        // Clear all students cache for current user
         Object.keys(sessionStorage).forEach(key => {
-          if (key.startsWith(CACHE_KEY)) {
+          if (key.startsWith(`${CACHE_KEY}_${username}`)) {
             sessionStorage.removeItem(key)
           }
         })

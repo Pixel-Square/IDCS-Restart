@@ -400,54 +400,143 @@ class UserAdmin(DjangoUserAdmin):
                 row_num = r.get('row_num')
                 try:
                     with transaction.atomic():
-                        u = User.objects.create_user(
-                            username=r.get('username'),
-                            email=r.get('email') or None,
-                            password=r.get('password'),
-                        )
-
                         profile_type = (r.get('profile_type') or '').upper()
                         status = (r.get('status') or 'ACTIVE').upper()
+                        username = r.get('username')
+                        password = r.get('password')
+                        email = r.get('email') or None
 
+                        # Check uniqueness based on reg_no/staff_id, not username
+                        existing_user = None
+                        existing_profile = None
+                        
                         if profile_type == 'STUDENT':
-                            # resolve optional section value (accept PK or exact name)
-                            sect_obj = None
-                            sect_val = (r.get('section') or '').strip()
-                            if sect_val:
-                                try:
-                                    # try numeric PK
-                                    pk = int(sect_val)
-                                    sect_obj = Section.objects.filter(pk=pk).first()
-                                except Exception:
-                                    # try by name (case-insensitive)
-                                    sect_obj = Section.objects.filter(name__iexact=sect_val).first()
-
-                            StudentProfile.objects.create(
-                                user=u,
-                                reg_no=r.get('reg_no'),
-                                section=sect_obj,
-                                batch=r.get('batch') or '',
-                                status=status,
-                            )
-                            default_roles = ['STUDENT']
+                            reg_no = r.get('reg_no')
+                            # Check if reg_no already exists
+                            existing_profile = StudentProfile.objects.filter(reg_no=reg_no).select_related('user').first()
+                            if existing_profile:
+                                # reg_no exists - update existing user's password only (don't change username)
+                                existing_user = existing_profile.user
+                                existing_user.set_password(password)
+                                if email:
+                                    existing_user.email = email
+                                existing_user.save()
+                                u = existing_user
+                            else:
+                                # reg_no doesn't exist - check if username exists
+                                if User.objects.filter(username=username).exists():
+                                    # username exists but different reg_no - make username unique
+                                    base_username = username
+                                    counter = 1
+                                    while User.objects.filter(username=username).exists():
+                                        username = f"{base_username}_{counter}"
+                                        counter += 1
+                                # Create new user
+                                u = User.objects.create_user(
+                                    username=username,
+                                    email=email,
+                                    password=password,
+                                )
                         else:
-                            # Allow staff_id to be auto-filled when blank to let admin ignore the column.
                             staff_id_val = (r.get('staff_id') or '').strip()
                             if not staff_id_val:
-                                staff_id_val = f"STAFF-{r.get('username')}"
+                                staff_id_val = f"STAFF-{username}"
+                            # Check if staff_id already exists
+                            existing_profile = StaffProfile.objects.filter(staff_id=staff_id_val).select_related('user').first()
+                            if existing_profile:
+                                # staff_id exists - update existing user's password only (don't change username)
+                                existing_user = existing_profile.user
+                                existing_user.set_password(password)
+                                if email:
+                                    existing_user.email = email
+                                existing_user.save()
+                                u = existing_user
+                            else:
+                                # staff_id doesn't exist - check if username exists
+                                if User.objects.filter(username=username).exists():
+                                    # username exists but different staff_id - make username unique
+                                    base_username = username
+                                    counter = 1
+                                    while User.objects.filter(username=username).exists():
+                                        username = f"{base_username}_{counter}"
+                                        counter += 1
+                                # Create new user
+                                u = User.objects.create_user(
+                                    username=username,
+                                    email=email,
+                                    password=password,
+                                )
 
-                            dept = None
-                            dept_code = (r.get('department_code') or '').strip()
-                            if dept_code:
-                                dept = Department.objects.filter(code__iexact=dept_code).first()
+                        # Create or update profile
+                        if profile_type == 'STUDENT':
+                            if not existing_user:
+                                # resolve optional section value (accept PK or exact name)
+                                sect_obj = None
+                                sect_val = (r.get('section') or '').strip()
+                                if sect_val:
+                                    try:
+                                        # try numeric PK
+                                        pk = int(sect_val)
+                                        sect_obj = Section.objects.filter(pk=pk).first()
+                                    except Exception:
+                                        # try by name (case-insensitive)
+                                        sect_obj = Section.objects.filter(name__iexact=sect_val).first()
 
-                            StaffProfile.objects.create(
-                                user=u,
-                                staff_id=staff_id_val,
-                                department=dept,
-                                designation=r.get('designation') or '',
-                                status=status,
-                            )
+                                StudentProfile.objects.create(
+                                    user=u,
+                                    reg_no=r.get('reg_no'),
+                                    section=sect_obj,
+                                    batch=r.get('batch') or '',
+                                    status=status,
+                                )
+                            else:
+                                # Update existing student profile
+                                existing_profile.status = status
+                                sect_val = (r.get('section') or '').strip()
+                                if sect_val:
+                                    try:
+                                        pk = int(sect_val)
+                                        sect_obj = Section.objects.filter(pk=pk).first()
+                                        if sect_obj:
+                                            existing_profile.section = sect_obj
+                                    except Exception:
+                                        sect_obj = Section.objects.filter(name__iexact=sect_val).first()
+                                        if sect_obj:
+                                            existing_profile.section = sect_obj
+                                if r.get('batch'):
+                                    existing_profile.batch = r.get('batch')
+                                existing_profile.save()
+                            default_roles = ['STUDENT']
+                        else:
+                            if not existing_user:
+                                # Allow staff_id to be auto-filled when blank to let admin ignore the column.
+                                staff_id_val = (r.get('staff_id') or '').strip()
+                                if not staff_id_val:
+                                    staff_id_val = f"STAFF-{username}"
+
+                                dept = None
+                                dept_code = (r.get('department_code') or '').strip()
+                                if dept_code:
+                                    dept = Department.objects.filter(code__iexact=dept_code).first()
+
+                                StaffProfile.objects.create(
+                                    user=u,
+                                    staff_id=staff_id_val,
+                                    department=dept,
+                                    designation=r.get('designation') or '',
+                                    status=status,
+                                )
+                            else:
+                                # Update existing staff profile
+                                existing_profile.status = status
+                                dept_code = (r.get('department_code') or '').strip()
+                                if dept_code:
+                                    dept = Department.objects.filter(code__iexact=dept_code).first()
+                                    if dept:
+                                        existing_profile.department = dept
+                                if r.get('designation'):
+                                    existing_profile.designation = r.get('designation')
+                                existing_profile.save()
                             default_roles = ['STAFF']
 
                         roles_raw = (r.get('roles') or '').strip()

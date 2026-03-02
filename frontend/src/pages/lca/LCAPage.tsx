@@ -25,11 +25,11 @@ function NumberInput({ value, onChange, min, max }: NumberInputProps): JSX.Eleme
       max={max}
       style={{
         width: 76,
-        padding: '6px 8px',
+        padding: '8px 10px',
         borderRadius: 8,
         border: '1px solid #e6eef8',
         outline: 'none',
-        fontSize: 13,
+        fontSize: 15,
       }}
     />
   );
@@ -69,12 +69,12 @@ function mapNumericLevelToLearnerBand(level: 1 | 2 | 3 | '-'): { label: string; 
 
 const styles: { [k: string]: React.CSSProperties } = {
   page: {
-    padding: 20,
+    padding: 0,
     width: '100%',
     boxSizing: 'border-box',
     minHeight: '100vh',
     display: 'flex',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
     alignItems: 'flex-start',
     margin: 0,
     fontFamily: "Inter, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial",
@@ -83,13 +83,12 @@ const styles: { [k: string]: React.CSSProperties } = {
   },
   card: {
     background: '#fff',
-    borderRadius: 12,
+    borderRadius: 0,
     padding: 18,
-    border: '1px solid #e6eef8',
-    boxShadow: '0 6px 20px rgba(13,60,100,0.04)',
+    border: 'none',
+    boxShadow: 'none',
     width: '100%',
-    maxWidth: 1200,
-    margin: '18px',
+    margin: 0,
     flex: '1 1 auto',
   },
   // ensure large pages fit the viewport and become scrollable
@@ -98,52 +97,48 @@ const styles: { [k: string]: React.CSSProperties } = {
     overflowY: 'auto' as React.CSSProperties['overflowY'],
     WebkitOverflowScrolling: 'touch' as any,
   },
-  title: { margin: 0, color: '#0b4a6f', fontSize: 22, fontWeight: 700 },
-  subtitle: { marginTop: 6, color: '#3d5566', fontSize: 13 },
-  sectionTitle: { margin: '0 0 10px 0', color: '#0b3b57', fontSize: 16 },
+  title: { margin: 0, color: '#0b4a6f', fontSize: 26, fontWeight: 700 },
+  subtitle: { marginTop: 6, color: '#3d5566', fontSize: 15 },
+  sectionTitle: { margin: '0 0 10px 0', color: '#0b3b57', fontSize: 19, fontWeight: 700 },
   table: {
     width: '100%',
     borderCollapse: 'collapse',
     marginTop: 8,
-    tableLayout: 'auto' as React.CSSProperties['tableLayout'],
-    // allow horizontal scrolling on small viewports
-    display: 'block',
-    overflowX: 'auto' as React.CSSProperties['overflowX'],
-    WebkitOverflowScrolling: 'touch' as any,
+    tableLayout: 'fixed' as React.CSSProperties['tableLayout'],
   },
   th: {
     background: '#f3f8ff',
     color: '#0b4a6f',
     fontWeight: 700,
-    padding: '8px 10px',
+    padding: '10px 14px',
     border: '1px solid #e6eef8',
     textAlign: 'center',
-    fontSize: 13,
+    fontSize: 15,
     whiteSpace: 'nowrap',
   },
   thLeft: {
     background: '#f3f8ff',
     color: '#0b4a6f',
     fontWeight: 700,
-    padding: '8px 10px',
+    padding: '10px 14px',
     border: '1px solid #e6eef8',
     textAlign: 'left',
-    fontSize: 13,
+    fontSize: 15,
     whiteSpace: 'nowrap',
     minWidth: 220,
   },
   td: {
-    padding: '8px 10px',
+    padding: '10px 14px',
     border: '1px solid #eef6fb',
     color: '#234451',
-    fontSize: 13,
+    fontSize: 15,
     textAlign: 'center',
   },
   tdLeft: {
-    padding: '8px 10px',
+    padding: '10px 14px',
     border: '1px solid #eef6fb',
     color: '#234451',
-    fontSize: 13,
+    fontSize: 15,
     textAlign: 'left',
     minWidth: 220,
   },
@@ -153,21 +148,22 @@ const styles: { [k: string]: React.CSSProperties } = {
   btn: {
     border: '1px solid #e6eef8',
     background: '#fbfdff',
-    padding: '8px 10px',
+    padding: '10px 14px',
     borderRadius: 10,
     cursor: 'pointer',
     fontWeight: 700,
+    fontSize: 15,
     color: '#0b4a6f',
   },
   pill: {
     display: 'inline-flex',
     alignItems: 'center',
     gap: 8,
-    padding: '8px 10px',
+    padding: '10px 14px',
     borderRadius: 10,
     background: '#fbfdff',
     border: '1px solid #e6eef8',
-    fontSize: 13,
+    fontSize: 15,
     color: '#234451',
   },
 };
@@ -490,12 +486,12 @@ export default function LCAPage({
           </table>
 
           {pbrBusy && (
-            <div style={{ marginTop: 10, fontSize: 13, color: '#3d5566' }}>
+            <div style={{ marginTop: 10, fontSize: 15, color: '#3d5566' }}>
               Parsing {pbrBusy.toUpperCase()} Excel…
             </div>
           )}
           {pbrError && (
-            <div style={{ marginTop: 10, fontSize: 13, color: '#b42318', fontWeight: 700 }}>
+            <div style={{ marginTop: 10, fontSize: 15, color: '#b42318', fontWeight: 700 }}>
               {pbrError}
             </div>
           )}
@@ -565,7 +561,7 @@ export default function LCAPage({
         <table style={styles.table}>
           <tbody>
             <tr>
-              <td style={{ ...styles.tdLeft, width: 220, fontWeight: 700 }}>COURSE CODE</td>
+              <td style={{ ...styles.tdLeft, fontWeight: 700 }}>COURSE CODE</td>
               <td style={{ ...styles.tdLeft, ...styles.cellGreen }}>
                 <input
                   value={courseMeta.courseCode}
@@ -573,7 +569,7 @@ export default function LCAPage({
                   disabled
                   aria-disabled="true"
                   title="Course code is locked"
-                  style={{ width: '100%', border: 'none', background: 'transparent', fontSize: 13, outline: 'none', cursor: 'not-allowed', color: '#234451' }}
+                  style={{ width: '100%', border: 'none', background: 'transparent', fontSize: 15, outline: 'none', cursor: 'not-allowed', color: '#234451' }}
                 />
               </td>
             </tr>
@@ -586,7 +582,7 @@ export default function LCAPage({
                   disabled
                   aria-disabled="true"
                   title="Course name is locked"
-                  style={{ width: '100%', border: 'none', background: 'transparent', fontSize: 13, outline: 'none', cursor: 'not-allowed', color: '#234451' }}
+                  style={{ width: '100%', border: 'none', background: 'transparent', fontSize: 15, outline: 'none', cursor: 'not-allowed', color: '#234451' }}
                 />
               </td>
             </tr>
@@ -597,7 +593,7 @@ export default function LCAPage({
                   value={courseMeta.credit}
                   onChange={(e) => setCourseMeta((p) => ({ ...p, credit: e.target.value }))
                   }
-                  style={{ width: '100%', border: 'none', background: 'transparent', fontSize: 13, outline: 'none' }}
+                  style={{ width: '100%', border: 'none', background: 'transparent', fontSize: 15, outline: 'none' }}
                 />
               </td>
             </tr>
@@ -608,7 +604,7 @@ export default function LCAPage({
                   value={courseMeta.courseModule}
                   onChange={(e) => setCourseMeta((p) => ({ ...p, courseModule: e.target.value }))
                   }
-                  style={{ width: '100%', border: 'none', background: 'transparent', fontSize: 13, outline: 'none' }}
+                  style={{ width: '100%', border: 'none', background: 'transparent', fontSize: 15, outline: 'none' }}
                 />
               </td>
             </tr>
@@ -622,12 +618,12 @@ export default function LCAPage({
         {/* 1.1 CURRENT GPA PROFILE */}
           <table style={styles.table}>
             <colgroup>
-              <col style={{ width: 220 }} />
-              <col style={{ width: 200 }} />
-              <col style={{ width: 200 }} />
-              <col style={{ width: 200 }} />
-              <col style={{ width: 100 }} />
-              <col style={{ width: 60 }} />
+              <col style={{ width: '22%' }} />
+              <col style={{ width: '18%' }} />
+              <col style={{ width: '18%' }} />
+              <col style={{ width: '18%' }} />
+              <col style={{ width: '16%' }} />
+              <col style={{ width: '8%' }} />
             </colgroup>
           <thead>
             <tr>
@@ -669,12 +665,12 @@ export default function LCAPage({
         {/* 1.2 PREREQUISITE PROFILE */}
         <table style={styles.table}>
           <colgroup>
-            <col style={{ width: 220 }} />
-            <col style={{ width: 200 }} />
-            <col style={{ width: 200 }} />
-            <col style={{ width: 200 }} />
-            <col style={{ width: 100 }} />
-            <col style={{ width: 60 }} />
+            <col style={{ width: '22%' }} />
+            <col style={{ width: '18%' }} />
+            <col style={{ width: '18%' }} />
+            <col style={{ width: '18%' }} />
+            <col style={{ width: '16%' }} />
+            <col style={{ width: '8%' }} />
           </colgroup>
           <thead>
             <tr>
@@ -765,7 +761,7 @@ export default function LCAPage({
                 >
                   +
                 </button>
-                <span style={{ marginLeft: 10, fontSize: 13, color: '#557085' }}>
+                <span style={{ marginLeft: 10, fontSize: 15, color: '#557085' }}>
                   Add next prerequisite
                 </span>
               </td>
@@ -814,7 +810,7 @@ export default function LCAPage({
         <table style={styles.table}>
           <tbody>
             <tr>
-              <td style={{ ...styles.tdLeft, fontWeight: 800, width: 220 }}>The Learners are at</td>
+              <td style={{ ...styles.tdLeft, fontWeight: 800 }}>The Learners are at</td>
               <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{learnersAt.label}</td>
               <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{learnersAt.code}</td>
             </tr>
@@ -827,7 +823,7 @@ export default function LCAPage({
         <table style={styles.table}>
           <tbody>
             <tr>
-              <td style={{ ...styles.tdLeft, fontWeight: 900, width: 260 }}>
+              <td style={{ ...styles.tdLeft, fontWeight: 900 }}>
                 <Link style={styles.link} to={`${courseBasePath}/lca/pbr`}>
                   PREVIOUS BATCH RESULT (PBR)
                 </Link>
@@ -849,7 +845,7 @@ export default function LCAPage({
         <table style={styles.table}>
           <tbody>
             <tr>
-              <td style={{ ...styles.tdLeft, fontWeight: 900, width: 260 }}>Learner Centric Level</td>
+              <td style={{ ...styles.tdLeft, fontWeight: 900 }}>Learner Centric Level</td>
               <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{learnerCentricLevelCode}</td>
             </tr>
           </tbody>

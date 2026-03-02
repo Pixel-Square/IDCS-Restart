@@ -5,7 +5,7 @@ import { fetchMyTeachingAssignments } from '../../services/obe';
 import { fetchDeptRows } from '../../services/curriculum';
 
 const styles: { [k: string]: React.CSSProperties } = {
-  page: { padding: 28, maxWidth: 1100, margin: '18px auto', fontFamily: "Inter, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial", color: '#1f3947' },
+  page: { padding: '20px 24px', width: '100%', boxSizing: 'border-box', minHeight: '100vh', fontFamily: "Inter, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial", color: '#1f3947' },
   card: { background: '#fff', borderRadius: 12, padding: 18, border: '1px solid #e6eef8', boxShadow: '0 6px 20px rgba(13,60,100,0.04)' },
   headerRow: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 },
   label: { color: '#557085', fontSize: 12, fontWeight: 700 },
@@ -36,7 +36,7 @@ export default function COTargetPage({
   const location = useLocation();
   const navigate = useNavigate();
 
-  const containerStyle = embedded ? { padding: 12, maxWidth: 980, width: '100%', margin: '0 auto' } as React.CSSProperties : styles.page;
+  const containerStyle = embedded ? { padding: 12, width: '100%', margin: 0 } as React.CSSProperties : styles.page;
 
   // Display name state — will be set from multiple fallbacks so UI shows as soon as available
   const [cdapCourseName, setCdapCourseName] = useState<string>('');

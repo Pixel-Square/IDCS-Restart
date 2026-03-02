@@ -1,19 +1,7 @@
 import fetchWithAuth from './fetchAuth';
+import { getApiBase } from './apiBase'
 
-function apiBase() {
-  const fromEnv = import.meta.env.VITE_API_BASE;
-  if (fromEnv) return String(fromEnv).replace(/\/+$/, '');
-
-  if (typeof window !== 'undefined' && window.location?.origin) {
-    const host = String(window.location.hostname || '').trim().toLowerCase();
-    if (host === 'localhost' || host === '127.0.0.1') return 'http://localhost:8000';
-    return String(window.location.origin).replace(/\/+$/, '');
-  }
-
-  return 'https://db.krgi.co.in';
-}
-
-const API_BASE = apiBase();
+const API_BASE = getApiBase();
 
 const ASSESSMENT_MASTER_CFG_CACHE_KEY = 'obe_assessment_master_config_cache';
 

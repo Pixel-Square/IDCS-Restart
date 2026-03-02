@@ -8,18 +8,19 @@ import COTargetPage from './COTargetPage';
 
 const styles: { [k: string]: React.CSSProperties } = {
   page: {
-    padding: 28,
-    maxWidth: 1100,
-    margin: '18px auto',
+    padding: 0,
+    width: '100%',
+    boxSizing: 'border-box',
+    minHeight: '100vh',
     fontFamily: "Inter, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial",
     color: '#1f3947',
   },
   card: {
     background: '#fff',
-    borderRadius: 12,
+    borderRadius: 0,
     padding: 18,
-    border: '1px solid #e6eef8',
-    boxShadow: '0 6px 20px rgba(13,60,100,0.04)',
+    border: 'none',
+    boxShadow: 'none',
   },
   header: {
     display: 'flex',
@@ -32,13 +33,13 @@ const styles: { [k: string]: React.CSSProperties } = {
     display: 'flex',
     flexDirection: 'column',
   },
-  title: { margin: 0, color: '#0b4a6f', fontSize: 22, fontWeight: 700 },
-  subtitle: { marginTop: 6, color: '#3d5566', fontSize: 13 },
-  meta: { color: '#557085', fontSize: 13, textAlign: 'right' },
+  title: { margin: 0, color: '#0b4a6f', fontSize: 26, fontWeight: 700 },
+  subtitle: { marginTop: 6, color: '#3d5566', fontSize: 15 },
+  meta: { color: '#557085', fontSize: 15, textAlign: 'right' },
   grid: { display: 'grid', gap: 16 },
   twoCol: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 },
-  sectionTitle: { margin: '0 0 10px 0', color: '#0b3b57', fontSize: 16 },
-  paragraph: { color: '#334e68', lineHeight: 1.45, margin: 0 },
+  sectionTitle: { margin: '0 0 10px 0', color: '#0b3b57', fontSize: 19, fontWeight: 700 },
+  paragraph: { color: '#334e68', lineHeight: 1.55, margin: 0, fontSize: 15 },
   table: {
     width: '100%',
     borderCollapse: 'collapse',
@@ -48,23 +49,23 @@ const styles: { [k: string]: React.CSSProperties } = {
     background: '#f3f8ff',
     color: '#0b4a6f',
     fontWeight: 700,
-    padding: '8px 10px',
+    padding: '10px 14px',
     border: '1px solid #e6eef8',
     textAlign: 'center',
-    fontSize: 13,
+    fontSize: 15,
   },
   td: {
-    padding: '8px 10px',
+    padding: '10px 14px',
     border: '1px solid #eef6fb',
     color: '#234451',
-    fontSize: 13,
+    fontSize: 15,
     textAlign: 'center',
   },
-  note: { color: '#6b8190', fontSize: 13 },
+  note: { color: '#6b8190', fontSize: 15 },
   keyValueRow: { display: 'flex', gap: 12, flexWrap: 'wrap' },
-  kv: { background: '#fbfdff', padding: 10, borderRadius: 8, border: '1px solid #e9f3fb', minWidth: 160 },
-  kvLabel: { fontSize: 12, color: '#557085', marginBottom: 6 },
-  kvValue: { fontWeight: 700, color: '#0b4a6f' },
+  kv: { background: '#fbfdff', padding: 12, borderRadius: 8, border: '1px solid #e9f3fb', minWidth: 160 },
+  kvLabel: { fontSize: 14, color: '#557085', marginBottom: 6 },
+  kvValue: { fontWeight: 700, color: '#0b4a6f', fontSize: 16 },
 };
 
 function SmallTable({ title, columns, rows }: { title?: string; columns: string[]; rows: (string | number)[][] }) {
@@ -146,12 +147,13 @@ export default function LCAInstructionsPage({
         key={label}
         onClick={handleClick}
         style={{
-          padding: '8px 12px',
+          padding: '10px 16px',
           borderRadius: 8,
           border: active ? '2px solid #0b4a6f' : '1px solid #e6eef8',
           background: active ? '#0b4a6f' : '#fbfdff',
           color: active ? '#fff' : '#0b4a6f',
           fontWeight: 700,
+          fontSize: 15,
           cursor: 'pointer',
         }}
       >
@@ -207,10 +209,10 @@ export default function LCAInstructionsPage({
 
               <div style={{ ...styles.card, padding: 14 }}>
                 <div style={styles.sectionTitle}>Instruction Steps (recommended)</div>
-                <ol style={{ margin: 0, paddingLeft: 18, color: '#334e68' }}>
-                  <li style={{ marginBottom: 8 }}>Identify learner profile (L1 / L2 / L3) for the target offering.</li>
-                  <li style={{ marginBottom: 8 }}>Use IL mapping to determine instruction emphasis across IL-1..IL-3.</li>
-                  <li style={{ marginBottom: 8 }}>Apply distribution when preparing teaching plan and question banks (map PT / CO / BTL).</li>
+                <ol style={{ margin: 0, paddingLeft: 22, color: '#334e68', fontSize: 15, lineHeight: 1.55 }}>
+                  <li style={{ marginBottom: 10 }}>Identify learner profile (L1 / L2 / L3) for the target offering.</li>
+                  <li style={{ marginBottom: 10 }}>Use IL mapping to determine instruction emphasis across IL-1..IL-3.</li>
+                  <li style={{ marginBottom: 10 }}>Apply distribution when preparing teaching plan and question banks (map PT / CO / BTL).</li>
                 </ol>
               </div>
 

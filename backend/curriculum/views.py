@@ -41,14 +41,54 @@ class CurriculumMasterViewSet(viewsets.ModelViewSet):
     serializer_class = CurriculumMasterSerializer
     permission_classes = [IsIQACOrReadOnly]
 
+    def create(self, request, *args, **kwargs):
+        try:
+            return super().create(request, *args, **kwargs)
+        except Exception as e:
+            import traceback
+            logging.getLogger(__name__).error('Error creating CurriculumMaster: %s\n%s', e, traceback.format_exc())
+            return Response(
+                {'detail': 'Failed to create master entry', 'error': str(e)}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def update(self, request, *args, **kwargs):
+        try:
+            return super().update(request, *args, **kwargs)
+        except Exception as e:
+            import traceback
+            logging.getLogger(__name__).error('Error updating CurriculumMaster: %s\n%s', e, traceback.format_exc())
+            return Response(
+                {'detail': 'Failed to update master entry', 'error': str(e)}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        try:
+            serializer.save(created_by=self.request.user)
+        except Exception as e:
+            logging.getLogger(__name__).exception('Error in perform_create: %s', e)
+            raise
+
+    def perform_update(self, serializer):
+        try:
+            serializer.save()
+        except Exception as e:
+            logging.getLogger(__name__).exception('Error in perform_update: %s', e)
+            raise
 
     @action(detail=True, methods=['post'], permission_classes=[IsIQACOrReadOnly])
     def propagate(self, request, pk=None):
-        obj = self.get_object()
-        obj.save()  # triggers post_save propagation
-        return Response({'status': 'propagation triggered'})
+        try:
+            obj = self.get_object()
+            obj.save()  # triggers post_save propagation
+            return Response({'status': 'propagation triggered'})
+        except Exception as e:
+            logging.getLogger(__name__).exception('Error in propagate: %s', e)
+            return Response(
+                {'detail': 'Failed to propagate', 'error': str(e)}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 class MasterImportView(APIView):
     """API endpoint to import CurriculumMaster CSV using token/JWT auth.

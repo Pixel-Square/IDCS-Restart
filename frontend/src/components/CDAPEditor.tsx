@@ -118,7 +118,8 @@ export default function CDAPEditor({
   };
 
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [fitToScreen, setFitToScreen] = useState(true);
+  // Default OFF so the grid doesn't appear unexpectedly shrunken.
+  const [fitToScreen, setFitToScreen] = useState(false);
   const [tableZoom, setTableZoom] = useState(1);
   const [zoom, setZoom] = useState(() => {
     if (!subjectId) return 100;
@@ -556,7 +557,8 @@ export default function CDAPEditor({
 
       const padding = 24;
       const raw = (containerWidth - padding) / naturalWidth;
-      const next = Math.min(1, Math.max(0.35, raw));
+      // Clamp so Fit Screen never makes text unreadably small.
+      const next = Math.min(1, Math.max(0.55, raw));
       setTableZoom(next);
     };
 
@@ -613,14 +615,14 @@ export default function CDAPEditor({
           border: none;
         }
         .cdap-table-wrap { overflow-x: auto; border: 1px solid #e2e8f0; border-radius: 10px; }
-        .cdap-table { border-collapse: collapse; width: 100%; font-size: 11px; table-layout: fixed; }
+        .cdap-table { border-collapse: collapse; width: 100%; font-size: 14px; table-layout: fixed; }
         .cdap-table thead th {
           position: sticky;
           top: 0;
           z-index: 2;
           border: 1px solid #e2e8f0;
-          padding: 5px 4px;
-          font-size: 10px;
+          padding: 6px 6px;
+          font-size: 13px;
           font-weight: 700;
           text-transform: uppercase;
           letter-spacing: 0.03em;
@@ -629,16 +631,16 @@ export default function CDAPEditor({
           text-overflow: ellipsis;
         }
         .cdap-table tbody tr:hover td { background: #eff6ff !important; }
-        .cdap-table tbody td { border: 1px solid #e2e8f0; padding: 3px 4px; vertical-align: top; }
+        .cdap-table tbody td { border: 1px solid #e2e8f0; padding: 4px 6px; vertical-align: top; }
         .cdap-cell-textarea {
           width: 100%;
           border: 1px solid #cbd5e1;
           border-radius: 4px;
-          padding: 3px 5px;
-          font-size: 11px;
+          padding: 4px 6px;
+          font-size: 14px;
           resize: none;
           font-family: inherit;
-          line-height: 1.4;
+          line-height: 1.45;
         }
         .cdap-cell-textarea:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,0.15); }
         .cdap-cell-textarea:disabled { background: #f3f4f6; cursor: not-allowed; color: #6b7280; }
@@ -664,7 +666,7 @@ export default function CDAPEditor({
         .cdap-unit-header-cell:last-child { border-right: none; }
         .cdap-unit-header-cell label {
           display: block;
-          font-size: 10px;
+          font-size: 13px;
           font-weight: 700;
           text-transform: uppercase;
           letter-spacing: 0.04em;
@@ -675,12 +677,12 @@ export default function CDAPEditor({
           width: 100%;
           border: 1px solid #cbd5e1;
           border-radius: 6px;
-          padding: 4px 6px;
-          font-size: 12px;
+          padding: 5px 8px;
+          font-size: 15px;
           font-family: inherit;
           resize: none;
           background: #fff;
-          line-height: 1.4;
+          line-height: 1.45;
         }
         .cdap-unit-header-cell textarea:focus { outline: none; border-color: #2563eb; }
         .cdap-unit-header-cell textarea:disabled { background: #f3f4f6; cursor: not-allowed; color: #6b7280; }
@@ -690,9 +692,9 @@ export default function CDAPEditor({
       `}</style>
 
       {loadingCloud ? (
-        <div style={{ marginBottom: 8, fontSize: 12, color: '#64748b' }}>Loading from cloud…</div>
+        <div style={{ marginBottom: 8, fontSize: 14, color: '#64748b' }}>Loading from cloud…</div>
       ) : cloudError ? (
-        <div style={{ marginBottom: 8, fontSize: 12, color: '#b91c1c' }}>{cloudError}</div>
+        <div style={{ marginBottom: 8, fontSize: 14, color: '#b91c1c' }}>{cloudError}</div>
       ) : null}
 
       {isReadOnly ? (
@@ -715,11 +717,11 @@ export default function CDAPEditor({
       ) : null}
 
       {editWindowLoading || editWindowError ? (
-        <div style={{ marginBottom: 10, fontSize: 12, color: editWindowError ? '#b91c1c' : '#64748b' }}>
+        <div style={{ marginBottom: 10, fontSize: 14, color: editWindowError ? '#b91c1c' : '#64748b' }}>
           {editWindowError ? editWindowError : 'Checking edit approval…'}
         </div>
       ) : isPublishedByServer && hasEditApproval && editWindow?.approval_until ? (
-        <div style={{ marginBottom: 10, fontSize: 12, color: '#065f46' }}>
+        <div style={{ marginBottom: 10, fontSize: 14, color: '#065f46' }}>
           Edit approved until {new Date(editWindow.approval_until).toLocaleString()}.
         </div>
       ) : null}
@@ -751,8 +753,8 @@ export default function CDAPEditor({
             </svg>
           </div>
           <div>
-            <div style={{ fontWeight: 700, color: '#0f172a', fontSize: 13 }}>Revised CDP Editor</div>
-            <div style={{ fontSize: 11, color: '#64748b' }}>Interactive spreadsheet interface</div>
+            <div style={{ fontWeight: 700, color: '#0f172a', fontSize: 16 }}>Revised CDP Editor</div>
+            <div style={{ fontSize: 13, color: '#64748b' }}>Interactive spreadsheet interface</div>
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -782,7 +784,7 @@ export default function CDAPEditor({
             >
               <ZoomIn size={14} color="#64748b" />
             </button>
-            <span style={{ fontSize: 11, color: '#334155', minWidth: 32, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{zoom}%</span>
+            <span style={{ fontSize: 13, color: '#334155', minWidth: 32, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{zoom}%</span>
           </div>
           {/* Fit screen toggle */}
           <button
@@ -796,7 +798,7 @@ export default function CDAPEditor({
               color: fitToScreen ? '#fff' : '#374151',
               cursor: 'pointer',
               fontWeight: 600,
-              fontSize: 11,
+              fontSize: 13,
               display: 'flex', alignItems: 'center', gap: 5,
               boxShadow: fitToScreen ? '0 2px 6px rgba(17,24,39,0.25)' : '0 1px 2px rgba(0,0,0,0.04)',
               transition: 'all 150ms ease',
@@ -819,7 +821,7 @@ export default function CDAPEditor({
               color: '#fff',
               cursor: isReadOnly ? 'not-allowed' : 'pointer',
               fontWeight: 600,
-              fontSize: 11,
+              fontSize: 13,
               opacity: isReadOnly ? 0.5 : 1,
               display: 'flex', alignItems: 'center', gap: 5,
               boxShadow: isReadOnly ? 'none' : '0 2px 6px rgba(5,150,105,0.28)',
@@ -844,7 +846,7 @@ export default function CDAPEditor({
               color: '#fff',
               cursor: requestEditBusy ? 'not-allowed' : 'pointer',
               fontWeight: 700,
-              fontSize: 11,
+              fontSize: 13,
               opacity: requestEditBusy ? 0.6 : 1,
               boxShadow: isReadOnly
                 ? '0 2px 6px rgba(22,163,74,0.28)'
@@ -880,7 +882,7 @@ export default function CDAPEditor({
             placeholder="Why do you need to edit this published CDAP?"
           />
           {requestEditError ? (
-            <div style={{ marginTop: 8, fontSize: 12, color: '#b91c1c', fontWeight: 700 }}>{requestEditError}</div>
+            <div style={{ marginTop: 8, fontSize: 14, color: '#b91c1c', fontWeight: 700 }}>{requestEditError}</div>
           ) : null}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 10 }}>
             <button
@@ -985,7 +987,7 @@ export default function CDAPEditor({
                       {group.items.map((item, idx) => (
                         <Fragment key={item.index}>
                           <tr style={{ background: idx % 2 === 0 ? '#fff' : '#f8fafc' }}>
-                            <td style={{ textAlign: 'center', color: '#94a3b8', fontWeight: 600, fontSize: 10 }}>{idx + 1}</td>
+                            <td style={{ textAlign: 'center', color: '#94a3b8', fontWeight: 600, fontSize: 13 }}>{idx + 1}</td>
                             {topCoreCols.map((c) => (
                               <td key={c.key}>
                                 <textarea
@@ -1014,7 +1016,7 @@ export default function CDAPEditor({
                                 value={item.row.total_hours_required ?? ''}
                                 onChange={(e) => updateCell(item.index, 'total_hours_required', e.target.value)}
                                 disabled={isReadOnly}
-                                style={{ width: '100%', border: '1px solid #cbd5e1', borderRadius: 4, padding: '3px 4px', fontSize: 11, background: isReadOnly ? '#f3f4f6' : '#fff', cursor: isReadOnly ? 'not-allowed' : 'text', textAlign: 'center' }}
+                                style={{ width: '100%', border: '1px solid #cbd5e1', borderRadius: 4, padding: '4px 6px', fontSize: 14, background: isReadOnly ? '#f3f4f6' : '#fff', cursor: isReadOnly ? 'not-allowed' : 'text', textAlign: 'center' }}
                               />
                             </td>
                             <td style={{ textAlign: 'center' }}>
@@ -1023,7 +1025,7 @@ export default function CDAPEditor({
                                 onClick={() => removeRow(item.index)}
                                 disabled={isReadOnly}
                                 title="Delete row"
-                                style={{ padding: '3px 7px', background: isReadOnly ? '#d1d5db' : '#fee2e2', color: isReadOnly ? '#9ca3af' : '#dc2626', border: `1px solid ${isReadOnly ? '#d1d5db' : '#fca5a5'}`, borderRadius: 5, cursor: isReadOnly ? 'not-allowed' : 'pointer', fontSize: 11, fontWeight: 600, opacity: isReadOnly ? 0.5 : 1 }}
+                                style={{ padding: '4px 8px', background: isReadOnly ? '#d1d5db' : '#fee2e2', color: isReadOnly ? '#9ca3af' : '#dc2626', border: `1px solid ${isReadOnly ? '#d1d5db' : '#fca5a5'}`, borderRadius: 5, cursor: isReadOnly ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600, opacity: isReadOnly ? 0.5 : 1 }}
                               >
                                 ✕
                               </button>
@@ -1043,9 +1045,9 @@ export default function CDAPEditor({
                   type="button"
                   onClick={() => addRowToGroup(group.key)}
                   disabled={isReadOnly}
-                  style={{ padding: '6px 12px', background: isReadOnly ? '#e5e7eb' : '#eff6ff', color: isReadOnly ? '#9ca3af' : '#2563eb', border: `1px solid ${isReadOnly ? '#d1d5db' : '#bfdbfe'}`, borderRadius: 7, cursor: isReadOnly ? 'not-allowed' : 'pointer', fontWeight: 600, fontSize: 12, opacity: isReadOnly ? 0.5 : 1, display: 'flex', alignItems: 'center', gap: 5 }}
+                  style={{ padding: '8px 14px', background: isReadOnly ? '#e5e7eb' : '#eff6ff', color: isReadOnly ? '#9ca3af' : '#2563eb', border: `1px solid ${isReadOnly ? '#d1d5db' : '#bfdbfe'}`, borderRadius: 7, cursor: isReadOnly ? 'not-allowed' : 'pointer', fontWeight: 600, fontSize: 14, opacity: isReadOnly ? 0.5 : 1, display: 'flex', alignItems: 'center', gap: 5 }}
                 >
-                  <span style={{ fontSize: 14, lineHeight: 1 }}>+</span> Add Row to Unit {group.key}
+                  <span style={{ fontSize: 16, lineHeight: 1 }}>+</span> Add Row to Unit {group.key}
                 </button>
               </div>
             </div>
@@ -1057,7 +1059,7 @@ export default function CDAPEditor({
         <h4 style={{ marginBottom: 10 }}>Reference Materials</h4>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 }}>
           <div>
-            <label style={{ fontSize: 12, fontWeight: 600 }}>Textbook Details</label>
+            <label style={{ fontSize: 15, fontWeight: 600 }}>Textbook Details</label>
             <textarea
               value={textbookDetails}
               onChange={(e) => setTextbookDetails(e.target.value)}
@@ -1068,7 +1070,7 @@ export default function CDAPEditor({
             />
           </div>
           <div>
-            <label style={{ fontSize: 12, fontWeight: 600 }}>Reference Book Details</label>
+            <label style={{ fontSize: 15, fontWeight: 600 }}>Reference Book Details</label>
             <textarea
               value={referenceDetails}
               onChange={(e) => setReferenceDetails(e.target.value)}
@@ -1085,7 +1087,7 @@ export default function CDAPEditor({
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
           <div>
             <h4 style={{ margin: 0 }}>Active Learning Mapping</h4>
-            <div style={{ fontSize: 12, color: '#64748b' }}>7 × 11 PO mapping matrix</div>
+            <div style={{ fontSize: 14, color: '#64748b' }}>7 × 11 PO mapping matrix</div>
           </div>
           <button
             type="button"
