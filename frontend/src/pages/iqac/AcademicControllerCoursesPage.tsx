@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { fetchDeptRows, DeptRow } from '../../services/curriculum';
+import { fetchDeptRows, fetchElectives, DeptRow } from '../../services/curriculum';
 
 type CourseCard = {
   course_code: string;
@@ -16,6 +16,7 @@ function normalize(s: any) {
 export default function AcademicControllerCoursesPage(): JSX.Element {
   const navigate = useNavigate();
   const [rows, setRows] = useState<DeptRow[]>([]);
+  const [electiveRows, setElectiveRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState('');
@@ -24,13 +25,23 @@ export default function AcademicControllerCoursesPage(): JSX.Element {
     let mounted = true;
     (async () => {
       try {
-        const dept = await fetchDeptRows();
+        const [dept, electives] = await Promise.all([
+          fetchDeptRows(),
+          fetchElectives().catch(() => []),
+        ]);
         if (!mounted) return;
         setRows(Array.isArray(dept) ? dept : []);
+        const electiveList = Array.isArray(electives)
+          ? electives
+          : Array.isArray((electives as any)?.results)
+          ? (electives as any).results
+          : [];
+        setElectiveRows(electiveList);
         setError(null);
       } catch (e: any) {
         if (!mounted) return;
         setRows([]);
+        setElectiveRows([]);
         setError(e?.message || 'Failed to load courses');
       } finally {
         if (mounted) setLoading(false);
@@ -44,8 +55,7 @@ export default function AcademicControllerCoursesPage(): JSX.Element {
   const courses = useMemo(() => {
     const map = new Map<string, CourseCard>();
 
-    // Department Curriculum is the source of truth for course selection.
-    // Multiple departments can have rows with the same course_code; pick the best row per code.
+    // Department Curriculum rows
     for (const r of rows || []) {
       const code = normalize((r as any).course_code);
       if (!code) continue;
@@ -69,11 +79,28 @@ export default function AcademicControllerCoursesPage(): JSX.Element {
         (c.question_paper_type ? 1 : 0) +
         (String(c.question_paper_type || '').trim().toUpperCase() && String(c.question_paper_type || '').trim().toUpperCase() !== 'QP1' ? 1 : 0);
 
-      // Keep whichever has "better" metadata; ties keep existing.
       if (score(incoming) > score(existing)) map.set(code, incoming);
     }
+
+    // Elective subjects — merge in; don't overwrite a dept row that already provides full metadata
+    for (const e of electiveRows || []) {
+      const code = normalize((e as any).course_code);
+      if (!code) continue;
+
+      const incoming: CourseCard = {
+        course_code: code,
+        course_name: normalize((e as any).course_name),
+        class_type: normalize((e as any).class_type) || 'ELECTIVE',
+        question_paper_type: normalize((e as any).question_paper_type) || null,
+      };
+
+      if (!map.has(code)) {
+        map.set(code, incoming);
+      }
+    }
+
     return Array.from(map.values()).sort((a, b) => a.course_code.localeCompare(b.course_code));
-  }, [rows]);
+  }, [rows, electiveRows]);
 
   const filtered = useMemo(() => {
     const needle = normalize(q).toLowerCase();

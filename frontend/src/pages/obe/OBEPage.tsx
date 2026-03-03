@@ -9,6 +9,7 @@ import '../../styles/obe-theme.css';
 // OBE/marks/COAttainment fetch and types removed
 
 import { getCachedMe } from '../../services/auth';
+import { fetchAssignedSubjects } from '../../services/staff';
 import {
   fetchMyTeachingAssignments,
   TeachingAssignmentItem,
@@ -177,8 +178,17 @@ export default function OBEPage(): JSX.Element {
     return rolesUpper.has('HOD') || rolesUpper.has('AHOD') || rolesUpper.has('ADVISOR');
   }, [effectiveRoles]);
 
+  const isAcademicViewer = useMemo(() => {
+    const rolesUpper = new Set(effectiveRoles.map((r) => String(r || '').trim().toUpperCase()));
+    return rolesUpper.has('IQAC') || rolesUpper.has('HAA');
+  }, [effectiveRoles]);
+
   const [assignments, setAssignments] = useState<TeachingAssignmentItem[]>([]);
   const [loadingAssignments, setLoadingAssignments] = useState(false);
+  const [assignmentsError, setAssignmentsError] = useState<string | null>(null);
+
+  const [academicCourses, setAcademicCourses] = useState<Array<{ subject_code: string; subject_name: string; class_type?: string | null }>>([]);
+  const [loadingAcademicCourses, setLoadingAcademicCourses] = useState(false);
 
   // Import wizard state (Exam Management)
   const [importWizardOpen, setImportWizardOpen] = useState(false);
@@ -289,14 +299,82 @@ export default function OBEPage(): JSX.Element {
     (async () => {
       try {
         setLoadingAssignments(true);
-        const r = await fetchMyTeachingAssignments();
-        if (Array.isArray(r)) setAssignments(r);
+        setAssignmentsError(null);
+
+        let list: TeachingAssignmentItem[] = [];
+        try {
+          const r = await fetchMyTeachingAssignments();
+          if (Array.isArray(r)) list = r;
+        } catch (e: any) {
+          // keep error for UI; we'll try fallback below
+          setAssignmentsError(e?.message ? String(e.message) : 'Failed to load courses');
+        }
+
+        // Fallback: the staff Assigned Subjects endpoint is often more reliable
+        // in deployments where teaching assignments are filtered differently.
+        if (!Array.isArray(list) || list.length === 0) {
+          try {
+            const alt = await fetchAssignedSubjects();
+            if (Array.isArray(alt)) list = alt as any;
+          } catch (e: any) {
+            if (!assignmentsError) {
+              setAssignmentsError(e?.message ? String(e.message) : 'Failed to load courses');
+            }
+          }
+        }
+
+        setAssignments(Array.isArray(list) ? list : []);
       } catch (e) {
         // ignore errors here to avoid blocking UI
         console.warn('Failed to load teaching assignments', e);
         setAssignments([]);
       } finally {
         setLoadingAssignments(false);
+      }
+    })();
+
+    // Academic (IQAC/HAA) users may not have teaching assignments; fall back to curriculum courses.
+    (async () => {
+      if (!isAcademicViewer) return;
+      try {
+        setLoadingAcademicCourses(true);
+        const [deptRes, elecRes] = await Promise.all([
+          fetchWithFallback('/api/curriculum/department/', { headers: { ...authHeaders() } }).then((r) => (r.ok ? r.json() : [] as any[])).catch(() => []),
+          fetchWithFallback('/api/curriculum/elective/?page_size=0', { headers: { ...authHeaders() } }).then((r) => (r.ok ? r.json() : [] as any[])).catch(() => []),
+        ]);
+
+        const deptRows = Array.isArray(deptRes) ? deptRes : [];
+        const electiveRows = Array.isArray(elecRes) ? elecRes : [];
+
+        const map = new Map<string, { subject_code: string; subject_name: string; class_type?: string | null }>();
+
+        for (const row of deptRows) {
+          const code = String((row as any)?.course_code || '').trim();
+          if (!code) continue;
+          const name = String((row as any)?.course_name || '').trim();
+          const classType = ((row as any)?.class_type == null ? null : String((row as any)?.class_type).trim()) || null;
+          const existing = map.get(code);
+          if (!existing || (!existing.subject_name && name)) {
+            map.set(code, { subject_code: code, subject_name: name, class_type: classType });
+          }
+        }
+
+        for (const row of electiveRows) {
+          const code = String((row as any)?.course_code || '').trim();
+          if (!code) continue;
+          const name = String((row as any)?.course_name || '').trim();
+          const classType = ((row as any)?.class_type == null ? null : String((row as any)?.class_type).trim()) || null;
+          const existing = map.get(code);
+          if (!existing || (!existing.subject_name && name)) {
+            map.set(code, { subject_code: code, subject_name: name, class_type: classType });
+          }
+        }
+
+        setAcademicCourses(Array.from(map.values()).sort((a, b) => a.subject_code.localeCompare(b.subject_code)));
+      } catch (e) {
+        setAcademicCourses([]);
+      } finally {
+        setLoadingAcademicCourses(false);
       }
     })();
 
@@ -311,7 +389,7 @@ export default function OBEPage(): JSX.Element {
         // ignore
       }
     })();
-  }, []);
+  }, [isAcademicViewer]);
 
   // Guard: Progress is only for HOD / Advisor.
   useEffect(() => {
@@ -908,20 +986,26 @@ export default function OBEPage(): JSX.Element {
                     }}
                   >
                     {/* Course list: show assignments when available (safe fetch) */}
-                    {loadingAssignments ? (
+                    {loadingAssignments || (isAcademicViewer && loadingAcademicCourses) ? (
                       <div style={{ gridColumn: '1/-1', color: '#64748b', fontSize: 16, textAlign: 'center', padding: 60, background: '#fff', borderRadius: 12 }}>⏳ Loading courses…</div>
-                    ) : assignments.length === 0 ? (
+                    ) : assignmentsError && assignments.length === 0 && !(isAcademicViewer && academicCourses.length > 0) ? (
+                      <div style={{ gridColumn: '1/-1', color: '#b91c1c', fontSize: 16, textAlign: 'center', padding: 60, background: '#fff', borderRadius: 12, border: '2px dashed #fecaca' }}>
+                        ⚠️ Failed to load courses.<br />
+                        <span style={{ fontSize: 14, marginTop: 12, display: 'block', color: '#7f1d1d' }}>{assignmentsError}</span>
+                      </div>
+                    ) : assignments.length === 0 && !(isAcademicViewer && academicCourses.length > 0) ? (
                       <div style={{ gridColumn: '1/-1', color: '#94a3b8', fontSize: 18, textAlign: 'center', padding: 60, background: '#fff', borderRadius: 12, border: '2px dashed #e2e8f0' }}>
                         📭 No courses found. You have no teaching assignments.<br />
                         <span style={{ fontSize: 14, marginTop: 12, display: 'block' }}>(If you expect to see courses here, please check with your backend/API or contact admin.)</span>
                       </div>
                     ) : (
-                      assignments
-                        .reduce((acc: TeachingAssignmentItem[], it) => {
-                          if (!acc.some(a => a.subject_code === it.subject_code)) acc.push(it);
-                          return acc;
-                        }, [] as TeachingAssignmentItem[])
-                        .map((it) => (
+                      (assignments.length > 0
+                        ? assignments.reduce((acc: TeachingAssignmentItem[], it) => {
+                            if (!acc.some(a => a.subject_code === it.subject_code)) acc.push(it);
+                            return acc;
+                          }, [] as TeachingAssignmentItem[])
+                        : academicCourses
+                      ).map((it: any) => (
                           <div
                             key={it.subject_code}
                             onClick={() => navigateToCourse(it.subject_code)}

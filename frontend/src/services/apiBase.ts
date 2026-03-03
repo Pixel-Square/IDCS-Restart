@@ -20,6 +20,14 @@ export function getApiBase(): string {
     const port = String(window.location.port || '').trim()
     const protocol = String(window.location.protocol || 'http:').trim()
 
+    // When serving the frontend from a plain static server (often :80/:443) on
+    // localhost, Django commonly runs on :8000 without an `/api` reverse proxy.
+    // Prefer :8000 in this case so API calls don't hit the static server and
+    // return index.html (which would look like an empty response).
+    if ((host === 'localhost' || host === '127.0.0.1') && (port === '' || port === '80' || port === '443')) {
+      return trimTrailingSlashes(`${protocol}//${host}:8000`)
+    }
+
     // When the frontend is served by a dev server, default to a Django backend on :8000.
     // This avoids same-origin API calls accidentally hitting the dev server.
     if (port === '5173' || port === '4173' || port === '3000') {

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ClipboardList } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster } from '../services/roster';
 import fetchWithAuth from '../services/fetchAuth';
@@ -235,7 +236,7 @@ function normalizeCoNumberMarks(raw: unknown): Record<string, number | ''> {
 function normalizedContribution(obtained: number, totalMax: number, weight: number): number {
   if (!Number.isFinite(obtained) || !Number.isFinite(totalMax) || !Number.isFinite(weight)) return 0;
   if (totalMax <= 0 || weight <= 0) return 0;
-  const safeObtained = Math.max(0, obtained);
+  const safeObtained = clampNumber(obtained, 0, totalMax);
   return (safeObtained / totalMax) * weight;
 }
 
@@ -256,6 +257,40 @@ function shortenRollNo(raw: unknown, keepLast: number = 7): string {
 
 function storageKey(assessmentKey: LabAssessmentKey, subjectId: string) {
   return `${assessmentKey}_sheet_${subjectId}`;
+}
+
+function safeFilePart(raw: string) {
+  return String(raw || '')
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9_-]/g, '')
+    .slice(0, 48);
+}
+
+function downloadCsv(filename: string, rows: Array<Record<string, string | number>>) {
+  if (!rows.length) return;
+  const headers = Object.keys(rows[0]);
+  const csv = [headers.join(',')]
+    .concat(
+      rows.map((r) =>
+        headers
+          .map((h) => {
+            const v = r[h];
+            const s = String(v ?? '').replace(/\n/g, ' ');
+            return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s;
+          })
+          .join(','),
+      ),
+    )
+    .join('\n');
+
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 export default function LabCourseMarksEntry({
@@ -302,6 +337,9 @@ export default function LabCourseMarksEntry({
   const [publishedViewError, setPublishedViewError] = useState<string | null>(null);
 
   const [showAbsenteesOnly, setShowAbsenteesOnly] = useState(false);
+  const [rosterRefreshKey, setRosterRefreshKey] = useState(0);
+  const [excelBusy, setExcelBusy] = useState(false);
+  const excelFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [markManagerModal, setMarkManagerModal] = useState<null | { mode: 'confirm' | 'request' }>(null);
   const [markManagerBusy, setMarkManagerBusy] = useState(false);
@@ -490,7 +528,7 @@ export default function LabCourseMarksEntry({
     () => normalizedClassType === 'LAB' || normalizedClassType === 'TCPL' || normalizedClassType === 'TCPR' || normalizedClassType === 'PRACTICAL' || normalizedClassType === 'PROJECT',
     [normalizedClassType],
   );
-  const isStrictLabMode = normalizedClassType === 'LAB';
+  const isStrictLabMode = normalizedClassType === 'LAB' || normalizedClassType === 'PRACTICAL';
   const usesLegacyTcplProfile = isTcplOrReviewBased && !isStrictLabMode && !isTcpr;
 
   // Load master config for term label
@@ -841,7 +879,7 @@ export default function LabCourseMarksEntry({
     return () => {
       mounted = false;
     };
-  }, [teachingAssignmentId]);
+  }, [teachingAssignmentId, rosterRefreshKey]);
   
 
   // Local mirror (for dashboard counts)
@@ -952,20 +990,7 @@ export default function LabCourseMarksEntry({
     [enabledCoMetas],
   );
   const tcplReviewCaaCols = tcplReviewCaaMetas.length;
-  const labCiaMetas = useMemo(
-    () =>
-      isStrictLabMode && ciaExamEnabled
-        ? enabledCoMetas.filter((m) => Number(LAB_CIA_MAX_BY_CO[m.coNumber] || 0) > 0)
-        : [],
-    [enabledCoMetas, isStrictLabMode, ciaExamEnabled],
-  );
-  const examCols = isStrictLabMode
-    ? (ciaExamEnabled ? labCiaMetas.length : 0)
-    : ciaExamEnabled
-      ? usesLegacyTcplProfile
-        ? Math.max(tcplReviewCaaCols, 1)
-        : 1
-      : 0;
+  const examCols = ciaExamEnabled ? (usesLegacyTcplProfile ? Math.max(tcplReviewCaaCols, 1) : 1) : 0;
   const coAttainmentCols = hasEnabledCos ? enabledCoMetas.length * 2 : 2;
   const maxExpMax = useMemo(() => enabledCoMetas.reduce((m, c) => Math.max(m, c.expMax), 0), [enabledCoMetas]);
 
@@ -994,15 +1019,26 @@ export default function LabCourseMarksEntry({
         : null;
 
     if (isStrictLabMode) {
+      const enabledCoCount = Math.max(1, marksForEnabledCos.length);
+      const ciaTotal = (() => {
+        if (!ciaExamEnabled) return 0;
+        if (ciaExamNumLegacy != null) return clampNumber(ciaExamNumLegacy, 0, ciaExamMaxEffective);
+        // Back-compat: older drafts may have per-CO CIA values only
+        const sumByCo = Object.values(ciaByCo).reduce<number>((acc, v) => acc + (typeof v === 'number' && Number.isFinite(v) ? v : 0), 0);
+        return clampNumber(sumByCo, 0, ciaExamMaxEffective);
+      })();
+      const ciaMaxPerCo = ciaExamEnabled ? ciaExamMaxEffective / enabledCoCount : 0;
+      const ciaPerCo = ciaExamEnabled ? ciaTotal / enabledCoCount : 0;
+
       const values = marksForEnabledCos.map((m) => {
         const totalObtained = sumMarks(m.marks);
         const totalMax = Math.max(0, m.expCount) * Math.max(0, m.expMax);
         const expWeight = Number(LAB_EXPERIMENT_WEIGHT_BY_CO[m.coNumber] || 0);
-        const ciaContribution = ciaExamEnabled ? readCoWeightedMark(ciaByCo, m.coNumber, LAB_CIA_MAX_BY_CO) : 0;
+        const ciaContribution = ciaExamEnabled ? normalizedContribution(ciaPerCo, ciaMaxPerCo, ciaMaxPerCo) : 0;
         const expContribution = normalizedContribution(totalObtained, totalMax, expWeight);
         const hasAnyCoMark = totalObtained > 0 || ciaContribution > 0;
         const mark = hasAnyCoMark ? round1(expContribution + ciaContribution) : null;
-        const coMax = round1(expWeight + (ciaExamEnabled ? Number(LAB_CIA_MAX_BY_CO[m.coNumber] || 0) : 0));
+        const coMax = round1(expWeight + (ciaExamEnabled ? ciaMaxPerCo : 0));
         return { coNumber: m.coNumber, mark, coMax };
       });
 
@@ -2569,6 +2605,235 @@ export default function LabCourseMarksEntry({
     });
   };
 
+  const exportHeaders = useMemo(() => {
+    const headers: string[] = ['S.No', 'Register No', 'Name'];
+    if (absentUiEnabled) headers.push('Absent');
+    for (const m of enabledCoMetas) {
+      for (let i = 0; i < m.expCount; i++) headers.push(`CO${m.coNumber}_${itemColAbbrev}${i + 1}`);
+    }
+    if (ciaExamEnabled) {
+      if (usesLegacyTcplProfile) {
+        for (const m of tcplReviewCaaMetas) headers.push(`CAA_CO${m.coNumber}`);
+      } else {
+        headers.push('CIA Exam');
+      }
+    }
+    headers.push('Total');
+    return headers;
+  }, [absentUiEnabled, enabledCoMetas, itemColAbbrev, ciaExamEnabled, usesLegacyTcplProfile, tcplReviewCaaMetas]);
+
+  const buildExportObjects = () => {
+    return students.map((s, idx) => {
+      const row = draft.sheet.rowsByStudentId?.[String(s.id)];
+      const marksForEnabledCos = getRowMarksForEnabledCos(row, enabledCoMetas);
+      const computed = computeRowCoAttainment(row, marksForEnabledCos);
+      const effectiveAbsent = Boolean(absentUiEnabled && (row as any)?.absent && !computed.hasAnyMarks);
+      const out: Record<string, string | number> = {
+        'S.No': idx + 1,
+        'Register No': String((s as any).reg_no || ''),
+        Name: String((s as any).name || ''),
+      };
+
+      if (absentUiEnabled) {
+        out.Absent = effectiveAbsent ? String((row as any)?.absentKind || 'AL') : '';
+      }
+
+      for (const m of enabledCoMetas) {
+        const found = marksForEnabledCos.find((x) => x.coNumber === m.coNumber);
+        const marks = found?.marks || [];
+        for (let i = 0; i < m.expCount; i++) {
+          out[`CO${m.coNumber}_${itemColAbbrev}${i + 1}`] = typeof marks[i] === 'number' ? Number(marks[i]) : '';
+        }
+      }
+
+      if (ciaExamEnabled) {
+        if (usesLegacyTcplProfile) {
+          for (const m of tcplReviewCaaMetas) {
+            const raw = computed.caaByCo?.[String(m.coNumber)];
+            out[`CAA_CO${m.coNumber}`] = typeof raw === 'number' && Number.isFinite(raw) ? raw : '';
+          }
+        } else {
+          out['CIA Exam'] = computed.ciaExamNumLegacy != null ? Number(computed.ciaExamNumLegacy) : '';
+        }
+      }
+
+      out.Total = effectiveAbsent ? 'ABSENT' : (computed.finalTotal as any);
+      return out;
+    });
+  };
+
+  const exportSheetCsv = () => {
+    const rows = buildExportObjects();
+    if (!rows.length) return;
+    downloadCsv(`${String(subjectId)}_${safeFilePart(label || assessmentKey)}_sheet.csv`, rows);
+  };
+
+  const exportSheetExcel = () => {
+    const rows = buildExportObjects();
+    if (!rows.length) return;
+    const aoa = [exportHeaders, ...rows.map((r) => exportHeaders.map((h) => (r as any)[h] ?? ''))];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, String(label || assessmentKey || 'Sheet').slice(0, 31));
+    XLSX.writeFile(wb, `${String(subjectId)}_${safeFilePart(label || assessmentKey)}_sheet.xlsx`);
+  };
+
+  const triggerExcelImport = () => {
+    if (excelBusy) return;
+    excelFileInputRef.current?.click();
+  };
+
+  const handleExcelFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.currentTarget.value = '';
+    if (!file || !subjectId) return;
+
+    const parseFinite = (v: any): number | null => {
+      if (v == null || v === '') return null;
+      if (typeof v === 'string' && !v.trim()) return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+    const normalizeReg = (v: any) => String(v ?? '').trim().replace(/\s+/g, '').toLowerCase();
+
+    try {
+      setExcelBusy(true);
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: 'array' });
+      const sheet0 = workbook.Sheets[workbook.SheetNames[0]];
+      const rows: any[][] = XLSX.utils.sheet_to_json(sheet0, { header: 1 });
+      if (!Array.isArray(rows) || rows.length < 2) {
+        alert('Excel file is empty.');
+        return;
+      }
+
+      const header = (rows[0] || []).map((h) => String(h ?? '').trim());
+      const colMap = new Map<string, number>();
+      header.forEach((h, i) => {
+        if (h) colMap.set(h, i);
+      });
+
+      const regIdx = colMap.get('Register No');
+      if (regIdx == null) {
+        alert('Invalid file format: Register No column not found.');
+        return;
+      }
+
+      const absentIdx = colMap.get('Absent');
+      const expCols = enabledCoMetas.flatMap((m) =>
+        Array.from({ length: m.expCount }, (_, i) => ({
+          coNumber: m.coNumber,
+          expIndex: i,
+          expMax: m.expMax,
+          idx: colMap.get(`CO${m.coNumber}_${itemColAbbrev}${i + 1}`),
+        })),
+      );
+      const ciaIdx = colMap.get('CIA Exam');
+      const caaCols = tcplReviewCaaMetas.map((m) => ({
+        coNumber: m.coNumber,
+        idx: colMap.get(`CAA_CO${m.coNumber}`),
+      }));
+
+      const studentByReg = new Map<string, Student>();
+      for (const st of students) studentByReg.set(normalizeReg(st.reg_no), st);
+
+      let matched = 0;
+      setDraft((p) => {
+        const rowsByStudentId: Record<string, LabRowState> = { ...(p.sheet.rowsByStudentId || {}) };
+
+        for (let r = 1; r < rows.length; r++) {
+          const line = rows[r] || [];
+          const reg = normalizeReg(line[regIdx]);
+          if (!reg) continue;
+          const student = studentByReg.get(reg);
+          if (!student) continue;
+
+          const sid = String(student.id);
+          const existing = rowsByStudentId[sid] || {
+            studentId: student.id,
+            marksA: [],
+            marksB: [],
+            marksByCo: {},
+            caaExamByCo: {},
+            ciaExamByCo: {},
+            ciaExam: '',
+          };
+
+          const marksByCo: Record<string, Array<number | ''>> = {
+            ...(((existing as any).marksByCo && typeof (existing as any).marksByCo === 'object') ? (existing as any).marksByCo : {}),
+          };
+
+          for (const m of enabledCoMetas) {
+            const coKey = String(m.coNumber);
+            marksByCo[coKey] = normalizeMarksArray(marksByCo[coKey], m.expCount);
+          }
+
+          for (const c of expCols) {
+            if (c.idx == null) continue;
+            const n = parseFinite(line[c.idx]);
+            const coKey = String(c.coNumber);
+            const arr = normalizeMarksArray(marksByCo[coKey], enabledCoMetas.find((x) => x.coNumber === c.coNumber)?.expCount ?? 0);
+            arr[c.expIndex] = n == null ? '' : clampInt(n, 0, c.expMax);
+            marksByCo[coKey] = arr;
+          }
+
+          const nextRow: LabRowState = {
+            ...(existing as any),
+            studentId: student.id,
+            marksByCo,
+          };
+
+          if (coANum != null) nextRow.marksA = normalizeMarksArray(marksByCo[String(coANum)], expCountA);
+          if (coBNum != null) nextRow.marksB = normalizeMarksArray(marksByCo[String(coBNum)], expCountB);
+
+          if (absentUiEnabled && absentIdx != null) {
+            const rawAbsent = String(line[absentIdx] ?? '').trim().toUpperCase();
+            if (!rawAbsent || rawAbsent === 'NO' || rawAbsent === 'N' || rawAbsent === 'FALSE' || rawAbsent === '0') {
+              nextRow.absent = false;
+              nextRow.absentKind = undefined;
+            } else {
+              nextRow.absent = true;
+              nextRow.absentKind = rawAbsent === 'ML' || rawAbsent === 'SKL' ? (rawAbsent as any) : 'AL';
+            }
+          }
+
+          if (ciaExamEnabled) {
+            if (usesLegacyTcplProfile) {
+              const caaExamByCo: Record<string, number | ''> = {
+                ...normalizeCaaByCo((existing as any).caaExamByCo),
+              };
+              for (const c of caaCols) {
+                if (c.idx == null) continue;
+                const n = parseFinite(line[c.idx]);
+                const rawMax = Number(TCPL_REVIEW_CAA_RAW_MAX[c.coNumber] || 0);
+                caaExamByCo[String(c.coNumber)] = n == null ? '' : clampInt(n, 0, rawMax);
+              }
+              nextRow.caaExamByCo = caaExamByCo;
+            } else if (ciaIdx != null) {
+              const n = parseFinite(line[ciaIdx]);
+              nextRow.ciaExam = n == null ? '' : clampInt(n, 0, ciaExamMaxEffective);
+            }
+          }
+
+          rowsByStudentId[sid] = nextRow;
+          matched += 1;
+        }
+
+        return { ...p, sheet: { ...p.sheet, rowsByStudentId } };
+      });
+
+      if (!matched) {
+        alert('No matching students found in the imported file.');
+        return;
+      }
+      alert(`Imported marks for ${matched} student(s).`);
+    } catch (err: any) {
+      alert(err?.message || 'Failed to import Excel');
+    } finally {
+      setExcelBusy(false);
+    }
+  };
+
   return (
     <AssessmentContainer>
       <style>{`
@@ -2767,8 +3032,12 @@ export default function LabCourseMarksEntry({
 
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button onClick={downloadTotals} className="obe-btn obe-btn-secondary" disabled={!subjectId || students.length === 0}>
-            Download
+          <button
+            onClick={() => setRosterRefreshKey((v) => v + 1)}
+            className="obe-btn obe-btn-secondary"
+            disabled={!teachingAssignmentId || loadingRoster}
+          >
+            {loadingRoster ? 'Loading roster…' : 'Load/Refresh Roster'}
           </button>
           <button
             onClick={resetSheet}
@@ -2776,7 +3045,64 @@ export default function LabCourseMarksEntry({
             disabled={!subjectId || tableBlocked}
             title={tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : undefined}
           >
-            Reset
+            Reset Marks
+          </button>
+          <button
+            className="obe-btn obe-btn-secondary"
+            disabled={!hasAbsentees}
+            onClick={() => {
+              if (showAbsenteesOnly) return;
+              setShowAbsenteesOnly(true);
+            }}
+            title={hasAbsentees ? 'Filter the table to show only absentees' : 'No absentees marked yet'}
+            style={showAbsenteesOnly ? { background: 'linear-gradient(180deg, #111827, #334155)', color: '#fff', borderColor: 'rgba(2,6,23,0.12)' } : undefined}
+          >
+            Show absentees list
+            {showAbsenteesOnly ? (
+              <span
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowAbsenteesOnly(false);
+                }}
+                role="button"
+                aria-label="Close absentees list"
+                title="Close absentees list"
+                style={{
+                  marginLeft: 10,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 20,
+                  height: 20,
+                  borderRadius: 999,
+                  background: 'rgba(255,255,255,0.18)',
+                  border: '1px solid rgba(255,255,255,0.25)',
+                  fontWeight: 900,
+                  lineHeight: 1,
+                  cursor: 'pointer',
+                  userSelect: 'none',
+                }}
+              >
+                ×
+              </span>
+            ) : null}
+          </button>
+          <button onClick={exportSheetCsv} className="obe-btn obe-btn-secondary" disabled={students.length === 0}>
+            Export CSV
+          </button>
+          <button onClick={exportSheetExcel} className="obe-btn obe-btn-secondary" disabled={students.length === 0}>
+            Export Excel
+          </button>
+          <button
+            onClick={triggerExcelImport}
+            className="obe-btn obe-btn-secondary"
+            disabled={excelBusy || students.length === 0 || tableBlocked || globalLocked}
+          >
+            {excelBusy ? 'Importing…' : 'Import Excel'}
+          </button>
+          <input ref={excelFileInputRef} type="file" accept=".xlsx,.xls" onChange={handleExcelFileSelect} style={{ display: 'none' }} />
+          <button onClick={downloadTotals} className="obe-btn obe-btn-secondary" disabled={!subjectId || students.length === 0}>
+            Download
           </button>
         </div>
 
@@ -2792,10 +3118,10 @@ export default function LabCourseMarksEntry({
           <button
             onClick={publish}
             className="obe-btn obe-btn-primary"
-            disabled={publishButtonIsRequestEdit ? false : !subjectId || publishing || tableBlocked || globalLocked || !publishAllowed}
+            disabled={publishButtonIsRequestEdit ? markEntryReqPending : !subjectId || publishing || tableBlocked || globalLocked || !publishAllowed}
             title={tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : !publishAllowed ? 'Publish window closed' : globalLocked ? 'Publishing locked' : 'Publish'}
           >
-            {publishButtonIsRequestEdit ? 'Request Edit' : publishing ? 'Publishing…' : 'Publish'}
+            {publishButtonIsRequestEdit ? (markEntryReqPending ? 'Request Pending' : 'Request Edit') : publishing ? 'Publishing…' : 'Publish'}
           </button>
           {savedAt && <div style={{ fontSize: 12, color: '#6b7280', alignSelf: 'center' }}>Saved: {savedAt}</div>}
           {publishedAt && <div style={{ fontSize: 12, color: '#16a34a', alignSelf: 'center' }}>Published: {publishedAt}</div>}
@@ -2944,15 +3270,7 @@ export default function LabCourseMarksEntry({
                   <th style={{ ...cellTh, width: COL_AVG_W, minWidth: COL_AVG_W, maxWidth: COL_AVG_W }} rowSpan={5}>
                     AVG
                   </th>
-                  {isStrictLabMode ? (
-                    <>
-                      {ciaExamEnabled && labCiaMetas.length > 0 ? (
-                        <th style={cellTh} colSpan={labCiaMetas.length}>
-                          CIA EXAM
-                        </th>
-                      ) : null}
-                    </>
-                  ) : ciaExamEnabled ? (
+                  {ciaExamEnabled ? (
                     usesLegacyTcplProfile ? (
                       <th style={cellTh} colSpan={Math.max(tcplReviewCaaCols, 1)}>
                         CIA EXAM
@@ -3002,17 +3320,7 @@ export default function LabCourseMarksEntry({
                     </>
                   )}
 
-                  {isStrictLabMode ? (
-                    <>
-                      {ciaExamEnabled
-                        ? labCiaMetas.map((m) => (
-                            <th key={`lab_cia_co_${m.coNumber}`} style={cellTh}>
-                              CO-{m.coNumber}
-                            </th>
-                          ))
-                        : null}
-                    </>
-                  ) : ciaExamEnabled && usesLegacyTcplProfile ? (
+                  {ciaExamEnabled && usesLegacyTcplProfile ? (
                     tcplReviewCaaCols > 0 ? (
                       tcplReviewCaaMetas.map((m) => (
                         <th key={`caa_co_${m.coNumber}`} style={cellTh}>
@@ -3057,17 +3365,7 @@ export default function LabCourseMarksEntry({
                     </>
                   )}
 
-                  {isStrictLabMode ? (
-                    <>
-                      {ciaExamEnabled
-                        ? labCiaMetas.map((m) => (
-                            <th key={`lab_cia_max_${m.coNumber}`} style={cellTh}>
-                              {LAB_CIA_MAX_BY_CO[m.coNumber] ?? 0}
-                            </th>
-                          ))
-                        : null}
-                    </>
-                  ) : ciaExamEnabled && usesLegacyTcplProfile ? (
+                  {ciaExamEnabled && usesLegacyTcplProfile ? (
                     tcplReviewCaaCols > 0 ? (
                       tcplReviewCaaMetas.map((m) => (
                         <th key={`caa_max_${m.coNumber}`} style={cellTh}>
@@ -3084,7 +3382,7 @@ export default function LabCourseMarksEntry({
                       const coMax = isStrictLabMode
                         ? round1(
                             Number(LAB_EXPERIMENT_WEIGHT_BY_CO[m.coNumber] || 0) +
-                              (ciaExamEnabled ? Number(LAB_CIA_MAX_BY_CO[m.coNumber] || 0) : 0),
+                              (ciaExamEnabled && enabledCoMetas.length ? ciaExamMaxEffective / enabledCoMetas.length : 0),
                           )
                         : (() => {
                             const profileCoMax = Number(TCPL_REVIEW_CO_MAX[m.coNumber] || 0);
@@ -3293,46 +3591,7 @@ export default function LabCourseMarksEntry({
                       )}
 
                       <td style={{ ...cellTd, width: COL_AVG_W, minWidth: 0, textAlign: 'right', fontWeight: 800 }}>{avgTotal == null ? '' : avgTotal.toFixed(1)}</td>
-                      {isStrictLabMode ? (
-                        <>
-                          {ciaExamEnabled
-                            ? labCiaMetas.map((m) => {
-                                const maxRaw = Number(LAB_CIA_MAX_BY_CO[m.coNumber] || 0);
-                                const value = ciaByCo[String(m.coNumber)] ?? '';
-                                return (
-                                  <td key={`lab_cia_${s.id}_${m.coNumber}`} style={{ ...cellTd, width: 66, minWidth: 0, padding: '2px 2px', background: '#fff7ed' }}>
-                                    <input
-                                      type="number"
-                                      value={value}
-                                      onChange={(e) => {
-                                        const raw = e.target.value;
-                                        if (raw === '') {
-                                          e.currentTarget.setCustomValidity('');
-                                          return setCiaExamByCo(s.id, m.coNumber, '');
-                                        }
-                                        const next = Number(raw);
-                                        if (!Number.isFinite(next)) return;
-                                        if (next > maxRaw) {
-                                          e.currentTarget.setCustomValidity(`Max mark is ${maxRaw}`);
-                                          e.currentTarget.reportValidity();
-                                          window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
-                                          return;
-                                        }
-                                        e.currentTarget.setCustomValidity('');
-                                        setCiaExamByCo(s.id, m.coNumber, next);
-                                      }}
-                                      style={inputStyle}
-                                      min={0}
-                                      max={maxRaw}
-                                      step={0.1}
-                                      disabled={tableBlocked}
-                                    />
-                                  </td>
-                                );
-                              })
-                            : null}
-                        </>
-                      ) : ciaExamEnabled ? (
+                      {ciaExamEnabled ? (
                         usesLegacyTcplProfile ? (
                           tcplReviewCaaCols > 0 ? (
                             tcplReviewCaaMetas.map((m) => {
@@ -4059,15 +4318,7 @@ export default function LabCourseMarksEntry({
                     <th style={{ ...cellTh, width: COL_AVG_W, minWidth: COL_AVG_W, maxWidth: COL_AVG_W }} rowSpan={5}>
                       AVG
                     </th>
-                    {isStrictLabMode ? (
-                      <>
-                        {ciaExamEnabled && labCiaMetas.length > 0 ? (
-                          <th style={cellTh} colSpan={labCiaMetas.length}>
-                            CIA EXAM
-                          </th>
-                        ) : null}
-                      </>
-                    ) : ciaExamEnabled ? (
+                    {ciaExamEnabled ? (
                       usesLegacyTcplProfile ? (
                         <th style={cellTh} colSpan={Math.max(tcplReviewCaaCols, 1)}>
                           CIA EXAM
@@ -4117,17 +4368,7 @@ export default function LabCourseMarksEntry({
                       </>
                     )}
 
-                    {isStrictLabMode ? (
-                      <>
-                        {ciaExamEnabled
-                          ? labCiaMetas.map((m) => (
-                              <th key={`lab_cia_co_view_${m.coNumber}`} style={cellTh}>
-                                CO-{m.coNumber}
-                              </th>
-                            ))
-                          : null}
-                      </>
-                    ) : ciaExamEnabled && usesLegacyTcplProfile ? (
+                    {ciaExamEnabled && usesLegacyTcplProfile ? (
                       tcplReviewCaaCols > 0 ? (
                         tcplReviewCaaMetas.map((m) => (
                           <th key={`caa_co_view_${m.coNumber}`} style={cellTh}>
@@ -4172,17 +4413,7 @@ export default function LabCourseMarksEntry({
                       </>
                     )}
 
-                    {isStrictLabMode ? (
-                      <>
-                        {ciaExamEnabled
-                          ? labCiaMetas.map((m) => (
-                              <th key={`lab_cia_max_view_${m.coNumber}`} style={cellTh}>
-                                {LAB_CIA_MAX_BY_CO[m.coNumber] ?? 0}
-                              </th>
-                            ))
-                          : null}
-                      </>
-                    ) : ciaExamEnabled && usesLegacyTcplProfile ? (
+                    {ciaExamEnabled && usesLegacyTcplProfile ? (
                       tcplReviewCaaCols > 0 ? (
                         tcplReviewCaaMetas.map((m) => (
                           <th key={`caa_max_view_${m.coNumber}`} style={cellTh}>
@@ -4199,7 +4430,7 @@ export default function LabCourseMarksEntry({
                         const coMax = isStrictLabMode
                           ? round1(
                               Number(LAB_EXPERIMENT_WEIGHT_BY_CO[m.coNumber] || 0) +
-                                (ciaExamEnabled ? Number(LAB_CIA_MAX_BY_CO[m.coNumber] || 0) : 0),
+                                (ciaExamEnabled && enabledCoMetas.length ? ciaExamMaxEffective / enabledCoMetas.length : 0),
                             )
                           : (() => {
                               const profileCoMax = Number(TCPL_REVIEW_CO_MAX[m.coNumber] || 0);
@@ -4318,17 +4549,7 @@ export default function LabCourseMarksEntry({
                         )}
 
                         <td style={{ ...cellTd, width: COL_AVG_W, minWidth: 0, textAlign: 'right', fontWeight: 800 }}>{avgTotal == null ? '' : avgTotal.toFixed(1)}</td>
-                        {isStrictLabMode ? (
-                          <>
-                            {ciaExamEnabled
-                              ? labCiaMetas.map((m) => (
-                                  <td key={`view_lab_cia_${s.id}_${m.coNumber}`} style={{ ...cellTd, width: 66, minWidth: 0, padding: '2px 2px', background: '#fff7ed', textAlign: 'center', fontWeight: 800 }}>
-                                    {ciaByCo[String(m.coNumber)] ?? ''}
-                                  </td>
-                                ))
-                              : null}
-                          </>
-                        ) : ciaExamEnabled ? (
+                        {ciaExamEnabled ? (
                           usesLegacyTcplProfile ? (
                             tcplReviewCaaCols > 0 ? (
                               tcplReviewCaaMetas.map((m) => (

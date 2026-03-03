@@ -313,7 +313,7 @@ export default function CourseOBEPage(): JSX.Element {
             {activeTab === 'marks' && <MarkEntryPage courseId={courseId} classType={courseClassType} questionPaperType={courseQpType} enabledAssessments={courseEnabledAssessments} />}
             {activeTab === 'lca_instructions' && <LCAInstructionsPage courseCode={courseId} courseName={courseName} initialTab={lcaInitialTab} />}
             {activeTab === 'co_attainment' && <COAttainmentPage courseId={courseId} enabledAssessments={courseEnabledAssessments} classType={courseClassType} />}
-            {activeTab === 'internal_mark' && <InternalMarkCoursePage courseId={courseId} enabledAssessments={courseEnabledAssessments} />}
+            {activeTab === 'internal_mark' && <InternalMarkCoursePage courseId={courseId} enabledAssessments={courseEnabledAssessments} classType={courseClassType} />}
             {activeTab === 'cqi' && <CQIPage courseId={courseId} />}
           </div>
       </div>

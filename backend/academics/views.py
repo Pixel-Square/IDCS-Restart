@@ -62,6 +62,99 @@ from .models import StudentMentorMap
 from django.db import transaction
 
 
+def _ensure_teaching_assignments_from_subject_batches(staff_profile) -> int:
+    """Best-effort backfill: create TeachingAssignment rows from StudentSubjectBatch.
+
+    This is used as a fallback when staff have subject batches (i.e., they clearly
+    teach something) but their TeachingAssignment table is empty due to missing
+    data provisioning.
+
+    Returns the number of TeachingAssignment rows created or re-activated.
+    """
+    if not staff_profile or not getattr(staff_profile, 'pk', None):
+        return 0
+
+    try:
+        from .models import StudentSubjectBatch, TeachingAssignment
+    except Exception:
+        return 0
+
+    batches_qs = StudentSubjectBatch.objects.filter(
+        staff=staff_profile,
+        is_active=True,
+        academic_year__is_active=True,
+        curriculum_row__isnull=False,
+    ).select_related('academic_year')
+
+    if not batches_qs.exists():
+        return 0
+
+    created_or_updated = 0
+
+    # Group by (academic_year, curriculum_row) and create one TeachingAssignment per pair.
+    pairs = list(
+        batches_qs.values_list('academic_year_id', 'curriculum_row_id').distinct()
+    )
+
+    from academics.models import StudentProfile
+
+    for academic_year_id, curriculum_row_id in pairs:
+        if not academic_year_id or not curriculum_row_id:
+            continue
+
+        # If any active TA already exists for this staff+course+year (any section), don't create another.
+        existing = TeachingAssignment.objects.filter(
+            staff=staff_profile,
+            academic_year_id=academic_year_id,
+            curriculum_row_id=curriculum_row_id,
+        )
+        if existing.filter(is_active=True).exists():
+            continue
+
+        # Infer a representative section if all students in the batches belong to exactly one section.
+        section_ids = list(
+            StudentProfile.objects.filter(
+                subject_batches__staff=staff_profile,
+                subject_batches__is_active=True,
+                subject_batches__academic_year_id=academic_year_id,
+                subject_batches__curriculum_row_id=curriculum_row_id,
+            ).exclude(section_id__isnull=True).values_list('section_id', flat=True).distinct()
+        )
+        section_id = section_ids[0] if len(section_ids) == 1 else None
+
+        # If an inactive TA exists, reactivate it (prefer one matching inferred section if possible).
+        try:
+            ta_to_reactivate = None
+            if section_id is not None:
+                ta_to_reactivate = existing.filter(section_id=section_id).first()
+            if ta_to_reactivate is None:
+                ta_to_reactivate = existing.first()
+
+            if ta_to_reactivate is not None:
+                if not ta_to_reactivate.is_active:
+                    ta_to_reactivate.is_active = True
+                    ta_to_reactivate.save(update_fields=['is_active'])
+                    created_or_updated += 1
+                continue
+        except Exception:
+            pass
+
+        try:
+            TeachingAssignment.objects.create(
+                staff=staff_profile,
+                academic_year_id=academic_year_id,
+                curriculum_row_id=curriculum_row_id,
+                section_id=section_id,
+                is_active=True,
+            )
+            created_or_updated += 1
+        except Exception:
+            # Ignore races / integrity errors; this is best-effort.
+            continue
+
+    return created_or_updated
+
+
 # Attendance endpoints removed.
 
 
@@ -109,7 +202,7 @@ class MyTeachingAssignmentsView(APIView):
 
     def get(self, request):
         user = request.user
-        qs = TeachingAssignment.objects.select_related(
+        base_qs = TeachingAssignment.objects.select_related(
             'subject',
             'curriculum_row',
             'curriculum_row__master',
@@ -122,14 +215,41 @@ class MyTeachingAssignmentsView(APIView):
             'elective_subject',
             'elective_subject__department',
             'elective_subject__semester',
-        ).filter(is_active=True)
+        )
+
+        qs = base_qs.filter(is_active=True)
 
         staff_profile = getattr(user, 'staff_profile', None)
         role_names = {r.name.upper() for r in user.roles.all()} if getattr(user, 'roles', None) is not None else set()
 
         # staff: only their teaching assignments (do not expand to department-level for HOD/ADVISOR here)
         if staff_profile:
-            qs = qs.filter(staff=staff_profile)
+            # Prefer matching by user link; it's stable even if staff profile details change.
+            qs_staff = qs.filter(staff__user=user)
+            # Fallback: legacy / direct FK match.
+            if not qs_staff.exists():
+                qs_staff = qs.filter(staff=staff_profile)
+            # Final fallback: if assignments exist but are not marked active, include active academic year.
+            if not qs_staff.exists():
+                qs_staff = base_qs.filter(staff__user=user, academic_year__is_active=True)
+
+            # Backfill from StudentSubjectBatch when the staff has no teaching assignments at all.
+            if not qs_staff.exists():
+                try:
+                    _ensure_teaching_assignments_from_subject_batches(staff_profile)
+                except Exception:
+                    pass
+                qs_staff = qs.filter(staff__user=user)
+                if not qs_staff.exists():
+                    qs_staff = qs.filter(staff=staff_profile)
+
+            # Final fallback: do not hide assignments solely due to flags.
+            # If the staff has any TeachingAssignment rows at all, return them.
+            if not qs_staff.exists():
+                qs_staff = base_qs.filter(staff__user=user)
+                if not qs_staff.exists():
+                    qs_staff = base_qs.filter(staff=staff_profile)
+            qs = qs_staff
         # else: admins can see all
 
         ser = TeachingAssignmentInfoSerializer(qs.order_by('section__name', 'id'), many=True)
@@ -2234,14 +2354,40 @@ class StaffAssignedSubjectsView(APIView):
             raise PermissionDenied('You do not have permission to view this staff assignments.')
 
         # fetch teaching assignments
-        # Only return active assignments in the active academic year that
-        # have an explicit curriculum_row or subject. This avoids showing
-        # placeholder/unnamed records for staff without assigned subjects.
+        # Only return assignments that have an explicit curriculum_row/subject.
+        # Prefer the active academic year when available, but avoid returning
+        # an empty list just because the active-year flag isn't set.
         qs = TeachingAssignment.objects.filter(
             staff=target,
             is_active=True,
-            academic_year__is_active=True
-        ).filter(Q(curriculum_row__isnull=False) | Q(subject__isnull=False) | Q(elective_subject__isnull=False)).select_related('curriculum_row', 'section', 'academic_year', 'subject', 'elective_subject')
+        ).filter(
+            Q(curriculum_row__isnull=False) | Q(subject__isnull=False) | Q(elective_subject__isnull=False)
+        ).select_related('curriculum_row', 'section', 'academic_year', 'subject', 'elective_subject')
+
+        try:
+            if qs.filter(academic_year__is_active=True).exists():
+                qs = qs.filter(academic_year__is_active=True)
+        except Exception:
+            pass
+
+        # Backfill from StudentSubjectBatch (best-effort) if nothing exists.
+        if not qs.exists():
+            try:
+                _ensure_teaching_assignments_from_subject_batches(target)
+            except Exception:
+                pass
+            qs = TeachingAssignment.objects.filter(
+                staff=target,
+                is_active=True,
+            ).filter(
+                Q(curriculum_row__isnull=False) | Q(subject__isnull=False) | Q(elective_subject__isnull=False)
+            ).select_related('curriculum_row', 'section', 'academic_year', 'subject', 'elective_subject')
+
+            try:
+                if qs.filter(academic_year__is_active=True).exists():
+                    qs = qs.filter(academic_year__is_active=True)
+            except Exception:
+                pass
         ser = TeachingAssignmentInfoSerializer(qs, many=True)
         return Response({'results': ser.data})
 
@@ -2280,13 +2426,15 @@ class IQACCourseTeachingMapView(APIView):
             'curriculum_row',
             'curriculum_row__master',
             'section__batch__course__department',
+            'elective_subject',
         ).filter(is_active=True)
 
-        # Filter to the requested course first.
+        # Filter to the requested course first (curriculum_row, master row, legacy subject, or elective).
         qs = qs.filter(
             Q(curriculum_row__course_code__iexact=code)
             | Q(curriculum_row__master__course_code__iexact=code)
             | Q(subject__code__iexact=code)
+            | Q(elective_subject__course_code__iexact=code)
         )
 
         # Prefer active academic year only within this course (avoid hiding results when
@@ -2309,11 +2457,18 @@ class IQACCourseTeachingMapView(APIView):
             # Best-effort subject metadata
             subject_code = None
             subject_name = None
+            class_type = None
             try:
+                if getattr(ta, 'elective_subject', None):
+                    es = ta.elective_subject
+                    subject_code = getattr(es, 'course_code', None)
+                    subject_name = getattr(es, 'course_name', None)
+                    class_type = getattr(es, 'class_type', None)
                 if getattr(ta, 'curriculum_row', None):
                     cr = ta.curriculum_row
-                    subject_code = getattr(cr, 'course_code', None) or getattr(getattr(cr, 'master', None), 'course_code', None)
-                    subject_name = getattr(cr, 'course_name', None) or getattr(getattr(cr, 'master', None), 'course_name', None)
+                    subject_code = subject_code or getattr(cr, 'course_code', None) or getattr(getattr(cr, 'master', None), 'course_code', None)
+                    subject_name = subject_name or getattr(cr, 'course_name', None) or getattr(getattr(cr, 'master', None), 'course_name', None)
+                    class_type = class_type or getattr(cr, 'class_type', None) or getattr(getattr(cr, 'master', None), 'class_type', None)
                 if (not subject_code or not subject_name) and getattr(ta, 'subject', None):
                     subject_code = subject_code or getattr(ta.subject, 'code', None)
                     subject_name = subject_name or getattr(ta.subject, 'name', None)
@@ -2325,6 +2480,7 @@ class IQACCourseTeachingMapView(APIView):
                     'teaching_assignment_id': getattr(ta, 'id', None),
                     'course_code': subject_code or code,
                     'course_name': subject_name,
+                    'class_type': class_type,
                     'section_id': getattr(sec, 'id', None),
                     'section_name': getattr(sec, 'name', None),
                     'academic_year': getattr(ay, 'name', None) if ay else None,

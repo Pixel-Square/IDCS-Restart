@@ -223,14 +223,18 @@ class CurriculumDepartmentViewSet(viewsets.ModelViewSet):
                 except Exception:
                     dept_ids = []
 
-        # Users with global access (superuser, IQAC/HAA groups, or explicit wide perms) see all
-        if user.is_superuser or user.groups.filter(name__in=['IQAC', 'HAA']).exists():
-            logger.debug('get_queryset: user is superuser or IQAC/HAA; user=%s groups=%s', user.username, [g.name for g in user.groups.all()])
+        # Users with global access (superuser, IQAC/HAA groups, custom roles, or explicit wide perms) see all
+        try:
+            role_names = {r.name.upper() for r in user.roles.all()}
+        except Exception:
+            role_names = set()
+        if user.is_superuser or user.groups.filter(name__in=['IQAC', 'HAA']).exists() or bool(role_names & {'IQAC', 'HAA', 'IQAC_HEAD', 'OBE_MASTER'}):
+            logger.debug('get_queryset: user is superuser or IQAC/HAA; user=%s groups=%s roles=%s', user.username, [g.name for g in user.groups.all()], role_names)
             return qs
 
         perms = get_user_permissions(user)
         logger.debug('get_queryset: user=%s computed dept_ids=%r perms=%s', getattr(user, 'username', None), dept_ids, perms)
-        wide_perms = {'curriculum_master_edit', 'curriculum_master_publish', 'CURRICULUM_MASTER_EDIT', 'CURRICULUM_MASTER_PUBLISH'}
+        wide_perms = {'curriculum_master_edit', 'curriculum_master_publish', 'CURRICULUM_MASTER_EDIT', 'CURRICULUM_MASTER_PUBLISH', 'obe.master.manage'}
         if perms & wide_perms:
             logger.debug('get_queryset: user has wide_perms, returning all; user=%s', user.username)
             return qs
@@ -252,7 +256,11 @@ class CurriculumDepartmentViewSet(viewsets.ModelViewSet):
         logger.debug('perform_update: incoming data=%s', serializer.validated_data)
 
         user = self.request.user
-        privileged = user.is_superuser or user.groups.filter(name__in=['IQAC', 'HAA']).exists()
+        try:
+            _role_names = {r.name.upper() for r in user.roles.all()}
+        except Exception:
+            _role_names = set()
+        privileged = user.is_superuser or user.groups.filter(name__in=['IQAC', 'HAA']).exists() or bool(_role_names & {'IQAC', 'HAA', 'IQAC_HEAD', 'OBE_MASTER'})
         perms = get_user_permissions(user)
         if perms & {'curriculum_department_approve', 'CURRICULUM_DEPARTMENT_APPROVE', 'curriculum.department.approve'}:
             privileged = True
@@ -287,7 +295,11 @@ class CurriculumDepartmentViewSet(viewsets.ModelViewSet):
         obj = self.get_object()
         user = request.user
         # permission: IQAC/HAA or role-permission 'curriculum.department.approve'
-        privileged = user.is_superuser or user.groups.filter(name__in=['IQAC', 'HAA']).exists()
+        try:
+            _role_names = {r.name.upper() for r in user.roles.all()}
+        except Exception:
+            _role_names = set()
+        privileged = user.is_superuser or user.groups.filter(name__in=['IQAC', 'HAA']).exists() or bool(_role_names & {'IQAC', 'HAA', 'IQAC_HEAD', 'OBE_MASTER'})
         perms = get_user_permissions(user)
         if perms & {'curriculum.department.approve', 'CURRICULUM_DEPARTMENT_APPROVE'}:
             privileged = True

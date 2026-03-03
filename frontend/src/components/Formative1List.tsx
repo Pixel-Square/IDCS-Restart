@@ -909,11 +909,13 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
           }
         }
 
-        // If not elective or elective fetch failed, use regular TA roster
-        if (!roster.length && matchedTa && matchedTa.id) {
-          console.log('[Formative] Fetching regular TA roster for TA ID:', matchedTa.id);
+        // If not elective or elective fetch failed, use regular TA roster.
+        // Also covers IQAC viewer path where matchedTa is null but teachingAssignmentId is provided.
+        const rosterTaId: number | undefined = (matchedTa && matchedTa.id) || (teachingAssignmentId ?? undefined);
+        if (!roster.length && rosterTaId) {
+          console.log('[Formative] Fetching regular TA roster for TA ID:', rosterTaId);
           try {
-            const taResp = await fetchTeachingAssignmentRoster(matchedTa.id);
+            const taResp = await fetchTeachingAssignmentRoster(rosterTaId);
             roster = (taResp.students || []).map((s: TeachingAssignmentRosterStudent) => ({ 
               id: Number(s.id), 
               reg_no: String(s.reg_no ?? ''), 
@@ -921,7 +923,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
               section: s.section ?? null 
             })).filter((s) => Number.isFinite(s.id));
             console.log('[Formative] Regular roster returned:', roster.length, 'students');
-            if (mounted) setSubjectData({ subject_name: matchedTa.subject_name, section: matchedTa.section_name });
+            if (matchedTa && mounted) setSubjectData({ subject_name: matchedTa.subject_name, section: matchedTa.section_name });
           } catch (err) {
             console.warn('[Formative] TA roster fetch failed:', err);
           }

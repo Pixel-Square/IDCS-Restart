@@ -49,15 +49,59 @@ function splitCycleWeight(total: unknown, ssaW: unknown, ciaW: unknown, faW: unk
 function normalizeInternalWeightsLen17(
   arr: Array<number | string> | null | undefined,
   row?: { ssa1?: any; cia1?: any; formative1?: any },
+  classType?: string,
 ): Array<number | string> {
   let next = Array.isArray(arr) ? [...arr] : [...DEFAULT_INTERNAL_MARK_WEIGHTS];
+  const k = normalizeClassType(classType || '');
+  const sanitizeLabPractical = (input: Array<number | string>) => {
+    const out = ensureInternalWeightsLen17(input);
+    const labCiaFallback = Number(DEFAULT_INTERNAL_MARK_WEIGHTS[1] ?? 3);
+    const modelFallback = Number(DEFAULT_INTERNAL_MARK_WEIGHTS[16] ?? 4);
+    const pickLabCia = (legacy: unknown) => {
+      if (legacy === '' || legacy == null) return '';
+      const n = Number(legacy);
+      if (Number.isFinite(n)) return n;
+      return labCiaFallback;
+    };
+    out[1] = pickLabCia(out[1]);
+    out[4] = pickLabCia(out[4]);
+    out[7] = pickLabCia(out[7]);
+    out[10] = pickLabCia(out[10]);
+    if (out[16] === '' || out[16] == null) {
+      out[16] = '';
+    } else {
+      const meCo5Raw = Number(out[16]);
+      out[16] = Number.isFinite(meCo5Raw) ? meCo5Raw : modelFallback;
+    }
+    return out;
+  };
   // Backward compatibility: old format had 13 weights with CO1/CO2 as single cycle columns.
   if (next.length === 13) {
-    const [co1Ssa, co1Cia, co1Fa] = splitCycleWeight(next[0] ?? 0, row?.ssa1 ?? 1.5, row?.cia1 ?? 3, row?.formative1 ?? 2.5);
-    const [co2Ssa, co2Cia, co2Fa] = splitCycleWeight(next[1] ?? 0, row?.ssa1 ?? 1.5, row?.cia1 ?? 3, row?.formative1 ?? 2.5);
-    next = [co1Ssa, co1Cia, co1Fa, co2Ssa, co2Cia, co2Fa, ...next.slice(2)];
+    if (k === 'LAB' || k === 'PRACTICAL') {
+      const labCiaFallback = Number(DEFAULT_INTERNAL_MARK_WEIGHTS[1] ?? 3);
+      const modelFallback = Number(DEFAULT_INTERNAL_MARK_WEIGHTS[16] ?? 4);
+      const pickLabCia = (legacy: unknown) => {
+        if (legacy === '' || legacy == null) return '';
+        const n = Number(legacy);
+        if (Number.isFinite(n)) return n;
+        return labCiaFallback;
+      };
+      const co1Cia = pickLabCia(next[0]);
+      const co2Cia = pickLabCia(next[1]);
+      const co3Cia = pickLabCia(next[3]);
+      const co4Cia = pickLabCia(next[6]);
+      const meCo5 = next[12] === '' || next[12] == null ? '' : (Number.isFinite(Number(next[12])) ? Number(next[12]) : modelFallback);
+      next = [0, co1Cia, 0, 0, co2Cia, 0, 0, co3Cia, 0, 0, co4Cia, 0, 0, 0, 0, 0, meCo5];
+    } else {
+      const [co1Ssa, co1Cia, co1Fa] = splitCycleWeight(next[0] ?? 0, row?.ssa1 ?? 1.5, row?.cia1 ?? 3, row?.formative1 ?? 2.5);
+      const [co2Ssa, co2Cia, co2Fa] = splitCycleWeight(next[1] ?? 0, row?.ssa1 ?? 1.5, row?.cia1 ?? 3, row?.formative1 ?? 2.5);
+      next = [co1Ssa, co1Cia, co1Fa, co2Ssa, co2Cia, co2Fa, ...next.slice(2)];
+    }
   }
   next = ensureInternalWeightsLen17(next);
+  if (k === 'LAB' || k === 'PRACTICAL') {
+    next = sanitizeLabPractical(next);
+  }
   return next;
 }
 
@@ -209,7 +253,7 @@ export default function AcademicControllerWeightsPage() {
             ssa1: seedRow.ssa1,
             cia1: seedRow.cia1,
             formative1: seedRow.formative1,
-            internal_mark_weights: normalizeInternalWeightsLen17((im && im.length ? im : out[k].internal_mark_weights) as any, seedRow),
+            internal_mark_weights: normalizeInternalWeightsLen17((im && im.length ? im : out[k].internal_mark_weights) as any, seedRow, k),
           };
         }
         return out;
@@ -279,6 +323,7 @@ export default function AcademicControllerWeightsPage() {
         const normalizedIm = normalizeInternalWeightsLen17(
           Array.isArray(w?.internal_mark_weights) ? w.internal_mark_weights : DEFAULT_INTERNAL_MARK_WEIGHTS,
           { ssa1: w?.ssa1, cia1: w?.cia1, formative1: w?.formative1 },
+          k,
         );
         normalized[k] = {
           ssa1: Number(w?.ssa1) || 0,
@@ -378,7 +423,7 @@ export default function AcademicControllerWeightsPage() {
             {INTERNAL_MARK_TABLE_CLASS_TYPES.map((ct) => {
               const key = normalizeClassType(String(ct));
               const row = weights[key];
-              const arr = normalizeInternalWeightsLen17(Array.isArray(row?.internal_mark_weights) ? row.internal_mark_weights : DEFAULT_INTERNAL_MARK_WEIGHTS, row);
+              const arr = normalizeInternalWeightsLen17(Array.isArray(row?.internal_mark_weights) ? row.internal_mark_weights : DEFAULT_INTERNAL_MARK_WEIGHTS, row, key);
               const groups = buildInternalWeightsGroups(key);
               const cols = groups.flatMap((g) => g.cols);
               return (
@@ -427,7 +472,20 @@ export default function AcademicControllerWeightsPage() {
             })}
           </div>
 
-          <button type="submit" disabled={saving} style={{ padding: '8px 18px', fontWeight: 700 }}>
+          <button
+            type="submit"
+            disabled={saving}
+            style={{
+              padding: '8px 18px',
+              fontWeight: 700,
+              backgroundColor: '#2563eb',
+              color: '#ffffff',
+              border: 'none',
+              borderRadius: 6,
+              cursor: saving ? 'not-allowed' : 'pointer',
+              opacity: saving ? 0.7 : 1,
+            }}
+          >
             {saving ? 'Saving...' : 'Save'}
           </button>
           {error && <div style={{ color: 'red', marginTop: 12 }}>{error}</div>}

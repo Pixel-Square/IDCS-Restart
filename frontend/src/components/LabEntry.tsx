@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ClipboardList } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster } from '../services/roster';
 import fetchWithAuth from '../services/fetchAuth';
@@ -24,6 +25,7 @@ import { useLockBodyScroll } from '../hooks/useLockBodyScroll';
 import PublishLockOverlay from './PublishLockOverlay';
 import AssessmentContainer from './containers/AssessmentContainer';
 import { ModalPortal } from './ModalPortal';
+import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
 
 
 type Student = {
@@ -35,6 +37,8 @@ type Student = {
 
 type LabRowState = {
   studentId: number;
+  absent?: boolean;
+  absentKind?: 'AL' | 'ML' | 'SKL';
   marksA: Array<number | ''>;
   marksB: Array<number | ''>;
   marksByCo?: Record<string, Array<number | ''>>;
@@ -151,6 +155,40 @@ function clampInt(n: number, min: number, max: number) {
 
 function storageKey(assessmentKey: 'formative1' | 'formative2' | 'review1' | 'review2', subjectId: string) {
   return `${assessmentKey}_sheet_${subjectId}`;
+}
+
+function safeFilePart(raw: string) {
+  return String(raw || '')
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9_-]/g, '')
+    .slice(0, 48);
+}
+
+function downloadCsv(filename: string, rows: Array<Record<string, string | number>>) {
+  if (!rows.length) return;
+  const headers = Object.keys(rows[0]);
+  const csv = [headers.join(',')]
+    .concat(
+      rows.map((r) =>
+        headers
+          .map((h) => {
+            const v = r[h];
+            const s = String(v ?? '').replace(/\n/g, ' ');
+            return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s;
+          })
+          .join(','),
+      ),
+    )
+    .join('\n');
+
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 function normalizeMarksArray(raw: unknown, length: number): Array<number | ''> {
@@ -313,6 +351,10 @@ export default function LabEntry({
   const [requestMessage, setRequestMessage] = useState<string | null>(null);
   const [markManagerError, setMarkManagerError] = useState<string | null>(null);
   const [markManagerAnimating, setMarkManagerAnimating] = useState(false);
+  const [rosterRefreshTick, setRosterRefreshTick] = useState(0);
+  const [showAbsenteesOnly, setShowAbsenteesOnly] = useState(false);
+  const [excelBusy, setExcelBusy] = useState(false);
+  const excelFileInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const [draft, setDraft] = useState<LabDraftPayload>({
     sheet: {
@@ -571,7 +613,7 @@ export default function LabEntry({
     return () => {
       mounted = false;
     };
-  }, [teachingAssignmentId]);
+  }, [teachingAssignmentId, rosterRefreshTick]);
 
   // Merge roster into rowsByStudentId
   useEffect(() => {
@@ -740,6 +782,15 @@ export default function LabEntry({
   const coMaxB = Number(LAB_REVIEW_CO_MAX[coB] ?? 0);
 
   const markManagerLocked = Boolean(draft.sheet.markManagerLocked);
+  const hasAbsentees = useMemo(() => {
+    const rows = draft.sheet.rowsByStudentId || {};
+    return Object.values(rows).some((r) => Boolean((r as any)?.absent));
+  }, [draft.sheet.rowsByStudentId]);
+
+  const renderStudents = useMemo(() => {
+    if (!showAbsenteesOnly) return students;
+    return students.filter((s) => Boolean((draft.sheet.rowsByStudentId?.[String(s.id)] as any)?.absent));
+  }, [students, showAbsenteesOnly, draft.sheet.rowsByStudentId]);
   
   // Table visibility and blocking logic:
   // - BEFORE Mark Manager confirm: table is HIDDEN
@@ -747,6 +798,225 @@ export default function LabEntry({
   // - Table editability is driven by backend `entry_open` (blocks after publish unless IQAC unblocks)
   const tableVisible = markManagerLocked; // Only show table after Mark Manager is confirmed
   const tableBlocked = Boolean(globalLocked || (markLock?.exists ? !markLock?.entry_open : false));
+
+  const buildExportRows = () => {
+    return students.map((s, idx) => {
+      const row = draft.sheet.rowsByStudentId?.[String(s.id)];
+      const perCo: Array<{ coNumber: number; marks: Array<number | ''>; expCount: number }> = enabledCoMetas.map((m) => ({
+        coNumber: m.coNumber,
+        marks: getRowMarksForCo(row as any, m.coNumber, m.expCount, coA, coB),
+        expCount: m.expCount,
+      }));
+      const allVisibleMarks = perCo.flatMap((c) => c.marks.slice(0, c.expCount));
+      const avgTotal = avgMarks(allVisibleMarks);
+      const rawCia = (row as any)?.ciaExam;
+      const ciaRaw = rawCia === '' || rawCia == null ? null : Number(rawCia);
+      const total = draft.sheet.ciaExamEnabled !== false ? (Number.isFinite(ciaRaw as number) ? Number(ciaRaw) : '') : (avgTotal == null ? '' : Number(avgTotal.toFixed(1)));
+
+      const out: Record<string, string | number> = {
+        'S.No': idx + 1,
+        'Register No': String(s.reg_no || ''),
+        Name: String(s.name || ''),
+        Absent: Boolean((row as any)?.absent) ? String((row as any)?.absentKind || 'AL') : '',
+      };
+
+      for (const m of enabledCoMetas) {
+        const marks = getRowMarksForCo(row as any, m.coNumber, m.expCount, coA, coB);
+        for (let i = 0; i < m.expCount; i++) {
+          out[`CO${m.coNumber}_E${i + 1}`] = typeof marks[i] === 'number' ? marks[i] : '';
+        }
+      }
+
+      out['CIA Exam'] = Number.isFinite(ciaRaw as number) ? Number(ciaRaw) : '';
+      out.Total = total as any;
+      return out;
+    });
+  };
+
+  const exportSheetCsv = () => {
+    const rows = buildExportRows();
+    if (!rows.length) return;
+    downloadCsv(`${String(subjectId || 'subject')}_${safeFilePart(label || assessmentKey)}_sheet.csv`, rows);
+  };
+
+  const exportSheetExcel = () => {
+    const rows = buildExportRows();
+    if (!rows.length) return;
+    const headers = Object.keys(rows[0]);
+    const data = rows.map((r) => headers.map((h) => (r as any)[h] ?? ''));
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...data]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, String(label || assessmentKey || 'LAB').slice(0, 31));
+    XLSX.writeFile(wb, `${String(subjectId || 'subject')}_${safeFilePart(label || assessmentKey)}_sheet.xlsx`);
+  };
+
+  const triggerExcelImport = () => {
+    if (excelBusy) return;
+    excelFileInputRef.current?.click();
+  };
+
+  const handleExcelFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.currentTarget.value = '';
+    if (!file) return;
+
+    const normalizeReg = (v: any) => String(v ?? '').trim().replace(/\s+/g, '').toLowerCase();
+    const parseFinite = (v: any): number | null => {
+      if (v == null || v === '') return null;
+      if (typeof v === 'string' && !v.trim()) return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+
+    try {
+      setExcelBusy(true);
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: 'array' });
+      const sheet0 = workbook.Sheets[workbook.SheetNames[0]];
+      const rows: any[][] = XLSX.utils.sheet_to_json(sheet0, { header: 1 });
+      if (!Array.isArray(rows) || rows.length < 2) {
+        alert('Excel file is empty.');
+        return;
+      }
+
+      const header = (rows[0] || []).map((h) => String(h ?? '').trim());
+      const colMap = new Map<string, number>();
+      header.forEach((h, i) => {
+        if (h) colMap.set(h, i);
+      });
+
+      const regIdx = colMap.get('Register No');
+      if (regIdx == null) {
+        alert('Invalid file format: Register No column not found.');
+        return;
+      }
+
+      const absentIdx = colMap.get('Absent');
+      const ciaIdx = colMap.get('CIA Exam');
+      const expCols = enabledCoMetas.flatMap((m) =>
+        Array.from({ length: m.expCount }, (_, i) => ({
+          coNumber: m.coNumber,
+          expIndex: i,
+          expMax: m.expMax,
+          idx: colMap.get(`CO${m.coNumber}_E${i + 1}`),
+        })),
+      );
+
+      const studentByReg = new Map<string, Student>();
+      for (const st of students) studentByReg.set(normalizeReg(st.reg_no), st);
+
+      let matched = 0;
+      setDraft((p) => {
+        const rowsByStudentId: Record<string, LabRowState> = { ...(p.sheet.rowsByStudentId || {}) };
+
+        for (let r = 1; r < rows.length; r++) {
+          const line = rows[r] || [];
+          const reg = normalizeReg(line[regIdx]);
+          if (!reg) continue;
+          const student = studentByReg.get(reg);
+          if (!student) continue;
+
+          const sid = String(student.id);
+          const existing = rowsByStudentId[sid] || {
+            studentId: student.id,
+            marksA: Array.from({ length: expCountA }, () => ''),
+            marksB: Array.from({ length: expCountB }, () => ''),
+            marksByCo: {},
+            ciaExam: '',
+            caaExamByCo: {},
+          };
+
+          const marksByCo: Record<string, Array<number | ''>> =
+            (existing as any).marksByCo && typeof (existing as any).marksByCo === 'object' ? { ...(existing as any).marksByCo } : {};
+
+          for (const m of enabledCoMetas) {
+            const key = String(m.coNumber);
+            marksByCo[key] = normalizeMarksArray(marksByCo[key], m.expCount);
+          }
+
+          for (const c of expCols) {
+            if (c.idx == null) continue;
+            const n = parseFinite(line[c.idx]);
+            const coKey = String(c.coNumber);
+            const arr = normalizeMarksArray(marksByCo[coKey], enabledCoMetas.find((x) => x.coNumber === c.coNumber)?.expCount ?? 0);
+            arr[c.expIndex] = n == null ? '' : clampInt(n, 0, c.expMax);
+            marksByCo[coKey] = arr;
+          }
+
+          const nextRow: LabRowState = {
+            ...(existing as any),
+            studentId: student.id,
+            marksByCo,
+            marksA: normalizeMarksArray(marksByCo[String(coA)] ?? (existing as any).marksA, expCountA),
+            marksB: normalizeMarksArray(marksByCo[String(coB)] ?? (existing as any).marksB, expCountB),
+          };
+
+          if (absentIdx != null) {
+            const rawAbsent = String(line[absentIdx] ?? '').trim().toUpperCase();
+            if (!rawAbsent || rawAbsent === 'NO' || rawAbsent === 'N' || rawAbsent === 'FALSE' || rawAbsent === '0') {
+              nextRow.absent = false;
+              nextRow.absentKind = undefined;
+            } else {
+              nextRow.absent = true;
+              nextRow.absentKind = rawAbsent === 'ML' || rawAbsent === 'SKL' ? (rawAbsent as any) : 'AL';
+            }
+          }
+
+          if (ciaIdx != null) {
+            const n = parseFinite(line[ciaIdx]);
+            nextRow.ciaExam = n == null ? '' : clampInt(n, 0, DEFAULT_CIA_EXAM_MAX);
+          }
+
+          rowsByStudentId[sid] = nextRow;
+          matched += 1;
+        }
+
+        return { ...p, sheet: { ...p.sheet, rowsByStudentId } };
+      });
+
+      if (!matched) {
+        alert('No matching students found in the imported file.');
+        return;
+      }
+
+      alert(`Imported marks for ${matched} student(s).`);
+    } catch (err: any) {
+      alert(err?.message || 'Failed to import Excel');
+    } finally {
+      setExcelBusy(false);
+    }
+  };
+
+  async function downloadTotals() {
+    if (!subjectId) return;
+    const rows = students.map((s, idx) => {
+      const row = draft.sheet.rowsByStudentId?.[String(s.id)];
+      const perCo = enabledCoMetas.map((m) => ({
+        marks: getRowMarksForCo(row as any, m.coNumber, m.expCount, coA, coB),
+        expCount: m.expCount,
+      }));
+      const avgTotal = avgMarks(perCo.flatMap((c) => c.marks.slice(0, c.expCount)));
+      const rawCia = (row as any)?.ciaExam;
+      const ciaRaw = rawCia === '' || rawCia == null ? null : Number(rawCia);
+      const total = ciaExamEnabled ? (Number.isFinite(ciaRaw as number) ? Number(ciaRaw) : '') : (avgTotal == null ? '' : Number(avgTotal.toFixed(1)));
+      return {
+        sno: idx + 1,
+        regNo: String(s.reg_no || ''),
+        name: String(s.name || ''),
+        total,
+      };
+    });
+
+    await downloadTotalsWithPrompt({
+      filenameBase: `${String(subjectId)}_${label}`,
+      meta: {
+        courseName: '',
+        courseCode: String(subjectId),
+        className: '',
+      },
+      rows,
+    });
+  }
 
   function setCoEnabled(coNumber: number, enabled: boolean) {
     setDraft((p) => {
@@ -1278,6 +1548,90 @@ export default function LabEntry({
         }
       `}</style>
 
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button onClick={() => setRosterRefreshTick((v) => v + 1)} className="obe-btn obe-btn-secondary" disabled={!teachingAssignmentId || loading}>
+            {loading ? 'Loading roster…' : 'Load/Refresh Roster'}
+          </button>
+          <button
+            onClick={resetSheet}
+            className="obe-btn obe-btn-danger"
+            disabled={!subjectId || !tableVisible || tableBlocked}
+            title={!tableVisible ? 'Save & Lock Mark Manager first to enable table' : tableBlocked ? 'Table locked after publish' : 'Clear all marks'}
+          >
+            Reset Marks
+          </button>
+          <button
+            className="obe-btn obe-btn-secondary"
+            disabled={!hasAbsentees}
+            onClick={() => {
+              if (showAbsenteesOnly) return;
+              setShowAbsenteesOnly(true);
+            }}
+            title={hasAbsentees ? 'Filter the table to show only absentees' : 'No absentees marked yet'}
+            style={showAbsenteesOnly ? { background: 'linear-gradient(180deg, #111827, #334155)', color: '#fff', borderColor: 'rgba(2,6,23,0.12)' } : undefined}
+          >
+            Show absentees list
+            {showAbsenteesOnly ? (
+              <span
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowAbsenteesOnly(false);
+                }}
+                role="button"
+                aria-label="Close absentees list"
+                title="Close absentees list"
+                style={{
+                  marginLeft: 10,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 20,
+                  height: 20,
+                  borderRadius: 999,
+                  background: 'rgba(255,255,255,0.18)',
+                  border: '1px solid rgba(255,255,255,0.25)',
+                  fontWeight: 900,
+                  lineHeight: 1,
+                  cursor: 'pointer',
+                  userSelect: 'none',
+                }}
+              >
+                ×
+              </span>
+            ) : null}
+          </button>
+          <button onClick={exportSheetCsv} className="obe-btn obe-btn-secondary" disabled={students.length === 0}>Export CSV</button>
+          <button onClick={exportSheetExcel} className="obe-btn obe-btn-secondary" disabled={students.length === 0}>Export Excel</button>
+          <button onClick={triggerExcelImport} className="obe-btn obe-btn-secondary" disabled={excelBusy || students.length === 0 || tableBlocked || globalLocked}>
+            {excelBusy ? 'Importing…' : 'Import Excel'}
+          </button>
+          <input ref={excelFileInputRef} type="file" accept=".xlsx,.xls" onChange={handleExcelFileSelect} style={{ display: 'none' }} />
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <button onClick={downloadTotals} className="obe-btn obe-btn-secondary" disabled={!subjectId || students.length === 0}>
+            Download
+          </button>
+          <button
+            onClick={saveNow}
+            className="obe-btn obe-btn-success"
+            disabled={savingDraft || !subjectId || !tableVisible || tableBlocked}
+            title={!tableVisible ? 'Save & Lock Mark Manager first to enable table' : tableBlocked ? 'Table locked after publish' : 'Save current draft'}
+          >
+            {savingDraft ? 'Saving…' : 'Save Draft'}
+          </button>
+          <button
+            onClick={publish}
+            className="obe-btn obe-btn-primary"
+            disabled={publishedEditLocked ? markEntryReqPending : !subjectId || publishing || !tableVisible || tableBlocked || globalLocked || !publishAllowed}
+            title={!tableVisible ? 'Save & Lock Mark Manager first' : tableBlocked ? 'Table locked after publish' : !publishAllowed ? 'Publish window closed' : globalLocked ? 'Publishing locked by IQAC' : 'Publish marks'}
+          >
+            {publishedEditLocked ? (markEntryReqPending ? 'Request Pending' : 'Request Edit') : publishing ? 'Publishing…' : 'Publish'}
+          </button>
+        </div>
+      </div>
+
       <div
         style={{
           margin: '0 0 10px 0',
@@ -1381,40 +1735,6 @@ export default function LabEntry({
         </div>
 
         {markManagerError ? <div style={{ marginTop: 8, fontSize: 12, color: '#991b1b' }}>{markManagerError}</div> : null}
-      </div>
-
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button
-            onClick={resetSheet}
-            className="obe-btn obe-btn-danger"
-            disabled={!subjectId || !tableVisible || tableBlocked}
-            title={!tableVisible ? 'Save & Lock Mark Manager first to enable table' : tableBlocked ? 'Table locked after publish' : 'Clear all marks'}
-          >
-            Reset All
-          </button>
-        </div>
-
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <button
-            onClick={saveNow}
-            className="obe-btn obe-btn-success"
-            disabled={savingDraft || !subjectId || !tableVisible || tableBlocked}
-            title={!tableVisible ? 'Save & Lock Mark Manager first to enable table' : tableBlocked ? 'Table locked after publish' : 'Save current draft'}
-          >
-            {savingDraft ? 'Saving…' : 'Save Draft'}
-          </button>
-          <button
-            onClick={publish}
-            className="obe-btn obe-btn-primary"
-            disabled={publishedEditLocked ? markEntryReqPending : !subjectId || publishing || !tableVisible || tableBlocked || globalLocked || !publishAllowed}
-            title={!tableVisible ? 'Save & Lock Mark Manager first' : tableBlocked ? 'Table locked after publish' : !publishAllowed ? 'Publish window closed' : globalLocked ? 'Publishing locked by IQAC' : 'Publish marks'}
-          >
-            {publishedEditLocked ? (markEntryReqPending ? 'Request Pending' : 'Request Edit') : publishing ? 'Publishing…' : 'Publish'}
-          </button>
-          {savedAt && <div style={{ fontSize: 12, color: '#6b7280', alignSelf: 'center' }}>Saved: {savedAt}</div>}
-          {publishedAt && <div style={{ fontSize: 12, color: '#16a34a', alignSelf: 'center' }}>Published: {publishedAt}</div>}
-        </div>
       </div>
 
       {error && (
@@ -1665,7 +1985,7 @@ export default function LabEntry({
                 </tr>
               ) : (
                 <>
-                  {students.map((s, idx) => {
+                  {renderStudents.map((s, idx) => {
                     const row = draft.sheet.rowsByStudentId?.[String(s.id)];
                     const rawCia = (row as any)?.ciaExam;
                     const ciaRaw = rawCia === '' || rawCia == null ? 0 : Number(rawCia);
@@ -1799,7 +2119,7 @@ export default function LabEntry({
                     );
                   })}
 
-                  {students.length === 0 ? (
+                  {renderStudents.length === 0 ? (
                     <tr>
                       <td colSpan={headerCols} style={{ padding: 10, color: '#6b7280' }}>
                         No students.

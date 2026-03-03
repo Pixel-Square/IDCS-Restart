@@ -24,7 +24,22 @@ export async function fetchMyTeachingAssignments(): Promise<TeachingAssignmentIt
   const url = `${apiBase()}/api/academics/my-teaching-assignments/`;
   try {
     const res = await apiClient.get(url);
-    return res.data as TeachingAssignmentItem[];
+    const data = (res as any)?.data;
+    // Common misconfig: static server returns index.html for unknown /api routes.
+    // That would be a 200 + HTML string, which should not be treated as "no courses".
+    if (typeof data === 'string') {
+      const s = data.trim().toLowerCase();
+      if (s.startsWith('<!doctype html') || s.startsWith('<html') || s.includes('<head') || s.includes('<body')) {
+        throw new Error('API request returned HTML. Check VITE_API_BASE or /api reverse-proxy configuration.');
+      }
+    }
+    if (Array.isArray(data)) return data as TeachingAssignmentItem[];
+    // Be tolerant to pagination wrappers or alternate envelopes.
+    if (data && Array.isArray((data as any).results)) return (data as any).results as TeachingAssignmentItem[];
+    if (data && Array.isArray((data as any).teaching_assignments)) {
+      return (data as any).teaching_assignments as TeachingAssignmentItem[];
+    }
+    return [];
   } catch (e: any) {
     if (e?.response?.status === 401) return [];
     throw e;

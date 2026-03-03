@@ -7,6 +7,7 @@ export type IQACTeachingMapRow = {
   teaching_assignment_id: number;
   course_code: string;
   course_name: string;
+  class_type?: string | null;
   section_id: number;
   section_name: string;
   academic_year: string;

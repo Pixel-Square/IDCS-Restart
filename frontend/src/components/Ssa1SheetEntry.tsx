@@ -593,8 +593,30 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
     setRosterError(null);
     try {
       let roster: TeachingAssignmentRosterStudent[] = [];
-      
-      // ALWAYS check user's TAs first (matching CIA logic) - handles electives correctly
+
+      // If a specific teaching assignment ID is provided (e.g. IQAC viewing another faculty's course),
+      // skip fetchMyTeachingAssignments (which only returns the current user's own TAs) and
+      // directly fetch the roster for that TA. The backend already permits IQAC role access.
+      if (teachingAssignmentId) {
+        try {
+          const taResp = await fetchTeachingAssignmentRoster(teachingAssignmentId);
+          roster = taResp.students || [];
+          setTaMeta({
+            courseName: String((taResp as any)?.teaching_assignment?.subject_name || subjectId || ''),
+            courseCode: String((taResp as any)?.teaching_assignment?.subject_code || subjectId || ''),
+            className: String((taResp as any)?.teaching_assignment?.section_name || ''),
+          });
+          console.log('[SSA1] Direct TA roster returned:', roster.length, 'students');
+        } catch (err) {
+          console.warn('[SSA1] Direct TA roster fetch failed:', err);
+        }
+        if (roster.length) {
+          mergeRosterIntoRows(roster);
+          return;
+        }
+      }
+
+      // Fallback: look up TA from user's own teaching assignments (faculty flow)
       let matchedTa: any = null;
       try {
         const myTAs = await fetchMyTeachingAssignments();
@@ -604,7 +626,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
           const idMatch = teachingAssignmentId ? t.id === teachingAssignmentId : false;
           return idMatch || codeMatch;
         });
-        
+
         if (matchedTa) {
           console.log('[SSA1] Found TA match:', matchedTa.id, 'elective_subject_id:', matchedTa.elective_subject_id, 'section_id:', matchedTa.section_id);
         } else {

@@ -22,7 +22,7 @@ import { fetchDeptRow, fetchDeptRows, fetchMasters } from '../services/curriculu
 import { lsGet, lsSet } from '../utils/localStorage';
 import { normalizeClassType } from '../constants/classTypes';
 
-type Props = { courseId: string; enabledAssessments?: string[] | null };
+type Props = { courseId: string; enabledAssessments?: string[] | null; classType?: string | null };
 
 type Student = {
   id: number;
@@ -315,12 +315,30 @@ function buildInternalSchema(classType: string | null, enabledSet: Set<string>):
     });
   }
 
-  if (ct === 'LAB' || ct === 'PRACTICAL') {
-    // Only CIA (lab-style) + MODEL(CO5) are used.
+  if (ct === 'LAB') {
+    // LAB uses CIA 1 LAB, CIA 2 LAB and MODEL LAB (no SSA/FA).
+    visible = [1, 4, 7, 10, 16];
+    const header = ['CO1', 'CO2', 'CO3', 'CO4', 'CO5'];
+    const cyc = ['CIA 1 LAB', 'CIA 1 LAB', 'CIA 2 LAB', 'CIA 2 LAB', 'MODEL LAB'];
+    const lab = ['CO1-CIA1', 'CO2-CIA1', 'CO3-CIA2', 'CO4-CIA2', 'ME-CO5'];
+    return { visible, header, cycles: cyc, labels: lab };
+  }
+
+  if (ct === 'PRACTICAL') {
+    // PRACTICAL keeps CIA + MODEL behavior.
     visible = [1, 4, 7, 10, 16];
     const header = ['CO1', 'CO2', 'CO3', 'CO4', 'ME'];
     const cyc = ['CIA 1', 'CIA 1', 'CIA 2', 'CIA 2', 'MODEL'];
     const lab = ['CO1-CIA1', 'CO2-CIA1', 'CO3-CIA2', 'CO4-CIA2', 'ME-CO5'];
+    return { visible, header, cycles: cyc, labels: lab };
+  }
+
+  if (ct === 'PROJECT') {
+    // PROJECT mark entry has Review 1, Review 2 and MODEL pages.
+    visible = [2, 5, 8, 11, 12, 13, 14, 15, 16];
+    const header = ['CO1', 'CO2', 'CO3', 'CO4', 'CO1', 'CO2', 'CO3', 'CO4', 'CO5'];
+    const cyc = ['Review 1', 'Review 1', 'Review 2', 'Review 2', 'MODEL', 'MODEL', 'MODEL', 'MODEL', 'MODEL'];
+    const lab = ['CO1-Review1', 'CO2-Review1', 'CO3-Review2', 'CO4-Review2', 'ME-CO1', 'ME-CO2', 'ME-CO3', 'ME-CO4', 'ME-CO5'];
     return { visible, header, cycles: cyc, labels: lab };
   }
 
@@ -345,7 +363,7 @@ function buildInternalSchema(classType: string | null, enabledSet: Set<string>):
   return { visible, header, cycles: cyc, labels: lab };
 }
 
-export default function InternalMarkCoursePage({ courseId, enabledAssessments }: Props): JSX.Element {
+export default function InternalMarkCoursePage({ courseId, enabledAssessments, classType: classTypeProp }: Props): JSX.Element {
   const enabledSet = useMemo(() => new Set((enabledAssessments || []).map((x) => String(x || '').trim().toLowerCase()).filter(Boolean)), [enabledAssessments]);
 
   const [tas, setTas] = useState<TeachingAssignmentItem[]>([]);
@@ -353,6 +371,11 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
   const [taError, setTaError] = useState<string | null>(null);
 
   const [classType, setClassType] = useState<string | null>(null);
+  const effectiveClassType = useMemo(() => {
+    const fromProp = normalizeClassType(classTypeProp);
+    if (fromProp) return fromProp;
+    return normalizeClassType(classType);
+  }, [classTypeProp, classType]);
 
   const [masterCfg, setMasterCfg] = useState<any>(null);
 
@@ -479,7 +502,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
     let mounted = true;
     (async () => {
       try {
-        const ct = normalizeClassType(classType);
+        const ct = effectiveClassType;
         const applyWeights = (w: any) => {
           if (!w || typeof w !== 'object') return false;
           const ssa1W = Number.isFinite(Number(w.ssa1)) ? Number(w.ssa1) : 1.5;
@@ -494,15 +517,54 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
               return Number.isFinite(n) ? n : 0;
             });
 
+            const sanitizeLabPractical = (input: number[]) => {
+              const out = [...input];
+              const labCiaFallback = Number(DEFAULT_INTERNAL_MAPPING.weights[1] ?? 3);
+              const modelFallback = Number(DEFAULT_INTERNAL_MAPPING.weights[16] ?? 4);
+              const pickLabCia = (legacy: unknown) => {
+                const n = Number(legacy);
+                if (Number.isFinite(n) && n >= 2.9 && n <= 5) return n;
+                return labCiaFallback;
+              };
+              while (out.length < DEFAULT_INTERNAL_MAPPING.weights.length) out.push(DEFAULT_INTERNAL_MAPPING.weights[out.length] ?? 0);
+              out[1] = pickLabCia(out[1]);
+              out[4] = pickLabCia(out[4]);
+              out[7] = pickLabCia(out[7]);
+              out[10] = pickLabCia(out[10]);
+              const meCo5Raw = Number(out[16]);
+              out[16] = Number.isFinite(meCo5Raw) && meCo5Raw > 0 ? meCo5Raw : modelFallback;
+              return out;
+            };
+
             // Backward compatibility: old format had 13 weights with CO1/CO2 as a single "cycle 1" column.
             // New format has 17 weights with CO1/CO2 split into ssa/cia/fa.
             if (arr.length === 13 && DEFAULT_INTERNAL_MAPPING.weights.length === 17) {
-              const [co1Ssa, co1Cia, co1Fa] = splitCycleWeight(arr[0] || 0, ssa1W, cia1W, fa1W);
-              const [co2Ssa, co2Cia, co2Fa] = splitCycleWeight(arr[1] || 0, ssa1W, cia1W, fa1W);
-              arr = [co1Ssa, co1Cia, co1Fa, co2Ssa, co2Cia, co2Fa, ...arr.slice(2)];
+              if (ct === 'LAB' || ct === 'PRACTICAL') {
+                const labCiaFallback = Number(DEFAULT_INTERNAL_MAPPING.weights[1] ?? 3);
+                const modelFallback = Number(DEFAULT_INTERNAL_MAPPING.weights[16] ?? 4);
+                const pickLabCia = (legacy: unknown) => {
+                  const n = Number(legacy);
+                  if (Number.isFinite(n) && n >= 2.9 && n <= 5) return n;
+                  return labCiaFallback;
+                };
+                const co1Cia = pickLabCia(arr[0]);
+                const co2Cia = pickLabCia(arr[1]);
+                const co3Cia = pickLabCia(arr[3]);
+                const co4Cia = pickLabCia(arr[6]);
+                const meCo5Raw = Number(arr[12]);
+                const meCo5 = Number.isFinite(meCo5Raw) && meCo5Raw > 0 ? meCo5Raw : modelFallback;
+                arr = [0, co1Cia, 0, 0, co2Cia, 0, 0, co3Cia, 0, 0, co4Cia, 0, 0, 0, 0, 0, meCo5];
+              } else {
+                const [co1Ssa, co1Cia, co1Fa] = splitCycleWeight(arr[0] || 0, ssa1W, cia1W, fa1W);
+                const [co2Ssa, co2Cia, co2Fa] = splitCycleWeight(arr[1] || 0, ssa1W, cia1W, fa1W);
+                arr = [co1Ssa, co1Cia, co1Fa, co2Ssa, co2Cia, co2Fa, ...arr.slice(2)];
+              }
             }
 
             while (arr.length < DEFAULT_INTERNAL_MAPPING.weights.length) arr.push(DEFAULT_INTERNAL_MAPPING.weights[arr.length] ?? 0);
+            if (ct === 'LAB' || ct === 'PRACTICAL') {
+              arr = sanitizeLabPractical(arr);
+            }
             setInternalMarkWeights(arr.slice(0, DEFAULT_INTERNAL_MAPPING.weights.length));
           } else {
             setInternalMarkWeights([...DEFAULT_INTERNAL_MAPPING.weights]);
@@ -532,7 +594,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
       }
     })();
     return () => { mounted = false; };
-  }, [classType]);
+  }, [effectiveClassType]);
 
   useEffect(() => {
     let mounted = true;
@@ -589,10 +651,11 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
       setLoadingData(true);
       setDataError(null);
       try {
-        const ct = normalizeClassType(classType);
+        const ct = effectiveClassType;
         const taId = selectedTaId ?? undefined;
         const isTcpl = ct === 'TCPL';
         const isTcpr = ct === 'TCPR';
+        const isProject = ct === 'PROJECT';
         const isLabLike = ct === 'LAB' || ct === 'PRACTICAL';
         const isSpecial = ct === 'SPECIAL' && enabledSet.size;
         const allow = (k: string) => (!isSpecial ? true : enabledSet.has(String(k).toLowerCase()));
@@ -700,7 +763,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
           try { ssa2Res = await fetchPublishedSsa2(courseId, taId); } catch { ssa2Res = null; }
         }
 
-        if (isTcpr) {
+        if (isTcpr || isProject) {
           try { const d = await fetchDraft('review1', courseId, taId); if (d?.draft && (d.draft as any).marks) review1Res = { marks: (d.draft as any).marks }; } catch {}
           try { const d = await fetchDraft('review2', courseId, taId); if (d?.draft && (d.draft as any).marks) review2Res = { marks: (d.draft as any).marks }; } catch {}
           if (!review1Res?.marks) {
@@ -726,13 +789,13 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
           if (!mounted) return;
           setPublishedTcplLab({ lab1: (tcplLab1Res as any)?.data ?? null, lab2: (tcplLab2Res as any)?.data ?? null });
         } else {
-          if (!isTcpr && allow('formative1')) {
+          if (!isTcpr && !isProject && allow('formative1')) {
             try { const d = await fetchDraft('formative1', courseId, taId); if (d?.draft && (d.draft as any).marks) f1Res = { marks: (d.draft as any).marks }; } catch {}
             if (!f1Res?.marks) {
               try { f1Res = await fetchPublishedFormative('formative1', courseId, taId); } catch { f1Res = null; }
             }
           }
-          if (!isTcpr && allow('formative2')) {
+          if (!isTcpr && !isProject && allow('formative2')) {
             try { const d = await fetchDraft('formative2', courseId, taId); if (d?.draft && (d.draft as any).marks) f2Res = { marks: (d.draft as any).marks }; } catch {}
             if (!f2Res?.marks) {
               try { f2Res = await fetchPublishedFormative('formative2', courseId, taId); } catch { f2Res = null; }
@@ -796,9 +859,9 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
 
     load();
     return () => { mounted = false; };
-  }, [courseId, classType, enabledSet, selectedTaId]);
+  }, [courseId, effectiveClassType, enabledSet, selectedTaId]);
 
-  const schema = useMemo(() => buildInternalSchema(classType, enabledSet), [classType, enabledSet]);
+  const schema = useMemo(() => buildInternalSchema(effectiveClassType, enabledSet), [effectiveClassType, enabledSet]);
 
   const effMapping = useMemo(() => {
     const weightsArr = Array.isArray(internalMarkWeights) && internalMarkWeights.length ? internalMarkWeights : DEFAULT_INTERNAL_MAPPING.weights;
@@ -814,7 +877,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
   }, [effMapping]);
 
   const computedRows = useMemo(() => {
-    const ct = normalizeClassType(classType);
+    const ct = effectiveClassType;
 
     // Map the visible weights back into their 0..16 slot positions.
     const wFull = new Array(17).fill(0);
@@ -1175,10 +1238,9 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
         const CO_MAX_A = expMaxA + (ciaEnabled ? HALF : 0);
         const CO_MAX_B = coB != null ? expMaxB + (ciaEnabled ? HALF : 0) : 0;
 
-        const normalizeMarksArray = (raw: any, expCount: number) => {
-          if (Array.isArray(raw)) return raw.map((x) => (typeof x === 'number' && Number.isFinite(x) ? x : null));
-          if (raw == null) return [];
-          return [];
+        const normalizeMarksArray = (raw: any) => {
+          if (!Array.isArray(raw)) return [] as Array<number | null>;
+          return raw.map((x) => (typeof x === 'number' && Number.isFinite(x) ? x : null));
         };
         const avgMarks = (arr: Array<number | null>) => {
           const nums = (arr || []).filter((x) => typeof x === 'number' && Number.isFinite(x)) as number[];
@@ -1192,20 +1254,26 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
           const rawA = marksByCo?.[String(coA)] ?? (row as any).marksA;
           const rawB = coB != null ? (marksByCo?.[String(coB)] ?? (row as any).marksB) : [];
 
-          const marksA = normalizeMarksArray(rawA, expCountA).slice(0, coAEnabled ? expCountA : 0);
-          const marksB = normalizeMarksArray(rawB, expCountB).slice(0, coBEnabled ? expCountB : 0);
+          const marksA = normalizeMarksArray(rawA).slice(0, coAEnabled ? expCountA : 0);
+          const marksB = normalizeMarksArray(rawB).slice(0, coBEnabled ? expCountB : 0);
           const avgA = avgMarks(marksA);
           const avgB = avgMarks(marksB);
           const ciaExamRaw = (row as any)?.ciaExam;
           const ciaExamNum = typeof ciaExamRaw === 'number' && Number.isFinite(ciaExamRaw) ? ciaExamRaw : null;
+          const pairEnabled = coB != null && coBEnabled;
+          const ciaDivisor = ciaEnabled ? (pairEnabled ? 2 : 1) : 1;
+          const ciaShare = ciaEnabled ? (ciaExamNum ?? 0) / ciaDivisor : 0;
+          const ciaShareMax = ciaEnabled ? 30 / ciaDivisor : 0;
+          const totalA = Math.max(0, expMaxA) + (coAEnabled ? ciaShareMax : 0);
+          const totalB = Math.max(0, expMaxB) + (pairEnabled ? ciaShareMax : 0);
           const hasAny = avgA != null || avgB != null || ciaExamNum != null;
 
-          const a = !hasAny ? null : (avgA ?? 0) + (ciaEnabled ? (ciaExamNum ?? 0) / 2 : 0);
-          const b = !hasAny ? null : (avgB ?? 0) + (ciaEnabled ? (ciaExamNum ?? 0) / 2 : 0);
+          const a = !hasAny || !coAEnabled ? null : (avgA ?? 0) + ciaShare;
+          const b = !hasAny || !pairEnabled ? null : (avgB ?? 0) + ciaShare;
 
           return {
-            a: a == null ? null : clamp(a, 0, CO_MAX_A),
-            b: b == null ? null : clamp(b, 0, CO_MAX_B),
+            a: a == null ? null : clamp(a, 0, totalA),
+            b: b == null ? null : clamp(b, 0, totalB),
           };
         };
 
@@ -1345,14 +1413,11 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
         const CO_MAX_B = coB != null ? expMaxB + (ciaEnabled ? HALF : 0) : 0;
 
         const normalizeMarksArray = (raw: any) => {
-          if (Array.isArray(raw)) return raw.map((x) => (typeof x === 'number' && Number.isFinite(x) ? x : null));
-          return [];
+          if (!Array.isArray(raw)) return [] as Array<number | null>;
+          return raw.map((x) => (typeof x === 'number' && Number.isFinite(x) ? x : null));
         };
-        const avgMarks = (arr: Array<number | null>) => {
-          const nums = (arr || []).filter((x) => typeof x === 'number' && Number.isFinite(x)) as number[];
-          if (!nums.length) return null;
-          return nums.reduce((s0, n) => s0 + n, 0) / nums.length;
-        };
+        const sumMarks = (arr: Array<number | null>) =>
+          (arr || []).reduce((s0, n) => s0 + (typeof n === 'number' && Number.isFinite(n) ? n : 0), 0);
 
         const get = (sid: number) => {
           const row = rowsByStudentId[String(sid)] || {};
@@ -1363,18 +1428,28 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
 
           const marksA = normalizeMarksArray(rawA).slice(0, coAEnabled ? expCountA : 0);
           const marksB = normalizeMarksArray(rawB).slice(0, coBEnabled ? expCountB : 0);
-          const avgA = avgMarks(marksA);
-          const avgB = avgMarks(marksB);
+          const hasAInput = marksA.some((x) => typeof x === 'number' && Number.isFinite(x));
+          const hasBInput = marksB.some((x) => typeof x === 'number' && Number.isFinite(x));
+          const expObtA = sumMarks(marksA);
+          const expObtB = sumMarks(marksB);
+          const expTotalA = Math.max(0, expCountA) * Math.max(0, expMaxA);
+          const expTotalB = Math.max(0, expCountB) * Math.max(0, expMaxB);
           const ciaExamRaw = (row as any)?.ciaExam;
           const ciaExamNum = typeof ciaExamRaw === 'number' && Number.isFinite(ciaExamRaw) ? ciaExamRaw : null;
-          const hasAny = avgA != null || avgB != null || ciaExamNum != null;
+          const pairEnabled = coB != null && coBEnabled;
+          const ciaDivisor = ciaEnabled ? (pairEnabled ? 2 : 1) : 1;
+          const ciaShare = ciaEnabled ? (ciaExamNum ?? 0) / ciaDivisor : 0;
+          const ciaShareMax = ciaEnabled ? 30 / ciaDivisor : 0;
+          const totalA = expTotalA + (coAEnabled ? ciaShareMax : 0);
+          const totalB = expTotalB + (pairEnabled ? ciaShareMax : 0);
+          const hasAny = hasAInput || hasBInput || ciaExamNum != null;
 
-          const a = !hasAny ? null : (avgA ?? 0) + (ciaEnabled ? (ciaExamNum ?? 0) / 2 : 0);
-          const b = !hasAny ? null : (avgB ?? 0) + (ciaEnabled ? (ciaExamNum ?? 0) / 2 : 0);
+          const a = !hasAny || !coAEnabled ? null : expObtA + ciaShare;
+          const b = !hasAny || !pairEnabled ? null : expObtB + ciaShare;
 
           return {
-            a: a == null ? null : clamp(a, 0, CO_MAX_A),
-            b: b == null ? null : clamp(b, 0, CO_MAX_B),
+            a: a == null ? null : clamp(a, 0, totalA),
+            b: b == null ? null : clamp(b, 0, totalB),
           };
         };
 
@@ -1445,14 +1520,14 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
       // CO1/CO2 split into SSA/CIA/FA columns.
       const co1Ssa = scale(ssa1Co1Mark, maxes.ssa1.co1, wCo1Ssa);
       const co1Cia = scale(ciaCo1, maxes.cia1.co1, wCo1Cia);
-      const co1Fa = ct === 'TCPR'
+      const co1Fa = (ct === 'TCPR' || ct === 'PROJECT')
         ? scale(review1Co1, maxes.review1.co1, wCo1Fa)
         : ct === 'TCPL'
           ? scale(tcplLab1Co1, tcplLab1?.CO_MAX_A ?? maxes.f1.co1, wCo1Fa)
           : scale(f1Co1, maxes.f1.co1, wCo1Fa);
       const co2Ssa = scale(ssa1Co2Mark, maxes.ssa1.co2, wCo2Ssa);
       const co2Cia = scale(ciaCo2, maxes.cia1.co2, wCo2Cia);
-      const co2Fa = ct === 'TCPR'
+      const co2Fa = (ct === 'TCPR' || ct === 'PROJECT')
         ? scale(review1Co2, maxes.review1.co2, wCo2Fa)
         : ct === 'TCPL'
           ? scale(tcplLab1Co2, tcplLab1?.CO_MAX_B ?? maxes.f1.co2, wCo2Fa)
@@ -1460,14 +1535,14 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
 
       const co3Ssa = scale(ssa2Co3Mark, maxes.ssa2.co3, wCo3Ssa);
       const co3Cia = scale(ciaCo3, maxes.cia2.co3, wCo3Cia);
-      const co3Fa = ct === 'TCPR'
+      const co3Fa = (ct === 'TCPR' || ct === 'PROJECT')
         ? scale(review2Co3, maxes.review2.co3, wCo3Fa)
         : ct === 'TCPL'
           ? scale(tcplLab2Co3, tcplLab2?.CO_MAX_A ?? maxes.f2.co3, wCo3Fa)
           : scale(f2Co3, maxes.f2.co3, wCo3Fa);
       const co4Ssa = scale(ssa2Co4Mark, maxes.ssa2.co4, wCo4Ssa);
       const co4Cia = scale(ciaCo4, maxes.cia2.co4, wCo4Cia);
-      const co4Fa = ct === 'TCPR'
+      const co4Fa = (ct === 'TCPR' || ct === 'PROJECT')
         ? scale(review2Co4, maxes.review2.co4, wCo4Fa)
         : ct === 'TCPL'
           ? scale(tcplLab2Co4, tcplLab2?.CO_MAX_B ?? maxes.f2.co4, wCo4Fa)
@@ -1512,7 +1587,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments }:
         pct,
       };
     });
-  }, [effMapping, published, publishedReview, publishedLab, publishedTcplLab, publishedModel, students, weights, maxTotal, courseId, selectedTaId, masterCfg, classType, iqacCiaPattern, iqacModelPattern]);
+  }, [effMapping, published, publishedReview, publishedLab, publishedTcplLab, publishedModel, students, weights, maxTotal, courseId, selectedTaId, masterCfg, effectiveClassType, iqacCiaPattern, iqacModelPattern]);
 
   const header = effMapping.header;
   const cycles = effMapping.cycles;

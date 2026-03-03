@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import MarkEntryTabs from '../../components/MarkEntryTabs';
 import { normalizeClassType } from '../../constants/classTypes';
 import { fetchIQACCourseTeachingMap, IQACTeachingMapRow } from '../../services/academics';
-import { fetchDeptRows, fetchMasters } from '../../services/curriculum';
+import { fetchDeptRows, fetchElectives, fetchMasters } from '../../services/curriculum';
 import { fetchSpecialCourseEnabledAssessments } from '../../services/obe';
 import type { TeachingAssignmentItem } from '../../services/obe';
 
@@ -23,7 +23,11 @@ export default function AcademicControllerCourseMarksPage(): JSX.Element {
     (async () => {
       if (!code) return;
       try {
-        const [rows, masters] = await Promise.all([fetchDeptRows(), fetchMasters()]);
+        const [rows, masters, electives] = await Promise.all([
+          fetchDeptRows(),
+          fetchMasters(),
+          fetchElectives().catch(() => [] as any[]),
+        ]);
         if (!mounted) return;
         const matches = (rows || []).filter((r: any) => String(r?.course_code || '').trim().toUpperCase() === code.toUpperCase());
         const pick = matches[0];
@@ -46,9 +50,17 @@ export default function AcademicControllerCourseMarksPage(): JSX.Element {
           }
         } else {
           const m = (masters || []).find((mm: any) => String(mm?.course_code || '').trim().toUpperCase() === code.toUpperCase());
-          setClassType(m?.class_type ? String(m.class_type) : null);
-          setQpType(null);
-          setEnabledAssessments(null);
+          if (m) {
+            setClassType(m?.class_type ? String(m.class_type) : null);
+            setQpType(null);
+            setEnabledAssessments(null);
+          } else {
+            // Elective courses are not in dept rows or masters — look up in elective subjects.
+            const e = (electives || []).find((r: any) => String(r?.course_code || '').trim().toUpperCase() === code.toUpperCase());
+            setClassType(e?.class_type ? String(e.class_type) : null);
+            setQpType(null);
+            setEnabledAssessments(null);
+          }
         }
       } catch {
         // ignore
@@ -68,6 +80,11 @@ export default function AcademicControllerCourseMarksPage(): JSX.Element {
         if (!mounted) return;
         const found = (rows || []).find((r) => Number(r.teaching_assignment_id) === Number(teachingAssignmentId)) || null;
         setMapping(found);
+        // Use class_type from the teaching map as a fallback for elective/unlisted courses
+        // (the backend now returns class_type in each teaching map row).
+        if (found?.class_type) {
+          setClassType((prev) => prev || String(found.class_type!));
+        }
       } catch {
         if (!mounted) return;
         setMapping(null);
