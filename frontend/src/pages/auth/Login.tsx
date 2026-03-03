@@ -3,7 +3,6 @@ import { useNavigate, Link } from "react-router-dom";
 import { Mail, Lock, Eye, EyeOff, AlertCircle } from "lucide-react";
 import { login } from "../../services/auth";
 import Navbar from "../../components/navigation/Navbar";
-import BiometricLogin from "../../components/biometric/BiometricLogin";
 
 export default function Login() {
   const [identifier, setIdentifier] = useState("");
@@ -55,18 +54,6 @@ export default function Login() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleBiometricSuccess = (tokens: { access: string; refresh: string }) => {
-    // Store tokens in localStorage (same as regular login)
-    localStorage.setItem('access_token', tokens.access);
-    localStorage.setItem('refresh_token', tokens.refresh);
-    // Redirect to dashboard
-    nav("/dashboard");
-  };
-
-  const handleBiometricError = (errorMsg: string) => {
-    setError(errorMsg);
   };
 
   return (
@@ -171,13 +158,6 @@ export default function Login() {
                 )}
               </button>
             </form>
-
-            {/* Biometric Login Option */}
-            <BiometricLogin 
-              username={identifier}
-              onSuccess={handleBiometricSuccess}
-              onError={handleBiometricError}
-            />
 
             {/* Back to Home Link */}
             <div className="text-center pt-4">

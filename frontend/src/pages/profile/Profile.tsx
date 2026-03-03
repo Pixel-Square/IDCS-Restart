@@ -5,7 +5,6 @@ import DashboardLayout from '../../components/layout/DashboardLayout';
 import { ModalPortal } from '../../components/ModalPortal';
 import logo from '../../assets/idcs-logo.png';
 import fetchWithAuth from '../../services/fetchAuth';
-import BiometricSetup from '../../components/biometric/BiometricSetup';
 
 type RoleObj = { name: string };
 type Me = {
@@ -31,11 +30,6 @@ type Me = {
 function normalizeMobileForUi(raw: unknown): string {
   const s = String(raw ?? '').trim();
   return s;
-}
-
-function isIQACMainUser(user: Me | null | undefined): boolean {
-  if (!user?.username) return false;
-  return user.username.toUpperCase() === 'IQAC';
 }
 
 export default function ProfilePage({ user: initialUser }: { user?: Me | null }) {
@@ -814,11 +808,6 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                 </div>
               </div>
             </div>
-
-            {/* Biometric Authentication Card - Only for IQAC main admin */}
-            {isIQACMainUser(user) && (
-              <BiometricSetup />
-            )}
 
           </div>
         </div>

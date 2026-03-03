@@ -14,13 +14,6 @@ from .views import (
     AllQueriesListView,
     QueryUpdateView,
 )
-from .webauthn_views import (
-    WebAuthnRegistrationBeginView,
-    WebAuthnRegistrationCompleteView,
-    WebAuthnLoginBeginView,
-    WebAuthnLoginCompleteView,
-    WebAuthnCredentialsListView,
-)
 from rest_framework_simplejwt.views import TokenRefreshView
 from .api.dashboard import DashboardView
 
@@ -40,11 +33,4 @@ urlpatterns = [
     path('queries/<int:pk>/', UserQueryDetailView.as_view(), name='user_query_detail'),
     path('queries/all/', AllQueriesListView.as_view(), name='all_queries'),
     path('queries/<int:pk>/update/', QueryUpdateView.as_view(), name='query_update'),
-    
-    # WebAuthn/Biometric Authentication
-    path('webauthn/register/begin/', WebAuthnRegistrationBeginView.as_view(), name='webauthn_register_begin'),
-    path('webauthn/register/complete/', WebAuthnRegistrationCompleteView.as_view(), name='webauthn_register_complete'),
-    path('webauthn/login/begin/', WebAuthnLoginBeginView.as_view(), name='webauthn_login_begin'),
-    path('webauthn/login/complete/', WebAuthnLoginCompleteView.as_view(), name='webauthn_login_complete'),
-    path('webauthn/credentials/', WebAuthnCredentialsListView.as_view(), name='webauthn_credentials'),
 ]

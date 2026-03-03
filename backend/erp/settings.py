@@ -340,10 +340,3 @@ DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'rohit08sk@gmail.com')
 # Allow Django admin popups to work properly by setting X-Frame-Options to SAMEORIGIN
 # This prevents the "Cannot read properties of null (reading 'dismissAddRelatedObjectPopup')" error
 X_FRAME_OPTIONS = 'SAMEORIGIN'
-
-# --- WebAuthn/Biometric Authentication Configuration ---
-# Relying Party (RP) identifier - should match the domain
-# For local development, use 'localhost'
-# For production, use the actual domain without protocol (e.g., 'idcs.krgi.co.in')
-WEBAUTHN_RP_ID = os.getenv('WEBAUTHN_RP_ID', 'idcs.krgi.co.in' if not DEBUG else 'localhost')
-WEBAUTHN_RP_NAME = os.getenv('WEBAUTHN_RP_NAME', 'IDCS - Integrated Dashboard for College System')

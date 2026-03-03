@@ -286,7 +286,3 @@ class UserQuery(models.Model):
     
     def __str__(self):
         return f"{self.user.username} - {self.status} - {self.created_at.strftime('%Y-%m-%d')}"
-
-
-# Import WebAuthn models
-from .webauthn_models import WebAuthnCredential, WebAuthnChallenge
