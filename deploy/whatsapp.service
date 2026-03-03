@@ -1,0 +1,22 @@
+[Unit]
+Description=WhatsApp OTP Service for IDCS
+After=network.target
+
+[Service]
+Type=simple
+User=iqac
+Group=iqac
+WorkingDirectory=/home/iqac/IDCS-Restart/iqac-whatsapp
+ExecStart=/usr/bin/node /home/iqac/IDCS-Restart/iqac-whatsapp/server.js
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/iqac/IDCS-Restart/iqac-whatsapp/server.log
+StandardError=append:/home/iqac/IDCS-Restart/iqac-whatsapp/server.log
+
+# Environment variables
+Environment="NODE_ENV=production"
+Environment="OBE_WHATSAPP_API_KEY=IQAC_SECRET_123"
+Environment="WHATSAPP_SEND_TIMEOUT_MS=12000"
+
+[Install]
+WantedBy=multi-user.target

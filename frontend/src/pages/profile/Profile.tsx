@@ -750,33 +750,38 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                     </div>
                   </div>
 
-                  <div className="mt-4 flex flex-col sm:flex-row items-start sm:items-center gap-3">
-                    <input
-                      value={mobileDraft}
-                      onChange={(e) => setMobileDraft(e.target.value)}
-                      className="px-3 py-2 border rounded-md w-full sm:w-64"
-                      placeholder="+91XXXXXXXXXX"
-                      disabled={otpBusy}
-                    />
-                    <button
-                      onClick={handleRequestOtp}
-                      className="bg-blue-600 text-white px-4 py-2 rounded-md"
-                      disabled={otpBusy}
-                    >
-                      {otpBusy ? 'Sending…' : 'Request OTP'}
-                    </button>
-                  </div>
-
-                  {otpSent && (
-                    <div className="mt-3">
-                      <div className="text-sm text-gray-500 mb-2">Enter OTP ({otpSecondsLeft}s)</div>
-                      <div className="flex items-center gap-2">
-                        <input value={otpDraft} onChange={(e) => setOtpDraft(e.target.value)} className="px-3 py-2 border rounded-md" />
-                        <button onClick={handleVerifyOtp} className="bg-emerald-600 text-white px-3 py-2 rounded-md">Verify</button>
-                        {canResendOtp && <button onClick={handleRequestOtp} className="text-sm text-blue-600">Resend</button>}
+                  {/* Only show Request OTP when mobile is not verified */}
+                  {!profileMobileVerified && (
+                    <>
+                      <div className="mt-4 flex flex-col sm:flex-row items-start sm:items-center gap-3">
+                        <input
+                          value={mobileDraft}
+                          onChange={(e) => setMobileDraft(e.target.value)}
+                          className="px-3 py-2 border rounded-md w-full sm:w-64"
+                          placeholder="+91XXXXXXXXXX"
+                          disabled={otpBusy}
+                        />
+                        <button
+                          onClick={handleRequestOtp}
+                          className="bg-blue-600 text-white px-4 py-2 rounded-md"
+                          disabled={otpBusy}
+                        >
+                          {otpBusy ? 'Sending…' : 'Request OTP'}
+                        </button>
                       </div>
-                      {otpError && <div className="mt-2 text-sm text-red-600">{otpError}</div>}
-                    </div>
+
+                      {otpSent && (
+                        <div className="mt-3">
+                          <div className="text-sm text-gray-500 mb-2">Enter OTP ({otpSecondsLeft}s)</div>
+                          <div className="flex items-center gap-2">
+                            <input value={otpDraft} onChange={(e) => setOtpDraft(e.target.value)} className="px-3 py-2 border rounded-md" />
+                            <button onClick={handleVerifyOtp} className="bg-emerald-600 text-white px-3 py-2 rounded-md">Verify</button>
+                            {canResendOtp && <button onClick={handleRequestOtp} className="text-sm text-blue-600">Resend</button>}
+                          </div>
+                          {otpError && <div className="mt-2 text-sm text-red-600">{otpError}</div>}
+                        </div>
+                      )}
+                    </>
                   )}
 
                   {/* Only show "Remove mobile number" when a verified number exists */}
