@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import DashboardLayout from '../../components/layout/DashboardLayout';
-import { Bell, Save, Plus, X } from 'lucide-react';
+import { Bell, Save, Plus, X, ArrowLeft } from 'lucide-react';
 
 import { fetchNotificationTemplates, saveNotificationTemplates, type NotificationTemplate as ApiTemplate } from '../../services/notifications';
 
@@ -63,6 +64,7 @@ const DEFAULT_TEMPLATES: MessageTemplate[] = [
 ];
 
 export default function NotificationsPage() {
+  const navigate = useNavigate();
   const [templates, setTemplates] = useState<MessageTemplate[]>(DEFAULT_TEMPLATES);
   const [activeTemplate, setActiveTemplate] = useState<string | null>('mobile_verify');
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
@@ -218,6 +220,13 @@ export default function NotificationsPage() {
       <div className="max-w-7xl mx-auto p-6">
         <div className="mb-6 flex items-center justify-between">
           <div className="flex items-center gap-3">
+            <button
+              onClick={() => navigate('/settings')}
+              className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800 mr-1"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Settings
+            </button>
             <Bell className="w-8 h-8 text-blue-600" />
             <div>
               <h1 className="text-2xl font-bold text-gray-900">

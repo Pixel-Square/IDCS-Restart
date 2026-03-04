@@ -96,6 +96,7 @@ type Props = {
   showCia1Embed?: boolean;
   cia1Embed?: React.ReactNode;
   tcprMode?: boolean;
+  useSsaPublishedLockUi?: boolean;
 };
 
 const DEFAULT_EXPERIMENTS = 5;
@@ -313,6 +314,7 @@ export default function LabEntry({
   allCos,
   showCia1Embed,
   cia1Embed,
+  useSsaPublishedLockUi,
 }: Props) {
   const reviewFixedTable = assessmentKey === 'review1' || assessmentKey === 'review2';
 
@@ -1822,7 +1824,15 @@ export default function LabEntry({
         </div>
       ) : (
         <div style={cardStyle}>
-          <PublishLockOverlay locked={globalLocked}>
+          <PublishLockOverlay
+            locked={Boolean(globalLocked || (useSsaPublishedLockUi ? publishedEditLocked : false))}
+            title={globalLocked ? 'Locked by IQAC' : 'Published — Locked'}
+            subtitle={
+              globalLocked
+                ? 'Publishing is turned OFF globally for this assessment.'
+                : 'Marks are published. Request IQAC approval to edit.'
+            }
+          >
             <div
               className="obe-table-wrapper"
               style={{
@@ -2134,7 +2144,7 @@ export default function LabEntry({
 
 
               {/* Green overlay when blocked after Publish */}
-              {publishedEditLocked ? (
+              {publishedEditLocked && !useSsaPublishedLockUi ? (
                 <div
                   style={{
                     position: 'absolute',
@@ -2167,8 +2177,8 @@ export default function LabEntry({
               {publishedEditLocked ? (
                 <div style={floatingPanelStyle}>
                   <div style={{ textAlign: 'center' }}>
-                    <div style={{ fontWeight: 900, color: '#065f46' }}>Published</div>
-                    <div style={{ fontSize: 13, color: '#065f46' }}>Marks are locked. Request IQAC approval to edit.</div>
+                    <div style={{ fontWeight: 900, color: useSsaPublishedLockUi ? '#111827' : '#065f46' }}>Published</div>
+                    <div style={{ fontSize: 13, color: useSsaPublishedLockUi ? '#6b7280' : '#065f46' }}>Marks are locked. Request IQAC approval to edit.</div>
                   </div>
                   <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
                     <button type="button" className="obe-btn" onClick={() => setViewMarksModalOpen(true)}>
@@ -2204,8 +2214,8 @@ export default function LabEntry({
                       placeItems: 'center',
                     }}
                   >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#065f46" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="3" y="11" width="18" height="11" rx="2" ry="2" fill="#d1fae5" />
+                    <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke={useSsaPublishedLockUi ? '#111827' : '#065f46'} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="11" width="18" height="11" rx="2" ry="2" fill={useSsaPublishedLockUi ? '#f3f4f6' : '#d1fae5'} />
                       <path d="M7 11V7a5 5 0 0 1 10 0v4" />
                     </svg>
                   </div>

@@ -41,6 +41,7 @@ export default function ReviewCourseMarkEntery({ subjectId, teachingAssignmentId
       ciaExamAvailable={true}
       absentEnabled={true}
       autoSaveDraft={true}
+      useSsaPublishedLockUi={true}
     />
   );
 }

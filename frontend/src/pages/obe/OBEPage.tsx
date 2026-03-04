@@ -9,6 +9,7 @@ import '../../styles/obe-theme.css';
 // OBE/marks/COAttainment fetch and types removed
 
 import { getCachedMe } from '../../services/auth';
+import ClassResultAnalysisPage from './class_result_analysis/ClassResultAnalysisPage';
 import { fetchAssignedSubjects } from '../../services/staff';
 import {
   fetchMyTeachingAssignments,
@@ -107,7 +108,7 @@ type OBEItem = {
   achieved: string;
 };
 
-type TabKey = 'courses' | 'exam' | 'progress';
+type TabKey = 'courses' | 'exam' | 'progress' | 'class_result';
 
 type ObeProgressExam = {
   assessment: string;
@@ -391,9 +392,9 @@ export default function OBEPage(): JSX.Element {
     })();
   }, [isAcademicViewer]);
 
-  // Guard: Progress is only for HOD / Advisor.
+  // Guard: Progress / Class Result are only for HOD / Advisor.
   useEffect(() => {
-    if (activeTab === 'progress' && !canViewProgress) {
+    if ((activeTab === 'progress' || activeTab === 'class_result') && !canViewProgress) {
       setActiveTab('courses');
     }
   }, [activeTab, canViewProgress]);
@@ -687,9 +688,9 @@ export default function OBEPage(): JSX.Element {
   const [examUploadStatus, setExamUploadStatus] = useState<'idle'|'uploading'|'success'|'error'>('idle');
   const [examUploadMessage, setExamUploadMessage] = useState<string | null>(null);
 
-  // Fetch progress when switching to Progress tab (lazy-load)
+  // Fetch progress when switching to Progress or Class Result tab (lazy-load)
   useEffect(() => {
-    if (activeTab !== 'progress') return;
+    if (activeTab !== 'progress' && activeTab !== 'class_result') return;
     if (!canViewProgress) return;
     if (progressLoading || progressData) return;
 
@@ -966,6 +967,25 @@ export default function OBEPage(): JSX.Element {
                     }}
                   >
                     📈 Progress
+                  </button>
+                )}
+                {canViewProgress && (
+                  <button
+                    onClick={() => setActiveTab('class_result')}
+                    style={{
+                      padding: '10px 24px',
+                      borderRadius: 8,
+                      border: 'none',
+                      background: activeTab === 'class_result' ? 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)' : 'transparent',
+                      color: activeTab === 'class_result' ? '#fff' : '#64748b',
+                      cursor: 'pointer',
+                      fontWeight: activeTab === 'class_result' ? 600 : 500,
+                      fontSize: 15,
+                      transition: 'all 0.2s ease',
+                      boxShadow: activeTab === 'class_result' ? '0 2px 8px rgba(99,102,241,0.25)' : 'none'
+                    }}
+                  >
+                    📊 Class Result Analysis
                   </button>
                 )}
               </div>
@@ -1305,6 +1325,13 @@ export default function OBEPage(): JSX.Element {
                       <div style={{ marginTop: 12, fontSize: 14, color: examUploadStatus === 'error' ? '#dc2626' : '#16a34a', background: examUploadStatus === 'error' ? '#fef2f2' : '#f0fdf4', padding: '12px 16px', borderRadius: 10, border: `1px solid ${examUploadStatus === 'error' ? '#fecaca' : '#bbf7d0'}` }}>{examUploadMessage}</div>
                     )}
                   </div>
+                </section>
+              )}
+
+              {/* Class Result Analysis tab */}
+              {activeTab === 'class_result' && canViewProgress && (
+                <section aria-label="Class Result Analysis" style={{ background: '#f8fafc', padding: 0, borderRadius: 16, overflow: 'hidden' }}>
+                  <ClassResultAnalysisPage canViewProgress={canViewProgress} />
                 </section>
               )}
 

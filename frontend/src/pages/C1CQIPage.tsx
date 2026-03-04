@@ -15,6 +15,8 @@ import fetchWithAuth from '../services/fetchAuth';
 import { fetchDeptRow } from '../services/curriculum';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { isLabClassType, normalizeClassType } from '../constants/classTypes';
+import { exportCqiPdf } from '../utils/cqiExportPdf';
+import { getCachedMe } from '../services/auth';
 
 type Props = {
   courseId: string;
@@ -237,6 +239,8 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
   const [tas, setTas] = useState<TeachingAssignmentItem[]>([]);
   const [taError, setTaError] = useState<string | null>(null);
   const [selectedTaId, setSelectedTaId] = useState<number | null>(null);
+
+  const selectedTa = useMemo(() => tas.find((t) => t.id === selectedTaId) || null, [tas, selectedTaId]);
 
   const [loadingRoster, setLoadingRoster] = useState(false);
   const [rosterError, setRosterError] = useState<string | null>(null);
@@ -903,6 +907,39 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
     );
   };
 
+  const handleExportPdf = () => {
+    const subjectCode = String(selectedTa?.subject_code || courseId || '').trim() || '—';
+    const subjectName = String(selectedTa?.subject_name || '').trim() || null;
+
+    const me = getCachedMe() as any;
+    const instructorName =
+      String(`${me?.first_name || ''} ${me?.last_name || ''}`.replace(/\s+/g, ' ').trim()) ||
+      String(me?.username || '').trim() ||
+      String(me?.profile?.staff_id || '').trim() ||
+      null;
+
+    const rows = (visibleRows || []).map((r: any) => {
+      const flaggedCos = visibleCos.filter((n) => Boolean(r?.[`flagCO${n}`])).map((n) => `CO${n}`);
+      return {
+        regNo: String(r?.reg_no || ''),
+        name: String(r?.name || ''),
+        section: r?.section ?? null,
+        flaggedCos,
+        total: r?.total ?? null,
+      };
+    });
+
+    exportCqiPdf({
+      subjectCode,
+      subjectName,
+      coNumbers: visibleCos,
+      rows,
+      title: `CQI Export - ${visibleCos.map((n) => `CO${n}`).join(', ')}`,
+      filename: `CQI_${subjectCode}.pdf`,
+      instructorName,
+    });
+  };
+
   return (
     <div style={{ display: 'grid', gap: 14 }}>
       <div
@@ -1004,6 +1041,26 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
                 placeholder="Reg no / name / section"
                 style={{ padding: '10px 12px', borderRadius: 12, border: '1px solid #e2e8f0', width: 260 }}
               />
+            </div>
+
+            <div>
+              <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6, fontWeight: 700 }}>Export</div>
+              <button
+                type="button"
+                onClick={handleExportPdf}
+                style={{
+                  padding: '10px 12px',
+                  borderRadius: 12,
+                  border: '1px solid #e2e8f0',
+                  background: '#fff',
+                  fontSize: 12,
+                  fontWeight: 900,
+                  color: '#0f172a',
+                  minWidth: 140,
+                }}
+              >
+                Export PDF
+              </button>
             </div>
           </div>
         </div>

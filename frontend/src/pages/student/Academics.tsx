@@ -45,6 +45,21 @@ export default function StudentAcademics() {
 
   const semesterNumber = data?.semester?.number ?? null;
 
+  const internalDisplay = (internalObj: any, cycleKey: 'cycle1' | 'cycle2') => {
+    const val = internalObj?.[cycleKey] ?? internalObj?.computed;
+    const max =
+      cycleKey === 'cycle1'
+        ? (internalObj?.max_cycle1 ?? internalObj?.max_total)
+        : (internalObj?.max_cycle2 ?? internalObj?.max_total);
+
+    return (
+      <span>
+        {fmt(val)}
+        {max ? <span className="text-gray-400">/{fmt(max)}</span> : null}
+      </span>
+    );
+  };
+
   return (
     <div className="p-6">
       <div className="max-w-7xl mx-auto w-full">
@@ -53,86 +68,85 @@ export default function StudentAcademics() {
           {semesterNumber ? `Semester ${semesterNumber} · ` : ''}All enrolled courses and marks.
         </p>
 
-        <div className="mt-6 bg-white shadow rounded p-4">
+        <div className="mt-6 obe-card">
           {loading ? (
-            <div className="text-gray-600">Loading marks…</div>
+            <div className="text-gray-600" role="status">Loading marks…</div>
           ) : error ? (
             <div className="bg-red-50 border border-red-200 rounded p-3 text-red-800 text-sm">{error}</div>
           ) : (
             <div>
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                {courses.length === 0 ? (
-                  <div className="text-gray-600">No courses found for your semester.</div>
-                ) : courses.map((c: any) => {
-                  const m = c.marks || {};
-                  const internalObj = m.internal || {};
-                  const hasCqi = !!m.has_cqi;
+              {courses.length === 0 ? (
+                <div className="text-gray-600">No courses found for your semester.</div>
+              ) : (
+                <div className="overflow-x-auto -mx-2 px-2">
+                  <table className="min-w-[1100px] w-full border-separate border-spacing-0 text-sm">
+                    <thead>
+                      <tr className="text-left">
+                        {[
+                          'Code',
+                          'Subject',
+                          'Type',
+                          'CQI',
+                          'SSA 1',
+                          'CIA 1',
+                          'Review 1',
+                          'Formative 1',
+                          'Internal (C1)',
+                          'SSA 2',
+                          'CIA 2',
+                          'Review 2',
+                          'Formative 2',
+                          'Internal (C2)',
+                        ].map((h) => (
+                          <th
+                            key={h}
+                            className="sticky top-0 z-10 bg-white/90 backdrop-blur border-b border-slate-200 px-3 py-2 text-xs font-extrabold tracking-wide text-slate-700 uppercase whitespace-nowrap"
+                          >
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {courses.map((c: any, idx: number) => {
+                        const m = c.marks || {};
+                        const internalObj = m.internal || {};
+                        const hasCqi = !!m.has_cqi;
+                        const zebra = idx % 2 === 0;
 
-                  return (
-                    <div key={c.code || String(c.id)} className="p-3 border rounded bg-white">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <div className="font-semibold">{c.code} — {c.name}</div>
-                          <div className="text-sm text-gray-500">
-                            {c.class_type ? String(c.class_type) : ''}
-                            {hasCqi ? (c.class_type ? ' · CQI available' : 'CQI available') : ''}
-                          </div>
-                        </div>
-                        <div className="text-right text-xs text-gray-500">
-                          {semesterNumber ? `Semester ${semesterNumber}` : ''}
-                        </div>
-                      </div>
+                        return (
+                          <tr key={c.code || String(c.id)} className={zebra ? 'bg-white' : 'bg-slate-50'}>
+                            <td className="px-3 py-2 border-b border-slate-100 whitespace-nowrap">
+                              {c.code ? <span className="obe-pill obe-neutral-pill">{String(c.code)}</span> : '—'}
+                            </td>
+                            <td className="px-3 py-2 border-b border-slate-100 min-w-[260px]">
+                              <div className="font-semibold text-slate-900 leading-snug">{c.name || '—'}</div>
+                              {semesterNumber ? <div className="mt-0.5 obe-small-muted">Semester {semesterNumber}</div> : null}
+                            </td>
+                            <td className="px-3 py-2 border-b border-slate-100 whitespace-nowrap text-slate-700">
+                              {c.class_type ? String(c.class_type) : '—'}
+                            </td>
+                            <td className="px-3 py-2 border-b border-slate-100 whitespace-nowrap">
+                              {hasCqi ? <span className="obe-pill">Available</span> : <span className="obe-pill obe-neutral-pill">—</span>}
+                            </td>
 
-                      <div className="mt-3 overflow-x-auto">
-                        <table className="min-w-full text-sm">
-                          <tbody className="divide-y">
-                            <tr>
-                              <td className="py-1 pr-3 text-gray-500">CIA 1</td>
-                              <td className="py-1 pr-6 font-medium text-gray-900">{fmt(m.cia1)}</td>
-                              <td className="py-1 pr-3 text-gray-500">CIA 2</td>
-                              <td className="py-1 font-medium text-gray-900">{fmt(m.cia2)}</td>
-                            </tr>
-                            <tr>
-                              <td className="py-1 pr-3 text-gray-500">SSA 1</td>
-                              <td className="py-1 pr-6 font-medium text-gray-900">{fmt(m.ssa1)}</td>
-                              <td className="py-1 pr-3 text-gray-500">SSA 2</td>
-                              <td className="py-1 font-medium text-gray-900">{fmt(m.ssa2)}</td>
-                            </tr>
-                            <tr>
-                              <td className="py-1 pr-3 text-gray-500">Review 1</td>
-                              <td className="py-1 pr-6 font-medium text-gray-900">{fmt(m.review1)}</td>
-                              <td className="py-1 pr-3 text-gray-500">Review 2</td>
-                              <td className="py-1 font-medium text-gray-900">{fmt(m.review2)}</td>
-                            </tr>
-                            <tr>
-                              <td className="py-1 pr-3 text-gray-500">Formative 1</td>
-                              <td className="py-1 pr-6 font-medium text-gray-900">{fmt(m.formative1)}</td>
-                              <td className="py-1 pr-3 text-gray-500">Formative 2</td>
-                              <td className="py-1 font-medium text-gray-900">{fmt(m.formative2)}</td>
-                            </tr>
-                            <tr>
-                              <td className="py-1 pr-3 text-gray-500">Internal (Cycle 1)</td>
-                              <td className="py-1 pr-6 font-medium text-gray-900">
-                                {fmt(internalObj.cycle1 ?? internalObj.computed)}
-                                {internalObj.max_cycle1 || internalObj.max_total ? (
-                                  <span className="text-gray-400">/{fmt(internalObj.max_cycle1 ?? internalObj.max_total)}</span>
-                                ) : null}
-                              </td>
-                              <td className="py-1 pr-3 text-gray-500">Internal (Cycle 2)</td>
-                              <td className="py-1 font-medium text-gray-900">
-                                {fmt(internalObj.cycle2 ?? internalObj.computed)}
-                                {internalObj.max_cycle2 || internalObj.max_total ? (
-                                  <span className="text-gray-400">/{fmt(internalObj.max_cycle2 ?? internalObj.max_total)}</span>
-                                ) : null}
-                              </td>
-                            </tr>
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+                            <td className="px-3 py-2 border-b border-slate-100 tabular-nums whitespace-nowrap">{fmt(m.ssa1)}</td>
+                            <td className="px-3 py-2 border-b border-slate-100 tabular-nums whitespace-nowrap">{fmt(m.cia1)}</td>
+                            <td className="px-3 py-2 border-b border-slate-100 tabular-nums whitespace-nowrap">{fmt(m.review1)}</td>
+                            <td className="px-3 py-2 border-b border-slate-100 tabular-nums whitespace-nowrap">{fmt(m.formative1)}</td>
+                            <td className="px-3 py-2 border-b border-slate-100 tabular-nums whitespace-nowrap">{internalDisplay(internalObj, 'cycle1')}</td>
+                            <td className="px-3 py-2 border-b border-slate-100 tabular-nums whitespace-nowrap">{fmt(m.ssa2)}</td>
+                            <td className="px-3 py-2 border-b border-slate-100 tabular-nums whitespace-nowrap">{fmt(m.cia2)}</td>
+                            <td className="px-3 py-2 border-b border-slate-100 tabular-nums whitespace-nowrap">{fmt(m.review2)}</td>
+                            <td className="px-3 py-2 border-b border-slate-100 tabular-nums whitespace-nowrap">{fmt(m.formative2)}</td>
+                            <td className="px-3 py-2 border-b border-slate-100 tabular-nums whitespace-nowrap">{internalDisplay(internalObj, 'cycle2')}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
         </div>

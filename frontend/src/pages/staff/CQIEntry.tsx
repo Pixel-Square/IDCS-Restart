@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../../services/roster';
 import { lsGet, lsSet } from '../../utils/localStorage';
+import { exportCqiPdf } from '../../utils/cqiExportPdf';
+import { getCachedMe } from '../../services/auth';
 import { fetchWithAuth } from '../../services/fetchAuth';
 import { 
   fetchPublishedSsa1, 
@@ -256,6 +258,7 @@ export default function CQIEntry({
   cqiDivider,
   cqiMultiplier,
 }: CQIEntryProps) {
+    const [taMeta, setTaMeta] = useState<{ subjectCode: string; subjectName: string } | null>(null);
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -366,6 +369,15 @@ export default function CQIEntry({
     (async () => {
       try {
         const resp = await fetchTeachingAssignmentRoster(teachingAssignmentId);
+                const ta = (resp as any)?.teaching_assignment;
+                if (ta && (ta.subject_code || ta.subject_name)) {
+                  setTaMeta({
+                    subjectCode: String(ta.subject_code || '').trim(),
+                    subjectName: String(ta.subject_name || '').trim(),
+                  });
+                } else {
+                  setTaMeta(null);
+                }
         if (!mounted) return;
         
         const roster = (resp.students || [])
@@ -382,6 +394,7 @@ export default function CQIEntry({
       } catch (e: any) {
         if (!mounted) return;
         setError(e?.message || 'Failed to load roster');
+        setTaMeta(null);
       } finally {
         if (mounted) setLoading(false);
       }
@@ -389,6 +402,67 @@ export default function CQIEntry({
 
     return () => { mounted = false; };
   }, [teachingAssignmentId]);
+
+  const exportRowsAll = useMemo(() => {
+    if (!students.length || !coNumbers.length) return [] as Array<{ regNo?: string; name: string; section?: string | null; flaggedCos: string[]; total?: number | null }>;
+    return students.map((s) => {
+      const studentTotals: any = coTotals[s.id] || {};
+      const flaggedCos = coNumbers
+        .filter((coNum) => {
+          const cell = studentTotals?.[`co${coNum}`];
+          const max = Number(cell?.max || 0);
+          const val = Number(cell?.value || 0);
+          if (!max) return false;
+          const pct = (val / max) * 100;
+          return Number.isFinite(pct) && pct < THRESHOLD_PERCENT;
+        })
+        .map((coNum) => `CO${coNum}`);
+
+      let totalValue = 0;
+      let totalMax = 0;
+      coNumbers.forEach((coNum) => {
+        const cell = studentTotals?.[`co${coNum}`];
+        if (!cell) return;
+        const max = Number(cell?.max || 0);
+        const val = Number(cell?.value || 0);
+        if (!max) return;
+        totalValue += Number.isFinite(val) ? val : 0;
+        totalMax += Number.isFinite(max) ? max : 0;
+      });
+      const totalPct = totalMax ? (totalValue / totalMax) * 100 : null;
+
+      return {
+        regNo: s.reg_no,
+        name: s.name,
+        section: s.section ?? null,
+        flaggedCos,
+        total: totalPct,
+      };
+    });
+  }, [students, coTotals, coNumbers]);
+
+  const handleExportPdf = () => {
+    const subjectCode = String(taMeta?.subjectCode || '').trim() || (subjectId != null ? `SUBJECT_${subjectId}` : '—');
+    const subjectName = String(taMeta?.subjectName || '').trim() || null;
+    const title = `CQI Export${Array.isArray(cos) && cos.length ? ` - ${cos.join(', ')}` : ''}`;
+
+    const me = getCachedMe() as any;
+    const instructorName =
+      String(`${me?.first_name || ''} ${me?.last_name || ''}`.replace(/\s+/g, ' ').trim()) ||
+      String(me?.username || '').trim() ||
+      String(me?.profile?.staff_id || '').trim() ||
+      null;
+
+    exportCqiPdf({
+      subjectCode,
+      subjectName,
+      coNumbers,
+      rows: exportRowsAll,
+      title,
+      filename: `CQI_${subjectCode}${teachingAssignmentId ? `_TA${teachingAssignmentId}` : ''}.pdf`,
+      instructorName,
+    });
+  };
 
   // Load CQI entries from localStorage
   useEffect(() => {
@@ -1076,6 +1150,14 @@ export default function CQIEntry({
           Save CQI
         </button>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <button
+                      type="button"
+                      onClick={handleExportPdf}
+                      className="obe-btn"
+                      style={{ minWidth: 110 }}
+                    >
+                      Export PDF
+                    </button>
           <button
             type="button"
             onClick={() => setDebugMode((s) => !s)}

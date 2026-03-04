@@ -78,15 +78,15 @@ function normalizeInternalWeights(
   classType: string,
   arr: Array<number | string> | null | undefined,
   row?: { ssa1?: any; cia1?: any; formative1?: any },
-  classType?: string,
 ): Array<number | string> {
-<<<<<<< HEAD
-  let next = Array.isArray(arr) ? [...arr] : [...DEFAULT_INTERNAL_MARK_WEIGHTS];
-  const k = normalizeClassType(classType || '');
+  const k = normalizeClassType(classType);
+  const defaults = defaultInternalWeightsForClassType(k);
+  let next = Array.isArray(arr) ? [...arr] : [...defaults];
+
   const sanitizeLabPractical = (input: Array<number | string>) => {
-    const out = ensureInternalWeightsLen17(input);
-    const labCiaFallback = Number(DEFAULT_INTERNAL_MARK_WEIGHTS[1] ?? 3);
-    const modelFallback = Number(DEFAULT_INTERNAL_MARK_WEIGHTS[16] ?? 4);
+    const out = ensureInternalWeightsLen(k, input);
+    const labCiaFallback = Number((defaults as any)?.[1] ?? DEFAULT_INTERNAL_MARK_WEIGHTS[1] ?? 3);
+    const modelFallback = Number((defaults as any)?.[16] ?? DEFAULT_INTERNAL_MARK_WEIGHTS[16] ?? 4);
     const pickLabCia = (legacy: unknown) => {
       if (legacy === '' || legacy == null) return '';
       const n = Number(legacy);
@@ -105,12 +105,6 @@ function normalizeInternalWeights(
     }
     return out;
   };
-=======
-  const k = normalizeClassType(classType);
-  const defaults = defaultInternalWeightsForClassType(k);
-  let next = Array.isArray(arr) ? [...arr] : [...defaults];
-
->>>>>>> 4dd36089cc953007cf37a62eae126a75c501fea0
   // Backward compatibility: old format had 13 weights with CO1/CO2 as single cycle columns.
   if (next.length === 13) {
     if (k === 'LAB' || k === 'PRACTICAL') {
@@ -134,13 +128,6 @@ function normalizeInternalWeights(
       next = [co1Ssa, co1Cia, co1Fa, co2Ssa, co2Cia, co2Fa, ...next.slice(2)];
     }
   }
-<<<<<<< HEAD
-  next = ensureInternalWeightsLen17(next);
-  if (k === 'LAB' || k === 'PRACTICAL') {
-    next = sanitizeLabPractical(next);
-  }
-=======
-
   // TCPL upgrade: old 17-slot schema -> new 21-slot schema by inserting CIA Exam weights.
   if (k === 'TCPL' && next.length === 17) {
     const out: Array<number | string> = [];
@@ -153,7 +140,9 @@ function normalizeInternalWeights(
   }
 
   next = ensureInternalWeightsLen(k, next);
->>>>>>> 4dd36089cc953007cf37a62eae126a75c501fea0
+  if (k === 'LAB' || k === 'PRACTICAL') {
+    next = sanitizeLabPractical(next);
+  }
   return next;
 }
 
@@ -334,11 +323,7 @@ export default function AcademicControllerWeightsPage() {
             ssa1: seedRow.ssa1,
             cia1: seedRow.cia1,
             formative1: seedRow.formative1,
-<<<<<<< HEAD
-            internal_mark_weights: normalizeInternalWeightsLen17((im && im.length ? im : out[k].internal_mark_weights) as any, seedRow, k),
-=======
             internal_mark_weights: normalizeInternalWeights(k, (im && im.length ? im : out[k].internal_mark_weights) as any, seedRow),
->>>>>>> 4dd36089cc953007cf37a62eae126a75c501fea0
           };
         }
         return out;
@@ -410,7 +395,6 @@ export default function AcademicControllerWeightsPage() {
           k,
           Array.isArray(w?.internal_mark_weights) ? w.internal_mark_weights : defaultInternalWeightsForClassType(k),
           { ssa1: w?.ssa1, cia1: w?.cia1, formative1: w?.formative1 },
-          k,
         );
         const expected = internalWeightsExpectedLen(k);
         const defaults = defaultInternalWeightsForClassType(k) as number[];
@@ -517,11 +501,7 @@ export default function AcademicControllerWeightsPage() {
             {INTERNAL_MARK_TABLE_CLASS_TYPES.map((ct) => {
               const key = normalizeClassType(String(ct));
               const row = weights[key];
-<<<<<<< HEAD
-              const arr = normalizeInternalWeightsLen17(Array.isArray(row?.internal_mark_weights) ? row.internal_mark_weights : DEFAULT_INTERNAL_MARK_WEIGHTS, row, key);
-=======
               const arr = normalizeInternalWeights(key, Array.isArray(row?.internal_mark_weights) ? row.internal_mark_weights : defaultInternalWeightsForClassType(key), row);
->>>>>>> 4dd36089cc953007cf37a62eae126a75c501fea0
               const groups = buildInternalWeightsGroups(key);
               const cols = groups.flatMap((g) => g.cols);
               return (

@@ -43,45 +43,6 @@ const DEFAULT_INTERNAL_MAPPING = {
   cycles: ['ssa', 'cia', 'fa', 'ssa', 'cia', 'fa', 'ssa', 'cia', 'fa', 'ssa', 'cia', 'fa', 'ME', 'ME', 'ME', 'ME', 'ME'],
 };
 
-// TCPL splits the old FA(LAB) column into two: LAB + CIA Exam.
-// Slot order (21):
-// CO1: SSA, CIA, LAB, CIA Exam
-// CO2: SSA, CIA, LAB, CIA Exam
-// CO3: SSA, CIA, LAB, CIA Exam
-// CO4: SSA, CIA, LAB, CIA Exam
-// ME: CO1..CO5
-const DEFAULT_INTERNAL_MAPPING_TCPL = {
-  header: [
-    'CO1', 'CO1', 'CO1', 'CO1',
-    'CO2', 'CO2', 'CO2', 'CO2',
-    'CO3', 'CO3', 'CO3', 'CO3',
-    'CO4', 'CO4', 'CO4', 'CO4',
-    'CO1', 'CO2', 'CO3', 'CO4', 'CO5',
-  ],
-  // Defaults: keep the old weights, and start the new CIA Exam slots at 0.
-  // IQAC can update these in the weights page.
-  weights: [
-    1.5, 3.0, 2.5, 0,
-    1.5, 3.0, 2.5, 0,
-    1.5, 3.0, 2.5, 0,
-    1.5, 3.0, 2.5, 0,
-    2.0, 2.0, 2.0, 2.0, 4.0,
-  ],
-  cycles: [
-    'ssa', 'cia', 'LAB 1', 'CIA Exam',
-    'ssa', 'cia', 'LAB 1', 'CIA Exam',
-    'ssa', 'cia', 'LAB 2', 'CIA Exam',
-    'ssa', 'cia', 'LAB 2', 'CIA Exam',
-    'ME', 'ME', 'ME', 'ME', 'ME',
-  ],
-} as const;
-
-function defaultInternalWeightsFor(classType: string | null): number[] {
-  const ct = normalizeClassType(classType);
-  if (ct === 'TCPL') return [...DEFAULT_INTERNAL_MAPPING_TCPL.weights];
-  return [...DEFAULT_INTERNAL_MAPPING.weights];
-}
-
 const DEFAULT_CIA1_QUESTIONS: QuestionDef[] = [
   { key: 'q1', max: 2, co: 1 },
   { key: 'q2', max: 2, co: 1 },
@@ -302,25 +263,6 @@ type InternalSchema = {
 
 function buildInternalSchema(classType: string | null, enabledSet: Set<string>): InternalSchema {
   const ct = normalizeClassType(classType);
-
-  if (ct === 'TCPL') {
-    // TCPL uses LAB1/LAB2 from lab-style sheets + CIA Exam as a separate column.
-    const visible = Array.from({ length: 21 }, (_, i) => i);
-    const labels = [
-      'CO1-SSA', 'CO1-CIA', 'CO1-LAB1', 'CO1-CIAExam',
-      'CO2-SSA', 'CO2-CIA', 'CO2-LAB1', 'CO2-CIAExam',
-      'CO3-SSA', 'CO3-CIA', 'CO3-LAB2', 'CO3-CIAExam',
-      'CO4-SSA', 'CO4-CIA', 'CO4-LAB2', 'CO4-CIAExam',
-      'ME-CO1', 'ME-CO2', 'ME-CO3', 'ME-CO4', 'ME-CO5',
-    ];
-    return {
-      visible,
-      header: [...DEFAULT_INTERNAL_MAPPING_TCPL.header],
-      cycles: [...DEFAULT_INTERNAL_MAPPING_TCPL.cycles],
-      labels,
-    };
-  }
-
   const allHeader = DEFAULT_INTERNAL_MAPPING.header;
   const allCycles = DEFAULT_INTERNAL_MAPPING.cycles;
   const allLabels = [
@@ -373,7 +315,6 @@ function buildInternalSchema(classType: string | null, enabledSet: Set<string>):
     });
   }
 
-<<<<<<< HEAD
   if (ct === 'LAB') {
     // LAB uses CIA 1 LAB, CIA 2 LAB and MODEL LAB (no SSA/FA).
     visible = [1, 4, 7, 10, 16];
@@ -385,20 +326,6 @@ function buildInternalSchema(classType: string | null, enabledSet: Set<string>):
 
   if (ct === 'PRACTICAL') {
     // PRACTICAL keeps CIA + MODEL behavior.
-=======
-  if (ct === 'PROJECT') {
-    // PROJECT uses Review 1 / Review 2 / Model Review.
-    // Reuse the FA slots for Review1/Review2 (same columns as TCPR), and ME-CO5 for Model Review.
-    visible = [2, 5, 8, 11, 16];
-    const header = ['CO1', 'CO2', 'CO3', 'CO4', 'CO5'];
-    const cyc = ['Review 1', 'Review 1', 'Review 2', 'Review 2', 'Model Review'];
-    const lab = ['CO1-Review1', 'CO2-Review1', 'CO3-Review2', 'CO4-Review2', 'CO5-ModelReview'];
-    return { visible, header, cycles: cyc, labels: lab };
-  }
-
-  if (ct === 'LAB' || ct === 'PRACTICAL') {
-    // Only CIA (lab-style) + MODEL(CO5) are used.
->>>>>>> 4dd36089cc953007cf37a62eae126a75c501fea0
     visible = [1, 4, 7, 10, 16];
     const header = ['CO1', 'CO2', 'CO3', 'CO4', 'ME'];
     const cyc = ['CIA 1', 'CIA 1', 'CIA 2', 'CIA 2', 'MODEL'];
@@ -575,26 +502,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
     let mounted = true;
     (async () => {
       try {
-<<<<<<< HEAD
         const ct = effectiveClassType;
-=======
-        const ct = normalizeClassType(classType);
-        const defaultIm = defaultInternalWeightsFor(ct);
-        const expectedLen = defaultIm.length;
-
-        const upgradeTcpl17To21 = (arr17: number[]) => {
-          // Old TCPL used the 17-slot theory mapping; new TCPL uses 21 slots.
-          // Insert CIA Exam slot after each LAB slot in the first 12 positions.
-          const out: number[] = [];
-          for (let co = 0; co < 4; co++) {
-            const base = co * 3;
-            out.push(arr17[base] ?? 0, arr17[base + 1] ?? 0, arr17[base + 2] ?? 0, 0);
-          }
-          out.push(...arr17.slice(12, 17));
-          return out;
-        };
-
->>>>>>> 4dd36089cc953007cf37a62eae126a75c501fea0
         const applyWeights = (w: any) => {
           if (!w || typeof w !== 'object') return false;
           const ssa1W = Number.isFinite(Number(w.ssa1)) ? Number(w.ssa1) : 1.5;
@@ -653,23 +561,13 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
               }
             }
 
-<<<<<<< HEAD
             while (arr.length < DEFAULT_INTERNAL_MAPPING.weights.length) arr.push(DEFAULT_INTERNAL_MAPPING.weights[arr.length] ?? 0);
             if (ct === 'LAB' || ct === 'PRACTICAL') {
               arr = sanitizeLabPractical(arr);
             }
             setInternalMarkWeights(arr.slice(0, DEFAULT_INTERNAL_MAPPING.weights.length));
-=======
-            // TCPL upgrade: 17-slot -> 21-slot (insert CIA Exam weight slots).
-            if (ct === 'TCPL' && arr.length === 17 && expectedLen === 21) {
-              arr = upgradeTcpl17To21(arr);
-            }
-
-            while (arr.length < expectedLen) arr.push(defaultIm[arr.length] ?? 0);
-            setInternalMarkWeights(arr.slice(0, expectedLen));
->>>>>>> 4dd36089cc953007cf37a62eae126a75c501fea0
           } else {
-            setInternalMarkWeights([...defaultIm]);
+            setInternalMarkWeights([...DEFAULT_INTERNAL_MAPPING.weights]);
           }
           return true;
         };
@@ -845,24 +743,23 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         }
 
         // Prefer entered/draft marks (staff view), fallback to published.
-        // PROJECT does not use SSA/Formative in Internal Marks.
-        if (!isProject && allow('ssa1')) {
+        if (allow('ssa1')) {
           try {
             const d = await fetchDraft('ssa1', courseId, taId);
             if (d?.draft && (d.draft as any).marks) ssa1Res = { marks: (d.draft as any).marks };
           } catch {}
         }
-        if (!isProject && allow('ssa2')) {
+        if (allow('ssa2')) {
           try {
             const d = await fetchDraft('ssa2', courseId, taId);
             if (d?.draft && (d.draft as any).marks) ssa2Res = { marks: (d.draft as any).marks };
           } catch {}
         }
 
-        if (!isProject && allow('ssa1') && !ssa1Res?.marks) {
+        if (allow('ssa1') && !ssa1Res?.marks) {
           try { ssa1Res = await fetchPublishedSsa1(courseId, taId); } catch { ssa1Res = null; }
         }
-        if (!isProject && allow('ssa2') && !ssa2Res?.marks) {
+        if (allow('ssa2') && !ssa2Res?.marks) {
           try { ssa2Res = await fetchPublishedSsa2(courseId, taId); } catch { ssa2Res = null; }
         }
 
@@ -906,13 +803,13 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
           }
         }
 
-        if (!isProject && allow('cia1')) {
+        if (allow('cia1')) {
           try { const d = await fetchDraft('cia1', courseId, taId); if (d?.draft) cia1Res = { data: (d.draft as any).data ?? d.draft }; } catch {}
           if (!cia1Res?.data) {
             try { cia1Res = await fetchPublishedCiaSheet('cia1', courseId, taId); } catch { cia1Res = null; }
           }
         }
-        if (!isProject && allow('cia2')) {
+        if (allow('cia2')) {
           try { const d = await fetchDraft('cia2', courseId, taId); if (d?.draft) cia2Res = { data: (d.draft as any).data ?? d.draft }; } catch {}
           if (!cia2Res?.data) {
             try { cia2Res = await fetchPublishedCiaSheet('cia2', courseId, taId); } catch { cia2Res = null; }
@@ -967,14 +864,12 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
   const schema = useMemo(() => buildInternalSchema(effectiveClassType, enabledSet), [effectiveClassType, enabledSet]);
 
   const effMapping = useMemo(() => {
-    const defaults = defaultInternalWeightsFor(classType);
-    const expectedLen = defaults.length;
-    const weightsArr = Array.isArray(internalMarkWeights) && internalMarkWeights.length ? internalMarkWeights : defaults;
-    const weightsAll = weightsArr.slice(0, expectedLen);
-    while (weightsAll.length < expectedLen) weightsAll.push(defaults[weightsAll.length] ?? 0);
+    const weightsArr = Array.isArray(internalMarkWeights) && internalMarkWeights.length ? internalMarkWeights : DEFAULT_INTERNAL_MAPPING.weights;
+    const weightsAll = weightsArr.slice(0, DEFAULT_INTERNAL_MAPPING.weights.length);
+    while (weightsAll.length < DEFAULT_INTERNAL_MAPPING.weights.length) weightsAll.push(DEFAULT_INTERNAL_MAPPING.weights[weightsAll.length] ?? 0);
     const weights = schema.visible.map((i) => weightsAll[i] ?? 0);
     return { header: schema.header, weights, cycles: schema.cycles, visible: schema.visible, labels: schema.labels };
-  }, [internalMarkWeights, schema, classType]);
+  }, [internalMarkWeights, schema]);
 
   const maxTotal = useMemo(() => {
     const w = effMapping.weights.map((x: any) => Number(x) || 0);
@@ -984,46 +879,29 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
   const computedRows = useMemo(() => {
     const ct = effectiveClassType;
 
-    const isTcpl = ct === 'TCPL';
-
     // Map the visible weights back into their 0..16 slot positions.
-    const fullSlots = Math.max(0, ...effMapping.visible) + 1;
-    const wFull = new Array(fullSlots).fill(0);
+    const wFull = new Array(17).fill(0);
     for (let i = 0; i < effMapping.visible.length; i++) {
       const idx = effMapping.visible[i];
       wFull[idx] = Number(effMapping.weights[i]) || 0;
     }
-
-    const wCo1Ssa = isTcpl ? (wFull[0] || 0) : (wFull[0] || 0);
-    const wCo1Cia = isTcpl ? (wFull[1] || 0) : (wFull[1] || 0);
-    const wCo1Lab = isTcpl ? (wFull[2] || 0) : 0;
-    const wCo1CiaExam = isTcpl ? (wFull[3] || 0) : 0;
-
-    const wCo2Ssa = isTcpl ? (wFull[4] || 0) : (wFull[3] || 0);
-    const wCo2Cia = isTcpl ? (wFull[5] || 0) : (wFull[4] || 0);
-    const wCo2Lab = isTcpl ? (wFull[6] || 0) : 0;
-    const wCo2CiaExam = isTcpl ? (wFull[7] || 0) : 0;
-
-    const wCo3Ssa = isTcpl ? (wFull[8] || 0) : (wFull[6] || 0);
-    const wCo3Cia = isTcpl ? (wFull[9] || 0) : (wFull[7] || 0);
-    const wCo3Lab = isTcpl ? (wFull[10] || 0) : 0;
-    const wCo3CiaExam = isTcpl ? (wFull[11] || 0) : 0;
-
-    const wCo4Ssa = isTcpl ? (wFull[12] || 0) : (wFull[9] || 0);
-    const wCo4Cia = isTcpl ? (wFull[13] || 0) : (wFull[10] || 0);
-    const wCo4Lab = isTcpl ? (wFull[14] || 0) : 0;
-    const wCo4CiaExam = isTcpl ? (wFull[15] || 0) : 0;
-
-    const wCo1Fa = isTcpl ? 0 : (wFull[2] || 0);
-    const wCo2Fa = isTcpl ? 0 : (wFull[5] || 0);
-    const wCo3Fa = isTcpl ? 0 : (wFull[8] || 0);
-    const wCo4Fa = isTcpl ? 0 : (wFull[11] || 0);
-
-    const wMeCo1 = isTcpl ? (wFull[16] || 0) : (wFull[12] || 0);
-    const wMeCo2 = isTcpl ? (wFull[17] || 0) : (wFull[13] || 0);
-    const wMeCo3 = isTcpl ? (wFull[18] || 0) : (wFull[14] || 0);
-    const wMeCo4 = isTcpl ? (wFull[19] || 0) : (wFull[15] || 0);
-    const wMeCo5 = isTcpl ? (wFull[20] || 0) : (wFull[16] || 0);
+    const wCo1Ssa = wFull[0] || 0;
+    const wCo1Cia = wFull[1] || 0;
+    const wCo1Fa = wFull[2] || 0;
+    const wCo2Ssa = wFull[3] || 0;
+    const wCo2Cia = wFull[4] || 0;
+    const wCo2Fa = wFull[5] || 0;
+    const wCo3Ssa = wFull[6] || 0;
+    const wCo3Cia = wFull[7] || 0;
+    const wCo3Fa = wFull[8] || 0;
+    const wCo4Ssa = wFull[9] || 0;
+    const wCo4Cia = wFull[10] || 0;
+    const wCo4Fa = wFull[11] || 0;
+    const wMeCo1 = wFull[12] || 0;
+    const wMeCo2 = wFull[13] || 0;
+    const wMeCo3 = wFull[14] || 0;
+    const wMeCo4 = wFull[15] || 0;
+    const wMeCo5 = wFull[16] || 0;
 
     const cia1Snap = published.cia1 && typeof published.cia1 === 'object' ? published.cia1 : null;
     const cia2Snap = published.cia2 && typeof published.cia2 === 'object' ? published.cia2 : null;
@@ -1566,53 +1444,26 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
           const totalB = expTotalB + (pairEnabled ? ciaShareMax : 0);
           const hasAny = hasAInput || hasBInput || ciaExamNum != null;
 
-<<<<<<< HEAD
           const a = !hasAny || !coAEnabled ? null : expObtA + ciaShare;
           const b = !hasAny || !pairEnabled ? null : expObtB + ciaShare;
 
           return {
             a: a == null ? null : clamp(a, 0, totalA),
             b: b == null ? null : clamp(b, 0, totalB),
-=======
-          if (!hasAny) {
-            return { labA: null, examA: null, totalA: null, labB: null, examB: null, totalB: null };
-          }
-
-          const examShare = ciaEnabled ? clamp((ciaExamNum ?? 0) / 2, 0, HALF) : 0;
-
-          const labA = clamp(avgA ?? 0, 0, expMaxA);
-          const labB = clamp(avgB ?? 0, 0, expMaxB);
-
-          const totalA = clamp(labA + examShare, 0, CO_MAX_A);
-          const totalB = clamp(labB + examShare, 0, CO_MAX_B);
-
-          return {
-            labA,
-            examA: examShare,
-            totalA,
-            labB,
-            examB: examShare,
-            totalB,
->>>>>>> 4dd36089cc953007cf37a62eae126a75c501fea0
           };
         };
 
-        return { get, CO_MAX_A, CO_MAX_B, expMaxA, expMaxB, examMax: HALF };
+        return { get, CO_MAX_A, CO_MAX_B };
       };
 
       const tcplLab1 = ct === 'TCPL' ? readTcplLabPair(publishedTcplLab.lab1, 1, 2) : null;
       const tcplLab2 = ct === 'TCPL' ? readTcplLabPair(publishedTcplLab.lab2, 3, 4) : null;
       const tcpl1 = tcplLab1 ? tcplLab1.get(s.id) : null;
       const tcpl2 = tcplLab2 ? tcplLab2.get(s.id) : null;
-      const tcplLab1Co1Lab = (tcpl1 as any)?.labA ?? null;
-      const tcplLab1Co1Exam = (tcpl1 as any)?.examA ?? null;
-      const tcplLab1Co2Lab = (tcpl1 as any)?.labB ?? null;
-      const tcplLab1Co2Exam = (tcpl1 as any)?.examB ?? null;
-
-      const tcplLab2Co3Lab = (tcpl2 as any)?.labA ?? null;
-      const tcplLab2Co3Exam = (tcpl2 as any)?.examA ?? null;
-      const tcplLab2Co4Lab = (tcpl2 as any)?.labB ?? null;
-      const tcplLab2Co4Exam = (tcpl2 as any)?.examB ?? null;
+      const tcplLab1Co1 = tcpl1?.a ?? null;
+      const tcplLab1Co2 = tcpl1?.b ?? null;
+      const tcplLab2Co3 = tcpl2?.a ?? null;
+      const tcplLab2Co4 = tcpl2?.b ?? null;
 
       const cia1Row = cia1ById[String(s.id)] || {};
       const cia2Row = cia2ById[String(s.id)] || {};
@@ -1669,58 +1520,33 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       // CO1/CO2 split into SSA/CIA/FA columns.
       const co1Ssa = scale(ssa1Co1Mark, maxes.ssa1.co1, wCo1Ssa);
       const co1Cia = scale(ciaCo1, maxes.cia1.co1, wCo1Cia);
-<<<<<<< HEAD
       const co1Fa = (ct === 'TCPR' || ct === 'PROJECT')
-=======
-      const co1Fa = ct === 'TCPR' || ct === 'PROJECT'
->>>>>>> 4dd36089cc953007cf37a62eae126a75c501fea0
         ? scale(review1Co1, maxes.review1.co1, wCo1Fa)
         : ct === 'TCPL'
-          ? null
+          ? scale(tcplLab1Co1, tcplLab1?.CO_MAX_A ?? maxes.f1.co1, wCo1Fa)
           : scale(f1Co1, maxes.f1.co1, wCo1Fa);
       const co2Ssa = scale(ssa1Co2Mark, maxes.ssa1.co2, wCo2Ssa);
       const co2Cia = scale(ciaCo2, maxes.cia1.co2, wCo2Cia);
-<<<<<<< HEAD
       const co2Fa = (ct === 'TCPR' || ct === 'PROJECT')
-=======
-      const co2Fa = ct === 'TCPR' || ct === 'PROJECT'
->>>>>>> 4dd36089cc953007cf37a62eae126a75c501fea0
         ? scale(review1Co2, maxes.review1.co2, wCo2Fa)
         : ct === 'TCPL'
-          ? null
+          ? scale(tcplLab1Co2, tcplLab1?.CO_MAX_B ?? maxes.f1.co2, wCo2Fa)
           : scale(f1Co2, maxes.f1.co2, wCo2Fa);
 
       const co3Ssa = scale(ssa2Co3Mark, maxes.ssa2.co3, wCo3Ssa);
       const co3Cia = scale(ciaCo3, maxes.cia2.co3, wCo3Cia);
-<<<<<<< HEAD
       const co3Fa = (ct === 'TCPR' || ct === 'PROJECT')
-=======
-      const co3Fa = ct === 'TCPR' || ct === 'PROJECT'
->>>>>>> 4dd36089cc953007cf37a62eae126a75c501fea0
         ? scale(review2Co3, maxes.review2.co3, wCo3Fa)
         : ct === 'TCPL'
-          ? null
+          ? scale(tcplLab2Co3, tcplLab2?.CO_MAX_A ?? maxes.f2.co3, wCo3Fa)
           : scale(f2Co3, maxes.f2.co3, wCo3Fa);
       const co4Ssa = scale(ssa2Co4Mark, maxes.ssa2.co4, wCo4Ssa);
       const co4Cia = scale(ciaCo4, maxes.cia2.co4, wCo4Cia);
-<<<<<<< HEAD
       const co4Fa = (ct === 'TCPR' || ct === 'PROJECT')
-=======
-      const co4Fa = ct === 'TCPR' || ct === 'PROJECT'
->>>>>>> 4dd36089cc953007cf37a62eae126a75c501fea0
         ? scale(review2Co4, maxes.review2.co4, wCo4Fa)
         : ct === 'TCPL'
-          ? null
+          ? scale(tcplLab2Co4, tcplLab2?.CO_MAX_B ?? maxes.f2.co4, wCo4Fa)
           : scale(f2Co4, maxes.f2.co4, wCo4Fa);
-
-      const co1Lab = isTcpl ? scale(tcplLab1Co1Lab, (tcplLab1 as any)?.expMaxA ?? 25, wCo1Lab) : null;
-      const co1CiaExam = isTcpl ? scale(tcplLab1Co1Exam, (tcplLab1 as any)?.examMax ?? 15, wCo1CiaExam) : null;
-      const co2Lab = isTcpl ? scale(tcplLab1Co2Lab, (tcplLab1 as any)?.expMaxB ?? 25, wCo2Lab) : null;
-      const co2CiaExam = isTcpl ? scale(tcplLab1Co2Exam, (tcplLab1 as any)?.examMax ?? 15, wCo2CiaExam) : null;
-      const co3Lab = isTcpl ? scale(tcplLab2Co3Lab, (tcplLab2 as any)?.expMaxA ?? 25, wCo3Lab) : null;
-      const co3CiaExam = isTcpl ? scale(tcplLab2Co3Exam, (tcplLab2 as any)?.examMax ?? 15, wCo3CiaExam) : null;
-      const co4Lab = isTcpl ? scale(tcplLab2Co4Lab, (tcplLab2 as any)?.expMaxB ?? 25, wCo4Lab) : null;
-      const co4CiaExam = isTcpl ? scale(tcplLab2Co4Exam, (tcplLab2 as any)?.examMax ?? 15, wCo4CiaExam) : null;
 
       const model = getModelCoMarks(s);
       const meCo1 = scale(model.co1, model.max.co1, wMeCo1);
@@ -1729,49 +1555,25 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       const meCo4 = scale(model.co4, model.max.co4, wMeCo4);
       const meCo5 = scale(model.co5, model.max.co5, wMeCo5);
 
-      const partsFull = isTcpl
-        ? [
-            co1Ssa,
-            co1Cia,
-            co1Lab,
-            co1CiaExam,
-            co2Ssa,
-            co2Cia,
-            co2Lab,
-            co2CiaExam,
-            co3Ssa,
-            co3Cia,
-            co3Lab,
-            co3CiaExam,
-            co4Ssa,
-            co4Cia,
-            co4Lab,
-            co4CiaExam,
-            meCo1,
-            meCo2,
-            meCo3,
-            meCo4,
-            meCo5,
-          ]
-        : [
-            co1Ssa,
-            co1Cia,
-            co1Fa,
-            co2Ssa,
-            co2Cia,
-            co2Fa,
-            co3Ssa,
-            co3Cia,
-            co3Fa,
-            co4Ssa,
-            co4Cia,
-            co4Fa,
-            meCo1,
-            meCo2,
-            meCo3,
-            meCo4,
-            meCo5,
-          ];
+      const partsFull = [
+        co1Ssa,
+        co1Cia,
+        co1Fa,
+        co2Ssa,
+        co2Cia,
+        co2Fa,
+        co3Ssa,
+        co3Cia,
+        co3Fa,
+        co4Ssa,
+        co4Cia,
+        co4Fa,
+        meCo1,
+        meCo2,
+        meCo3,
+        meCo4,
+        meCo5,
+      ];
       const parts = effMapping.visible.map((i: number) => partsFull[i]);
       const any = parts.some((p) => typeof p === 'number' && Number.isFinite(p));
       const total = any ? round2(parts.reduce((s0, p) => s0 + (typeof p === 'number' && Number.isFinite(p) ? p : 0), 0)) : null;

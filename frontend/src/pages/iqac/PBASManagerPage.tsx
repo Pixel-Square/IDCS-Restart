@@ -248,6 +248,132 @@ function addChildAtPath(nodes: NodeDraft[], path: number[]): NodeDraft[] {
   return updateAtPath(nodes, path, (n) => ({ ...n, children: [...n.children, blank] }))
 }
 
+const AUTHOR_PUBLISHER_OPTIONS = [
+  'Tata McGraw-Hill',
+  'Pearson',
+  'PHI',
+  'IEEE press',
+  'Wiley',
+  'Oxford',
+  'Galgotia',
+  'Cengage',
+  'S.K. Kataria',
+  'S.Chand',
+  'Khanna',
+  'Lakshmi Pvt Ltd',
+  'Dhanpat Rai',
+  'Other Books with ISBN (Hardbound)',
+]
+
+const R6_GROUP_A_PUBLISHERS = [
+  'Tata McGraw-Hill',
+  'Pearson',
+  'PHI',
+  'IEEE press',
+  'Wiley',
+  'Oxford',
+  'Galgotia',
+  'Cengage',
+]
+
+const R6_GROUP_B_PUBLISHERS = [
+  'S.K. Kataria',
+  'S.Chand',
+  'Khanna',
+  'Lakshmi Pvt Ltd',
+  'Dhanpat Rai',
+]
+
+function makeNode(label: string, extra?: Partial<NodeDraft>): NodeDraft {
+  return {
+    label,
+    audience: 'both',
+    input_mode: 'upload',
+    link: '',
+    uploaded_name: '',
+    limit: '',
+    college_required: false,
+    position: '',
+    children: [],
+    ...(extra || {}),
+  }
+}
+
+function buildPartCTemplateTree(): NodeDraft[] {
+  return [
+    makeNode('Part C: Research & Development (30 Marks)', {
+      limit: '30',
+      children: [
+        makeNode('R1 Publications', {
+          limit: '20',
+          children: [
+            makeNode('R1.1 Journals (Collaborative publications within the KRGI-1 bonus credit) • Condition: Refer Annexure II • Actual Mark: Min 10 credits for Ph.D Holders & 6 credits for Non Ph.D'),
+            makeNode('R1.2 Conference Proceedings indexed in Scopus • First/Cor Author: 1 • Co-author: 0.5'),
+            makeNode('R1.3 Book chapters indexed in Scopus • First/Cor Author: 2 • Co-author: 1'),
+          ],
+        }),
+        makeNode('R2 Patents & Copyrights', {
+          limit: '10',
+          children: [
+            makeNode('R2.1 Patent Published (Institute Name) • each 2'),
+            makeNode('R2.2 Patent Granted (Institute Name) • each 5'),
+            makeNode('R2.3 Revenue generated from Patent (Rs. 10000) • 1'),
+          ],
+        }),
+        makeNode('R3 Consultancy, Funding & Grants', {
+          children: [
+            makeNode('R3.1 Research Grant', {
+              limit: '5',
+              children: [
+                makeNode('Applied • 0.5 per proposal'),
+                makeNode('Received • Amount divided by 50K'),
+              ],
+            }),
+            makeNode('R3.2 Research Project', {
+              limit: '4',
+              children: [
+                makeNode('Submitted to Govt. Agency / Industry • 0.5 per proposal'),
+                makeNode('Submitted with Industry / Institute (INI) partner (Interdisciplinary / Collaborative Project) • 1 per proposal'),
+                makeNode('Fund received from the Govt. Agency / Industry • Amount divided by 1 lakh'),
+                makeNode('Fund Received for Interdisciplinary / Collaborative Project • 2 additional credits'),
+              ],
+            }),
+            makeNode('R3.4 Funds received for Start-ups (Internal incubation centre preferred) • Amount divided by 1 lakh', {
+              limit: '5',
+            }),
+            makeNode('R3.5 Consultancy Received (bonus 2 credits if revenue > ₹2,00,000) • Amount divided by 10000'),
+          ],
+        }),
+        makeNode('R4 Citation Impact of published work (For the particular calendar year from Scopus) • 1 citation 0.1 (or) h-index growth: +1 credit per 2-point increase', {
+          limit: '5',
+        }),
+        makeNode('R5 Ph.D Guidance / Pursuing PhD', {
+          children: [
+            makeNode('R5.1 Research Supervisor - Recognition • 3 credits (Applicable in the year of recognition)'),
+            makeNode('R5.2 Research Scholar - Registration (During Assessment year) • External: 1.5 per candidate • Internal: 2 per candidate • Full Time: 3 per candidate'),
+            makeNode('R5.3 Research Scholar - Completion (During Assessment year) • Part Time: 4 per candidate • Full Time: 5 per candidate'),
+            makeNode('R5.4 DC member / Viva Voce Examiners (During Assessment year) • 1 / candidate'),
+          ],
+        }),
+        makeNode('R6 Book Publication', {
+          limit: '15',
+          children: [
+            makeNode('R6.1 Author-6, Co-Author-3', {
+              children: R6_GROUP_A_PUBLISHERS.map((name) => makeNode(name, { uploaded_name: name })),
+            }),
+            makeNode('R6.2 Author-4, Co-author-2', {
+              children: R6_GROUP_B_PUBLISHERS.map((name) => makeNode(name, { uploaded_name: name })),
+            }),
+            makeNode('R6.3 Other Books with ISBN (Hardbound) • Author-2, Co-author-1', {
+              uploaded_name: 'Other Books with ISBN (Hardbound)',
+            }),
+          ],
+        }),
+      ],
+    }),
+  ]
+}
+
 export default function PBASManagerPage() {
   const [departments, setDepartments] = useState<PBASCustomDepartment[]>([])
   const [selectedDeptId, setSelectedDeptId] = useState<string>('')
@@ -450,8 +576,23 @@ export default function PBASManagerPage() {
     }
   }
 
+  function onLoadPartCTemplate() {
+    if (busy) return
+    if (treeRoots.length) {
+      const ok = confirm('This will replace the current tree with the Part C: Research & Development template. Continue?')
+      if (!ok) return
+    }
+    setTreeRoots(buildPartCTemplateTree())
+    setError('')
+    setSuccess('Part C template loaded. Click Save to persist.')
+  }
+
   function renderNode(n: NodeDraft, path: number[], depth: number) {
     const indent = depth * 18
+    const matchedAuthorPublisher = AUTHOR_PUBLISHER_OPTIONS.find(
+      (opt) => normalizeStr(opt) === normalizeStr(n.uploaded_name),
+    )
+    const authorPublisherChoice = matchedAuthorPublisher || (n.uploaded_name ? '__other__' : '')
     return (
       <div key={path.join('-')} className="border rounded-md p-3 bg-white" style={{ marginLeft: indent }}>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -499,7 +640,7 @@ export default function PBASManagerPage() {
           </label>
 
           <label className="block">
-            <div className="text-xs font-medium text-gray-600">Position</div>
+            <div className="text-xs font-medium text-gray-600">Points</div>
             <input
               className="mt-1 w-full border rounded-md px-3 py-2"
               type="number"
@@ -525,15 +666,44 @@ export default function PBASManagerPage() {
           </label>
 
           <label className="block">
-            <div className="text-xs font-medium text-gray-600">Uploaded Name (optional)</div>
-            <input
-              className="mt-1 w-full border rounded-md px-3 py-2"
-              value={n.uploaded_name}
+            <div className="text-xs font-medium text-gray-600">Author / Publisher (optional)</div>
+            <select
+              className="mt-1 w-full border rounded-md px-3 py-2 bg-white"
+              value={authorPublisherChoice}
               onChange={(e) => {
-                setTreeRoots((prev) => updateAtPath(prev, path, (x) => ({ ...x, uploaded_name: e.target.value })))
+                const v = e.target.value
+                if (!v) {
+                  setTreeRoots((prev) => updateAtPath(prev, path, (x) => ({ ...x, uploaded_name: '' })))
+                  return
+                }
+                if (v === '__other__') {
+                  if (AUTHOR_PUBLISHER_OPTIONS.some((opt) => normalizeStr(opt) === normalizeStr(n.uploaded_name))) {
+                    setTreeRoots((prev) => updateAtPath(prev, path, (x) => ({ ...x, uploaded_name: '' })))
+                  }
+                  return
+                }
+                setTreeRoots((prev) => updateAtPath(prev, path, (x) => ({ ...x, uploaded_name: v })))
               }}
               disabled={busy}
-            />
+            >
+              <option value="">Select</option>
+              {AUTHOR_PUBLISHER_OPTIONS.map((opt) => (
+                <option key={opt} value={opt}>{opt}</option>
+              ))}
+              <option value="__other__">Others</option>
+            </select>
+
+            {authorPublisherChoice === '__other__' ? (
+              <input
+                className="mt-2 w-full border rounded-md px-3 py-2"
+                placeholder="Enter author/publisher"
+                value={n.uploaded_name}
+                onChange={(e) => {
+                  setTreeRoots((prev) => updateAtPath(prev, path, (x) => ({ ...x, uploaded_name: e.target.value })))
+                }}
+                disabled={busy}
+              />
+            ) : null}
           </label>
 
           <label className="block md:col-span-2">
@@ -737,6 +907,13 @@ export default function PBASManagerPage() {
                     <div className="text-xs text-gray-500 mt-0.5">{treeDeptTitle}</div>
                   </div>
                   <div className="flex items-center gap-2">
+                    <button
+                      className="px-3 py-2 rounded-md border bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+                      onClick={onLoadPartCTemplate}
+                      disabled={busy}
+                    >
+                      Load Part C Template
+                    </button>
                     <button
                       className="px-3 py-2 rounded-md border bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-60"
                       onClick={() => setTreeRoots((prev) => addChildAtPath(prev, []))}

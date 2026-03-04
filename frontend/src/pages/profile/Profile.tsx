@@ -4,6 +4,7 @@ import { User, Mail, Shield, Building, Briefcase, School, Phone, CheckCircle2, T
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import { ModalPortal } from '../../components/ModalPortal';
 import logo from '../../assets/idcs-logo.png';
+import indiaFlag from '../../assets/india-flag.svg';
 import fetchWithAuth from '../../services/fetchAuth';
 
 type RoleObj = { name: string };
@@ -108,7 +109,17 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
 
   useEffect(() => {
     const current = profileMobile || '';
-    setMobileDraft(normalizeMobileForUi(current));
+    let initialDraft = '';
+    if (current) {
+      const normalized = normalizeMobileForApi(current);
+      if (normalized) {
+        const digits = normalized.replace(/\D+/g, '');
+        if (digits.length >= 10) {
+          initialDraft = digits.slice(-10);
+        }
+      }
+    }
+    setMobileDraft(initialDraft);
     setMobileEditing(!profileMobileVerified || !current);
     setOtpSent(false);
     setOtpDraft('');
@@ -202,6 +213,11 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
   const initials = (user.username || 'U').slice(0, 2).toUpperCase();
 
   const showVerifiedCheck = Boolean(profileMobileVerified && !mobileEditing && profileMobile);
+
+  const handleMobileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const onlyDigits = e.target.value.replace(/\D+/g, '').slice(0, 10);
+    setMobileDraft(onlyDigits);
+  };
 
   async function handleRequestOtp() {
     setOtpError(null);
@@ -786,13 +802,25 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                   </div>
 
                   <div className="mt-4 flex flex-col sm:flex-row items-start sm:items-center gap-3">
-                    <input
-                      value={mobileDraft}
-                      onChange={(e) => setMobileDraft(e.target.value)}
-                      className="px-3 py-2 border rounded-md w-full sm:w-64"
-                      placeholder="+91XXXXXXXXXX"
-                      disabled={otpBusy}
-                    />
+                    <div className="flex w-full sm:w-auto">
+                      <div className="flex items-center gap-2 px-3 py-2 border border-r-0 rounded-l-md bg-gray-50">
+                        <img
+                          src={indiaFlag}
+                          alt="India flag"
+                          className="w-6 h-4 object-cover rounded-sm shadow-sm"
+                        />
+                        <span className="text-sm font-medium text-gray-700">+91</span>
+                      </div>
+                      <input
+                        value={mobileDraft}
+                        onChange={handleMobileInputChange}
+                        className="px-3 py-2 border rounded-r-md w-full sm:w-64 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        placeholder="Enter 10-digit mobile"
+                        disabled={otpBusy}
+                        inputMode="numeric"
+                        maxLength={10}
+                      />
+                    </div>
                     <button
                       onClick={handleRequestOtp}
                       className="bg-blue-600 text-white px-4 py-2 rounded-md"

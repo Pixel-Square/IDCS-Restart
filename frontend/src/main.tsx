@@ -5,6 +5,7 @@ import App from "./App";
 import { SidebarProvider } from './components/layout/SidebarContext';
 import Login from "./pages/auth/Login";
 import "./index.css";
+import "./styles/obe-theme.css";
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

@@ -145,8 +145,13 @@ export default function App() {
                   path="/settings/whatsapp-sender"
                   element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<WhatsAppSenderPage />} />}
                 />
+                <Route
+                  path="/settings/notification-templates"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<NotificationsPage />} />}
+                />
                 <Route path="/queries" element={<QueriesPage />} />
-                <Route path="/notifications" element={<NotificationsPage />} />
+                {/* /notifications kept as redirect for any bookmarks */}
+                <Route path="/notifications" element={<Navigate to="/settings/notification-templates" replace />} />
                 <Route path="/academic-calendar" element={<AcademicCalendarRedirect user={user} />} />
                 <Route
                   path="/iqac/calendar"

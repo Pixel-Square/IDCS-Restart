@@ -805,6 +805,154 @@ class WhatsAppGatewayQrView(APIView):
             return Response(payload)
 
 
+class WhatsAppGatewayDisconnectView(APIView):
+    """IQAC-only: proxy a disconnect/logout request to the Node gateway."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request):
+        if not _user_is_iqac(request.user):
+            return Response({'detail': 'Not allowed.'}, status=status.HTTP_403_FORBIDDEN)
+
+        bases = _whatsapp_gateway_base_url_candidates()
+        if not bases:
+            return Response({'ok': False, 'detail': 'WhatsApp gateway is not configured.'})
+
+        api_key = str(getattr(settings, 'OBE_WHATSAPP_API_KEY', '') or '').strip()
+        timeout = float(getattr(settings, 'OBE_WHATSAPP_TIMEOUT_SECONDS', 8.0) or 8.0)
+
+        try:
+            import requests as _requests
+
+            for base in bases:
+                try:
+                    r = _requests.post(
+                        f'{base}/disconnect',
+                        json={'api_key': api_key},
+                        headers={'X-Api-Key': api_key} if api_key else {},
+                        timeout=timeout,
+                    )
+                    if 200 <= int(r.status_code or 0) < 300:
+                        try:
+                            payload = r.json()
+                        except Exception:
+                            payload = {'ok': True}
+                        return Response(payload)
+                except Exception:
+                    continue
+
+            return Response({'ok': False, 'detail': 'Gateway disconnect request failed.'})
+        except Exception as e:
+            log.exception('WhatsApp gateway disconnect failed')
+            return Response({'ok': False, 'detail': str(e)})
+
+
+class WhatsAppGatewayRestartView(APIView):
+    """IQAC-only: proxy a restart (re-initialise) request to the Node gateway."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request):
+        if not _user_is_iqac(request.user):
+            return Response({'detail': 'Not allowed.'}, status=status.HTTP_403_FORBIDDEN)
+
+        bases = _whatsapp_gateway_base_url_candidates()
+        if not bases:
+            return Response({'ok': False, 'detail': 'WhatsApp gateway is not configured.'})
+
+        api_key = str(getattr(settings, 'OBE_WHATSAPP_API_KEY', '') or '').strip()
+        timeout = float(getattr(settings, 'OBE_WHATSAPP_TIMEOUT_SECONDS', 8.0) or 8.0)
+
+        try:
+            import requests as _requests
+
+            for base in bases:
+                try:
+                    r = _requests.post(
+                        f'{base}/restart',
+                        json={'api_key': api_key},
+                        headers={'X-Api-Key': api_key} if api_key else {},
+                        timeout=timeout,
+                    )
+                    if 200 <= int(r.status_code or 0) < 300:
+                        try:
+                            payload = r.json()
+                        except Exception:
+                            payload = {'ok': True}
+                        return Response(payload)
+                except Exception:
+                    continue
+
+            return Response({'ok': False, 'detail': 'Gateway restart request failed.'})
+        except Exception as e:
+            log.exception('WhatsApp gateway restart failed')
+            return Response({'ok': False, 'detail': str(e)})
+
+
+class WhatsAppGatewaySendTestView(APIView):
+    """IQAC-only: send a test WhatsApp message via the gateway."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request):
+        if not _user_is_iqac(request.user):
+            return Response({'detail': 'Not allowed.'}, status=status.HTTP_403_FORBIDDEN)
+
+        to = str((request.data or {}).get('to') or '').strip()
+        if not to:
+            return Response({'ok': False, 'detail': '"to" phone number is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        from .services.sms import send_whatsapp
+        message = str((request.data or {}).get('message') or '').strip() or (
+            f'✅ Test message from IDCS. Gateway working correctly. Sent at {__import__("datetime").datetime.now().strftime("%d/%m/%Y %H:%M")}.'
+        )
+
+        result = send_whatsapp(to, message)
+        return Response({'ok': result.ok, 'detail': result.message})
+
+
+class WhatsAppGatewayClearSessionView(APIView):
+    """IQAC-only: wipe the Node session data and force a fresh QR pairing."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request):
+        if not _user_is_iqac(request.user):
+            return Response({'detail': 'Not allowed.'}, status=status.HTTP_403_FORBIDDEN)
+
+        bases = _whatsapp_gateway_base_url_candidates()
+        if not bases:
+            return Response({'ok': False, 'detail': 'WhatsApp gateway is not configured.'})
+
+        api_key = str(getattr(settings, 'OBE_WHATSAPP_API_KEY', '') or '').strip()
+        timeout = float(getattr(settings, 'OBE_WHATSAPP_TIMEOUT_SECONDS', 8.0) or 8.0)
+
+        try:
+            import requests as _requests
+
+            for base in bases:
+                try:
+                    r = _requests.post(
+                        f'{base}/clear-session',
+                        json={'api_key': api_key},
+                        headers={'X-Api-Key': api_key} if api_key else {},
+                        timeout=timeout,
+                    )
+                    if 200 <= int(r.status_code or 0) < 300:
+                        try:
+                            payload = r.json()
+                        except Exception:
+                            payload = {'ok': True}
+                        return Response(payload)
+                except Exception:
+                    continue
+
+            return Response({'ok': False, 'detail': 'Gateway clear-session request failed.'})
+        except Exception as e:
+            log.exception('WhatsApp gateway clear-session failed')
+            return Response({'ok': False, 'detail': str(e)})
+
+
 class UserQueryListCreateView(APIView):
     """List all queries for the current user or create a new query."""
     permission_classes = (permissions.IsAuthenticated,)

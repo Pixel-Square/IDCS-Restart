@@ -207,13 +207,8 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
 
   // Academic calendar is available for all authenticated users
   items.push({ key: 'academic_calendar', label: 'Academic Calendar', to: '/academic-calendar' });
-  
-  // Show notifications for IQAC role only
-  if (isIqac) {
-    items.push({ key: 'notifications', label: 'Notifications', to: '/notifications' });
-  }
 
-  // Settings (IQAC only)
+  // Settings (IQAC only) – includes Notification Templates and WhatsApp config
   if (isIqac && !items.some((item) => item.key === 'settings')) {
     items.push({ key: 'settings', label: 'Settings', to: '/settings' });
   }
@@ -296,8 +291,10 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                     </span>
                   </Link>
 
-                  {/* Submenu for Academic: show OBE Master and Due Dates */}
-                  {i.key === 'academic' && canObeMaster && expanded.academic ? (
+                    {/* Submenu for Academic: show OBE Master and Due Dates.
+                      Hidden when sidebar is collapsed and for IQAC role
+                      (IQAC main account uses other IQAC tools instead). */}
+                    {i.key === 'academic' && canObeMaster && expanded.academic && !collapsed && !isIqac ? (
                     <ul className="pl-8 mt-1 space-y-1">
                       <li>
                         <Link to={'/academic?tab=obe_master'} className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/academic') && new URLSearchParams(loc.search).get('tab') === 'obe_master' ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'}`} onClick={() => { if (window.innerWidth < 1024) toggle(); }}>
@@ -314,8 +311,9 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                     </ul>
                   ) : null}
 
-                  {/* Submenu for Academic Controller (IQAC) */}
-                  {i.key === 'academic_controller' && expanded.academic_controller ? (
+                  {/* Submenu for Academic Controller (IQAC).
+                      Also hidden when sidebar is collapsed. */}
+                  {i.key === 'academic_controller' && expanded.academic_controller && !collapsed ? (
                     <ul className="pl-8 mt-1 space-y-1">
                       <li>
                         <Link to={'/iqac/academic-controller?tab=dashboard'} className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/iqac/academic-controller') && new URLSearchParams(loc.search).get('tab') === 'dashboard' ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'}`} onClick={() => { if (window.innerWidth < 1024) toggle(); }}>
