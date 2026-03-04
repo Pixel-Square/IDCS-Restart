@@ -46,6 +46,7 @@ npm install
 # 3. Create .env
 cp .env.example .env
 # Edit .env and set a strong WA_API_KEY that matches the Django backend's OBE_WHATSAPP_API_KEY
+# (The gateway also accepts OBE_WHATSAPP_API_KEY directly for convenience.)
 
 # 4. Start the server
 npm start

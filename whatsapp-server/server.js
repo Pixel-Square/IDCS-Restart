@@ -36,11 +36,20 @@ try {
 // ─────────────────────────────────────────────
 // Configuration
 // ─────────────────────────────────────────────
-const PORT    = parseInt(process.env.PORT || '3000', 10);
-const API_KEY = (process.env.WA_API_KEY || '').trim();
+const PORT = parseInt(process.env.PORT || '3000', 10);
 
-if (!API_KEY) {
-  console.warn('[WA] WARNING: WA_API_KEY is not set. Authenticated endpoints are unprotected!');
+// Accept either env var name to avoid configuration drift between services.
+// - `WA_API_KEY` is the gateway's canonical name
+// - `OBE_WHATSAPP_API_KEY` matches the Django backend setting
+const API_KEYS = Array.from(
+  new Set([
+    String(process.env.WA_API_KEY || '').trim(),
+    String(process.env.OBE_WHATSAPP_API_KEY || '').trim(),
+  ].filter(Boolean)),
+);
+
+if (API_KEYS.length === 0) {
+  console.warn('[WA] WARNING: No API key is set (WA_API_KEY / OBE_WHATSAPP_API_KEY). Authenticated endpoints are unprotected!');
 }
 
 // ─────────────────────────────────────────────
@@ -226,12 +235,12 @@ app.use((req, _res, next) => {
 
 // ─── API key middleware ───────────────────────
 function requireApiKey(req, res, next) {
-  if (!API_KEY) return next(); // not configured → allow all (dev only)
+  if (API_KEYS.length === 0) return next(); // not configured → allow all (dev only)
   const key =
     req.headers['x-api-key'] ||
     (req.body && req.body.api_key) ||
     req.query.api_key;
-  if (!key || key !== API_KEY) {
+  if (!key || !API_KEYS.includes(String(key).trim())) {
     return res.status(401).json({ ok: false, detail: 'Invalid or missing API key.' });
   }
   next();
@@ -432,7 +441,7 @@ app.get('/events', (req, res) => {
 // ─────────────────────────────────────────────
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`[WA] Gateway listening on http://0.0.0.0:${PORT}`);
-  console.log(`[WA] API key protection: ${API_KEY ? 'ENABLED' : 'DISABLED (set WA_API_KEY)'}`);
+  console.log(`[WA] API key protection: ${API_KEYS.length ? `ENABLED (${API_KEYS.length} key(s))` : 'DISABLED (set WA_API_KEY or OBE_WHATSAPP_API_KEY)'}`);
   // Auto-start the WhatsApp client
   initClient();
 });

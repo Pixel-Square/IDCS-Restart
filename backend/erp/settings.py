@@ -5,16 +5,21 @@ import sys
 from pathlib import Path
 from datetime import timedelta
 
+BASE_DIR = Path(__file__).resolve().parent.parent
+
 # Make python-dotenv optional so local tooling (manage.py, migrations) can run
 # even if the dependency isn't installed in the current environment.
 try:
     from dotenv import load_dotenv
 
-    load_dotenv()
+    # Prefer the backend-local .env regardless of the process working directory.
+    # This prevents production deployments (e.g. Gunicorn/systemd) from silently
+    # missing WhatsApp/SMS configuration due to a different CWD.
+    load_dotenv(dotenv_path=BASE_DIR / '.env', override=False)
+    # Also allow a top-level .env (if present) without overriding already-loaded vars.
+    load_dotenv(override=False)
 except Exception:
     pass
-
-BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'dev-secret')
 
