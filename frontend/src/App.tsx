@@ -51,6 +51,11 @@ import AcademicCalendarRedirect from './pages/academicCalendar/AcademicCalendarR
 import AcademicCalendarPage from './pages/academicCalendar/AcademicCalendarPage';
 import PBASSubmissionPage from './pages/staff/PBASSubmissionPage';
 import PBASManagerPage from './pages/iqac/PBASManagerPage';
+import BrandingLayout from './pages/branding/BrandingLayout';
+import BrandingProtectedRoute from './components/routing/BrandingProtectedRoute';
+import HodEventsListPage from './pages/hod/events/HodEventsListPage';
+import HodEventCreatePage from './pages/hod/events/HodEventCreatePage';
+import CanvaDesignEditorPage from './pages/hod/events/CanvaDesignEditorPage';
 
 type RoleObj = { name: string };
 type Me = {
@@ -68,7 +73,16 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const { collapsed } = useSidebar();
 
+  // ── Branding role: local-only session, not backed by the API ────────────
+  const isBrandingUser = localStorage.getItem('branding_auth') === 'true';
+  // ────────────────────────────────────────────────────────────────────────
+
   useEffect(() => {
+    // Skip API fetch for Branding sessions — they authenticate locally.
+    if (isBrandingUser) {
+      setLoading(false);
+      return;
+    }
     // Check if user has an access token before attempting to fetch profile
     const token = localStorage.getItem('access')
     if (!token) {
@@ -119,6 +133,21 @@ export default function App() {
       </div>
     );
   }
+
+  // ── Branding role: isolated layout, no Navbar / DashboardSidebar ────────
+  if (isBrandingUser) {
+    return (
+      <Routes>
+        <Route
+          path="/branding/*"
+          element={<BrandingProtectedRoute element={<BrandingLayout />} />}
+        />
+        {/* Any other path → redirect into branding dashboard */}
+        <Route path="*" element={<Navigate to="/branding" replace />} />
+      </Routes>
+    );
+  }
+  // ────────────────────────────────────────────────────────────────────────
 
   return (
     <div className="min-h-screen bg-gray-50 overflow-x-hidden">
@@ -197,6 +226,18 @@ export default function App() {
                 <Route
                   path="/hod/result-analysis"
                   element={<ProtectedRoute user={user} requiredRoles={["HOD", "ADVISOR"]} element={<HodResultAnalysisPage />} />}
+                />
+                <Route
+                  path="/hod/events"
+                  element={<ProtectedRoute user={user} requiredRoles={["HOD"]} element={<HodEventsListPage />} />}
+                />
+                <Route
+                  path="/hod/events/create"
+                  element={<ProtectedRoute user={user} requiredRoles={["HOD"]} element={<HodEventCreatePage />} />}
+                />
+                <Route
+                  path="/hod/events/canva-editor"
+                  element={<ProtectedRoute user={user} requiredRoles={["HOD"]} element={<CanvaDesignEditorPage />} />}
                 />
                 <Route
                   path="/staffs"
@@ -305,6 +346,8 @@ export default function App() {
                   }
                 />
                 <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
+                {/* Prevent regular users from accessing Branding-only routes */}
+                <Route path="/branding/*" element={<Navigate to="/dashboard" replace />} />
               </Routes>
             </div>
           </main>

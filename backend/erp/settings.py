@@ -359,3 +359,10 @@ DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'rohit08sk@gmail.com')
 # This prevents the "Cannot read properties of null (reading 'dismissAddRelatedObjectPopup')" error
 X_FRAME_OPTIONS = 'SAMEORIGIN'
 
+# ── Canva Connect API ─────────────────────────────────────────────────────────
+# Register your app at https://www.canva.com/developers/ and set these in .env:
+#   CANVA_CLIENT_ID=<your-client-id>
+#   CANVA_CLIENT_SECRET=<your-client-secret>
+CANVA_CLIENT_ID     = os.getenv('CANVA_CLIENT_ID', '')
+CANVA_CLIENT_SECRET = os.getenv('CANVA_CLIENT_SECRET', '')
+

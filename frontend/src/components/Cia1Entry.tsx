@@ -345,6 +345,11 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const draftLoadedRef = useRef(false);
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
+
+  // Avoid leaking published state across subject/assignment switches.
+  useEffect(() => {
+    setPublishedAt(null);
+  }, [assessmentKey, subjectId, teachingAssignmentId]);
   const [viewMarksModalOpen, setViewMarksModalOpen] = useState(false);
   const [publishedViewLoading, setPublishedViewLoading] = useState(false);
   const [publishedViewError, setPublishedViewError] = useState<string | null>(null);
@@ -365,6 +370,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
     error: publishWindowError,
     remainingSeconds,
     publishAllowed,
+    editAllowed,
     refresh: refreshPublishWindow,
   } = usePublishWindow({ assessment: assessmentKey, subjectCode: subjectId, teachingAssignmentId });
 
@@ -434,9 +440,9 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
     Boolean(markManagerApprovalUntil) &&
     markManagerApprovalUntil !== (publishConsumedApprovals?.markManagerApprovalUntil ?? null);
 
-  const entryOpen = !isPublished ? true : Boolean(markLock?.entry_open) || markEntryApprovedFresh || markManagerApprovedFresh;
+  const entryOpen = !isPublished ? Boolean(editAllowed) : Boolean(markLock?.entry_open) || markEntryApprovedFresh || markManagerApprovedFresh;
   const publishedEditLocked = Boolean(isPublished && !entryOpen);
-  const tableBlocked = Boolean(globalLocked || (isPublished ? !entryOpen : !markManagerLocked));
+  const tableBlocked = Boolean(globalLocked || !entryOpen || (!isPublished && !markManagerLocked));
 
   const publishButtonIsRequestEdit = Boolean(isPublished && publishedEditLocked);
 
@@ -1404,8 +1410,16 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
     setRequestMessage(null);
     setError(null);
     try {
-      await createPublishRequest({ assessment: assessmentKey, subject_code: subjectId, reason: requestReason, teaching_assignment_id: teachingAssignmentId });
-      setRequestMessage('Request sent to IQAC for approval.');
+      const reason = String(requestReason || '').trim();
+      if (!reason) {
+        setError('Reason is required.');
+        return;
+      }
+      const created = await createPublishRequest({ assessment: assessmentKey, subject_code: subjectId, reason, teaching_assignment_id: teachingAssignmentId });
+      const routed = String((created as any)?.routed_to || '').trim().toUpperCase();
+      const warn = String((created as any)?.routing_warning || '').trim();
+      const baseMsg = routed === 'HOD' ? 'Request sent to HOD for approval.' : 'Request sent to IQAC for approval.';
+      setRequestMessage(warn ? `${baseMsg} ${warn}` : baseMsg);
     } catch (e: any) {
       setError(e?.message || 'Failed to request approval');
     } finally {
@@ -1929,9 +1943,11 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
           <button onClick={downloadTotals} className="obe-btn obe-btn-secondary" disabled={students.length === 0}>
             Download
           </button>
-          <button onClick={saveDraftToDb} className="obe-btn obe-btn-success" disabled={saving || students.length === 0 || tableBlocked || globalLocked}>
-            {saving ? 'Saving…' : 'Save Draft'}
-          </button>
+          {!publishedEditLocked ? (
+            <button onClick={saveDraftToDb} className="obe-btn obe-btn-success" disabled={saving || students.length === 0 || tableBlocked || globalLocked}>
+              {saving ? 'Saving…' : 'Save Draft'}
+            </button>
+          ) : null}
           <button
             onClick={publish}
             disabled={publishButtonIsRequestEdit ? markEntryReqPending : publishing || students.length === 0 || !publishAllowed || tableBlocked || globalLocked}
@@ -1974,17 +1990,17 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       ) : !publishAllowed ? (
         <div style={{ marginBottom: 10, border: '1px solid #fecaca', background: '#fff7ed', borderRadius: 12, padding: 12 }}>
           <div style={{ fontWeight: 800, marginBottom: 6 }}>Publish time is over</div>
-          <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>Send a request to IQAC to approve publishing.</div>
+          <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>Send a request for approval (routes to HOD, then IQAC).</div>
           <textarea
             value={requestReason}
             onChange={(e) => setRequestReason(e.target.value)}
-            placeholder="Reason (optional)"
+            placeholder="Reason (required)"
             rows={3}
             style={{ width: '100%', padding: 10, borderRadius: 10, border: '1px solid #e5e7eb', resize: 'vertical' }}
           />
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
             <button className="obe-btn" onClick={() => refreshPublishWindow()} disabled={requesting || publishWindowLoading}>Refresh</button>
-            <button className="obe-btn obe-btn-primary" onClick={requestApproval} disabled={requesting}>{requesting ? 'Requesting…' : 'Request Approval'}</button>
+            <button className="obe-btn obe-btn-primary" onClick={requestApproval} disabled={requesting || !String(requestReason || '').trim()}>{requesting ? 'Requesting…' : 'Request Approval'}</button>
           </div>
           {requestMessage ? <div style={{ marginTop: 8, fontSize: 12, color: '#065f46' }}>{requestMessage}</div> : null}
         </div>

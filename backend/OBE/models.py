@@ -308,6 +308,8 @@ class ObeDueSchedule(models.Model):
     subject_code = models.CharField(max_length=64, db_index=True)
     subject_name = models.CharField(max_length=255, blank=True, default='')
     assessment = models.CharField(max_length=20, choices=ASSESSMENT_CHOICES)
+    # Optional start datetime; when set, mark entry must remain read-only until this time.
+    open_from = models.DateTimeField(null=True, blank=True)
     due_at = models.DateTimeField()
 
     is_active = models.BooleanField(default=True)
@@ -395,6 +397,26 @@ class ObePublishRequest(models.Model):
     status = models.CharField(max_length=16, choices=STATUS_CHOICES, default='PENDING', db_index=True)
     approved_until = models.DateTimeField(null=True, blank=True)
 
+    # HOD pre-approval routing (mirrors ObeEditRequest semantics)
+    # Default hod_approved=True to preserve behavior for existing rows created
+    # before introducing HOD routing.
+    hod_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='obe_publish_requests_hod_inbox',
+    )
+    hod_approved = models.BooleanField(default=True, db_index=True)
+    hod_reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='obe_publish_requests_hod_reviewed',
+    )
+    hod_reviewed_at = models.DateTimeField(null=True, blank=True)
+
     reviewed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='obe_publish_requests_reviewed')
     reviewed_at = models.DateTimeField(null=True, blank=True)
 
@@ -406,6 +428,7 @@ class ObePublishRequest(models.Model):
             models.Index(fields=['status', 'created_at']),
             models.Index(fields=['staff_user', 'assessment']),
             models.Index(fields=['academic_year', 'assessment']),
+            models.Index(fields=['hod_user', 'hod_approved', 'status']),
         ]
 
     def mark_approved(self, reviewer, window_minutes: int = 120):

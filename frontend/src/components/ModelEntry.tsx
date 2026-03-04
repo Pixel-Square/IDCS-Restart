@@ -142,6 +142,11 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [savedBy, setSavedBy] = useState<string | null>(null);
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
+
+  // Avoid leaking published state across subject/assignment switches.
+  useEffect(() => {
+    setPublishedAt(null);
+  }, [subjectId, teachingAssignmentId]);
   const [publishedViewSnapshot, setPublishedViewSnapshot] = useState<any | null>(null);
   const [publishedViewLoading, setPublishedViewLoading] = useState(false);
   const [publishedViewError, setPublishedViewError] = useState<string | null>(null);
@@ -178,6 +183,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     error: publishWindowError,
     remainingSeconds,
     publishAllowed,
+    editAllowed,
     refresh: refreshPublishWindow,
   } = usePublishWindow({
     assessment: 'model',
@@ -217,7 +223,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     if (next !== (publishedAt || '')) setPublishedAt(next);
   }, [markLock?.is_published, markLock?.updated_at, publishedAt]);
   const approvalOpen = Boolean(markEntryEditWindow?.allowed_by_approval);
-  const entryOpen = !isPublished ? true : approvalOpen;
+  const entryOpen = !isPublished ? Boolean(editAllowed) : approvalOpen;
   const publishedEditLocked = Boolean(isPublished && !approvalOpen);
 
   const publishButtonIsRequestEdit = Boolean(isPublished && publishedEditLocked);
@@ -243,7 +249,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   // - If globally locked, table blocked
   // - If published, table blocked when entry is not open
   // - If not published, table is not blocked (no mark-manager on model)
-  const tableBlocked = Boolean(globalLocked || (isPublished ? !entryOpen : false));
+  const tableBlocked = Boolean(globalLocked || !entryOpen || (isPublished ? !entryOpen : false));
 
   useEffect(() => {
     // Reset the locked-view toggle when switching subjects or when editing becomes open.
@@ -642,17 +648,25 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
 
   const requestApproval = async () => {
     if (!subjectId) return;
+    const reason = String(requestReason || '').trim();
+    if (!reason) {
+      setActionError('Reason is required.');
+      return;
+    }
     setRequesting(true);
     setRequestMessage(null);
     setActionError(null);
     try {
-      await OBE.createPublishRequest({
+      const created = await OBE.createPublishRequest({
         assessment: 'model',
         subject_code: subjectId,
-        reason: requestReason,
+        reason,
         teaching_assignment_id: teachingAssignmentId,
       });
-      setRequestMessage('Request sent to IQAC for approval.');
+      const routed = String((created as any)?.routed_to || '').trim().toUpperCase();
+      const warn = String((created as any)?.routing_warning || '').trim();
+      const baseMsg = routed === 'HOD' ? 'Request sent to HOD for approval.' : 'Request sent to IQAC for approval.';
+      setRequestMessage(warn ? `${baseMsg} ${warn}` : baseMsg);
     } catch (e: any) {
       setActionError(e?.message || 'Failed to request approval');
     } finally {
@@ -1452,14 +1466,16 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
         </div>
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <button
-            onClick={saveDraftToDb}
-            className="obe-btn obe-btn-success"
-            disabled={savingDraft || !subjectId || publishedEditLocked}
-            title={publishedEditLocked ? 'Published sheets are locked (IQAC must open editing).' : undefined}
-          >
-            {savingDraft ? 'Saving…' : 'Save Draft'}
-          </button>
+          {!publishedEditLocked ? (
+            <button
+              onClick={saveDraftToDb}
+              className="obe-btn obe-btn-success"
+              disabled={savingDraft || !subjectId || publishedEditLocked}
+              title={publishedEditLocked ? 'Published sheets are locked (IQAC must open editing).' : undefined}
+            >
+              {savingDraft ? 'Saving…' : 'Save Draft'}
+            </button>
+          ) : null}
           <button
             onClick={publish}
             className="obe-btn obe-btn-primary"
@@ -1508,17 +1524,17 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
       ) : !publishAllowed ? (
         <div style={{ marginBottom: 10, border: '1px solid #fecaca', background: '#fff7ed', borderRadius: 12, padding: 12 }}>
           <div style={{ fontWeight: 800, marginBottom: 6 }}>Publish time is over</div>
-          <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>Send a request to IQAC to approve publishing.</div>
+          <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>Send a request for approval (routes to HOD, then IQAC).</div>
           <textarea
             value={requestReason}
             onChange={(e) => setRequestReason(e.target.value)}
-            placeholder="Reason (optional)"
+            placeholder="Reason (required)"
             rows={3}
             style={{ width: '100%', padding: 10, borderRadius: 10, border: '1px solid #e5e7eb', resize: 'vertical' }}
           />
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
             <button className="obe-btn" onClick={() => refreshPublishWindow()} disabled={requesting || publishWindowLoading}>Refresh</button>
-            <button className="obe-btn obe-btn-primary" onClick={requestApproval} disabled={requesting || !subjectId}>
+            <button className="obe-btn obe-btn-primary" onClick={requestApproval} disabled={requesting || !subjectId || !String(requestReason || '').trim()}>
               {requesting ? 'Requesting…' : 'Request Approval'}
             </button>
           </div>

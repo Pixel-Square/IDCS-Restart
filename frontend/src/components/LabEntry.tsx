@@ -380,10 +380,16 @@ export default function LabEntry({
 
   const key = useMemo(() => (subjectId ? storageKey(assessmentKey, subjectId) : ''), [assessmentKey, subjectId]);
 
+  // Avoid leaking published state across subject/assignment switches.
+  useEffect(() => {
+    setPublishedAt(null);
+  }, [assessmentKey, subjectId, teachingAssignmentId]);
+
   const {
     data: publishWindow,
     publishAllowed,
     remainingSeconds,
+    editAllowed,
     loading: publishWindowLoading,
     error: publishWindowError,
     refresh: refreshPublishWindow,
@@ -409,7 +415,7 @@ export default function LabEntry({
   const isPublished = Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published);
   // Authoritative: backend computes `entry_open` from mark_entry_blocked + mark_manager_locked/unlock windows.
   // If we don't have a lock row yet, treat entry as open (table is hidden until Mark Manager is confirmed anyway).
-  const entryOpen = markLock?.exists ? Boolean(markLock?.entry_open) : true;
+  const entryOpen = isPublished ? (markLock?.exists ? Boolean(markLock?.entry_open) : true) : Boolean(editAllowed);
   const publishedEditLocked = Boolean(isPublished && !entryOpen);
 
   // Restore publishedAt from backend when markLock indicates the table was published.
@@ -799,7 +805,7 @@ export default function LabEntry({
   // - AFTER Mark Manager confirm: table is VISIBLE
   // - Table editability is driven by backend `entry_open` (blocks after publish unless IQAC unblocks)
   const tableVisible = markManagerLocked; // Only show table after Mark Manager is confirmed
-  const tableBlocked = Boolean(globalLocked || (markLock?.exists ? !markLock?.entry_open : false));
+  const tableBlocked = Boolean(globalLocked || !entryOpen || (markLock?.exists ? !markLock?.entry_open : false));
 
   const buildExportRows = () => {
     return students.map((s, idx) => {
@@ -1326,16 +1332,24 @@ export default function LabEntry({
 
   async function requestApproval() {
     if (!subjectId) return;
+    const reason = String(requestReason || '').trim();
+    if (!reason) {
+      setRequestMessage('Reason is required.');
+      return;
+    }
     setRequesting(true);
     setRequestMessage(null);
     try {
-      await createPublishRequest({
+      const created = await createPublishRequest({
         assessment: assessmentKey,
         subject_code: subjectId,
-        reason: requestReason,
+        reason,
         teaching_assignment_id: teachingAssignmentId
       });
-      setRequestMessage('Request sent to IQAC successfully.');
+      const routed = String((created as any)?.routed_to || '').trim().toUpperCase();
+      const warn = String((created as any)?.routing_warning || '').trim();
+      const baseMsg = routed === 'HOD' ? 'Request sent to HOD successfully.' : 'Request sent to IQAC successfully.';
+      setRequestMessage(warn ? `${baseMsg} ${warn}` : baseMsg);
       setRequestReason('');
       refreshPublishWindow();
     } catch (e: any) {
@@ -1615,14 +1629,16 @@ export default function LabEntry({
           <button onClick={downloadTotals} className="obe-btn obe-btn-secondary" disabled={!subjectId || students.length === 0}>
             Download
           </button>
-          <button
-            onClick={saveNow}
-            className="obe-btn obe-btn-success"
-            disabled={savingDraft || !subjectId || !tableVisible || tableBlocked}
-            title={!tableVisible ? 'Save & Lock Mark Manager first to enable table' : tableBlocked ? 'Table locked after publish' : 'Save current draft'}
-          >
-            {savingDraft ? 'Saving…' : 'Save Draft'}
-          </button>
+          {!publishedEditLocked ? (
+            <button
+              onClick={saveNow}
+              className="obe-btn obe-btn-success"
+              disabled={savingDraft || !subjectId || !tableVisible || tableBlocked}
+              title={!tableVisible ? 'Save & Lock Mark Manager first to enable table' : tableBlocked ? 'Table locked after publish' : 'Save current draft'}
+            >
+              {savingDraft ? 'Saving…' : 'Save Draft'}
+            </button>
+          ) : null}
           <button
             onClick={publish}
             className="obe-btn obe-btn-primary"
@@ -1788,17 +1804,17 @@ export default function LabEntry({
       ) : !publishAllowed ? (
         <div style={{ marginBottom: 10, border: '1px solid #fecaca', background: '#fff7ed', borderRadius: 12, padding: 12 }}>
           <div style={{ fontWeight: 800, marginBottom: 6 }}>Publish time is over</div>
-          <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>Send a request to IQAC to approve publishing.</div>
+          <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>Send a request for approval (routes to HOD, then IQAC).</div>
           <textarea
             value={requestReason}
             onChange={(e) => setRequestReason(e.target.value)}
-            placeholder="Reason (optional)"
+            placeholder="Reason (required)"
             rows={3}
             style={{ width: '100%', padding: 10, borderRadius: 10, border: '1px solid #e5e7eb', resize: 'vertical' }}
           />
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
             <button className="obe-btn" onClick={() => refreshPublishWindow()} disabled={requesting || publishWindowLoading}>Refresh</button>
-            <button className="obe-btn obe-btn-primary" onClick={requestApproval} disabled={requesting}>{requesting ? 'Requesting…' : 'Request Approval'}</button>
+            <button className="obe-btn obe-btn-primary" onClick={requestApproval} disabled={requesting || !String(requestReason || '').trim()}>{requesting ? 'Requesting…' : 'Request Approval'}</button>
           </div>
           {requestMessage ? <div style={{ marginTop: 8, fontSize: 12, color: '#065f46' }}>{requestMessage}</div> : null}
         </div>

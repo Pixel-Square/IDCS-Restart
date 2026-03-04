@@ -214,6 +214,11 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const draftLoadedRef = useRef(false);
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
+
+  // Avoid leaking published state across subject/assignment switches.
+  useEffect(() => {
+    setPublishedAt(null);
+  }, [assessmentKey, subjectId, teachingAssignmentId]);
   const [inlineViewOnly, setInlineViewOnly] = useState(false);
 
   const excelFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -225,6 +230,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
     error: publishWindowError,
     remainingSeconds,
     publishAllowed,
+    editAllowed,
     refresh: refreshPublishWindow,
   } = usePublishWindow({ assessment: assessmentKey, subjectCode: String(subjectId || ''), teachingAssignmentId });
 
@@ -279,14 +285,14 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
     Boolean(markManagerEditWindow?.allowed_by_approval) &&
     Boolean(markManagerApprovalUntil) &&
     markManagerApprovalUntil !== (publishConsumedApprovals?.markManagerApprovalUntil ?? null);
-  const entryOpen = !isPublished ? true : Boolean(markLock?.entry_open) || markEntryApprovedFresh || markManagerApprovedFresh;
+  const entryOpen = !isPublished ? Boolean(editAllowed) : Boolean(markLock?.entry_open) || markEntryApprovedFresh || markManagerApprovedFresh;
   const publishedEditLocked = Boolean(isPublished && !entryOpen);
   const showPublishedLockPanel = Boolean(isPublished && publishedEditLocked);
 
   const publishButtonIsRequestEdit = Boolean(isPublished && publishedEditLocked);
   const tableBlocked = skipMarkManager
-    ? Boolean(globalLocked || (isPublished ? !entryOpen : false))
-    : Boolean(globalLocked || (isPublished ? !entryOpen : !markManagerLocked));
+    ? Boolean(globalLocked || (isPublished ? !entryOpen : !editAllowed))
+    : Boolean(globalLocked || (isPublished ? !entryOpen : !markManagerLocked || !editAllowed));
   const showNameList = skipMarkManager ? true : Boolean(sheet.markManagerSnapshot != null) || Boolean(isPublished);
 
   const [markManagerModal, setMarkManagerModal] = useState<null | { mode: 'confirm' | 'request' }>(null);
@@ -1154,12 +1160,20 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
 
   const requestApproval = async () => {
     if (!subjectId) return;
+    const reason = String(requestReason || '').trim();
+    if (!reason) {
+      setError('Reason is required.');
+      return;
+    }
     setRequesting(true);
     setRequestMessage(null);
     setError(null);
     try {
-      await createPublishRequest({ assessment: assessmentKey, subject_code: subjectId, reason: requestReason, teaching_assignment_id: teachingAssignmentId });
-      setRequestMessage('Request sent to IQAC for approval.');
+      const created = await createPublishRequest({ assessment: assessmentKey, subject_code: subjectId, reason, teaching_assignment_id: teachingAssignmentId });
+      const routed = String((created as any)?.routed_to || '').trim().toUpperCase();
+      const warn = String((created as any)?.routing_warning || '').trim();
+      const baseMsg = routed === 'HOD' ? 'Request sent to HOD for approval.' : 'Request sent to IQAC for approval.';
+      setRequestMessage(warn ? `${baseMsg} ${warn}` : baseMsg);
     } catch (e: any) {
       setError(e?.message || 'Failed to request approval');
     } finally {
@@ -1463,9 +1477,11 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
           <button onClick={downloadTotals} className="obe-btn obe-btn-secondary" disabled={students.length === 0}>
             Download
           </button>
-          <button onClick={saveDraftToDb} className="obe-btn obe-btn-success" disabled={savingDraft || students.length === 0}>
-            {savingDraft ? 'Saving…' : 'Save Draft'}
-          </button>
+          {!publishedEditLocked ? (
+            <button onClick={saveDraftToDb} className="obe-btn obe-btn-success" disabled={savingDraft || students.length === 0}>
+              {savingDraft ? 'Saving…' : 'Save Draft'}
+            </button>
+          ) : null}
           <button
             onClick={publish}
             disabled={publishButtonIsRequestEdit ? markEntryReqPending : publishing || students.length === 0 || !publishAllowed || globalLocked}

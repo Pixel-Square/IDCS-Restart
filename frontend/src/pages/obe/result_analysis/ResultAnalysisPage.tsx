@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { Table2, BarChart2, TrendingUp, Trophy, Download } from 'lucide-react';
 import {
   fetchClassTypeWeights,
   fetchCiaMarks,
@@ -15,6 +16,7 @@ import {
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../../../services/roster';
 import fetchWithAuth from '../../../services/fetchAuth';
 import { lsGet, lsSet } from '../../../utils/localStorage';
+import { getCachedMe } from '../../../services/auth';
 import { normalizeClassType } from '../../../constants/classTypes';
 import MarkAnalysisSheetPage, { SheetCol, SheetRow } from './MarkAnalysisSheetPage';
 import BellGraphPage from './BellGraphPage';
@@ -346,18 +348,22 @@ export default function ResultAnalysisPage({ courseId, classType, enabledAssessm
   );
 
   const cycleLabels: Record<CycleKey, string> = { cycle1: 'Cycle 1', cycle2: 'Cycle 2', model: 'Model' };
-  const viewLabels: Record<ViewKey, string> = {
-    sheet: '📋 Mark Analysis Sheet',
-    bell: '📊 Bell Graph',
-    range: '📈 Range Analysis',
-    rank: '🏆 Ranking',
+  const viewMeta: Record<ViewKey, { icon: React.ReactNode; label: string }> = {
+    sheet: { icon: <Table2  size={14} />, label: 'Mark Analysis Sheet' },
+    bell:  { icon: <BarChart2 size={14} />, label: 'Bell Graph' },
+    range: { icon: <TrendingUp size={14} />, label: 'Range Analysis' },
+    rank:  { icon: <Trophy size={14} />, label: 'Ranking' },
   };
 
   /* ── Derived for download ── */
   const selectedTa = tas.find((t) => t.id === selectedTaId);
   const sectionName = selectedTa?.section_name || selectedTa?.subject_code || courseId;
+  const courseName = selectedTa?.subject_name || selectedTa?.elective_subject_name || courseId;
   const staffName = (() => {
-    try { const u = JSON.parse(localStorage.getItem('user') || '{}'); return u.name || u.full_name || u.username || ''; } catch { return ''; }
+    const me = getCachedMe() as any;
+    if (!me) return '';
+    const full = `${me.first_name || ''} ${me.last_name || ''}`.replace(/\s+/g, ' ').trim();
+    return full || me.profile?.full_name || me.username || '';
   })();
 
   return (
@@ -409,7 +415,7 @@ export default function ResultAnalysisPage({ courseId, classType, enabledAssessm
             onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(255,255,255,0.22)'; }}
             onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(255,255,255,0.13)'; }}
           >
-            <span style={{ fontSize: 17 }}>⬇️</span>
+            <Download size={16} />
             <span>Download</span>
           </button>
         </div>
@@ -457,7 +463,9 @@ export default function ResultAnalysisPage({ courseId, classType, enabledAssessm
                 transition: 'color 0.15s, border-color 0.15s',
               }}
             >
-              {viewLabels[v]}
+              <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                {viewMeta[v].icon}{viewMeta[v].label}
+              </span>
             </button>
           ))}
           {/* Student count badge */}
@@ -524,6 +532,7 @@ export default function ResultAnalysisPage({ courseId, classType, enabledAssessm
         open={showDownload}
         onClose={() => setShowDownload(false)}
         courseId={courseId}
+        courseName={courseName}
         ct={ct}
         sectionName={sectionName}
         staffName={staffName}

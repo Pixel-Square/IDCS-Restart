@@ -1389,6 +1389,11 @@ def _parse_due_at(value):
     return None
 
 
+def _parse_open_from(value):
+    # Same parsing rules as due_at
+    return _parse_due_at(value)
+
+
 def _resolve_staff_teaching_assignment(request, subject_code: str, teaching_assignment_id: int | None = None):
     user = getattr(request, 'user', None)
     staff_profile = getattr(user, 'staff_profile', None)
@@ -1525,6 +1530,7 @@ def _get_due_schedule_for_request(request, subject_code: str, assessment: str, t
         ).order_by('-updated_at').first()
 
     due_at = getattr(schedule, 'due_at', None)
+    open_from = getattr(schedule, 'open_from', None)
 
     # Assessment enable + open state (IQAC-controlled)
     ctrl = None
@@ -1577,12 +1583,24 @@ def _get_due_schedule_for_request(request, subject_code: str, assessment: str, t
 
     allowed_by_due = True
     remaining_seconds = None
+    starts_in_seconds = None
     if (not assessment_enabled) or (not assessment_open):
         allowed_by_due = False
         remaining_seconds = None
-    elif due_at is not None:
-        allowed_by_due = now < due_at
-        remaining_seconds = int(max(0, (due_at - now).total_seconds()))
+    else:
+        if open_from is not None:
+            try:
+                starts_in_seconds = int(max(0, (open_from - now).total_seconds()))
+            except Exception:
+                starts_in_seconds = None
+
+        # Not started yet → closed
+        if open_from is not None and now < open_from:
+            allowed_by_due = False
+            remaining_seconds = None
+        elif due_at is not None:
+            allowed_by_due = now < due_at
+            remaining_seconds = int(max(0, (due_at - now).total_seconds()))
 
     approval = None
     if academic_year is not None:
@@ -1658,9 +1676,11 @@ def _get_due_schedule_for_request(request, subject_code: str, assessment: str, t
         'semester': semester,
         'teaching_assignment': ta,
         'schedule': schedule,
+        'open_from': open_from,
         'due_at': due_at,
         'now': now,
         'remaining_seconds': remaining_seconds,
+        'starts_in_seconds': starts_in_seconds,
         'allowed_by_due': allowed_by_due,
         'allowed_by_approval': allowed_by_approval,
         'approval_until': approval_until,
@@ -1674,6 +1694,267 @@ def _get_due_schedule_for_request(request, subject_code: str, assessment: str, t
         'global_updated_by': global_updated_by,
         'allowed_by_global': allowed_by_global,
     }
+
+
+def _auto_publish_from_draft_if_due(request, *, subject, assessment_key: str, teaching_assignment_id: int | None = None) -> bool:
+    """Best-effort auto publish when due time has passed.
+
+    This is intentionally idempotent; it will no-op if already published.
+    """
+    assessment_key = str(assessment_key or '').strip().lower()
+    if assessment_key not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
+        return False
+
+    info = _get_due_schedule_for_request(request, subject_code=getattr(subject, 'code', ''), assessment=assessment_key, teaching_assignment_id=teaching_assignment_id)
+    due_at = info.get('due_at')
+    now = info.get('now')
+    # No timer, or not yet due.
+    if due_at is None or now is None or now < due_at:
+        return False
+    # Unlimited/global-open means no auto publish.
+    if info.get('global_override_active') and bool(info.get('global_is_open')):
+        return False
+
+    ta = info.get('teaching_assignment')
+    academic_year = info.get('academic_year')
+    section_name = _resolve_section_name_from_ta(ta)
+    lock = _get_mark_table_lock_if_exists(
+        staff_user=getattr(request, 'user', None),
+        subject_code=str(getattr(subject, 'code', '') or ''),
+        assessment=assessment_key,
+        teaching_assignment=ta,
+        academic_year=academic_year,
+        section_name=section_name,
+    )
+    if lock is not None and bool(getattr(lock, 'is_published', False)):
+        return False
+
+    from .models import (
+        AssessmentDraft,
+        Cia1Mark,
+        Cia1PublishedSheet,
+        Cia2Mark,
+        Cia2PublishedSheet,
+        Formative1Mark,
+        Formative2Mark,
+        ModelPublishedSheet,
+        Review1Mark,
+        Review2Mark,
+        Ssa1Mark,
+        Ssa2Mark,
+    )
+
+    draft = AssessmentDraft.objects.filter(subject=subject, assessment=assessment_key).first()
+    data = getattr(draft, 'data', None) if draft else None
+    if not isinstance(data, dict):
+        return False
+
+    # Frontend drafts sometimes wrap the actual sheet under `sheet`.
+    payload = data.get('sheet') if isinstance(data.get('sheet'), dict) else data
+
+    # Publish implementations mirror existing publish endpoints but use stored draft.
+    try:
+        if assessment_key in {'ssa1', 'ssa2'}:
+            rows = payload.get('rows', [])
+            if not isinstance(rows, list):
+                rows = []
+            model = Ssa1Mark if assessment_key == 'ssa1' else Ssa2Mark
+            with transaction.atomic():
+                for item in rows:
+                    try:
+                        sid = int(item.get('studentId'))
+                    except Exception:
+                        continue
+                    student = StudentProfile.objects.filter(id=sid).first()
+                    if not student:
+                        continue
+                    raw_total = item.get('total')
+                    mark = _coerce_decimal_or_none(raw_total)
+                    # Match publish endpoint behavior: blank => delete, invalid => skip.
+                    if raw_total not in (None, '',) and mark is None:
+                        continue
+                    if mark is None:
+                        model.objects.filter(subject=subject, student=student).delete()
+                    else:
+                        model.objects.update_or_create(subject=subject, student=student, defaults={'mark': mark})
+
+        elif assessment_key in {'review1', 'review2'}:
+            model = Review1Mark if assessment_key == 'review1' else Review2Mark
+            with transaction.atomic():
+                rows = payload.get('rows', [])
+                if not isinstance(rows, list):
+                    rows = []
+                for item in rows:
+                    try:
+                        sid = int(item.get('studentId'))
+                    except Exception:
+                        continue
+                    student = StudentProfile.objects.filter(id=sid).first()
+                    if not student:
+                        continue
+                    raw_total = item.get('total')
+                    mark = _coerce_decimal_or_none(raw_total)
+                    if raw_total not in (None, '',) and mark is None:
+                        continue
+                    if mark is None:
+                        model.objects.filter(subject=subject, student=student).delete()
+                    else:
+                        model.objects.update_or_create(subject=subject, student=student, defaults={'mark': mark})
+
+        elif assessment_key in {'formative1', 'formative2'}:
+            rows_by = payload.get('rowsByStudentId', {})
+            if not isinstance(rows_by, dict):
+                rows_by = {}
+            model = Formative1Mark if assessment_key == 'formative1' else Formative2Mark
+            with transaction.atomic():
+                for sid_str, item in rows_by.items():
+                    try:
+                        sid = int(sid_str)
+                    except Exception:
+                        continue
+                    student = StudentProfile.objects.filter(id=sid).first()
+                    if not student:
+                        continue
+                    skill1 = _coerce_decimal_or_none((item or {}).get('skill1'))
+                    skill2 = _coerce_decimal_or_none((item or {}).get('skill2'))
+                    att1 = _coerce_decimal_or_none((item or {}).get('att1'))
+                    att2 = _coerce_decimal_or_none((item or {}).get('att2'))
+                    if skill1 is None or skill2 is None or att1 is None or att2 is None:
+                        model.objects.filter(subject=subject, student=student).delete()
+                        continue
+                    total = skill1 + skill2 + att1 + att2
+                    model.objects.update_or_create(
+                        subject=subject,
+                        student=student,
+                        defaults={'skill1': skill1, 'skill2': skill2, 'att1': att1, 'att2': att2, 'total': total},
+                    )
+
+        elif assessment_key in {'cia1', 'cia2'}:
+            if assessment_key == 'cia1':
+                pub_model = Cia1PublishedSheet
+                mark_model = Cia1Mark
+            else:
+                pub_model = Cia2PublishedSheet
+                mark_model = Cia2Mark
+
+            pub_model.objects.update_or_create(
+                subject=subject,
+                defaults={'data': payload, 'updated_by': getattr(getattr(request, 'user', None), 'id', None)},
+            )
+            questions = payload.get('questions', [])
+            if not isinstance(questions, list):
+                questions = []
+            rows_by = payload.get('rowsByStudentId', {})
+            if not isinstance(rows_by, dict):
+                rows_by = {}
+            qkeys = [str(q.get('key')) for q in questions if isinstance(q, dict) and q.get('key')]
+            with transaction.atomic():
+                for sid_str, row in rows_by.items():
+                    try:
+                        sid = int(sid_str)
+                    except Exception:
+                        continue
+                    student = StudentProfile.objects.filter(id=sid).first()
+                    if not student:
+                        continue
+                    absent = bool((row or {}).get('absent'))
+                    if absent:
+                        total_dec = Decimal('0')
+                    else:
+                        q = (row or {}).get('q', {})
+                        if not isinstance(q, dict):
+                            q = {}
+                        total = Decimal('0')
+                        for k in qkeys:
+                            dec = _coerce_decimal_or_none(q.get(k))
+                            if dec is None:
+                                continue
+                            total += dec
+                        total_dec = total
+                    mark_model.objects.update_or_create(subject=subject, student=student, defaults={'mark': total_dec})
+
+        elif assessment_key == 'model':
+            ModelPublishedSheet.objects.update_or_create(
+                subject=subject,
+                defaults={'data': payload, 'updated_by': getattr(getattr(request, 'user', None), 'id', None)},
+            )
+        else:
+            return False
+    except Exception:
+        return False
+
+    try:
+        _touch_lock_after_publish(
+            request,
+            subject_code=str(getattr(subject, 'code', '') or ''),
+            subject_name=str(getattr(subject, 'name', '') or str(getattr(subject, 'code', '') or '')),
+            assessment=assessment_key,
+            teaching_assignment_id=teaching_assignment_id,
+        )
+    except Exception:
+        pass
+    return True
+
+
+def _enforce_mark_entry_window(request, *, subject, assessment_key: str, teaching_assignment_id: int | None = None):
+    """Enforce IQAC-configured start/end window for editing (draft saves and marks PUT).
+
+    If the window has ended, attempts best-effort auto-publish.
+    """
+    assessment_key = str(assessment_key or '').strip().lower()
+    info = _get_due_schedule_for_request(request, subject_code=getattr(subject, 'code', ''), assessment=assessment_key, teaching_assignment_id=teaching_assignment_id)
+
+    # Unlimited/global-open: allow edits regardless of due time (but still respect enable/open flags).
+    if info.get('global_override_active') and bool(info.get('global_is_open')):
+        return None
+
+    if bool(info.get('assessment_enabled')) is False or bool(info.get('assessment_open')) is False:
+        return Response({'detail': 'Assessment is disabled by IQAC.'}, status=status.HTTP_403_FORBIDDEN)
+
+    open_from = info.get('open_from')
+    due_at = info.get('due_at')
+    now = info.get('now')
+
+    # Before start
+    if open_from is not None and now is not None and now < open_from:
+        return Response(
+            {
+                'detail': 'Mark entry window has not started yet.',
+                'assessment': assessment_key,
+                'subject_code': str(getattr(subject, 'code', '') or ''),
+                'open_from': open_from.isoformat() if open_from else None,
+                'due_at': due_at.isoformat() if due_at else None,
+                'now': now.isoformat() if now else None,
+            },
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    # After end
+    if due_at is not None and now is not None and now >= due_at:
+        auto_published = False
+        try:
+            auto_published = _auto_publish_from_draft_if_due(
+                request,
+                subject=subject,
+                assessment_key=assessment_key,
+                teaching_assignment_id=teaching_assignment_id,
+            )
+        except Exception:
+            auto_published = False
+        return Response(
+            {
+                'detail': 'Mark entry window ended. Table is now read-only.',
+                'assessment': assessment_key,
+                'subject_code': str(getattr(subject, 'code', '') or ''),
+                'open_from': open_from.isoformat() if open_from else None,
+                'due_at': due_at.isoformat() if due_at else None,
+                'now': now.isoformat() if now else None,
+                'auto_published': bool(auto_published),
+            },
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    return None
 
 
 @api_view(['GET'])
@@ -2007,6 +2288,10 @@ def assessment_draft(request, assessment: str, subject_id: str):
     from .models import AssessmentDraft
 
     if request.method == 'PUT':
+        gate = _enforce_mark_entry_window(request, subject=subject, assessment_key=assessment, teaching_assignment_id=ta_id)
+        if gate is not None:
+            return gate
+
         body = request.data or {}
         data = body.get('data', None)
         if data is None:
@@ -3878,6 +4163,11 @@ def cia1_marks(request, subject_id):
 
     # Subject may not exist when teaching assignments reference curriculum rows only.
     subject = Subject.objects.filter(code=subject_id).first()
+    if subject is None:
+        try:
+            subject = _get_subject(subject_id, request)
+        except Exception:
+            subject = None
 
     try:
         tas = TeachingAssignment.objects.select_related('section', 'academic_year', 'curriculum_row').filter(is_active=True)
@@ -4033,6 +4323,11 @@ def cia1_marks(request, subject_id):
         )
 
     if request.method == 'PUT':
+        if subject is not None:
+            gate = _enforce_mark_entry_window(request, subject=subject, assessment_key='cia1', teaching_assignment_id=ta_id)
+            if gate is not None:
+                return gate
+
         payload = request.data or {}
         incoming = payload.get('marks', {})
         if incoming is None:
@@ -4158,6 +4453,11 @@ def cia2_marks(request, subject_id):
 
     # Subject may not exist when teaching assignments reference curriculum rows only.
     subject = Subject.objects.filter(code=subject_id).first()
+    if subject is None:
+        try:
+            subject = _get_subject(subject_id, request)
+        except Exception:
+            subject = None
 
     try:
         tas = TeachingAssignment.objects.select_related('section', 'academic_year', 'curriculum_row').filter(is_active=True)
@@ -4298,6 +4598,11 @@ def cia2_marks(request, subject_id):
         )
 
     if request.method == 'PUT':
+        if subject is not None:
+            gate = _enforce_mark_entry_window(request, subject=subject, assessment_key='cia2', teaching_assignment_id=ta_id)
+            if gate is not None:
+                return gate
+
         payload = request.data or {}
         incoming = payload.get('marks', {})
         if incoming is None:
@@ -4922,9 +5227,43 @@ def publish_window(request, assessment: str, subject_id: str):
     info = _get_due_schedule_for_request(request, subject_code=subject_code, assessment=assessment_key, teaching_assignment_id=ta_id)
 
     due_at = info.get('due_at')
+    open_from = info.get('open_from')
     now = info.get('now')
     academic_year = info.get('academic_year')
     ta = info.get('teaching_assignment')
+
+    # Determine edit/window status for mark entry tables.
+    unlimited = bool(info.get('global_override_active') and info.get('global_is_open'))
+    assessment_enabled = bool(info.get('assessment_enabled'))
+    assessment_open = bool(info.get('assessment_open'))
+    within_window = bool(info.get('allowed_by_due'))
+    edit_allowed = bool(assessment_enabled and assessment_open and (unlimited or within_window))
+
+    if not assessment_enabled or not assessment_open:
+        window_state = 'DISABLED'
+    elif unlimited:
+        window_state = 'UNLIMITED'
+    elif open_from is not None and now is not None and now < open_from:
+        window_state = 'NOT_STARTED'
+    elif due_at is not None and now is not None and now >= due_at:
+        window_state = 'ENDED'
+    elif due_at is not None:
+        window_state = 'OPEN'
+    else:
+        window_state = 'OPEN'
+
+    auto_published = False
+    if window_state == 'ENDED':
+        try:
+            subj = _get_subject(subject_code, request)
+            auto_published = _auto_publish_from_draft_if_due(
+                request,
+                subject=subj,
+                assessment_key=assessment_key,
+                teaching_assignment_id=ta_id,
+            )
+        except Exception:
+            auto_published = False
 
     # If publish is restricted to a single user, and the caller is not that user,
     # present the same response shape but with publishing disabled so the UI
@@ -4939,17 +5278,22 @@ def publish_window(request, assessment: str, subject_id: str):
             'assessment': assessment_key,
             'subject_code': subject_code,
             'assessment_control_active': bool(info.get('assessment_control_active')),
-            'assessment_enabled': bool(info.get('assessment_enabled')),
-            'assessment_open': bool(info.get('assessment_open')),
+            'assessment_enabled': assessment_enabled,
+            'assessment_open': assessment_open,
+            'edit_allowed': edit_allowed,
+            'window_state': window_state,
             'publish_allowed': publish_allowed,
             'allowed_by_due': bool(info.get('allowed_by_due')),
             'allowed_by_approval': bool(info.get('allowed_by_approval')),
             'global_override_active': bool(info.get('global_override_active')),
             'global_is_open': bool(info.get('global_is_open')) if info.get('global_override_active') else None,
             'allowed_by_global': bool(info.get('allowed_by_global')) if info.get('global_override_active') else None,
+            'auto_published': bool(auto_published),
+            'open_from': open_from.isoformat() if open_from else None,
             'due_at': due_at.isoformat() if due_at else None,
             'now': now.isoformat() if now else None,
             'remaining_seconds': info.get('remaining_seconds'),
+            'starts_in_seconds': info.get('starts_in_seconds'),
             'approval_until': (info.get('approval_until').isoformat() if info.get('approval_until') else None),
             'academic_year': {
                 'id': getattr(academic_year, 'id', None),
@@ -4960,6 +5304,38 @@ def publish_window(request, assessment: str, subject_id: str):
             'teaching_assignment_id': getattr(ta, 'id', None) if ta else None,
         }
     )
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def auto_publish_due(request, assessment: str, subject_id: str):
+    """Auto publish (best-effort) from stored draft when the due time has passed.
+
+    This is intended to be called by the frontend exactly when the countdown reaches 0.
+    """
+    staff_profile, err = _faculty_only(request)
+    if err:
+        return err
+
+    assessment_key = str(assessment or '').strip().lower()
+    if assessment_key not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
+        return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    subject = _get_subject(subject_id, request)
+    ta_id = _get_teaching_assignment_id_from_request(request, request.data if isinstance(request.data, dict) else None)
+
+    info = _get_due_schedule_for_request(request, subject_code=subject.code, assessment=assessment_key, teaching_assignment_id=ta_id)
+    due_at = info.get('due_at')
+    now = info.get('now')
+    unlimited = bool(info.get('global_override_active') and info.get('global_is_open'))
+    if unlimited:
+        return Response({'status': 'skipped', 'reason': 'unlimited', 'auto_published': False})
+    if due_at is None or now is None or now < due_at:
+        return Response({'status': 'skipped', 'reason': 'not_due', 'auto_published': False, 'due_at': due_at.isoformat() if due_at else None, 'now': now.isoformat() if now else None})
+
+    ok = _auto_publish_from_draft_if_due(request, subject=subject, assessment_key=assessment_key, teaching_assignment_id=ta_id)
+    return Response({'status': 'ok', 'auto_published': bool(ok)})
 
 
 @api_view(['GET'])
@@ -5389,24 +5765,42 @@ def due_schedules(request):
         qs = qs.filter(semester_id__in=sem_ids)
 
     items = []
-    for r in qs:
-        items.append(
-            {
-                'id': r.id,
-                'semester': {
-                    'id': r.semester_id,
-                    'number': getattr(getattr(r, 'semester', None), 'number', None),
+    try:
+        for r in qs:
+            items.append(
+                {
+                    'id': r.id,
+                    'semester': {
+                        'id': r.semester_id,
+                        'number': getattr(getattr(r, 'semester', None), 'number', None),
+                    }
+                    if r.semester_id
+                    else None,
+                    'subject_code': r.subject_code,
+                    'subject_name': r.subject_name,
+                    'assessment': r.assessment,
+                    'open_from': r.open_from.isoformat() if getattr(r, 'open_from', None) else None,
+                    'due_at': r.due_at.isoformat() if r.due_at else None,
+                    'is_active': bool(r.is_active),
+                    'updated_at': r.updated_at.isoformat() if r.updated_at else None,
                 }
-                if r.semester_id
-                else None,
-                'subject_code': r.subject_code,
-                'subject_name': r.subject_name,
-                'assessment': r.assessment,
-                'due_at': r.due_at.isoformat() if r.due_at else None,
-                'is_active': bool(r.is_active),
-                'updated_at': r.updated_at.isoformat() if r.updated_at else None,
-            }
-        )
+            )
+    except Exception as e:
+        # Common cause: DB schema not migrated yet (missing `open_from` column).
+        try:
+            from django.db.utils import OperationalError, ProgrammingError
+
+            if isinstance(e, (ProgrammingError, OperationalError)) and 'open_from' in str(e).lower():
+                return Response(
+                    {
+                        'detail': 'Database schema out of date for OBE due schedules. Apply migrations (OBE 0046_obedueschedule_open_from).',
+                        'hint': 'Run: python manage.py migrate',
+                    },
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+        except Exception:
+            pass
+        raise
 
     return Response({'results': items})
 
@@ -5472,10 +5866,14 @@ def due_schedule_upsert(request):
     subject_code = str(body.get('subject_code') or '').strip()
     subject_name = str(body.get('subject_name') or '').strip()
     assessment = str(body.get('assessment') or '').strip().lower()
+    open_from = _parse_open_from(body.get('open_from'))
     due_at = _parse_due_at(body.get('due_at'))
 
     if not sem_id or not subject_code or not assessment or due_at is None:
         return Response({'detail': 'semester_id, subject_code, assessment, due_at are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if open_from is not None and due_at is not None and open_from >= due_at:
+        return Response({'detail': 'open_from must be before due_at.'}, status=status.HTTP_400_BAD_REQUEST)
 
     if assessment not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -5491,19 +5889,36 @@ def due_schedule_upsert(request):
     if not subject_name and subj is not None:
         subject_name = subj.name
 
-    obj, _created = ObeDueSchedule.objects.update_or_create(
-        semester=sem,
-        subject_code=subject_code,
-        assessment=assessment,
-        defaults={
-            'subject': subj,
-            'subject_name': subject_name,
-            'due_at': due_at,
-            'is_active': True,
-            'updated_by': getattr(request.user, 'id', None),
-            'created_by': getattr(request.user, 'id', None),
-        },
-    )
+    try:
+        obj, _created = ObeDueSchedule.objects.update_or_create(
+            semester=sem,
+            subject_code=subject_code,
+            assessment=assessment,
+            defaults={
+                'subject': subj,
+                'subject_name': subject_name,
+                'open_from': open_from,
+                'due_at': due_at,
+                'is_active': True,
+                'updated_by': getattr(request.user, 'id', None),
+                'created_by': getattr(request.user, 'id', None),
+            },
+        )
+    except Exception as e:
+        try:
+            from django.db.utils import OperationalError, ProgrammingError
+
+            if isinstance(e, (ProgrammingError, OperationalError)) and 'open_from' in str(e).lower():
+                return Response(
+                    {
+                        'detail': 'Database schema out of date for OBE due schedules. Apply migrations (OBE 0046_obedueschedule_open_from).',
+                        'hint': 'Run: python manage.py migrate',
+                    },
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+        except Exception:
+            pass
+        raise
 
     return Response(
         {
@@ -5512,6 +5927,7 @@ def due_schedule_upsert(request):
             'subject_code': obj.subject_code,
             'subject_name': obj.subject_name,
             'assessment': obj.assessment,
+            'open_from': obj.open_from.isoformat() if getattr(obj, 'open_from', None) else None,
             'due_at': obj.due_at.isoformat() if obj.due_at else None,
             'updated_at': obj.updated_at.isoformat() if obj.updated_at else None,
         }
@@ -5531,10 +5947,14 @@ def due_schedule_bulk_upsert(request):
     sem_id = body.get('semester_id')
     assessments = body.get('assessments') or []
     subject_codes = body.get('subject_codes') or []
+    open_from = _parse_open_from(body.get('open_from'))
     due_at = _parse_due_at(body.get('due_at'))
 
     if not sem_id or due_at is None:
         return Response({'detail': 'semester_id and due_at are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if open_from is not None and due_at is not None and open_from >= due_at:
+        return Response({'detail': 'open_from must be before due_at.'}, status=status.HTTP_400_BAD_REQUEST)
 
     if not isinstance(assessments, list) or not assessments:
         return Response({'detail': 'assessments must be a non-empty list.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -5555,26 +5975,43 @@ def due_schedule_bulk_upsert(request):
         return Response({'detail': 'Semester not found.'}, status=status.HTTP_404_NOT_FOUND)
 
     updated = 0
-    for code in [str(s).strip() for s in subject_codes]:
-        if not code:
-            continue
-        subj = Subject.objects.filter(code=code).first()
-        name = getattr(subj, 'name', '') if subj else ''
-        for a in norm_assessments:
-            ObeDueSchedule.objects.update_or_create(
-                semester=sem,
-                subject_code=code,
-                assessment=a,
-                defaults={
-                    'subject': subj,
-                    'subject_name': name,
-                    'due_at': due_at,
-                    'is_active': True,
-                    'updated_by': getattr(request.user, 'id', None),
-                    'created_by': getattr(request.user, 'id', None),
-                },
-            )
-            updated += 1
+    try:
+        for code in [str(s).strip() for s in subject_codes]:
+            if not code:
+                continue
+            subj = Subject.objects.filter(code=code).first()
+            name = getattr(subj, 'name', '') if subj else ''
+            for a in norm_assessments:
+                ObeDueSchedule.objects.update_or_create(
+                    semester=sem,
+                    subject_code=code,
+                    assessment=a,
+                    defaults={
+                        'subject': subj,
+                        'subject_name': name,
+                        'open_from': open_from,
+                        'due_at': due_at,
+                        'is_active': True,
+                        'updated_by': getattr(request.user, 'id', None),
+                        'created_by': getattr(request.user, 'id', None),
+                    },
+                )
+                updated += 1
+    except Exception as e:
+        try:
+            from django.db.utils import OperationalError, ProgrammingError
+
+            if isinstance(e, (ProgrammingError, OperationalError)) and 'open_from' in str(e).lower():
+                return Response(
+                    {
+                        'detail': 'Database schema out of date for OBE due schedules. Apply migrations (OBE 0046_obedueschedule_open_from).',
+                        'hint': 'Run: python manage.py migrate',
+                    },
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+        except Exception:
+            pass
+        raise
 
     return Response({'status': 'ok', 'updated': updated})
 
@@ -5788,6 +6225,8 @@ def publish_request_create(request):
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
     if not subject_code:
         return Response({'detail': 'subject_code is required.'}, status=status.HTTP_400_BAD_REQUEST)
+    if not reason:
+        return Response({'detail': 'reason is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
     info = _get_due_schedule_for_request(request, subject_code=subject_code, assessment=assessment, teaching_assignment_id=ta_id)
     if (not force) and info.get('publish_allowed') and info.get('allowed_by_due'):
@@ -5798,6 +6237,110 @@ def publish_request_create(request):
         return Response({'detail': 'Unable to resolve academic year for this subject.'}, status=status.HTTP_400_BAD_REQUEST)
 
     from .models import ObePublishRequest
+
+    # Resolve department HOD for this staff member + academic year (same logic as edit requests).
+    hod_user = None
+    dept = getattr(staff_profile, 'current_department', None) or getattr(staff_profile, 'department', None)
+    if dept is None:
+        return Response(
+            {
+                'detail': 'Unable to resolve your department for HOD routing.',
+                'how_to_fix': [
+                    'Ensure this staff has an active department assignment (or department set) in Academics.',
+                    'Then re-try submitting the publish request.',
+                ],
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    try:
+        from academics.models import DepartmentRole
+
+        if dept is not None and academic_year is not None:
+            hod_role = (
+                DepartmentRole.objects.filter(
+                    department=dept,
+                    academic_year=academic_year,
+                    role='HOD',
+                    is_active=True,
+                )
+                .select_related('staff__user')
+                .first()
+            )
+            if hod_role is not None:
+                hod_user = getattr(getattr(hod_role, 'staff', None), 'user', None)
+
+        # Backward-compat: if a HOD is configured but not mapped for this academic year, pick latest active.
+        if hod_user is None and dept is not None:
+            hod_role_any = (
+                DepartmentRole.objects.filter(
+                    department=dept,
+                    role='HOD',
+                    is_active=True,
+                )
+                .select_related('staff__user', 'academic_year')
+                .order_by('-academic_year_id', '-id')
+                .first()
+            )
+            if hod_role_any is not None:
+                hod_user = getattr(getattr(hod_role_any, 'staff', None), 'user', None)
+    except Exception:
+        hod_user = None
+
+    if hod_user is None and dept is not None:
+        try:
+            from academics.models import StaffProfile, RoleAssignment
+            from django.db.models import Q
+
+            dept_staff_qs = StaffProfile.objects.filter(
+                Q(department=dept)
+                | Q(department_assignments__department=dept, department_assignments__end_date__isnull=True)
+            ).select_related('user').distinct()
+
+            ra = (
+                RoleAssignment.objects.filter(
+                    staff__in=dept_staff_qs,
+                    role_name__iexact='HOD',
+                    end_date__isnull=True,
+                )
+                .select_related('staff__user')
+                .order_by('-start_date')
+                .first()
+            )
+            if ra is not None:
+                hod_user = getattr(getattr(ra, 'staff', None), 'user', None)
+        except Exception:
+            hod_user = None
+
+    routing_warning = None
+    if hod_user is None:
+        dept_name = (
+            str(getattr(dept, 'short_name', '') or '').strip()
+            or str(getattr(dept, 'name', '') or '').strip()
+            or str(getattr(dept, 'code', '') or '').strip()
+            or 'your department'
+        )
+        routing_warning = f'No active HOD configured for {dept_name}. Request will be sent directly to IQAC.'
+
+    if hod_user is None and dept is not None:
+        try:
+            from academics.models import StaffProfile
+            from django.db.models import Q
+
+            dept_staff_qs = StaffProfile.objects.filter(
+                Q(department=dept)
+                | Q(department_assignments__department=dept, department_assignments__end_date__isnull=True)
+            ).select_related('user').distinct()
+
+            sp_hod = (
+                dept_staff_qs.filter(user__roles__name__iexact='HOD')
+                .exclude(user=request.user)
+                .order_by('id')
+                .first()
+            )
+            if sp_hod is not None:
+                hod_user = getattr(sp_hod, 'user', None)
+        except Exception:
+            hod_user = None
 
     # If a pending request already exists, update reason and keep status pending.
     existing = ObePublishRequest.objects.filter(
@@ -5811,7 +6354,16 @@ def publish_request_create(request):
     if existing:
         existing.reason = reason
         existing.subject_name = existing.subject_name or (getattr(info.get('schedule'), 'subject_name', '') or '')
-        existing.save(update_fields=['reason', 'subject_name', 'updated_at'])
+
+        # If this is an older request with no HOD routing info yet, assign it now.
+        try:
+            if getattr(existing, 'hod_user_id', None) is None and hod_user is not None:
+                existing.hod_user = hod_user
+                existing.hod_approved = False
+        except Exception:
+            pass
+
+        existing.save(update_fields=['reason', 'subject_name', 'hod_user', 'hod_approved', 'updated_at'])
         req = existing
     else:
         req = ObePublishRequest.objects.create(
@@ -5821,13 +6373,50 @@ def publish_request_create(request):
             subject_name=(getattr(info.get('schedule'), 'subject_name', '') or ''),
             assessment=assessment,
             reason=reason,
+            hod_user=hod_user,
+            hod_approved=(False if hod_user is not None else True),
         )
+
+    routed_to = 'HOD' if getattr(req, 'hod_user_id', None) is not None and not bool(getattr(req, 'hod_approved', True)) else 'IQAC'
+
+    hod_u = getattr(req, 'hod_user', None)
+    hod_name = (
+        ' '.join([
+            str(getattr(hod_u, 'first_name', '') or '').strip(),
+            str(getattr(hod_u, 'last_name', '') or '').strip(),
+        ]).strip()
+        if hod_u
+        else ''
+    )
+    if not hod_name:
+        hod_name = str(getattr(hod_u, 'username', '') or '').strip() if hod_u else ''
 
     return Response(
         {
             'id': req.id,
             'status': req.status,
             'created_at': req.created_at.isoformat() if req.created_at else None,
+            'routed_to': routed_to,
+            'routing_warning': routing_warning,
+            'department': (
+                {
+                    'id': getattr(dept, 'id', None),
+                    'code': getattr(dept, 'code', None),
+                    'name': getattr(dept, 'name', None),
+                    'short_name': getattr(dept, 'short_name', None),
+                }
+                if dept is not None
+                else None
+            ),
+            'hod': (
+                {
+                    'id': getattr(hod_u, 'id', None),
+                    'username': getattr(hod_u, 'username', None),
+                    'name': hod_name or None,
+                }
+                if getattr(req, 'hod_user_id', None) is not None
+                else None
+            ),
         }
     )
 
@@ -5845,7 +6434,7 @@ def publish_requests_pending(request):
 
     qs = (
         ObePublishRequest.objects.select_related('staff_user', 'academic_year')
-        .filter(status='PENDING')
+        .filter(status='PENDING', hod_approved=True)
         .order_by('-created_at')
     )
 
@@ -5916,7 +6505,7 @@ def publish_requests_history(request):
 
     qs = (
         ObePublishRequest.objects.select_related('staff_user', 'academic_year', 'reviewed_by')
-        .filter(status__in=statuses)
+        .filter(status__in=statuses, hod_approved=True)
         .order_by('-updated_at')
     )[:limit]
 
@@ -5995,11 +6584,141 @@ def publish_requests_pending_count(request):
         if auth:
             return auth
         from .models import ObePublishRequest
-        return Response({'pending': int(ObePublishRequest.objects.filter(status='PENDING').count())})
+        return Response({'pending': int(ObePublishRequest.objects.filter(status='PENDING', hod_approved=True).count())})
     except Exception as e:
         import logging
         logging.getLogger(__name__).exception('Error in publish_requests_pending_count: %s', e)
         return Response({'detail': 'Internal error', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def publish_requests_hod_pending(request):
+    """HOD: list pending publish requests assigned to this HOD (pre-approval stage)."""
+    user = getattr(request, 'user', None)
+    staff_profile = getattr(user, 'staff_profile', None)
+    if staff_profile is None:
+        return Response({'detail': 'Not a staff member.'}, status=status.HTTP_403_FORBIDDEN)
+
+    from .models import ObePublishRequest
+
+    qs = ObePublishRequest.objects.select_related('staff_user', 'academic_year').filter(
+        status='PENDING',
+        hod_approved=False,
+        hod_user=user,
+    ).order_by('-created_at')
+
+    def staff_name(u):
+        if not u:
+            return None
+        try:
+            full = ' '.join([str(getattr(u, 'first_name', '') or '').strip(), str(getattr(u, 'last_name', '') or '').strip()]).strip()
+            return full or getattr(u, 'username', None)
+        except Exception:
+            return getattr(u, 'username', None)
+
+    out = []
+    for r in qs:
+        u = getattr(r, 'staff_user', None)
+        out.append(
+            {
+                'id': r.id,
+                'status': r.status,
+                'assessment': r.assessment,
+                'subject_code': r.subject_code,
+                'subject_name': r.subject_name,
+                'reason': r.reason,
+                'requested_at': r.created_at.isoformat() if r.created_at else None,
+                'academic_year': {
+                    'id': r.academic_year_id,
+                    'name': getattr(getattr(r, 'academic_year', None), 'name', None),
+                }
+                if r.academic_year_id
+                else None,
+                'staff': {
+                    'id': getattr(u, 'id', None),
+                    'username': getattr(u, 'username', None),
+                    'name': staff_name(u),
+                },
+            }
+        )
+    return Response({'results': out})
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def publish_requests_hod_pending_count(request):
+    """HOD: count pending publish requests assigned to this HOD."""
+    user = getattr(request, 'user', None)
+    staff_profile = getattr(user, 'staff_profile', None)
+    if staff_profile is None:
+        return Response({'pending': 0})
+
+    from .models import ObePublishRequest
+    return Response({'pending': int(ObePublishRequest.objects.filter(status='PENDING', hod_approved=False, hod_user=user).count())})
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def publish_request_hod_approve(request, req_id: int):
+    """HOD: approve/forward a publish request to IQAC."""
+    user = getattr(request, 'user', None)
+    staff_profile = getattr(user, 'staff_profile', None)
+    if staff_profile is None:
+        return Response({'detail': 'Not a staff member.'}, status=status.HTTP_403_FORBIDDEN)
+
+    from .models import ObePublishRequest
+    row = ObePublishRequest.objects.filter(id=req_id).first()
+    if not row:
+        return Response({'detail': 'Request not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    if getattr(row, 'hod_user_id', None) != getattr(user, 'id', None):
+        return Response({'detail': 'Not assigned to you.'}, status=status.HTTP_403_FORBIDDEN)
+
+    if str(getattr(row, 'status', '') or '').upper() != 'PENDING':
+        return Response({'detail': 'Request is not pending.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if bool(getattr(row, 'hod_approved', False)):
+        return Response({'status': 'forwarded'})
+
+    row.hod_approved = True
+    row.hod_reviewed_by = user
+    row.hod_reviewed_at = timezone.now()
+    row.save(update_fields=['hod_approved', 'hod_reviewed_by', 'hod_reviewed_at', 'updated_at'])
+    return Response({'status': 'forwarded'})
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def publish_request_hod_reject(request, req_id: int):
+    """HOD: reject a publish request (does not reach IQAC)."""
+    user = getattr(request, 'user', None)
+    staff_profile = getattr(user, 'staff_profile', None)
+    if staff_profile is None:
+        return Response({'detail': 'Not a staff member.'}, status=status.HTTP_403_FORBIDDEN)
+
+    from .models import ObePublishRequest
+    row = ObePublishRequest.objects.filter(id=req_id).first()
+    if not row:
+        return Response({'detail': 'Request not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    if getattr(row, 'hod_user_id', None) != getattr(user, 'id', None):
+        return Response({'detail': 'Not assigned to you.'}, status=status.HTTP_403_FORBIDDEN)
+
+    if str(getattr(row, 'status', '') or '').upper() != 'PENDING':
+        return Response({'detail': 'Request is not pending.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Mark as rejected at HOD stage.
+    row.status = 'REJECTED'
+    row.hod_approved = False
+    row.hod_reviewed_by = user
+    row.hod_reviewed_at = timezone.now()
+    row.save(update_fields=['status', 'hod_approved', 'hod_reviewed_by', 'hod_reviewed_at', 'updated_at'])
+    return Response({'status': 'rejected'})
 
 
 @api_view(['POST'])

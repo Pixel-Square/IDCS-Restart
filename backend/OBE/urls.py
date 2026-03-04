@@ -53,6 +53,7 @@ urlpatterns = [
 
     # Due schedules + publish requests
     path('publish-window/<str:assessment>/<str:subject_id>', views.publish_window),
+    path('auto-publish/<str:assessment>/<str:subject_id>', views.auto_publish_due),
 
     # Edit approvals (separate from publish window)
     path('edit-window/<str:assessment>/<str:subject_id>', views.edit_window),
@@ -86,7 +87,11 @@ urlpatterns = [
     path('publish-request', views.publish_request_create),
     path('publish-requests/pending', views.publish_requests_pending),
     path('publish-requests/pending-count', views.publish_requests_pending_count),
+    path('publish-requests/hod/pending', views.publish_requests_hod_pending),
+    path('publish-requests/hod/pending-count', views.publish_requests_hod_pending_count),
     path('publish-requests/history', views.publish_requests_history),
+    path('publish-requests/<int:req_id>/hod-approve', views.publish_request_hod_approve),
+    path('publish-requests/<int:req_id>/hod-reject', views.publish_request_hod_reject),
     path('publish-requests/<int:req_id>/approve', views.publish_request_approve),
     path('publish-requests/<int:req_id>/reject', views.publish_request_reject),
 

@@ -1,4 +1,5 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
+import { BookOpen, ClipboardList, TrendingUp, BarChart2 } from 'lucide-react';
 
 import CDAPPage from '../lca/CDAPPage';
 import ArticulationMatrixPage from '../lca/ArticulationMatrixPage';

@@ -236,6 +236,11 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
   const [savedBy, setSavedBy] = useState<string | null>(null);
   const draftLoadedRef = useRef(false);
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
+
+  // Avoid leaking published state across subject/assignment switches.
+  useEffect(() => {
+    setPublishedAt(null);
+  }, [subjectId, teachingAssignmentId]);
   const [viewMarksModalOpen, setViewMarksModalOpen] = useState(false);
   const [publishedEditModalOpen, setPublishedEditModalOpen] = useState(false);
   const [editRequestReason, setEditRequestReason] = useState('');
@@ -253,6 +258,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
     error: publishWindowError,
     remainingSeconds,
     publishAllowed,
+    editAllowed,
     refresh: refreshPublishWindow,
   } = usePublishWindow({ assessment: assessmentKey, subjectCode: subjectId, teachingAssignmentId });
 
@@ -328,7 +334,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
 
   // When published, the list must be locked unless IQAC explicitly opens editing.
   // Any approval that existed at the moment of publishing is treated as consumed.
-  const entryOpen = !isPublished ? true : Boolean(markLock?.entry_open) || markEntryApprovedFresh || markManagerApprovedFresh;
+  const entryOpen = !isPublished ? Boolean(editAllowed) : Boolean(markLock?.entry_open) || markEntryApprovedFresh || markManagerApprovedFresh;
   const publishedEditLocked = Boolean(isPublished && !entryOpen);
 
   const {
@@ -354,7 +360,9 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
   const tableBlocked = Boolean(
     globalLocked ||
       lockStatusUnknown ||
-      (markLock ? !markLock.entry_open : isPublished ? !entryOpen : !markManagerLocked),
+      !entryOpen ||
+      (!isPublished && !markManagerLocked) ||
+      (markLock ? !markLock.entry_open : false),
   );
 
   const marksEditDisabled = Boolean(globalLocked || publishedEditLocked || tableBlocked);
@@ -874,12 +882,20 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
   };
 
   const requestApproval = async () => {
+    const reason = String(requestReason || '').trim();
+    if (!reason) {
+      setSaveError('Reason is required.');
+      return;
+    }
     setRequesting(true);
     setRequestMessage(null);
     setSaveError(null);
     try {
-      await createPublishRequest({ assessment: assessmentKey, subject_code: subjectId, reason: requestReason, teaching_assignment_id: teachingAssignmentId });
-      setRequestMessage('Request sent to IQAC for approval.');
+      const created = await createPublishRequest({ assessment: assessmentKey, subject_code: subjectId, reason, teaching_assignment_id: teachingAssignmentId });
+      const routed = String((created as any)?.routed_to || '').trim().toUpperCase();
+      const warn = String((created as any)?.routing_warning || '').trim();
+      const baseMsg = routed === 'HOD' ? 'Request sent to HOD for approval.' : 'Request sent to IQAC for approval.';
+      setRequestMessage(warn ? `${baseMsg} ${warn}` : baseMsg);
     } catch (e: any) {
       setSaveError(e?.message || 'Failed to request approval');
     } finally {
@@ -1616,14 +1632,16 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
             <button onClick={downloadTotals} className="obe-btn obe-btn-secondary" disabled={!sheet.rows.length}>
               Download
             </button>
-            <button
-              onClick={saveDraftToDb}
-              className="obe-btn obe-btn-success"
-              disabled={savingDraft || tableBlocked}
-              title={tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : undefined}
-            >
-              {savingDraft ? 'Saving…' : 'Save Draft'}
-            </button>
+            {!publishedEditLocked ? (
+              <button
+                onClick={saveDraftToDb}
+                className="obe-btn obe-btn-success"
+                disabled={savingDraft || tableBlocked}
+                title={tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : undefined}
+              >
+                {savingDraft ? 'Saving…' : 'Save Draft'}
+              </button>
+            ) : null}
             <button
               onClick={publishButtonOnClick}
               className="obe-btn obe-btn-primary"
@@ -1685,17 +1703,17 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
         ) : !publishAllowed ? (
           <div style={{ marginTop: 10, border: '1px solid #fecaca', background: '#fff7ed', borderRadius: 12, padding: 12 }}>
             <div style={{ fontWeight: 800, marginBottom: 6 }}>Publish time is over</div>
-            <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>Send a request to IQAC to approve publishing.</div>
+            <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>Send a request for approval (routes to HOD, then IQAC).</div>
             <textarea
               value={requestReason}
               onChange={(e) => setRequestReason(e.target.value)}
-              placeholder="Reason (optional)"
+              placeholder="Reason (required)"
               rows={3}
               style={{ width: '100%', padding: 10, borderRadius: 10, border: '1px solid #e5e7eb', resize: 'vertical' }}
             />
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
               <button className="obe-btn" onClick={() => refreshPublishWindow()} disabled={requesting || publishWindowLoading}>Refresh</button>
-              <button className="obe-btn obe-btn-primary" onClick={requestApproval} disabled={requesting}>{requesting ? 'Requesting…' : 'Request Approval'}</button>
+              <button className="obe-btn obe-btn-primary" onClick={requestApproval} disabled={requesting || !String(requestReason || '').trim()}>{requesting ? 'Requesting…' : 'Request Approval'}</button>
             </div>
             {requestMessage ? <div style={{ marginTop: 8, fontSize: 12, color: '#065f46' }}>{requestMessage}</div> : null}
           </div>

@@ -1,0 +1,185 @@
+/**
+ * CanvaDesignService.ts
+ *
+ * Create Canva designs from saved templates and inject event data via autofill.
+ *
+ * Canva Autofill notes:
+ *  - Only works with Brand Templates that have named Data Fields configured
+ *    inside Canva itself (via the "Data fields" panel in the template editor).
+ *  - Field keys used here must exactly match the field names set up in Canva.
+ *  - Text field types use { type: "text", text: "..." }.
+ */
+
+import { getConnection } from './CanvaAuthService';
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export interface AutofillData {
+  event_title?: string;
+  venue?: string;
+  department?: string;
+  date_time?: string;
+  coordinators?: string;
+}
+
+export interface CanvaJobResult {
+  jobId: string;
+  status: 'pending' | 'success' | 'failed';
+  /** Present on success — the newly created design's ID */
+  designId?: string;
+  /** Present on success — the Canva editor URL for the autofilled design */
+  designEditUrl?: string;
+}
+
+export interface NewDesignResult {
+  designId: string;
+  editUrl: string;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function requireConnection() {
+  const conn = getConnection();
+  if (!conn) throw new Error('Not connected to Canva. Please connect your account first.');
+  return conn;
+}
+
+/** Convert structured AutofillData into Canva's data-field wire format. */
+function buildAutofillFields(data: AutofillData): Record<string, unknown> {
+  const fields: Record<string, unknown> = {};
+  const add = (key: string, text: string | undefined) => {
+    if (text) fields[key] = { type: 'text', text };
+  };
+  add('event_title',  data.event_title);
+  add('venue',        data.venue);
+  add('department',   data.department);
+  add('date_time',    data.date_time);
+  add('coordinators', data.coordinators);
+  return fields;
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
+/**
+ * Create a new Canva design that is a copy of an existing design/template.
+ * The backend proxies to POST /v1/designs with design_type.from_template.
+ */
+export async function createDesignFromTemplate(
+  canvaTemplateId: string,
+): Promise<NewDesignResult> {
+  const conn = requireConnection();
+
+  const res = await fetch('/api/canva/designs', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({
+      access_token: conn.accessToken,
+      template_id:  canvaTemplateId,
+    }),
+  });
+
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({})) as Record<string, string>;
+    throw new Error(e.detail ?? `Failed to create design (${res.status})`);
+  }
+
+  const data = await res.json() as { design: { id: string; urls: { edit_url: string } } };
+  return {
+    designId: data.design.id,
+    editUrl:  data.design.urls.edit_url,
+  };
+}
+
+/**
+ * Submit an autofill job.
+ * Uses the Canva Brand Template autofill endpoint (POST /v1/autofills).
+ * `brandTemplateId` must be a Canva Brand Template (not a regular design).
+ */
+export async function submitAutofill(
+  brandTemplateId: string,
+  autofillData: AutofillData,
+): Promise<CanvaJobResult> {
+  const conn = requireConnection();
+  const fields = buildAutofillFields(autofillData);
+
+  if (Object.keys(fields).length === 0) {
+    throw new Error('No autofill data provided.');
+  }
+
+  const res = await fetch('/api/canva/autofills', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({
+      access_token:       conn.accessToken,
+      brand_template_id:  brandTemplateId,
+      data:               fields,
+    }),
+  });
+
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({})) as Record<string, string>;
+    throw new Error(e.detail ?? `Autofill submission failed (${res.status})`);
+  }
+
+  const result = await res.json() as { job: { id: string } };
+  return { jobId: result.job.id, status: 'pending' };
+}
+
+/** Poll the autofill job status once. */
+export async function pollAutofill(jobId: string): Promise<CanvaJobResult> {
+  const conn = requireConnection();
+
+  const res = await fetch(`/api/canva/autofills/${jobId}?access_token=${encodeURIComponent(conn.accessToken)}`);
+  if (!res.ok) throw new Error(`Autofill poll failed (${res.status})`);
+
+  const data = await res.json() as {
+    job: {
+      id: string;
+      status: string;
+      result?: { design?: { id: string; urls?: { edit_url?: string } } };
+    };
+  };
+  const job = data.job;
+
+  if (job.status === 'success') {
+    return {
+      jobId,
+      status:        'success',
+      designId:      job.result?.design?.id,
+      designEditUrl: job.result?.design?.urls?.edit_url,
+    };
+  }
+  if (job.status === 'failed') return { jobId, status: 'failed' };
+  return { jobId, status: 'pending' };
+}
+
+/**
+ * Submit autofill and poll until complete (or timeout).
+ * Resolves with the finalized CanvaJobResult.
+ */
+export async function waitForAutofill(
+  brandTemplateId: string,
+  autofillData: AutofillData,
+  maxWaitMs = 30_000,
+): Promise<CanvaJobResult> {
+  const { jobId } = await submitAutofill(brandTemplateId, autofillData);
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    const result = await pollAutofill(jobId);
+    if (result.status !== 'pending') return result;
+    await sleep(2000);
+  }
+  return { jobId, status: 'failed' };
+}
+
+/**
+ * Build the Canva editor URL for a given designId.
+ * This URL can be used in an anchor/popup (Canva blocks cross-origin iframes).
+ */
+export function buildEditorUrl(designId: string): string {
+  return `https://www.canva.com/design/${designId}/edit`;
+}
