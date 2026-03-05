@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import fetchWithAuth from '../../services/fetchAuth'
-import { Users, GraduationCap, Mail, Loader2, UserCircle2, ChevronLeft, ChevronRight, Building2, Globe, UserCheck, Heart } from 'lucide-react'
+import { Users, GraduationCap, Mail, Loader2, UserCircle2, ChevronLeft, ChevronRight, Building2, Globe, UserCheck, Heart, Edit2, X } from 'lucide-react'
 
 // Cache key and expiry time (5 minutes)
 const CACHE_KEY = 'students_page_cache'
@@ -62,6 +62,10 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
   const [deptDeptFilter, setDeptDeptFilter] = useState<string>('')
   const [deptBatchFilter, setDeptBatchFilter] = useState<string>('')
   const [deptSectionFilter, setDeptSectionFilter] = useState<string>('')
+  // Edit modal state
+  const [isEditOpen, setIsEditOpen] = useState(false)
+  const [selectedStudent, setSelectedStudent] = useState<Student | null>(null)
+  const [editFormData, setEditFormData] = useState<Student | null>(null)
 
   // Get user permissions from localStorage and user object
   const getPermissions = (): string[] => {
@@ -509,6 +513,51 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
     return pages
   }
 
+  // Edit Modal Handlers
+  const handleEdit = (student: Student) => {
+    setSelectedStudent(student)
+    setEditFormData({ ...student })
+    setIsEditOpen(true)
+  }
+
+  const handleEditChange = (field: keyof Student, value: any) => {
+    if (editFormData) {
+      setEditFormData({
+        ...editFormData,
+        [field]: value
+      })
+    }
+  }
+
+  const handleSaveEdit = () => {
+    if (!editFormData || !selectedStudent) return
+
+    // Update in lazyStudents
+    setLazyStudents(prev => 
+      prev.map(s => s.id === editFormData.id ? editFormData : s)
+    )
+
+    // Update in studentsCache (for my-students and my-mentees modes)
+    if (selectedSection && (viewMode === 'my-students' || viewMode === 'my-mentees')) {
+      setStudentsCache(prev => ({
+        ...prev,
+        [selectedSection]: prev[selectedSection]?.map(s => 
+          s.id === editFormData.id ? editFormData : s
+        ) || []
+      }))
+    }
+
+    setIsEditOpen(false)
+    setSelectedStudent(null)
+    setEditFormData(null)
+  }
+
+  const handleCloseEdit = () => {
+    setIsEditOpen(false)
+    setSelectedStudent(null)
+    setEditFormData(null)
+  }
+
   // If user has no permissions for any view mode, show access denied
   if (availableViews.length === 0) {
     return (
@@ -758,6 +807,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                   <th className="text-left py-3 px-4 text-sm font-semibold text-indigo-900">Department</th>
                   <th className="text-left py-3 px-4 text-sm font-semibold text-indigo-900">Email</th>
                   <th className="text-left py-3 px-4 text-sm font-semibold text-indigo-900">Status</th>
+                  <th className="text-left py-3 px-4 text-sm font-semibold text-indigo-900">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
@@ -812,6 +862,15 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                         {student.status || 'active'}
                       </span>
                     </td>
+                    <td className="py-3 px-4">
+                      <button 
+                        onClick={() => handleEdit(student)}
+                        className="p-2 bg-blue-50 text-blue-700 border border-blue-300 rounded-lg hover:bg-blue-100 transition-colors"
+                        title="Edit Student"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -857,6 +916,109 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Edit Student Modal */}
+      {isEditOpen && editFormData && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            {/* Modal Header */}
+            <div className="sticky top-0 bg-gradient-to-r from-indigo-500 to-purple-600 text-white px-6 py-4 flex items-center justify-between border-b">
+              <div className="flex items-center gap-3">
+                <Edit2 className="w-6 h-6" />
+                <h2 className="text-xl font-bold">Edit Student Details</h2>
+              </div>
+              <button
+                onClick={handleCloseEdit}
+                className="p-1 hover:bg-white hover:bg-opacity-20 rounded-lg transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="p-6 space-y-4">
+              {/* Registration No */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-2">Registration No</label>
+                  <input
+                    type="text"
+                    value={editFormData.reg_no || ''}
+                    onChange={(e) => handleEditChange('reg_no', e.target.value)}
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-slate-900"
+                  />
+                </div>
+
+                {/* Student Name */}
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-2">Student Name</label>
+                  <input
+                    type="text"
+                    value={editFormData.username || ''}
+                    onChange={(e) => handleEditChange('username', e.target.value)}
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-slate-900"
+                  />
+                </div>
+              </div>
+
+              {/* Department */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-2">Department</label>
+                  <input
+                    type="text"
+                    value={editFormData.department_code || ''}
+                    readOnly
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg bg-slate-100 text-slate-700 cursor-not-allowed"
+                  />
+                </div>
+
+                {/* Email */}
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-2">Email</label>
+                  <input
+                    type="email"
+                    value={editFormData.email || ''}
+                    onChange={(e) => handleEditChange('email', e.target.value)}
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-slate-900"
+                  />
+                </div>
+              </div>
+
+              {/* Status */}
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">Status</label>
+                <select
+                  value={editFormData.status || 'active'}
+                  onChange={(e) => handleEditChange('status', e.target.value)}
+                  className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-slate-900 bg-white"
+                >
+                  <option value="active">Active</option>
+                  <option value="resigned">Resigned</option>
+                  <option value="debar">Debar</option>
+                  <option value="inactive">Inactive</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="border-t border-slate-200 bg-slate-50 px-6 py-4 flex items-center justify-end gap-3">
+              <button
+                onClick={handleCloseEdit}
+                className="px-5 py-2.5 bg-slate-200 text-slate-700 hover:bg-slate-300 rounded-lg font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveEdit}
+                className="px-5 py-2.5 bg-gradient-to-r from-indigo-500 to-purple-600 text-white hover:from-indigo-600 hover:to-purple-700 rounded-lg font-medium transition-colors flex items-center gap-2"
+              >
+                <span>Save Changes</span>
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
