@@ -17,6 +17,12 @@ urlpatterns = [
     # Draft/publish APIs (used by React sheets)
     path('draft/<str:assessment>/<str:subject_id>', views.assessment_draft),
 
+    # CQI (draft + publish)
+    path('cqi-draft/<str:subject_id>', views.cqi_draft),
+    path('cqi-save/<str:subject_id>', views.cqi_save),
+    path('cqi-published/<str:subject_id>', views.cqi_published),
+    path('cqi-publish/<str:subject_id>', views.cqi_publish),
+
     path('ssa1-published/<str:subject_id>', views.ssa1_published),
     path('ssa1-publish/<str:subject_id>', views.ssa1_publish),
 

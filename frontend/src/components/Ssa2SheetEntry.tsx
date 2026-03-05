@@ -1596,7 +1596,12 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
           <button onClick={loadRoster} className="obe-btn obe-btn-secondary" disabled={rosterLoading}>
             {rosterLoading ? 'Loading roster…' : 'Load/Refresh Roster'}
           </button>
-          <button onClick={resetAllMarks} className="obe-btn obe-btn-danger" disabled={!sheet.rows.length}>
+          <button
+            onClick={resetAllMarks}
+            className="obe-btn obe-btn-danger"
+            disabled={!sheet.rows.length || tableBlocked}
+            title={tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : undefined}
+          >
             Reset Marks
           </button>
           <button onClick={exportSheetCsv} className="obe-btn obe-btn-secondary" disabled={!sheet.rows.length}>
@@ -1654,12 +1659,23 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
         ) : publishWindowError ? (
           publishWindowError
         ) : publishWindow?.due_at ? (
-          <>
-            Due: {new Date(publishWindow.due_at).toLocaleString()} • Remaining: {formatRemaining(remainingSeconds)}
+          <div
+            style={{
+              display: 'inline-block',
+              border: '1px solid #e5e7eb',
+              borderRadius: 12,
+              padding: '8px 10px',
+              background: '#fff',
+              maxWidth: '100%',
+            }}
+          >
+            <div style={{ fontSize: 10, color: '#6b7280', fontWeight: 900, letterSpacing: 0.4 }}>REMAINING</div>
+            <div style={{ fontSize: 14, fontWeight: 900, color: publishAllowed ? '#065f46' : '#b91c1c' }}>{formatRemaining(remainingSeconds)}</div>
+            <div style={{ marginTop: 2, fontSize: 11, color: '#6b7280' }}>Due: {new Date(publishWindow.due_at).toLocaleString()}</div>
             {publishWindow.allowed_by_approval && publishWindow.approval_until ? (
-              <> • Approved until {new Date(publishWindow.approval_until).toLocaleString()}</>
+              <div style={{ marginTop: 2, fontSize: 11, color: '#6b7280' }}>Approved until {new Date(publishWindow.approval_until).toLocaleString()}</div>
             ) : null}
-          </>
+          </div>
         ) : (
           'Due time not set by IQAC.'
         )}

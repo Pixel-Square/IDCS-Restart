@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { SheetCol, SheetRow } from './MarkAnalysisSheetPage';
 
 type Props = {
@@ -39,203 +39,11 @@ function isPassed(row: SheetRow, cols: SheetCol[]): boolean {
   return true;
 }
 
-/* ─── Podium card ─── */
-interface PodiumProps {
-  rank: 1 | 2 | 3;
-  student: RankedStudent | null;
-  visible: boolean;
-}
-
-interface RankedStudent {
-  regNo: string;
-  name: string;
-  total: number;
-  marks: Record<string, number | null>;
-}
-
-const PODIUM_COLORS: Record<number, { bg: string; glow: string; text: string; accent: string }> = {
-  1: { bg: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 40%, #f59e0b 100%)', glow: 'rgba(251,191,36,0.5)', text: '#78350f', accent: '#d97706' },
-  2: { bg: 'linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 40%, #94a3b8 100%)', glow: 'rgba(148,163,184,0.5)', text: '#1e293b', accent: '#64748b' },
-  3: { bg: 'linear-gradient(135deg, #fef2e8 0%, #fed7aa 40%, #ea580c 100%)', glow: 'rgba(234,88,12,0.4)', text: '#7c2d12', accent: '#c2410c' },
+const MEDAL_ACCENT: Record<number, string> = {
+  1: '#d97706',
+  2: '#64748b',
+  3: '#c2410c',
 };
-
-const CUP_SVG: Record<number, JSX.Element> = {
-  1: (
-    <svg viewBox="0 0 64 80" width="72" height="90" fill="none">
-      <ellipse cx="32" cy="10" rx="24" ry="10" fill="#f59e0b" opacity="0.3" />
-      <path d="M12 4 H52 L46 34 Q44 50 32 54 Q20 50 18 34 Z" fill="url(#g1)" />
-      <path d="M12 4 Q4 4 4 14 Q4 26 18 30" stroke="#f59e0b" strokeWidth="5" fill="none" strokeLinecap="round" />
-      <path d="M52 4 Q60 4 60 14 Q60 26 46 30" stroke="#f59e0b" strokeWidth="5" fill="none" strokeLinecap="round" />
-      <rect x="26" y="54" width="12" height="14" rx="3" fill="#d97706" />
-      <rect x="20" y="66" width="24" height="6" rx="3" fill="#b45309" />
-      <path d="M32 16 L34 22 L41 22 L35 26 L37 33 L32 29 L27 33 L29 26 L23 22 L30 22 Z" fill="#fff" opacity="0.9" />
-      <defs>
-        <linearGradient id="g1" x1="12" y1="4" x2="52" y2="54" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#fde68a" />
-          <stop offset="1" stopColor="#d97706" />
-        </linearGradient>
-      </defs>
-    </svg>
-  ),
-  2: (
-    <svg viewBox="0 0 64 80" width="62" height="78" fill="none">
-      <path d="M12 4 H52 L46 34 Q44 50 32 54 Q20 50 18 34 Z" fill="url(#g2)" />
-      <path d="M12 4 Q4 4 4 14 Q4 26 18 30" stroke="#94a3b8" strokeWidth="5" fill="none" strokeLinecap="round" />
-      <path d="M52 4 Q60 4 60 14 Q60 26 46 30" stroke="#94a3b8" strokeWidth="5" fill="none" strokeLinecap="round" />
-      <rect x="26" y="54" width="12" height="14" rx="3" fill="#64748b" />
-      <rect x="20" y="66" width="24" height="6" rx="3" fill="#475569" />
-      <path d="M32 16 L34 22 L41 22 L35 26 L37 33 L32 29 L27 33 L29 26 L23 22 L30 22 Z" fill="#fff" opacity="0.8" />
-      <defs>
-        <linearGradient id="g2" x1="12" y1="4" x2="52" y2="54" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#e2e8f0" />
-          <stop offset="1" stopColor="#64748b" />
-        </linearGradient>
-      </defs>
-    </svg>
-  ),
-  3: (
-    <svg viewBox="0 0 64 80" width="56" height="70" fill="none">
-      <path d="M12 4 H52 L46 34 Q44 50 32 54 Q20 50 18 34 Z" fill="url(#g3)" />
-      <path d="M12 4 Q4 4 4 14 Q4 26 18 30" stroke="#ea580c" strokeWidth="5" fill="none" strokeLinecap="round" />
-      <path d="M52 4 Q60 4 60 14 Q60 26 46 30" stroke="#ea580c" strokeWidth="5" fill="none" strokeLinecap="round" />
-      <rect x="26" y="54" width="12" height="14" rx="3" fill="#c2410c" />
-      <rect x="20" y="66" width="24" height="6" rx="3" fill="#9a3412" />
-      <path d="M32 16 L34 22 L41 22 L35 26 L37 33 L32 29 L27 33 L29 26 L23 22 L30 22 Z" fill="#fff" opacity="0.8" />
-      <defs>
-        <linearGradient id="g3" x1="12" y1="4" x2="52" y2="54" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#fed7aa" />
-          <stop offset="1" stopColor="#c2410c" />
-        </linearGradient>
-      </defs>
-    </svg>
-  ),
-};
-
-function PodiumCard({ rank, student, visible }: PodiumProps) {
-  const c = PODIUM_COLORS[rank];
-  const animTotal = useCountUp(student?.total ?? 0, 1600, visible && !!student);
-  const heights = { 1: 180, 2: 140, 3: 120 };
-  const elevated = { 1: 0, 2: 40, 3: 60 };
-  const rankLabels = { 1: '1st', 2: '2nd', 3: '3rd' };
-
-  return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        marginTop: elevated[rank],
-        transition: 'transform 0.3s ease',
-        minWidth: 180,
-        maxWidth: 220,
-        flex: 1,
-      }}
-    >
-      {/* Info card */}
-      <div
-        style={{
-          background: 'rgba(255,255,255,0.06)',
-          border: `1.5px solid ${c.glow}`,
-          borderRadius: 16,
-          padding: '18px 20px 14px',
-          textAlign: 'center',
-          width: '100%',
-          backdropFilter: 'blur(8px)',
-          boxShadow: `0 0 24px ${c.glow}`,
-          marginBottom: 10,
-        }}
-      >
-        {/* Rank badge */}
-        <div
-          style={{
-            display: 'inline-block',
-            background: c.bg,
-            color: c.text,
-            fontWeight: 900,
-            fontSize: 13,
-            borderRadius: 20,
-            padding: '3px 14px',
-            marginBottom: 10,
-            letterSpacing: '0.05em',
-          }}
-        >
-          {rankLabels[rank]}
-        </div>
-
-        {/* Cup */}
-        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 8 }}>
-          {CUP_SVG[rank]}
-        </div>
-
-        {student ? (
-          <>
-            <div
-              style={{
-                fontSize: 15,
-                fontWeight: 800,
-                color: '#f1f5f9',
-                lineHeight: 1.3,
-                marginBottom: 4,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                maxWidth: 170,
-              }}
-              title={student.name}
-            >
-              {student.name}
-            </div>
-            <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 10 }}>{student.regNo}</div>
-            <div
-              style={{
-                fontSize: rank === 1 ? 36 : 28,
-                fontWeight: 900,
-                background: c.bg,
-                WebkitBackgroundClip: 'text',
-                WebkitTextFillColor: 'transparent',
-                lineHeight: 1.1,
-              }}
-            >
-              {animTotal}
-            </div>
-            <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>Total / 100</div>
-          </>
-        ) : (
-          <div style={{ fontSize: 13, color: '#64748b', padding: '8px 0' }}>—</div>
-        )}
-      </div>
-
-      {/* Podium base */}
-      <div
-        style={{
-          width: '100%',
-          height: heights[rank],
-          borderRadius: '12px 12px 0 0',
-          background: rank === 1
-            ? 'linear-gradient(180deg, #f59e0b 0%, #b45309 100%)'
-            : rank === 2
-            ? 'linear-gradient(180deg, #94a3b8 0%, #475569 100%)'
-            : 'linear-gradient(180deg, #ea580c 0%, #7c2d12 100%)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          boxShadow: `0 -4px 20px ${c.glow}`,
-        }}
-      >
-        <span
-          style={{
-            fontSize: rank === 1 ? 52 : rank === 2 ? 42 : 36,
-            fontWeight: 900,
-            color: 'rgba(255,255,255,0.2)',
-            userSelect: 'none',
-          }}
-        >
-          {rank}
-        </span>
-      </div>
-    </div>
-  );
-}
 
 /* ─── Animated count number ─── */
 function AnimNum({ value, visible }: { value: number | null; visible: boolean }) {
@@ -269,12 +77,6 @@ export default function RankingPage({ cols, rows, loading }: Props): JSX.Element
   }, [rows, cols]);
 
   const failedCount = rows.length - rankedRows.length;
-  const top3: (RankedStudent | null)[] = [null, null, null];
-  rankedRows.slice(0, 3).forEach((r, i) => {
-    top3[i] = { regNo: r.regNo, name: r.name, total: r.total100 ?? 0, marks: r.marks };
-  });
-
-  const totalAnimated = useCountUp(rankedRows.length, 1200, visible);
 
   if (loading) {
     return (
@@ -372,54 +174,6 @@ export default function RankingPage({ cols, rows, loading }: Props): JSX.Element
         </div>
       </div>
 
-      {/* ── Podium Section ── */}
-      <div
-        style={{
-          background: 'linear-gradient(160deg, #0f172a 0%, #1e293b 50%, #0f172a 100%)',
-          borderRadius: 20,
-          padding: '32px 24px 0',
-          marginBottom: 32,
-          overflow: 'hidden',
-          position: 'relative',
-          animation: 'fadeInUp 0.6s ease 0.1s both',
-        }}
-      >
-        {/* Decorative circles */}
-        <div style={{ position: 'absolute', top: -60, left: -60, width: 200, height: 200, borderRadius: '50%', background: 'rgba(251,191,36,0.04)' }} />
-        <div style={{ position: 'absolute', top: -40, right: -40, width: 160, height: 160, borderRadius: '50%', background: 'rgba(99,102,241,0.05)' }} />
-
-        <div style={{ textAlign: 'center', marginBottom: 24, position: 'relative' }}>
-          <div style={{ fontSize: 22, fontWeight: 900, color: '#f1f5f9', letterSpacing: '0.03em' }}>
-            🏆 Class Toppers
-          </div>
-          <div style={{ fontSize: 13, color: '#64748b', marginTop: 4 }}>
-            Top ranking students this cycle
-          </div>
-        </div>
-
-        {rankedRows.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '32px 0 48px', color: '#64748b', fontSize: 15 }}>
-            No students qualified for ranking this cycle.
-          </div>
-        ) : (
-          /* Podium layout: 2nd | 1st | 3rd */
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'flex-end',
-              justifyContent: 'center',
-              gap: 16,
-              maxWidth: 680,
-              margin: '0 auto',
-            }}
-          >
-            <PodiumCard rank={2} student={top3[1]} visible={visible} />
-            <PodiumCard rank={1} student={top3[0]} visible={visible} />
-            <PodiumCard rank={3} student={top3[2]} visible={visible} />
-          </div>
-        )}
-      </div>
-
       {/* ── Ranking Table ── */}
       {rankedRows.length > 0 && (
         <div
@@ -479,7 +233,7 @@ export default function RankingPage({ cols, rows, loading }: Props): JSX.Element
                             gap: 4,
                             fontWeight: 800,
                             fontSize: 14,
-                            color: isMedal ? PODIUM_COLORS[row.rank as 1 | 2 | 3].accent : '#374151',
+                            color: isMedal ? MEDAL_ACCENT[row.rank as 1 | 2 | 3] : '#374151',
                           }}
                         >
                           {row.rank === 1 ? '🥇' : row.rank === 2 ? '🥈' : row.rank === 3 ? '🥉' : row.rank}

@@ -16,10 +16,17 @@ import { getConnection } from './CanvaAuthService';
 
 export interface AutofillData {
   event_title?: string;
+  event_type?: string;
+  participants?: string;
   venue?: string;
   department?: string;
   date_time?: string;
   coordinators?: string;
+  resource_person?: string;
+  resource_designation?: string;
+  faculty_coordinator_1?: string;
+  faculty_coordinator_2?: string;
+  student_coordinator?: string;
 }
 
 export interface CanvaJobResult {
@@ -42,10 +49,14 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function requireConnection() {
-  const conn = getConnection();
-  if (!conn) throw new Error('Not connected to Canva. Please connect your account first.');
-  return conn;
+/**
+ * Get the current user's personal Canva access token, or an empty string if
+ * they haven't connected.  When the token is empty, the Django backend falls
+ * back to the branding-user service token stored in the DB, so Canva API calls
+ * work for HODs without requiring them to connect their own Canva account.
+ */
+function getAccessToken(): string {
+  return getConnection()?.accessToken ?? '';
 }
 
 /** Convert structured AutofillData into Canva's data-field wire format. */
@@ -71,13 +82,11 @@ function buildAutofillFields(data: AutofillData): Record<string, unknown> {
 export async function createDesignFromTemplate(
   canvaTemplateId: string,
 ): Promise<NewDesignResult> {
-  const conn = requireConnection();
-
   const res = await fetch('/api/canva/designs', {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({
-      access_token: conn.accessToken,
+      access_token: getAccessToken(),   // empty → backend uses service token
       template_id:  canvaTemplateId,
     }),
   });
@@ -103,7 +112,6 @@ export async function submitAutofill(
   brandTemplateId: string,
   autofillData: AutofillData,
 ): Promise<CanvaJobResult> {
-  const conn = requireConnection();
   const fields = buildAutofillFields(autofillData);
 
   if (Object.keys(fields).length === 0) {
@@ -114,7 +122,7 @@ export async function submitAutofill(
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({
-      access_token:       conn.accessToken,
+      access_token:       getAccessToken(),   // empty → backend uses service token
       brand_template_id:  brandTemplateId,
       data:               fields,
     }),
@@ -131,9 +139,8 @@ export async function submitAutofill(
 
 /** Poll the autofill job status once. */
 export async function pollAutofill(jobId: string): Promise<CanvaJobResult> {
-  const conn = requireConnection();
-
-  const res = await fetch(`/api/canva/autofills/${jobId}?access_token=${encodeURIComponent(conn.accessToken)}`);
+  const tok = getAccessToken();
+  const res = await fetch(`/api/canva/autofills/${jobId}?access_token=${encodeURIComponent(tok)}`);
   if (!res.ok) throw new Error(`Autofill poll failed (${res.status})`);
 
   const data = await res.json() as {

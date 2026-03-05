@@ -365,4 +365,36 @@ X_FRAME_OPTIONS = 'SAMEORIGIN'
 #   CANVA_CLIENT_SECRET=<your-client-secret>
 CANVA_CLIENT_ID     = os.getenv('CANVA_CLIENT_ID', '')
 CANVA_CLIENT_SECRET = os.getenv('CANVA_CLIENT_SECRET', '')
+# Full URL that Canva redirects the browser to after authorisation.
+# Must be registered in the Canva Developer Portal under your app's "Redirect URLs".
+# Dev (via Vite proxy):   http://localhost:5173/api/canva/oauth/callback
+# Production (via Nginx): https://idcs.krgi.co.in/api/canva/oauth/callback
+CANVA_REDIRECT_URI  = os.getenv('CANVA_REDIRECT_URI', '')
+
+# Canva OAuth scopes (space-separated). Keep minimal by default; Canva will
+# reject auth requests if scopes are not enabled for the client.
+CANVA_SCOPES = os.getenv(
+    'CANVA_SCOPES',
+    'design:content:read design:content:write',
+)
+
+# ── n8n Branding Poster Automation ────────────────────────────────────────────
+# Webhook URL of the n8n workflow that drives Canva autofill poster generation.
+# Set this to the URL shown in the "Receive Event Webhook" node after activating
+# the workflow in n8n (e.g. https://n8n.example.com/webhook/canva-poster).
+N8N_BRANDING_WEBHOOK_URL = os.getenv('N8N_BRANDING_WEBHOOK_URL', '')
+
+# Shared secret validated by the IDCS poster-callback endpoint and sent back
+# by n8n when it POSTs the generated poster URL.  Must match on both sides.
+N8N_WEBHOOK_SECRET = os.getenv('N8N_WEBHOOK_SECRET', '')
+
+# Public base URL of this Django backend (no trailing slash).
+# Used to build the callback URL embedded in the n8n payload.
+# E.g.: https://idcs.krgi.co.in
+IDCS_BACKEND_URL = os.getenv('IDCS_BACKEND_URL', '')
+
+# Canva Brand Template ID for the event branding poster.
+# Copy this from the Canva URL of the template design:
+#   https://www.canva.com/design/<TEMPLATE_ID>/edit
+CANVA_BRANDING_TEMPLATE_ID = os.getenv('CANVA_BRANDING_TEMPLATE_ID', '')
 

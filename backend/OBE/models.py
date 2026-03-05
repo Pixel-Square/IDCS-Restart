@@ -71,6 +71,72 @@ class ObeCqiConfig(models.Model):
         db_table = 'obe_cqi_config'
 
 
+class ObeCqiDraft(models.Model):
+    """Per-section CQI draft entries saved by faculty.
+
+    Keyed by (subject, teaching_assignment) so multiple sections for the same
+    subject can maintain distinct CQI drafts.
+    """
+
+    subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='obe_cqi_drafts')
+    teaching_assignment = models.ForeignKey(
+        'academics.TeachingAssignment',
+        on_delete=models.CASCADE,
+        related_name='obe_cqi_drafts',
+    )
+
+    # Shape: { [studentId]: { co1?: number|null, co2?: number|null, ... } }
+    entries = models.JSONField(default=dict)
+
+    updated_by = models.IntegerField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'obe_cqi_draft'
+        constraints = [
+            UniqueConstraint(fields=['subject', 'teaching_assignment'], name='unique_obe_cqi_draft_per_ta'),
+        ]
+        indexes = [
+            models.Index(fields=['subject', 'updated_at']),
+            models.Index(fields=['teaching_assignment', 'updated_at']),
+        ]
+
+
+class ObeCqiPublished(models.Model):
+    """Per-section CQI published snapshot.
+
+    Stored separately from draft so Internal Marks can consume a stable
+    published snapshot.
+    """
+
+    subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='obe_cqi_published')
+    teaching_assignment = models.ForeignKey(
+        'academics.TeachingAssignment',
+        on_delete=models.CASCADE,
+        related_name='obe_cqi_published',
+    )
+
+    # e.g., [1,2,3,4,5]
+    co_numbers = models.JSONField(default=list)
+    # Shape: { [studentId]: { co1?: number|null, ... } }
+    entries = models.JSONField(default=dict)
+
+    published_by = models.IntegerField(null=True, blank=True)
+    published_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'obe_cqi_published'
+        constraints = [
+            UniqueConstraint(fields=['subject', 'teaching_assignment'], name='unique_obe_cqi_published_per_ta'),
+        ]
+        indexes = [
+            models.Index(fields=['subject', 'published_at']),
+            models.Index(fields=['teaching_assignment', 'published_at']),
+        ]
+
+
 class InternalMarkMapping(models.Model):
         """IQAC-managed internal mark mapping per Subject.
 

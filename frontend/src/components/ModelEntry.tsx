@@ -1503,9 +1503,20 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
         ) : publishWindowError ? (
           publishWindowError
         ) : publishWindow?.due_at ? (
-          <>
-            Due: {new Date(publishWindow.due_at).toLocaleString()} • Remaining: {formatRemaining(remainingSeconds)}
-          </>
+          <div
+            style={{
+              display: 'inline-block',
+              border: '1px solid #e5e7eb',
+              borderRadius: 12,
+              padding: '8px 10px',
+              background: '#fff',
+              maxWidth: '100%',
+            }}
+          >
+            <div style={{ fontSize: 10, color: '#6b7280', fontWeight: 900, letterSpacing: 0.4 }}>REMAINING</div>
+            <div style={{ fontSize: 14, fontWeight: 900, color: publishAllowed ? '#065f46' : '#b91c1c' }}>{formatRemaining(remainingSeconds)}</div>
+            <div style={{ marginTop: 2, fontSize: 11, color: '#6b7280' }}>Due: {new Date(publishWindow.due_at).toLocaleString()}</div>
+          </div>
         ) : (
           'Due time not set by IQAC.'
         )}

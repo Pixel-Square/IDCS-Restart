@@ -53,15 +53,46 @@ const PosterRenderer = forwardRef<HTMLDivElement, Props>(({ template, data }, re
         case 'date_time':    content = data.dateTime
           ? new Date(data.dateTime).toLocaleString('en-IN', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })
           : 'Date & Time'; break;
-        case 'coordinators': content = data.coordinatorCount
-          ? `Coordinated by ${data.coordinatorCount} coordinator${data.coordinatorCount > 1 ? 's' : ''}`
-          : ''; break;
+        case 'coordinators': {
+          const parts = [data.facultyCoordinator1, data.facultyCoordinator2].filter(Boolean);
+          content = parts.length ? parts.join(' | ') : (data.coordinatorCount ? `${data.coordinatorCount} coordinator(s)` : '');
+          break;
+        }
+        case 'resource_person': content = data.resourcePersons?.[0]?.name ?? ''; break;
+        case 'event_type':      content = data.eventType ?? ''; break;
+        case 'participants':    content = data.participants ?? ''; break;
+        case 'chief_guests':    content = data.chiefGuests?.[0]?.name ?? ''; break;
         default: break;
       }
 
       return (
         <div key={region.id} style={style}>
           <span style={textStyle}>{content}</span>
+        </div>
+      );
+    }
+
+    // image region — resource person photo
+    if (region.placeholderKey === 'resource_person') {
+      const rp = data.resourcePersons?.[0];
+      return (
+        <div key={region.id} style={{ ...style, justifyContent: 'center', alignItems: 'center' }}>
+          {rp?.photoDataUrl ? (
+            <img
+              src={rp.photoDataUrl}
+              alt={rp.name}
+              style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'top' }}
+            />
+          ) : (
+            <div style={{
+              width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: 'rgba(255,255,255,0.15)',
+            }}>
+              <span style={{ color: 'white', fontSize: 28, fontWeight: 'bold' }}>
+                {rp?.name?.charAt(0)?.toUpperCase() ?? '?'}
+              </span>
+            </div>
+          )}
         </div>
       );
     }

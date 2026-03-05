@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
-import { FileSpreadsheet, FileText, ImageIcon, LayoutGrid, Sheet, BarChart2 } from 'lucide-react';
+import { FileSpreadsheet, FileText } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
 import { RANGES, computeRangeCounts } from './BellGraphPage';
 import { SheetCol, SheetRow } from './MarkAnalysisSheetPage';
-import bannerSrc from '../../../assets/banner.png';
+import newBannerSrc from '../../../assets/new_banner.png';
 import krLogoSrc from '../../../assets/krlogo.png';
 import idcsLogoSrc from '../../../assets/idcs-logo.png';
 
@@ -46,6 +46,9 @@ export type DownloadReportModalProps = {
   totals: number[];
   isClassReport?: boolean;
   staffLabel?: string;
+  year?: string;
+  department?: string;
+  semester?: number | string | null;
 };
 
 /* ─────────────────────────────────────────────────────────────── */
@@ -64,6 +67,9 @@ export default function DownloadReportModal({
   totals,
   isClassReport = false,
   staffLabel = 'Staff',
+  year,
+  department,
+  semester,
 }: DownloadReportModalProps): JSX.Element | null {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
@@ -96,6 +102,14 @@ export default function DownloadReportModal({
 
       /* ── Sheet 2: Range Analysis ── */
       const rangeCounts = computeRangeCounts(totals);
+      const xlsxAttended  = totals.length;
+      const xlsxAbsent    = studentCount - xlsxAttended;
+      const xlsxPass      = totals.filter((v) => v >= 50).length;
+      const xlsxFail      = xlsxAttended - xlsxPass;
+      const xlsxPassRate  = xlsxAttended > 0 ? `${Math.round((xlsxPass / xlsxAttended) * 100)}%` : '0%';
+      const xlsxAvg       = xlsxAttended > 0 ? (totals.reduce((a, b) => a + b, 0) / xlsxAttended).toFixed(1) : '—';
+      const xlsxHighest   = xlsxAttended > 0 ? Math.max(...totals) : '—';
+      const xlsxLowest    = xlsxAttended > 0 ? Math.min(...totals) : '—';
       const ws2 = XLSX.utils.aoa_to_sheet([
         [`Range Analysis — ${cycleName}`, '', ''],
         ['Range', 'Count', 'Strength (%)'],
@@ -105,8 +119,15 @@ export default function DownloadReportModal({
           totals.length > 0 ? `${((r.count / totals.length) * 100).toFixed(1)}%` : '0%',
         ]),
         [],
-        ['Total Attended', totals.length, ''],
-        ['Total Absent', studentCount - totals.length, ''],
+        ['CLASS STATISTICS', '', ''],
+        ['Attended',  xlsxAttended,  ''],
+        ['Absent',    xlsxAbsent,    ''],
+        ['Pass',      xlsxPass,      ''],
+        ['Fail',      xlsxFail,      ''],
+        ['Pass Rate', xlsxPassRate,  ''],
+        ['Average',   xlsxAvg,       ''],
+        ['Highest',   xlsxHighest,   ''],
+        ['Lowest',    xlsxLowest,    ''],
       ]);
       ws2['!cols'] = [{ wch: 16 }, { wch: 8 }, { wch: 14 }];
       XLSX.utils.book_append_sheet(wb, ws2, 'Range Analysis');
@@ -136,8 +157,8 @@ export default function DownloadReportModal({
     setStatus('Loading assets…');
     try {
       /* load images */
-      const [b64Banner, b64Kr, b64Idcs] = await Promise.all([
-        toBase64(bannerSrc).catch(() => ''),
+      const [b64NewBanner, b64Kr, b64Idcs] = await Promise.all([
+        toBase64(newBannerSrc).catch(() => ''),
         toBase64(krLogoSrc).catch(() => ''),
         toBase64(idcsLogoSrc).catch(() => ''),
       ]);
@@ -153,26 +174,60 @@ export default function DownloadReportModal({
       let curY = 10;
 
       /* ─────────────────────────────────────────────────────────
-         HELPER: draw a page-level banner that spans full UW
+         HELPER: draw page header — new_banner left, logos right
          ───────────────────────────────────────────────────────── */
+      const HEADER_H = 26; // fixed header row height in mm
+
+      /* ─────────────────────────────────────────────────────────
+         HELPER: draw watermark — krlogo centred, semi-transparent
+         ───────────────────────────────────────────────────────── */
+      const drawWatermark = async () => {
+        if (!b64Kr) return;
+        const { w: kw, h: kh } = await imgSize(b64Kr);
+        const wmSize = 100; // mm
+        const wmW = wmSize;
+        const wmH = (kh / kw) * wmW;
+        const wmX = (PW - wmW) / 2;
+        const wmY = (PH - wmH) / 2;
+        doc.setGState(new (doc as any).GState({ opacity: 0.15 }));
+        doc.addImage(b64Kr, 'PNG', wmX, wmY, wmW, wmH);
+        doc.setGState(new (doc as any).GState({ opacity: 1 }));
+      };
+
       const drawPageBanner = async () => {
-        if (b64Banner) {
-          const { w: bw, h: bh } = await imgSize(b64Banner);
-          // Fill the entire usable width; calculate height proportionally
-          const bannerH = Math.round((bh / bw) * UW);
-          const clampedH = Math.min(45, bannerH); // cap at 35 mm (slightly taller)
-          doc.addImage(b64Banner, 'PNG', ML, curY, UW, clampedH);
-          curY += clampedH + 4;
-        } else {
-          doc.setFillColor(30, 58, 95);
-          doc.rect(ML, curY, UW, 15, 'F');
-          doc.setTextColor(255, 255, 255);
-          doc.setFontSize(13);
-          doc.setFont('helvetica', 'bold');
-          doc.text('K.RAMAKRISHNAN COLLEGE OF TECHNOLOGY', PW / 2, curY + 9.5, { align: 'center' });
-          doc.setTextColor(0, 0, 0);
-          curY += 19;
+        // Left: new_banner.png — generous size
+        if (b64NewBanner) {
+          const { w: bw, h: bh } = await imgSize(b64NewBanner);
+          const bannerAR = bw / bh;
+          const bannerDrawH = HEADER_H;
+          const bannerDrawW = Math.min(UW * 0.90
+            , bannerAR * bannerDrawH);
+          doc.addImage(b64NewBanner, 'PNG', ML, curY, bannerDrawW, bannerDrawH);
         }
+        // Right: logos side-by-side, right-aligned and vertically centred
+        const logoH2 = 18;
+        const logoW2 = 22;
+        const logoGap2 = 4;
+        const logosBlockW = logoW2 * 2 + logoGap2;
+        const logosX = PW - MR - logosBlockW;
+        if (b64Kr) {
+          const { w: kw, h: kh } = await imgSize(b64Kr);
+          const kDrawH = Math.min(logoH2, (kh / kw) * logoW2);
+          const kDrawY = curY + (HEADER_H - kDrawH) / 2;
+          doc.addImage(b64Kr, 'PNG', logosX, kDrawY, logoW2, kDrawH);
+        }
+        if (b64Idcs) {
+          const { w: iw, h: ih } = await imgSize(b64Idcs);
+          const iDrawH = Math.min(logoH2, (ih / iw) * logoW2);
+          const iDrawY = curY + (HEADER_H - iDrawH) / 2;
+          doc.addImage(b64Idcs, 'PNG', logosX + logoW2 + logoGap2, iDrawY, logoW2, iDrawH);
+        }
+        curY += HEADER_H + 2;
+        // Thin accent line below header
+        doc.setDrawColor(30, 58, 95);
+        doc.setLineWidth(0.6);
+        doc.line(ML, curY, PW - MR, curY);
+        curY += 4;
       };
 
       /* ── Page 1 Banner ─── */
@@ -180,153 +235,144 @@ export default function DownloadReportModal({
       await drawPageBanner();
 
       /* ─────────────────────────────────────────────────────────
-         INFO SECTION: 3 × 2 grid (two columns of 3 rows each)
-         + Logos pinned to far right
+         INFO SECTION: professional 2-column bordered grid
          ───────────────────────────────────────────────────────── */
-      const infoY = curY;
-      const logoW  = 28;
-      const logoGap = 4;
-      const logoAreaW = logoW * 2 + logoGap;
-      const infoAreaW = UW - logoAreaW - 6; // space for two label columns
-      const colW = infoAreaW / 2;
+      const colW = UW / 2;
+      const labelOffset = 30; // space reserved for label text
+      const rowH = 7;
 
-      // Left column (3 rows): Course Code | Section | Students
-      // Right column (3 rows): Course Name | Staff | Cycle
-      const leftCol: [string, string][] = [
-        ['Course Code', courseId],
-        ['Section',     sectionName || '—'],
-        ['Students',    String(studentCount)],
-      ];
-      const rightCol: [string, string][] = [
-        ['Course Name', courseName || '—'],
-        [staffLabel,     staffName || '—'],
-        ['Cycle',        cycleName],
-      ];
+      // Build info rows depending on role
+      const semLabel = semester != null ? `Semester ${semester}` : '';
+      // Each entry: [leftLabel, leftValue, rightLabel, rightValue]
+      const infoRows: [string, string, string, string][] = [
+        ...(!isClassReport
+          ? [['Course Code', courseId, 'Course Name', courseName || '—'] as [string, string, string, string]]
+          : []),
+        ['Section', sectionName || '—', staffLabel, staffName || '—'],
+        ['Students', String(studentCount), 'Cycle', cycleName],
+        ...(semLabel || year
+          ? [[semLabel ? 'Semester' : '', semLabel || '', year ? 'Academic Year' : '', year || ''] as [string, string, string, string]]
+          : []),
+        ...(department
+          ? [['Department', department, '', ''] as [string, string, string, string]]
+          : []),
+      ].filter((r): r is [string, string, string, string] => !!(r[0] || r[2])); // remove fully empty rows
 
-      const baseRowH = 6.8;
-      doc.setFontSize(9);
+      const gridH = infoRows.length * rowH;
 
-      // precompute wrapped lines
-      const leftLines = leftCol.map(([,v]) => {
-        const maxW = colW - 28;
-        return doc.splitTextToSize(v, maxW);
-      });
-      const rightLines = rightCol.map(([,v]) => {
-        const maxW = colW - 28;
-        return doc.splitTextToSize(v, maxW);
-      });
+      // Draw light background
+      doc.setFillColor(248, 250, 253);
+      doc.roundedRect(ML, curY, UW, gridH, 1.5, 1.5, 'F');
+      // Draw outer border
+      doc.setDrawColor(200, 210, 225);
+      doc.setLineWidth(0.35);
+      doc.roundedRect(ML, curY, UW, gridH, 1.5, 1.5, 'S');
 
-      let curInfoY = infoY;
-      for (let i = 0; i < leftCol.length; i++) {
-        const nlines = Math.max(leftLines[i].length, rightLines[i].length);
-        const cellH = Math.max(baseRowH, nlines * 5 + 2);
+      // Draw horizontal row separators
+      for (let i = 1; i < infoRows.length; i++) {
+        const ly = curY + i * rowH;
+        doc.setDrawColor(220, 228, 238);
+        doc.setLineWidth(0.2);
+        doc.line(ML + 1, ly, PW - MR - 1, ly);
+      }
+      // Draw vertical centre divider
+      doc.setDrawColor(200, 210, 225);
+      doc.setLineWidth(0.3);
+      doc.line(ML + colW, curY + 1, ML + colW, curY + gridH - 1);
 
-        // left label + values
-        doc.setFont('helvetica', 'bold');
-        doc.setTextColor(30, 58, 95);
-        doc.text(`${leftCol[i][0]}:`, ML, curInfoY + 4);
-        doc.setFont('helvetica', 'normal');
-        doc.setTextColor(55, 65, 81);
-        leftLines[i].forEach((ln, li) => {
-          doc.text(ln, ML + 26, curInfoY + 4 + li * 5);
-        });
+      // Render text per row
+      doc.setFontSize(8.5);
+      for (let i = 0; i < infoRows.length; i++) {
+        const [lLabel, lVal, rLabel, rVal] = infoRows[i];
+        const baselineY = curY + i * rowH + 5;
 
-        // right side
-        doc.setFont('helvetica', 'bold');
-        doc.setTextColor(30, 58, 95);
-        doc.text(`${rightCol[i][0]}:`, ML + colW, curInfoY + 4);
-        doc.setFont('helvetica', 'normal');
-        doc.setTextColor(55, 65, 81);
-        rightLines[i].forEach((ln, li) => {
-          doc.text(ln, ML + colW + 26, curInfoY + 4 + li * 5);
-        });
-
-        curInfoY += cellH;
+        if (lLabel) {
+          doc.setFont('helvetica', 'bold');
+          doc.setTextColor(30, 58, 95);
+          doc.text(`${lLabel}:`, ML + 4, baselineY);
+          doc.setFont('helvetica', 'normal');
+          doc.setTextColor(55, 65, 81);
+          doc.text(lVal, ML + 4 + labelOffset, baselineY);
+        }
+        if (rLabel) {
+          doc.setFont('helvetica', 'bold');
+          doc.setTextColor(30, 58, 95);
+          doc.text(`${rLabel}:`, ML + colW + 4, baselineY);
+          doc.setFont('helvetica', 'normal');
+          doc.setTextColor(55, 65, 81);
+          doc.text(rVal, ML + colW + 4 + labelOffset, baselineY);
+        }
       }
 
-      /* Logos: right-aligned, vertically centred in the info block */
-      const infoBlockH = curInfoY - infoY; // actual used height
-      const logoY = infoY + (infoBlockH - 16) / 2;
-      const logoStartX = PW - MR - logoAreaW;
-
-      if (b64Kr) {
-        const { w: kw, h: kh } = await imgSize(b64Kr);
-        const kScaled = Math.min(16, (kh / kw) * logoW);
-        doc.addImage(b64Kr, 'PNG', logoStartX, logoY, logoW, kScaled);
-      }
-      if (b64Idcs) {
-        const { w: iw, h: ih } = await imgSize(b64Idcs);
-        const iScaled = Math.min(16, (ih / iw) * logoW);
-        doc.addImage(b64Idcs, 'PNG', logoStartX + logoW + logoGap, logoY, logoW, iScaled);
-      }
+      curY += gridH + 5;
 
       /* divider */
-      curY = infoY + infoBlockH + 4;
       doc.setDrawColor(210, 215, 220);
       doc.setLineWidth(0.4);
       doc.line(ML, curY, PW - MR, curY);
       curY += 5;
 
       /* ─────────────────────────────────────────────────────────
-         MARK ANALYSIS TABLE  (left 65%)  +  stats panel (right 32%)
+         MARK ANALYSIS TABLE
+         • Staff view   → two side-by-side half-tables (compact, 1-page)
+         • Class report (Advisor / HOD) → single full-width table, multi-page
          ───────────────────────────────────────────────────────── */
       setStatus('Building mark sheet…');
-
-      const tableW   = isClassReport ? UW : Math.round(UW * 0.63);
-      const panelGap = 5;
-      const panelX   = ML + tableW + panelGap;
-      const panelW   = isClassReport ? 0 : UW - tableW - panelGap;
-
-      // Compute column widths to fill exactly tableW
-      const rollW  = 32;  // roll number column (wider for full reg no)
-      const totalW = 16;
-      const nameW  = Math.max(24, tableW - rollW - totalW - cols.length * 16);
-      const markW  = cols.length > 0 ? Math.floor((tableW - rollW - nameW - totalW) / cols.length) : 18;
 
       const sheetHead = [
         ['Roll No.', 'Name', ...cols.map((c) => `${c.label}\n/ ${c.max}`), 'Total\n/ 100'],
       ];
-      const sheetBody = rows.map((r) => [
-        r.regNo,
-        r.name,
-        ...cols.map((c) => (r.marks[c.key] != null ? String(r.marks[c.key]) : '—')),
-        r.total100 != null ? String(r.total100) : '—',
-      ]);
+
+      const mkBody = (subset: typeof rows) =>
+        subset.map((r) => [
+          r.regNo,
+          r.name,
+          ...cols.map((c) => (r.marks[c.key] != null ? String(r.marks[c.key]) : '—')),
+          r.total100 != null ? String(r.total100) : '—',
+        ]);
 
       const sheetStartY = curY;
-      autoTable(doc, {
-        startY: sheetStartY,
-        head: sheetHead,
-        body: sheetBody,
-        margin: { left: ML, right: isClassReport ? MR : MR + panelW + panelGap },
-        tableWidth: tableW,
-        theme: 'grid',
-        headStyles: {
-          fillColor: [30, 58, 95],
-          textColor: [255, 255, 255],
-          fontStyle: 'bold',
-          fontSize: 8,
-          halign: 'center',
-          cellPadding: 2,
-        },
-        bodyStyles: { fontSize: 7.5, cellPadding: 1.5 },
-        columnStyles: {
-          0: { halign: 'center', cellWidth: rollW },
-          1: { halign: 'left',   cellWidth: nameW },
-          ...Object.fromEntries(cols.map((_, i) => [i + 2, { halign: 'center', cellWidth: markW }])),
-          [cols.length + 2]: {
-            halign: 'center',
-            cellWidth: totalW,
+      let afterSheet = sheetStartY;
+
+      if (isClassReport) {
+        /* ── FULL-WIDTH single table (Advisor / HOD) ── */
+        const fRollW  = 30;
+        const fTotalW = 16;
+        const fMarkW  = cols.length > 0 ? Math.max(10, Math.floor((UW - fRollW - 40 - fTotalW) / cols.length)) : 14;
+        const fNameW  = Math.max(24, UW - fRollW - fTotalW - cols.length * fMarkW);
+
+        const totalColIdx = cols.length + 2;
+        autoTable(doc, {
+          startY: sheetStartY,
+          head: sheetHead,
+          body: mkBody(rows),
+          margin: { left: ML, right: MR },
+          tableWidth: UW,
+          theme: 'grid',
+          headStyles: {
+            fillColor: [30, 58, 95] as [number, number, number],
+            textColor: [255, 255, 255] as [number, number, number],
             fontStyle: 'bold',
-            fillColor: [254, 240, 138],
-            textColor: [31, 41, 55],
+            fontSize: 8,
+            halign: 'center',
+            cellPadding: 2,
           },
-        },
-        alternateRowStyles: { fillColor: [248, 250, 252] },
-        didParseCell: (data) => {
-          if (data.section === 'body') {
-            const totalIdx = cols.length + 2;
-            if (data.column.index === totalIdx) {
+          bodyStyles: { fontSize: 8, cellPadding: 2 },
+          columnStyles: {
+            0: { halign: 'center' as const, cellWidth: fRollW },
+            1: { halign: 'left'   as const, cellWidth: fNameW },
+            ...Object.fromEntries(cols.map((_, i) => [i + 2, { halign: 'center' as const, cellWidth: fMarkW }])),
+            [totalColIdx]: {
+              halign: 'center' as const,
+              cellWidth: fTotalW,
+              fontStyle: 'bold' as const,
+              fillColor: [254, 240, 138] as [number, number, number],
+              textColor: [31, 41, 55]   as [number, number, number],
+            },
+          },
+          alternateRowStyles: { fillColor: [248, 250, 252] as [number, number, number] },
+          didParseCell: (data: any) => {
+            if (data.section === 'body' && data.column.index === totalColIdx) {
               const val = Number(data.cell.raw);
               if (!isNaN(val)) {
                 if      (val >= 75) data.cell.styles.textColor = [5, 150, 105];
@@ -335,13 +381,99 @@ export default function DownloadReportModal({
                 else                data.cell.styles.textColor = [220, 38, 38];
               }
             }
-          }
-        },
-      });
+          },
+        });
+        afterSheet = (doc as any).lastAutoTable?.finalY ?? sheetStartY + 50;
+      } else {
+        /* ── SPLIT two side-by-side half-tables (Staff) ── */
+        const halfGap = 4;
+        const halfW   = (UW - halfGap) / 2;
 
-      const afterSheet = (doc as any).lastAutoTable?.finalY ?? sheetStartY + 50;
+        const midIdx    = Math.ceil(rows.length / 2);
+        const leftRows  = rows.slice(0, midIdx);
+        const rightRows = rows.slice(midIdx);
 
-      /* ── Stats panel: right-side for staff view, below table for class report ── */
+        const hRollW  = 22;
+        const hTotalW = 10;
+        const hMarkW  = cols.length > 0 ? Math.max(8, Math.floor((halfW - hRollW - 20 - hTotalW) / cols.length)) : 10;
+        const hNameW  = Math.max(16, halfW - hRollW - hTotalW - cols.length * hMarkW);
+
+        const halfTableStyles = {
+          theme: 'grid' as const,
+          headStyles: {
+            fillColor: [30, 58, 95] as [number, number, number],
+            textColor: [255, 255, 255] as [number, number, number],
+            fontStyle: 'bold' as const,
+            fontSize: 6.5,
+            halign: 'center' as const,
+            cellPadding: 1.2,
+          },
+          bodyStyles: { fontSize: 6, cellPadding: 1 },
+          columnStyles: {
+            0: { halign: 'center' as const, cellWidth: hRollW },
+            1: { halign: 'left'   as const, cellWidth: hNameW },
+            ...Object.fromEntries(cols.map((_, i) => [i + 2, { halign: 'center' as const, cellWidth: hMarkW }])),
+            [cols.length + 2]: {
+              halign: 'center' as const,
+              cellWidth: hTotalW,
+              fontStyle: 'bold' as const,
+              fillColor: [254, 240, 138] as [number, number, number],
+              textColor: [31, 41, 55]   as [number, number, number],
+            },
+          },
+          alternateRowStyles: { fillColor: [248, 250, 252] as [number, number, number] },
+          didParseCell: (data: any) => {
+            if (data.section === 'body') {
+              const totalIdx = cols.length + 2;
+              if (data.column.index === totalIdx) {
+                const val = Number(data.cell.raw);
+                if (!isNaN(val)) {
+                  if      (val >= 75) data.cell.styles.textColor = [5, 150, 105];
+                  else if (val >= 50) data.cell.styles.textColor = [37, 99, 235];
+                  else if (val >= 40) data.cell.styles.textColor = [217, 119, 6];
+                  else                data.cell.styles.textColor = [220, 38, 38];
+                }
+              }
+            }
+          },
+        };
+
+        // Left table
+        autoTable(doc, {
+          startY: sheetStartY,
+          head: sheetHead,
+          body: mkBody(leftRows),
+          margin: { left: ML, right: PW - ML - halfW },
+          tableWidth: halfW,
+          ...halfTableStyles,
+        });
+        const afterLeft = (doc as any).lastAutoTable?.finalY ?? sheetStartY + 50;
+
+        // Right table
+        if (rightRows.length > 0) {
+          autoTable(doc, {
+            startY: sheetStartY,
+            head: sheetHead,
+            body: mkBody(rightRows),
+            margin: { left: ML + halfW + halfGap, right: MR },
+            tableWidth: halfW,
+            ...halfTableStyles,
+          });
+        }
+        const afterRight = (doc as any).lastAutoTable?.finalY ?? sheetStartY;
+        afterSheet = Math.max(afterLeft, afterRight);
+      }
+
+      /* ═══════════════════════════════════════════════════════════
+         PAGE 2: Class Statistics (left) + Bell Curve (right)
+                 then Ranking Table below — all on ONE page
+         ═══════════════════════════════════════════════════════════ */
+      doc.addPage();
+      curY = 10;
+      setStatus('Building statistics & ranking page…');
+      await drawPageBanner();
+
+      /* ── Shared data ── */
       const _statsValidTotals  = totals.filter((v) => v != null);
       const _statsAttended     = _statsValidTotals.length;
       const _statsAbsent       = studentCount - _statsAttended;
@@ -352,8 +484,18 @@ export default function DownloadReportModal({
       const _statsMin          = _statsAttended > 0 ? Math.min(..._statsValidTotals) : 0;
       const _statsPassRateNum  = _statsAttended > 0 ? Math.round((_statsPassCount / _statsAttended) * 100) : 0;
       const _statsPassRate     = String(_statsPassRateNum);
+      const rangeCounts        = computeRangeCounts(totals);
+      const absent             = studentCount - totals.length;
 
-      const _drawStatsPanel = (startX: number, startY: number, pw2: number) => {
+      /* ── Layout: left = stats panel, right = bell curve ── */
+      const panelGap  = 5;
+      const statsW    = Math.round(UW * 0.38);
+      const bellW     = UW - statsW - panelGap;
+      const bellX     = ML + statsW + panelGap;
+      const topRowY   = curY;
+
+      /* ── Class Statistics panel (left) ── */
+      {
         type RGB = [number, number, number];
         const NAVY:  RGB = [30,  58,  95];
         const GREEN: RGB = [5,   150, 105];
@@ -371,264 +513,266 @@ export default function DownloadReportModal({
           ['Highest',   String(_statsMax),       GREEN],
           ['Lowest',    String(_statsMin),       Number(_statsMin) >= 50 ? GREEN : Number(_statsMin) >= 40 ? AMBER : RED],
         ];
-        const rowH    = 8;
-        const rowGap  = 0.5;
-        const headerH = 10;
-        const panelH  = headerH + statsList.length * (rowH + rowGap) + 3;
+        const sRowH    = 7.5;
+        const sRowGap  = 0.4;
+        const sHeaderH = 9;
+        const panelH   = sHeaderH + statsList.length * (sRowH + sRowGap) + 2;
+
         doc.setFillColor(248, 250, 253);
-        doc.roundedRect(startX, startY, pw2, panelH, 2.5, 2.5, 'F');
+        doc.roundedRect(ML, topRowY, statsW, panelH, 2.5, 2.5, 'F');
         doc.setDrawColor(203, 213, 225);
-        doc.setLineWidth(0.5);
-        doc.roundedRect(startX, startY, pw2, panelH, 2.5, 2.5, 'S');
+        doc.setLineWidth(0.4);
+        doc.roundedRect(ML, topRowY, statsW, panelH, 2.5, 2.5, 'S');
         doc.setFillColor(...NAVY);
-        doc.roundedRect(startX, startY, pw2, headerH, 2.5, 2.5, 'F');
-        doc.rect(startX, startY + headerH - 4, pw2, 4, 'F');
+        doc.roundedRect(ML, topRowY, statsW, sHeaderH, 2.5, 2.5, 'F');
+        doc.rect(ML, topRowY + sHeaderH - 3, statsW, 3, 'F');
         doc.setTextColor(255, 255, 255);
         doc.setFont('helvetica', 'bold');
-        doc.setFontSize(8.5);
-        doc.text('Class Statistics', startX + pw2 / 2, startY + 6.8, { align: 'center' });
+        doc.setFontSize(8);
+        doc.text('Class Statistics', ML + statsW / 2, topRowY + 6, { align: 'center' });
         statsList.forEach(([lbl, val, valColor], i) => {
-          const ry = startY + headerH + i * (rowH + rowGap);
-          if (ry + rowH > PH - 12) return;
-          if (i % 2 === 0) { doc.setFillColor(239, 246, 255); doc.rect(startX + 1, ry, pw2 - 2, rowH, 'F'); }
-          if (lbl === 'Pass Rate') { doc.setFillColor(...valColor); doc.rect(startX + 1, ry, 2, rowH, 'F'); }
-          doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(55, 65, 81);
-          doc.text(lbl, startX + 5, ry + 5.4);
-          doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5); doc.setTextColor(...valColor);
-          doc.text(val, startX + pw2 - 4, ry + 5.4, { align: 'right' });
-          if (i < statsList.length - 1) { doc.setDrawColor(220, 230, 242); doc.setLineWidth(0.2); doc.line(startX + 3, ry + rowH + rowGap / 2, startX + pw2 - 3, ry + rowH + rowGap / 2); }
+          const ry = topRowY + sHeaderH + i * (sRowH + sRowGap);
+          if (i % 2 === 0) { doc.setFillColor(239, 246, 255); doc.rect(ML + 1, ry, statsW - 2, sRowH, 'F'); }
+          if (lbl === 'Pass Rate') { doc.setFillColor(...valColor); doc.rect(ML + 1, ry, 2, sRowH, 'F'); }
+          doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(55, 65, 81);
+          doc.text(lbl, ML + 5, ry + 5);
+          doc.setFont('helvetica', 'bold'); doc.setFontSize(7); doc.setTextColor(...valColor);
+          doc.text(val, ML + statsW - 4, ry + 5, { align: 'right' });
+          if (i < statsList.length - 1) { doc.setDrawColor(220, 230, 242); doc.setLineWidth(0.15); doc.line(ML + 3, ry + sRowH + sRowGap / 2, ML + statsW - 3, ry + sRowH + sRowGap / 2); }
         });
-        return panelH;
-      };
-
-      if (!isClassReport) {
-        /* ── Right-side stats panel (staff view) ── */
-        _drawStatsPanel(panelX, sheetStartY, panelW - 2);
-      } // end if (!isClassReport)
-
-      // Stats panel height (8 rows × (8+0.5) + header 10 + padding 3)
-      const statsCardH = 10 + 8 * (8 + 0.5) + 3; // ≈ 81 mm
-      if (!isClassReport) {
-        curY = Math.max(afterSheet, sheetStartY + statsCardH) + 6;
-      } else {
-        // Class report: place stats panel below the mark table
-        curY = afterSheet + 6;
-        const belowPanelH = _drawStatsPanel(ML, curY, UW);
-        curY += belowPanelH + 6;
+        // Record height for aligning the bell graph
+        curY = topRowY + panelH;
       }
 
-      /* ─────────────────────────────────────────────────────────
-         ANALYSIS SUMMARY — place on this page if enough space
-         remains, otherwise always start fresh on a new page.
-         Never push down: let it sit naturally at curY so autoTable
-         never overflows mid-section onto the next page.
-         ───────────────────────────────────────────────────────── */
-      // 12 data rows + 1 total row, ~6.2 mm each + 7 mm header + section
-      // heading (10 mm) + generous buffer = 120 mm safe envelope
-      const analysisEstH = 120;
-      const pageBottom   = PH - 12; // 285 mm (above footer)
-      if (curY + analysisEstH > pageBottom) {
-        // not enough room — move to next page top
-        doc.addPage();
-        curY = 10;
-        setStatus('Placing banner on analysis page…');
-        await drawPageBanner();
-      }
-      // else: enough space — place at current curY, no forced push-down
-
-      // Section heading
-      doc.setFillColor(30, 58, 95);
-      doc.rect(ML, curY, UW, 7, 'F');
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(9);
-      doc.setTextColor(255, 255, 255);
-      doc.text('Analysis Summary', ML + 4, curY + 4.8);
-      curY += 10;
-
-      /* ── Range Analysis table (left 46%) ── */
-      const rangeW  = Math.round(UW * 0.46);
-      const bellGap = 5;
-      const bellX   = ML + rangeW + bellGap;
-      const bellW   = UW - rangeW - bellGap;
-
-      const rangeCounts = computeRangeCounts(totals);
-      const absent      = studentCount - totals.length;
-      const analysisSY  = curY;
-
-      setStatus('Building range table…');
-      autoTable(doc, {
-        startY: analysisSY,
-        head: [['RANGE', 'COUNT', 'STRENGTH %', 'ATTENDED', 'ABSENT']],
-        body: [
-          ...rangeCounts.map((r) => [
-            r.label,
-            String(r.count),
-            totals.length > 0 ? `${((r.count / totals.length) * 100).toFixed(1)}%` : '0%',
-            String(totals.length),
-            String(absent),
-          ]),
-          ['Total', String(totals.length), '100%', String(totals.length), String(absent)],
-        ],
-        margin: { left: ML, right: bellX + bellW - ML },
-        tableWidth: rangeW,
-        theme: 'grid',
-        headStyles: {
-          fillColor: [16, 185, 129],
-          textColor: [255, 255, 255],
-          fontStyle: 'bold',
-          fontSize: 8,
-          halign: 'center',
-          cellPadding: 2,
-        },
-        bodyStyles: { fontSize: 7.5, cellPadding: 1.8, halign: 'center' },
-        alternateRowStyles: { fillColor: [240, 253, 244] },
-        didParseCell: (data) => {
-          if (data.section === 'body' && data.row.index === rangeCounts.length) {
-            data.cell.styles.fontStyle  = 'bold';
-            data.cell.styles.fillColor  = [220, 252, 231] as any;
-          }
-        },
-      });
-
-      const afterRange = (doc as any).lastAutoTable?.finalY ?? analysisSY + 50;
-
-      /* ── Bell Graph (right side) — drawn with jsPDF primitives ── */
+      /* ── Bell Curve (right) — match stats panel height ── */
       setStatus('Drawing bell graph…');
+
+      // Subject colors palette (used when isClassReport with multiple subjects)
+      const SUBJECT_COLORS: [number, number, number][] = [
+        [37,  99,  235],  // blue
+        [220, 38,  38 ],  // red
+        [5,   150, 105],  // green
+        [217, 119, 6  ],  // amber
+        [124, 58,  237],  // purple
+        [8,   145, 178],  // cyan
+        [190, 24,  93 ],  // pink
+        [194, 65,  12 ],  // orange
+        [6,   95,  70 ],  // dark green
+        [29,  78,  216],  // indigo
+      ];
+
+      // Build per-subject range data when isClassReport
+      type SubjectCurve = { code: string; label: string; subLabel?: string; color: [number, number, number]; rangeCts: { label: string; count: number }[] };
+      const subjectCurves: SubjectCurve[] = [];
+      if (isClassReport && cols.length > 1) {
+        cols.forEach((col, ci) => {
+          const subjectMarks = rows.map((r) => r.marks[col.key]).filter((v): v is number => v != null);
+          const cts = RANGES.map((rng) => ({
+            label: rng.label,
+            count: subjectMarks.filter((v) => v >= rng.min && v <= rng.max).length,
+          }));
+          subjectCurves.push({
+            code: col.key,
+            label: col.key,
+            subLabel: col.label !== col.key ? col.label : undefined,
+            color: SUBJECT_COLORS[ci % SUBJECT_COLORS.length],
+            rangeCts: cts,
+          });
+        });
+      }
+      const useMultiCurve = subjectCurves.length > 1;
+
       {
-        // Layout constants
-        const padL = 14;  // left padding (Y-axis space)
+        const bellH   = curY - topRowY; // match the stats panel height
+        const padL = 14;
         const padR = 4;
-        const padT = 14;  // room for title
-        const padB = 16;  // room for X-axis labels
+        const padT = 14;
+        const padB = 16;
         const chartX  = bellX + padL;
         const chartW  = bellW - padL - padR;
-        const chartTopY = analysisSY + padT;
-        const chartH    = Math.min(55, afterRange - analysisSY - padB - padT);
+        const chartTopY = topRowY + padT;
+        const chartH    = bellH - padT - padB;
         const chartBotY = chartTopY + chartH;
 
-        const maxCount = Math.max(1, ...rangeCounts.map((r) => r.count));
-        const n        = rangeCounts.length;
-        const barW     = (chartW / n) * 0.7;
-        const barGap   = chartW / n;
+        const n      = rangeCounts.length;
+        const barGap = chartW / n;
 
-        // Bar colours keyed by index
-        const barColors: [number, number, number][] = [
-          [220, 38,  38 ],  // 0–9   deep red
-          [239, 68,  68 ],  // 10–19 red
-          [249, 115, 22 ],  // 20–29 orange
-          [234, 179, 8  ],  // 30–39 amber
-          [253, 224, 71 ],  // 40–49 yellow
-          [163, 230, 53 ],  // 50–59 lime
-          [52,  211, 153],  // 60–69 teal-green
-          [16,  185, 129],  // 70–79 green
-          [5,   150, 105],  // 80–89 dark green
-          [4,   120, 87 ],  // 90–100 deepest green
-        ];
+        // Global max count for Y-axis scale
+        let globalMax = Math.max(1, ...rangeCounts.map((r) => r.count));
+        if (useMultiCurve) {
+          for (const sc of subjectCurves)
+            globalMax = Math.max(globalMax, ...sc.rangeCts.map((r) => r.count));
+        }
 
         // Panel background
         doc.setFillColor(248, 250, 252);
-        doc.roundedRect(bellX, analysisSY, bellW, afterRange - analysisSY, 2, 2, 'F');
+        doc.roundedRect(bellX, topRowY, bellW, bellH, 2, 2, 'F');
         doc.setDrawColor(220, 230, 240);
         doc.setLineWidth(0.3);
-        doc.roundedRect(bellX, analysisSY, bellW, afterRange - analysisSY, 2, 2, 'S');
+        doc.roundedRect(bellX, topRowY, bellW, bellH, 2, 2, 'S');
 
         // Title
         doc.setFont('helvetica', 'bold');
-        doc.setFontSize(8.5);
+        doc.setFontSize(8);
         doc.setTextColor(30, 58, 95);
-        doc.text('Bell Curve Distribution', bellX + bellW / 2, analysisSY + 8, { align: 'center' });
+        doc.text('Bell Curve Distribution', bellX + bellW / 2, topRowY + 8, { align: 'center' });
 
         // Axes
         doc.setDrawColor(180, 190, 200);
         doc.setLineWidth(0.5);
-        doc.line(chartX, chartTopY, chartX, chartBotY);             // Y-axis
-        doc.line(chartX, chartBotY, chartX + chartW, chartBotY);    // X-axis
+        doc.line(chartX, chartTopY, chartX, chartBotY);
+        doc.line(chartX, chartBotY, chartX + chartW, chartBotY);
 
-        // Horizontal grid lines (4 lines)
+        // Horizontal grid lines
         doc.setDrawColor(220, 230, 240);
         doc.setLineWidth(0.2);
         for (let g = 1; g <= 4; g++) {
           const gy = chartBotY - (chartH * g) / 4;
           doc.line(chartX, gy, chartX + chartW, gy);
           doc.setFont('helvetica', 'normal');
-          doc.setFontSize(5.5);
+          doc.setFontSize(5);
           doc.setTextColor(140, 150, 165);
-          doc.text(String(Math.round((maxCount * g) / 4)), chartX - 2, gy + 1, { align: 'right' });
+          doc.text(String(Math.round((globalMax * g) / 4)), chartX - 2, gy + 1, { align: 'right' });
         }
 
-        // Draw bars
+        // X-axis labels (vertical, stacked: high\nto\nlow)
         rangeCounts.forEach((r, i) => {
-          const bx    = chartX + i * barGap + (barGap - barW) / 2;
-          const bh    = chartH > 0 ? (r.count / maxCount) * chartH : 0;
-          const by    = chartBotY - bh;
-          const color = barColors[Math.min(i, barColors.length - 1)];
+          const bx = chartX + i * barGap + barGap / 2;
+          const parts = r.label.replace('–', '-').split('-').map(s => s.trim());
+          const lines = parts.length === 2 ? [parts[1], 'to', parts[0]] : [r.label];
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(4.5);
+          doc.setTextColor(75, 85, 99);
+          lines.forEach((ln, li) => {
+            doc.text(ln, bx, chartBotY + 3 + li * 3.2, { align: 'center' });
+          });
+        });
 
+        // Helper: draw a single bell curve
+        const drawCurve = (cts: { label: string; count: number }[], color: [number, number, number], lineW: number, fillAlpha: boolean) => {
+          const pts = cts.map((r, i) => ({
+            x: chartX + i * barGap + barGap / 2,
+            y: chartBotY - (chartH > 0 ? (r.count / globalMax) * chartH : 0),
+          }));
+          if (pts.length < 2) return;
+          const tension = 0.45;
+          const tan = pts.map((p, i) => {
+            const prev = pts[Math.max(0, i - 1)];
+            const next = pts[Math.min(pts.length - 1, i + 1)];
+            return { x: (next.x - prev.x) * tension, y: (next.y - prev.y) * tension };
+          });
+          const bezSegs: number[][] = [];
+          for (let i = 0; i < pts.length - 1; i++) {
+            const cp1x = pts[i].x + tan[i].x / 3;
+            const cp1y = pts[i].y + tan[i].y / 3;
+            const cp2x = pts[i + 1].x - tan[i + 1].x / 3;
+            const cp2y = pts[i + 1].y - tan[i + 1].y / 3;
+            bezSegs.push([
+              cp1x - pts[i].x, cp1y - pts[i].y,
+              cp2x - pts[i].x, cp2y - pts[i].y,
+              pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y,
+            ]);
+          }
+          // Filled area (only for single curve)
+          if (fillAlpha) {
+            const areaSegs: number[][] = [...bezSegs];
+            areaSegs.push([0, chartBotY - pts[pts.length - 1].y]);
+            areaSegs.push([pts[0].x - pts[pts.length - 1].x, 0]);
+            doc.setFillColor(color[0], color[1], color[2]);
+            doc.setGState(new (doc as any).GState({ opacity: 0.12 }));
+            doc.setDrawColor(color[0], color[1], color[2]);
+            doc.setLineWidth(0);
+            doc.lines(areaSegs, pts[0].x, pts[0].y, [1, 1], 'F', true);
+            doc.setGState(new (doc as any).GState({ opacity: 1 }));
+          }
+          // Curve line
+          doc.setDrawColor(...color);
+          doc.setLineWidth(lineW);
+          doc.lines(bezSegs, pts[0].x, pts[0].y, [1, 1], 'S');
+          // Dots
           doc.setFillColor(...color);
           doc.setDrawColor(...color);
-          if (bh > 0) doc.rect(bx, by, barW, bh, 'F');
+          pts.forEach((p) => { doc.circle(p.x, p.y, 0.6, 'F'); });
+        };
 
-          // Count label on top of bar
-          if (r.count > 0) {
-            doc.setFont('helvetica', 'bold');
-            doc.setFontSize(6);
-            doc.setTextColor(...color);
-            doc.text(String(r.count), bx + barW / 2, by - 1, { align: 'center' });
-          }
+        if (useMultiCurve) {
+          // Draw each subject curve
+          subjectCurves.forEach((sc) => {
+            drawCurve(sc.rangeCts, sc.color, 0.8, false);
+          });
+        } else {
+          // Single overall curve (staff view)
+          drawCurve(rangeCounts, [37, 99, 235], 1, true);
 
-          // X-axis label (range bucket)
-          doc.setFont('helvetica', 'normal');
-          doc.setFontSize(5.5);
-          doc.setTextColor(75, 85, 99);
-          const labelText = r.label.length > 6 ? r.label.replace('–', '-') : r.label;
-          doc.text(labelText, bx + barW / 2, chartBotY + 4.5, { align: 'center' });
-        });
-
-        // Connect dots with a smooth overlay line (bell curve effect)
-        doc.setDrawColor(37, 99, 235);
-        doc.setLineWidth(0.8);
-        const pts = rangeCounts.map((r, i) => ({
-          x: chartX + i * barGap + barGap / 2,
-          y: chartBotY - (chartH > 0 ? (r.count / maxCount) * chartH : 0),
-        }));
-        for (let i = 0; i < pts.length - 1; i++) {
-          const cp = { x: (pts[i].x + pts[i + 1].x) / 2, y: (pts[i].y + pts[i + 1].y) / 2 };
-          doc.lines([[pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y]], pts[i].x, pts[i].y);
+          // Data point count labels
+          const pts = rangeCounts.map((r, i) => ({
+            x: chartX + i * barGap + barGap / 2,
+            y: chartBotY - (chartH > 0 ? (r.count / globalMax) * chartH : 0),
+          }));
+          pts.forEach((p, i) => {
+            if (rangeCounts[i].count > 0) {
+              doc.setFont('helvetica', 'bold');
+              doc.setFontSize(5.5);
+              doc.setTextColor(37, 99, 235);
+              doc.text(String(rangeCounts[i].count), p.x, p.y - 2, { align: 'center' });
+            }
+          });
         }
-        // Dots at data points
-        doc.setFillColor(37, 99, 235);
-        pts.forEach((p) => {
-          doc.circle(p.x, p.y, 0.8, 'F');
-        });
 
         // Y-axis label
         doc.setFont('helvetica', 'normal');
-        doc.setFontSize(5.5);
+        doc.setFontSize(5);
         doc.setTextColor(100, 116, 139);
         doc.text('#', chartX - 2, chartTopY - 1, { align: 'right' });
 
-        // Subtitle: totals attended
+        // Subtitle
         doc.setFont('helvetica', 'normal');
-        doc.setFontSize(6.5);
+        doc.setFontSize(6);
         doc.setTextColor(107, 114, 128);
         doc.text(
-          `${totals.length} attended · ${absent} absent · Class Avg: ${totals.length > 0 ? (totals.reduce((a, b) => a + b, 0) / totals.length).toFixed(1) : '—'} / 100`,
+          `${totals.length} attended · ${absent} absent · Avg: ${_statsAvg} / 100`,
           bellX + bellW / 2,
-          afterRange - 3,
+          topRowY + bellH - 3,
           { align: 'center' },
         );
       }
 
-      curY = afterRange + 6;
+      /* ── Subject Legend (below graph, for multi-subject class report) ── */
+      if (subjectCurves.length > 1) {
+        curY += 2;
+        const legendCols = Math.min(subjectCurves.length, 4);
+        const legendColW = UW / legendCols;
+        const legendRows = Math.ceil(subjectCurves.length / legendCols);
+        // Draw a light background box for the legend
+        const legendH = legendRows * 5 + 3;
+        doc.setFillColor(248, 250, 252);
+        doc.roundedRect(ML, curY, UW, legendH, 1.5, 1.5, 'F');
+        doc.setDrawColor(220, 230, 240);
+        doc.setLineWidth(0.25);
+        doc.roundedRect(ML, curY, UW, legendH, 1.5, 1.5, 'S');
+        subjectCurves.forEach((sc, si) => {
+          const col = si % legendCols;
+          const row = Math.floor(si / legendCols);
+          const lx = ML + 4 + col * legendColW;
+          const ly = curY + 2.5 + row * 5;
+          // Color swatch
+          doc.setFillColor(...sc.color);
+          doc.roundedRect(lx, ly, 4, 2, 0.5, 0.5, 'F');
+          // Subject code label
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(5);
+          doc.setTextColor(...sc.color);
+          const drawLabel = sc.subLabel ? `${sc.label} (${sc.subLabel})` : sc.label;
+          doc.text(drawLabel, lx + 5.5, ly + 1.6);
+        });
+        curY += legendH;
+      }
 
-      /* ═══════════════════════════════════════════════════════════
-         RANKING PAGE — always on a fresh page
-         ═══════════════════════════════════════════════════════════ */
-      doc.addPage();
-      curY = 10;
-      setStatus('Building ranking page…');
-      await drawPageBanner();
+      curY += 6;
 
-      /* ── Build ranked data ── */
+      /* ── Ranking Table (below stats & bell, same page) ── */
+      setStatus('Building ranking table…');
+
       const PASS_PCT = 0.5;
       const isPassed = (row: SheetRow): boolean => {
         for (const col of cols) {
@@ -648,193 +792,21 @@ export default function DownloadReportModal({
           return { ...r, rank };
         });
       })();
-      const failedCount = rows.length - rankedRows.length;
 
-      /* ── Section heading ── */
-      doc.setFillColor(30, 58, 95);
-      doc.rect(ML, curY, UW, 7, 'F');
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(9);
-      doc.setTextColor(255, 255, 255);
-      doc.text('Class Toppers', PW / 2, curY + 4.8, { align: 'center' });
-      curY += 10;
-
-      /* ── Stats pills — corporate style ── */
-      type RGB3 = [number, number, number];
-      const summaryPills: { label: string; val: string; accent: RGB3; lightBg: RGB3 }[] = [
-        { label: cycleName,           val: cols.map(c => c.label).join(' + '), accent: [30, 58, 95],  lightBg: [236, 241, 250] },
-        { label: 'Total Students',    val: String(studentCount),               accent: [71, 85, 105], lightBg: [241, 244, 248] },
-        { label: 'Ranked Students',   val: String(rankedRows.length),          accent: [5, 150, 105], lightBg: [236, 253, 245] },
-        { label: 'Not Ranked (Fail)', val: String(failedCount),                accent: [220, 38, 38], lightBg: [254, 242, 242] },
-      ];
-      const pillW2 = 44;
-      const pillH2 = 17;
-      const pillGap2 = 4;
-      const pillsTotalW = summaryPills.length * pillW2 + (summaryPills.length - 1) * pillGap2;
-      let pillX2 = PW / 2 - pillsTotalW / 2;
-      summaryPills.forEach(({ label, val, accent, lightBg }) => {
-        // Card background
-        doc.setFillColor(...lightBg);
-        doc.roundedRect(pillX2, curY, pillW2, pillH2, 2.5, 2.5, 'F');
-        // Colored left accent bar (3 mm wide)
-        doc.setFillColor(...accent);
-        doc.roundedRect(pillX2, curY, 3, pillH2, 1.5, 1.5, 'F');
-        doc.rect(pillX2 + 1.5, curY, 1.5, pillH2, 'F'); // ensure flat right edge
-        // Thin border
-        doc.setDrawColor(...accent);
-        doc.setLineWidth(0.3);
-        doc.roundedRect(pillX2, curY, pillW2, pillH2, 2.5, 2.5, 'S');
-        // Label
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(5.5);
-        doc.setTextColor(100, 116, 139);
-        doc.text(label, pillX2 + pillW2 / 2 + 1, curY + 5.5, { align: 'center' });
-        // Value
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(10);
-        doc.setTextColor(...accent);
-        doc.text(val, pillX2 + pillW2 / 2 + 1, curY + 13.5, { align: 'center' });
-        pillX2 += pillW2 + pillGap2;
-      });
-      curY += pillH2 + 7;
-
-      /* ══════════════════════════════════════════════════════════
-         CORPORATE LEADERBOARD — Top 3 cards + ranked rows 4+
-         No trophies. Flat, data-forward design.
-         ══════════════════════════════════════════════════════════ */
-      const LB: Record<number, { base: RGB3; dark: RGB3; ring: RGB3 }> = {
-        1: { base: [192, 148,  40], dark: [140, 100,  15], ring: [254, 243, 199] },
-        2: { base: [ 94, 115, 143], dark: [ 65,  85, 110], ring: [226, 232, 240] },
-        3: { base: [153,  88,  48], dark: [115,  60,  25], ring: [254, 237, 218] },
-      };
-
-      // Helper: draw a filled circle for rank badge
-      const drawRankCircle = (cx: number, cy: number, r: number, fill: RGB3, ring: RGB3) => {
-        doc.setFillColor(...ring);
-        doc.circle(cx, cy, r + 1.2, 'F');  // outer ring
-        doc.setFillColor(...fill);
-        doc.circle(cx, cy, r, 'F');
-      };
-
-
-      // ── TOP 3 CARDS ──────────────────────────────────────────
-      const top3CardH = 56;
-      const top3SlotW = UW / 3;
-      const cardPad   = 5;
-
-      // Panel background
-      doc.setFillColor(245, 248, 252);
-      doc.roundedRect(ML, curY, UW, top3CardH + cardPad * 2, 3, 3, 'F');
-      doc.setDrawColor(210, 220, 232);
-      doc.setLineWidth(0.35);
-      doc.roundedRect(ML, curY, UW, top3CardH + cardPad * 2, 3, 3, 'S');
-
-      // Vertical dividers between slots
-      doc.setDrawColor(218, 228, 240);
-      doc.setLineWidth(0.25);
-      doc.line(ML + top3SlotW,     curY + 6, ML + top3SlotW,     curY + top3CardH + cardPad * 2 - 6);
-      doc.line(ML + top3SlotW * 2, curY + 6, ML + top3SlotW * 2, curY + top3CardH + cardPad * 2 - 6);
-
-      // Order: 2nd left, 1st center, 3rd right
-      const top3slots: { rank: 1 | 2 | 3; slotX: number }[] = [
-        { rank: 2, slotX: ML },
-        { rank: 1, slotX: ML + top3SlotW },
-        { rank: 3, slotX: ML + top3SlotW * 2 },
-      ];
-
-      top3slots.forEach(({ rank, slotX }) => {
-        const student = rankedRows.find((r) => r.rank === rank) ?? null;
-        const c       = LB[rank];
-        const cx3     = slotX + top3SlotW / 2;
-        const topY    = curY + cardPad;
-        const cw      = top3SlotW - 12;
-
-        // Rank circle (large, centered)
-        const circR  = rank === 1 ? 7.5 : 6.5;
-        const circCY = topY + circR + 1;
-        drawRankCircle(cx3, circCY, circR, c.base, c.ring);
-
-        if (student) {
-          // Initials inside avatar circle
-          const initials = student.name.trim().split(/\s+/).map((w: string) => w[0] ?? '').slice(0, 2).join('').toUpperCase();
-          doc.setFont('helvetica', 'bold');
-          doc.setFontSize(rank === 1 ? 8 : 7);
-          doc.setTextColor(255, 255, 255);
-          doc.text(initials, cx3, circCY + (rank === 1 ? 2.8 : 2.4), { align: 'center' });
-
-          // Small rank badge bottom-right of avatar
-          const bdR  = 2.6;
-          const bdX  = cx3 + circR * 0.62;
-          const bdY  = circCY + circR * 0.62;
-          doc.setFillColor(255, 255, 255);
-          doc.circle(bdX, bdY, bdR + 0.7, 'F');
-          doc.setFillColor(...c.dark);
-          doc.circle(bdX, bdY, bdR, 'F');
-          doc.setFont('helvetica', 'bold');
-          doc.setFontSize(5);
-          doc.setTextColor(255, 255, 255);
-          doc.text(String(rank), bdX, bdY + 1.7, { align: 'center' });
-
-          // Name
-          const nameLines3 = doc.splitTextToSize(student.name, cw);
-          doc.setFont('helvetica', 'bold');
-          doc.setFontSize(rank === 1 ? 8 : 7.5);
-          doc.setTextColor(22, 36, 58);
-          const nameBaseY = topY + circR * 2 + 7;
-          nameLines3.slice(0, 2).forEach((ln: string, li: number) => {
-            doc.text(ln, cx3, nameBaseY + li * 5, { align: 'center' });
-          });
-          const nlCount3 = Math.min(nameLines3.length, 2);
-
-          // Reg No
-          doc.setFont('helvetica', 'normal');
-          doc.setFontSize(5.5);
-          doc.setTextColor(130, 148, 168);
-          doc.text(student.regNo, cx3, nameBaseY + nlCount3 * 5 + 1, { align: 'center' });
-
-          // Score (large) + label
-          const scoreY = topY + top3CardH - 13;
-          doc.setFont('helvetica', 'bold');
-          doc.setFontSize(rank === 1 ? 18 : 14);
-          doc.setTextColor(...c.base);
-          doc.text(String(student.total100 ?? '—'), cx3, scoreY, { align: 'center' });
-          doc.setFont('helvetica', 'normal');
-          doc.setFontSize(5.5);
-          doc.setTextColor(165, 178, 195);
-          doc.text('/ 100', cx3, scoreY + 5, { align: 'center' });
-
-        } else {
-          doc.setFont('helvetica', 'normal');
-          doc.setFontSize(9);
-          doc.setTextColor(195, 208, 220);
-          doc.text('—', cx3, topY + top3CardH / 2, { align: 'center' });
-        }
-      });
-
-      curY += top3CardH + cardPad * 2 + 5;
-
-      /* ── Ranking table ── */
-      // new page if not enough room
-      if (curY + 60 > PH - 12) {
-        doc.addPage();
-        curY = 10;
-        setStatus('Placing banner on ranking table page…');
-        await drawPageBanner();
-      }
-
-      // Sub-heading
+      // Section heading
       doc.setFillColor(5, 150, 105);
-      doc.rect(ML, curY, UW, 7, 'F');
+      doc.rect(ML, curY, UW, 6, 'F');
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(9);
+      doc.setFontSize(8);
       doc.setTextColor(255, 255, 255);
-      doc.text('Ranking Table', ML + 4, curY + 4.8);
-      curY += 10;
+      doc.text('Ranking Table', ML + 4, curY + 4.2);
+      curY += 8;
 
       const rankTableHead = [
         ['Rank', 'Roll No.', 'Name', ...cols.map((c) => `${c.label}\n/ ${c.max}`), 'Total\n/ 100'],
       ];
-      const rankTableBody = rankedRows.map((r) => [
+      const top3Rows = rankedRows.filter((r) => r.rank <= 3);
+      const rankTableBody = top3Rows.map((r) => [
         String(r.rank),
         r.regNo,
         r.name,
@@ -842,13 +814,12 @@ export default function DownloadReportModal({
         r.total100 != null ? String(r.total100) : '—',
       ]);
 
-      const rankRollW  = 32;
-      const rankTotalW = 16;
+      const rankRollW  = 28;
+      const rankTotalW = 14;
       const rankRankW  = 10;
-      const rankNameW  = Math.max(24, UW - rankRankW - rankRollW - rankTotalW - cols.length * 16 - 2);
-      const rankMarkW  = cols.length > 0 ? Math.floor((UW - rankRankW - rankRollW - rankNameW - rankTotalW) / cols.length) : 16;
+      const rankMarkW  = cols.length > 0 ? Math.max(8, Math.floor((UW - rankRankW - rankRollW - 30 - rankTotalW) / cols.length)) : 14;
+      const rankNameW  = Math.max(20, UW - rankRankW - rankRollW - rankTotalW - cols.length * rankMarkW);
 
-      setStatus('Building ranking table…');
       autoTable(doc, {
         startY: curY,
         head: rankTableHead,
@@ -857,29 +828,29 @@ export default function DownloadReportModal({
         tableWidth: UW,
         theme: 'grid',
         headStyles: {
-          fillColor: [5, 150, 105],
-          textColor: [255, 255, 255],
+          fillColor: [5, 150, 105] as [number, number, number],
+          textColor: [255, 255, 255] as [number, number, number],
           fontStyle: 'bold',
-          fontSize: 8,
+          fontSize: 7,
           halign: 'center',
-          cellPadding: 2,
+          cellPadding: 1.5,
         },
-        bodyStyles: { fontSize: 7.5, cellPadding: 1.5 },
+        bodyStyles: { fontSize: 6.5, cellPadding: 1.2 },
         columnStyles: {
           0: { halign: 'center', cellWidth: rankRankW,  fontStyle: 'bold' },
           1: { halign: 'center', cellWidth: rankRollW },
           2: { halign: 'left',   cellWidth: rankNameW },
-          ...Object.fromEntries(cols.map((_, i) => [i + 3, { halign: 'center', cellWidth: rankMarkW }])),
+          ...Object.fromEntries(cols.map((_, i) => [i + 3, { halign: 'center' as const, cellWidth: rankMarkW }])),
           [cols.length + 3]: {
-            halign: 'center',
+            halign: 'center' as const,
             cellWidth: rankTotalW,
-            fontStyle: 'bold',
-            fillColor: [209, 250, 229],
-            textColor: [5, 150, 105],
+            fontStyle: 'bold' as const,
+            fillColor: [209, 250, 229] as [number, number, number],
+            textColor: [5, 150, 105] as [number, number, number],
           },
         },
-        alternateRowStyles: { fillColor: [240, 253, 244] },
-        didParseCell: (data) => {
+        alternateRowStyles: { fillColor: [240, 253, 244] as [number, number, number] },
+        didParseCell: (data: any) => {
           if (data.section === 'body' && data.column.index === 0) {
             const v = Number(data.cell.raw);
             if (v === 1) data.cell.styles.textColor = [217, 119, 6];
@@ -904,18 +875,22 @@ export default function DownloadReportModal({
       curY = (doc as any).lastAutoTable?.finalY ?? curY + 40;
       curY += 6;
 
-      /* ── Footer on each page ── */
+      /* ── Footer and Watermark on each page ── */
       const pageCount = (doc as any).internal.getNumberOfPages();
       for (let p = 1; p <= pageCount; p++) {
         doc.setPage(p);
+        // Draw watermark on top of all content
+        await drawWatermark();
+        // Draw footer
         doc.setDrawColor(200, 205, 210);
         doc.setLineWidth(0.3);
         doc.line(ML, PH - 9, PW - MR, PH - 9);
         doc.setFontSize(6.5);
         doc.setFont('helvetica', 'normal');
         doc.setTextColor(156, 163, 175);
+        const semStr = semester != null ? `  ·  Semester ${semester}` : '';
         doc.text(
-          `Generated: ${new Date().toLocaleString()}  |  ${courseId} · ${sectionName} · ${cycleName}  |  Page ${p} / ${pageCount}`,
+          `Generated: ${new Date().toLocaleString()}  |  ${courseId} · ${sectionName}${semStr} · ${cycleName}  |  Page ${p} / ${pageCount}`,
           PW / 2,
           PH - 5,
           { align: 'center' },

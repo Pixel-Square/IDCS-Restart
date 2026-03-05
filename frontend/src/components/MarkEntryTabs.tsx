@@ -630,16 +630,19 @@ export default function MarkEntryTabs({
   }, [visibleTabs, active]);
 
   const [publishStatusByAssessment, setPublishStatusByAssessment] = useState<Record<string, MarkTableLockStatusResponse | null>>({});
+  const [publishWindowByAssessment, setPublishWindowByAssessment] = useState<Record<string, OBE.PublishWindowResponse | null>>({});
 
   useEffect(() => {
     let mounted = true;
     (async () => {
       if (!subjectId) {
         setPublishStatusByAssessment({});
+        setPublishWindowByAssessment({});
         return;
       }
       if (selectedTaId == null) {
         setPublishStatusByAssessment({});
+        setPublishWindowByAssessment({});
         return;
       }
 
@@ -653,21 +656,35 @@ export default function MarkEntryTabs({
 
       const results = await Promise.all(
         keys.map(async (k) => {
-          try {
-            const s = await fetchMarkTableLockStatus(k, String(subjectId), Number(selectedTaId));
-            return [k, s] as const;
-          } catch {
-            return [k, null] as const;
-          }
+          const [lock, win] = await Promise.all([
+            (async () => {
+              try {
+                return await fetchMarkTableLockStatus(k, String(subjectId), Number(selectedTaId));
+              } catch {
+                return null;
+              }
+            })(),
+            (async () => {
+              try {
+                return await fetchPublishWindow(k, String(subjectId), Number(selectedTaId));
+              } catch {
+                return null;
+              }
+            })(),
+          ]);
+          return [k, { lock, win }] as const;
         }),
       );
 
       if (!mounted) return;
       const map: Record<string, MarkTableLockStatusResponse | null> = {};
+      const winMap: Record<string, OBE.PublishWindowResponse | null> = {};
       results.forEach(([k, v]) => {
-        map[String(k)] = v;
+        map[String(k)] = v?.lock ?? null;
+        winMap[String(k)] = v?.win ?? null;
       });
       setPublishStatusByAssessment(map);
+      setPublishWindowByAssessment(winMap);
     })();
     return () => {
       mounted = false;
@@ -692,7 +709,13 @@ export default function MarkEntryTabs({
       .map((t) => {
         const dueKey = tabToAssessmentKey(t.key);
         const lock = dueKey ? publishStatusByAssessment[String(dueKey)] : null;
-        const published = Boolean(lock?.is_published);
+        const win = dueKey ? publishWindowByAssessment[String(dueKey)] : null;
+        const windowState = String((win as any)?.window_state || '').trim().toUpperCase();
+        const endedBySchedule = windowState === 'ENDED';
+
+        // Some assessments can be effectively locked/closed by schedule even if the
+        // staff never opened the tab (so no lock row exists yet).
+        const published = Boolean(lock?.is_published || lock?.published_blocked || endedBySchedule);
 
         let entered = 0;
         let denom = rosterTotal || 0;
@@ -726,7 +749,7 @@ export default function MarkEntryTabs({
 
         return { key: t.key, label: t.label, status, progress };
       });
-  }, [subjectId, selectedTaId, visibleTabs, publishStatusByAssessment, rosterTotal]);
+  }, [subjectId, selectedTaId, visibleTabs, publishStatusByAssessment, publishWindowByAssessment, rosterTotal]);
 
   const ProgressStrip = ({ items }: { items: typeof progressItems }) => {
     if (!items.length) return null;

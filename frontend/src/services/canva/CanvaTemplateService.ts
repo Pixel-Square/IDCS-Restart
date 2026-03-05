@@ -1,15 +1,19 @@
 /**
  * CanvaTemplateService.ts
  *
- * Fetch the Branding user's Canva designs and manage saved templates.
- * All API calls are proxied through the Django backend (/api/canva/).
+ * Fetch the Branding user's Canva designs and manage saved IDCS templates.
+ * Templates are stored in the Django DB (shared across all users) via the
+ * backend API at /api/canva/templates.
+ *
+ * The localStorage cache in canvaStore is still used for quick reads by
+ * the HOD event-creation page so it works offline too.
  */
 
 import { getConnection } from './CanvaAuthService';
 import {
-  getAllCanvaTemplates,
   saveCanvaTemplate,
   deleteCanvaTemplate,
+  getAllCanvaTemplates,
   type CanvaTemplate,
 } from '../../store/canvaStore';
 
@@ -24,11 +28,11 @@ export interface CanvaDesignItem {
   updated_at: number;
 }
 
-// ── API ───────────────────────────────────────────────────────────────────────
+// ── Designs ───────────────────────────────────────────────────────────────────
 
 /**
  * Fetch designs from the connected Canva account via backend proxy.
- * Returns the items array (paginated; up to 50 most recent by default).
+ * Returns up to 50 most recent by default.
  */
 export async function listUserDesigns(query = ''): Promise<CanvaDesignItem[]> {
   const conn = getConnection();
@@ -47,19 +51,106 @@ export async function listUserDesigns(query = ''): Promise<CanvaDesignItem[]> {
   return data.items ?? [];
 }
 
+// ── Template library (DB-backed) ──────────────────────────────────────────────
+
+/** Fetch all saved IDCS templates from the backend DB and refresh localStorage cache. */
+export async function fetchTemplatesFromBackend(): Promise<CanvaTemplate[]> {
+  const res = await fetch('/api/canva/templates');
+  if (!res.ok) throw new Error(`Failed to load templates (${res.status})`);
+
+  const data = await res.json() as {
+    templates: Array<{
+      id: number;
+      name: string;
+      canvaTemplateId: string;
+      previewUrl: string;
+      is_brand_template: boolean;
+      editUrl: string;
+      savedBy: string;
+      savedAt: string;
+    }>;
+  };
+
+  // Sync to localStorage
+  const current = getAllCanvaTemplates();
+  const currentIds = new Set(current.map((t) => t.canvaTemplateId));
+  const backendItems = data.templates ?? [];
+
+  for (const t of backendItems) {
+    if (!currentIds.has(t.canvaTemplateId)) {
+      saveCanvaTemplate({
+        name:            t.name,
+        canvaTemplateId: t.canvaTemplateId,
+        previewUrl:      t.previewUrl,
+        thumbnailUrl:    t.previewUrl,
+        editUrl:         t.editUrl,
+        savedBy:         t.savedBy,
+      });
+    }
+  }
+
+  return getAllCanvaTemplates();
+}
+
 /**
- * Save a Canva design as a reusable event poster template in the local store.
- * The Canva design ID is preserved so it can be used to create autofilled copies.
+ * Save a Canva design as a reusable template.
+ * Persists to backend DB AND updates localStorage cache.
  */
-export function saveAsTemplate(design: CanvaDesignItem, savedBy: string): CanvaTemplate {
+export async function saveAsTemplate(
+  design: CanvaDesignItem,
+  savedBy: string,
+): Promise<CanvaTemplate> {
+  // 1. Save to backend DB
+  const res = await fetch('/api/canva/templates', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({
+      name:              design.title || 'Untitled Template',
+      canva_design_id:   design.id,
+      thumbnail_url:     design.thumbnail?.url ?? '',
+      is_brand_template: true,
+      edit_url:          design.urls?.edit_url ?? '',
+      saved_by:          savedBy,
+    }),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({})) as Record<string, string>;
+    throw new Error(e.detail ?? `Failed to save template (${res.status})`);
+  }
+
+  // 2. Update localStorage cache
   return saveCanvaTemplate({
-    name:             design.title || 'Untitled Template',
-    canvaTemplateId:  design.id,
-    previewUrl:       design.thumbnail?.url ?? '',
-    thumbnailUrl:     design.thumbnail?.url ?? '',
-    editUrl:          design.urls?.edit_url,
+    name:            design.title || 'Untitled Template',
+    canvaTemplateId: design.id,
+    previewUrl:      design.thumbnail?.url ?? '',
+    thumbnailUrl:    design.thumbnail?.url ?? '',
+    editUrl:         design.urls?.edit_url,
     savedBy,
   });
 }
 
-export { getAllCanvaTemplates, deleteCanvaTemplate };
+/**
+ * Delete a template by its localStorage ID.
+ * Also deletes from backend DB by matching canvaTemplateId.
+ */
+export async function deleteTemplate(templateId: string): Promise<void> {
+  // Find the backend integer ID by looking up from templates list
+  try {
+    const res = await fetch('/api/canva/templates');
+    if (res.ok) {
+      const tpl = getAllCanvaTemplates().find((t) => t.id === templateId);
+      if (tpl) {
+        const data = await res.json() as { templates: Array<{ id: number; canvaTemplateId: string }> };
+        const backendEntry = data.templates.find((t) => t.canvaTemplateId === tpl.canvaTemplateId);
+        if (backendEntry) {
+          await fetch(`/api/canva/templates/${backendEntry.id}`, { method: 'DELETE' });
+        }
+      }
+    }
+  } catch {
+    // localStorage delete below will run regardless
+  }
+  deleteCanvaTemplate(templateId);
+}
+
+export { getAllCanvaTemplates };

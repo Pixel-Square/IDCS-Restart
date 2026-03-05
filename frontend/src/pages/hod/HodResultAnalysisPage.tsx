@@ -44,6 +44,7 @@ type ObeProgressSection = {
   batch: { id: number | null; name: string | null };
   course: { id: number | null; name: string | null };
   department: { id: number | null; code: string | null; name: string | null; short_name: string | null };
+  semester?: number | null;
   staff: ObeProgressStaff[];
 };
 type ObeProgressResponse = {
@@ -355,7 +356,7 @@ function BellGraphView({ taSlots, taCache, cycle }: { taSlots: TaSlot[]; taCache
           <div key={slot.taId} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, color: '#374151' }}>
             <div style={{ width: 28, height: 4, borderRadius: 2, background: SUBJECT_COLORS[i % SUBJECT_COLORS.length] }} />
             <span style={{ fontWeight: 700 }}>{slot.subjectCode}</span>
-            <span style={{ color: '#9ca3af', fontSize: 11 }}>{slot.subjectName}</span>
+            <span style={{ color: '#374151', fontSize: 13, fontWeight: 500 }}>— {slot.subjectName}</span>
           </div>
         ))}
       </div>
@@ -437,43 +438,9 @@ function RankingView({ taSlots, taCache, cycle }: { taSlots: TaSlot[]; taCache: 
 
   if (ranked.length === 0) return <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af' }}>No data for ranking.</div>;
 
-  const podium = ranked.slice(0, 3);
-  const podiumOrder = [1, 0, 2]; // display order: 2nd, 1st, 3rd
-  const HEIGHTS = [160, 210, 130];
-  const PBGS = ['#16213e','#1a1a2e','#0f3460'];
-
   return (
     <div>
-      {/* Podium */}
-      <div style={{ background: 'linear-gradient(135deg,#0f0c29,#302b63,#24243e)', borderRadius: 20, padding: '36px 24px 28px', marginBottom: 28 }}>
-        <div style={{ textAlign: 'center', fontSize: 18, fontWeight: 900, color: '#fff', marginBottom: 32, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
-          🏆 Class Rankings — {cycle === 'cycle1' ? 'Cycle 1' : cycle === 'cycle2' ? 'Cycle 2' : 'Model'}
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-end', gap: 14 }}>
-          {podiumOrder.map((pi) => {
-            const entry = podium[pi];
-            if (!entry) return <div key={pi} style={{ width: 150 }} />;
-            const rank = (pi + 1) as 1|2|3;
-            return (
-              <div key={pi} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 150 }}>
-                <CupSVG rank={rank} />
-                <div style={{ background: 'rgba(255,255,255,0.1)', borderRadius: 10, padding: '8px 12px', textAlign: 'center', marginTop: 6, border: '1px solid rgba(255,255,255,0.12)', backdropFilter: 'blur(6px)', width: '100%', boxSizing: 'border-box' }}>
-                  <div style={{ fontSize: 10, color: '#94a3b8', fontWeight: 600 }}>#{rank}</div>
-                  <div style={{ fontSize: 13, fontWeight: 800, color: '#fff', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.student.name}</div>
-                  <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 1 }}>{entry.student.regNo}</div>
-                  <div style={{ fontSize: 20, fontWeight: 900, color: rank===1?'#FFD700':rank===2?'#E8E8E8':'#CD7F32', marginTop: 4 }}>{entry.sum}<span style={{ fontSize: 11, color: '#64748b', marginLeft: 2 }}>pts</span></div>
-                  <div style={{ fontSize: 10, color: '#64748b' }}>Avg {entry.avg ?? '—'}/100</div>
-                </div>
-                <div style={{ width: 130, height: HEIGHTS[pi] - 100, background: PBGS[pi], borderRadius: '8px 8px 0 0', marginTop: 6, border: '1px solid rgba(255,255,255,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.3)', fontSize: 26, fontWeight: 900 }}>
-                  {rank}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Full table */}
+      {/* Rankings table */}
       <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e5e7eb', overflow: 'hidden', boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
         <div style={{ background: '#1e3a5f', padding: '12px 18px', color: '#fff', fontWeight: 800, fontSize: 14 }}>
           Full Rankings — {ranked.length} Students
@@ -574,6 +541,7 @@ export default function HodResultAnalysisPage(): JSX.Element {
                 name: (dept as any)?.name ?? null,
                 short_name: (dept as any)?.short_name ?? null,
               },
+              semester: first.semester != null ? Number(first.semester) : null,
               staff: [
                 {
                   id: 0,
@@ -827,6 +795,7 @@ export default function HodResultAnalysisPage(): JSX.Element {
           rows={dlRows}
           totals={dlTotals}
           isClassReport={true}
+          semester={selectedSection.semester ?? null}
         />
       </div>
     );

@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
-  Save, ArrowLeft, Plus, Trash2, Type, Image, Move, CheckCircle, AlertTriangle,
+  Save, ArrowLeft, Plus, Trash2, Type, Image, Move, CheckCircle, AlertTriangle, ScanSearch, Loader2,
 } from 'lucide-react';
 import { convertAndSave, type EditorRegion } from './TemplateConverterService';
 import {
   TEXT_PLACEHOLDER_LABELS, DEFAULT_REGION, type PlaceholderKey, type TemplateRegion,
 } from '../../../store/templateStore';
+import { analyzeTemplate, zonesToEditorRegions, type AnalysisProgress } from './TemplateAnalyzerService';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -111,6 +112,11 @@ export default function TemplateEditorPage() {
   const [toast, setToast]             = useState<{ msg: string; ok: boolean } | null>(null);
   const [addMenuOpen, setAddMenuOpen] = useState(false);
 
+  // OCR auto-detect state
+  const [ocrRunning, setOcrRunning]     = useState(false);
+  const [ocrProgress, setOcrProgress]   = useState<AnalysisProgress | null>(null);
+  const [ocrSuggest, setOcrSuggest]     = useState<EditorRegion[] | null>(null);
+
   const canvasRef   = useRef<HTMLDivElement>(null);
   const interaction = useRef<Interaction | null>(null);
 
@@ -191,6 +197,47 @@ export default function TemplateEditorPage() {
   }
 
   const selected = useMemo(() => regions.find((r) => r.id === selectedId) ?? null, [regions, selectedId]);
+
+  // ── OCR Auto-Detect ────────────────────────────────────────────────────────
+
+  async function handleAutoDetect() {
+    if (!imageDataUrl || ocrRunning) return;
+    setOcrRunning(true);
+    setOcrProgress({ status: 'Starting…', progress: 0 });
+    setOcrSuggest(null);
+    try {
+      const result = await analyzeTemplate(imageDataUrl, (p) => setOcrProgress(p));
+      const suggested = zonesToEditorRegions(
+        result.zones,
+        result.imageWidth,
+        result.imageHeight,
+        CANVAS_W,
+        CANVAS_H,
+      );
+      if (suggested.length === 0) {
+        setToast({ msg: 'No placeholder text detected. Try placing regions manually.', ok: false });
+      } else {
+        setOcrSuggest(suggested);
+      }
+    } catch (err) {
+      setToast({ msg: `OCR failed: ${(err as Error).message}`, ok: false });
+    } finally {
+      setOcrRunning(false);
+      setOcrProgress(null);
+    }
+  }
+
+  function acceptOcrSuggestions() {
+    if (!ocrSuggest) return;
+    // Merge with existing — don't duplicate same placeholderKey zones
+    setRegions((prev) => {
+      const existingKeys = new Set(prev.map((r) => r.placeholderKey));
+      const toAdd = ocrSuggest.filter((r) => !existingKeys.has(r.placeholderKey));
+      return [...prev, ...toAdd];
+    });
+    setToast({ msg: `Added ${ocrSuggest.length} detected placeholder zone(s). Drag to fine-tune.`, ok: true });
+    setOcrSuggest(null);
+  }
 
   // ── Save ────────────────────────────────────────────────────────────────────
 
@@ -330,6 +377,76 @@ export default function TemplateEditorPage() {
 
         {/* ── Right panel ── */}
         <aside className="w-72 flex-shrink-0 bg-white border-l border-gray-200 flex flex-col overflow-y-auto">
+
+          {/* ── OCR Auto-Detect ── */}
+          <div className="p-4 border-b border-gray-100 bg-gradient-to-br from-purple-50 to-indigo-50">
+            <div className="flex items-center gap-2 mb-2">
+              <ScanSearch className="w-4 h-4 text-purple-600" />
+              <span className="text-xs font-bold text-purple-800">Auto-Detect Placeholders</span>
+            </div>
+            <p className="text-xs text-purple-600 mb-2.5 leading-relaxed">
+              Uses OCR to scan your template image and automatically find placeholder text regions.
+            </p>
+
+            {/* Progress bar */}
+            {ocrRunning && ocrProgress && (
+              <div className="mb-2">
+                <div className="flex items-center gap-2 mb-1">
+                  <Loader2 className="w-3 h-3 animate-spin text-purple-500" />
+                  <span className="text-xs text-purple-600">{ocrProgress.status}</span>
+                </div>
+                <div className="w-full bg-purple-100 rounded-full h-1.5">
+                  <div
+                    className="bg-purple-600 h-1.5 rounded-full transition-all duration-300"
+                    style={{ width: `${Math.round(ocrProgress.progress * 100)}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* OCR suggestion confirmation */}
+            {ocrSuggest && !ocrRunning && (
+              <div className="mb-2.5 bg-white border border-purple-200 rounded-xl p-3">
+                <p className="text-xs font-semibold text-purple-800 mb-1">
+                  ✦ {ocrSuggest.length} zone{ocrSuggest.length !== 1 ? 's' : ''} detected
+                </p>
+                <ul className="text-xs text-purple-600 space-y-0.5 mb-2.5">
+                  {ocrSuggest.map((r, i) => (
+                    <li key={i} className="flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-purple-400 flex-shrink-0" />
+                      {r.placeholderKey}
+                    </li>
+                  ))}
+                </ul>
+                <div className="flex gap-1.5">
+                  <button
+                    onClick={acceptOcrSuggestions}
+                    className="flex-1 py-1.5 bg-purple-600 text-white rounded-lg text-xs font-semibold hover:bg-purple-700"
+                  >
+                    Accept All
+                  </button>
+                  <button
+                    onClick={() => setOcrSuggest(null)}
+                    className="px-3 py-1.5 border border-gray-300 text-gray-600 rounded-lg text-xs hover:bg-gray-50"
+                  >
+                    Discard
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <button
+              onClick={handleAutoDetect}
+              disabled={ocrRunning || !imageDataUrl}
+              className="w-full flex items-center justify-center gap-2 py-2 rounded-xl bg-purple-600 text-white text-xs font-semibold hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {ocrRunning
+                ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Analyzing…</>
+                : <><ScanSearch className="w-3.5 h-3.5" /> Scan Template for Placeholders</>
+              }
+            </button>
+          </div>
+
           {/* Add region */}
           <div className="p-4 border-b border-gray-100">
             <div className="relative">

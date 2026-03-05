@@ -55,6 +55,7 @@ type ObeProgressSection = {
   batch: { id: number | null; name: string | null };
   course: { id: number | null; name: string | null };
   department: { id: number | null; code: string | null; name: string | null; short_name: string | null };
+  semester?: number | null;
   staff: ObeProgressStaff[];
 };
 

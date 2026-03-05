@@ -13,11 +13,14 @@ const STORAGE_KEY = 'idcs_branding_templates';
 
 export type PlaceholderKey =
   | 'event_title'
+  | 'event_type'
   | 'venue'
   | 'department'
   | 'date_time'
   | 'coordinators'
-  | 'chief_guests';
+  | 'chief_guests'
+  | 'resource_person'
+  | 'participants';
 
 export type RegionType = 'text' | 'image';
 
@@ -73,12 +76,15 @@ export const DEFAULT_REGION: Omit<TemplateRegion, 'id' | 'placeholderKey'> = {
 };
 
 export const TEXT_PLACEHOLDER_LABELS: Record<PlaceholderKey, string> = {
-  event_title:  'Event Title',
-  venue:        'Venue',
-  department:   'Department',
-  date_time:    'Date & Time',
-  coordinators: 'Coordinators',
-  chief_guests: 'Chief Guests (images)',
+  event_title:     'Event Title',
+  event_type:      'Type of Event',
+  venue:           'Venue',
+  department:      'Department',
+  date_time:       'Date & Time',
+  coordinators:    'Coordinators',
+  chief_guests:    'Chief Guests (images)',
+  resource_person: 'Resource Person',
+  participants:    'Participants',
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

@@ -633,6 +633,89 @@ def _resolve_section_name_from_ta(ta) -> str:
     return str(getattr(sec, 'name', None) or str(sec) or '').strip()
 
 
+def _resolve_semester_from_ta(ta):
+    """Resolve Semester FK from a TeachingAssignment.
+
+    Some datasets (often older/migrated) have Section.semester unset even though
+    the assignment clearly belongs to a semester via curriculum/subject.
+    Due schedules and global publish controls are semester-scoped, so we attempt
+    multiple fallbacks.
+    """
+    if not ta:
+        return None
+
+    # Primary: section.semester
+    try:
+        sem = getattr(getattr(ta, 'section', None), 'semester', None)
+        if sem is not None:
+            return sem
+    except Exception:
+        pass
+
+    # Last resort: compute from section.batch.start_year + academic_year parity
+    # (mirrors academics.models.Section.save()). This is needed for older/migrated
+    # sections where `semester` FK was left null.
+    try:
+        sec = getattr(ta, 'section', None)
+        batch = getattr(sec, 'batch', None) if sec else None
+        ay = getattr(ta, 'academic_year', None)
+        if batch is not None:
+            start_year = getattr(batch, 'start_year', None)
+            if start_year is None:
+                try:
+                    start_year = int(str(getattr(batch, 'name', '')).split('-')[0])
+                except Exception:
+                    start_year = None
+
+            acad_start = None
+            if ay is not None:
+                try:
+                    acad_start = int(str(getattr(ay, 'name', '')).split('-')[0])
+                except Exception:
+                    acad_start = None
+
+            if start_year is not None and acad_start is not None:
+                delta = int(acad_start) - int(start_year)
+                parity = str(getattr(ay, 'parity', '') or '').upper()
+                offset = 1 if parity == 'ODD' else 2
+                sem_number = int(delta) * 2 + int(offset)
+                if sem_number >= 1 and sem_number <= 20:
+                    from academics.models import Semester
+                    sem_obj, _ = Semester.objects.get_or_create(number=sem_number)
+                    return sem_obj
+    except Exception:
+        pass
+
+    # Fallbacks: curriculum row / elective / subject
+    try:
+        sem = getattr(getattr(ta, 'curriculum_row', None), 'semester', None)
+        if sem is not None:
+            return sem
+    except Exception:
+        pass
+    try:
+        row = getattr(ta, 'curriculum_row', None)
+        sem = getattr(getattr(row, 'master', None), 'semester', None)
+        if sem is not None:
+            return sem
+    except Exception:
+        pass
+    try:
+        sem = getattr(getattr(ta, 'elective_subject', None), 'semester', None)
+        if sem is not None:
+            return sem
+    except Exception:
+        pass
+    try:
+        sem = getattr(getattr(ta, 'subject', None), 'semester', None)
+        if sem is not None:
+            return sem
+    except Exception:
+        pass
+
+    return None
+
+
 def _get_mark_table_lock_if_exists(*, staff_user, subject_code: str, assessment: str, teaching_assignment=None, academic_year=None, section_name: str = ''):
     from .models import ObeMarkTableLock
 
@@ -952,6 +1035,177 @@ def iqac_cqi_upsert(request):
         return Response({'detail': 'Failed to save CQI config', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     return Response({'status': 'ok'})
+
+
+@api_view(['GET', 'PUT'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def cqi_draft(request, subject_id: str):
+    """Get/Upsert CQI draft for a subject + teaching assignment."""
+    _staff_profile, err = _faculty_only(request)
+    if err:
+        return err
+
+    subject = _get_subject(subject_id, request)
+    ta_id = _get_teaching_assignment_id_from_request(request, request.data if request.method == 'PUT' else None)
+    if ta_id is None:
+        return Response({'detail': 'teaching_assignment_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
+    if ta is None:
+        return Response({'detail': 'Invalid teaching_assignment_id.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    from .models import ObeCqiDraft
+
+    if request.method == 'GET':
+        obj = ObeCqiDraft.objects.filter(subject=subject, teaching_assignment=ta).first()
+        if obj is None:
+            return Response({'draft': None})
+        return Response(
+            {
+                'draft': {'entries': obj.entries or {}},
+                'updated_at': obj.updated_at.isoformat() if getattr(obj, 'updated_at', None) else None,
+                'updated_by': getattr(obj, 'updated_by', None),
+            }
+        )
+
+    body = request.data if isinstance(request.data, dict) else {}
+    entries = body.get('entries', None)
+    if entries is None:
+        return Response({'detail': 'Missing entries.'}, status=status.HTTP_400_BAD_REQUEST)
+    if not isinstance(entries, dict):
+        return Response({'detail': 'entries must be an object.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    user_id = getattr(getattr(request, 'user', None), 'id', None)
+    obj, _created = ObeCqiDraft.objects.update_or_create(
+        subject=subject,
+        teaching_assignment=ta,
+        defaults={
+            'entries': entries or {},
+            'updated_by': user_id,
+        },
+    )
+
+    return Response(
+        {
+            'status': 'ok',
+            'updated_at': obj.updated_at.isoformat() if getattr(obj, 'updated_at', None) else None,
+            'updated_by': getattr(obj, 'updated_by', None),
+        }
+    )
+
+
+@api_view(['PUT'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def cqi_save(request, subject_id: str):
+    """Alias for CQI draft save (kept for frontend compatibility)."""
+    return cqi_draft(request, subject_id)
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def cqi_published(request, subject_id: str):
+    """Fetch published CQI snapshot for Internal Marks."""
+    _staff_profile, err = _faculty_only(request)
+    if err:
+        return err
+
+    subject = _get_subject(subject_id, request)
+    ta_id = _get_teaching_assignment_id_from_request(request)
+    if ta_id is None:
+        return Response({'detail': 'teaching_assignment_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
+    if ta is None:
+        return Response({'detail': 'Invalid teaching_assignment_id.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    from .models import ObeCqiPublished
+
+    obj = ObeCqiPublished.objects.filter(subject=subject, teaching_assignment=ta).first()
+    if obj is None:
+        return Response({'published': None})
+
+    return Response(
+        {
+            'published': {
+                'publishedAt': obj.published_at.isoformat() if getattr(obj, 'published_at', None) else None,
+                'coNumbers': obj.co_numbers or [],
+                'entries': obj.entries or {},
+            }
+        }
+    )
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def cqi_publish(request, subject_id: str):
+    """Publish CQI snapshot to DB for a subject + teaching assignment."""
+    _staff_profile, err = _faculty_only(request)
+    if err:
+        return err
+
+    subject = _get_subject(subject_id, request)
+    ta_id = _get_teaching_assignment_id_from_request(request, request.data if isinstance(request.data, dict) else None)
+    if ta_id is None:
+        return Response({'detail': 'teaching_assignment_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
+    if ta is None:
+        return Response({'detail': 'Invalid teaching_assignment_id.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    body = request.data if isinstance(request.data, dict) else {}
+    entries = body.get('entries')
+    co_numbers = body.get('coNumbers', body.get('co_numbers'))
+
+    # Backward compatibility: if frontend doesn't send entries, publish latest draft.
+    if entries is None:
+        try:
+            from .models import ObeCqiDraft
+
+            d = ObeCqiDraft.objects.filter(subject=subject, teaching_assignment=ta).first()
+            entries = d.entries if d is not None else None
+        except Exception:
+            entries = None
+
+    if entries is None:
+        return Response({'detail': 'Missing entries (send in body or save a draft first).'}, status=status.HTTP_400_BAD_REQUEST)
+    if not isinstance(entries, dict):
+        return Response({'detail': 'entries must be an object.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    nums: list[int] = []
+    if isinstance(co_numbers, list):
+        for x in co_numbers:
+            try:
+                n = int(x)
+            except Exception:
+                continue
+            if 1 <= n <= 20 and n not in nums:
+                nums.append(n)
+    nums.sort()
+
+    from .models import ObeCqiPublished
+
+    user_id = getattr(getattr(request, 'user', None), 'id', None)
+    obj, _created = ObeCqiPublished.objects.update_or_create(
+        subject=subject,
+        teaching_assignment=ta,
+        defaults={
+            'co_numbers': nums,
+            'entries': entries or {},
+            'published_by': user_id,
+        },
+    )
+
+    return Response(
+        {
+            'status': 'ok',
+            'published_at': obj.published_at.isoformat() if getattr(obj, 'published_at', None) else None,
+            'published_by': getattr(obj, 'published_by', None),
+        }
+    )
 
 
 @api_view(['POST'])
@@ -1505,18 +1759,51 @@ def _get_due_schedule_for_request(request, subject_code: str, assessment: str, t
 
     ta = _resolve_staff_teaching_assignment(request, subject_code=subject_code, teaching_assignment_id=teaching_assignment_id)
     academic_year = getattr(ta, 'academic_year', None) if ta else None
-    semester = None
-    try:
-        semester = getattr(getattr(ta, 'section', None), 'semester', None) if ta else None
-    except Exception:
-        semester = None
+    semester = _resolve_semester_from_ta(ta)
+
+    if semester is None:
+        try:
+            row = _resolve_curriculum_row_for_subject(request, subject_code=subject_code, teaching_assignment_id=teaching_assignment_id)
+            semester = getattr(row, 'semester', None) if row is not None else None
+        except Exception:
+            semester = None
+
+    # Subject code matching:
+    # IQAC schedules are configured using curriculum `course_code`, while faculty mark-entry
+    # screens sometimes call APIs using Subject.code (or master course_code) depending on
+    # how the TeachingAssignment is mapped. Treat these as equivalent identifiers and
+    # match due schedules / controls / approvals using any available variant.
+    subject_code_variants: list[str] = []
+
+    def _add_code(v):
+        s = str(v or '').strip()
+        if not s:
+            return
+        if s not in subject_code_variants:
+            subject_code_variants.append(s)
+        su = s.upper()
+        if su and su not in subject_code_variants:
+            subject_code_variants.append(su)
+
+    _add_code(subject_code)
+    if ta is not None:
+        try:
+            _add_code(getattr(getattr(ta, 'subject', None), 'code', None))
+        except Exception:
+            pass
+        try:
+            row = getattr(ta, 'curriculum_row', None)
+            _add_code(getattr(row, 'course_code', None))
+            _add_code(getattr(getattr(row, 'master', None), 'course_code', None))
+        except Exception:
+            pass
 
     schedule = None
     # Prefer Semester-based schedules; fall back to AcademicYear for older rows.
     if semester is not None:
         schedule = ObeDueSchedule.objects.filter(
             semester=semester,
-            subject_code=str(subject_code),
+            subject_code__in=subject_code_variants or [str(subject_code)],
             assessment=str(assessment).lower(),
             is_active=True,
         ).order_by('-updated_at').first()
@@ -1524,7 +1811,7 @@ def _get_due_schedule_for_request(request, subject_code: str, assessment: str, t
         schedule = ObeDueSchedule.objects.filter(
             academic_year=academic_year,
             semester__isnull=True,
-            subject_code=str(subject_code),
+            subject_code__in=subject_code_variants or [str(subject_code)],
             assessment=str(assessment).lower(),
             is_active=True,
         ).order_by('-updated_at').first()
@@ -1542,7 +1829,7 @@ def _get_due_schedule_for_request(request, subject_code: str, assessment: str, t
         try:
             ctrl = ObeAssessmentControl.objects.filter(
                 semester=semester,
-                subject_code=str(subject_code),
+                subject_code__in=subject_code_variants or [str(subject_code)],
                 assessment=str(assessment).lower(),
             ).order_by('-updated_at').first()
         except OperationalError:
@@ -1555,7 +1842,7 @@ def _get_due_schedule_for_request(request, subject_code: str, assessment: str, t
             ctrl = ObeAssessmentControl.objects.filter(
                 academic_year=academic_year,
                 semester__isnull=True,
-                subject_code=str(subject_code),
+                subject_code__in=subject_code_variants or [str(subject_code)],
                 assessment=str(assessment).lower(),
             ).order_by('-updated_at').first()
         except OperationalError:
@@ -1607,7 +1894,7 @@ def _get_due_schedule_for_request(request, subject_code: str, assessment: str, t
         approval = ObePublishRequest.objects.filter(
             staff_user=getattr(request, 'user', None),
             academic_year=academic_year,
-            subject_code=str(subject_code),
+            subject_code__in=subject_code_variants or [str(subject_code)],
             assessment=str(assessment).lower(),
             status='APPROVED',
             approved_until__gt=now,
@@ -3451,7 +3738,7 @@ def obe_progress_overview(request):
             if raw_dept.lower() in ('all', '*', '0', 'none') or raw_dept == '':
                 selected_department_id = None
                 sections_qs = (
-                    Section.objects.select_related('batch', 'batch__course', 'batch__course__department')
+                    Section.objects.select_related('batch', 'batch__course', 'batch__course__department', 'semester')
                     .all()
                 )
                 department = None
@@ -3487,7 +3774,7 @@ def obe_progress_overview(request):
             from academics.models import Section
 
             sections_qs = (
-                Section.objects.select_related('batch', 'batch__course', 'batch__course__department')
+                Section.objects.select_related('batch', 'batch__course', 'batch__course__department', 'semester')
                 .filter(batch__course__department=department)
             )
 
@@ -3512,7 +3799,7 @@ def obe_progress_overview(request):
         from academics.models import Section
 
         section_ids = list(advisor_rows.values_list('section_id', flat=True))
-        sections_qs = Section.objects.filter(id__in=section_ids).select_related('batch', 'batch__course', 'batch__course__department')
+        sections_qs = Section.objects.filter(id__in=section_ids).select_related('batch', 'batch__course', 'batch__course__department', 'semester')
         # Derive department from the first section if not already set
         if department is None:
             first_sec = advisor_rows.first()
@@ -3530,7 +3817,7 @@ def obe_progress_overview(request):
         if ay is not None:
             ta_qs = ta_qs.filter(academic_year=ay)
         section_ids = {ta.section_id for ta in ta_qs if ta.section_id}
-        sections_qs = Section.objects.filter(id__in=section_ids).select_related('batch', 'batch__course', 'batch__course__department')
+        sections_qs = Section.objects.filter(id__in=section_ids).select_related('batch', 'batch__course', 'batch__course__department', 'semester')
         if department is None:
             first_ta = ta_qs.first()
             if first_ta and getattr(first_ta.section.batch.course, 'department', None) is not None:
@@ -3861,6 +4148,7 @@ def obe_progress_overview(request):
                 batch = getattr(sec, 'batch', None)
                 course = getattr(batch, 'course', None) if batch is not None else None
                 course_dept = getattr(course, 'department', None) if course is not None else None
+                sem_obj = getattr(sec, 'semester', None)
                 section_results.append(
                     {
                         'id': getattr(sec, 'id', None),
@@ -3879,6 +4167,7 @@ def obe_progress_overview(request):
                             'name': getattr(course_dept, 'name', None) if course_dept is not None else None,
                             'short_name': getattr(course_dept, 'short_name', None) if course_dept is not None else None,
                         },
+                        'semester': getattr(sem_obj, 'number', None) if sem_obj is not None else None,
                         'staff': [],
                     }
                 )
@@ -3965,6 +4254,7 @@ def obe_progress_overview(request):
         batch = getattr(sec, 'batch', None)
         course = getattr(batch, 'course', None) if batch is not None else None
         course_dept = getattr(course, 'department', None) if course is not None else None
+        sem_obj = getattr(sec, 'semester', None)
 
         section_results.append(
             {
@@ -3984,6 +4274,7 @@ def obe_progress_overview(request):
                     'name': getattr(course_dept, 'name', None) if course_dept is not None else None,
                     'short_name': getattr(course_dept, 'short_name', None) if course_dept is not None else None,
                 },
+                'semester': getattr(sem_obj, 'number', None) if sem_obj is not None else None,
                 'staff': list(staff_map.values()),
             }
         )

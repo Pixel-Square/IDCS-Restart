@@ -359,6 +359,8 @@ export default function ResultAnalysisPage({ courseId, classType, enabledAssessm
   const selectedTa = tas.find((t) => t.id === selectedTaId);
   const sectionName = selectedTa?.section_name || selectedTa?.subject_code || courseId;
   const courseName = selectedTa?.subject_name || selectedTa?.elective_subject_name || courseId;
+  const dlYear = selectedTa?.academic_year || '';
+  const dlDepartment = selectedTa?.department?.short_name || selectedTa?.department?.code || selectedTa?.department?.name || '';
   const staffName = (() => {
     const me = getCachedMe() as any;
     if (!me) return '';
@@ -515,6 +517,7 @@ export default function ResultAnalysisPage({ courseId, classType, enabledAssessm
         {activeView === 'range' && (
           <RangeAnalysisPage
             totals={activeTotals}
+            studentCount={students.length}
             loading={activeLoading}
           />
         )}
@@ -541,6 +544,9 @@ export default function ResultAnalysisPage({ courseId, classType, enabledAssessm
         cols={activeCols}
         rows={activeRows}
         totals={activeTotals}
+        year={dlYear}
+        department={dlDepartment}
+        semester={selectedTa?.semester ?? null}
       />
     </div>
   );

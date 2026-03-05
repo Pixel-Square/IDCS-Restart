@@ -3,14 +3,22 @@
  *
  * OAuth 2.0 PKCE flow for the Canva Connect API.
  *
- * Setup (add to frontend/.env):
- *   VITE_CANVA_CLIENT_ID=<your-client-id>
+ * Architecture (matching the ecommerce starter-kit pattern):
+ *   1. Frontend calls initiateOAuth() → redirects browser to
+ *      GET /api/canva/oauth/authorize?origin=<this-window-origin>
+ *   2. Django backend generates PKCE, stores state+verifier in the server
+ *      session (like the starter-kit's signed cookies), and redirects the
+ *      browser to Canva's authorisation endpoint.
+ *   3. User approves on Canva → Canva redirects back to
+ *      /api/canva/oauth/callback  (the registered redirect URI)
+ *   4. Django exchanges the code for tokens, stores them in the session,
+ *      and redirects the browser to /branding/templates?canva_connected=1
+ *   5. TemplatesListPage detects ?canva_connected=1 and calls
+ *      loadConnectionFromBackend() to pull the tokens into localStorage.
  *
- * The redirect URI registered in the Canva Developer Portal must be:
- *   <your-origin>/branding/oauth-callback
- *
- * The token exchange is handled by the Django backend (/api/canva/oauth/token)
- * to keep client_secret off the browser.
+ * Redirect URI to register in the Canva Developer Portal:
+ *   Dev  : http://localhost:5173/api/canva/oauth/callback  (via Vite proxy)
+ *   Prod : https://idcs.krgi.co.in/api/canva/oauth/callback  (via Nginx)
  */
 
 import {
@@ -20,159 +28,72 @@ import {
   type CanvaConnection,
 } from '../../store/canvaStore';
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-const CANVA_AUTH_URL   = 'https://www.canva.com/api/oauth/authorize';
-const PKCE_VERIFIER_KEY = 'canva_pkce_verifier';
-const OAUTH_STATE_KEY   = 'canva_oauth_state';
-
-/** Space-separated Canva OAuth scopes required by this integration. */
-const CANVA_SCOPES = [
-  'design:content:read',
-  'design:content:write',
-  'asset:read',
-  'asset:write',
-].join(' ');
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function getClientId(): string {
-  return (import.meta as any).env?.VITE_CANVA_CLIENT_ID ?? (window as any).__CANVA_CLIENT_ID__ ?? '';
-}
-
-function getRedirectUri(): string {
-  return `${window.location.origin}/branding/oauth-callback`;
-}
-
-/** Cryptographically random base64url string. */
-async function randomBase64Url(byteLength = 32): Promise<string> {
-  const bytes = crypto.getRandomValues(new Uint8Array(byteLength));
-  return btoa(String.fromCharCode(...Array.from(bytes)))
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=/g, '');
-}
-
-/** SHA-256 hash → base64url (for PKCE code_challenge). */
-async function sha256Base64Url(plain: string): Promise<string> {
-  const data = new TextEncoder().encode(plain);
-  const hash = await crypto.subtle.digest('SHA-256', data);
-  return btoa(String.fromCharCode(...Array.from(new Uint8Array(hash))))
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=/g, '');
-}
-
-// ── Public API ────────────────────────────────────────────────────────────────
+// ── Server-side OAuth (primary flow) ─────────────────────────────────────────
 
 /**
  * Start the Canva OAuth flow.
- * Generates a PKCE code_verifier + code_challenge, stores the verifier in
- * sessionStorage, then redirects the user to Canva's authorisation endpoint.
+ * Redirects the browser to the Django backend /authorize endpoint,
+ * which handles PKCE and redirects onward to Canva.
  */
-export async function initiateOAuth(): Promise<void> {
-  const clientId = getClientId();
-  if (!clientId) {
-    throw new Error(
-      'VITE_CANVA_CLIENT_ID is not set. Add it to frontend/.env and restart the dev server.',
-    );
-  }
-
-  const verifier  = await randomBase64Url(32);
-  const challenge = await sha256Base64Url(verifier);
-  const state     = await randomBase64Url(16);
-
-  sessionStorage.setItem(PKCE_VERIFIER_KEY, verifier);
-  sessionStorage.setItem(OAUTH_STATE_KEY, state);
-
-  const params = new URLSearchParams({
-    response_type:         'code',
-    client_id:             clientId,
-    redirect_uri:          getRedirectUri(),
-    scope:                 CANVA_SCOPES,
-    code_challenge:        challenge,
-    code_challenge_method: 'S256',
-    state,
-  });
-
-  window.location.href = `${CANVA_AUTH_URL}?${params.toString()}`;
+export function initiateOAuth(): void {
+  const origin = encodeURIComponent(window.location.origin);
+  window.location.href = `/api/canva/oauth/authorize?origin=${origin}`;
 }
 
 /**
- * Complete the OAuth flow after Canva redirects back.
- * Sends the authorisation code + PKCE verifier to the backend proxy
- * (POST /api/canva/oauth/token) which performs the server-side token exchange.
+ * Fetch the current Canva connection from the Django session.
+ * Called after a successful OAuth callback redirect (?canva_connected=1)
+ * and on every page mount to restore a live session.
+ *
+ * Updates localStorage cache so getConnection() stays in sync.
  */
-export async function handleCallback(
-  code: string,
-  returnedState: string,
-): Promise<CanvaConnection> {
-  const expectedState = sessionStorage.getItem(OAUTH_STATE_KEY);
-  const verifier      = sessionStorage.getItem(PKCE_VERIFIER_KEY);
+export async function loadConnectionFromBackend(): Promise<CanvaConnection | null> {
+  try {
+    const res = await fetch('/api/canva/oauth/connection', { credentials: 'include' });
+    if (!res.ok) return null;
+    const data = await res.json() as {
+      connected: boolean;
+      access_token?: string;
+      expires_at?: number;
+      user_id?: string;
+      display_name?: string;
+    };
 
-  if (!verifier) {
-    throw new Error('PKCE verifier not found. The session may have expired — please try connecting again.');
+    if (!data.connected || !data.access_token) {
+      clearConnection();
+      return null;
+    }
+
+    const conn: CanvaConnection = {
+      accessToken:  data.access_token,
+      refreshToken: undefined,
+      expiresAt:    data.expires_at ?? Date.now() + 3_600_000,
+      userId:       data.user_id ?? '',
+      displayName:  data.display_name ?? 'Canva User',
+    };
+    saveConnection(conn);
+    return conn;
+  } catch {
+    return null;
   }
-  if (returnedState !== expectedState) {
-    throw new Error('OAuth state mismatch. This may indicate a CSRF attempt.');
-  }
-
-  sessionStorage.removeItem(PKCE_VERIFIER_KEY);
-  sessionStorage.removeItem(OAUTH_STATE_KEY);
-
-  const res = await fetch('/api/canva/oauth/token', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({
-      code,
-      code_verifier: verifier,
-      redirect_uri:  getRedirectUri(),
-    }),
-  });
-
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({})) as Record<string, string>;
-    throw new Error(err.detail ?? `Token exchange failed (${res.status})`);
-  }
-
-  const data = await res.json() as {
-    access_token: string;
-    refresh_token?: string;
-    expires_in?: number;
-    user_id?: string;
-    display_name?: string;
-  };
-
-  const connection: CanvaConnection = {
-    accessToken:  data.access_token,
-    refreshToken: data.refresh_token,
-    expiresAt:    Date.now() + (data.expires_in ?? 3600) * 1000,
-    userId:       data.user_id ?? '',
-    displayName:  data.display_name ?? 'Canva User',
-  };
-
-  saveConnection(connection);
-  return connection;
 }
 
 /**
- * Revoke the current token and remove the stored connection.
- * Safe to call even when no connection exists.
+ * Revoke the current token on the backend and clear the local connection.
  */
 export async function disconnect(): Promise<void> {
-  const conn = getConnection();
-  if (conn) {
-    try {
-      await fetch('/api/canva/oauth/revoke', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ access_token: conn.accessToken }),
-      });
-    } catch {
-      // Ignore network errors during revocation; always clear locally.
-    }
+  try {
+    await fetch('/api/canva/oauth/connection', {
+      method:      'DELETE',
+      credentials: 'include',
+    });
+  } catch {
+    // Always clear locally even if revocation fails.
   }
   clearConnection();
 }
 
+// ── Re-exports ────────────────────────────────────────────────────────────────
+
 export { getConnection };
+export type { CanvaConnection };
