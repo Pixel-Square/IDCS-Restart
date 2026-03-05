@@ -70,9 +70,8 @@ class StudentProfileForm(forms.ModelForm):
             # disable reg_no editing for existing records in admin
             if 'reg_no' in self.fields:
                 self.fields['reg_no'].disabled = True
-            # deprecate editing section here; assignments should be used
-            if 'section' in self.fields:
-                self.fields['section'].disabled = True
+            # section field is now synced with StudentSectionAssignment via signals
+            # enable editing to allow direct updates that will sync automatically
 
     def clean_reg_no(self):
         val = self.cleaned_data.get('reg_no')

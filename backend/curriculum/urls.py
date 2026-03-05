@@ -6,6 +6,8 @@ from .views import (
     ElectiveSubjectViewSet, 
     ElectiveChoicesView, 
     MasterImportView,
+    DepartmentGroupViewSet,
+    CurriculumDepartmentsView,
 )
 from .elective_import_views import (
     ElectiveChoiceTemplateDownloadView,
@@ -16,6 +18,7 @@ router = DefaultRouter()
 router.register(r'master', CurriculumMasterViewSet, basename='curriculum-master')
 router.register(r'department', CurriculumDepartmentViewSet, basename='curriculum-department')
 router.register(r'elective', ElectiveSubjectViewSet, basename='curriculum-elective')
+router.register(r'department-groups', DepartmentGroupViewSet, basename='curriculum-department-groups')
 
 urlpatterns = [
     # Place the explicit import endpoint before the router so 'import' is not
@@ -24,5 +27,6 @@ urlpatterns = [
     path('elective-choices/template/', ElectiveChoiceTemplateDownloadView.as_view(), name='elective-choices-template'),
     path('elective-choices/import/', ElectiveChoiceBulkImportView.as_view(), name='elective-choices-import'),
     path('elective-choices/', ElectiveChoicesView.as_view(), name='elective-choices'),
+    path('departments/', CurriculumDepartmentsView.as_view(), name='curriculum-departments'),
     path('', include(router.urls)),
 ]

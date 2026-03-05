@@ -54,6 +54,14 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
   const [selectedSection, setSelectedSection] = useState<number | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [itemsPerPage] = useState(10)
+  // All-students cascading dropdown filters
+  const [allDeptFilter, setAllDeptFilter] = useState<string>('')
+  const [allBatchFilter, setAllBatchFilter] = useState<string>('')
+  const [allSectionFilter, setAllSectionFilter] = useState<string>('')
+  // Department-students dropdown filters
+  const [deptDeptFilter, setDeptDeptFilter] = useState<string>('')
+  const [deptBatchFilter, setDeptBatchFilter] = useState<string>('')
+  const [deptSectionFilter, setDeptSectionFilter] = useState<string>('')
 
   // Get user permissions from localStorage and user object
   const getPermissions = (): string[] => {
@@ -185,6 +193,65 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
 
   // Reset to page 1 when section changes
   useEffect(() => { setCurrentPage(1) }, [selectedSection])
+
+  // Reset filters when allSections list is refreshed
+  useEffect(() => {
+    if (viewMode === 'all-students') {
+      setAllDeptFilter('')
+      setAllBatchFilter('')
+      setAllSectionFilter('')
+      setSelectedSection(null)
+      setLazyStudents([])
+    }
+  }, [allSections.length])
+
+  // Reset dept-students filters when deptSections list is refreshed
+  useEffect(() => {
+    if (viewMode === 'department-students') {
+      setDeptDeptFilter('')
+      setDeptBatchFilter('')
+      setDeptSectionFilter('')
+      setSelectedSection(null)
+      setLazyStudents([])
+    }
+  }, [deptSections.length])
+
+  // Resolve + fetch for dept-students when any dept/batch/section filter changes
+  useEffect(() => {
+    if (viewMode !== 'department-students') return
+    if (!deptDeptFilter && !deptBatchFilter && !deptSectionFilter) {
+      setSelectedSection(null)
+      setLazyStudents([])
+      return
+    }
+    const matched = deptSections.filter(s =>
+      (!deptDeptFilter || (s.department_short_name || s.department_code) === deptDeptFilter) &&
+      (!deptBatchFilter || s.batch_name === deptBatchFilter) &&
+      (!deptSectionFilter || s.section_name === deptSectionFilter)
+    )
+    if (matched.length === 0) { setSelectedSection(null); setLazyStudents([]); return }
+    setSelectedSection(null)
+    fetchDeptStudentsForSections(matched.map(s => s.section_id))
+  }, [deptDeptFilter, deptBatchFilter, deptSectionFilter])
+
+  // Resolve + fetch students whenever any filter changes in all-students mode
+  // Works with partial selection: dept only → entire dept, dept+batch → entire batch, all three → specific section
+  useEffect(() => {
+    if (viewMode !== 'all-students') return
+    if (!allDeptFilter && !allBatchFilter && !allSectionFilter) {
+      setSelectedSection(null)
+      setLazyStudents([])
+      return
+    }
+    const matched = allSections.filter(s =>
+      (!allDeptFilter || (s.department_short_name || s.department_code) === allDeptFilter) &&
+      (!allBatchFilter || s.batch_name === allBatchFilter) &&
+      (!allSectionFilter || s.section_name === allSectionFilter)
+    )
+    if (matched.length === 0) { setSelectedSection(null); setLazyStudents([]); return }
+    setSelectedSection(null)
+    fetchAllStudentsForSections(matched.map(s => s.section_id))
+  }, [allDeptFilter, allBatchFilter, allSectionFilter])
 
   // Map a raw result entry (from my-students or my-mentees response) to SectionMeta + Student[]
   function parsePreloadedSection(r: any): { meta: SectionMeta; students: Student[] } {
@@ -345,13 +412,61 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
     }
   }
 
+  // Fetch students for multiple sections in parallel (used by all-students partial filter)
+  async function fetchAllStudentsForSections(sectionIds: number[]) {
+    setLoadingStudents(true)
+    setLazyStudents([])
+    try {
+      const results = await Promise.all(
+        sectionIds.map(async sid => {
+          const res = await fetchWithAuth(`/api/academics/all-students/?section_id=${sid}`)
+          if (!res.ok) return [] as Student[]
+          const data = await res.json()
+          return (data.students || []) as Student[]
+        })
+      )
+      setLazyStudents(results.flat())
+    } catch (e) {
+      console.error('fetchAllStudentsForSections error:', e)
+      setLazyStudents([])
+    } finally {
+      setLoadingStudents(false)
+    }
+  }
+
+  // Fetch students for multiple sections in parallel (used by department-students partial filter)
+  async function fetchDeptStudentsForSections(sectionIds: number[]) {
+    setLoadingStudents(true)
+    setLazyStudents([])
+    try {
+      const results = await Promise.all(
+        sectionIds.map(async sid => {
+          const res = await fetchWithAuth(`/api/academics/department-students/?section_id=${sid}`)
+          if (!res.ok) return [] as Student[]
+          const data = await res.json()
+          return (data.students || []) as Student[]
+        })
+      )
+      setLazyStudents(results.flat())
+    } catch (e) {
+      console.error('fetchDeptStudentsForSections error:', e)
+      setLazyStudents([])
+    } finally {
+      setLoadingStudents(false)
+    }
+  }
+
   // Current section list and students
   const currentSectionList: SectionMeta[] =
     viewMode === 'my-students' ? myStudentsSections
     : viewMode === 'my-mentees' ? myMenteesSections
     : viewMode === 'department-students' ? deptSections
     : allSections
-  const displayStudentsList: Student[] = lazyStudents
+  const displayStudentsList: Student[] = [...lazyStudents].sort((a, b) => {
+    const nameA = (a.first_name || a.username || '').trim().toLowerCase()
+    const nameB = (b.first_name || b.username || '').trim().toLowerCase()
+    return nameA.localeCompare(nameB)
+  })
 
   // Pagination calculations
   const totalItems = displayStudentsList.length
@@ -490,8 +605,8 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
         </div>
       )}
 
-      {/* Section Pills */}
-      {hasContent && (
+      {/* Section Selection – only for my-students and my-mentees */}
+      {hasContent && (viewMode === 'my-students' || viewMode === 'my-mentees') && (
         <div className="mb-6">
           <div className="flex flex-wrap gap-2">
             {currentSectionList.map(sec => {
@@ -513,6 +628,112 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
           </div>
         </div>
       )}
+
+      {/* Department-Students dept + batch + section dropdowns */}
+      {hasContent && viewMode === 'department-students' && (() => {
+        const deptOptions = Array.from(new Set(
+          deptSections.map(s => s.department_short_name || s.department_code || '').filter(Boolean)
+        )).sort()
+        const batchOptions = Array.from(new Set(
+          deptSections.map(s => s.batch_name || '').filter(Boolean)
+        )).sort()
+        const sectionOptions = Array.from(new Set(
+          deptSections.map(s => s.section_name).filter(Boolean)
+        )).sort()
+        return (
+          <div className="mb-6 bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+            <div className="flex flex-wrap gap-4 items-end">
+              {deptOptions.length > 1 && (
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Department</label>
+                  <select
+                    value={deptDeptFilter}
+                    onChange={e => setDeptDeptFilter(e.target.value)}
+                    className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400 min-w-[160px]"
+                  >
+                    <option value="">-- All Departments --</option>
+                    {deptOptions.map(d => <option key={d} value={d}>{d}</option>)}
+                  </select>
+                </div>
+              )}
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Batch</label>
+                <select
+                  value={deptBatchFilter}
+                  onChange={e => setDeptBatchFilter(e.target.value)}
+                  className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400 min-w-[140px]"
+                >
+                  <option value="">-- All Batches --</option>
+                  {batchOptions.map(b => <option key={b} value={b}>{b}</option>)}
+                </select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Section</label>
+                <select
+                  value={deptSectionFilter}
+                  onChange={e => setDeptSectionFilter(e.target.value)}
+                  className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400 min-w-[120px]"
+                >
+                  <option value="">-- All Sections --</option>
+                  {sectionOptions.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* All-Students independent dropdowns */}
+      {hasContent && viewMode === 'all-students' && (() => {
+        const deptOptions = Array.from(new Set(
+          allSections.map(s => s.department_short_name || s.department_code || '').filter(Boolean)
+        )).sort()
+        const batchOptions = Array.from(new Set(
+          allSections.map(s => s.batch_name || '').filter(Boolean)
+        )).sort()
+        const sectionOptions = Array.from(new Set(
+          allSections.map(s => s.section_name).filter(Boolean)
+        )).sort()
+        return (
+          <div className="mb-6 bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+            <div className="flex flex-wrap gap-4 items-end">
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Department</label>
+                <select
+                  value={allDeptFilter}
+                  onChange={e => setAllDeptFilter(e.target.value)}
+                  className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400 min-w-[160px]"
+                >
+                  <option value="">-- Select --</option>
+                  {deptOptions.map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Batch</label>
+                <select
+                  value={allBatchFilter}
+                  onChange={e => setAllBatchFilter(e.target.value)}
+                  className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400 min-w-[140px]"
+                >
+                  <option value="">-- Select --</option>
+                  {batchOptions.map(b => <option key={b} value={b}>{b}</option>)}
+                </select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Section</label>
+                <select
+                  value={allSectionFilter}
+                  onChange={e => setAllSectionFilter(e.target.value)}
+                  className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400 min-w-[120px]"
+                >
+                  <option value="">-- Select --</option>
+                  {sectionOptions.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Spinner when switching sections */}
       {loadingStudents && (

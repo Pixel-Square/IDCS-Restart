@@ -171,17 +171,17 @@ export default function Login() {
                   "Sign In"
                 )}
               </button>
-
-              {/* Back to Home Link */}
-              <div className="text-center pt-4">
-                <Link
-                  to="/"
-                  className="text-sm text-gray-600 hover:text-gray-900 font-medium transition-colors"
-                >
-                  ← Back to Home
-                </Link>
-              </div>
             </form>
+
+            {/* Back to Home Link */}
+            <div className="text-center pt-4">
+              <Link
+                to="/"
+                className="text-sm text-gray-600 hover:text-gray-900 font-medium transition-colors"
+              >
+                ← Back to Home
+              </Link>
+            </div>
           </div>
         </div>
       </div>

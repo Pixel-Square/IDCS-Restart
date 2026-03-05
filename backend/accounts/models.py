@@ -26,12 +26,9 @@ class User(AbstractUser):
     """
     username = models.CharField(
         max_length=150,
-        unique=True,
-        help_text='Required. 150 characters or fewer. Letters, numbers, spaces, and @/./+/-/_ characters.',
+        unique=False,
+        help_text='150 characters or fewer. Letters, numbers, spaces, and @/./+/-/_ characters.',
         validators=[UsernameValidator()],
-        error_messages={
-            'unique': 'A user with that username already exists.',
-        },
     )
     
     roles = models.ManyToManyField(

@@ -100,10 +100,13 @@ export async function fetchElectives(params?: { department_id?: number; regulati
   if (params?.department_id) qs.set('department_id', String(params.department_id));
   if (params?.regulation) qs.set('regulation', params.regulation);
   if (params?.semester) qs.set('semester', String(params.semester));
+  qs.set('page_size', '0'); // Disable pagination to get all results
   const url = `${API_BASE}/api/curriculum/elective/?${qs.toString()}`;
   const res = await fetchWithAuth(url);
   if (!res.ok) throw new Error('Failed to fetch electives');
-  return res.json();
+  const data = await res.json();
+  // Handle both paginated and non-paginated responses
+  return Array.isArray(data) ? data : (data.results || []);
 }
 
 export async function createElective(payload: Partial<DeptRow> & { parent: number; semester_id?: number; department_id?: number }) {

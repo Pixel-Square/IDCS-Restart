@@ -13,6 +13,8 @@ type Elective = {
   semester: number;
   department: Department;
   student_count: number;
+  parent?: number | null;
+  parent_name?: string | null;
 };
 
 export default function ElectiveImport() {
@@ -24,9 +26,11 @@ export default function ElectiveImport() {
   const [regulations, setRegulations] = useState<string[]>([]);
   const [semesters, setSemesters] = useState<number[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
+  const [parentElectives, setParentElectives] = useState<string[]>([]);
   const [selectedRegulation, setSelectedRegulation] = useState<string>('');
   const [selectedSemester, setSelectedSemester] = useState<number | ''>('');
   const [selectedDept, setSelectedDept] = useState<number | ''>('');
+  const [selectedParent, setSelectedParent] = useState<string>('');
   
   // Electives data
   const [electives, setElectives] = useState<Elective[]>([]);
@@ -62,18 +66,28 @@ export default function ElectiveImport() {
 
   const loadFilterOptions = async () => {
     try {
-      const data = await fetchElectives();
-      if (!data || !Array.isArray(data)) return;
+      const [electivesData, deptsResponse] = await Promise.all([
+        fetchElectives(),
+        fetchWithAuth('/api/curriculum/departments/')
+      ]);
+      
+      // Load departments from curriculum API (respects curriculum permissions)
+      const deptsData = await deptsResponse.json();
+      const allDepts = (deptsData.results || []) as Department[];
+      setDepartments(allDepts.sort((a, b) => (a.code || '').localeCompare(b.code || '')));
 
-      const uniqueRegs = [...new Set(data.map((e: Elective) => e.regulation))].filter(Boolean).sort() as string[];
-      const uniqueSems = [...new Set(data.map((e: Elective) => e.semester))].filter(Boolean).sort((a, b) => (a as number) - (b as number)) as number[];
-      const uniqueDepts = Array.from(
-        new Map(data.map((e: Elective) => e.department).filter(Boolean).map((d: Department) => [d.id, d])).values()
-      ).sort((a, b) => ((a as Department).code || '').localeCompare((b as Department).code || '')) as Department[];
+      // Load other filters from electives data
+      if (!electivesData || !Array.isArray(electivesData)) return;
+
+      const uniqueRegs = [...new Set(electivesData.map((e: Elective) => e.regulation))].filter(Boolean).sort() as string[];
+      const uniqueSems = [...new Set(electivesData.map((e: Elective) => e.semester))].filter(Boolean).sort((a, b) => (a as number) - (b as number)) as number[];
+      const uniqueParents = [...new Set(
+        electivesData.map((e: Elective) => e.parent_name).filter((n: any) => !!n)
+      )].sort() as string[];
 
       setRegulations(uniqueRegs);
       setSemesters(uniqueSems);
-      setDepartments(uniqueDepts);
+      setParentElectives(uniqueParents);
     } catch (error) {
       console.error('Failed to load filter options:', error);
     }
@@ -197,6 +211,7 @@ export default function ElectiveImport() {
     if (selectedRegulation && e.regulation !== selectedRegulation) return false;
     if (selectedSemester && e.semester !== selectedSemester) return false;
     if (selectedDept && e.department?.id !== selectedDept) return false;
+    if (selectedParent && e.parent_name !== selectedParent) return false;
     return true;
   });
 
@@ -310,7 +325,7 @@ export default function ElectiveImport() {
           </div>
 
           {/* Filters */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Regulation</label>
               <select
@@ -354,6 +369,20 @@ export default function ElectiveImport() {
                 ))}
               </select>
             </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Parent Elective</label>
+              <select
+                value={selectedParent}
+                onChange={(e) => setSelectedParent(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              >
+                <option value="">All Parents</option>
+                {parentElectives.map(p => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+            </div>
           </div>
 
           {/* Electives Table */}
@@ -371,6 +400,9 @@ export default function ElectiveImport() {
                     </th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Course Name
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Parent Elective
                     </th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Regulation
@@ -398,6 +430,9 @@ export default function ElectiveImport() {
                       <td className="px-4 py-3 text-sm text-gray-700">
                         {elective.course_name || '—'}
                       </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-sm text-indigo-700">
+                        {elective.parent_name || '—'}
+                      </td>
                       <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-600">
                         {elective.regulation || '—'}
                       </td>
@@ -405,7 +440,7 @@ export default function ElectiveImport() {
                         {elective.semester || '—'}
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-600">
-                        {elective.department?.code || '—'}
+                        {elective.department?.short_name || elective.department?.code || '—'}
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-center">
                         <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${

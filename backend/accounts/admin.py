@@ -1,11 +1,46 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
+from django.contrib.auth.forms import UserCreationForm, UserChangeForm
 from django.utils.html import format_html
 from .models import User, Role, UserRole, Permission, RolePermission, UserQuery
 from academics.models import StudentProfile, StaffProfile, Section, Department
 from django import forms
 from django.core.exceptions import ValidationError
 from .models import validate_roles_for_user
+
+
+class CustomUserCreationForm(UserCreationForm):
+    """Add user form that:
+    - Requires email (used as the login identifier)
+    - Does NOT reject duplicate usernames (names like 'John Smith' may repeat;
+      uniqueness is enforced by email / reg_no / staff_id).
+    """
+    email = forms.EmailField(required=True, label='Email address')
+
+    class Meta(UserCreationForm.Meta):
+        model = User
+        fields = ('username', 'email')
+
+    def clean_username(self):
+        # Skip the built-in uniqueness check entirely – the model no longer
+        # enforces it either, so just return the value as-is.
+        return self.cleaned_data.get('username')
+
+    def clean_email(self):
+        email = self.cleaned_data.get('email')
+        if email and User.objects.filter(email__iexact=email).exists():
+            raise ValidationError(
+                'A user with that email address already exists. '
+                'Each account must have a unique email.'
+            )
+        return email
+
+
+class CustomUserChangeForm(UserChangeForm):
+    """Change user form that keeps the same no-uniqueness-on-username policy."""
+
+    class Meta(UserChangeForm.Meta):
+        model = User
 
 from django.urls import path
 from django.shortcuts import render
@@ -49,7 +84,12 @@ class StaffProfileInline(admin.StackedInline):
 
 @admin.register(User)
 class UserAdmin(DjangoUserAdmin):
-    # inherit Django's user add/change forms which correctly handle password hashing
+    # Use custom forms so that:
+    #  - email is required on creation
+    #  - duplicate usernames (display names) are allowed; uniqueness is by email.
+    form = CustomUserChangeForm
+    add_form = CustomUserCreationForm
+
     list_display = ('username', 'email', 'mobile_no', 'is_staff', 'get_roles', 'get_profile_status')
     inlines = (StudentProfileInline, StaffProfileInline)
     actions = ('deactivate_users', 'delete_and_purge_users')
@@ -59,7 +99,11 @@ class UserAdmin(DjangoUserAdmin):
         ('Contact', {'fields': ('mobile_no',)}),
     )
 
-    add_fieldsets = DjangoUserAdmin.add_fieldsets + (
+    add_fieldsets = (
+        (None, {
+            'classes': ('wide',),
+            'fields': ('username', 'email', 'password1', 'password2'),
+        }),
         ('Contact', {'fields': ('mobile_no',)}),
     )
 
@@ -423,14 +467,16 @@ class UserAdmin(DjangoUserAdmin):
                                 existing_user.save()
                                 u = existing_user
                             else:
-                                # reg_no doesn't exist - check if username exists
-                                if User.objects.filter(username=username).exists():
-                                    # username exists but different reg_no - make username unique
-                                    base_username = username
-                                    counter = 1
-                                    while User.objects.filter(username=username).exists():
-                                        username = f"{base_username}_{counter}"
-                                        counter += 1
+                                # reg_no doesn't exist - new user.
+                                # Only mangle username if the email is also duplicate
+                                # (same email = same person re-imported); keep the
+                                # original name when the email is fresh (unique).
+                                if email and User.objects.filter(email=email).exists():
+                                    reg_no_val = (r.get('reg_no') or '').strip()
+                                    if reg_no_val:
+                                        username = f"{username}_{reg_no_val}"
+                                # If email is unique, keep username as-is (allow
+                                # same display name for different people).
                                 # Create new user
                                 u = User.objects.create_user(
                                     username=username,
@@ -452,14 +498,14 @@ class UserAdmin(DjangoUserAdmin):
                                 existing_user.save()
                                 u = existing_user
                             else:
-                                # staff_id doesn't exist - check if username exists
-                                if User.objects.filter(username=username).exists():
-                                    # username exists but different staff_id - make username unique
-                                    base_username = username
-                                    counter = 1
-                                    while User.objects.filter(username=username).exists():
-                                        username = f"{base_username}_{counter}"
-                                        counter += 1
+                                # staff_id doesn't exist - new user.
+                                # Only mangle username if the email is also duplicate
+                                # (same email = same person re-imported); keep the
+                                # original name when the email is fresh (unique).
+                                if email and User.objects.filter(email=email).exists():
+                                    if staff_id_val:
+                                        username = f"{username}_{staff_id_val}"
+                                # If email is unique, keep username as-is.
                                 # Create new user
                                 u = User.objects.create_user(
                                     username=username,

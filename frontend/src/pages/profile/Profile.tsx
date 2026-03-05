@@ -850,9 +850,12 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                     </div>
                   )}
 
-                  <div className="mt-4">
-                    <button onClick={() => setRemoveModalOpen(true)} className="text-sm text-red-600">Remove mobile number</button>
-                  </div>
+                  {/* Only show "Remove mobile number" when a verified number exists */}
+                  {profileMobile && profileMobileVerified && (
+                    <div className="mt-4">
+                      <button onClick={() => setRemoveModalOpen(true)} className="text-sm text-red-600">Remove mobile number</button>
+                    </div>
+                  )}
 
                 </div>
               </div>

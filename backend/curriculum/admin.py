@@ -7,6 +7,8 @@ from .models import (
     ElectiveSubject,
     ElectiveChoice,
     Regulation,
+    DepartmentGroup,
+    DepartmentGroupMapping,
     SPECIAL_ASSESSMENT_CHOICES,
 )
 from django.urls import path
@@ -336,8 +338,8 @@ class ElectiveSubjectInline(admin.TabularInline):
 
 @admin.register(ElectiveSubject)
 class ElectiveSubjectAdmin(admin.ModelAdmin):
-    list_display = ('course_code', 'course_name', 'department', 'parent', 'regulation', 'semester', 'is_elective', 'editable', 'approval_status')
-    list_filter = ('department', RegulationFilter, 'semester', 'is_elective', 'approval_status')
+    list_display = ('course_code', 'course_name', 'department', 'department_group', 'parent', 'regulation', 'semester', 'is_elective', 'editable', 'approval_status')
+    list_filter = ('department', 'department_group', RegulationFilter, 'semester', 'is_elective', 'approval_status')
     search_fields = ('course_code', 'course_name')
 
 
@@ -352,4 +354,20 @@ class ElectiveChoiceAdmin(admin.ModelAdmin):
 class RegulationAdmin(admin.ModelAdmin):
     list_display = ('code', 'name', 'is_active')
     list_filter = ('is_active',)
+
+
+@admin.register(DepartmentGroup)
+class DepartmentGroupAdmin(admin.ModelAdmin):
+    list_display = ('code', 'name', 'is_active', 'created_at')
+    list_filter = ('is_active',)
+    search_fields = ('code', 'name', 'description')
+    ordering = ('code',)
+
+
+@admin.register(DepartmentGroupMapping)
+class DepartmentGroupMappingAdmin(admin.ModelAdmin):
+    list_display = ('group', 'department', 'is_active', 'created_at')
+    list_filter = ('group', 'is_active')
+    search_fields = ('group__code', 'group__name', 'department__code', 'department__name')
+    ordering = ('group', 'department')
     search_fields = ('code', 'name')

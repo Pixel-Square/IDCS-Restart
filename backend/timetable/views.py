@@ -33,9 +33,72 @@ class CurriculumBySectionView(APIView):
             return Response({'results': []})
 
         try:
-            from curriculum.models import CurriculumDepartment
+            from curriculum.models import CurriculumDepartment, ElectiveSubject, DepartmentGroupMapping
             qs = CurriculumDepartment.objects.filter(department=dept, semester__number=sem)
-            data = [{'id': c.pk, 'course_code': c.course_code, 'course_name': c.course_name, 'regulation': c.regulation, 'class_type': c.class_type, 'is_elective': c.is_elective} for c in qs]
+
+            # Find department groups that this department belongs to (for cross-dept elective matching)
+            group_ids = list(DepartmentGroupMapping.objects.filter(
+                department=dept, is_active=True
+            ).values_list('group_id', flat=True))
+
+            data = []
+            for c in qs:
+                data.append({
+                    'id': c.pk,
+                    'course_code': c.course_code,
+                    'course_name': c.course_name,
+                    'regulation': c.regulation,
+                    'class_type': c.class_type,
+                    'is_elective': c.is_elective,
+                })
+                if c.is_elective:
+                    # 1. Own child elective subjects (parent = this curriculum row)
+                    own_children = ElectiveSubject.objects.filter(parent=c).select_related('department')
+                    for es in own_children:
+                        data.append({
+                            'id': es.pk,
+                            'course_code': es.course_code,
+                            'course_name': es.course_name,
+                            'regulation': es.regulation,
+                            'class_type': es.class_type,
+                            'is_elective': True,
+                            'is_elective_child': True,
+                            'is_cross_department': False,
+                            'parent': c.pk,
+                            'parent_id': c.pk,
+                            'parent_name': c.course_name,
+                        })
+
+                    # 2. Cross-dept shared child elective subjects via DepartmentGroup
+                    # Match by: shared department_group membership AND same parent slot name
+                    if group_ids:
+                        cross_children = ElectiveSubject.objects.filter(
+                            department_group_id__in=group_ids,
+                            parent__course_name__iexact=c.course_name,
+                        ).exclude(department=dept).select_related('department', 'parent')
+                        for es in cross_children:
+                            owner_dept = es.department
+                            short_n = (
+                                getattr(owner_dept, 'short_name', None)
+                                or getattr(owner_dept, 'code', None)
+                                or owner_dept.name
+                            )
+                            data.append({
+                                'id': es.pk,
+                                'course_code': es.course_code,
+                                'course_name': es.course_name,
+                                'regulation': es.regulation,
+                                'class_type': es.class_type,
+                                'is_elective': True,
+                                'is_elective_child': True,
+                                'is_cross_department': True,
+                                'owner_department_short_name': short_n,
+                                'owner_department_name': f"{getattr(owner_dept, 'code', '')} - {short_n}",
+                                # Map parent to our local PE row so resolveCurriculumId picks the right id
+                                'parent': c.pk,
+                                'parent_id': c.pk,
+                                'parent_name': c.course_name,
+                            })
             return Response({'results': data})
         except Exception:
             return Response({'results': []})
@@ -116,12 +179,23 @@ class SectionTimetableView(APIView):
                         # Prefer section-scoped mapping first, then department-wide mappings
                         from academics.models import TeachingAssignment
                         try:
+                            _cr_name = getattr(a.curriculum_row, 'course_name', None)
                             ta = TeachingAssignment.objects.filter(section=a.section, is_active=True).filter(
-                                Q(curriculum_row=a.curriculum_row) | Q(elective_subject__parent=a.curriculum_row)
+                                Q(curriculum_row=a.curriculum_row) |
+                                Q(elective_subject__parent=a.curriculum_row) |
+                                Q(elective_subject__department_group__isnull=False,
+                                  elective_subject__parent__course_name=_cr_name,
+                                  elective_subject__department_group__department_mappings__department=dept,
+                                  elective_subject__department_group__department_mappings__is_active=True)
                             ).select_related('elective_subject').first()
                             if not ta:
                                 ta = TeachingAssignment.objects.filter(is_active=True).filter(
-                                    Q(curriculum_row=a.curriculum_row) | Q(elective_subject__parent=a.curriculum_row)
+                                    Q(curriculum_row=a.curriculum_row) |
+                                    Q(elective_subject__parent=a.curriculum_row) |
+                                    Q(elective_subject__department_group__isnull=False,
+                                      elective_subject__parent__course_name=_cr_name,
+                                      elective_subject__department_group__department_mappings__department=dept,
+                                      elective_subject__department_group__department_mappings__is_active=True)
                                 ).select_related('elective_subject').first()
                             if ta and getattr(ta, 'elective_subject', None):
                                 es = ta.elective_subject
@@ -1351,7 +1425,15 @@ class StaffTimetableView(APIView):
                 is_active=True,
             ).filter(
                 (Q(section=OuterRef('section')) | Q(section__isnull=True)) &
-                (Q(curriculum_row=OuterRef('curriculum_row')) | Q(elective_subject__parent=OuterRef('curriculum_row')))
+                (
+                    Q(curriculum_row=OuterRef('curriculum_row')) |
+                    Q(elective_subject__parent=OuterRef('curriculum_row')) |
+                    # Cross-dept shared electives: same parent slot name AND the group includes the slot's section dept
+                    Q(elective_subject__department_group__isnull=False,
+                      elective_subject__parent__course_name=OuterRef('curriculum_row__course_name'),
+                      elective_subject__department_group__department_mappings__department=OuterRef('section__batch__course__department'),
+                      elective_subject__department_group__department_mappings__is_active=True)
+                )
             )
 
             qs = TimetableAssignment.objects.select_related('period', 'staff', 'curriculum_row', 'section', 'section__batch')
@@ -1379,16 +1461,33 @@ class StaffTimetableView(APIView):
                     from academics.models import TeachingAssignment
                     # Prefer mappings specific to this staff. Try section-scoped first,
                     # then department-wide mappings (where section may be null).
+                    _cr_name_staff = getattr(a.curriculum_row, 'course_name', None)
+                    # Determine section's department for scoping cross-dept group match
+                    _sec_dept_id = None
+                    try:
+                        _sec_dept_id = a.section.batch.course.department_id
+                    except Exception:
+                        pass
                     ta = TeachingAssignment.objects.filter(
                         staff=staff_profile, section=a.section, is_active=True
                     ).filter(
-                        Q(curriculum_row=a.curriculum_row) | Q(elective_subject__parent=a.curriculum_row)
+                        Q(curriculum_row=a.curriculum_row) |
+                        Q(elective_subject__parent=a.curriculum_row) |
+                        Q(elective_subject__department_group__isnull=False,
+                          elective_subject__parent__course_name=_cr_name_staff,
+                          elective_subject__department_group__department_mappings__department_id=_sec_dept_id,
+                          elective_subject__department_group__department_mappings__is_active=True)
                     ).select_related('elective_subject').first()
                     if not ta:
                         ta = TeachingAssignment.objects.filter(
                             staff=staff_profile, is_active=True
                         ).filter(
-                            Q(curriculum_row=a.curriculum_row) | Q(elective_subject__parent=a.curriculum_row)
+                            Q(curriculum_row=a.curriculum_row) |
+                            Q(elective_subject__parent=a.curriculum_row) |
+                            Q(elective_subject__department_group__isnull=False,
+                              elective_subject__parent__course_name=_cr_name_staff,
+                              elective_subject__department_group__department_mappings__department_id=_sec_dept_id,
+                              elective_subject__department_group__department_mappings__is_active=True)
                         ).select_related('elective_subject').first()
                     if ta and getattr(ta, 'elective_subject', None):
                         es = ta.elective_subject
@@ -1510,7 +1609,20 @@ class StaffTimetableView(APIView):
                     try:
                         if e.curriculum_row:
                             # resolve elective if TeachingAssignment maps to elective for this staff
-                            ta = TeachingAssignment.objects.filter(staff=staff_profile, is_active=True).filter(Q(curriculum_row=e.curriculum_row) | Q(elective_subject__parent=e.curriculum_row)).select_related('elective_subject').first()
+                            _ecr_name = getattr(e.curriculum_row, 'course_name', None)
+                            _sec_dept_id_sp = None
+                            try:
+                                _sec_dept_id_sp = e.timetable.section.batch.course.department_id
+                            except Exception:
+                                pass
+                            ta = TeachingAssignment.objects.filter(staff=staff_profile, is_active=True).filter(
+                                Q(curriculum_row=e.curriculum_row) |
+                                Q(elective_subject__parent=e.curriculum_row) |
+                                Q(elective_subject__department_group__isnull=False,
+                                  elective_subject__parent__course_name=_ecr_name,
+                                  elective_subject__department_group__department_mappings__department_id=_sec_dept_id_sp,
+                                  elective_subject__department_group__department_mappings__is_active=True)
+                            ).select_related('elective_subject').first()
                             if ta and getattr(ta, 'elective_subject', None):
                                 es = ta.elective_subject
                                 subj_text = f"{getattr(es, 'course_code', '')} - {getattr(es, 'course_name', '')}".strip(' -')

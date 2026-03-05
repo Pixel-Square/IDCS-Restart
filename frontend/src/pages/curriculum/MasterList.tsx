@@ -1,16 +1,15 @@
-
-
 import React, { useEffect, useState } from 'react';
 import { fetchMasters } from '../../services/curriculum';
 import fetchWithAuth from '../../services/fetchAuth';
 import { useLocation, useNavigate } from 'react-router-dom';
 import CurriculumLayout from './CurriculumLayout';
 import { Link } from 'react-router-dom';
-import { BookOpen, Download, Upload, Edit } from 'lucide-react';
+import { BookOpen, Download, Upload, Edit, RefreshCw } from 'lucide-react';
 
 export default function MasterList() {
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
   const loc = useLocation();
   const navigate = useNavigate();
@@ -34,6 +33,29 @@ export default function MasterList() {
       .catch(err => console.error(err))
       .finally(() => setLoading(false));
   }, []);
+
+  // Auto-refresh when page becomes visible (e.g., returning from admin tab)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden && !loading && !refreshing) {
+        handleRefresh();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [loading, refreshing]);
+
+  async function handleRefresh() {
+    setRefreshing(true);
+    try {
+      const fresh = await fetchMasters();
+      setData(fresh);
+    } catch (error) {
+      console.error('Failed to refresh:', error);
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   function csvEscape(v: any) {
     if (v === null || v === undefined) return '';
@@ -137,6 +159,14 @@ export default function MasterList() {
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
+              title="Refresh data"
+            >
+              <RefreshCw className={`w-5 h-5 ${refreshing ? 'animate-spin' : ''}`} />
+            </button>
             {(() => {
               try {
                 const roles = JSON.parse(localStorage.getItem('roles') || '[]');

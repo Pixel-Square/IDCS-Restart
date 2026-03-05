@@ -291,6 +291,43 @@ class StudentProfile(models.Model):
         super().save(*args, **kwargs)
 
 
+# Signal handler to sync legacy section field changes with StudentSectionAssignment
+@receiver(post_save, sender=StudentProfile)
+def _sync_section_assignment_on_profile_save(sender, instance: StudentProfile, created, **kwargs):
+    """Create/update StudentSectionAssignment when StudentProfile.section is changed."""
+    try:
+        # Skip if no section is set
+        if instance.section is None:
+            return
+        
+        # Check if there's already an active assignment for this section
+        active_assignment = StudentSectionAssignment.objects.filter(
+            student=instance,
+            end_date__isnull=True
+        ).select_related('section').first()
+        
+        # If active assignment exists and matches the current section, no action needed
+        if active_assignment and active_assignment.section_id == instance.section_id:
+            return
+        
+        # If active assignment exists but points to a different section, end it and create new one
+        today = timezone.now().date()
+        if active_assignment and active_assignment.section_id != instance.section_id:
+            active_assignment.end_date = today
+            active_assignment.save(update_fields=['end_date'])
+        
+        # Create new assignment if no matching active assignment exists
+        if not active_assignment or active_assignment.section_id != instance.section_id:
+            StudentSectionAssignment.objects.create(
+                student=instance,
+                section=instance.section,
+                start_date=today
+            )
+    except Exception:
+        # Silently fail to avoid breaking the save operation
+        pass
+
+
 class StudentSectionAssignment(models.Model):
     """Time-bound assignment of a student to a section.
 
@@ -324,6 +361,65 @@ class StudentSectionAssignment(models.Model):
         super().save(*args, **kwargs)
 
 
+# Signal handlers to keep StudentProfile.section in sync with active StudentSectionAssignment
+@receiver(post_save, sender=StudentSectionAssignment)
+def _sync_student_section_on_assignment_save(sender, instance: StudentSectionAssignment, created, **kwargs):
+    """Update StudentProfile.section when a StudentSectionAssignment is created or updated."""
+    try:
+        student = instance.student
+        if student is None or not student.pk:
+            return
+        
+        # Refresh student from DB to get current state
+        student.refresh_from_db()
+        
+        # If this is an active assignment (no end_date), update the student's section
+        if instance.end_date is None:
+            # Always update to ensure sync
+            StudentProfile.objects.filter(pk=student.pk).update(section=instance.section)
+        else:
+            # If this assignment was ended, find the newest active assignment
+            # Don't clear the section field yet - let the new active assignment set it
+            active_assignment = StudentSectionAssignment.objects.filter(
+                student=student, 
+                end_date__isnull=True
+            ).select_related('section').order_by('-start_date').first()
+            
+            if active_assignment:
+                # Sync with the active assignment
+                StudentProfile.objects.filter(pk=student.pk).update(section=active_assignment.section)
+            # Don't clear section if no active assignment - it might be created in same transaction
+    except Exception:
+        # Silently fail to avoid breaking the save operation
+        pass
+
+
+@receiver(post_delete, sender=StudentSectionAssignment)
+def _sync_student_section_on_assignment_delete(sender, instance: StudentSectionAssignment, **kwargs):
+    """Update StudentProfile.section when a StudentSectionAssignment is deleted."""
+    try:
+        student = instance.student
+        # If student is being deleted (CASCADE), skip sync
+        if student is None or student._state.adding or not student.pk:
+            return
+        
+        # Find any remaining active assignment
+        active_assignment = StudentSectionAssignment.objects.filter(
+            student=student,
+            end_date__isnull=True
+        ).select_related('section').first()
+        
+        if active_assignment:
+            # Sync with the remaining active assignment
+            if student.section_id != active_assignment.section_id:
+                StudentProfile.objects.filter(pk=student.pk).update(section=active_assignment.section)
+        else:
+            # No active assignments remain; clear the legacy section field
+            if student.section_id is not None:
+                StudentProfile.objects.filter(pk=student.pk).update(section=None)
+    except Exception:
+        # Silently fail to avoid breaking the delete operation
+        pass
 
 
 class StaffProfile(models.Model):

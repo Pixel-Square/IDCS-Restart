@@ -4,8 +4,8 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from django.db.models import Count, Q
 from django.http import HttpResponse
-from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject
-from .serializers import CurriculumMasterSerializer, CurriculumDepartmentSerializer, ElectiveSubjectSerializer
+from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject, DepartmentGroup, DepartmentGroupMapping
+from .serializers import CurriculumMasterSerializer, CurriculumDepartmentSerializer, ElectiveSubjectSerializer, DepartmentGroupSerializer
 from .permissions import IsIQACOrReadOnly
 from accounts.utils import get_user_permissions
 from academics.utils import get_user_effective_departments
@@ -326,22 +326,38 @@ class CurriculumDepartmentViewSet(viewsets.ModelViewSet):
 
 
 class ElectiveSubjectViewSet(viewsets.ModelViewSet):
-    queryset = ElectiveSubject.objects.all().select_related('department', 'parent', 'semester')
+    queryset = ElectiveSubject.objects.all().select_related('department', 'parent', 'semester', 'department_group')
     serializer_class = ElectiveSubjectSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        qs = ElectiveSubject.objects.all().select_related('department', 'parent', 'semester')
+        qs = ElectiveSubject.objects.all().select_related('department', 'parent', 'semester', 'department_group')
         qs = qs.annotate(student_count=Count('choices', filter=Q(choices__is_active=True)))
         req = self.request
         dept_id = req.query_params.get('department_id')
         regulation = req.query_params.get('regulation')
         semester = req.query_params.get('semester')
+        
         if dept_id:
             try:
-                qs = qs.filter(department_id=int(dept_id))
-            except Exception:
+                dept_id_int = int(dept_id)
+                # Find all department groups that this department is mapped to
+                group_ids = DepartmentGroupMapping.objects.filter(
+                    department_id=dept_id_int,
+                    is_active=True
+                ).values_list('group_id', flat=True)
+                
+                # Filter electives that either:
+                # 1. Belong directly to this department, OR
+                # 2. Have a department_group that this department is mapped to
+                qs = qs.filter(
+                    Q(department_id=dept_id_int) | 
+                    Q(department_group_id__in=list(group_ids))
+                )
+            except Exception as e:
+                logger.error('Error filtering electives by department_id: %s', e)
                 pass
+        
         if regulation:
             qs = qs.filter(regulation=regulation)
         if semester:
@@ -391,6 +407,60 @@ class ElectiveSubjectViewSet(viewsets.ModelViewSet):
         raise PermissionDenied('You do not have permission to change this elective subject')
 
 
+class CurriculumDepartmentsView(APIView):
+    """Return departments filtered by curriculum permissions.
+    
+    Uses same permission logic as CurriculumDepartmentViewSet:
+    - Superusers, IQAC/HAA groups: see all departments
+    - Users with curriculum_master_edit/publish: see all departments
+    - HODs/regular staff: see only their effective departments
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        user = request.user
+        from academics.models import Department
+        
+        # Users with global access see all departments
+        if user.is_superuser or user.groups.filter(name__in=['IQAC', 'HAA']).exists():
+            qs = Department.objects.all()
+        else:
+            perms = get_user_permissions(user)
+            wide_perms = {'curriculum_master_edit', 'curriculum_master_publish', 
+                         'CURRICULUM_MASTER_EDIT', 'CURRICULUM_MASTER_PUBLISH'}
+            if perms & wide_perms:
+                # Users with wide curriculum permissions see all
+                qs = Department.objects.all()
+            else:
+                # Regular users see only their effective departments
+                dept_ids = get_user_effective_departments(user)
+                if not dept_ids:
+                    # Try student fallback
+                    student = getattr(user, 'student_profile', None)
+                    if student:
+                        try:
+                            section = getattr(student, 'current_section', None) or student.get_current_section()
+                            if section and getattr(section, 'batch', None) and getattr(section.batch, 'course', None):
+                                dept_ids = [section.batch.course.department_id]
+                        except Exception:
+                            pass
+                
+                if not dept_ids:
+                    return Response({'results': []})
+                
+                qs = Department.objects.filter(id__in=dept_ids)
+        
+        results = []
+        for d in qs:
+            results.append({
+                'id': d.id, 
+                'code': getattr(d, 'code', None), 
+                'name': getattr(d, 'name', None), 
+                'short_name': getattr(d, 'short_name', None)
+            })
+        return Response({'results': results})
+
+
 class ElectiveChoicesView(APIView):
     permission_classes = (IsAuthenticated,)
 
@@ -431,4 +501,11 @@ class ElectiveChoicesView(APIView):
             return Response({'results': []})
 
         return Response({'results': results})
+
+
+class DepartmentGroupViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet for viewing department groups. Read-only for now."""
+    queryset = DepartmentGroup.objects.filter(is_active=True).order_by('code')
+    serializer_class = DepartmentGroupSerializer
+    permission_classes = [IsAuthenticated]
 

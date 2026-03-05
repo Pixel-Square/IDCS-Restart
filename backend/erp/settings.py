@@ -196,7 +196,9 @@ STATICFILES_DIRS = [
 if DEBUG:
     STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.StaticFilesStorage'
 else:
-    STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.ManifestStaticFilesStorage'
+    # Temporarily using StaticFilesStorage to debug 500 error
+    STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.StaticFilesStorage'
+    # STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.ManifestStaticFilesStorage'
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
@@ -204,6 +206,10 @@ MEDIA_ROOT = BASE_DIR / 'media'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 AUTH_USER_MODEL = 'accounts.User'
+
+# Username is a display name only; login uses email/reg_no/staff_id.
+# Suppress the warning about USERNAME_FIELD not being unique.
+SILENCED_SYSTEM_CHECKS = ['auth.W004']
 
 AUTHENTICATION_BACKENDS = [
     'powerbi_portal.auth_backends.PowerBIIdentifierBackend',
@@ -358,6 +364,7 @@ DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'rohit08sk@gmail.com')
 # Allow Django admin popups to work properly by setting X-Frame-Options to SAMEORIGIN
 # This prevents the "Cannot read properties of null (reading 'dismissAddRelatedObjectPopup')" error
 X_FRAME_OPTIONS = 'SAMEORIGIN'
+<<<<<<< HEAD
 
 # ── Canva Connect API ─────────────────────────────────────────────────────────
 # Register your app at https://www.canva.com/developers/ and set these in .env:
@@ -398,3 +405,5 @@ IDCS_BACKEND_URL = os.getenv('IDCS_BACKEND_URL', '')
 #   https://www.canva.com/design/<TEMPLATE_ID>/edit
 CANVA_BRANDING_TEMPLATE_ID = os.getenv('CANVA_BRANDING_TEMPLATE_ID', '')
 
+=======
+>>>>>>> 9a019c8d5d82453b9611efb1bfedbb037e19e2d3

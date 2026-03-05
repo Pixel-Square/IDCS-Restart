@@ -37,6 +37,12 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# WhatsApp session files (generated at runtime)
+iqac-whatsapp/session/
+iqac-whatsapp/server.log
+iqac-whatsapp/.wwebjs_cache/
+iqac-whatsapp/node_modules/
+
 # Test / coverage
 .pytest_cache/
 coverage/

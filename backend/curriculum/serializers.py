@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject
+from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject, DepartmentGroup, DepartmentGroupMapping
 from academics.models import Department, Semester
 
 
@@ -107,24 +107,81 @@ class CurriculumDepartmentSerializer(serializers.ModelSerializer):
         return super().update(instance, validated_data)
 
 
+class DepartmentGroupSmallSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DepartmentGroup
+        fields = ('id', 'code', 'name')
+
+
+class DepartmentGroupSerializer(serializers.ModelSerializer):
+    """Full serializer for DepartmentGroup with mapping info."""
+    department_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = DepartmentGroup
+        fields = ('id', 'code', 'name', 'description', 'is_active', 'department_count', 'created_at', 'updated_at')
+        read_only_fields = ('created_at', 'updated_at')
+    
+    def get_department_count(self, obj):
+        return obj.department_mappings.filter(is_active=True).count()
+
+
 class ElectiveSubjectSerializer(serializers.ModelSerializer):
     department = DepartmentSmallSerializer(read_only=True)
     department_id = serializers.PrimaryKeyRelatedField(queryset=Department.objects.all(), source='department', write_only=True)
+    department_group = DepartmentGroupSmallSerializer(read_only=True)
+    department_group_id = serializers.PrimaryKeyRelatedField(queryset=DepartmentGroup.objects.all(), source='department_group', write_only=True, required=False, allow_null=True)
     semester = serializers.IntegerField(source='semester.number', read_only=True)
     semester_id = serializers.PrimaryKeyRelatedField(queryset=Semester.objects.all(), source='semester', write_only=True, required=False)
     student_count = serializers.IntegerField(read_only=True, default=0)
+    # Indicates if this elective is from another department via group mapping
+    is_cross_department = serializers.SerializerMethodField()
+    owner_department_name = serializers.SerializerMethodField()
+    parent_name = serializers.SerializerMethodField()
 
     class Meta:
         model = ElectiveSubject
         fields = [
-            'id', 'parent', 'department', 'department_id', 'regulation', 'semester', 'semester_id', 'course_code', 'course_name',
+            'id', 'parent', 'parent_name', 'department', 'department_id', 'department_group', 'department_group_id',
+            'regulation', 'semester', 'semester_id', 'course_code', 'course_name',
             'class_type', 'category', 'is_elective', 'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark',
             'total_hours', 'question_paper_type', 'editable', 'overridden',
             'approval_status', 'approved_by', 'approved_at',
-            'student_count',
+            'student_count', 'is_cross_department', 'owner_department_name',
             'created_by', 'created_at', 'updated_at'
         ]
-        read_only_fields = ('created_by', 'created_at', 'updated_at', 'student_count')
+        read_only_fields = ('created_by', 'created_at', 'updated_at', 'student_count', 'is_cross_department', 'owner_department_name', 'parent_name')
+    
+    def get_is_cross_department(self, obj):
+        """Check if this elective is being shown in a different department's view via group mapping."""
+        request = self.context.get('request')
+        if not request:
+            return False
+        
+        # Get the department_id from query params
+        queried_dept_id = request.query_params.get('department_id')
+        if not queried_dept_id:
+            return False
+        
+        try:
+            queried_dept_id = int(queried_dept_id)
+            # If the elective's department is different from the queried department, it's cross-department
+            return obj.department_id != queried_dept_id
+        except (ValueError, TypeError):
+            return False
+    
+    def get_owner_department_name(self, obj):
+        """Return the owner department's name for cross-department electives."""
+        if self.get_is_cross_department(obj):
+            dept = obj.department
+            return f"{dept.code} - {dept.short_name or dept.name}" if dept else None
+        return None
+    
+    def get_parent_name(self, obj):
+        """Return the parent curriculum row's course name."""
+        if obj.parent:
+            return obj.parent.course_name or obj.parent.course_code or f"Elective {obj.parent.id}"
+        return None
 
     def create(self, validated_data):
         user = self.context['request'].user

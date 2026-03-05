@@ -48,6 +48,54 @@ class Regulation(models.Model):
         return self.code
 
 
+class DepartmentGroup(models.Model):
+    """Group model to organize departments into logical groups.
+    
+    This model allows departments to be grouped together for curriculum
+    management purposes. For example, grouping all engineering departments
+    or all science departments together.
+    """
+    
+    code = models.CharField(max_length=32, unique=True)
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'Department Group'
+        verbose_name_plural = 'Department Groups'
+        ordering = ('code',)
+    
+    def __str__(self):
+        return f"{self.code} - {self.name}"
+
+
+class DepartmentGroupMapping(models.Model):
+    """Mapping between department groups and individual departments.
+    
+    This model creates a many-to-many relationship between DepartmentGroup
+    and Department from the academics app. A department can belong to multiple
+    groups, and a group can contain multiple departments.
+    """
+    
+    group = models.ForeignKey(DepartmentGroup, on_delete=models.CASCADE, related_name='department_mappings')
+    department = models.ForeignKey(Department, on_delete=models.CASCADE, related_name='group_mappings')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'Department Group Mapping'
+        verbose_name_plural = 'Department Group Mappings'
+        unique_together = ('group', 'department')
+        ordering = ('group', 'department')
+    
+    def __str__(self):
+        return f"{self.group.code} -> {self.department.code}"
+
+
 
 SPECIAL_ASSESSMENT_CHOICES = (
     ('ssa1', 'SSA1'),
@@ -298,6 +346,8 @@ class ElectiveSubject(models.Model):
     parent = models.ForeignKey(CurriculumDepartment, on_delete=models.CASCADE, related_name='elective_options')
     # keep a reference to department for quick filtering
     department = models.ForeignKey(Department, on_delete=models.CASCADE, related_name='elective_subjects')
+    # optional department group mapping to organize electives by group
+    department_group = models.ForeignKey(DepartmentGroup, on_delete=models.SET_NULL, null=True, blank=True, related_name='elective_subjects')
     regulation = models.CharField(max_length=32)
     semester = models.ForeignKey('academics.Semester', on_delete=models.PROTECT, related_name='elective_subjects')
 

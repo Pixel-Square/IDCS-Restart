@@ -2609,8 +2609,17 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                     assign = TimetableAssignment.objects.filter(section=section, period=period, day=day).first()
                     if assign and not getattr(assign, 'staff', None):
                         from .models import TeachingAssignment as _TA
+                        _acr_name = getattr(getattr(assign, 'curriculum_row', None), 'course_name', None)
+                        _sec_dept_id_a = getattr(getattr(getattr(section, 'batch', None), 'course', None), 'department_id', None) if section else None
                         ta_match_qs = _TA.objects.filter(is_active=True, staff=staff_profile)
-                        ta_match_qs = ta_match_qs.filter((Q(curriculum_row=assign.curriculum_row) | Q(elective_subject__parent=assign.curriculum_row))).filter(Q(section=section) | Q(section__isnull=True))
+                        ta_match_qs = ta_match_qs.filter(
+                            Q(curriculum_row=assign.curriculum_row) |
+                            Q(elective_subject__parent=assign.curriculum_row) |
+                            Q(elective_subject__department_group__isnull=False,
+                              elective_subject__parent__course_name=_acr_name,
+                              elective_subject__department_group__department_mappings__department_id=_sec_dept_id_a,
+                              elective_subject__department_group__department_mappings__is_active=True)
+                        ).filter(Q(section=section) | Q(section__isnull=True))
                         if ta_match_qs.exists():
                             ta = assign
                             teach_assign = ta_match_qs.order_by(
@@ -2631,9 +2640,19 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                 from .models import TeachingAssignment as _TA
                 ta_qs = _TA.objects.filter(is_active=True, staff=staff_profile).filter(Q(section=section) | Q(section__isnull=True))
                 cr = getattr(getattr(ta, 'curriculum_row', None), 'pk', None) if ta is not None else None
+                _cr_obj = getattr(ta, 'curriculum_row', None) if ta is not None else None
+                _cr_name_fallback = getattr(_cr_obj, 'course_name', None)
+                _sec_dept_id_f = getattr(getattr(getattr(section, 'batch', None), 'course', None), 'department_id', None) if section else None
                 if cr:
                     # Filter by the period's curriculum_row — only match if staff actually teaches it.
-                    ta_qs = ta_qs.filter(Q(curriculum_row_id=cr) | Q(elective_subject__parent_id=cr))
+                    ta_qs = ta_qs.filter(
+                        Q(curriculum_row_id=cr) |
+                        Q(elective_subject__parent_id=cr) |
+                        Q(elective_subject__department_group__isnull=False,
+                          elective_subject__parent__course_name=_cr_name_fallback,
+                          elective_subject__department_group__department_mappings__department_id=_sec_dept_id_f,
+                          elective_subject__department_group__department_mappings__is_active=True)
+                    )
                     teach_assign = ta_qs.order_by(
                         models.Case(
                             models.When(section=section, then=models.Value(0)),
@@ -2701,8 +2720,17 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                     assign = TimetableAssignment.objects.filter(section=section, period=period, day=day).first()
                     if assign and not getattr(assign, 'staff', None):
                         from .models import TeachingAssignment as _TA
+                        _bulk_cr_name = getattr(getattr(assign, 'curriculum_row', None), 'course_name', None)
+                        _sec_dept_id_b = getattr(getattr(getattr(section, 'batch', None), 'course', None), 'department_id', None) if section else None
                         ta_match_qs = _TA.objects.filter(is_active=True, staff=staff_profile)
-                        ta_match_qs = ta_match_qs.filter((Q(curriculum_row=assign.curriculum_row) | Q(elective_subject__parent=assign.curriculum_row))).filter(Q(section=section) | Q(section__isnull=True))
+                        ta_match_qs = ta_match_qs.filter(
+                            Q(curriculum_row=assign.curriculum_row) |
+                            Q(elective_subject__parent=assign.curriculum_row) |
+                            Q(elective_subject__department_group__isnull=False,
+                              elective_subject__parent__course_name=_bulk_cr_name,
+                              elective_subject__department_group__department_mappings__department_id=_sec_dept_id_b,
+                              elective_subject__department_group__department_mappings__is_active=True)
+                        ).filter(Q(section=section) | Q(section__isnull=True))
                         if ta_match_qs.exists():
                             ta = assign
                             teach_assign = ta_match_qs.order_by(
@@ -2751,9 +2779,18 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                 from .models import TeachingAssignment as _TA
                 ta_qs = _TA.objects.filter(is_active=True, staff=staff_profile).filter(Q(section=section) | Q(section__isnull=True))
                 cr_id = getattr(ta, 'curriculum_row_id', None) if ta is not None else None
+                _cr_name_bulk = getattr(getattr(ta, 'curriculum_row', None), 'course_name', None) if ta is not None else None
+                _sec_dept_id_bk = getattr(getattr(getattr(section, 'batch', None), 'course', None), 'department_id', None) if section else None
                 if cr_id:
                     # Filter by the period's curriculum_row — only match if staff actually teaches it.
-                    ta_qs = ta_qs.filter(Q(curriculum_row_id=cr_id) | Q(elective_subject__parent_id=cr_id))
+                    ta_qs = ta_qs.filter(
+                        Q(curriculum_row_id=cr_id) |
+                        Q(elective_subject__parent_id=cr_id) |
+                        Q(elective_subject__department_group__isnull=False,
+                          elective_subject__parent__course_name=_cr_name_bulk,
+                          elective_subject__department_group__department_mappings__department_id=_sec_dept_id_bk,
+                          elective_subject__department_group__department_mappings__is_active=True)
+                    )
                     teach_assign = ta_qs.order_by(
                         models.Case(
                             models.When(section=section, then=models.Value(0)),
@@ -3051,7 +3088,16 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                         assign = TimetableAssignment.objects.filter(section=section_obj, period=period_obj, day=dow).first()
                         if assign:
                             from academics.models import TeachingAssignment as _TA
-                            ta_match_qs = _TA.objects.filter(is_active=True, staff=staff_profile).filter((Q(curriculum_row=assign.curriculum_row) | Q(elective_subject__parent=assign.curriculum_row))).filter(Q(section=section_obj) | Q(section__isnull=True))
+                            _auto_cr_name = getattr(getattr(assign, 'curriculum_row', None), 'course_name', None)
+                            _sec_dept_id_auto = getattr(getattr(getattr(section_obj, 'batch', None), 'course', None), 'department_id', None) if section_obj else None
+                            ta_match_qs = _TA.objects.filter(is_active=True, staff=staff_profile).filter(
+                                Q(curriculum_row=assign.curriculum_row) |
+                                Q(elective_subject__parent=assign.curriculum_row) |
+                                Q(elective_subject__department_group__isnull=False,
+                                  elective_subject__parent__course_name=_auto_cr_name,
+                                  elective_subject__department_group__department_mappings__department_id=_sec_dept_id_auto,
+                                  elective_subject__department_group__department_mappings__is_active=True)
+                            ).filter(Q(section=section_obj) | Q(section__isnull=True))
                             try:
                                 match_exists = ta_match_qs.exists()
                             except Exception:
@@ -3067,7 +3113,16 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                             assign_any = TimetableAssignment.objects.filter(section=section_obj, period=period_obj).first()
                             if assign_any:
                                 from academics.models import TeachingAssignment as _TA
-                                ta_match_qs = _TA.objects.filter(is_active=True, staff=staff_profile).filter((Q(curriculum_row=assign_any.curriculum_row) | Q(elective_subject__parent=assign_any.curriculum_row))).filter(Q(section=section_obj) | Q(section__isnull=True))
+                                _auto_any_cr_name = getattr(getattr(assign_any, 'curriculum_row', None), 'course_name', None)
+                                _sec_dept_id_any = getattr(getattr(getattr(section_obj, 'batch', None), 'course', None), 'department_id', None) if section_obj else None
+                                ta_match_qs = _TA.objects.filter(is_active=True, staff=staff_profile).filter(
+                                    Q(curriculum_row=assign_any.curriculum_row) |
+                                    Q(elective_subject__parent=assign_any.curriculum_row) |
+                                    Q(elective_subject__department_group__isnull=False,
+                                      elective_subject__parent__course_name=_auto_any_cr_name,
+                                      elective_subject__department_group__department_mappings__department_id=_sec_dept_id_any,
+                                      elective_subject__department_group__department_mappings__is_active=True)
+                                ).filter(Q(section=section_obj) | Q(section__isnull=True))
                                 try:
                                     match_exists = ta_match_qs.exists()
                                 except Exception:
@@ -3184,7 +3239,16 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                                     cr = None
                             ta_match = None
                             if cr is not None:
-                                ta_match = _TA.objects.filter(is_active=True, staff=staff_profile, elective_subject__isnull=False).filter(Q(elective_subject__parent=cr) | Q(curriculum_row=cr)).filter(Q(section=section_obj) | Q(section__isnull=True)).select_related('elective_subject').first()
+                                _ta_cr_name = getattr(cr, 'course_name', None) if cr is not None else None
+                                _sec_dept_id_ta = getattr(getattr(getattr(section_obj, 'batch', None), 'course', None), 'department_id', None) if section_obj else None
+                                ta_match = _TA.objects.filter(is_active=True, staff=staff_profile, elective_subject__isnull=False).filter(
+                                    Q(elective_subject__parent=cr) |
+                                    Q(curriculum_row=cr) |
+                                    Q(elective_subject__department_group__isnull=False,
+                                      elective_subject__parent__course_name=_ta_cr_name,
+                                      elective_subject__department_group__department_mappings__department_id=_sec_dept_id_ta,
+                                      elective_subject__department_group__department_mappings__is_active=True)
+                                ).filter(Q(section=section_obj) | Q(section__isnull=True)).select_related('elective_subject').first()
                             if ta_match and getattr(ta_match, 'elective_subject', None):
                                 from curriculum.models import ElectiveChoice
                                 es = ta_match.elective_subject

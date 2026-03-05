@@ -57,6 +57,8 @@ function CellPopup(props: any) {
     selectedOtherDept,
     setSelectedOtherDept,
     setLastSelectedCurriculumRaw,
+    selectedElectiveSubjectId,
+    setSelectedElectiveSubjectId,
     otherDeptStaffList,
     setOtherDeptStaffList,
   } = props
@@ -431,6 +433,13 @@ function CellPopup(props: any) {
                           try{ console.debug('OtherDept subject select changed', { raw, resolved: val, selectedOtherDept, deptCurriculumSample: (deptCurriculum||[]).slice(0,5) }) } catch(e){}
                           setLastSelectedCurriculumRaw && setLastSelectedCurriculumRaw(String(raw))
                           setEditingCurriculumId(val)
+                          // detect if this is a child elective item so we can pass elective_subject_id
+                          const picked = (selectedOtherDept ? deptCurriculum : subjectSource).find((c:any) => String(resolveCurriculumId(c)) === String(raw) || String(c.id) === String(raw))
+                          if (picked?.is_elective_child) {
+                            setSelectedElectiveSubjectId && setSelectedElectiveSubjectId(picked.id)
+                          } else {
+                            setSelectedElectiveSubjectId && setSelectedElectiveSubjectId(null)
+                          }
                           setEditingBatchId(null)
                           if(val){
                             await loadBatchesForCurriculum(val)
@@ -443,9 +452,17 @@ function CellPopup(props: any) {
                         <option value="">Select subject…</option>
                         {(selectedOtherDept ? deptCurriculum : curriculum)
                           .filter((c: any) => Boolean(c))
-                          .map((c: any) => (
-                            <option key={c.id} value={resolveCurriculumId(c)}>{c.course_code} — {c.course_name}</option>
-                          ))}
+                          .map((c: any) => {
+                            const isChild = Boolean(c.is_elective_child)
+                            let label = `${c.course_code || ''} — ${c.course_name || ''}`
+                            if (isChild) {
+                              label = `↳ ${c.course_code || ''} — ${c.course_name || ''}`
+                              if (c.is_cross_department && c.owner_department_short_name) {
+                                label += ` (${c.owner_department_short_name})`
+                              }
+                            }
+                            return <option key={c.id} value={resolveCurriculumId(c)}>{label}</option>
+                          })}
                       </select>
                     </div>
                     {deptCurriculumError && (
@@ -478,6 +495,13 @@ function CellPopup(props: any) {
                           try{ console.debug('Subject select changed', { raw, resolved: val, selectedOtherDept }) } catch(e){}
                           setLastSelectedCurriculumRaw && setLastSelectedCurriculumRaw(String(raw))
                           setEditingCurriculumId(val)
+                          // detect if this is a child elective item
+                          const pickedCurr = subjectSource.find((c:any) => String(resolveCurriculumId(c)) === String(raw) || String(c.id) === String(raw))
+                          if (pickedCurr?.is_elective_child) {
+                            setSelectedElectiveSubjectId && setSelectedElectiveSubjectId(pickedCurr.id)
+                          } else {
+                            setSelectedElectiveSubjectId && setSelectedElectiveSubjectId(null)
+                          }
                           setEditingBatchId(null)
                           if(val){
                             await loadBatchesForCurriculum(val)
@@ -494,12 +518,22 @@ function CellPopup(props: any) {
                             if (selectedOtherDept) {
                               return Boolean(c.is_elective)
                             }
+                            // ElectiveSubject children bypass regulation — they match by name in backend
+                            if (c.is_elective_child) return true
                             if (!currentSectionRegulation?.code) return true
                             return c.regulation === currentSectionRegulation.code
                           })
-                          .map((c: any) => (
-                            <option key={c.id} value={resolveCurriculumId(c)}>{c.course_code} — {c.course_name}</option>
-                          ))}
+                          .map((c: any) => {
+                            const isChild = Boolean(c.is_elective_child)
+                            let label = `${c.course_code || ''} — ${c.course_name || ''}`
+                            if (isChild) {
+                              label = `↳ ${c.course_code || ''} — ${c.course_name || ''}`
+                              if (c.is_cross_department && c.owner_department_short_name) {
+                                label += ` (${c.owner_department_short_name})`
+                              }
+                            }
+                            return <option key={c.id} value={resolveCurriculumId(c)}>{label}</option>
+                          })}
                       </select>
                     </div>
                     
@@ -869,6 +903,7 @@ export default function TimetableEditor(){
   const [editingCell, setEditingCell] = useState<{day:number, periodId:number} | null>(null)
   const [editingCurriculumId, setEditingCurriculumId] = useState<number | null>(null)
   const [lastSelectedCurriculumRaw, setLastSelectedCurriculumRaw] = useState<string | null>(null)
+  const [selectedElectiveSubjectId, setSelectedElectiveSubjectId] = useState<number | null>(null)
   const [editingAvailableBatches, setEditingAvailableBatches] = useState<any[]>([])
   const [editingBatchId, setEditingBatchId] = useState<number | null>(null)
   const [showCellPopup, setShowCellPopup] = useState(false)
@@ -1043,6 +1078,8 @@ export default function TimetableEditor(){
       if(!curriculumId) return alert('Select a curriculum row first')
       payload.curriculum_row = curriculumId
       if(editingBatchId) payload.subject_batch_id = editingBatchId
+      // If user selected a specific elective child, also pass elective_subject_id
+      if(selectedElectiveSubjectId) payload.elective_subject_id = selectedElectiveSubjectId
     }
     // if assigning from Other Dept, include metadata so backend can honor chosen dept/option
     if(isOtherDept && selectedOtherDept) {
@@ -1064,6 +1101,7 @@ export default function TimetableEditor(){
     
     // reset editor state
     setEditingCurriculumId(null)
+    setSelectedElectiveSubjectId(null)
     setEditingAvailableBatches([])
     setEditingBatchId(null)
     setCustomAssignmentText('')
@@ -1511,7 +1549,9 @@ export default function TimetableEditor(){
               setIsOtherDept={setIsOtherDept}
               selectedOtherDept={selectedOtherDept}
               setSelectedOtherDept={setSelectedOtherDept}
-                  setLastSelectedCurriculumRaw={setLastSelectedCurriculumRaw}
+              setLastSelectedCurriculumRaw={setLastSelectedCurriculumRaw}
+              selectedElectiveSubjectId={selectedElectiveSubjectId}
+              setSelectedElectiveSubjectId={setSelectedElectiveSubjectId}
                 otherDeptStaffList={otherDeptStaffList}
                 setOtherDeptStaffList={setOtherDeptStaffList}
               departments={departments}

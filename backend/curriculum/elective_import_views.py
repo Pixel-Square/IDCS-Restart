@@ -46,12 +46,12 @@ class ElectiveChoiceTemplateDownloadView(APIView):
             ws.title = "Elective Choices"
             
             # Headers
-            headers = ['student_reg_no', 'elective_subject_code', 'department', 'academic_year', 'is_active']
+            headers = ['student_reg_no', 'elective_subject_code', 'department', 'semester_type', 'academic_year', 'is_active']
             ws.append(headers)
             
             # Sample row
             sample_dept = dept_names[0] if dept_names else 'AI&DS'
-            ws.append(['REG001', 'ELEC001', sample_dept, '2025-2026', 'TRUE'])
+            ws.append(['REG001', 'ELEC001', sample_dept, 'ODD', '2025-2026', 'TRUE'])
             
             # Add data validation (dropdown) for department column (column C)
             if dept_names:
@@ -59,22 +59,40 @@ class ElectiveChoiceTemplateDownloadView(APIView):
                 dept_list = ','.join(dept_names)
                 
                 # Create data validation for department column
-                dv = DataValidation(type="list", formula1=f'"{dept_list}"', allow_blank=True)
-                dv.error = 'Please select a department from the dropdown'
-                dv.errorTitle = 'Invalid Department'
-                dv.prompt = 'Select a department'
-                dv.promptTitle = 'Department'
+                dv_dept = DataValidation(type="list", formula1=f'"{dept_list}"', allow_blank=True)
+                dv_dept.error = 'Please select a department from the dropdown'
+                dv_dept.errorTitle = 'Invalid Department'
+                dv_dept.prompt = 'Select a department'
+                dv_dept.promptTitle = 'Department'
                 
                 # Apply validation to department column (C2:C1000)
-                ws.add_data_validation(dv)
-                dv.add(f'C2:C1000')
+                ws.add_data_validation(dv_dept)
+                dv_dept.add(f'C2:C1000')
+            
+            # Add data validation (dropdown) for semester_type column (column D)
+            sem_types = 'ODD,EVEN'
+            dv_sem_type = DataValidation(type="list", formula1=f'"{sem_types}"', allow_blank=False)
+            dv_sem_type.error = 'Please select ODD or EVEN'
+            dv_sem_type.errorTitle = 'Invalid Semester Type'
+            dv_sem_type.prompt = 'Select semester type (ODD or EVEN)'
+            dv_sem_type.promptTitle = 'Semester Type'
+            
+            # Apply validation to semester_type column (D2:D1000)
+            ws.add_data_validation(dv_sem_type)
+            dv_sem_type.add(f'D2:D1000')
+            
+            # Format academic_year column (E) as text to prevent Excel auto-formatting
+            from openpyxl.styles import numbers
+            for row in range(2, 1001):  # Apply to rows 2-1000
+                ws[f'E{row}'].number_format = numbers.FORMAT_TEXT
             
             # Adjust column widths
             ws.column_dimensions['A'].width = 20  # student_reg_no
             ws.column_dimensions['B'].width = 25  # elective_subject_code
             ws.column_dimensions['C'].width = 15  # department
-            ws.column_dimensions['D'].width = 20  # academic_year
-            ws.column_dimensions['E'].width = 12  # is_active
+            ws.column_dimensions['D'].width = 15  # semester_type
+            ws.column_dimensions['E'].width = 20  # academic_year
+            ws.column_dimensions['F'].width = 12  # is_active
             
             # Save to bytes
             from io import BytesIO
@@ -157,7 +175,7 @@ class ElectiveChoiceBulkImportView(APIView):
         # Process rows
         try:
             from .models import ElectiveChoice, ElectiveSubject
-            from academics.models import StudentProfile, AcademicYear
+            from academics.models import StudentProfile, AcademicYear, Department
             
             created_count = 0
             updated_count = 0
@@ -168,11 +186,18 @@ class ElectiveChoiceBulkImportView(APIView):
                     try:
                         student_reg = row.get('student_reg_no', '').strip()
                         elective_code = row.get('elective_subject_code', '').strip()
+                        dept_name = row.get('department', '').strip()
+                        semester_type = row.get('semester_type', '').strip().upper()
                         ay_name = row.get('academic_year', '').strip()
                         is_active_str = row.get('is_active', 'TRUE').strip().upper()
                         
-                        if not student_reg or not elective_code:
-                            errors.append(f'Row {idx}: Missing required fields')
+                        if not student_reg or not elective_code or not dept_name or not semester_type:
+                            errors.append(f'Row {idx}: Missing required fields (student_reg_no, elective_subject_code, department, semester_type)')
+                            continue
+                        
+                        # Validate semester_type
+                        if semester_type not in ('ODD', 'EVEN'):
+                            errors.append(f'Row {idx}: semester_type must be ODD or EVEN, got "{semester_type}"')
                             continue
                         
                         # Find student
@@ -182,30 +207,69 @@ class ElectiveChoiceBulkImportView(APIView):
                             errors.append(f'Row {idx}: Student with reg_no "{student_reg}" not found')
                             continue
                         
-                        # Find elective subject
+                        # Find department
                         try:
-                            elective = ElectiveSubject.objects.get(course_code=elective_code)
-                        except ElectiveSubject.DoesNotExist:
-                            errors.append(f'Row {idx}: Elective subject with code "{elective_code}" not found')
+                            department = Department.objects.get(short_name__iexact=dept_name)
+                        except Department.DoesNotExist:
+                            errors.append(f'Row {idx}: Department with short_name "{dept_name}" not found')
                             continue
                         
-                        # Find academic year
+                        # Find academic year with parity
                         academic_year = None
                         if ay_name:
                             try:
-                                academic_year = AcademicYear.objects.filter(name=ay_name).first()
+                                # Try exact match first
+                                academic_year = AcademicYear.objects.filter(name=ay_name, parity=semester_type).first()
+                                
+                                # If not found, try normalizing the format
                                 if not academic_year:
-                                    errors.append(f'Row {idx}: Academic year "{ay_name}" not found')
+                                    # Convert "2025-26" to "2025-2026" or "2025-2026" to "2025-26"
+                                    import re
+                                    match = re.match(r'^(\d{4})-(\d{2,4})$', ay_name)
+                                    if match:
+                                        start_year = match.group(1)
+                                        end_year = match.group(2)
+                                        
+                                        # Try alternative formats
+                                        if len(end_year) == 2:
+                                            # Convert "2025-26" to "2025-2026"
+                                            full_end = start_year[:2] + end_year
+                                            academic_year = AcademicYear.objects.filter(name=f'{start_year}-{full_end}', parity=semester_type).first()
+                                        elif len(end_year) == 4:
+                                            # Convert "2025-2026" to "2025-26"
+                                            short_end = end_year[-2:]
+                                            academic_year = AcademicYear.objects.filter(name=f'{start_year}-{short_end}', parity=semester_type).first()
+                                
+                                if not academic_year:
+                                    # Get available academic years for better error message
+                                    available = AcademicYear.objects.filter(parity=semester_type).values_list('name', flat=True)[:5]
+                                    available_str = ', '.join(available) if available else 'none'
+                                    errors.append(f'Row {idx}: Academic year "{ay_name}" with semester type "{semester_type}" not found. Available: {available_str}')
                                     continue
                             except Exception as e:
                                 errors.append(f'Row {idx}: Error finding academic year: {str(e)}')
                                 continue
                         else:
-                            # Use active academic year
-                            academic_year = AcademicYear.objects.filter(is_active=True).first()
+                            # Use active academic year with matching parity
+                            academic_year = AcademicYear.objects.filter(is_active=True, parity=semester_type).first()
                             if not academic_year:
-                                errors.append(f'Row {idx}: No active academic year found. Please specify academic_year in CSV.')
+                                errors.append(f'Row {idx}: No active academic year found with semester type "{semester_type}". Please specify academic_year in CSV.')
                                 continue
+                        
+                        # Find elective subject by code, department, and semester (which should match the academic year parity)
+                        try:
+                            # Filter by course_code and department
+                            elective = ElectiveSubject.objects.filter(
+                                course_code=elective_code,
+                                department=department
+                            ).first()
+                            
+                            if not elective:
+                                errors.append(f'Row {idx}: Elective subject with code "{elective_code}" in department "{dept_name}" not found')
+                                continue
+                        except Exception as e:
+                            errors.append(f'Row {idx}: Error finding elective subject: {str(e)}')
+                            continue
                         
                         is_active = is_active_str in ('TRUE', '1', 'YES', 'Y')
                         

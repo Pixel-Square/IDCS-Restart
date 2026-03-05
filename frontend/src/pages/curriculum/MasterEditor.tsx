@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import CurriculumLayout from './CurriculumLayout';
 import CLASS_TYPES, { normalizeClassType, QP_TYPES } from '../../constants/classTypes';
-import { createMaster, updateMaster, fetchMasters, fetchDeptRows } from '../../services/curriculum';
+import { createMaster, updateMaster, fetchMasters } from '../../services/curriculum';
+import fetchWithAuth from '../../services/fetchAuth';
 import { BookOpen, Save, X as CancelIcon } from 'lucide-react';
 
 export default function MasterEditor() {
@@ -24,13 +25,12 @@ export default function MasterEditor() {
     }
   }, [effectiveId]);
 
-  // load departments list for checkboxes
+  // load departments list for checkboxes (curriculum permissions)
   useEffect(() => {
-    fetchDeptRows().then(rows => {
-      const map = new Map<number, any>();
-      rows.forEach(r => map.set(r.department.id, r.department));
-      setDepartments(Array.from(map.values()));
-    }).catch(() => setDepartments([]));
+    fetchWithAuth('/api/curriculum/departments/')
+      .then(res => res.json())
+      .then(data => setDepartments(data.results || []))
+      .catch(() => setDepartments([]));
   }, []);
 
   async function save() {
