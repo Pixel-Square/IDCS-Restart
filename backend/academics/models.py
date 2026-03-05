@@ -78,6 +78,21 @@ class Department(models.Model):
     # Short form for display (abbreviation) e.g. 'CSE', 'EEE'
     short_name = models.CharField(max_length=32, blank=True)
 
+    # S&H hierarchy: sub-departments (Maths, English, Tamil, Physics, Chemistry)
+    # point to their parent S&H department.
+    parent = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='sub_departments',
+        help_text='For S&H sub-departments, points to the parent S&H department.',
+    )
+    # Marks the main managing body for Year-1 students (i.e. S&H itself).
+    is_sh_main = models.BooleanField(
+        default=False,
+        help_text='True for the S&H department that manages Year-1 sections.',
+    )
+
     class Meta:
         ordering = ('code',)
 
@@ -123,6 +138,18 @@ class Section(models.Model):
     name = models.CharField(max_length=8)
     batch = models.ForeignKey('Batch', on_delete=models.CASCADE, related_name='sections')
     semester = models.ForeignKey('Semester', on_delete=models.PROTECT, null=True, blank=True, related_name='sections')
+
+    # For Year-1 S&H sections, this points to the S&H department so that
+    # S&H HOD/staff can see and manage these sections regardless of the
+    # batch's core department.
+    # NULL for all normal Year 2-4 sections (no override needed).
+    managing_department = models.ForeignKey(
+        'Department',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='managed_sections',
+        help_text='Override managing department for Year-1 S&H sections.',
+    )
 
     class Meta:
         unique_together = ('name', 'batch')
@@ -183,9 +210,11 @@ class Section(models.Model):
 
 
 class Batch(models.Model):
-    """A student cohort/batch for a given course.
+    """A student cohort/batch for a given course or department.
 
-    Example: Batch name '2023' for B.Tech CSE course. Sections belong to a Batch.
+    For normal 4-year programmes: set `course` (implies department via course.department).
+    For special/S&H Year-1 batches: leave `course` blank and set `department` directly.
+
     The `name` column is kept for ORM lookup compatibility; its value is
     auto-populated from `batch_year.name` whenever `batch_year` is set.
     """
@@ -197,13 +226,53 @@ class Batch(models.Model):
         help_text='Shared batch year label (source of truth for the name)',
     )
     name = models.CharField(max_length=32)
-    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='batches')
+    course = models.ForeignKey(
+        Course,
+        on_delete=models.CASCADE,
+        null=True, blank=True,
+        related_name='batches',
+        help_text='Required for regular degree batches. Leave blank for S&H / dept-only batches.',
+    )
+    department = models.ForeignKey(
+        'Department',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='direct_batches',
+        help_text='Set this when there is no Course (e.g. S&H Year-1 batches).',
+    )
     start_year = models.PositiveSmallIntegerField(null=True, blank=True)
     end_year = models.PositiveSmallIntegerField(null=True, blank=True)
     regulation = models.ForeignKey('curriculum.Regulation', on_delete=models.SET_NULL, null=True, blank=True, related_name='batches', help_text='Curriculum regulation this batch follows')
 
     class Meta:
-        unique_together = ('name', 'course')
+        constraints = [
+            # Normal batches (course-based): unique per course+name
+            models.UniqueConstraint(
+                fields=['name', 'course'],
+                condition=Q(course__isnull=False),
+                name='unique_batch_name_course',
+            ),
+            # Dept-only batches (S&H etc.): unique per department+name
+            models.UniqueConstraint(
+                fields=['name', 'department'],
+                condition=Q(course__isnull=True),
+                name='unique_batch_name_department',
+            ),
+        ]
+
+    def clean(self):
+        if not self.course_id and not self.department_id:
+            raise ValidationError('Either a Course or a Department must be set on a Batch.')
+
+    @property
+    def effective_department(self):
+        """Returns the owning Department regardless of whether the batch uses course or direct dept."""
+        if self.course_id:
+            try:
+                return self.course.department
+            except Exception:
+                return None
+        return self.department
 
     def save(self, *args, **kwargs):
         # If batch_year is linked, keep name in sync from it
@@ -225,7 +294,19 @@ class Batch(models.Model):
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"{self.course.name} - {self.name}"
+        if self.course_id:
+            try:
+                label = self.course.name
+            except Exception:
+                label = '?'
+        elif self.department_id:
+            try:
+                label = self.department.short_name
+            except Exception:
+                label = '?'
+        else:
+            label = '?'
+        return f"{label} - {self.name}"
 
 
 class BatchYear(models.Model):
@@ -307,6 +388,18 @@ class StudentProfile(models.Model):
     section = models.ForeignKey(Section, on_delete=models.SET_NULL, null=True, blank=True, related_name='students')
     batch = models.CharField(max_length=32, blank=True)
     status = models.CharField(max_length=16, choices=STUDENT_STATUS_CHOICES, default='ACTIVE')
+
+    # Permanent degree department — never changes even when the student is
+    # in S&H sections during Year 1.  For Year 2+ students this mirrors
+    # section.batch.course.department; for Year 1 it is the core dept
+    # (CSE, IT, EEE …) while section points to an S&H section.
+    home_department = models.ForeignKey(
+        'Department',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='home_students',
+        help_text='Permanent degree department (unchanged during Year-1 S&H placement).',
+    )
 
     # Optional mobile number for OTP verification (kept on profile as requested)
     mobile_number = models.CharField(max_length=32, blank=True, default='')

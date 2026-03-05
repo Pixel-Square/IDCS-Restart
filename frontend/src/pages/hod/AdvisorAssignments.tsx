@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { User, Edit, BookOpen, Save, X, Trash2, Edit2 } from 'lucide-react'
+import { User, Edit, BookOpen, Save, X, Trash2, Edit2, RefreshCw } from 'lucide-react'
 import fetchWithAuth from '../../services/fetchAuth'
 import { getCachedMe } from '../../services/auth'
 
@@ -162,19 +162,30 @@ export default function AdvisorAssignments() {
               </div>
             </div>
             {!loading && sections.length > 0 && (
-              <button
-                onClick={() => setBulkEditMode(true)}
-                disabled={bulkEditMode}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 md:self-start ${
-                  bulkEditMode
-                    ? 'bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-300'
-                    : 'bg-blue-100 text-blue-700 hover:bg-blue-200 border border-blue-300'
-                }`}
-                title="Edit all assignments at once"
-              >
-                <Edit2 className="h-4 w-4" />
-                Common Edit
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => fetchData()}
+                  disabled={loading}
+                  title="Refresh — reloads sections, staff and assignments"
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                  <span className="hidden sm:inline">Refresh</span>
+                </button>
+                <button
+                  onClick={() => setBulkEditMode(true)}
+                  disabled={bulkEditMode}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 md:self-start ${
+                    bulkEditMode
+                      ? 'bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-300'
+                      : 'bg-blue-100 text-blue-700 hover:bg-blue-200 border border-blue-300'
+                  }`}
+                  title="Edit all assignments at once"
+                >
+                  <Edit2 className="h-4 w-4" />
+                  Common Edit
+                </button>
+              </div>
             )}
           </div>
         </div>

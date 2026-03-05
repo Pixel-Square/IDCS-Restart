@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import fetchWithAuth from '../../services/fetchAuth'
-import { Users, GraduationCap, Mail, Loader2, UserCircle2, ChevronLeft, ChevronRight, Building2, Globe, UserCheck, Heart } from 'lucide-react'
+import { Users, GraduationCap, Mail, Loader2, UserCircle2, ChevronLeft, ChevronRight, Building2, Globe, UserCheck, Heart, RefreshCw } from 'lucide-react'
 
 // Cache key and expiry time (5 minutes)
 const CACHE_KEY = 'students_page_cache'
@@ -553,12 +553,23 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
               <p className="text-slate-600 text-sm">{currentView?.description || 'View and manage students'}</p>
             </div>
           </div>
-          <div className="px-4 py-2 bg-gradient-to-r from-slate-100 to-indigo-100 rounded-lg">
-            <div className="flex items-center gap-2">
-              <Users className="w-5 h-5 text-indigo-700" />
-              <span className="text-sm font-semibold text-indigo-900">
-                {totalLabel}
-              </span>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => { clearCache(); fetchSectionsOrStudents() }}
+              disabled={loading}
+              title="Refresh — clears cached data and reloads sections"
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-slate-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">Refresh</span>
+            </button>
+            <div className="px-4 py-2 bg-gradient-to-r from-slate-100 to-indigo-100 rounded-lg">
+              <div className="flex items-center gap-2">
+                <Users className="w-5 h-5 text-indigo-700" />
+                <span className="text-sm font-semibold text-indigo-900">
+                  {totalLabel}
+                </span>
+              </div>
             </div>
           </div>
         </div>
