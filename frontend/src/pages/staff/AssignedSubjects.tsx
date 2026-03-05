@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { fetchAssignedSubjects } from '../../services/staff'
 import { fetchSubjectBatches, createSubjectBatch } from '../../services/subjectBatches'
 import fetchWithAuth from '../../services/fetchAuth'
-import { BookOpen, Users, AlertCircle, FileText, RotateCcw } from 'lucide-react'
+import { BookOpen, Users, AlertCircle, FileText, RotateCcw, Search } from 'lucide-react'
 
 type AssignedSubject = {
   id: number
@@ -50,6 +50,7 @@ export default function AssignedSubjectsPage() {
   const [editRangeStart, setEditRangeStart] = useState('')
   const [editRangeEnd, setEditRangeEnd] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
+  const [editSearchQuery, setEditSearchQuery] = useState('')
 
   // Fix scroll container height to allow all students to be visible
   React.useEffect(() => {
@@ -322,12 +323,12 @@ export default function AssignedSubjectsPage() {
     setEditingSelectedStudentIds(selectedIds)
   }
 
-  // Apply edit filter when filter type or values change
+  // Apply edit filter only when user explicitly changes filter options (not on initial load)
   React.useEffect(() => {
     if (editingBatchStudents.length > 0 && editingBatchId) {
       applyEditSelectionFilter()
     }
-  }, [editSelectionFilter, editCustomNumbers, editRangeStart, editRangeEnd, editingBatchStudents, editingBatchId])
+  }, [editSelectionFilter, editCustomNumbers, editRangeStart, editRangeEnd])
 
   async function submitPicker(){
     if (!pickerItem) return
@@ -363,10 +364,11 @@ export default function AssignedSubjectsPage() {
     setEditingBatchName(b.name || '')
     setEditingBatch(b)
     setEditingSelectedStudentIds((b.students || []).map((s:any) => s.id))
-    setEditSelectionFilter('all')
+    // Don't reset filter - keep pre-selected students
     setEditCustomNumbers('')
     setEditRangeStart('')
     setEditRangeEnd('')
+    setEditSearchQuery('')
     
     // Load all available students for the batch's curriculum_row
     if (b.curriculum_row && b.curriculum_row.id) {
@@ -376,14 +378,14 @@ export default function AssignedSubjectsPage() {
         if (matchingItem) {
           let sdata
           if (matchingItem.section_id) {
-            // Regular subject with section
-            const sres = await fetchWithAuth(`/api/academics/sections/${matchingItem.section_id}/students/`)
+            // Regular subject with section - fetch all students with large page_size
+            const sres = await fetchWithAuth(`/api/academics/sections/${matchingItem.section_id}/students/?page_size=1000`)
             if (sres.ok) {
               sdata = await sres.json()
             }
           } else if (matchingItem.elective_subject_id) {
             // Elective subject
-            const sres = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${matchingItem.elective_subject_id}`)
+            const sres = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${matchingItem.elective_subject_id}&page_size=1000`)
             if (sres.ok) {
               sdata = await sres.json()
             }
@@ -657,59 +659,6 @@ export default function AssignedSubjectsPage() {
               </div>
             ))}
           </div>
-        </div>
-      )}
-
-      {/* Continue with batches section - keeping it as is for now */}
-      {!loading && !error && items.length > 0 && (
-        <div className="mt-6">
-          {items.map((item, index) => {
-            const crId = item.curriculum_row_id || item.curriculum_row?.id
-            if (!crId) return null
-            const relatedBatches = batchesByCurriculum[crId] || []
-            if (relatedBatches.length === 0) return null
-            return (
-              <div key={`${item.id}-batches`} className="bg-white rounded-xl shadow-lg p-4 md:p-6 mb-4">
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <h3 className="text-base md:text-lg font-semibold text-gray-900">{item.subject_name || 'Subject'}</h3>
-                    {item.subject_code && <p className="text-xs md:text-sm text-gray-600">{item.subject_code}</p>}
-                  </div>
-                  <span className="text-xs md:text-sm text-gray-500">{relatedBatches.length} batch{relatedBatches.length !== 1 ? 'es' : ''}</span>
-                </div>
-                <div className="space-y-3">
-                  {relatedBatches.map(b => (
-                    <div key={b.id} className="border border-gray-200 rounded-lg p-3 md:p-4 hover:border-blue-300 transition-colors">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
-                        <div className="font-medium text-gray-900 text-sm md:text-base">{b.name}</div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs md:text-sm text-gray-600">{(b.students || []).length} students</span>
-                          <button 
-                            className="text-blue-600 hover:text-blue-700 text-xs md:text-sm font-medium"
-                            onClick={() => openEditBatchModal(b)}
-                          >
-                            Edit
-                          </button>
-                          <button 
-                            className="text-red-600 hover:text-red-700 text-xs md:text-sm font-medium"
-                            onClick={() => deleteBatch(b.id)}
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </div>
-                      {b.students && b.students.length > 0 && (
-                        <div className="text-xs md:text-sm text-gray-600">
-                          {b.students.slice(0, 3).map((s: any) => s.reg_no || s.username).join(', ')}
-                          {b.students.length > 3 && ` +${b.students.length - 3} more`}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )
-          })}
         </div>
       )}
 
@@ -1073,65 +1022,86 @@ export default function AssignedSubjectsPage() {
       {/* Batch Edit Modal */}
       {editingBatchId && editingBatch && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[80vh] overflow-hidden">
-            <div className="p-6 border-b border-gray-200">
-              <div className="flex justify-between items-start">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="p-3 border-b border-gray-200 flex-shrink-0">
+              <div className="flex justify-between items-start mb-2">
                 <div>
-                  <h3 className="text-xl font-bold text-gray-900 mb-1">
+                  <h3 className="text-lg font-bold text-gray-900">
                     Edit Batch
                   </h3>
-                  <div className="text-sm text-gray-600">
+                  <div className="text-xs text-gray-600">
                     Modify batch name and student assignments
                   </div>
                 </div>
                 <div className="flex gap-2">
                   <button 
                     type="button" 
-                    className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded-lg font-medium transition-colors" 
+                    className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors" 
                     onClick={cancelBatchEdit}
                   >
                     Cancel
                   </button>
                   <button 
                     type="button" 
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors" 
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors" 
                     onClick={saveBatchEdit}
                   >
                     Save Changes
                   </button>
                 </div>
               </div>
-            </div>
-            
-            <div className="p-6">
+              
               {/* Batch Name */}
-              <div className="mb-6">
-                <label className="block text-sm font-semibold text-gray-900 mb-2">
+              <div>
+                <label className="block text-xs text-gray-600 mb-0.5">
                   Batch Name
                 </label>
                 <input 
                   type="text"
                   value={editingBatchName} 
                   onChange={e=>setEditingBatchName(e.target.value)} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
                   placeholder="Enter batch name"
                 />
               </div>
-
+            </div>
+            
+            <div className="p-6 overflow-y-auto flex-1">
               {/* Student Selection */}
-              <div>
-                <h4 className="font-semibold text-gray-900 mb-2 flex items-center justify-between">
-                  <span>Students ({editingSelectedStudentIds.length} selected)</span>
-                  <div className="text-sm text-gray-600">
-                    Click to add/remove students
+              <div className="mb-4">
+                <h4 className="font-semibold text-gray-900 mb-2">Students ({editingBatchStudents.length})</h4>
+                <p className="text-sm text-gray-600 mb-4">Select students to include in this batch - all {editingBatchStudents.length} students shown</p>
+                
+                {/* Search Field */}
+                <div className="mb-3">
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Search Students</label>
+                  <input
+                    type="text"
+                    placeholder="Search by name or registration number..."
+                    value={editSearchQuery}
+                    onChange={(e) => setEditSearchQuery(e.target.value)}
+                    className="w-full px-3 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                  />
+                  <div className="mt-2 text-xs text-gray-600">
+                    Selected: {editingSelectedStudentIds.length} of {editingBatchStudents.length} students
+                    {editSearchQuery.trim() && (
+                      <span className="ml-2 text-blue-600">
+                        (filtering {editingBatchStudents.filter(s => {
+                          const query = editSearchQuery.toLowerCase()
+                          const name = (s.username || s.full_name || '').toLowerCase()
+                          const regNo = (s.reg_no || '').toLowerCase()
+                          return name.includes(query) || regNo.includes(query)
+                        }).length} matches)
+                      </span>
+                    )}
                   </div>
-                </h4>
+                </div>
                 
                 {/* Edit Selection Filters */}
-                <div className="bg-gray-50 rounded-lg p-4 mb-4">
-                  <h5 className="font-medium text-gray-900 mb-3">Selection Options</h5>
+                <div className="bg-gray-50 rounded-lg p-3 mb-3">
+                  <h5 className="font-medium text-gray-900 mb-2 text-sm">Selection Options</h5>
                   
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                     <div>
                       <label className="flex items-center gap-2">
                         <input
@@ -1175,9 +1145,9 @@ export default function AssignedSubjectsPage() {
                     </div>
                   </div>
                   
-                  <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div>
-                      <label className="flex items-center gap-2 mb-2">
+                      <label className="flex items-center gap-2 mb-1.5">
                         <input
                           type="radio"
                           name="editSelectionFilter"
@@ -1194,12 +1164,12 @@ export default function AssignedSubjectsPage() {
                         value={editCustomNumbers}
                         onChange={(e) => setEditCustomNumbers(e.target.value)}
                         disabled={editSelectionFilter !== 'custom'}
-                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                        className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
                       />
                     </div>
                     
                     <div>
-                      <label className="flex items-center gap-2 mb-2">
+                      <label className="flex items-center gap-2 mb-1.5">
                         <input
                           type="radio"
                           name="editSelectionFilter"
@@ -1217,7 +1187,7 @@ export default function AssignedSubjectsPage() {
                           value={editRangeStart}
                           onChange={(e) => setEditRangeStart(e.target.value)}
                           disabled={editSelectionFilter !== 'range'}
-                          className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                          className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
                           min="1"
                           max="99"
                         />
@@ -1228,7 +1198,7 @@ export default function AssignedSubjectsPage() {
                           value={editRangeEnd}
                           onChange={(e) => setEditRangeEnd(e.target.value)}
                           disabled={editSelectionFilter !== 'range'}
-                          className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                          className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
                           min="1"
                           max="99"
                         />
@@ -1236,60 +1206,75 @@ export default function AssignedSubjectsPage() {
                     </div>
                   </div>
                   
-                  <div className="mt-3 text-xs text-gray-600">
-                    Selected: {editingSelectedStudentIds.length} of {editingBatchStudents.length} students
-                  </div>
-                </div>
-                
-                <div className="max-h-80 overflow-y-auto border border-gray-200 rounded-lg p-4">
-                  {editingBatchStudents.length === 0 ? (
-                    <div className="text-center text-gray-500 py-4">
-                      <Users className="w-8 h-8 mx-auto mb-2 text-gray-300" />
-                      <p>No students available for this batch</p>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      {(() => {
-                        // Sort students alphabetically by name for display
-                        const sortedStudents = [...editingBatchStudents].sort((a, b) => {
-                          const nameA = (a.username || a.full_name || a.reg_no || '').toLowerCase()
-                          const nameB = (b.username || b.full_name || b.reg_no || '').toLowerCase()
-                          return nameA.localeCompare(nameB)
-                        })
-                        
-                        return sortedStudents.map((s, index) => (
-                          <label 
-                            key={s.id} 
-                            className={`flex items-center gap-3 p-3 border rounded-lg cursor-pointer transition-colors ${
-                              editingSelectedStudentIds.includes(s.id) 
-                                ? 'border-blue-300 bg-blue-50' 
-                                : 'border-gray-200 hover:bg-gray-50'
-                            }`}
-                          >
-                            <input 
-                              type="checkbox" 
-                              checked={editingSelectedStudentIds.includes(s.id)} 
-                              onChange={() => toggleEditingStudentSelect(s.id)} 
-                              className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                            />
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs text-gray-400 w-6">{index + 1}.</span>
-                              <div>
-                                <div className="font-medium text-gray-900">
-                                  {s.username || s.full_name || s.reg_no}
-                                </div>
-                                {s.reg_no && (
-                                  <div className="text-xs text-gray-500">{s.reg_no}</div>
-                                )}
-                              </div>
-                            </div>
-                          </label>
-                        ))
-                      })()}
-                    </div>
-                  )}
+
                 </div>
               </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {(() => {
+                    // Sort students alphabetically by name for display
+                    const sortedStudents = [...editingBatchStudents].sort((a, b) => {
+                      const nameA = (a.username || a.full_name || a.reg_no || '').toLowerCase()
+                      const nameB = (b.username || b.full_name || b.reg_no || '').toLowerCase()
+                      return nameA.localeCompare(nameB)
+                    })
+                    
+                    // Filter students based on search query
+                    const filteredStudents = editSearchQuery.trim() 
+                      ? sortedStudents.filter(s => {
+                          const query = editSearchQuery.toLowerCase()
+                          const name = (s.username || s.full_name || '').toLowerCase()
+                          const regNo = (s.reg_no || '').toLowerCase()
+                          return name.includes(query) || regNo.includes(query)
+                        })
+                      : sortedStudents
+                    
+                    // Show message if no students match search
+                    if (filteredStudents.length === 0 && editSearchQuery.trim()) {
+                      return (
+                        <div className="col-span-2 text-center py-8 text-gray-500">
+                          No students found matching "{editSearchQuery}"
+                        </div>
+                      )
+                    }
+                    
+                    // Show message if no students available
+                    if (editingBatchStudents.length === 0) {
+                      return (
+                        <div className="col-span-2 text-center py-8 text-gray-500">
+                          <Users className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+                          <p>No students available for this batch</p>
+                        </div>
+                      )
+                    }
+                    
+                    return filteredStudents.map((s, index) => (
+                      <label 
+                        key={s.id} 
+                        className="flex items-center gap-2 p-2 border border-gray-200 rounded-md hover:bg-gray-50 cursor-pointer transition-colors"
+                        style={{minHeight: '56px'}}
+                      >
+                        <input 
+                          type="checkbox" 
+                          checked={editingSelectedStudentIds.includes(s.id)} 
+                          onChange={() => toggleEditingStudentSelect(s.id)} 
+                          className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                        />
+                        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                          <span className="text-xs text-gray-400 w-5 flex-shrink-0">{index + 1}.</span>
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm font-medium text-gray-900 truncate">
+                              {s.username || s.full_name || s.reg_no}
+                            </div>
+                            {s.reg_no && (
+                              <div className="text-xs text-gray-500 truncate">{s.reg_no}</div>
+                            )}
+                          </div>
+                        </div>
+                      </label>
+                    ))
+                  })()}
+                </div>
             </div>
           </div>
         </div>
