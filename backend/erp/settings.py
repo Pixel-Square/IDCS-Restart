@@ -65,6 +65,7 @@ INSTALLED_APPS = [
     'bi.apps.BiConfig',
     'powerbi_portal.apps.PowerbiPortalConfig',
     'pbas.apps.PbasConfig',
+    'staff_attendance.apps.StaffAttendanceConfig',
 ]
 
 MIDDLEWARE = [

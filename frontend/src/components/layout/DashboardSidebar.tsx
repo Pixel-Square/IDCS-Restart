@@ -143,6 +143,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   const canHodObeRequests = Boolean((entry as any)?.hod_obe_requests) || rolesUpper.includes('HOD');
   if (canHodObeRequests) items.push({ key: 'hod_obe_requests', label: 'HOD: OBE Requests', to: '/hod/obe-requests' });
   if (rolesUpper.includes('HOD') || rolesUpper.includes('ADVISOR')) items.push({ key: 'hod_result_analysis', label: 'Result Analysis', to: '/hod/result-analysis' });
+  
+  // HOD staff attendance
+  if (rolesUpper.includes('HOD')) {
+    items.push({ key: 'hod_staff_attendance', label: 'Staff Attendance', to: '/hod/staff-attendance' });
+  }
 
   // Staffs page: require explicit view permission
   if (permsLower.includes('academics.view_staffs_page')) {
@@ -187,6 +192,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'pbas', label: 'PBAS', to: '/staff/pbas' });
   }
 
+  // My Attendance for staff
+  if (flags.is_staff) {
+    items.push({ key: 'my_attendance', label: 'My Attendance', to: '/staff/my-attendance' });
+  }
+
   // Period attendance for staff
   if (flags.is_staff && (permsLower.includes('academics.mark_attendance') || rolesUpper.includes('HOD') || rolesUpper.includes('ADVISOR'))) {
     items.push({ key: 'period_attendance', label: 'Mark Attendance', to: '/staff/period-attendance' });
@@ -227,6 +237,22 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   if (canPbasManage && !items.some((item) => item.key === 'pbas_manager')) {
     items.push({ key: 'pbas_manager', label: 'PBAS Manager', to: '/iqac/pbas' });
   }
+  
+  // IQAC staff attendance
+  if (rolesUpper.includes('IQAC') && !items.some((item) => item.key === 'iqac_staff_attendance')) {
+    items.push({ key: 'iqac_staff_attendance', label: 'Staff Attendance', to: '/iqac/staff-attendance' });
+  }
+
+  // PS (Principal Secretary) specific features
+  if (rolesUpper.includes('PS')) {
+    if (!items.some((item) => item.key === 'ps_staff_attendance')) {
+      items.push({ key: 'ps_staff_attendance', label: 'Staff Attendance Upload', to: '/ps/staff-attendance/upload' });
+    }
+    if (!items.some((item) => item.key === 'ps_staff_attendance_view')) {
+      items.push({ key: 'ps_staff_attendance_view', label: 'View All Staff Attendance', to: '/ps/staff-attendance/view' });
+    }
+  }
+
   if (canObeMaster && !isIqac && !items.some(item => item.key === 'obe_due_dates')) {
     items.push({ key: 'obe_due_dates', label: 'OBE: Due Dates', to: '/obe/master/due-dates' });
   }

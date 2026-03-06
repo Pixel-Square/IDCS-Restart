@@ -58,3 +58,52 @@ def get_user_effective_departments(user) -> List[int]:
     depts += get_user_hod_department_ids(user)
     # dedupe and filter falsy
     return [d for d in sorted(set([int(x) for x in depts if x]))]
+
+
+def can_staff_mark_period_attendance(user, date):
+    """Check if staff can mark period attendance for a given date.
+    
+    Staff can mark attendance if:
+    1. They are marked present/partial in staff attendance, OR
+    2. They have an approved access request for the date (for absent staff)
+    
+    The request flow is: staff comes half-day → requests HOD/AHOD approval → 
+    marks period attendance → PS uploads CSV next day → actual attendance recorded.
+    
+    Returns:
+        tuple: (can_mark: bool, reason: str, attendance_record: AttendanceRecord|None)
+    """
+    try:
+        from staff_attendance.models import AttendanceRecord, HalfDayRequest
+        
+        # Check if staff attendance record exists
+        try:
+            attendance_record = AttendanceRecord.objects.get(user=user, date=date)
+            
+            # If staff is present or partial, they can mark attendance
+            if attendance_record.status in ['present', 'partial']:
+                return True, f"Staff is {attendance_record.status}", attendance_record
+            
+            # If staff is absent, check for approved access request
+            if attendance_record.status == 'absent':
+                approved_request = HalfDayRequest.objects.filter(
+                    staff_user=user,
+                    attendance_date=date,
+                    status='approved'
+                ).first()
+                
+                if approved_request:
+                    return True, "Period attendance access approved by HOD/AHOD", attendance_record
+                else:
+                    return False, "Staff is absent. Please request period attendance access from your HOD/AHOD", attendance_record
+            
+            # Other status (shouldn't normally happen)
+            return False, f"Staff attendance status: {attendance_record.status}", attendance_record
+            
+        except AttendanceRecord.DoesNotExist:
+            # No attendance record yet - allow access (attendance not uploaded by PS yet)
+            return True, "No staff attendance record found", None
+        
+    except Exception as e:
+        # If anything goes wrong, don't block attendance marking
+        return True, f"Error checking staff attendance: {str(e)}", None

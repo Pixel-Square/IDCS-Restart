@@ -2587,6 +2587,14 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
         if not staff_profile:
             raise PermissionDenied('Only staff users may create attendance sessions')
 
+        # Check if staff can mark attendance based on their daily attendance
+        date = serializer.validated_data.get('date')
+        if date:
+            from .utils import can_staff_mark_period_attendance
+            can_mark, reason, attendance_record = can_staff_mark_period_attendance(user, date)
+            if not can_mark:
+                raise PermissionDenied(f'Cannot mark period attendance: {reason}')
+
         # determine day for permission checking
         date = serializer.validated_data.get('date')
         period = serializer.validated_data.get('period')
@@ -2700,6 +2708,21 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
 
         user = request.user
         staff_profile = getattr(user, 'staff_profile', None)
+        
+        # Check if staff can mark attendance based on their daily attendance
+        if date:
+            from .utils import can_staff_mark_period_attendance
+            can_mark, reason, attendance_record = can_staff_mark_period_attendance(user, date)
+            if not can_mark:
+                return Response({
+                    'error': f'Cannot mark period attendance: {reason}',
+                    'attendance_locked': True,
+                    'attendance_record': {
+                        'date': attendance_record.date.isoformat() if attendance_record else None,
+                        'status': attendance_record.status if attendance_record else None
+                    } if attendance_record else None
+                }, status=status.HTTP_403_FORBIDDEN)
+        
         day = None
         try:
             if date is not None:

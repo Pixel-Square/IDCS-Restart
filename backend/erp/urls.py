@@ -32,6 +32,7 @@ urlpatterns = [
     path('api/timetable/', include('timetable.urls')),
     path('api/academic-calendar/', include('academic_calendar.api_urls')),
     path('api/pbas/', include('pbas.urls')),
+    path('api/staff-attendance/', include('staff_attendance.urls')),
 ]
 
 # Admin dashboard data endpoint (counts for models) - always available

@@ -48,6 +48,29 @@ class User(AbstractUser):
     def __str__(self):
         return self.username
 
+    def has_perm(self, perm, obj=None):
+        """
+        Check permission against the project's custom `Permission` model.
+
+        Expected permission string format: '<app>.<codename>' (e.g. 'staff_attendance.upload_csv').
+        This method returns True for superusers, and otherwise checks whether any of the
+        user's roles has the specified permission via `RolePermission`.
+        """
+        # Superuser always has permissions
+        if getattr(self, 'is_superuser', False):
+            return True
+
+        try:
+            from .models import RolePermission  # local import to avoid circulars
+        except Exception:
+            # If import fails for any reason, fall back to denying permission
+            return False
+
+        return RolePermission.objects.filter(
+            role__user_roles__user=self,
+            permission__code=perm
+        ).exists()
+
 
 class MobileOtp(models.Model):
     """OTP for verifying a user's mobile number.

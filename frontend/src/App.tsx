@@ -51,6 +51,11 @@ import AcademicCalendarRedirect from './pages/academicCalendar/AcademicCalendarR
 import AcademicCalendarPage from './pages/academicCalendar/AcademicCalendarPage';
 import PBASSubmissionPage from './pages/staff/PBASSubmissionPage';
 import PBASManagerPage from './pages/iqac/PBASManagerPage';
+import { StaffAttendanceUpload } from './pages/PS';
+import { MyAttendance } from './pages/staff';
+import HODStaffAttendancePage from './pages/hod/StaffAttendance';
+import IQACStaffAttendancePage from './pages/iqac/StaffAttendance';
+import PSStaffAttendanceViewPage from './pages/PS/StaffAttendanceView';
 
 type RoleObj = { name: string };
 type Me = {
@@ -153,6 +158,10 @@ export default function App() {
                 <Route path="/queries" element={<QueriesPage />} />
                 {/* /notifications kept as redirect for any bookmarks */}
                 <Route path="/notifications" element={<Navigate to="/settings/notification-templates" replace />} />
+                <Route
+                  path="/ps/staff-attendance/upload"
+                  element={<ProtectedRoute user={user} requiredRoles={['PS']} element={<StaffAttendanceUpload />} />}
+                />
                 <Route path="/academic-calendar" element={<AcademicCalendarRedirect user={user} />} />
                 <Route
                   path="/iqac/calendar"
@@ -199,6 +208,10 @@ export default function App() {
                   element={<ProtectedRoute user={user} requiredRoles={["HOD", "ADVISOR"]} element={<HodResultAnalysisPage />} />}
                 />
                 <Route
+                  path="/hod/staff-attendance"
+                  element={<ProtectedRoute user={user} requiredRoles={["HOD"]} element={<HODStaffAttendancePage />} />}
+                />
+                <Route
                   path="/staffs"
                   element={<ProtectedRoute user={user} requiredPermissions={["academics.view_staffs_page"]} element={<StaffsPage />} />}
                 />
@@ -237,6 +250,14 @@ export default function App() {
                 <Route
                   path="/iqac/pbas"
                   element={<ProtectedRoute user={user} requiredRoles={['IQAC', 'ADMIN', 'PRINCIPAL', 'PS']} element={<PBASManagerPage />} />}
+                />
+                <Route
+                  path="/iqac/staff-attendance"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<IQACStaffAttendancePage />} />}
+                />
+                <Route
+                  path="/ps/staff-attendance/view"
+                  element={<ProtectedRoute user={user} requiredRoles={['PS', 'ADMIN']} element={<PSStaffAttendanceViewPage />} />}
                 />
                 <Route
                   path="/advisor/timetable"
@@ -303,6 +324,10 @@ export default function App() {
                       element={<AttendanceAnalytics />}
                     />
                   }
+                />
+                <Route
+                  path="/staff/my-attendance"
+                  element={<ProtectedRoute user={user} requiredProfile={'STAFF'} element={<MyAttendance />} />}
                 />
                 <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
               </Routes>

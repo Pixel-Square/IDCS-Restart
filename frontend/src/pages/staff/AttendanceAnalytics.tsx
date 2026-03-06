@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { Lock, Unlock, RefreshCw, X, Calendar, Clock, Users, BarChart3, FileText, CheckCircle2, XCircle, AlertCircle, Building2, GraduationCap, Loader2, FileSpreadsheet, ChevronDown, ChevronUp } from 'lucide-react'
 import fetchWithAuth from '../../services/fetchAuth'
-import AttendanceRequests from './AttendanceRequests'
 
 interface PeriodStat {
   session_id: number
@@ -832,15 +831,7 @@ const AttendanceAnalytics: React.FC = () => {
               </>
             )}
           </div>
-          { (permissionLevel === 'all' || permissionLevel === 'department') && (
-            <button 
-              onClick={() => { setShowRequestsModal(true); }} 
-              className="relative px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2 shadow-sm"
-            >
-              <Lock className="w-4 h-4" />
-              {permissionLevel === 'department' ? 'HOD Approval Requests' : 'Unlock Requests'}
-            </button>
-          )}
+          {/* HOD approval / unlock requests button removed per UX update */}
         </div>
       </div>
 
@@ -2091,7 +2082,7 @@ const AttendanceAnalytics: React.FC = () => {
                   <Lock className="w-5 h-5 text-white" />
                 </div>
                 <h3 className="text-xl font-semibold text-white">
-                  {permissionLevel === 'department' ? 'HOD Approval Requests' : 'Unlock Requests (Final Approval)'}
+                  {permissionLevel === 'department' ? 'HOD/AHOD Approval Dashboard' : 'Unlock Requests (Final Approval)'}
                 </h3>
               </div>
               <button 
@@ -2102,7 +2093,10 @@ const AttendanceAnalytics: React.FC = () => {
               </button>
             </div>
             <div className="p-6">
-              <AttendanceRequests />
+              {/* Content removed - requests moved to Mark Attendance page */}
+              <div className="text-center py-8 text-gray-500">
+                <p>Session unlock requests have been moved to the Mark Attendance page.</p>
+              </div>
             </div>
           </div>
         </div>
