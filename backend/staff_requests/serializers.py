@@ -26,7 +26,7 @@ class RequestTemplateSerializer(serializers.ModelSerializer):
         model = RequestTemplate
         fields = [
             'id', 'name', 'description', 'is_active',
-            'form_schema', 'allowed_roles',
+            'form_schema', 'allowed_roles', 'leave_policy',
             'approval_steps', 'total_steps',
             'created_at', 'updated_at'
         ]
@@ -53,6 +53,26 @@ class RequestTemplateSerializer(serializers.ModelSerializer):
         """Validate allowed_roles structure"""
         if not isinstance(value, list):
             raise serializers.ValidationError("allowed_roles must be a list")
+        return value
+    
+    def validate_leave_policy(self, value):
+        """Validate leave_policy structure"""
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("leave_policy must be a dictionary")
+        
+        # If leave_policy has an action, validate it
+        if 'action' in value:
+            allowed_actions = ['deduct', 'earn', 'neutral']
+            if value['action'] not in allowed_actions:
+                raise serializers.ValidationError(
+                    f"action must be one of: {', '.join(allowed_actions)}"
+                )
+        
+        # Validate allotment_per_role if present
+        if 'allotment_per_role' in value:
+            if not isinstance(value['allotment_per_role'], dict):
+                raise serializers.ValidationError("allotment_per_role must be a dictionary")
+        
         return value
 
 

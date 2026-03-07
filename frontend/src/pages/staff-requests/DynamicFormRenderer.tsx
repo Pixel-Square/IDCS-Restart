@@ -141,6 +141,77 @@ export default function DynamicFormRenderer({ fields, values, onChange }: Props)
           </div>
         );
 
+      case 'file':
+        const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+          const file = e.target.files?.[0];
+          if (!file) {
+            handleChange(field.name, null);
+            return;
+          }
+
+          // Check file size
+          const maxSizeMb = field.max_size_mb || 10;
+          const maxSizeBytes = maxSizeMb * 1024 * 1024;
+          if (file.size > maxSizeBytes) {
+            alert(`File size exceeds maximum allowed size of ${maxSizeMb}MB`);
+            e.target.value = '';
+            return;
+          }
+
+          // Check file extension
+          if (field.allowed_extensions && field.allowed_extensions.length > 0) {
+            const fileExt = '.' + file.name.split('.').pop()?.toLowerCase();
+            if (!field.allowed_extensions.includes(fileExt)) {
+              alert(`File type not allowed. Allowed types: ${field.allowed_extensions.join(', ')}`);
+              e.target.value = '';
+              return;
+            }
+          }
+
+          // Convert to base64
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            handleChange(field.name, {
+              filename: file.name,
+              content: reader.result as string,
+              size: file.size,
+              type: file.type
+            });
+          };
+          reader.readAsDataURL(file);
+        };
+
+        const fileInfo = value ? (typeof value === 'object' ? value.filename : value) : '';
+        const acceptTypes = field.allowed_extensions?.join(',') || '*';
+        const maxSize = field.max_size_mb || 10;
+
+        return (
+          <div key={field.name} className="mb-4">
+            <label htmlFor={field.name} className={labelClasses}>
+              {field.label}
+              {field.required && <span className="text-red-600 ml-1">*</span>}
+            </label>
+            <input
+              id={field.name}
+              type="file"
+              onChange={handleFileChange}
+              required={field.required}
+              accept={acceptTypes}
+              className={commonClasses}
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Max size: {maxSize}MB
+              {field.allowed_extensions && field.allowed_extensions.length > 0 && 
+                ` • Allowed: ${field.allowed_extensions.join(', ')}`}
+            </p>
+            {fileInfo && (
+              <p className="text-xs text-green-600 mt-1">
+                ✓ Selected: {fileInfo}
+              </p>
+            )}
+          </div>
+        );
+
       default:
         return (
           <div key={field.name} className="mb-4">

@@ -4,12 +4,13 @@ import { apiClient } from '../../services/auth';
 import { getApiBase } from '../../services/apiBase';
 import { getMyRequests } from '../../services/staffRequests';
 import NewRequestModal from '../staff-requests/NewRequestModal';
+import LeaveBalanceBadges from '../../components/LeaveBalanceBadges';
 import type { StaffRequest } from '../../types/staffRequests';
 
 interface AttendanceRecord {
   id: number;
   date: string;
-  status: 'present' | 'absent' | 'partial' | 'half_day';
+  status: string;  // Any status: 'present', 'absent', 'partial', 'OD', 'CL', 'ML', 'COL', etc.
   morning_in: string | null;
   evening_out: string | null;
 }
@@ -50,7 +51,7 @@ export default function MyCalendarPage() {
       setLoading(true);
       const url = `${getApiBase()}/api/staff-attendance/records/monthly_records/`;
       const response = await apiClient.get(url, {
-        params: { year: selectedYear, month: selectedMonth }
+        params: { year: selectedYear, month: selectedMonth, self_only: 'true' }
       });
       setAttendanceData(response.data);
     } catch (err) {
@@ -89,26 +90,28 @@ export default function MyCalendarPage() {
   };
 
   const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'present':
-        return <CheckCircle className="w-4 h-4 text-green-600" />;
-      case 'partial':
-      case 'half_day':
-        return <AlertCircle className="w-4 h-4 text-yellow-600" />;
-      default:
-        return <XCircle className="w-4 h-4 text-red-600" />;
+    const s = status.toLowerCase();
+    if (s === 'present') {
+      return <CheckCircle className="w-4 h-4 text-green-600" />;
+    } else if (s === 'partial' || s === 'half_day') {
+      return <AlertCircle className="w-4 h-4 text-yellow-600" />;
+    } else if (s === 'od' || s === 'on duty' || s === 'cl' || s === 'ml' || s === 'col' || s === 'leave') {
+      return <CheckCircle className="w-4 h-4 text-purple-600" />;  // Leave/OD = purple check
+    } else {
+      return <XCircle className="w-4 h-4 text-red-600" />;  // Absent = red X
     }
   };
 
   const getStatusBgColor = (status: string) => {
-    switch (status) {
-      case 'present':
-        return 'bg-green-50 border-green-200';
-      case 'partial':
-      case 'half_day':
-        return 'bg-yellow-50 border-yellow-200';
-      default:
-        return 'bg-red-50 border-red-200';
+    const s = status.toLowerCase();
+    if (s === 'present') {
+      return 'bg-green-50 border-green-200';
+    } else if (s === 'partial' || s === 'half_day') {
+      return 'bg-yellow-50 border-yellow-200';
+    } else if (s === 'od' || s === 'on duty' || s === 'cl' || s === 'ml' || s === 'col' || s === 'leave') {
+      return 'bg-purple-50 border-purple-200';  // Leave/OD = purple
+    } else {
+      return 'bg-red-50 border-red-200';  // Absent = red
     }
   };
 
@@ -159,6 +162,52 @@ export default function MyCalendarPage() {
     fetchMyRequests();
   };
 
+  // Get leave status for a specific date from approved requests
+  const getLeaveStatusForDate = (date: number): string | null => {
+    const dateStr = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${String(date).padStart(2, '0')}`;
+    const dateObj = new Date(dateStr);
+    
+    // Find approved requests that cover this date
+    for (const request of myRequests) {
+      if (request.status !== 'approved') continue;
+      
+      const statusCode = request.template?.leave_policy?.attendance_status;
+      if (!statusCode) continue;
+      
+      // Get date range from form_data
+      const formData = request.form_data;
+      let startDate: Date | null = null;
+      let endDate: Date | null = null;
+      
+      // Try different field name patterns
+      for (const startKey of ['start_date', 'from_date', 'startDate', 'fromDate', 'date']) {
+        if (formData[startKey]) {
+          startDate = new Date(formData[startKey]);
+          break;
+        }
+      }
+      
+      for (const endKey of ['end_date', 'to_date', 'endDate', 'toDate']) {
+        if (formData[endKey]) {
+          endDate = new Date(formData[endKey]);
+          break;
+        }
+      }
+      
+      // If only start date, assume single day
+      if (startDate && !endDate) {
+        endDate = startDate;
+      }
+      
+      // Check if date falls within range
+      if (startDate && endDate && dateObj >= startDate && dateObj <= endDate) {
+        return statusCode;
+      }
+    }
+    
+    return null;
+  };
+
   const getAttendancePercentage = () => {
     if (!attendanceData || attendanceData.summary.total_records === 0) return 0;
     return Math.round((attendanceData.summary.present_count / attendanceData.summary.total_records) * 100);
@@ -186,6 +235,9 @@ export default function MyCalendarPage() {
           <h1 className="text-3xl font-bold text-gray-900">My Calendar</h1>
           <p className="text-gray-600 mt-1">Attendance calendar and request submissions</p>
         </div>
+
+        {/* Leave Balances */}
+        <LeaveBalanceBadges />
 
         {/* Month Navigation & Summary */}
         <div className="bg-white rounded-lg shadow-md p-6 mb-6">
@@ -289,13 +341,21 @@ export default function MyCalendarPage() {
                 const lateIn = attendance && isTimeInLate(attendance.morning_in);
                 const earlyOut = attendance && isTimeOutEarly(attendance.evening_out);
                 const highlightClass = lateIn || earlyOut ? 'ring-2 ring-yellow-300' : '';
+                const leaveStatusFromRequest = getLeaveStatusForDate(day);
+                
+                // Determine which status to display:
+                // Priority: attendance record status > request status > no data
+                const attendanceIsLeaveStatus = attendance && !['present', 'absent', 'partial', 'half_day'].includes(attendance.status.toLowerCase());
+                const displayLeaveStatus = attendanceIsLeaveStatus ? attendance.status : leaveStatusFromRequest;
 
                 return (
                   <div
                     key={day}
                     onClick={() => handleDateClick(day)}
                     className={`aspect-square border-2 rounded-lg p-2 cursor-pointer transition-all hover:shadow-md ${
-                      hasAttendance
+                      displayLeaveStatus
+                        ? 'bg-purple-50 border-purple-300'
+                        : hasAttendance
                         ? `${getStatusBgColor(attendance.status)} ${highlightClass}`
                         : 'bg-gray-50 border-gray-200 hover:border-blue-300'
                     }`}
@@ -304,11 +364,29 @@ export default function MyCalendarPage() {
                       {/* Day number */}
                       <div className="flex items-center justify-between">
                         <span className="font-semibold text-gray-900">{day}</span>
-                        {hasAttendance && getStatusIcon(attendance.status)}
+                        {displayLeaveStatus ? (
+                          <span className="text-xs font-bold text-purple-700 bg-purple-200 px-1.5 py-0.5 rounded uppercase">
+                            {displayLeaveStatus}
+                          </span>
+                        ) : (
+                          hasAttendance && getStatusIcon(attendance.status)
+                        )}
                       </div>
 
-                      {/* Time info */}
-                      {hasAttendance && (
+                      {/* Leave or Attendance info */}
+                      {displayLeaveStatus ? (
+                        <div className="text-center mt-1">
+                          <div className="text-xs font-semibold text-purple-900 capitalize">
+                            {displayLeaveStatus === 'CL' ? 'Casual Leave' :
+                             displayLeaveStatus === 'OD' ? 'On Duty' :
+                             displayLeaveStatus === 'COL' ? 'Compensatory' :
+                             displayLeaveStatus === 'LOP' ? 'Loss of Pay' :
+                             displayLeaveStatus === 'ML' ? 'Medical Leave' :
+                             displayLeaveStatus === 'LEAVE' ? 'Leave' :
+                             displayLeaveStatus}
+                          </div>
+                        </div>
+                      ) : hasAttendance ? (
                         <div className="text-xs text-gray-700 space-y-0.5">
                           {attendance.morning_in && (
                             <div title={attendance.morning_in} className={`${lateIn ? 'text-red-700 font-semibold' : ''}`}>
@@ -324,10 +402,10 @@ export default function MyCalendarPage() {
                             {attendance.status}
                           </div>
                         </div>
-                      )}
+                      ) : null}
 
                       {/* Click to add request hint */}
-                      {!hasAttendance && (
+                      {!displayLeaveStatus && !hasAttendance && (
                         <div className="text-xs text-gray-500 text-center flex items-center justify-center gap-1">
                           <Plus className="w-3 h-3" />
                           Add

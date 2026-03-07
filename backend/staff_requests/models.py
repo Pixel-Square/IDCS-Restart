@@ -27,6 +27,20 @@ class RequestTemplate(models.Model):
         help_text="List of role names that can submit this request type"
     )
     
+    # Leave and Attendance Policy
+    # Example: {
+    #   "action": "deduct",  // "deduct", "earn", or "neutral"
+    #   "allotment_per_role": {"STAFF": 6, "HOD": 10},  // Initial balance for deduct action
+    #   "reset_duration": "yearly",  // "yearly" or "monthly"
+    #   "overdraft_name": "LOP",  // Penalty count if allotment exceeded
+    #   "attendance_status": "CL"  // Status code for attendance register
+    # }
+    leave_policy = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Leave and attendance policy configuration"
+    )
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -198,6 +212,37 @@ class StaffRequest(models.Model):
         """Mark the request as rejected"""
         self.status = 'rejected'
         self.save(update_fields=['status', 'updated_at'])
+
+
+class StaffLeaveBalance(models.Model):
+    """
+    Tracks leave balances for each staff member by leave type.
+    Balances are updated when requests are approved.
+    """
+    staff = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='leave_balances'
+    )
+    leave_type = models.CharField(
+        max_length=100,
+        help_text="Leave type name (e.g., 'Casual Leave', 'COL', 'OD', 'LOP')"
+    )
+    balance = models.FloatField(
+        default=0.0,
+        help_text="Current balance for this leave type"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        unique_together = [['staff', 'leave_type']]
+        ordering = ['staff', 'leave_type']
+        verbose_name = 'Staff Leave Balance'
+        verbose_name_plural = 'Staff Leave Balances'
+    
+    def __str__(self):
+        return f"{self.staff.get_full_name() or self.staff.username} - {self.leave_type}: {self.balance}"
 
 
 class ApprovalLog(models.Model):

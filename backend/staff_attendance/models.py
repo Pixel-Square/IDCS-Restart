@@ -5,12 +5,8 @@ from django.utils import timezone
 
 class AttendanceRecord(models.Model):
     """Records daily attendance for staff members"""
-    STATUS_CHOICES = [
-        ('present', 'Present'),
-        ('absent', 'Absent'),
-        ('half_day', 'Half Day'),
-        ('partial', 'Partial'),
-    ]
+    # No choices constraint - accepts any status code from leave templates
+    # Common values: 'present', 'absent', 'half_day', 'partial', 'OD', 'LEAVE', 'CL', 'ML', 'COL', etc.
     
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -20,7 +16,7 @@ class AttendanceRecord(models.Model):
     date = models.DateField(db_index=True)
     morning_in = models.TimeField(null=True, blank=True)
     evening_out = models.TimeField(null=True, blank=True)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='absent')
+    status = models.CharField(max_length=20, default='absent', help_text='Attendance status code - can be any value from leave templates')
     notes = models.TextField(blank=True)
     
     # Audit fields

@@ -2,13 +2,15 @@
 
 export interface FormField {
   name: string;
-  type: 'text' | 'textarea' | 'date' | 'number' | 'select' | 'time' | 'email';
+  type: 'text' | 'textarea' | 'date' | 'number' | 'select' | 'time' | 'email' | 'file';
   label: string;
   required: boolean;
   options?: string[];
   placeholder?: string;
   min?: string | number;
   max?: string | number;
+  max_size_mb?: number; // For file uploads
+  allowed_extensions?: string[]; // For file uploads, e.g., ['.pdf', '.docx', '.jpg']
 }
 
 export interface ApprovalStep {
@@ -19,6 +21,29 @@ export interface ApprovalStep {
   updated_at?: string;
 }
 
+export interface LeavePolicy {
+  action?: 'deduct' | 'earn' | 'neutral';
+  allotment_per_role?: Record<string, number>;
+  reset_duration?: 'yearly' | 'monthly';
+  overdraft_name?: string;
+  attendance_status?: string;
+}
+
+export interface LeaveBalance {
+  leave_type: string;
+  balance: number;
+  updated_at?: string;
+}
+
+export interface LeaveBalancesResponse {
+  user: {
+    id: number;
+    username: string;
+    full_name: string;
+  };
+  balances: LeaveBalance[];
+}
+
 export interface RequestTemplate {
   id?: number;
   name: string;
@@ -27,6 +52,7 @@ export interface RequestTemplate {
   form_schema: FormField[];
   allowed_roles: string[];
   approval_steps?: ApprovalStep[];
+  leave_policy?: LeavePolicy;
   total_steps?: number;
   created_at?: string;
   updated_at?: string;

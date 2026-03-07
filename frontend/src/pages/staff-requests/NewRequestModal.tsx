@@ -40,7 +40,26 @@ export default function NewRequestModal({ onClose, onCreated, onSuccess, presele
 
   const handleTemplateSelect = (template: RequestTemplate) => {
     setSelectedTemplate(template);
-    setFormData({});
+    const initialData: Record<string, any> = {};
+    
+    // Pre-fill date fields if preselectedDate is provided
+    if (preselectedDate) {
+      template.form_schema.forEach(field => {
+        // Check if field is a date type or has date-related names
+        if (
+          field.type === 'date' ||
+          field.name === 'start_date' ||
+          field.name === 'end_date' ||
+          field.name === 'from_date' ||
+          field.name === 'to_date' ||
+          field.name === 'date'
+        ) {
+          initialData[field.name] = preselectedDate;
+        }
+      });
+    }
+    
+    setFormData(initialData);
     setError(null);
   };
 

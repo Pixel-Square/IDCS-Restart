@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import RequestTemplate, ApprovalStep, StaffRequest, ApprovalLog
+from .models import RequestTemplate, ApprovalStep, StaffRequest, ApprovalLog, StaffLeaveBalance
 
 
 class ApprovalStepInline(admin.TabularInline):
@@ -25,6 +25,11 @@ class RequestTemplateAdmin(admin.ModelAdmin):
         ('Form Configuration', {
             'fields': ('form_schema', 'allowed_roles'),
             'description': 'Define the dynamic form fields and allowed user roles'
+        }),
+        ('Leave & Attendance Policy', {
+            'fields': ('leave_policy',),
+            'classes': ('collapse',),
+            'description': 'Configure leave balance tracking and attendance integration'
         }),
         ('Timestamps', {
             'fields': ('created_at', 'updated_at'),
@@ -145,3 +150,30 @@ class ApprovalLogAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         """Prevent deletion of approval logs (audit trail)"""
         return False
+
+
+@admin.register(StaffLeaveBalance)
+class StaffLeaveBalanceAdmin(admin.ModelAdmin):
+    """Admin interface for StaffLeaveBalance"""
+    list_display = ['staff', 'leave_type', 'balance', 'updated_at']
+    list_filter = ['leave_type', 'updated_at']
+    search_fields = ['staff__username', 'staff__first_name', 'staff__last_name', 'leave_type']
+    ordering = ['staff', 'leave_type']
+    
+    fieldsets = (
+        ('Balance Information', {
+            'fields': ('staff', 'leave_type', 'balance')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    readonly_fields = ['created_at', 'updated_at']
+    
+    def get_readonly_fields(self, request, obj=None):
+        """Make staff and leave_type readonly after creation"""
+        if obj:  # Editing existing object
+            return self.readonly_fields + ['staff', 'leave_type']
+        return self.readonly_fields

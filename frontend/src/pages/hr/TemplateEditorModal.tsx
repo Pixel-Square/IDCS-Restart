@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Plus, Trash2, GripVertical } from 'lucide-react';
 import { createTemplate, updateTemplate } from '../../services/staffRequests';
-import type { RequestTemplate, FormField, ApprovalStep } from '../../types/staffRequests';
+import type { RequestTemplate, FormField, ApprovalStep, LeavePolicy } from '../../types/staffRequests';
 import { fetchRoles } from '../../services/accounts';
 
 interface Props {
@@ -17,7 +17,8 @@ const FIELD_TYPES = [
   { value: 'time', label: 'Time' },
   { value: 'number', label: 'Number' },
   { value: 'email', label: 'Email' },
-  { value: 'select', label: 'Dropdown' }
+  { value: 'select', label: 'Dropdown' },
+  { value: 'file', label: 'File Upload' }
 ];
 
 // fallback roles while dashboard is loading
@@ -36,6 +37,7 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
   const [roles, setRoles] = useState<string[]>([]);
   const [rolesLoading, setRolesLoading] = useState(false);
   const [rolesError, setRolesError] = useState<string | null>(null);
+  const [leavePolicy, setLeavePolicy] = useState<LeavePolicy>({});
 
   useEffect(() => {
     if (template) {
@@ -50,6 +52,7 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
           approver_role: step.approver_role
         }))
       );
+      setLeavePolicy(template.leave_policy || {});
     }
   }, [template]);
 
@@ -120,6 +123,33 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
     }
   };
 
+  const handleLeavePolicyChange = (updates: Partial<LeavePolicy>) => {
+    setLeavePolicy(prev => ({ ...prev, ...updates }));
+  };
+
+  const handleAllotmentChange = (role: string, value: string) => {
+    const numValue = parseFloat(value) || 0;
+    setLeavePolicy(prev => ({
+      ...prev,
+      allotment_per_role: {
+        ...prev.allotment_per_role,
+        [role]: numValue
+      }
+    }));
+  };
+
+  const removeAllotmentRole = (role: string) => {
+    setLeavePolicy(prev => {
+      const updated = { ...prev };
+      if (updated.allotment_per_role) {
+        const newAllotment = { ...updated.allotment_per_role };
+        delete newAllotment[role];
+        updated.allotment_per_role = newAllotment;
+      }
+      return updated;
+    });
+  };
+
   const validateForm = (): string | null => {
     if (!name.trim()) return 'Template name is required';
     if (formFields.length === 0) return 'At least one form field is required';
@@ -158,7 +188,8 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
         is_active: isActive,
         form_schema: formFields,
         allowed_roles: allowedRoles.length > 0 ? allowedRoles : [],
-        approval_steps: approvalSteps as ApprovalStep[]
+        approval_steps: approvalSteps as ApprovalStep[],
+        leave_policy: (leavePolicy.action || leavePolicy.allotment_per_role || leavePolicy.attendance_status) ? leavePolicy : {}
       };
 
       if (template?.id) {
@@ -296,6 +327,141 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
                   <div className="mt-2 text-xs text-red-600">Failed to load roles: {rolesError}</div>
                 )}
               </div>
+
+              {/* Leave & Attendance Settings */}
+              <div className="border-t pt-6 mt-6">
+                <h3 className="text-base font-semibold text-gray-900 mb-4">Leave & Attendance Settings</h3>
+                
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Action Type
+                    </label>
+                    <select
+                      value={leavePolicy.action || ''}
+                      onChange={(e) => {
+                        const action = e.target.value as LeavePolicy['action'] | '';
+                        if (action) {
+                          handleLeavePolicyChange({ 
+                            action,
+                            overdraft_name: action === 'deduct' ? (leavePolicy.overdraft_name || 'LOP') : undefined,
+                            reset_duration: action === 'deduct' ? (leavePolicy.reset_duration || 'yearly') : undefined
+                          });
+                        } else {
+                          setLeavePolicy({});
+                        }
+                      }}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    >
+                      <option value="">None (No leave tracking)</option>
+                      <option value="deduct">Deduct (Consumes leave balance)</option>
+                      <option value="earn">Earn (Adds to leave balance)</option>
+                      <option value="neutral">Neutral (No balance changes)</option>
+                    </select>
+                  </div>
+
+                  {leavePolicy.action && (
+                    <>
+                      {leavePolicy.action === 'deduct' && (
+                        <>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Allotment per Role
+                            </label>
+                            <p className="text-xs text-gray-500 mb-3">
+                              Set the initial leave balance for each role. Staff will get this balance when first tracked.
+                            </p>
+                            <div className="space-y-2">
+                              {Object.entries(leavePolicy.allotment_per_role || {}).map(([role, days]) => (
+                                <div key={role} className="flex items-center gap-2">
+                                  <span className="text-sm font-medium text-gray-700 w-24">{role}:</span>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.5"
+                                    value={days}
+                                    onChange={(e) => handleAllotmentChange(role, e.target.value)}
+                                    className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500"
+                                  />
+                                  <span className="text-sm text-gray-500 w-12">days</span>
+                                  <button
+                                    onClick={() => removeAllotmentRole(role)}
+                                    className="text-red-600 hover:text-red-700 p-1"
+                                  >
+                                    <Trash2 size={16} />
+                                  </button>
+                                </div>
+                              ))}
+                              <select
+                                value=""
+                                onChange={(e) => {
+                                  if (e.target.value) {
+                                    handleAllotmentChange(e.target.value, '0');
+                                  }
+                                }}
+                                className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                              >
+                                <option value="">+ Add role...</option>
+                                {(rolesLoading ? FALLBACK_ROLES : (roles.length ? roles : FALLBACK_ROLES))
+                                  .filter(role => !leavePolicy.allotment_per_role?.[role])
+                                  .map(role => (
+                                    <option key={role} value={role}>{role}</option>
+                                  ))}
+                              </select>
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Reset Duration
+                            </label>
+                            <select
+                              value={leavePolicy.reset_duration || 'yearly'}
+                              onChange={(e) => handleLeavePolicyChange({ reset_duration: e.target.value as 'yearly' | 'monthly' })}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            >
+                              <option value="yearly">Yearly</option>
+                              <option value="monthly">Monthly</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Overdraft Field Name
+                            </label>
+                            <input
+                              type="text"
+                              value={leavePolicy.overdraft_name || 'LOP'}
+                              onChange={(e) => handleLeavePolicyChange({ overdraft_name: e.target.value })}
+                              placeholder="LOP"
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">
+                              If staff exceed their allotment, this field will count the extra days.
+                            </p>
+                          </div>
+                        </>
+                      )}
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Attendance Status Code
+                        </label>
+                        <input
+                          type="text"
+                          value={leavePolicy.attendance_status || ''}
+                          onChange={(e) => handleLeavePolicyChange({ attendance_status: e.target.value })}
+                          placeholder="e.g., CL, COL, OD"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">
+                          The exact code to mark in the attendance register upon approval.
+                        </p>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
             </div>
           )}
 
@@ -381,6 +547,43 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
                             rows={3}
                             className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500"
                           />
+                        </div>
+                      )}
+
+                      {field.type === 'file' && (
+                        <div className="mb-3 space-y-3">
+                          <div>
+                            <label className="block text-xs font-medium text-gray-700 mb-1">
+                              Max File Size (MB)
+                            </label>
+                            <input
+                              type="number"
+                              value={field.max_size_mb || 10}
+                              onChange={(e) => handleUpdateField(index, { 
+                                max_size_mb: parseFloat(e.target.value) || 10
+                              })}
+                              min="1"
+                              max="100"
+                              className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-700 mb-1">
+                              Allowed File Extensions (comma-separated)
+                            </label>
+                            <input
+                              type="text"
+                              value={(field.allowed_extensions || []).join(', ')}
+                              onChange={(e) => handleUpdateField(index, { 
+                                allowed_extensions: e.target.value.split(',').map(ext => ext.trim()).filter(ext => ext)
+                              })}
+                              placeholder=".pdf, .docx, .jpg, .png"
+                              className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">
+                              Leave empty to allow all file types
+                            </p>
+                          </div>
                         </div>
                       )}
 

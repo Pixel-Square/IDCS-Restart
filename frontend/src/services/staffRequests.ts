@@ -6,7 +6,8 @@ import type {
   StaffRequestCreate,
   ProcessApprovalPayload,
   ProcessApprovalResponse,
-  ApprovalStep
+  ApprovalStep,
+  LeaveBalancesResponse
 } from '../types/staffRequests';
 
 const BASE_URL = `${getApiBase()}/api/staff-requests`;
@@ -132,4 +133,21 @@ export async function updateApprovalStep(id: number, data: Partial<ApprovalStep>
 
 export async function deleteApprovalStep(id: number): Promise<void> {
   await apiClient.delete(`${BASE_URL}/approval-steps/${id}/`);
+}
+
+// ==================== Leave Balances ====================
+
+export async function getLeaveBalances(): Promise<LeaveBalancesResponse> {
+  const res = await apiClient.get(`${BASE_URL}/requests/balances/`);
+  return res.data;
+}
+
+export async function processAbsences(data: {
+  year: number;
+  month: number;
+  absence_dates: string[];
+  user_id?: number;
+}): Promise<any> {
+  const res = await apiClient.post(`${BASE_URL}/requests/process_absences/`, data);
+  return res.data;
 }

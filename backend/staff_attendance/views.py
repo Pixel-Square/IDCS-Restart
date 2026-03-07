@@ -84,6 +84,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         to_date_str = request.query_params.get('to_date')
         user_id = request.query_params.get('user_id')
         department_id = request.query_params.get('department_id')
+        self_only = request.query_params.get('self_only', 'false').lower() == 'true'
         
         # If date range provided, use it; otherwise use year/month
         if from_date_str and to_date_str:
@@ -113,8 +114,11 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         user_staff_profile = getattr(user, 'staff_profile', None)
         user_department = user_staff_profile.department if user_staff_profile else None
         
+        # Force self-only view if requested (for personal calendar views)
+        if self_only:
+            queryset = queryset.filter(user=user)
         # Filter by specific user_id if provided
-        if user_id:
+        elif user_id:
             # Check if user has permission to view other users' records
             if not (is_superuser or has_view_perm or is_ps or is_hod or is_iqac or is_admin):
                 return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
@@ -350,15 +354,20 @@ class CSVUploadViewSet(viewsets.ViewSet):
                         # Had morning entry but was marked absent, now adding evening - should be present
                         pass  # Status will be recalculated below
 
-            # Recompute status: morning_in presence determines absent vs present/partial
-            if record.morning_in is None:
-                record.status = 'absent'  # No morning entry = absent
-            elif record.morning_in and record.evening_out:
-                record.status = 'present'  # Has morning + evening = present
-            elif record.morning_in:
-                record.status = 'partial'  # Has morning only = partial
-            else:
-                record.status = 'absent'   # Fallback
+            # Recompute status ONLY if current status is a biometric status (not leave/OD)
+            # Preserve approved leave statuses (OD, CL, ML, COL, LEAVE, LOP, etc.)
+            BIOMETRIC_STATUSES = ['present', 'absent', 'partial', 'half_day']
+            if record.status in BIOMETRIC_STATUSES:
+                # Only recalculate for biometric statuses
+                if record.morning_in is None:
+                    record.status = 'absent'  # No morning entry = absent
+                elif record.morning_in and record.evening_out:
+                    record.status = 'present'  # Has morning + evening = present
+                elif record.morning_in:
+                    record.status = 'partial'  # Has morning only = partial
+                else:
+                    record.status = 'absent'   # Fallback
+            # else: preserve existing leave status (OD, CL, ML, etc.)
 
         record.source_file = source_file
         record.save()
