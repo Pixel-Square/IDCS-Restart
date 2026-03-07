@@ -101,6 +101,30 @@ export default function HODStaffAttendancePage() {
     return date.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric', month: 'short' });
   };
 
+  // Helper to check if time in is late (> 8:45 AM)
+  const isTimeInLate = (timeStr: string | null): boolean => {
+    if (!timeStr || timeStr === '—') return false;
+    try {
+      const time = new Date(`2000-01-01 ${timeStr.replace(/\s+/g, ' ')}`);
+      const cutoffTime = new Date('2000-01-01 08:45 AM');
+      return time > cutoffTime;
+    } catch {
+      return false;
+    }
+  };
+
+  // Helper to check if time out is early (< 5:45 PM)
+  const isTimeOutEarly = (timeStr: string | null): boolean => {
+    if (!timeStr || timeStr === '—') return false;
+    try {
+      const time = new Date(`2000-01-01 ${timeStr.replace(/\s+/g, ' ')}`);
+      const cutoffTime = new Date('2000-01-01 05:45 PM');
+      return time < cutoffTime;
+    } catch {
+      return false;
+    }
+  };
+
   const todaysRecords = attendanceData?.records.filter(r => r.date === selectedDate) || [];
 
   return (
@@ -186,8 +210,12 @@ export default function HODStaffAttendancePage() {
                           </span>
                         </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{record.morning_in || '—'}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{record.evening_out || '—'}</td>
+                      <td className={`px-6 py-4 whitespace-nowrap text-sm font-medium ${isTimeInLate(record.morning_in) ? 'bg-red-100 text-red-900' : 'text-gray-900'}`}>
+                        {record.morning_in || '—'}
+                      </td>
+                      <td className={`px-6 py-4 whitespace-nowrap text-sm font-medium ${isTimeOutEarly(record.evening_out) ? 'bg-amber-100 text-amber-900' : 'text-gray-900'}`}>
+                        {record.evening_out || '—'}
+                      </td>
                       <td className="px-6 py-4 text-sm text-gray-500 truncate">{record.notes || '—'}</td>
                     </tr>
                   ))}
