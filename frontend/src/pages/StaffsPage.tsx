@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react'
-import { Users, Building2, AlertCircle, Edit, Trash2, UserPlus, Filter } from 'lucide-react'
+import { Users, Building2, AlertCircle, Edit, ToggleLeft, UserPlus, Filter } from 'lucide-react'
 import fetchWithAuth from '../services/fetchAuth'
 import StaffFormModal from '../components/StaffFormModal'
 
@@ -56,6 +56,10 @@ export default function StaffsPage() {
   const [selectedDeptId, setSelectedDeptId] = useState<number | null>(null)
   const [canEdit, setCanEdit] = useState(false)
   const [canViewAllStaff, setCanViewAllStaff] = useState(false)
+  const [statusEditStaff, setStatusEditStaff] = useState<StaffMember | null>(null)
+  const [statusValue, setStatusValue] = useState<string>('')
+  const [statusSaving, setStatusSaving] = useState(false)
+  const [statusError, setStatusError] = useState<string | null>(null)
 
   useEffect(() => {
     fetchStaffs()
@@ -120,27 +124,33 @@ export default function StaffsPage() {
     setIsModalOpen(true)
   }
 
-  const handleDelete = async (staffId: number, staffName: string) => {
-    if (!confirm(`Are you sure you want to delete ${staffName}? This action cannot be undone.`)) {
-      return
-    }
-    
+  const handleStatusEdit = (staff: StaffMember) => {
+    setStatusEditStaff(staff)
+    setStatusValue(staff.status || 'ACTIVE')
+    setStatusError(null)
+  }
+
+  const handleStatusSave = async () => {
+    if (!statusEditStaff) return
+    setStatusSaving(true)
+    setStatusError(null)
     try {
-      const response = await fetchWithAuth(`/api/academics/staffs/${staffId}/delete/`, {
-        method: 'DELETE',
+      const response = await fetchWithAuth(`/api/academics/staffs/${statusEditStaff.id}/status/`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: statusValue }),
       })
-      
       if (response.ok) {
-        // Refresh the staff list
+        setStatusEditStaff(null)
         await fetchStaffs()
-        alert('Staff member deleted successfully.')
       } else {
         const errorData = await response.json().catch(() => ({}))
-        alert(errorData.detail || 'Failed to delete staff member.')
+        setStatusError(errorData.detail || 'Failed to update status.')
       }
-    } catch (err: any) {
-      console.error('Delete error:', err)
-      alert('An error occurred while deleting the staff member.')
+    } catch (err) {
+      setStatusError('An error occurred while updating status.')
+    } finally {
+      setStatusSaving(false)
     }
   }
 
@@ -415,9 +425,9 @@ export default function StaffsPage() {
                                   staff.status === 'ACTIVE'
                                     ? 'bg-green-100 text-green-800'
                                     : staff.status === 'INACTIVE'
-                                    ? 'bg-gray-100 text-gray-800'
-                                    : staff.status === 'RESIGNED'
                                     ? 'bg-red-100 text-red-800'
+                                    : staff.status === 'RESIGNED'
+                                    ? 'bg-orange-100 text-orange-800'
                                     : 'bg-gray-100 text-gray-600'
                                 }`}
                               >
@@ -435,11 +445,11 @@ export default function StaffsPage() {
                                     <Edit className="h-4 w-4" />
                                   </button>
                                   <button
-                                    onClick={() => handleDelete(staff.id, getStaffDisplayName(staff))}
-                                    className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                                    title="Delete Staff"
+                                    onClick={() => handleStatusEdit(staff)}
+                                    className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                                    title="Edit Status"
                                   >
-                                    <Trash2 className="h-4 w-4" />
+                                    <ToggleLeft className="h-4 w-4" />
                                   </button>
                                 </div>
                               </td>
@@ -592,9 +602,9 @@ export default function StaffsPage() {
                                 staff.status === 'ACTIVE'
                                   ? 'bg-green-100 text-green-800'
                                   : staff.status === 'INACTIVE'
-                                  ? 'bg-gray-100 text-gray-800'
-                                  : staff.status === 'RESIGNED'
                                   ? 'bg-red-100 text-red-800'
+                                  : staff.status === 'RESIGNED'
+                                  ? 'bg-orange-100 text-orange-800'
                                   : 'bg-gray-100 text-gray-600'
                               }`}
                             >
@@ -612,11 +622,11 @@ export default function StaffsPage() {
                                   <Edit className="h-4 w-4" />
                                 </button>
                                 <button
-                                  onClick={() => handleDelete(staff.id, getStaffDisplayName(staff))}
-                                  className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                                  title="Delete Staff"
+                                  onClick={() => handleStatusEdit(staff)}
+                                  className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                                  title="Edit Status"
                                 >
-                                  <Trash2 className="h-4 w-4" />
+                                  <ToggleLeft className="h-4 w-4" />
                                 </button>
                               </div>
                             </td>
@@ -642,6 +652,76 @@ export default function StaffsPage() {
           initialData={editingStaff}
           departmentId={selectedDeptId}
         />
+      )}
+
+      {/* Status Edit Modal */}
+      {statusEditStaff && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm mx-4">
+            <h3 className="text-lg font-semibold text-gray-900 mb-1">Edit Status</h3>
+            <p className="text-sm text-gray-500 mb-4">
+              {getStaffDisplayName(statusEditStaff)}
+              <span className="mx-1 text-gray-400">·</span>
+              {statusEditStaff.staff_id}
+            </p>
+            <div className="mb-5">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Select Status
+              </label>
+              <div className="flex flex-col gap-2">
+                {(['ACTIVE', 'INACTIVE', 'RESIGNED'] as const).map((s) => (
+                  <label
+                    key={s}
+                    className={`flex items-center gap-3 cursor-pointer p-3 rounded-lg border transition-colors ${
+                      statusValue === s
+                        ? 'border-indigo-400 bg-indigo-50'
+                        : 'border-gray-200 hover:bg-gray-50'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="staff-status"
+                      value={s}
+                      checked={statusValue === s}
+                      onChange={() => setStatusValue(s)}
+                      className="text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <span
+                      className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                        s === 'ACTIVE'
+                          ? 'bg-green-100 text-green-800'
+                          : s === 'INACTIVE'
+                          ? 'bg-red-100 text-red-800'
+                          : 'bg-orange-100 text-orange-800'
+                      }`}
+                    >
+                      {s === 'ACTIVE' ? 'Active' : s === 'INACTIVE' ? 'Inactive' : 'Resigned'}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            {statusError && (
+              <p className="text-sm text-red-600 mb-4">{statusError}</p>
+            )}
+            <div className="flex items-center justify-end gap-3">
+              <button
+                onClick={() => setStatusEditStaff(null)}
+                disabled={statusSaving}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleStatusSave}
+                disabled={statusSaving}
+                className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50"
+              >
+                {statusSaving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

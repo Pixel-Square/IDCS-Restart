@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useRef } from 'react'
 import fetchWithAuth from '../../services/fetchAuth'
-import { Users, GraduationCap, Mail, Loader2, UserCircle2, ChevronLeft, ChevronRight, Building2, Globe, UserCheck, Heart, RefreshCw, Edit2, X, Search } from 'lucide-react'
+import { Users, GraduationCap, Mail, Loader2, UserCircle2, ChevronLeft, ChevronRight, Building2, Globe, UserCheck, Heart, RefreshCw, Edit2, X, Search, Upload, Download, FileText, AlertCircle, CheckCircle2 } from 'lucide-react'
 
 
 // Cache key and expiry time (5 minutes)
@@ -10,6 +10,7 @@ const CACHE_EXPIRY_MS = 5 * 60 * 1000
 type Student = { 
   id: number; 
   reg_no: string; 
+  name?: string;
   username: string; 
   first_name?: string;
   last_name?: string;
@@ -47,6 +48,11 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
   const [myMenteesSections, setMyMenteesSections] = useState<SectionMeta[]>([])
   const [deptSections, setDeptSections] = useState<SectionMeta[]>([])
   const [allSections, setAllSections] = useState<SectionMeta[]>([])
+  // Refs so filter effects can always read the latest sections without extra deps
+  const allSectionsRef = useRef<SectionMeta[]>([])
+  const deptSectionsRef = useRef<SectionMeta[]>([])
+  allSectionsRef.current = allSections
+  deptSectionsRef.current = deptSections
   // Pre-cached students for my-students / my-mentees modes (keyed by section_id)
   const [studentsCache, setStudentsCache] = useState<Record<number, Student[]>>({})
   const [lazyStudents, setLazyStudents] = useState<Student[]>([])
@@ -69,6 +75,19 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
   const [editFormData, setEditFormData] = useState<Student | null>(null)
   const [searchQuery, setSearchQuery] = useState<string>('')
   const [debouncedSearch, setDebouncedSearch] = useState<string>('')
+
+  // Import modal state
+  const [isImportOpen, setIsImportOpen] = useState(false)
+  const [importFile, setImportFile] = useState<File | null>(null)
+  const [importLoading, setImportLoading] = useState(false)
+  const [importResult, setImportResult] = useState<{
+    message: string
+    created: number
+    updated: number
+    errors: string[]
+    total_errors: number
+  } | null>(null)
+  const [importError, setImportError] = useState<string | null>(null)
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -238,25 +257,33 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
   useEffect(() => { setCurrentPage(1) }, [selectedSection])
   useEffect(() => { setCurrentPage(1) }, [debouncedSearch])
 
-  // Reset filters when allSections list is refreshed
+  // Auto-load all students when sections arrive; reset filters
   useEffect(() => {
     if (viewMode === 'all-students') {
       setAllDeptFilter('')
       setAllBatchFilter('')
       setAllSectionFilter('')
       setSelectedSection(null)
-      setLazyStudents([])
+      if (allSections.length > 0) {
+        fetchAllStudentsForSections(allSections.map(s => s.section_id))
+      } else {
+        setLazyStudents([])
+      }
     }
   }, [allSections.length])
 
-  // Reset dept-students filters when deptSections list is refreshed
+  // Auto-load dept students when sections arrive; reset filters
   useEffect(() => {
     if (viewMode === 'department-students') {
       setDeptDeptFilter('')
       setDeptBatchFilter('')
       setDeptSectionFilter('')
       setSelectedSection(null)
-      setLazyStudents([])
+      if (deptSections.length > 0) {
+        fetchDeptStudentsForSections(deptSections.map(s => s.section_id))
+      } else {
+        setLazyStudents([])
+      }
     }
   }, [deptSections.length])
 
@@ -265,7 +292,12 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
     if (viewMode !== 'department-students') return
     if (!deptDeptFilter && !deptBatchFilter && !deptSectionFilter && !debouncedSearch) {
       setSelectedSection(null)
-      setLazyStudents([])
+      const secs = deptSectionsRef.current
+      if (secs.length > 0) {
+        fetchDeptStudentsForSections(secs.map(s => s.section_id))
+      } else {
+        setLazyStudents([])
+      }
       return
     }
     const matched = deptSections.filter(s =>
@@ -284,7 +316,12 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
     if (viewMode !== 'all-students') return
     if (!allDeptFilter && !allBatchFilter && !allSectionFilter && !debouncedSearch) {
       setSelectedSection(null)
-      setLazyStudents([])
+      const secs = allSectionsRef.current
+      if (secs.length > 0) {
+        fetchAllStudentsForSections(secs.map(s => s.section_id))
+      } else {
+        setLazyStudents([])
+      }
       return
     }
     const matched = allSections.filter(s =>
@@ -309,6 +346,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
     const students: Student[] = (r.students || []).map((s: any) => ({
       id: s.id,
       reg_no: s.reg_no,
+      name: s.name,
       username: s.username || s.user?.username,
       first_name: s.first_name ?? s.user?.first_name,
       last_name: s.last_name ?? s.user?.last_name,
@@ -637,6 +675,62 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
   }
 
   const currentView = availableViews.find(v => v.key === viewMode)
+  // ── Import handlers ─────────────────────────────────────────────────────
+  const handleDownloadTemplate = async () => {
+    try {
+      const res = await fetchWithAuth('/api/academics/students/import/template/')
+      if (!res.ok) throw new Error('Failed to download template')
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'students_import_template.xlsx'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      alert('Failed to download template. Please try again.')
+    }
+  }
+
+  const handleImport = async () => {
+    if (!importFile) return
+    setImportLoading(true)
+    setImportResult(null)
+    setImportError(null)
+    try {
+      const formData = new FormData()
+      formData.append('file', importFile)
+      const res = await fetchWithAuth('/api/academics/students/import/', {
+        method: 'POST',
+        body: formData,
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setImportError(data.error || 'Import failed.')
+      } else {
+        setImportResult(data)
+        // Refresh students list
+        clearCache()
+        fetchSectionsOrStudents()
+      }
+    } catch (e) {
+      setImportError('An error occurred while importing. Please try again.')
+    } finally {
+      setImportLoading(false)
+    }
+  }
+
+  const handleCloseImport = () => {
+    setIsImportOpen(false)
+    setImportFile(null)
+    setImportResult(null)
+    setImportError(null)
+  }
+
+  const canImport = hasPermission('students.view_all_students')
+
   const totalLabel = `${currentSectionList.length} sections`
   const hasContent = currentSectionList.length > 0
 
@@ -655,6 +749,16 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            {canImport && (
+              <button
+                onClick={() => setIsImportOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-colors"
+                title="Import students from Excel or CSV"
+              >
+                <Upload className="w-4 h-4" />
+                <span className="hidden sm:inline">Import</span>
+              </button>
+            )}
             <button
               onClick={() => { clearCache(); fetchSectionsOrStudents() }}
               disabled={loading}
@@ -933,9 +1037,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                       <div className="flex items-center gap-2">
                         <UserCircle2 className="w-5 h-5 text-slate-400" />
                         <span className="text-sm font-medium text-slate-900">
-                          {student.first_name && student.last_name 
-                            ? `${student.first_name} ${student.last_name}`.trim() 
-                            : student.username}
+                          {student.name || `${student.first_name || ''} ${student.last_name || ''}`.trim() || student.username}
                         </span>
                       </div>
                     </td>
@@ -1123,6 +1225,153 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                 className="px-5 py-2.5 bg-gradient-to-r from-indigo-500 to-purple-600 text-white hover:from-indigo-600 hover:to-purple-700 rounded-lg font-medium transition-colors flex items-center gap-2"
               >
                 <span>Save Changes</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Import Students Modal */}
+      {isImportOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
+              <div className="flex items-center gap-3">
+                <div className="bg-indigo-100 p-2 rounded-lg">
+                  <FileText className="w-5 h-5 text-indigo-600" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-900">Import Students</h2>
+                  <p className="text-xs text-slate-500">Upload Excel (.xlsx) or CSV file</p>
+                </div>
+              </div>
+              <button
+                onClick={handleCloseImport}
+                className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="px-6 py-5 space-y-5">
+              {/* Template Download */}
+              <div className="bg-slate-50 rounded-lg p-4 flex items-start gap-3">
+                <Download className="w-5 h-5 text-slate-500 mt-0.5 shrink-0" />
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-slate-700">Download Template</p>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Template columns: student_reg_no, name, department, section, email, batch, status
+                    <br />
+                    Valid status values: ACTIVE, INACTIVE, ALUMNI, DEBAR
+                  </p>
+                </div>
+                <button
+                  onClick={handleDownloadTemplate}
+                  className="px-3 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors shrink-0"
+                >
+                  Download
+                </button>
+              </div>
+
+              {/* File Upload */}
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">
+                  Select File
+                </label>
+                <label className={`flex flex-col items-center justify-center w-full h-28 border-2 border-dashed rounded-lg cursor-pointer transition-colors ${
+                  importFile
+                    ? 'border-indigo-400 bg-indigo-50'
+                    : 'border-slate-300 bg-slate-50 hover:bg-slate-100'
+                }`}>
+                  <div className="flex flex-col items-center justify-center gap-1">
+                    <Upload className={`w-6 h-6 ${importFile ? 'text-indigo-500' : 'text-slate-400'}`} />
+                    {importFile ? (
+                      <span className="text-sm font-medium text-indigo-700">{importFile.name}</span>
+                    ) : (
+                      <>
+                        <span className="text-sm text-slate-600">Click to upload or drag and drop</span>
+                        <span className="text-xs text-slate-400">.xlsx, .csv</span>
+                      </>
+                    )}
+                  </div>
+                  <input
+                    type="file"
+                    className="hidden"
+                    accept=".xlsx,.csv"
+                    onChange={(e) => {
+                      setImportFile(e.target.files?.[0] || null)
+                      setImportResult(null)
+                      setImportError(null)
+                    }}
+                  />
+                </label>
+              </div>
+
+              {/* Error message */}
+              {importError && (
+                <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{importError}</span>
+                </div>
+              )}
+
+              {/* Import Result */}
+              {importResult && (
+                <div className="space-y-3">
+                  <div className={`flex items-start gap-2 p-3 rounded-lg border text-sm ${
+                    importResult.total_errors === 0
+                      ? 'bg-green-50 border-green-200 text-green-800'
+                      : 'bg-yellow-50 border-yellow-200 text-yellow-800'
+                  }`}>
+                    <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-medium">{importResult.message}</p>
+                      <p className="mt-0.5">
+                        Created: <strong>{importResult.created}</strong>&nbsp;&nbsp;
+                        Updated: <strong>{importResult.updated}</strong>
+                        {importResult.total_errors > 0 && (
+                          <>&nbsp;&nbsp;Errors: <strong>{importResult.total_errors}</strong></>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                  {importResult.errors.length > 0 && (
+                    <div className="max-h-36 overflow-y-auto rounded-lg border border-red-200 bg-red-50 p-3">
+                      <p className="text-xs font-semibold text-red-700 mb-1">
+                        Error details {importResult.total_errors > 50 ? `(showing first 50 of ${importResult.total_errors})` : ''}:
+                      </p>
+                      <ul className="space-y-1">
+                        {importResult.errors.map((err, i) => (
+                          <li key={i} className="text-xs text-red-600">• {err}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 flex items-center justify-end gap-3 rounded-b-xl">
+              <button
+                onClick={handleCloseImport}
+                disabled={importLoading}
+                className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-200 hover:bg-slate-300 rounded-lg transition-colors disabled:opacity-50"
+              >
+                Close
+              </button>
+              <button
+                onClick={handleImport}
+                disabled={!importFile || importLoading}
+                className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
+              >
+                {importLoading ? (
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Importing…</>
+                ) : (
+                  <><Upload className="w-4 h-4" /> Import</>
+                )}
               </button>
             </div>
           </div>

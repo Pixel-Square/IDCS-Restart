@@ -2195,6 +2195,62 @@ class StaffProfileDeleteView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+class StaffStatusUpdateView(APIView):
+    """Update only the status field of a staff profile (Active / Inactive)."""
+    permission_classes = (IsAuthenticated,)
+
+    def patch(self, request, pk):
+        from accounts.utils import get_user_permissions
+        from academics.models import STAFF_STATUS_CHOICES
+
+        user = request.user
+        perms = get_user_permissions(user)
+
+        if not (user.is_superuser or 'academics.edit_staff' in perms):
+            return Response(
+                {'detail': 'You do not have permission to update staff status.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            staff_profile = StaffProfile.objects.get(pk=pk)
+        except StaffProfile.DoesNotExist:
+            return Response(
+                {'detail': 'Staff profile not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Validate department scope for non-superusers without view_all_staff
+        if not user.is_superuser and 'academics.view_all_staff' not in perms:
+            from academics.utils import get_user_effective_departments
+
+            allowed_dept_ids = get_user_effective_departments(user)
+            if allowed_dept_ids:
+                if staff_profile.department_id not in allowed_dept_ids:
+                    return Response(
+                        {'detail': 'You can only update status of staff in departments you manage.'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            else:
+                return Response(
+                    {'detail': 'You are not mapped to any departments.'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+        new_status = request.data.get('status')
+        valid_statuses = [choice[0] for choice in STAFF_STATUS_CHOICES]
+        if not new_status or new_status not in valid_statuses:
+            return Response(
+                {'detail': f'Invalid status. Must be one of: {", ".join(valid_statuses)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        staff_profile.status = new_status
+        staff_profile.save(update_fields=['status'])
+
+        return Response({'id': staff_profile.pk, 'status': staff_profile.status})
+
+
 class AdvisorStaffListView(APIView):
     """Return staff list limited to departments/sections the advisor is assigned to.
 
@@ -5076,9 +5132,14 @@ class DepartmentStudentsView(APIView):
             students_out = []
             for st in studs:
                 user_obj = getattr(st, 'user', None)
+                full_name = (
+                    f"{getattr(user_obj, 'first_name', '')} {getattr(user_obj, 'last_name', '')}".strip()
+                    if user_obj else ''
+                )
                 students_out.append({
                     'id': st.pk,
                     'reg_no': st.reg_no,
+                    'name': full_name or getattr(user_obj, 'username', None),
                     'username': getattr(user_obj, 'username', None),
                     'first_name': getattr(user_obj, 'first_name', '') if user_obj else '',
                     'last_name': getattr(user_obj, 'last_name', '') if user_obj else '',
@@ -5183,9 +5244,14 @@ class AllStudentsView(APIView):
             students_out = []
             for st in studs:
                 user_obj = getattr(st, 'user', None)
+                full_name = (
+                    f"{getattr(user_obj, 'first_name', '')} {getattr(user_obj, 'last_name', '')}".strip()
+                    if user_obj else ''
+                )
                 students_out.append({
                     'id': st.pk,
                     'reg_no': st.reg_no,
+                    'name': full_name or getattr(user_obj, 'username', None),
                     'username': getattr(user_obj, 'username', None),
                     'first_name': getattr(user_obj, 'first_name', '') if user_obj else '',
                     'last_name': getattr(user_obj, 'last_name', '') if user_obj else '',

@@ -9,6 +9,7 @@ from .views import (
     StaffProfileCreateView,
     StaffProfileUpdateView,
     StaffProfileDeleteView,
+    StaffStatusUpdateView,
     HODSectionsView,
     TeachingAssignmentViewSet,
     AdvisorStaffListView,
@@ -37,6 +38,7 @@ from .views import (
 )
 from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView, ClassAttendanceReportView, TodayPeriodAttendanceView, PeriodAttendanceReportView, OverallSectionView, MyClassStudentsView, DailyAttendanceView, DailyAttendanceLockView, DailyAttendanceUnlockView, MyClassAttendanceAnalyticsView, DailyAttendanceSessionDetailView, SectionStudentAttendanceDayView, DailyAttendanceRevertAssignmentView, DailyAttendanceUnlockRequestView, PeriodAttendanceUnlockRequestView, HODUnlockRequestsView, PeriodAttendanceSwapView, PeriodAttendanceRevertAssignmentView
 from .views import UnifiedUnlockRequestsView, DepartmentStudentsView, AllStudentsView, MentorMyMenteesView
+from .student_import_views import StudentImportTemplateDownloadView, StudentBulkImportView
 
 router = DefaultRouter()
 router.register(r'section-advisors', SectionAdvisorViewSet, basename='section-advisor')
@@ -68,6 +70,7 @@ urlpatterns = [
     path('staffs/', StaffProfileCreateView.as_view()),
     path('staffs/<int:pk>/', StaffProfileUpdateView.as_view()),
     path('staffs/<int:pk>/delete/', StaffProfileDeleteView.as_view()),
+    path('staffs/<int:pk>/status/', StaffStatusUpdateView.as_view()),
     path('advisor-staff/', AdvisorStaffListView.as_view()),
     path('mentor/staff/', MentorStaffListView.as_view()),
     path('mentor/staff/<int:staff_id>/students/', MentorStudentsForStaffView.as_view()),
@@ -90,6 +93,8 @@ urlpatterns = [
     path('mentor/my-mentees/', MentorMyMenteesView.as_view()),
     path('department-students/', DepartmentStudentsView.as_view()),
     path('all-students/', AllStudentsView.as_view()),
+    path('students/import/', StudentBulkImportView.as_view()),
+    path('students/import/template/', StudentImportTemplateDownloadView.as_view()),
     path('staff/periods/', StaffPeriodsView.as_view()),
     path('student/attendance/', StudentAttendanceView.as_view()),
     path('student/marks/', StudentMarksView.as_view()),
