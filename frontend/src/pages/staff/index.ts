@@ -1,1 +1,1 @@
-export { default as MyAttendance } from './MyAttendance';
+export { default as MyAttendance } from './MyCalendar';

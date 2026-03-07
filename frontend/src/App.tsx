@@ -56,6 +56,9 @@ import { MyAttendance } from './pages/staff';
 import HODStaffAttendancePage from './pages/hod/StaffAttendance';
 import IQACStaffAttendancePage from './pages/iqac/StaffAttendance';
 import PSStaffAttendanceViewPage from './pages/PS/StaffAttendanceView';
+import RequestTemplatesPage from './pages/hr/RequestTemplatesPage';
+import MyRequestsPage from './pages/staff-requests/MyRequestsPage';
+import PendingApprovalsPage from './pages/staff-requests/PendingApprovalsPage';
 
 type RoleObj = { name: string };
 type Me = {
@@ -329,6 +332,23 @@ export default function App() {
                   path="/staff/my-attendance"
                   element={<ProtectedRoute user={user} requiredProfile={'STAFF'} element={<MyAttendance />} />}
                 />
+                
+                {/* HR Routes */}
+                <Route
+                  path="/hr/request-templates"
+                  element={<ProtectedRoute user={user} requiredRoles={['HR']} requiredPermissions={['staff_requests.manage_templates']} element={<RequestTemplatesPage />} />}
+                />
+                
+                {/* Staff Requests Routes */}
+                <Route
+                  path="/staff-requests/my-requests"
+                  element={<ProtectedRoute user={user} requiredProfile={'STAFF'} element={<MyRequestsPage />} />}
+                />
+                <Route
+                  path="/staff-requests/pending-approvals"
+                  element={<ProtectedRoute user={user} requiredRoles={['HOD','AHOD','HR','HAA','IQAC','PS','PRINCIPAL']} requiredPermissions={['staff_requests.approve_requests']} element={<PendingApprovalsPage />} />}
+                />
+                
                 <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
               </Routes>
             </div>

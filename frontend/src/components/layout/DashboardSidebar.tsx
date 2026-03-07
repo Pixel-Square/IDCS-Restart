@@ -4,7 +4,7 @@ import { Link, useLocation } from 'react-router-dom';
 
 
 import useDashboard from '../../hooks/useDashboard';
-import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2 } from 'lucide-react';
+import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, FileText } from 'lucide-react';
 
 import { useSidebar } from './SidebarContext';
 import { fetchPendingPublishRequestCount } from '../../services/obe';
@@ -42,6 +42,8 @@ import { fetchPendingPublishRequestCount } from '../../services/obe';
   pbas: ClipboardList,
   pbas_manager: Layout,
   settings: Settings,
+  hr_request_templates: FileText,
+  staff_requests_approvals: Bell,
 
 };
 
@@ -55,6 +57,10 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
 
   const perms = (data?.permissions || []).map((p) => String(p || '').toLowerCase());
   const canObeMaster = perms.includes('obe.master.manage');
+  // Debug: print permissions/roles to browser console to diagnose missing HR link
+  // Remove this log after verification
+  // eslint-disable-next-line no-console
+  console.debug('Dashboard permissions:', perms, 'roles:', (data?.roles || []).map(r => String(r || '').toUpperCase()), 'flags:', data?.flags);
 
   useEffect(() => {
     let mounted = true;
@@ -192,9 +198,9 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'pbas', label: 'PBAS', to: '/staff/pbas' });
   }
 
-  // My Attendance for staff
+  // My Calendar for staff (combined attendance + requests)
   if (flags.is_staff) {
-    items.push({ key: 'my_attendance', label: 'My Attendance', to: '/staff/my-attendance' });
+    items.push({ key: 'my_attendance', label: 'My Calendar', to: '/staff/my-attendance' });
   }
 
   // Period attendance for staff
@@ -258,6 +264,19 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   }
   if (canObeMaster && !items.some(item => item.key === 'obe_requests')) {
     items.push({ key: 'obe_requests', label: 'OBE: Requests', to: '/obe/master/requests' });
+  }
+
+  // HR Features
+  if ((permsLower.includes('staff_requests.manage_templates') || rolesUpper.includes('HR')) && !items.some(item => item.key === 'hr_request_templates')) {
+    items.push({ key: 'hr_request_templates', label: 'HR: Request Templates', to: '/hr/request-templates' });
+  }
+  
+  // Staff Requests system
+  // Note: 'My Requests' moved into My Calendar; keep direct link removed to avoid duplication
+  const approverRoles = ['HOD', 'AHOD', 'HR', 'HAA', 'IQAC', 'PS', 'PRINCIPAL'];
+  const isApprover = approverRoles.some(r => rolesUpper.includes(r));
+  if ((permsLower.includes('staff_requests.approve_requests') || isApprover) && !items.some(item => item.key === 'staff_requests_approvals')) {
+    items.push({ key: 'staff_requests_approvals', label: 'Pending Approvals', to: '/staff-requests/pending-approvals' });
   }
 
   // Add Token Raise for all users at the end (no permission check needed)

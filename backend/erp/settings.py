@@ -67,6 +67,8 @@ INSTALLED_APPS = [
     'pbas.apps.PbasConfig',
     'staff_attendance.apps.StaffAttendanceConfig',
 ]
+# Staff requests dynamic forms & workflow engine
+INSTALLED_APPS.append('staff_requests')
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
