@@ -43,6 +43,11 @@ iqac-whatsapp/server.log
 iqac-whatsapp/.wwebjs_cache/
 iqac-whatsapp/node_modules/
 
+# whatsapp-server (new gateway)
+whatsapp-server/.env
+whatsapp-server/node_modules/
+whatsapp-server/.wwebjs_auth/
+
 # Test / coverage
 .pytest_cache/
 coverage/

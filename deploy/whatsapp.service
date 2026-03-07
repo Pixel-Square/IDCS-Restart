@@ -6,17 +6,18 @@ After=network.target
 Type=simple
 User=iqac
 Group=iqac
-WorkingDirectory=/home/iqac/IDCS-Restart/iqac-whatsapp
-ExecStart=/usr/bin/node /home/iqac/IDCS-Restart/iqac-whatsapp/server.js
+WorkingDirectory=/home/iqac/IDCS-Restart/whatsapp-server
+ExecStart=/usr/bin/node /home/iqac/IDCS-Restart/whatsapp-server/server.js
 Restart=always
 RestartSec=10
-StandardOutput=append:/home/iqac/IDCS-Restart/iqac-whatsapp/server.log
-StandardError=append:/home/iqac/IDCS-Restart/iqac-whatsapp/server.log
+StandardOutput=journal
+StandardError=journal
 
 # Environment variables
 Environment="NODE_ENV=production"
+Environment="WA_API_KEY=IQAC_SECRET_123"
 Environment="OBE_WHATSAPP_API_KEY=IQAC_SECRET_123"
-Environment="WHATSAPP_SEND_TIMEOUT_MS=12000"
+Environment="CHROME_PATH=/usr/bin/google-chrome"
 
 [Install]
 WantedBy=multi-user.target

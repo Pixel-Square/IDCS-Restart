@@ -70,6 +70,40 @@ let waClient = null;
 const sseClients = new Set();
 
 // ─────────────────────────────────────────────
+// OTP store (in-memory)
+// Structure: { mobile: { code, expires_at, attempts, created_at } }
+// ─────────────────────────────────────────────
+const otpStore = new Map();
+const OTP_EXPIRY_MINUTES  = 5;
+const OTP_COOLDOWN_SECONDS = 30;
+const MAX_VERIFY_ATTEMPTS  = 3;
+
+function generateOtp(length = 6) {
+  let otp = '';
+  for (let i = 0; i < length; i++) {
+    otp += String(Math.floor(Math.random() * 10));
+  }
+  return otp;
+}
+
+function normalizePhoneForOtp(raw) {
+  const digits = String(raw || '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('91') && digits.length === 12) return digits;
+  if (digits.startsWith('0')  && digits.length === 11)  return '91' + digits.slice(1);
+  if (digits.length === 10) return '91' + digits;
+  return digits;
+}
+
+// Clean expired OTPs every minute
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of otpStore) {
+    if (v.expires_at < now) otpStore.delete(k);
+  }
+}, 60_000);
+
+// ─────────────────────────────────────────────
 // SSE helpers
 // ─────────────────────────────────────────────
 function pushSSE(eventName, data) {
@@ -306,6 +340,128 @@ app.get('/qr.png', async (_req, res) => {
   } catch (e) {
     res.status(500).json({ ok: false, detail: `QR render error: ${e.message}` });
   }
+});
+
+// ─── POST /mobile/request-otp ────────────────
+app.post('/mobile/request-otp', requireApiKey, async (req, res) => {
+  const { mobile_number } = req.body;
+
+  const mobile = normalizePhoneForOtp(mobile_number);
+  if (!mobile || mobile.length < 12) {
+    return res.status(400).json({ ok: false, error: 'Invalid mobile number.' });
+  }
+
+  if (waStatus !== 'CONNECTED' || !waClient) {
+    return res.status(503).json({
+      ok: false,
+      error: 'WhatsApp is not connected. Pair the device first.',
+      status: waStatus,
+    });
+  }
+
+  const now = Date.now();
+
+  // Cooldown check
+  const existing = otpStore.get(mobile);
+  if (existing && existing.created_at) {
+    const elapsed = (now - existing.created_at) / 1000;
+    if (elapsed < OTP_COOLDOWN_SECONDS) {
+      const retryAfter = Math.ceil(OTP_COOLDOWN_SECONDS - elapsed);
+      return res.status(429).json({
+        ok: false,
+        error: 'Please wait before requesting another OTP.',
+        retry_after_seconds: retryAfter,
+      });
+    }
+  }
+
+  const code = generateOtp(6);
+  otpStore.set(mobile, {
+    code,
+    expires_at: now + OTP_EXPIRY_MINUTES * 60 * 1000,
+    attempts: 0,
+    created_at: now,
+  });
+
+  // Verify number is registered on WhatsApp
+  let numberId;
+  try {
+    numberId = await waClient.getNumberId(mobile);
+  } catch (e) {
+    otpStore.delete(mobile);
+    return res.status(400).json({ ok: false, error: 'Failed to verify WhatsApp number.', detail: e.message });
+  }
+
+  if (!numberId) {
+    otpStore.delete(mobile);
+    return res.status(400).json({ ok: false, error: 'Number not registered on WhatsApp.' });
+  }
+
+  const chatId = numberId._serialized || `${mobile}@c.us`;
+  const message = `Your IDCS OTP is *${code}*. It is valid for ${OTP_EXPIRY_MINUTES} minutes. Do not share this code with anyone.`;
+
+  try {
+    await waClient.sendMessage(chatId, message);
+    console.log(`[WA] OTP sent to ${chatId}`);
+  } catch (e) {
+    otpStore.delete(mobile);
+    return res.status(500).json({ ok: false, error: 'Failed to send OTP via WhatsApp.', detail: e.message });
+  }
+
+  return res.json({
+    ok: true,
+    mobile_number: mobile,
+    expires_in_seconds: OTP_EXPIRY_MINUTES * 60,
+    cooldown_seconds: OTP_COOLDOWN_SECONDS,
+    message: 'OTP sent successfully via WhatsApp.',
+  });
+});
+
+// ─── POST /mobile/verify-otp ─────────────────
+app.post('/mobile/verify-otp', requireApiKey, async (req, res) => {
+  const { mobile_number, otp } = req.body;
+
+  const mobile  = normalizePhoneForOtp(mobile_number);
+  const otpCode = String(otp || '').trim();
+
+  if (!mobile || mobile.length < 12) {
+    return res.status(400).json({ ok: false, error: 'Invalid mobile number.' });
+  }
+  if (!otpCode) {
+    return res.status(400).json({ ok: false, error: 'OTP is required.' });
+  }
+
+  const stored = otpStore.get(mobile);
+  if (!stored) {
+    return res.status(400).json({ ok: false, error: 'No OTP found for this number. Please request a new OTP.' });
+  }
+
+  const now = Date.now();
+
+  if (stored.expires_at < now) {
+    otpStore.delete(mobile);
+    return res.status(400).json({ ok: false, error: 'OTP has expired. Please request a new OTP.' });
+  }
+
+  if (stored.attempts >= MAX_VERIFY_ATTEMPTS) {
+    otpStore.delete(mobile);
+    return res.status(400).json({ ok: false, error: 'Too many failed attempts. Please request a new OTP.' });
+  }
+
+  if (stored.code !== otpCode) {
+    stored.attempts += 1;
+    const remaining = MAX_VERIFY_ATTEMPTS - stored.attempts;
+    if (remaining <= 0) {
+      otpStore.delete(mobile);
+      return res.status(400).json({ ok: false, error: 'Invalid OTP. Too many failed attempts. Please request a new OTP.' });
+    }
+    return res.status(400).json({ ok: false, error: 'Invalid OTP.', remaining_attempts: remaining });
+  }
+
+  // Correct OTP
+  otpStore.delete(mobile);
+  console.log(`[WA] OTP verified for ${mobile}`);
+  return res.json({ ok: true, mobile_number: mobile, message: 'Mobile number verified successfully.' });
 });
 
 // ─── POST /send-whatsapp ─────────────────────
