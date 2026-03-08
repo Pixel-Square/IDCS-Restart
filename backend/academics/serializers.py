@@ -829,6 +829,8 @@ class StudentSimpleSerializer(serializers.Serializer):
 
 class StudentSubjectBatchSerializer(serializers.ModelSerializer):
     staff = serializers.SerializerMethodField(read_only=True)
+    staff_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
+    created_by = serializers.SerializerMethodField(read_only=True)
     student_ids = serializers.ListField(child=serializers.IntegerField(), write_only=True, required=False)
     students = StudentSimpleSerializer(many=True, read_only=True)
     academic_year = serializers.PrimaryKeyRelatedField(queryset=AcademicYear.objects.all(), required=False)
@@ -837,8 +839,8 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = None  # set at import time to avoid circular import
-        fields = ('id', 'name', 'staff', 'academic_year', 'curriculum_row_id', 'curriculum_row', 'student_ids', 'students', 'is_active', 'created_at', 'updated_at')
-        read_only_fields = ('created_at', 'updated_at')
+        fields = ('id', 'name', 'staff', 'staff_id', 'created_by', 'academic_year', 'curriculum_row_id', 'curriculum_row', 'student_ids', 'students', 'is_active', 'created_at', 'updated_at')
+        read_only_fields = ('created_at', 'updated_at', 'created_by')
 
     def __init__(self, *args, **kwargs):
         # import model lazily
@@ -851,7 +853,34 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
             st = getattr(obj, 'staff', None)
             if not st:
                 return None
-            return {'id': st.id, 'user': getattr(getattr(st, 'user', None), 'username', None), 'staff_id': getattr(st, 'staff_id', None)}
+            user = getattr(st, 'user', None)
+            name = ''
+            if user:
+                name = f"{user.first_name} {user.last_name}".strip() or user.username
+            return {
+                'id': st.id, 
+                'user': getattr(user, 'username', None), 
+                'staff_id': getattr(st, 'staff_id', None),
+                'name': name
+            }
+        except Exception:
+            return None
+
+    def get_created_by(self, obj):
+        try:
+            st = getattr(obj, 'created_by', None)
+            if not st:
+                return None
+            user = getattr(st, 'user', None)
+            name = ''
+            if user:
+                name = f"{user.first_name} {user.last_name}".strip() or user.username
+            return {
+                'id': st.id, 
+                'user': getattr(user, 'username', None), 
+                'staff_id': getattr(st, 'staff_id', None),
+                'name': name
+            }
         except Exception:
             return None
 
@@ -867,13 +896,23 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         student_ids = validated_data.pop('student_ids', []) or []
         curriculum_row_id = validated_data.pop('curriculum_row_id', None) or self.initial_data.get('curriculum_row_id')
+        staff_id = validated_data.pop('staff_id', None)
+        
         # default academic year
         if 'academic_year' not in validated_data or not validated_data.get('academic_year'):
             ay = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.order_by('-id').first()
             if ay:
                 validated_data['academic_year'] = ay
 
-        # staff will be set in view to current user's staff_profile when creating
+        # Handle staff assignment
+        if staff_id:
+            try:
+                staff = StaffProfile.objects.get(pk=staff_id)
+                validated_data['staff'] = staff
+            except StaffProfile.DoesNotExist:
+                pass  # staff will be set in view to current user's staff_profile
+        # Otherwise, staff will be set in view to current user's staff_profile when creating
+        
         # attach curriculum_row if provided
         if curriculum_row_id:
             try:
@@ -893,6 +932,16 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         student_ids = validated_data.pop('student_ids', None)
         curriculum_row_id = validated_data.pop('curriculum_row_id', None) or self.initial_data.get('curriculum_row_id')
+        staff_id = validated_data.pop('staff_id', None)
+        
+        # Handle staff assignment update
+        if staff_id is not None:
+            try:
+                staff = StaffProfile.objects.get(pk=staff_id)
+                validated_data['staff'] = staff
+            except StaffProfile.DoesNotExist:
+                pass  # Keep existing staff if invalid ID provided
+        
         if curriculum_row_id is not None:
             try:
                 from curriculum.models import CurriculumDepartment
@@ -969,13 +1018,15 @@ class PeriodAttendanceSessionSerializer(serializers.ModelSerializer):
     section_id = serializers.PrimaryKeyRelatedField(queryset=Section.objects.all(), source='section', write_only=True)
     period_id = serializers.PrimaryKeyRelatedField(queryset=TimetableSlot.objects.all(), source='period', write_only=True)
     teaching_assignment_id = serializers.PrimaryKeyRelatedField(queryset=TeachingAssignment.objects.all(), source='teaching_assignment', write_only=True, required=False, allow_null=True)
+    subject_batch_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
     section = serializers.SerializerMethodField(read_only=True)
     period = serializers.SerializerMethodField(read_only=True)
+    subject_batch = serializers.SerializerMethodField(read_only=True)
     records = PeriodAttendanceRecordSerializer(many=True, read_only=True)
 
     class Meta:
         model = PeriodAttendanceSession
-        fields = ('id', 'section', 'section_id', 'period', 'period_id', 'date', 'timetable_assignment', 'teaching_assignment', 'teaching_assignment_id', 'created_by', 'is_locked', 'created_at', 'records')
+        fields = ('id', 'section', 'section_id', 'period', 'period_id', 'date', 'timetable_assignment', 'teaching_assignment', 'teaching_assignment_id', 'subject_batch', 'subject_batch_id', 'created_by', 'is_locked', 'created_at', 'records')
         read_only_fields = ('created_by', 'created_at')
 
     # no custom __init__ required; queryset for `period_id` is statically provided above
@@ -993,6 +1044,31 @@ class PeriodAttendanceSessionSerializer(serializers.ModelSerializer):
             return {'id': p.id, 'index': p.index, 'label': p.label, 'start_time': p.start_time, 'end_time': p.end_time}
         except Exception:
             return None
+
+    def get_subject_batch(self, obj):
+        try:
+            b = obj.subject_batch
+            if not b:
+                return None
+            return {
+                'id': b.id, 
+                'name': b.name,
+                'student_count': b.students.count() if hasattr(b, 'students') else 0
+            }
+        except Exception:
+            return None
+
+    def validate(self, attrs):
+        # Handle subject_batch_id
+        subject_batch_id = self.initial_data.get('subject_batch_id')
+        if subject_batch_id:
+            try:
+                from .models import StudentSubjectBatch
+                batch = StudentSubjectBatch.objects.get(pk=int(subject_batch_id))
+                attrs['subject_batch'] = batch
+            except (StudentSubjectBatch.DoesNotExist, ValueError):
+                pass
+        return attrs
 
 
 class StaffProfileSerializer(serializers.ModelSerializer):

@@ -2515,11 +2515,12 @@ class SubjectBatchViewSet(viewsets.ModelViewSet):
             return []
         from .models import StudentSubjectBatch
         # staff sees only their own batches; superusers can see all
-        qs = StudentSubjectBatch.objects.select_related('staff', 'academic_year').prefetch_related('students')
+        qs = StudentSubjectBatch.objects.select_related('staff', 'created_by', 'academic_year').prefetch_related('students')
         # allow callers to request all batches (useful for timetable editors)
         include_all = str(self.request.query_params.get('include_all') or '').lower() in ('1', 'true', 'yes')
         if not user.is_superuser and not include_all:
-            qs = qs.filter(staff=staff_profile)
+            # Show batches created by this staff OR assigned to this staff
+            qs = qs.filter(Q(staff=staff_profile) | Q(created_by=staff_profile))
 
         # allow filtering by curriculum_row_id via query param (useful for timetable editor)
         cr = self.request.query_params.get('curriculum_row_id') or self.request.query_params.get('curriculum_row')
@@ -2546,20 +2547,66 @@ class SubjectBatchViewSet(viewsets.ModelViewSet):
         staff_profile = getattr(user, 'staff_profile', None)
         if not staff_profile:
             raise PermissionDenied('Only staff users can create subject batches')
-        # ensure academic_year default handled in serializer
-        # allow curriculum_row_id in payload; serializer will attach row
-        serializer.save(staff=staff_profile)
+        # Set created_by to current user
+        # If staff is not already set by serializer (from staff_id), use current user
+        if 'staff' not in serializer.validated_data:
+            serializer.save(staff=staff_profile, created_by=staff_profile)
+        else:
+            serializer.save(created_by=staff_profile)
+
+    def perform_update(self, serializer):
+        user = self.request.user
+        staff_profile = getattr(user, 'staff_profile', None)
+        instance = self.get_object()
+        
+        # Only the creator can edit the batch
+        if instance.created_by and instance.created_by != staff_profile and not user.is_superuser:
+            raise PermissionDenied('Only the batch creator can edit this batch')
+        
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        user = self.request.user
+        staff_profile = getattr(user, 'staff_profile', None)
+        
+        # Only the creator can delete the batch
+        if instance.created_by and instance.created_by != staff_profile and not user.is_superuser:
+            raise PermissionDenied('Only the batch creator can delete this batch')
+        
+        instance.delete()
 
 
 
 class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
-    queryset = PeriodAttendanceSession.objects.select_related('section', 'period', 'timetable_assignment', 'teaching_assignment').prefetch_related('records')
+    queryset = PeriodAttendanceSession.objects.select_related('section', 'period', 'timetable_assignment', 'timetable_assignment__staff', 'teaching_assignment', 'subject_batch', 'subject_batch__staff', 'subject_batch__created_by').prefetch_related('records')
     serializer_class = PeriodAttendanceSessionSerializer
     permission_classes = (IsAuthenticated,)
 
     def get_queryset(self):
-        """Filter queryset by date range if provided."""
+        """Filter queryset by date range and staff assignment (including batch assignments)."""
         queryset = super().get_queryset()
+        user = self.request.user
+        staff_profile = getattr(user, 'staff_profile', None)
+        
+        # Filter by staff assignment if staff user
+        if staff_profile and not user.is_superuser:
+            perms = get_user_permissions(user)
+            # If user has special attendance permission, show all
+            if 'academics.mark_attendance' not in perms:
+                # Show sessions where staff is:
+                # 1. Created by this staff
+                # 2. Assigned to this staff (swap scenario)
+                # 3. Timetable assignment staff matches
+                # 4. Subject batch staff matches
+                # 5. Subject batch creator matches
+                from timetable.models import TimetableAssignment
+                queryset = queryset.filter(
+                    Q(created_by=staff_profile) |
+                    Q(assigned_to=staff_profile) |
+                    Q(timetable_assignment__staff=staff_profile) |
+                    Q(subject_batch__staff=staff_profile) |
+                    Q(subject_batch__created_by=staff_profile)
+                ).distinct()
         
         # Support date filtering for bulk attendance checking
         date_after = self.request.query_params.get('date_after')
@@ -2600,12 +2647,36 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
 
         ta = None
         teach_assign = None
+        batch_staff_check_passed = False
         try:
             from timetable.models import TimetableAssignment
             if section and period and day:
-                ta = TimetableAssignment.objects.filter(section=section, period=period, day=day, staff=staff_profile).first()
+                # Check if there are ANY batch-specific assignments for this period
+                batch_assignments = TimetableAssignment.objects.filter(
+                    section=section, period=period, day=day, subject_batch__isnull=False
+                )
+                
+                if batch_assignments.exists():
+                    # Batch assignments exist - ONLY batch staff can access, block default staff
+                    for ta_candidate in batch_assignments:
+                        batch = ta_candidate.subject_batch
+                        is_batch_staff = (
+                            getattr(batch, 'created_by_id', None) == staff_profile.id or
+                            getattr(batch, 'staff_id', None) == staff_profile.id
+                        )
+                        if is_batch_staff:
+                            ta = ta_candidate
+                            batch_staff_check_passed = True
+                            break
+                    # If ta is still None, staff is not in any batch - they cannot access
+                else:
+                    # No batch assignments - use regular timetable assignment
+                    ta = TimetableAssignment.objects.filter(
+                        section=section, period=period, day=day, staff=staff_profile
+                    ).first()
+                
                 # If no explicit timetable assignment with staff, try resolving via TeachingAssignment
-                if ta is None:
+                if ta is None and not batch_assignments.exists():
                     assign = TimetableAssignment.objects.filter(section=section, period=period, day=day).first()
                     if assign and not getattr(assign, 'staff', None):
                         from .models import TeachingAssignment as _TA
@@ -2679,11 +2750,50 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                 teach_assign = None
 
         perms = get_user_permissions(user)
-        if not (ta or 'academics.mark_attendance' in perms or user.is_superuser):
-            raise PermissionDenied('You are not assigned to this period and cannot mark attendance')
+        
+        # Check if there are batch assignments for this period
+        try:
+            from timetable.models import TimetableAssignment
+            batch_assignments = TimetableAssignment.objects.filter(
+                section=section, period=period, day=day, subject_batch__isnull=False
+            ) if section and period and day else TimetableAssignment.objects.none()
+        except Exception:
+            batch_assignments = TimetableAssignment.objects.none()
+        
+        # If batch assignments exist, ONLY batch staff can access - block everyone else
+        if batch_assignments.exists() and not (user.is_superuser or 'academics.mark_attendance' in perms):
+            # Check if staff has access to any of the batches
+            has_batch_access = False
+            if ta and getattr(ta, 'subject_batch', None):
+                batch = ta.subject_batch
+                is_batch_staff = (
+                    getattr(batch, 'created_by_id', None) == staff_profile.id or
+                    getattr(batch, 'staff_id', None) == staff_profile.id
+                )
+                if is_batch_staff:
+                    has_batch_access = True
+            
+            if not has_batch_access:
+                # Get batch name for error message
+                try:
+                    batch_ta = batch_assignments.first()
+                    batch_name = batch_ta.subject_batch.name if batch_ta and batch_ta.subject_batch else 'assigned batch'
+                    raise PermissionDenied(f'This period is assigned to "{batch_name}". Only staff assigned to that batch can mark attendance.')
+                except PermissionDenied:
+                    raise
+                except Exception:
+                    raise PermissionDenied('This period is assigned to a batch. Only staff assigned to that batch can mark attendance.')
+        
+        # Regular permission check for non-batch periods
+        if not batch_assignments.exists():
+            if not (ta or 'academics.mark_attendance' in perms or user.is_superuser):
+                raise PermissionDenied('You are not assigned to this period and cannot mark attendance')
 
+        # Extract subject_batch from timetable assignment if present
+        subject_batch = getattr(ta, 'subject_batch', None) if ta else None
+        
         if ta or teach_assign:
-            serializer.save(timetable_assignment=ta, teaching_assignment=teach_assign, created_by=staff_profile)
+            serializer.save(timetable_assignment=ta, teaching_assignment=teach_assign, subject_batch=subject_batch, created_by=staff_profile)
         else:
             serializer.save(created_by=staff_profile)
 
@@ -2715,8 +2825,30 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
             section = _Section.objects.filter(pk=int(section_id)).first() if section_id is not None else None
             period = TimetableSlot.objects.filter(pk=int(period_id)).first() if period_id is not None else None
             if section and period and day and staff_profile:
-                ta = TimetableAssignment.objects.filter(section=section, period=period, day=day, staff=staff_profile).first()
-                if ta is None:
+                # Check if there are ANY batch-specific assignments for this period
+                batch_assignments = TimetableAssignment.objects.filter(
+                    section=section, period=period, day=day, subject_batch__isnull=False
+                )
+                
+                if batch_assignments.exists():
+                    # Batch assignments exist - ONLY batch staff can access, block default staff
+                    for ta_candidate in batch_assignments:
+                        batch = ta_candidate.subject_batch
+                        is_batch_staff = (
+                            getattr(batch, 'created_by_id', None) == staff_profile.id or
+                            getattr(batch, 'staff_id', None) == staff_profile.id
+                        )
+                        if is_batch_staff:
+                            ta = ta_candidate
+                            break
+                    # If ta is still None, staff is not in any batch - they cannot access
+                else:
+                    # No batch assignments - use regular timetable assignment
+                    ta = TimetableAssignment.objects.filter(
+                        section=section, period=period, day=day, staff=staff_profile
+                    ).first()
+                
+                if ta is None and not batch_assignments.exists():
                     assign = TimetableAssignment.objects.filter(section=section, period=period, day=day).first()
                     if assign and not getattr(assign, 'staff', None):
                         from .models import TeachingAssignment as _TA
@@ -2817,16 +2949,55 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                 teach_assign = None
 
         perms = get_user_permissions(user)
-        if not (ta or teach_assign or 'academics.mark_attendance' in perms or user.is_superuser):
-            # Also allow if there's a swap-assigned session for this staff
-            is_swap_assigned = (
-                section and period and date and staff_profile and
-                PeriodAttendanceSession.objects.filter(
-                    section=section, period=period, date=date, assigned_to=staff_profile
-                ).exists()
-            )
-            if not is_swap_assigned:
-                raise PermissionDenied('You are not allowed to mark attendance for this period')
+        
+        # Check if there are batch assignments for this period
+        try:
+            from timetable.models import TimetableAssignment as _TimetableAssignment
+            batch_assignments = _TimetableAssignment.objects.filter(
+                section=section, period=period, day=day, subject_batch__isnull=False
+            ) if section and period and day else _TimetableAssignment.objects.none()
+        except Exception:
+            batch_assignments = _TimetableAssignment.objects.none()
+        
+        # If batch assignments exist, ONLY batch staff can access - block everyone else
+        if batch_assignments.exists() and not (user.is_superuser or 'academics.mark_attendance' in perms):
+            # Check if staff has access to any of the batches
+            has_batch_access = False
+            if ta and getattr(ta, 'subject_batch', None):
+                batch = ta.subject_batch
+                is_batch_staff = (
+                    getattr(batch, 'created_by_id', None) == staff_profile.id or
+                    getattr(batch, 'staff_id', None) == staff_profile.id
+                )
+                if is_batch_staff:
+                    has_batch_access = True
+            
+            if not has_batch_access:
+                # Get batch name for error message
+                try:
+                    batch_ta = batch_assignments.first()
+                    batch_name = batch_ta.subject_batch.name if batch_ta and batch_ta.subject_batch else 'assigned batch'
+                    return Response({
+                        'error': f'This period is assigned to "{batch_name}". Only staff assigned to that batch can mark attendance.',
+                        'batch_name': batch_name
+                    }, status=403)
+                except Exception:
+                    return Response({
+                        'error': 'This period is assigned to a batch. Only staff assigned to that batch can mark attendance.'
+                    }, status=403)
+        
+        # Regular permission check for non-batch periods
+        if not batch_assignments.exists():
+            if not (ta or teach_assign or 'academics.mark_attendance' in perms or user.is_superuser):
+                # Also allow if there's a swap-assigned session for this staff
+                is_swap_assigned = (
+                    section and period and date and staff_profile and
+                    PeriodAttendanceSession.objects.filter(
+                        section=section, period=period, date=date, assigned_to=staff_profile
+                    ).exists()
+                )
+                if not is_swap_assigned:
+                    raise PermissionDenied('You are not allowed to mark attendance for this period')
 
         with transaction.atomic():
             # Optionally create a temporary special timetable entry for this date/period
@@ -2841,7 +3012,9 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                 pass
             # IMPORTANT: session must be subject-wise. Use resolved teaching_assignment
             # (staff+subject, including elective options) to prevent overwrites.
-            lookup = {'section': section, 'period': period, 'date': date, 'teaching_assignment': teach_assign}
+            # Also include subject_batch to allow separate sessions for different batches.
+            subject_batch = getattr(ta, 'subject_batch', None) if ta else None
+            lookup = {'section': section, 'period': period, 'date': date, 'teaching_assignment': teach_assign, 'subject_batch': subject_batch}
             if teach_assign is None:
                 # When teaching_assignment cannot be resolved (common for electives with no-staff
                 # timetable entries), use created_by as discriminator to avoid cross-staff session sharing.
@@ -2859,7 +3032,7 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
             else:
                 session, created = PeriodAttendanceSession.objects.get_or_create(
                     **lookup,
-                    defaults={'created_by': staff_profile, 'timetable_assignment': ta, 'teaching_assignment': teach_assign}
+                    defaults={'created_by': staff_profile, 'timetable_assignment': ta, 'teaching_assignment': teach_assign, 'subject_batch': subject_batch}
                 )
 
             # Enforce assigned_to: if session is assigned to someone else, block the original staff
@@ -2886,6 +3059,11 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
             if teach_assign is not None and session.teaching_assignment_id != getattr(teach_assign, 'id', None):
                 session.teaching_assignment = teach_assign
                 dirty_fields.append('teaching_assignment')
+            # Update subject_batch from timetable assignment if needed
+            ta_subject_batch = getattr(ta, 'subject_batch', None) if ta is not None else None
+            if ta_subject_batch is not None and session.subject_batch_id != getattr(ta_subject_batch, 'id', None):
+                session.subject_batch = ta_subject_batch
+                dirty_fields.append('subject_batch')
             if dirty_fields:
                 session.save(update_fields=dirty_fields)
 
@@ -3669,8 +3847,24 @@ class StaffPeriodsView(APIView):
             resolved_elective_name = None
             teach_assign = None
             try:
-                # Include explicit assignments only when timetable.staff matches.
-                if getattr(a, 'staff', None) and getattr(a.staff, 'id', None) == getattr(staff_profile, 'id', None):
+                # Check for batch-specific staff assignment first
+                batch = getattr(a, 'subject_batch', None)
+                if batch and getattr(batch, 'staff', None):
+                    # If batch has assigned staff, ONLY show to batch staff
+                    if getattr(batch.staff, 'id', None) == getattr(staff_profile, 'id', None):
+                        include = True
+                    else:
+                        # This period belongs to a different batch staff, skip it
+                        continue
+                elif batch and not getattr(batch, 'staff', None):
+                    # Batch exists but no staff assigned - only show to batch creator
+                    if getattr(batch, 'created_by', None) and getattr(batch.created_by, 'id', None) == getattr(staff_profile, 'id', None):
+                        include = True
+                    else:
+                        # This batch belongs to a different creator, skip it
+                        continue
+                elif getattr(a, 'staff', None) and getattr(a.staff, 'id', None) == getattr(staff_profile, 'id', None):
+                    # No batch, check default timetable staff
                     include = True
 
                 # Resolve a TeachingAssignment for this staff+slot. This is required to correctly
@@ -3884,7 +4078,24 @@ class StaffPeriodsView(APIView):
             for se in special_qs:
                 include = False
                 try:
-                    if getattr(se, 'staff', None) and getattr(se.staff, 'id', None) == getattr(staff_profile, 'id', None):
+                    # Check for batch-specific staff assignment first
+                    batch = getattr(se, 'subject_batch', None)
+                    if batch and getattr(batch, 'staff', None):
+                        # If batch has assigned staff, ONLY show to batch staff
+                        if getattr(batch.staff, 'id', None) == getattr(staff_profile, 'id', None):
+                            include = True
+                        else:
+                            # This period belongs to a different batch staff, skip it
+                            continue
+                    elif batch and not getattr(batch, 'staff', None):
+                        # Batch exists but no staff assigned - only show to batch creator
+                        if getattr(batch, 'created_by', None) and getattr(batch.created_by, 'id', None) == getattr(staff_profile, 'id', None):
+                            include = True
+                        else:
+                            # This batch belongs to a different creator, skip it
+                            continue
+                    elif getattr(se, 'staff', None) and getattr(se.staff, 'id', None) == getattr(staff_profile, 'id', None):
+                        # No batch, check default special entry staff
                         include = True
                     else:
                         # fallback: if special entry has a curriculum_row, check TeachingAssignment mappings

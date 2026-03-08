@@ -23,11 +23,48 @@ class TimetableAssignmentSerializer(serializers.ModelSerializer):
     # accept a numeric subject_batch id in payload; resolve to object in validate to avoid import-time cycles
     subject_batch_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
     staff_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
+    staff = serializers.SerializerMethodField(read_only=True)
+    effective_staff = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = TimetableAssignment
-        fields = ('id', 'period', 'period_id', 'day', 'section', 'section_id', 'staff', 'staff_id', 'curriculum_row', 'subject_batch', 'subject_batch_id', 'subject_text')
+        fields = ('id', 'period', 'period_id', 'day', 'section', 'section_id', 'staff', 'effective_staff', 'staff_id', 'curriculum_row', 'subject_batch', 'subject_batch_id', 'subject_text')
         read_only_fields = ('period', 'section')
+    
+    def get_staff(self, obj):
+        """Return the batch's assigned staff if subject_batch exists, otherwise return the timetable's staff"""
+        try:
+            # If there's a subject_batch with assigned staff, use that
+            if obj.subject_batch and obj.subject_batch.staff:
+                batch_staff = obj.subject_batch.staff
+                return {
+                    'id': batch_staff.id,
+                    'staff_id': batch_staff.staff_id,
+                    'name': batch_staff.user.get_full_name() if batch_staff.user else batch_staff.staff_id,
+                    'user': batch_staff.user_id
+                }
+            # Otherwise, use the timetable assignment's staff
+            elif obj.staff:
+                return {
+                    'id': obj.staff.id,
+                    'staff_id': obj.staff.staff_id,
+                    'name': obj.staff.user.get_full_name() if obj.staff.user else obj.staff.staff_id,
+                    'user': obj.staff.user_id
+                }
+            return None
+        except Exception:
+            return None
+    
+    def get_effective_staff(self, obj):
+        """Return the actual staff who should mark attendance (batch staff or timetable staff)"""
+        try:
+            if obj.subject_batch and obj.subject_batch.staff:
+                return obj.subject_batch.staff.id
+            elif obj.staff:
+                return obj.staff.id
+            return None
+        except Exception:
+            return None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -105,11 +142,48 @@ class SpecialTimetableEntrySerializer(serializers.ModelSerializer):
     # accept numeric subject_batch id from payload
     subject_batch_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
     staff_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
+    staff = serializers.SerializerMethodField(read_only=True)
+    effective_staff = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = SpecialTimetableEntry
         # expose only id-based writable fields to avoid duplicate source mapping
-        fields = ('id', 'timetable_id', 'date', 'period_id', 'staff', 'staff_id', 'curriculum_row', 'subject_batch', 'subject_batch_id', 'subject_text', 'is_active')
+        fields = ('id', 'timetable_id', 'date', 'period_id', 'staff', 'effective_staff', 'staff_id', 'curriculum_row', 'subject_batch', 'subject_batch_id', 'subject_text', 'is_active')
+    
+    def get_staff(self, obj):
+        """Return the batch's assigned staff if subject_batch exists, otherwise return the entry's staff"""
+        try:
+            # If there's a subject_batch with assigned staff, use that
+            if obj.subject_batch and obj.subject_batch.staff:
+                batch_staff = obj.subject_batch.staff
+                return {
+                    'id': batch_staff.id,
+                    'staff_id': batch_staff.staff_id,
+                    'name': batch_staff.user.get_full_name() if batch_staff.user else batch_staff.staff_id,
+                    'user': batch_staff.user_id
+                }
+            # Otherwise, use the special timetable entry's staff
+            elif obj.staff:
+                return {
+                    'id': obj.staff.id,
+                    'staff_id': obj.staff.staff_id,
+                    'name': obj.staff.user.get_full_name() if obj.staff.user else obj.staff.staff_id,
+                    'user': obj.staff.user_id
+                }
+            return None
+        except Exception:
+            return None
+    
+    def get_effective_staff(self, obj):
+        """Return the actual staff who should mark attendance (batch staff or entry staff)"""
+        try:
+            if obj.subject_batch and obj.subject_batch.staff:
+                return obj.subject_batch.staff.id
+            elif obj.staff:
+                return obj.staff.id
+            return None
+        except Exception:
+            return None
 
     def validate(self, attrs):
         # resolve subject_batch if provided as id in initial_data

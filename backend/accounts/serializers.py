@@ -64,6 +64,8 @@ class MeSerializer(serializers.Serializer):
     permissions = serializers.SerializerMethodField()
     profile_type = serializers.SerializerMethodField()
     profile = serializers.SerializerMethodField()
+    student_profile = serializers.SerializerMethodField()
+    staff_profile = serializers.SerializerMethodField()
     college = serializers.SerializerMethodField()
     is_iqac_main = serializers.SerializerMethodField()
 
@@ -181,6 +183,18 @@ class MeSerializer(serializers.Serializer):
                 'designation': st.designation,
                 'status': st.status,
             }
+        return None
+
+    def get_student_profile(self, obj):
+        """Return student profile with ID if user is a student."""
+        if hasattr(obj, 'student_profile') and obj.student_profile is not None:
+            return {'id': obj.student_profile.id}
+        return None
+
+    def get_staff_profile(self, obj):
+        """Return staff profile with ID if user is staff."""
+        if hasattr(obj, 'staff_profile') and obj.staff_profile is not None:
+            return {'id': obj.staff_profile.id}
         return None
 
     def get_college(self, obj):

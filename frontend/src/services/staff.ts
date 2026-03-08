@@ -15,6 +15,14 @@ export type AssignedSubject = {
   } | null
 }
 
+export type StaffMember = {
+  id: number
+  staff_id: string
+  name: string
+  username: string
+  designation?: string
+}
+
 export async function fetchAssignedSubjects(staffId?: number): Promise<AssignedSubject[]> {
   const path = staffId ? `/api/academics/staff/${staffId}/assigned-subjects/` : `/api/academics/staff/assigned-subjects/`
   const res = await fetchWithAuth(path)
@@ -24,4 +32,11 @@ export async function fetchAssignedSubjects(staffId?: number): Promise<AssignedS
   return data.results || data
 }
 
-export default { fetchAssignedSubjects }
+export async function fetchDepartmentStaff(): Promise<StaffMember[]> {
+  const res = await fetchWithAuth('/api/academics/department-staff/')
+  if (!res.ok) throw new Error('Failed to fetch department staff')
+  const data = await res.json()
+  return data.results || data
+}
+
+export default { fetchAssignedSubjects, fetchDepartmentStaff }

@@ -899,7 +899,8 @@ class StudentSubjectBatch(models.Model):
     a subject's internal assessments.
     """
     name = models.CharField(max_length=128)
-    staff = models.ForeignKey(StaffProfile, on_delete=models.CASCADE, related_name='subject_batches')
+    staff = models.ForeignKey(StaffProfile, on_delete=models.CASCADE, related_name='subject_batches', help_text='Staff assigned to handle this batch')
+    created_by = models.ForeignKey(StaffProfile, on_delete=models.CASCADE, related_name='created_batches', null=True, blank=True, help_text='Staff who created this batch')
     academic_year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT, related_name='subject_batches')
     # Link the batch to a specific curriculum row (subject) so batches are
     # subject-scoped. This is optional but recommended for subject-wise grouping.
@@ -937,6 +938,7 @@ class PeriodAttendanceSession(models.Model):
     - period: TimetableSlot (period definition)
     - date: date of the session
     - timetable_assignment: optional link to the TimetableAssignment that this session corresponds to
+    - subject_batch: optional link to StudentSubjectBatch for batch-wise attendance
     - created_by: staff who created the session
     - is_locked: once locked, records should not be modified
     - created_at: timestamp
@@ -946,6 +948,7 @@ class PeriodAttendanceSession(models.Model):
     date = models.DateField(default=timezone.now)
     timetable_assignment = models.ForeignKey('timetable.TimetableAssignment', on_delete=models.SET_NULL, null=True, blank=True, related_name='attendance_sessions')
     teaching_assignment = models.ForeignKey('academics.TeachingAssignment', on_delete=models.SET_NULL, null=True, blank=True, related_name='period_attendance_sessions')
+    subject_batch = models.ForeignKey('academics.StudentSubjectBatch', on_delete=models.SET_NULL, null=True, blank=True, related_name='attendance_sessions', help_text='Batch for batch-wise attendance')
     created_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
     assigned_to = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='assigned_period_sessions', help_text='Staff assigned to take attendance for this period (via swap)')
     is_locked = models.BooleanField(default=False)
@@ -954,9 +957,9 @@ class PeriodAttendanceSession(models.Model):
     class Meta:
         verbose_name = 'Period Attendance Session'
         verbose_name_plural = 'Period Attendance Sessions'
-        # A single (section, period, date) can have multiple subjects (especially electives).
-        # Use the resolved TeachingAssignment (staff+subject) to prevent overwrites.
-        unique_together = (('section', 'period', 'date', 'teaching_assignment'),)
+        # A single (section, period, date) can have multiple subjects/batches.
+        # Use the resolved TeachingAssignment + subject_batch to prevent overwrites.
+        unique_together = (('section', 'period', 'date', 'teaching_assignment', 'subject_batch'),)
 
     def __str__(self):
         return f"PeriodAttendance {self.section} | {self.period} @ {self.date}"

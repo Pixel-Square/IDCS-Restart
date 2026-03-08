@@ -927,7 +927,7 @@ class TimetableSlotViewSet(viewsets.ModelViewSet):
 
 
 class TimetableAssignmentViewSet(viewsets.ModelViewSet):
-    queryset = TimetableAssignment.objects.select_related('period', 'section', 'staff', 'curriculum_row', 'subject_batch')
+    queryset = TimetableAssignment.objects.select_related('period', 'section', 'staff', 'curriculum_row', 'subject_batch', 'subject_batch__staff')
     serializer_class = TimetableAssignmentSerializer
     permission_classes = (IsAuthenticated,)
 
@@ -1436,19 +1436,36 @@ class StaffTimetableView(APIView):
                 )
             )
 
-            qs = TimetableAssignment.objects.select_related('period', 'staff', 'curriculum_row', 'section', 'section__batch')
-            qs = qs.annotate(has_ta=Exists(ta_qs)).filter(Q(staff=staff_profile) | Q(staff__isnull=True, has_ta=True))
+            qs = TimetableAssignment.objects.select_related('period', 'staff', 'curriculum_row', 'section', 'section__batch', 'subject_batch', 'subject_batch__staff')
+            # Include assignments where:
+            # 1. staff=staff_profile (direct assignment)
+            # 2. staff is null but has teaching assignment (has_ta=True)
+            # 3. subject_batch.staff=staff_profile (batch-assigned to this staff)
+            # 4. subject_batch.created_by=staff_profile (batch created by this staff)
+            qs = qs.annotate(has_ta=Exists(ta_qs)).filter(
+                Q(staff=staff_profile) | 
+                Q(staff__isnull=True, has_ta=True) |
+                Q(subject_batch__staff=staff_profile) |
+                Q(subject_batch__created_by=staff_profile)
+            )
 
         except Exception:
-            # fallback: only show direct assignments
-            qs = TimetableAssignment.objects.select_related('period', 'staff', 'curriculum_row', 'section', 'section__batch').filter(staff=staff_profile)
+            # fallback: only show direct assignments and batch assignments
+            qs = TimetableAssignment.objects.select_related('period', 'staff', 'curriculum_row', 'section', 'section__batch', 'subject_batch', 'subject_batch__staff').filter(
+                Q(staff=staff_profile) | 
+                Q(subject_batch__staff=staff_profile) |
+                Q(subject_batch__created_by=staff_profile)
+            )
 
         out = {}
         for a in qs:
             day = a.day
             lst = out.setdefault(day, [])
-            # determine staff to present: explicit staff or the requesting staff (if resolved via TA)
-            if a.staff:
+            # determine staff to present: 
+            # Priority: batch staff > explicit staff > requesting staff (if resolved via TA)
+            if a.subject_batch and a.subject_batch.staff:
+                staff_obj = a.subject_batch.staff
+            elif a.staff:
                 staff_obj = a.staff
             else:
                 staff_obj = staff_profile
@@ -1575,15 +1592,22 @@ class StaffTimetableView(APIView):
             ).filter(
                 # Swap entries only show from today onwards; other specials show for the full week
                 ~Q(timetable__name__startswith='[SWAP]') | Q(date__gte=_today_staff)
-            ).select_related('timetable', 'timetable__section', 'timetable__section__batch', 'period', 'staff', 'curriculum_row')
+            ).select_related('timetable', 'timetable__section', 'timetable__section__batch', 'period', 'staff', 'curriculum_row', 'subject_batch', 'subject_batch__staff')
             for e in special_qs:
                 try:
                     # Treat all special entries (including swaps) uniformly
-                    # Show to staff if: explicitly assigned, or if staff has TeachingAssignment matching the section/day
+                    # Show to staff if: explicitly assigned, assigned via batch, or if staff has TeachingAssignment matching the section/day
                     include_special = False
                     explicit_staff = getattr(e, 'staff', None)
+                    batch_staff = getattr(getattr(e, 'subject_batch', None), 'staff', None) if e.subject_batch else None
+                    batch_creator = getattr(getattr(e, 'subject_batch', None), 'created_by', None) if e.subject_batch else None
                     
-                    if explicit_staff:
+                    # Check batch assignment first
+                    if batch_staff and getattr(batch_staff, 'id', None) == getattr(staff_profile, 'id', None):
+                        include_special = True
+                    elif batch_creator and getattr(batch_creator, 'id', None) == getattr(staff_profile, 'id', None):
+                        include_special = True
+                    elif explicit_staff:
                         # Show if explicitly assigned to this staff
                         if getattr(explicit_staff, 'id', None) == getattr(staff_profile, 'id', None):
                             include_special = True
@@ -1671,12 +1695,12 @@ class StaffTimetableView(APIView):
                         'elective_subject_id': elective_id,
                         'subject_batch': {'id': getattr(e.subject_batch, 'pk', None), 'name': getattr(e.subject_batch, 'name', None)} if getattr(e, 'subject_batch', None) else None,
                         'staff': {
-                            'id': getattr(e.staff, 'pk', None), 
-                            'staff_id': getattr(e.staff, 'staff_id', None),
-                            'username': getattr(getattr(e.staff, 'user', None), 'username', None),
-                            'first_name': getattr(getattr(e.staff, 'user', None), 'first_name', ''),
-                            'last_name': getattr(getattr(e.staff, 'user', None), 'last_name', '')
-                        } if getattr(e, 'staff', None) else None,
+                            'id': getattr(batch_staff if batch_staff else e.staff, 'pk', None), 
+                            'staff_id': getattr(batch_staff if batch_staff else e.staff, 'staff_id', None),
+                            'username': getattr(getattr(batch_staff if batch_staff else e.staff, 'user', None), 'username', None),
+                            'first_name': getattr(getattr(batch_staff if batch_staff else e.staff, 'user', None), 'first_name', ''),
+                            'last_name': getattr(getattr(batch_staff if batch_staff else e.staff, 'user', None), 'last_name', '')
+                        } if (batch_staff or getattr(e, 'staff', None)) else None,
                         'section': section_info,
                         'is_special': True,
                         'is_swap': (getattr(e.timetable, 'name', '') or '').startswith('[SWAP]'),
