@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import AttendanceRecord, UploadLog, HalfDayRequest, Holiday
+from .models import AttendanceRecord, UploadLog, HalfDayRequest, Holiday, AttendanceSettings
 
 
 class AttendanceRecordSerializer(serializers.ModelSerializer):
@@ -123,8 +123,8 @@ class HolidaySerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Holiday
-        fields = ['id', 'date', 'name', 'notes', 'created_by', 'created_by_name', 'created_at']
-        read_only_fields = ['created_by', 'created_at']
+        fields = ['id', 'date', 'name', 'notes', 'is_sunday', 'is_removable', 'created_by', 'created_by_name', 'created_at']
+        read_only_fields = ['created_by', 'created_at', 'is_sunday']
 
 
 class HolidayCreateSerializer(serializers.ModelSerializer):
@@ -138,3 +138,17 @@ class HolidayCreateSerializer(serializers.ModelSerializer):
         """Ensure the date is not in the past (optional validation)"""
         # Allow past dates for historical data
         return value
+
+
+class AttendanceSettingsSerializer(serializers.ModelSerializer):
+    """Serializer for Attendance Settings"""
+    updated_by_name = serializers.CharField(source='updated_by.username', read_only=True)
+    
+    class Meta:
+        model = AttendanceSettings
+        fields = [
+            'id', 'attendance_in_time_limit', 'attendance_out_time_limit',
+            'apply_time_based_absence', 'updated_by', 'updated_by_name',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['updated_by', 'created_at', 'updated_at']

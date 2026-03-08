@@ -29,6 +29,11 @@ export async function getActiveTemplates(): Promise<RequestTemplate[]> {
   return res.data;
 }
 
+export async function filterTemplatesForDate(date: string): Promise<{ templates: RequestTemplate[], message?: string }> {
+  const res = await apiClient.post(`${BASE_URL}/templates/filter_for_date/`, { date });
+  return res.data;
+}
+
 export async function getTemplate(id: number): Promise<RequestTemplate> {
   const res = await apiClient.get(`${BASE_URL}/templates/${id}/`);
   return res.data;
@@ -139,6 +144,11 @@ export async function deleteApprovalStep(id: number): Promise<void> {
 
 export async function getLeaveBalances(): Promise<LeaveBalancesResponse> {
   const res = await apiClient.get(`${BASE_URL}/requests/balances/`);
+  return res.data;
+}
+
+export async function getColClaimableInfo(): Promise<any> {
+  const res = await apiClient.get(`${BASE_URL}/requests/col_claimable_info/`);
   return res.data;
 }
 

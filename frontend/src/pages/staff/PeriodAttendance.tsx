@@ -588,7 +588,7 @@ export default function PeriodAttendance(){
             date,
             records: recordsBySection[sid] || [],
           }
-          console.log('Saving attendance for section', sid, 'period', pid, payload)
+          // saving attendance payload prepared
           const res = await fetchWithAuth('/api/academics/period-attendance/bulk-mark/', { method: 'POST', body: JSON.stringify(payload) })
           const j = await (res.ok ? res.json().catch(()=>null) : res.json().catch(()=>null))
           
@@ -605,8 +605,7 @@ export default function PeriodAttendance(){
 
       const failed = results.filter(r=> !r.ok)
       if (failed.length) {
-        console.error('Some saves failed:', failed)
-        alert('Attendance saved for some sections/periods, but failed for others. Check console for details.')
+        alert('Attendance saved for some sections/periods, but failed for others.')
       } else {
         await fetchPeriods()
         const label = (selected as any).combined_period_label || (selected.period && (selected.period.label || `Period ${selected.period.index}`))

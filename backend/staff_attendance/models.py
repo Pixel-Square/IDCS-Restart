@@ -134,6 +134,8 @@ class Holiday(models.Model):
     date = models.DateField(unique=True, db_index=True)
     name = models.CharField(max_length=200, help_text="Holiday name/description")
     notes = models.TextField(blank=True, help_text="Additional notes")
+    is_sunday = models.BooleanField(default=False, help_text="True if this is an auto-generated Sunday holiday")
+    is_removable = models.BooleanField(default=True, help_text="If False, this holiday cannot be deleted")
     
     # Audit fields
     created_by = models.ForeignKey(
@@ -153,3 +155,35 @@ class Holiday(models.Model):
     
     def __str__(self):
         return f"{self.date} - {self.name}"
+
+
+class AttendanceSettings(models.Model):
+    """Global settings for attendance time limits and absence rules"""
+    attendance_in_time_limit = models.TimeField(
+        default='08:45:00',
+        help_text="If morning_in is after this time, mark as absent"
+    )
+    attendance_out_time_limit = models.TimeField(
+        default='17:45:00',
+        help_text="If evening_out is before this time, mark as absent"
+    )
+    apply_time_based_absence = models.BooleanField(
+        default=True,
+        help_text="Enable time-based absence marking"
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='updated_attendance_settings'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'staff_attendance_settings'
+        verbose_name = 'Attendance Settings'
+        verbose_name_plural = 'Attendance Settings'
+    
+    def __str__(self):
+        return f"Attendance Settings (Updated: {self.updated_at.strftime('%Y-%m-%d %H:%M')})"

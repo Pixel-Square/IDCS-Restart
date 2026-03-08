@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Calendar, ChevronLeft, ChevronRight, CheckCircle, XCircle, AlertCircle, Clock, Plus } from 'lucide-react';
 import { apiClient } from '../../services/auth';
 import { getApiBase } from '../../services/apiBase';
-import { getMyRequests } from '../../services/staffRequests';
+import { getMyRequests, getColClaimableInfo } from '../../services/staffRequests';
 import NewRequestModal from '../staff-requests/NewRequestModal';
 import LeaveBalanceBadges from '../../components/LeaveBalanceBadges';
 import type { StaffRequest } from '../../types/staffRequests';
@@ -24,9 +24,20 @@ interface AttendanceSummary {
   partial_count: number;
 }
 
+interface Holiday {
+  id: number;
+  date: string;
+  name: string;
+  notes: string;
+  is_sunday: boolean;
+  is_removable: boolean;
+}
+
 export default function MyCalendarPage() {
   const [attendanceData, setAttendanceData] = useState<{ records: AttendanceRecord[]; summary: AttendanceSummary } | null>(null);
   const [myRequests, setMyRequests] = useState<StaffRequest[]>([]);
+  const [holidays, setHolidays] = useState<Holiday[]>([]);
+  const [colInfo, setColInfo] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
@@ -44,6 +55,8 @@ export default function MyCalendarPage() {
   useEffect(() => {
     fetchMonthlyAttendance();
     fetchMyRequests();
+    fetchHolidays();
+    fetchColInfo();
   }, [selectedYear, selectedMonth]);
 
   const fetchMonthlyAttendance = async () => {
@@ -55,7 +68,6 @@ export default function MyCalendarPage() {
       });
       setAttendanceData(response.data);
     } catch (err) {
-      console.error('Failed to fetch attendance:', err);
       setError('Failed to load calendar data');
     } finally {
       setLoading(false);
@@ -67,8 +79,31 @@ export default function MyCalendarPage() {
       const requests = await getMyRequests();
       setMyRequests(requests);
     } catch (err) {
-      console.error('Failed to fetch requests:', err);
+      // ignore fetch errors for requests
     }
+  };
+
+  const fetchHolidays = async () => {
+    try {
+      const response = await apiClient.get(`${getApiBase()}/api/staff-attendance/holidays/`);
+      setHolidays(response.data);
+    } catch (err) {
+      // ignore holidays fetch errors
+    }
+  };
+
+  const fetchColInfo = async () => {
+    try {
+      const info = await getColClaimableInfo();
+      setColInfo(info);
+    } catch (err) {
+      // ignore
+    }
+  };
+
+  const isHoliday = (dateStr: string): Holiday | null => {
+    // Normalize stored holiday date (may be YYYY-MM-DD or ISO string) by taking first 10 chars
+    return holidays.find(h => String(h.date).slice(0, 10) === dateStr) || null;
   };
 
   const goToPreviousMonth = () => {
@@ -160,6 +195,7 @@ export default function MyCalendarPage() {
   const handleRequestCreated = () => {
     setShowNewRequestModal(false);
     fetchMyRequests();
+    fetchColInfo();
   };
 
   // Get leave status for a specific date from approved requests
@@ -206,6 +242,46 @@ export default function MyCalendarPage() {
     }
     
     return null;
+  };
+
+  const requestCoversDate = (request: any, dateStr: string) => {
+    if (!request || !request.form_data) return false;
+    const fd = request.form_data as Record<string, any>;
+
+    const getIso = (v: any) => {
+      if (!v) return null;
+      if (typeof v === 'string') return String(v).slice(0, 10);
+      try {
+        return (new Date(v)).toISOString().slice(0, 10);
+      } catch {
+        return String(v).slice(0, 10);
+      }
+    };
+
+    const start = getIso(fd.start_date || fd.from_date || fd.startDate || fd.fromDate || fd.date);
+    const end = getIso(fd.end_date || fd.to_date || fd.endDate || fd.toDate || fd.date) || start;
+    if (!start) return false;
+    return dateStr >= start && dateStr <= end;
+  };
+
+  const isPaidByCol = (dateStr: string) => {
+    if (!myRequests || !Array.isArray(myRequests)) return false;
+    return myRequests.some(r => r.status === 'approved' && r.form_data && (r.form_data.claim_col === true || r.form_data.claim_col === 'true') && requestCoversDate(r, dateStr));
+  };
+
+  const isEarnedCol = (dateStr: string) => {
+    // First check earned_dates from colInfo (attendance on holidays)
+    if (colInfo && Array.isArray(colInfo.earned_dates) && colInfo.earned_dates.length > 0) {
+      if (colInfo.earned_dates.some((e: any) => String(e.date).slice(0, 10) === dateStr)) return true;
+    }
+
+    if (!myRequests || !Array.isArray(myRequests)) return false;
+    // Check if there's an approved COL/Compensatory leave earn request for this date
+    return myRequests.some(r => {
+      const isColTemplate = r.template?.name && (r.template.name.toLowerCase().includes('compensatory') || r.template.name.toLowerCase().includes('col'));
+      const isEarnAction = r.template?.leave_policy?.action === 'earn';
+      return r.status === 'approved' && isColTemplate && isEarnAction && requestCoversDate(r, dateStr);
+    });
   };
 
   const getAttendancePercentage = () => {
@@ -336,6 +412,8 @@ export default function MyCalendarPage() {
                   return <div key={`empty-${index}`} className="aspect-square" />;
                 }
 
+                const dateStr = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                const holidayInfo = isHoliday(dateStr);
                 const attendance = getAttendanceForDate(day);
                 const hasAttendance = !!attendance;
                 const lateIn = attendance && isTimeInLate(attendance.morning_in);
@@ -344,7 +422,7 @@ export default function MyCalendarPage() {
                 const leaveStatusFromRequest = getLeaveStatusForDate(day);
                 
                 // Determine which status to display:
-                // Priority: attendance record status > request status > no data
+                // Priority: holiday > attendance record status > request status > no data
                 const attendanceIsLeaveStatus = attendance && !['present', 'absent', 'partial', 'half_day'].includes(attendance.status.toLowerCase());
                 const displayLeaveStatus = attendanceIsLeaveStatus ? attendance.status : leaveStatusFromRequest;
 
@@ -353,7 +431,11 @@ export default function MyCalendarPage() {
                     key={day}
                     onClick={() => handleDateClick(day)}
                     className={`aspect-square border-2 rounded-lg p-2 cursor-pointer transition-all hover:shadow-md ${
-                      displayLeaveStatus
+                      holidayInfo
+                        ? holidayInfo.is_sunday 
+                          ? 'bg-blue-50 border-blue-300'
+                          : 'bg-orange-50 border-orange-300'
+                        : displayLeaveStatus
                         ? 'bg-purple-50 border-purple-300'
                         : hasAttendance
                         ? `${getStatusBgColor(attendance.status)} ${highlightClass}`
@@ -364,7 +446,18 @@ export default function MyCalendarPage() {
                       {/* Day number */}
                       <div className="flex items-center justify-between">
                         <span className="font-semibold text-gray-900">{day}</span>
-                        {displayLeaveStatus ? (
+                        {holidayInfo ? (
+                          <span 
+                            className={`text-xs font-bold px-1.5 py-0.5 rounded uppercase ${
+                              holidayInfo.is_sunday 
+                                ? 'text-blue-700 bg-blue-200' 
+                                : 'text-orange-700 bg-orange-200'
+                            }`}
+                            title={holidayInfo.notes || holidayInfo.name}
+                          >
+                            HOL
+                          </span>
+                        ) : displayLeaveStatus ? (
                           <span className="text-xs font-bold text-purple-700 bg-purple-200 px-1.5 py-0.5 rounded uppercase">
                             {displayLeaveStatus}
                           </span>
@@ -373,8 +466,21 @@ export default function MyCalendarPage() {
                         )}
                       </div>
 
-                      {/* Leave or Attendance info */}
-                      {displayLeaveStatus ? (
+                      {/* Leave, Holiday, or Attendance info */}
+                      {holidayInfo ? (
+                        <div className="text-center mt-1">
+                          <div className={`text-xs font-semibold capitalize ${
+                            holidayInfo.is_sunday ? 'text-blue-900' : 'text-orange-900'
+                          }`}>
+                            {holidayInfo.name}
+                          </div>
+                          {hasAttendance && (
+                            <div className="text-xs text-gray-600 mt-1">
+                              <div className="font-medium">✓ Worked (COL)</div>
+                            </div>
+                          )}
+                        </div>
+                      ) : displayLeaveStatus ? (
                         <div className="text-center mt-1">
                           <div className="text-xs font-semibold text-purple-900 capitalize">
                             {displayLeaveStatus === 'CL' ? 'Casual Leave' :
@@ -384,6 +490,15 @@ export default function MyCalendarPage() {
                              displayLeaveStatus === 'ML' ? 'Medical Leave' :
                              displayLeaveStatus === 'LEAVE' ? 'Leave' :
                              displayLeaveStatus}
+                          </div>
+                              {isPaidByCol(dateStr) && (
+                                <div className="text-xs text-green-700 font-medium mt-1">Paid (COL)</div>
+                              )}
+                        </div>
+                      ) : isEarnedCol(dateStr) ? (
+                        <div className="text-center mt-1">
+                          <div className="text-xs font-semibold text-blue-700">
+                            Worked (COL)
                           </div>
                         </div>
                       ) : hasAttendance ? (
@@ -401,11 +516,20 @@ export default function MyCalendarPage() {
                           <div className="capitalize font-medium text-gray-900">
                             {attendance.status}
                           </div>
+                          {isEarnedCol(dateStr) && (
+                            <div className="text-xs text-blue-700 font-medium mt-1">Worked (COL)</div>
+                          )}
+                        </div>
+                      ) : isEarnedCol(dateStr) ? (
+                        <div className="text-center mt-1">
+                          <div className="text-xs font-semibold text-blue-700">
+                            Worked (COL)
+                          </div>
                         </div>
                       ) : null}
 
                       {/* Click to add request hint */}
-                      {!displayLeaveStatus && !hasAttendance && (
+                      {!holidayInfo && !displayLeaveStatus && !hasAttendance && (
                         <div className="text-xs text-gray-500 text-center flex items-center justify-center gap-1">
                           <Plus className="w-3 h-3" />
                           Add

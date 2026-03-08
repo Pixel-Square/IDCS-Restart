@@ -620,7 +620,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
             courseCode: String((taResp as any)?.teaching_assignment?.subject_code || subjectId || ''),
             className: String((taResp as any)?.teaching_assignment?.section_name || ''),
           });
-          console.log('[SSA2] Direct TA roster returned:', roster.length, 'students');
+          // direct TA roster returned
         } catch (err) {
           console.warn('[SSA2] Direct TA roster fetch failed:', err);
         }
@@ -634,31 +634,27 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
       let matchedTa: any = null;
       try {
         const myTAs = await fetchMyTeachingAssignments();
-        console.log('[SSA2] My TAs:', myTAs?.length, 'for subject:', subjectId, 'teachingAssignmentId:', teachingAssignmentId);
+        // myTAs fetched
         matchedTa = (myTAs || []).find((t: any) => {
           const codeMatch = String(t.subject_code || '').trim().toUpperCase() === String(subjectId || '').trim().toUpperCase();
           const idMatch = teachingAssignmentId ? t.id === teachingAssignmentId : false;
           return idMatch || codeMatch;
         });
 
-        if (matchedTa) {
-          console.log('[SSA2] Found TA match:', matchedTa.id, 'elective_subject_id:', matchedTa.elective_subject_id, 'section_id:', matchedTa.section_id);
-        } else {
-          console.log('[SSA2] No TA match found in user TAs');
-        }
+        // matchedTa determined
       } catch (err) {
         console.warn('[SSA2] My TAs fetch failed:', err);
       }
 
       // If we found a TA and it's an elective (has elective_subject_id, no section_id), fetch from elective-choices
       if (matchedTa && matchedTa.elective_subject_id && !matchedTa.section_id) {
-        console.log('[SSA2] Detected elective, fetching elective-choices for elective_subject_id:', matchedTa.elective_subject_id);
+        // detected elective - fetching elective choices
         try {
           const esRes = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${encodeURIComponent(String(matchedTa.elective_subject_id))}`);
           if (esRes.ok) {
             const esData = await esRes.json();
             const items = Array.isArray(esData.results) ? esData.results : Array.isArray(esData) ? esData : (esData.items || []);
-            console.log('[SSA2] Elective choices returned:', items?.length, 'students');
+            // elective choices returned
             roster = (items || []).map((s: any) => ({ 
               id: Number(s.student_id ?? s.id), 
               reg_no: String(s.reg_no ?? s.regno ?? ''),
@@ -675,7 +671,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
 
       // If not elective or elective fetch failed, use regular TA roster
       if (!roster.length && matchedTa && matchedTa.id) {
-        console.log('[SSA2] Fetching regular TA roster for TA ID:', matchedTa.id);
+        // fetching regular TA roster
         try {
           const taResp = await fetchTeachingAssignmentRoster(matchedTa.id);
           roster = taResp.students || [];
@@ -684,13 +680,13 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
             courseCode: String((taResp as any)?.teaching_assignment?.subject_code || matchedTa?.subject_code || subjectId || ''),
             className: String((taResp as any)?.teaching_assignment?.section_name || matchedTa?.section_name || ''),
           });
-          console.log('[SSA2] Regular roster returned:', roster.length, 'students');
+          // regular roster returned
         } catch (err) {
           console.warn('[SSA2] TA roster fetch failed:', err);
         }
       }
 
-      console.log('[SSA2] Final roster count:', roster.length);
+      // final roster count ready
       mergeRosterIntoRows(roster);
     } catch (e: any) {
       setRosterError(e?.message || 'Failed to load roster');

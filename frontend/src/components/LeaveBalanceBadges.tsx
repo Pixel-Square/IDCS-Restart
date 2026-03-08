@@ -176,7 +176,26 @@ export default function LeaveBalanceBadges() {
     return a.leave_type.localeCompare(b.leave_type);
   });
 
-  const summary = sorted.map(b => `${b.leave_type} : ${formatNumber(b.balance)}`).join(' , ');
+  const summary = sorted;
+
+  const formatBalance = (n: number | undefined) => {
+    if (n === undefined || n === null) return '0';
+    return n % 1 === 0 ? String(n) : n.toFixed(1);
+  };
+
+  const getBoxClasses = (balance: number | undefined) => {
+    const isZero = !balance || balance === 0;
+    return isZero
+      ? 'border rounded-lg p-3 flex flex-col items-center justify-center gap-1 bg-red-50 border-red-200 text-red-800'
+      : 'border rounded-lg p-3 flex flex-col items-center justify-center gap-1 bg-green-50 border-green-200 text-green-800';
+  };
+
+  const getStatusCode = (leaveType: string) => {
+    const tmpl = templates.find(t => String(t.name).toLowerCase() === String(leaveType).toLowerCase());
+    if (tmpl && tmpl.leave_policy && tmpl.leave_policy.attendance_status) return String(tmpl.leave_policy.attendance_status).toUpperCase();
+    // If leaveType itself looks like a status code (LOP, OD, COL), use uppercased leaveType
+    return String(leaveType).toUpperCase();
+  };
 
   return (
     <div className="bg-white rounded-lg shadow-md p-4 mb-6">
@@ -193,8 +212,16 @@ export default function LeaveBalanceBadges() {
         </div>
       </div>
 
-      <div className="text-sm text-gray-700">
-        {summary || <span className="text-gray-500">No leave balances tracked yet</span>}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {summary.map((b) => {
+          const code = getStatusCode(b.leave_type);
+          return (
+            <div key={b.leave_type} className={getBoxClasses(b.balance)}>
+              <div className="text-xs font-semibold tracking-wide">{code}</div>
+              <div className="text-2xl font-bold">{formatBalance(b.balance as number)}</div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

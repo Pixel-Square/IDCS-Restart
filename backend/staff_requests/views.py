@@ -211,6 +211,80 @@ class RequestTemplateViewSet(viewsets.ModelViewSet):
         # Return updated template
         serializer = self.get_serializer(template)
         return Response(serializer.data)
+    
+    @action(detail=False, methods=['post'])
+    def filter_for_date(self, request):
+        """
+        Filter available templates based on date (holiday vs working day) and attendance status.
+        POST /api/request-templates/filter_for_date/
+        
+        Body: {"date": "2026-03-08"}
+        
+        Rules:
+        - Earn forms (action='earn') can only be applied on holidays
+        - Deduct/neutral forms can only be applied on working days (non-holidays)
+        - No forms can be applied on dates marked as 'absent' in attendance
+        """
+        date_str = request.data.get('date')
+        if not date_str:
+            return Response({'error': 'date parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            from datetime import datetime
+            check_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        except:
+            return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check if date is holiday
+        from staff_attendance.models import Holiday, AttendanceRecord
+        is_holiday = Holiday.objects.filter(date=check_date).exists()
+        
+        # Check if it's Sunday (also considered holiday)
+        is_sunday = check_date.weekday() == 6
+        is_holiday_or_sunday = is_holiday or is_sunday
+        
+        # Check attendance status for this date
+        attendance = AttendanceRecord.objects.filter(
+            user=request.user, 
+            date=check_date
+        ).first()
+        
+        # Block all forms if date is marked absent
+        if attendance and attendance.status == 'absent':
+            return Response({
+                'templates': [],
+                'message': 'Cannot apply forms for dates marked as absent',
+                'is_holiday': is_holiday_or_sunday,
+                'is_absent': True,
+                'attendance_status': attendance.status
+            })
+        
+        # Get all active templates
+        templates = RequestTemplate.objects.filter(is_active=True).exclude(leave_policy={})
+        
+        # Filter based on holiday status and action type
+        filtered = []
+        for template in templates:
+            leave_policy = template.leave_policy
+            if not leave_policy or 'action' not in leave_policy:
+                continue
+            
+            action = leave_policy.get('action')
+            
+            # Earn forms (COL, etc.) only on holidays
+            if is_holiday_or_sunday and action == 'earn':
+                filtered.append(template)
+            # Deduct/neutral forms only on working days
+            elif not is_holiday_or_sunday and action in ['deduct', 'neutral']:
+                filtered.append(template)
+        
+        return Response({
+            'templates': RequestTemplateSerializer(filtered, many=True).data,
+            'is_holiday': is_holiday_or_sunday,
+            'is_absent': False,
+            'total_available': len(filtered),
+            'message': f'{"Earn forms available (Holiday)" if is_holiday_or_sunday else "Deduct/Neutral forms available (Working day)"}'
+        })
 
 
 class StaffRequestViewSet(viewsets.ModelViewSet):
@@ -479,51 +553,97 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             logger.warning(f'[LeaveBalance] Skipping - days <= 0')
             return
         
-        # Get or create leave balance
-        balance_obj, created = StaffLeaveBalance.objects.get_or_create(
-            staff=staff_request.applicant,
-            leave_type=leave_type,
-            defaults={'balance': 0.0}
-        )
-        
-        logger.info(f'[LeaveBalance] Balance object - Created: {created}, Initial Balance: {balance_obj.balance}')
-        
-        # Initialize balance for new entries (deduct action only)
-        if created and action == 'deduct':
-            allotment = leave_policy.get('allotment_per_role', {})
-            # Get user's role (simplified - use first matching role)
-            user_role = self._get_primary_role(staff_request.applicant)
-            balance_obj.balance = allotment.get(user_role, 0.0)
-            balance_obj.save()
-            logger.info(f'[LeaveBalance] Initialized deduct balance for role {user_role}: {balance_obj.balance}')
-        
         # Apply action
         if action == 'deduct':
             overdraft_name = leave_policy.get('overdraft_name', 'LOP')
-            
-            if balance_obj.balance >= days:
-                # Sufficient balance - deduct normally
-                old_balance = balance_obj.balance
-                balance_obj.balance -= days
-                balance_obj.save()
-                logger.info(f'[LeaveBalance] Deducted {days} days: {old_balance} -> {balance_obj.balance}')
+            # If user has requested to claim COL for this deduct request, try using COL balance first
+            claim_col = False
+            try:
+                claim_col = bool(staff_request.form_data.get('claim_col'))
+            except Exception:
+                claim_col = False
+
+            remaining_days = days
+
+            if claim_col:
+                # Find COL template
+                from .models import RequestTemplate as RQTemplate
+                col_template = RQTemplate.objects.filter(
+                    is_active=True,
+                    leave_policy__action='earn'
+                ).filter(
+                    Q(name__icontains='Compensatory') | Q(name__icontains='COL')
+                ).first()
+
+                if col_template:
+                    col_balance_obj = StaffLeaveBalance.objects.filter(
+                        staff=staff_request.applicant,
+                        leave_type=col_template.name
+                    ).first()
+
+                    col_available = col_balance_obj.balance if col_balance_obj else 0.0
+                    if col_available > 0:
+                        use_from_col = min(col_available, remaining_days)
+                        # Deduct from COL
+                        col_balance_obj.balance = col_available - use_from_col
+                        col_balance_obj.save()
+                        logger.info(f'[LeaveBalance] Claimed {use_from_col} days from COL ({col_template.name}) for request {staff_request.id}')
+                        remaining_days -= use_from_col
+
+            # If COL covered all days, skip creating/modifying the leave balance entirely
+            if remaining_days <= 0:
+                logger.info(f'[LeaveBalance] All days covered by COL for request {staff_request.id}')
             else:
-                # Insufficient balance - deduct all and overflow to LOP
-                overflow = days - balance_obj.balance
-                balance_obj.balance = 0.0
-                balance_obj.save()
-                
-                # Add overflow to LOP
-                lop_balance, _ = StaffLeaveBalance.objects.get_or_create(
+                # Get or create leave balance only when needed
+                balance_obj, created = StaffLeaveBalance.objects.get_or_create(
                     staff=staff_request.applicant,
-                    leave_type=overdraft_name,
+                    leave_type=leave_type,
                     defaults={'balance': 0.0}
                 )
-                lop_balance.balance += overflow
-                lop_balance.save()
-                logger.info(f'[LeaveBalance] Insufficient balance - overflow {overflow} days to {overdraft_name}')
+
+                logger.info(f'[LeaveBalance] Balance object - Created: {created}, Initial Balance: {balance_obj.balance}')
+
+                # Initialize balance for new entries (deduct action only)
+                if created:
+                    allotment = leave_policy.get('allotment_per_role', {})
+                    # Get user's role (simplified - use first matching role)
+                    user_role = self._get_primary_role(staff_request.applicant)
+                    balance_obj.balance = allotment.get(user_role, 0.0)
+                    balance_obj.save()
+                    logger.info(f'[LeaveBalance] Initialized deduct balance for role {user_role}: {balance_obj.balance}')
+
+                # Now handle remaining_days using normal deduct logic
+                if balance_obj.balance >= remaining_days:
+                    # Sufficient balance - deduct normally
+                    old_balance = balance_obj.balance
+                    balance_obj.balance -= remaining_days
+                    balance_obj.save()
+                    logger.info(f'[LeaveBalance] Deducted {remaining_days} days: {old_balance} -> {balance_obj.balance}')
+                else:
+                    # Insufficient balance - deduct all and overflow to LOP
+                    overflow = remaining_days - balance_obj.balance
+                    balance_obj.balance = 0.0
+                    balance_obj.save()
+
+                    # Add overflow to LOP
+                    lop_balance, _ = StaffLeaveBalance.objects.get_or_create(
+                        staff=staff_request.applicant,
+                        leave_type=overdraft_name,
+                        defaults={'balance': 0.0}
+                    )
+                    lop_balance.balance += overflow
+                    lop_balance.save()
+                    logger.info(f'[LeaveBalance] Insufficient balance - overflow {overflow} days to {overdraft_name}')
         
         elif action == 'earn':
+            # Get or create balance for earn action
+            balance_obj, created = StaffLeaveBalance.objects.get_or_create(
+                staff=staff_request.applicant,
+                leave_type=leave_type,
+                defaults={'balance': 0.0}
+            )
+            logger.info(f'[LeaveBalance] Earn - Balance object - Created: {created}, Initial Balance: {balance_obj.balance}')
+            
             overdraft_name = leave_policy.get('overdraft_name', 'LOP')
             
             # Get LOP balance
@@ -553,6 +673,14 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                 logger.info(f'[LeaveBalance] Earned {days} days: {old_balance} -> {balance_obj.balance}')
         
         elif action == 'neutral':
+            # Get or create balance for neutral action
+            balance_obj, created = StaffLeaveBalance.objects.get_or_create(
+                staff=staff_request.applicant,
+                leave_type=leave_type,
+                defaults={'balance': 0.0}
+            )
+            logger.info(f'[LeaveBalance] Neutral - Balance object - Created: {created}, Initial Balance: {balance_obj.balance}')
+            
             # Simply add days
             old_balance = balance_obj.balance
             balance_obj.balance += days
@@ -686,15 +814,28 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
     def _get_primary_role(self, user):
         """
         Get user's primary role for leave allotment lookup.
-        Checks user_roles relationship and returns first matching role.
+        Checks roles relationship and returns first matching role from priority list.
         Defaults to 'STAFF' if no roles found.
         """
-        if hasattr(user, 'user_roles'):
-            first_role = user.user_roles.first()
-            if first_role and hasattr(first_role, 'role') and hasattr(first_role.role, 'name'):
-                return first_role.role.name.upper()
-        
-        return 'STAFF'
+        try:
+            # Get all role names for this user
+            user_roles = list(user.roles.values_list('name', flat=True))
+            
+            if not user_roles:
+                return 'STAFF'
+            
+            # Priority order for role selection (for leave allotment lookup)
+            role_priority = ['HOD', 'AHOD', 'FACULTY', 'STAFF', 'HR']
+            
+            # Return first role that matches priority order
+            for priority_role in role_priority:
+                if priority_role in user_roles:
+                    return priority_role
+            
+            # If no priority match, return first role
+            return user_roles[0]
+        except Exception:
+            return 'STAFF'
     
     def _sync_attendance(self, user, date_list, attendance_status):
         """
@@ -842,189 +983,83 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         Get leave balances for the current user.
         GET /api/staff-requests/balances/
         
-        Dynamically calculates balances based on:
-        1. Monthly allotment from templates
-        2. Approved leave requests this month
-        3. Approved compensatory/earn requests this month  
-        4. Absence records from attendance system
-        
-        Returns calculated balances for the current month.
+        Returns persisted balances from StaffLeaveBalance table.
+        Balances are updated when requests are approved via process_approval action.
         """
         import logging
-        from datetime import date
         from .models import RequestTemplate
         
         logger = logging.getLogger(__name__)
         user = request.user
         
         try:
-            # Get current month/year
-            today = date.today()
-            current_year = today.year
-            current_month = today.month
+            logger.info(f'[Balances] Fetching persisted balances for user {user.username}')
             
-            logger.info(f'[Balances] Calculating for user {user.username}, month {current_year}-{current_month}')
+            # Get all persisted balances for the user
+            balances_qs = StaffLeaveBalance.objects.filter(staff=user)
             
-            # Get all active templates with leave policies
-            templates = RequestTemplate.objects.filter(is_active=True).exclude(leave_policy={})
-            
-            # Calculate balances for each leave type
             balance_data = []
-            overdraft_entries = {}
+            for balance_obj in balances_qs:
+                balance_data.append({
+                    'leave_type': balance_obj.leave_type,
+                    'balance': balance_obj.balance,
+                    'updated_at': balance_obj.updated_at.isoformat() if balance_obj.updated_at else None
+                })
+                logger.info(f'[Balances] {balance_obj.leave_type}: {balance_obj.balance}')
+            
+            # Also include templates with leave_policy that don't have balances yet (show as 0)
+            templates = RequestTemplate.objects.filter(is_active=True).exclude(leave_policy={})
+            existing_leave_types = set(b['leave_type'] for b in balance_data)
             
             for template in templates:
                 leave_policy = template.leave_policy
                 if not leave_policy or 'action' not in leave_policy:
                     continue
                 
-                action = leave_policy.get('action')
                 leave_type = template.name
-                overdraft_name = leave_policy.get('overdraft_name', 'LOP')
                 
-                logger.info(f'[Balances] Processing template: {leave_type}, action: {action}')
+                # Skip if already in balance_data
+                if leave_type in existing_leave_types:
+                    continue
                 
-                # Get allotment for user's role
-                allotment = 0
-                if action == 'deduct':
-                    allotment_per_role = leave_policy.get('allotment_per_role', {})
-                    user_role = self._get_primary_role(user)
-                    allotment = allotment_per_role.get(user_role, 0)
-                    logger.info(f'[Balances] Allotment for role {user_role}: {allotment}')
-                
-                # Get approved requests for this template this month
-                approved_requests = self.get_queryset().filter(
-                    applicant=user,
-                    template=template,
-                    status='approved',
-                    created_at__year=current_year,
-                    created_at__month=current_month
-                )
-                
-                # Calculate total days from approved requests
-                total_request_days = 0
-                for req in approved_requests:
-                    days = self._calculate_days_from_form_data(req.form_data)
-                    total_request_days += days
-                    logger.info(f'[Balances] Approved request #{req.id}: {days} days')
-                
-                # Calculate balance based on action type
-                if action == 'deduct':
-                    # Start with allotment, subtract approved requests
-                    balance = allotment - total_request_days
-                    logger.info(f'[Balances] {leave_type}: allotment={allotment}, requests={total_request_days}, balance={balance}')
-                    
-                    # If negative, move to overdraft
-                    if balance < 0:
-                        overflow = abs(balance)
-                        balance = 0
-                        overdraft_entries[overdraft_name] = overdraft_entries.get(overdraft_name, 0) + overflow
-                        logger.info(f'[Balances] Overflow to {overdraft_name}: {overflow}')
-                    
-                    balance_data.append({
-                        'leave_type': leave_type,
-                        'balance': balance,
-                        'updated_at': None
-                    })
-                    
-                elif action == 'earn':
-                    # Earned leave adds up
-                    balance = total_request_days
-                    logger.info(f'[Balances] {leave_type} earned: {balance} days')
-                    
-                    balance_data.append({
-                        'leave_type': leave_type,
-                        'balance': balance,
-                        'updated_at': None
-                    })
-                
-                elif action == 'neutral':
-                    # Neutral just tracks
-                    balance = total_request_days
-                    balance_data.append({
-                        'leave_type': leave_type,
-                        'balance': balance,
-                        'updated_at': None
-                    })
-            
-            # Process absences from attendance system
-            try:
-                # Fetch absence records from staff_attendance app
-                from staff_attendance.models import AttendanceRecord
-                
-                absence_records = AttendanceRecord.objects.filter(
-                    user=user,
-                    date__year=current_year,
-                    date__month=current_month,
-                    status='absent'
-                )
-                absence_count = absence_records.count()
-                
-                logger.info(f'[Balances] Absence count: {absence_count}')
-                
-                if absence_count > 0:
-                    # Find primary deduct template
-                    primary_template = templates.filter(leave_policy__action='deduct').first()
-                    if primary_template:
-                        leave_type = primary_template.name
-                        overdraft_name = primary_template.leave_policy.get('overdraft_name', 'LOP')
+                # For deduct/earn templates, show with 0 balance if no record exists
+                action = leave_policy.get('action')
+                if action in ['deduct', 'earn']:
+                    # For deduct action, initialize with allotment
+                    if action == 'deduct':
+                        allotment_per_role = leave_policy.get('allotment_per_role', {})
+                        user_role = self._get_primary_role(user)
+                        allotment = allotment_per_role.get(user_role, 0)
                         
-                        # Calculate how many absences are covered:
-                        # Approved leave requests cover some absences
-                        # Remaining balance covers more absences
-                        # Anything left goes to LOP
-                        
-                        # Find the leave balance entry
-                        for entry in balance_data:
-                            if entry['leave_type'] == leave_type:
-                                current_balance = entry['balance']
-                                
-                                # Absences minus available balance = LOP
-                                if absence_count > current_balance:
-                                    uncovered = absence_count - current_balance
-                                    overdraft_entries[overdraft_name] = overdraft_entries.get(overdraft_name, 0) + uncovered
-                                    logger.info(f'[Balances] {absence_count} absences, {current_balance} available, {uncovered} to {overdraft_name}')
-                                else:
-                                    logger.info(f'[Balances] All {absence_count} absences covered by available balance')
-                                break
-            except Exception as e:
-                logger.exception(f'[Balances] Failed to process absences: {e}')
+                        balance_data.append({
+                            'leave_type': leave_type,
+                            'balance': allotment,
+                            'updated_at': None
+                        })
+                    else:
+                        # earn action starts at 0
+                        balance_data.append({
+                            'leave_type': leave_type,
+                            'balance': 0,
+                            'updated_at': None
+                        })
+                    
+                    existing_leave_types.add(leave_type)
             
-            # Don't automatically use compensatory to pay down LOP
-            # Users may want to track them separately and apply manually
-            # If automatic paydown is needed, uncomment below:
-            #
-            # for entry in balance_data[:]:
-            #     leave_type = entry['leave_type']
-            #     template = templates.filter(name=leave_type, leave_policy__action='earn').first()
-            #     if template and entry['balance'] > 0:
-            #         overdraft_name = template.leave_policy.get('overdraft_name', 'LOP')
-            #         if overdraft_name in overdraft_entries and overdraft_entries[overdraft_name] > 0:
-            #             if entry['balance'] >= overdraft_entries[overdraft_name]:
-            #                 entry['balance'] -= overdraft_entries[overdraft_name]
-            #                 paid = overdraft_entries[overdraft_name]
-            #                 overdraft_entries[overdraft_name] = 0
-            #                 logger.info(f'[Balances] Used {paid} {leave_type} to pay down {overdraft_name}')
-            #             else:
-            #                 overdraft_entries[overdraft_name] -= entry['balance']
-            #                 paid = entry['balance']
-            #                 entry['balance'] = 0
-            #                 logger.info(f'[Balances] Used {paid} {leave_type} to partially pay {overdraft_name}')
-            
-            # Collect all possible overdraft names from templates to ensure they appear even with 0 balance
+            # Add overdraft types (LOP, etc.) with 0 if not present
             all_overdraft_names = set()
             for template in templates:
                 policy = template.leave_policy
                 if policy and 'overdraft_name' in policy:
                     all_overdraft_names.add(policy['overdraft_name'])
             
-            # Add overdraft entries (LOP and others), ensuring all overdraft types appear even if 0
             for overdraft_name in all_overdraft_names:
-                balance = overdraft_entries.get(overdraft_name, 0)
-                balance_data.append({
-                    'leave_type': overdraft_name,
-                    'balance': balance,
-                    'updated_at': None
-                })
+                if overdraft_name not in existing_leave_types:
+                    balance_data.append({
+                        'leave_type': overdraft_name,
+                        'balance': 0,
+                        'updated_at': None
+                    })
         
             return Response({
                 'user': {
@@ -1036,10 +1071,10 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             })
         
         except Exception as e:
-            logger.exception(f'[Balances] Error calculating balances for user {user.username}: {e}')
+            logger.exception(f'[Balances] Error fetching balances for user {user.username}: {e}')
             return Response(
                 {
-                    'error': 'Failed to calculate balances',
+                    'error': 'Failed to fetch balances',
                     'detail': str(e),
                     'user': {
                         'id': user.id,
@@ -1049,6 +1084,89 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+    
+    @action(detail=False, methods=['get'])
+    def col_claimable_info(self, request):
+        """
+        Get COL balance and claimable dates for the current user.
+        
+        Returns:
+        - col_balance: Current COL count
+        - claimable_dates: List of future/today dates that are NOT holidays where COL can be claimed
+        - earned_dates: Dates when COL was earned (for reference)
+        """
+        user = request.user
+        current_date = timezone.now().date()
+        
+        # Find COL template
+        col_template = RequestTemplate.objects.filter(
+            is_active=True,
+            leave_policy__action='earn'
+        ).filter(
+            Q(name__icontains='Compensatory') | Q(name__icontains='COL')
+        ).first()
+        
+        if not col_template:
+            return Response({
+                'col_balance': 0,
+                'claimable_dates': [],
+                'earned_dates': [],
+                'message': 'COL template not found'
+            })
+        
+        # Get COL balance
+        col_balance_obj = StaffLeaveBalance.objects.filter(
+            staff=user,
+            leave_type=col_template.name
+        ).first()
+        
+        col_balance = col_balance_obj.balance if col_balance_obj else 0
+        
+        # Get dates when COL was earned (attendance on holidays)
+        from staff_attendance.models import AttendanceRecord, Holiday
+        
+        # Find all attendance records on holidays
+        earned_dates = []
+        holiday_work_records = AttendanceRecord.objects.filter(
+            user=user,
+            date__in=Holiday.objects.values_list('date', flat=True)
+        ).exclude(status='absent').order_by('-date')
+        
+        for record in holiday_work_records[:5]:  # Last 5
+            earned_dates.append({
+                'date': record.date.isoformat(),
+                'day_name': record.date.strftime('%A'),
+                'status': record.status
+            })
+        
+        # Generate list of claimable dates (working days from today onwards for next 30 days)
+        claimable_dates = []
+        if col_balance > 0:
+            from datetime import timedelta
+            
+            # Check next 30 days for working days
+            for i in range(30):
+                check_date = current_date + timedelta(days=i)
+                is_holiday = Holiday.objects.filter(date=check_date).exists()
+                is_sunday = check_date.weekday() == 6
+                
+                # Only working days (not holidays, not Sundays)
+                if not is_holiday and not is_sunday:
+                    claimable_dates.append({
+                        'date': check_date.isoformat(),
+                        'day_name': check_date.strftime('%A')
+                    })
+                    
+                    if len(claimable_dates) >= 10:  # Limit to 10 dates
+                        break
+        
+        return Response({
+            'col_balance': col_balance,
+            'col_template_name': col_template.name if col_template else None,
+            'claimable_dates': claimable_dates,
+            'earned_dates': earned_dates,
+            'message': f'You have {col_balance} COL days available' if col_balance > 0 else 'No COL balance available'
+        })
     
     @action(detail=False, methods=['post'])
     def process_absences(self, request):

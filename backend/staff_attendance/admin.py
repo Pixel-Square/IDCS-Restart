@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import AttendanceRecord, UploadLog, Holiday
+from .models import AttendanceRecord, UploadLog, Holiday, AttendanceSettings
 
 
 @admin.register(AttendanceRecord)
@@ -42,8 +42,8 @@ class UploadLogAdmin(admin.ModelAdmin):
 
 @admin.register(Holiday)
 class HolidayAdmin(admin.ModelAdmin):
-    list_display = ['date', 'name', 'created_by', 'created_at']
-    list_filter = ['date', 'created_at']
+    list_display = ['date', 'name', 'is_sunday', 'is_removable', 'created_by', 'created_at']
+    list_filter = ['date', 'is_sunday', 'is_removable', 'created_at']
     search_fields = ['name', 'notes']
     date_hierarchy = 'date'
     readonly_fields = ['created_by', 'created_at']
@@ -52,3 +52,23 @@ class HolidayAdmin(admin.ModelAdmin):
         if not change:
             obj.created_by = request.user
         super().save_model(request, obj, form, change)
+
+
+@admin.register(AttendanceSettings)
+class AttendanceSettingsAdmin(admin.ModelAdmin):
+    list_display = ['id', 'attendance_in_time_limit', 'attendance_out_time_limit', 'apply_time_based_absence', 'updated_by', 'updated_at']
+    readonly_fields = ['created_at', 'updated_at']
+    
+    def save_model(self, request, obj, form, change):
+        obj.updated_by = request.user
+        super().save_model(request, obj, form, change)
+    
+    def has_add_permission(self, request):
+        # Only allow one settings object
+        if AttendanceSettings.objects.exists():
+            return False
+        return super().has_add_permission(request)
+    
+    def has_delete_permission(self, request, obj=None):
+        # Prevent deletion of settings
+        return False

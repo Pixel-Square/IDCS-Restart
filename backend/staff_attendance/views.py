@@ -10,10 +10,11 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import PermissionDenied
 from accounts.models import User
-from .models import AttendanceRecord, UploadLog, HalfDayRequest, Holiday
-from .serializers import AttendanceRecordSerializer, UploadLogSerializer, CSVUploadSerializer, HalfDayRequestSerializer, HalfDayRequestCreateSerializer, HalfDayRequestReviewSerializer, HolidaySerializer, HolidayCreateSerializer
+from .models import AttendanceRecord, UploadLog, HalfDayRequest, Holiday, AttendanceSettings
+from .serializers import AttendanceRecordSerializer, UploadLogSerializer, CSVUploadSerializer, HalfDayRequestSerializer, HalfDayRequestCreateSerializer, HalfDayRequestReviewSerializer, HolidaySerializer, HolidayCreateSerializer, AttendanceSettingsSerializer
 from .permissions import StaffAttendanceViewPermission, StaffAttendanceUploadPermission
 
 
@@ -292,6 +293,58 @@ class CSVUploadViewSet(viewsets.ViewSet):
         """Check if a specific date is marked as a holiday."""
         return Holiday.objects.filter(date=target_date).exists()
 
+    def _check_time_based_absence(self, morning_in, evening_out):
+        """Check if attendance should be marked absent based on time limits"""
+        try:
+            settings = AttendanceSettings.objects.first()
+            if not settings or not settings.apply_time_based_absence:
+                return False  # Don't apply time-based absence
+            
+            # Late arrival = absent
+            if morning_in and morning_in > settings.attendance_in_time_limit:
+                return True
+            
+            # Early departure = absent
+            if evening_out and evening_out < settings.attendance_out_time_limit:
+                return True
+            
+            return False
+        except Exception:
+            return False
+
+    def _auto_create_col_for_holiday(self, user, holiday_date):
+        """Auto-create COL (Compensatory Leave) for staff who worked on holiday"""
+        from staff_requests.models import RequestTemplate, StaffLeaveBalance
+        
+        try:
+            # Find COL template (Compensatory leave with earn action)
+            col_template = RequestTemplate.objects.filter(
+                is_active=True,
+                leave_policy__action='earn'
+            ).filter(
+                Q(name__icontains='Compensatory') | Q(name__icontains='COL')
+            ).first()
+            
+            if not col_template:
+                return False
+            
+            # Update COL balance directly (no approval needed for holiday work)
+            balance, created = StaffLeaveBalance.objects.get_or_create(
+                staff=user,
+                leave_type=col_template.name,
+                defaults={'balance': 0}
+            )
+            balance.balance += 1  # Add 1 COL day
+            balance.save()
+            
+            return True
+        except Exception as e:
+            # Log error but don't fail the upload
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to create COL for {user.username} on {holiday_date}: {e}")
+            return False
+
     def _resolve_user(self, user_id, errors):
         """Look up User by StaffProfile.staff_id then by username."""
         try:
@@ -322,9 +375,11 @@ class CSVUploadViewSet(viewsets.ViewSet):
             return None
 
         if record is None:
-            # Determine status based on morning_in presence first
+            # Determine status based on time limits and presence
             if morning_in is None:
                 st = 'absent'  # No morning entry = absent
+            elif self._check_time_based_absence(morning_in, evening_out):
+                st = 'absent'  # Time limit violated = absent
             elif morning_in and evening_out:
                 st = 'present'  # Has morning + evening = present 
             elif morning_in:
@@ -359,7 +414,9 @@ class CSVUploadViewSet(viewsets.ViewSet):
             BIOMETRIC_STATUSES = ['present', 'absent', 'partial', 'half_day']
             if record.status in BIOMETRIC_STATUSES:
                 # Only recalculate for biometric statuses
-                if record.morning_in is None:
+                if reself._check_time_based_absence(record.morning_in, record.evening_out):
+                    record.status = 'absent'  # Time limit violated = absent
+                elif cord.morning_in is None:
                     record.status = 'absent'  # No morning entry = absent
                 elif record.morning_in and record.evening_out:
                     record.status = 'present'  # Has morning + evening = present
@@ -489,7 +546,20 @@ class CSVUploadViewSet(viewsets.ViewSet):
                     row_saved = False
 
                     # 1. TODAY: morning entry (+ evening if two distinct times)
-                    if not self._is_holiday(today):
+                    # Special handling for holidays: if staff came to college, award COL
+                    if self._is_holiday(today):
+                        t_in, t_out = self._parse_time_range(row.get(self._col(today_day), ''))
+                        # If there's attendance data on a holiday, it's COL
+                        if t_in or t_out:
+                            # Save attendance record for holiday work
+                            if self._upsert_record(user, today, t_in, t_out,
+                                                   'today', overwrite_existing, source_file):
+                                row_saved = True
+                                # Award COL for working on holiday
+                                self._auto_create_col_for_holiday(user, today)
+                        # else: no attendance on holiday = skip (don't save absent record)
+                    else:
+                        # Normal working day processing
                         t_in, t_out = self._parse_time_range(row.get(self._col(today_day), ''))
                         if self._upsert_record(user, today, t_in, t_out,
                                                'today', overwrite_existing, source_file):
@@ -498,7 +568,18 @@ class CSVUploadViewSet(viewsets.ViewSet):
                     # 2. YESTERDAY: deferred evening_out (half-day / late swipe)
                     if yest_day >= 1:
                         yest_date = today - timedelta(days=1)
-                        if not self._is_holiday(yest_date):
+                        # Check if yesterday was a holiday
+                        if self._is_holiday(yest_date):
+                            y_in, y_out = self._parse_time_range(row.get(self._col(yest_day), ''))
+                            if y_in or y_out:
+                                # Save attendance for holiday work
+                                if self._upsert_record(user, yest_date, y_in, y_out,
+                                                       'yesterday', overwrite_existing, source_file):
+                                    row_saved = True
+                                    # Award COL for working on holiday
+                                    self._auto_create_col_for_holiday(user, yest_date)
+                        else:
+                            # Normal yesterday processing
                             y_in, y_out = self._parse_time_range(row.get(self._col(yest_day), ''))
                             if self._upsert_record(user, yest_date, y_in, y_out,
                                                    'yesterday', overwrite_existing, source_file):
@@ -507,7 +588,18 @@ class CSVUploadViewSet(viewsets.ViewSet):
                     # 3. BACKFILL: D1 … D(today-2)  — only save if not yet in DB
                     for d in backfill_days:
                         past_date = date_type(today.year, today.month, d)
-                        if not self._is_holiday(past_date):
+                        # Check if past date was a holiday
+                        if self._is_holiday(past_date):
+                            p_in, p_out = self._parse_time_range(row.get(self._col(d), ''))
+                            if p_in or p_out:
+                                # Save attendance for holiday work
+                                if self._upsert_record(user, past_date, p_in, p_out,
+                                                       'backfill', overwrite_existing, source_file):
+                                    row_saved = True
+                                    # Award COL for working on holiday
+                                    self._auto_create_col_for_holiday(user, past_date)
+                        else:
+                            # Normal backfill processing
                             p_in, p_out = self._parse_time_range(row.get(self._col(d), ''))
                             if self._upsert_record(user, past_date, p_in, p_out,
                                                    'backfill', overwrite_existing, source_file):
@@ -821,7 +913,14 @@ class HolidayViewSet(viewsets.ModelViewSet):
     """ViewSet for managing holidays"""
     queryset = Holiday.objects.all()
     serializer_class = HolidaySerializer
-    permission_classes = [StaffAttendanceUploadPermission]  # Only PS can manage holidays
+    # default permission applied for unsafe methods; allow authenticated users to view holidays
+    permission_classes = [StaffAttendanceUploadPermission]
+
+    def get_permissions(self):
+        """Allow any authenticated user to list/retrieve holidays; restrict create/delete to PS role."""
+        if self.action in ['list', 'retrieve']:
+            return [IsAuthenticated()]
+        return [permission() for permission in self.permission_classes]
     
     def get_serializer_class(self):
         """Return appropriate serializer based on action"""
@@ -833,6 +932,16 @@ class HolidayViewSet(viewsets.ModelViewSet):
         """Save holiday with the current user"""
         serializer.save(created_by=self.request.user)
     
+    def destroy(self, request, *args, **kwargs):
+        """Check if holiday is removable before deletion"""
+        holiday = self.get_object()
+        if not holiday.is_removable:
+            return Response(
+                {'error': 'This holiday cannot be removed'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        return super().destroy(request, *args, **kwargs)
+    
     @action(detail=False, methods=['get'])
     def check_date(self, request):
         """Check if a specific date is a holiday"""
@@ -842,18 +951,152 @@ class HolidayViewSet(viewsets.ModelViewSet):
         
         try:
             from datetime import datetime
-            date = datetime.fromisoformat(date_str).date()
+            check_date = datetime.fromisoformat(date_str).date()
         except:
             return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
         
-        holiday = Holiday.objects.filter(date=date).first()
-        if holiday:
+        # Check if date is a Sunday
+        is_sunday = check_date.weekday() == 6
+        
+        # Check if date is marked as holiday
+        holiday = Holiday.objects.filter(date=check_date).first()
+        
+        return Response({
+            'is_holiday': holiday is not None,
+            'holiday': HolidaySerializer(holiday).data if holiday else None,
+            'is_sunday': is_sunday
+        })
+    
+    @action(detail=False, methods=['post'])
+    def generate_sundays(self, request):
+        """Generate Sunday holidays for a specific month/year or date range"""
+        year = request.data.get('year')
+        month = request.data.get('month')
+        from_date_str = request.data.get('from_date')
+        to_date_str = request.data.get('to_date')
+        
+        try:
+            if from_date_str and to_date_str:
+                from_date = datetime.strptime(from_date_str, '%Y-%m-%d').date()
+                to_date = datetime.strptime(to_date_str, '%Y-%m-%d').date()
+            elif year and month:
+                from_date = date_type(int(year), int(month), 1)
+                # Last day of month
+                if int(month) == 12:
+                    to_date = date_type(int(year), 12, 31)
+                else:
+                    to_date = date_type(int(year), int(month) + 1, 1) - timedelta(days=1)
+            else:
+                return Response(
+                    {'error': 'Provide either (year, month) or (from_date, to_date)'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Find all Sundays in the date range
+            sundays = []
+            current_date = from_date
+            while current_date <= to_date:
+                if current_date.weekday() == 6:  # Sunday
+                    sundays.append(current_date)
+                current_date += timedelta(days=1)
+            
+            # Create holiday records for Sundays that don't already exist
+            created_count = 0
+            for sunday in sundays:
+                holiday, created = Holiday.objects.get_or_create(
+                    date=sunday,
+                    defaults={
+                        'name': 'Sunday',
+                        'notes': 'Auto-generated Sunday holiday',
+                        'is_sunday': True,
+                        'is_removable': True,
+                        'created_by': request.user
+                    }
+                )
+                if created:
+                    created_count += 1
+            
             return Response({
-                'is_holiday': True,
-                'holiday': HolidaySerializer(holiday).data
+                'success': True,
+                'total_sundays': len(sundays),
+                'created': created_count,
+                'already_exists': len(sundays) - created_count
             })
-        else:
+        
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to generate Sundays: {str(e)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    
+    @action(detail=False, methods=['post'])
+    def remove_sundays(self, request):
+        """Remove Sunday holidays for a specific month/year or date range"""
+        year = request.data.get('year')
+        month = request.data.get('month')
+        from_date_str = request.data.get('from_date')
+        to_date_str = request.data.get('to_date')
+        
+        try:
+            if from_date_str and to_date_str:
+                from_date = datetime.strptime(from_date_str, '%Y-%m-%d').date()
+                to_date = datetime.strptime(to_date_str, '%Y-%m-%d').date()
+            elif year and month:
+                from_date = date_type(int(year), int(month), 1)
+                if int(month) == 12:
+                    to_date = date_type(int(year), 12, 31)
+                else:
+                    to_date = date_type(int(year), int(month) + 1, 1) - timedelta(days=1)
+            else:
+                return Response(
+                    {'error': 'Provide either (year, month) or (from_date, to_date)'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Delete Sunday holidays in the date range
+            deleted_count, _ = Holiday.objects.filter(
+                date__gte=from_date,
+                date__lte=to_date,
+                is_sunday=True,
+                is_removable=True
+            ).delete()
+            
             return Response({
-                'is_holiday': False,
-                'holiday': None
+                'success': True,
+                'deleted_count': deleted_count
             })
+        
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to remove Sundays: {str(e)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+
+class AttendanceSettingsViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing attendance time settings"""
+    queryset = AttendanceSettings.objects.all()
+    serializer_class = AttendanceSettingsSerializer
+    permission_classes = [StaffAttendanceUploadPermission]  # Only PS can manage settings
+    
+    def perform_create(self, serializer):
+        """Save settings with the current user"""
+        serializer.save(updated_by=self.request.user)
+    
+    def perform_update(self, serializer):
+        """Update settings with the current user"""
+        serializer.save(updated_by=self.request.user)
+    
+    @action(detail=False, methods=['get'])
+    def current(self, request):
+        """Get current attendance settings (create if doesn't exist)"""
+        settings, created = AttendanceSettings.objects.get_or_create(
+            id=1,
+            defaults={
+                'attendance_in_time_limit': '08:45:00',
+                'attendance_out_time_limit': '17:45:00',
+                'apply_time_based_absence': True,
+                'updated_by': request.user
+            }
+        )
+        return Response(AttendanceSettingsSerializer(settings).data)

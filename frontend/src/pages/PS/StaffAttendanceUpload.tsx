@@ -64,9 +64,21 @@ const StaffAttendanceUpload: React.FC = () => {
   const [holidayNotes, setHolidayNotes] = useState('');
   const [holidayError, setHolidayError] = useState<string | null>(null);
 
+  // Sunday management states
+  const [sundayMonth, setSundayMonth] = useState(new Date().getMonth() + 1);
+  const [sundayYear, setSundayYear] = useState(new Date().getFullYear());
+  const [sundayLoading, setSundayLoading] = useState(false);
+
+  // Attendance settings states
+  const [inTimeLimit, setInTimeLimit] = useState('08:45');
+  const [outTimeLimit, setOutTimeLimit] = useState('17:45');
+  const [applyTimeLimits, setApplyTimeLimits] = useState(true);
+  const [loadingSettings, setLoadingSettings] = useState(false);
+
   // Fetch holidays on component mount
   useEffect(() => {
     fetchHolidays();
+    fetchAttendanceSettings();
   }, []);
 
   const fetchHolidays = async () => {
@@ -117,7 +129,83 @@ const StaffAttendanceUpload: React.FC = () => {
       await apiClient.delete(`${getApiBase()}/api/staff-attendance/holidays/${id}/`);
       fetchHolidays();
     } catch (err: any) {
-      alert('Failed to delete holiday');
+      const errorMsg = err.response?.data?.error || 'Failed to delete holiday';
+      alert(errorMsg);
+    }
+  };
+
+  const handleGenerateSundays = async () => {
+    if (!confirm(`Generate Sunday holidays for ${sundayMonth}/${sundayYear}?`)) {
+      return;
+    }
+
+    setSundayLoading(true);
+    try {
+      const response = await apiClient.post(`${getApiBase()}/api/staff-attendance/holidays/generate_sundays/`, {
+        year: sundayYear,
+        month: sundayMonth
+      });
+      
+      const data = response.data;
+      alert(`Generated ${data.created} new Sunday holidays. ${data.already_exists} already existed.`);
+      fetchHolidays();
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to generate Sundays');
+    } finally {
+      setSundayLoading(false);
+    }
+  };
+
+  const handleRemoveSundays = async () => {
+    if (!confirm(`Remove all Sunday holidays for ${sundayMonth}/${sundayYear}?`)) {
+      return;
+    }
+
+    setSundayLoading(true);
+    try {
+      const response = await apiClient.post(`${getApiBase()}/api/staff-attendance/holidays/remove_sundays/`, {
+        year: sundayYear,
+        month: sundayMonth
+      });
+      
+      const data = response.data;
+      alert(`Removed ${data.deleted_count} Sunday holidays.`);
+      fetchHolidays();
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to remove Sundays');
+    } finally {
+      setSundayLoading(false);
+    }
+  };
+
+  const fetchAttendanceSettings = async () => {
+    try {
+      const response = await apiClient.get(`${getApiBase()}/api/staff-attendance/settings/current/`);
+      const settings = response.data;
+      
+      // Convert time format from "HH:MM:SS" to "HH:MM"
+      setInTimeLimit(settings.attendance_in_time_limit.substring(0, 5));
+      setOutTimeLimit(settings.attendance_out_time_limit.substring(0, 5));
+      setApplyTimeLimits(settings.apply_time_based_absence);
+    } catch (err: any) {
+      console.error('Failed to fetch attendance settings:', err);
+    }
+  };
+
+  const handleSaveSettings = async () => {
+    setLoadingSettings(true);
+    try {
+      await apiClient.patch(`${getApiBase()}/api/staff-attendance/settings/1/`, {
+        attendance_in_time_limit: `${inTimeLimit}:00`,
+        attendance_out_time_limit: `${outTimeLimit}:00`,
+        apply_time_based_absence: applyTimeLimits
+      });
+      
+      alert('Attendance settings saved successfully!');
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to save settings');
+    } finally {
+      setLoadingSettings(false);
     }
   };
 
@@ -457,6 +545,159 @@ const StaffAttendanceUpload: React.FC = () => {
               </div>
             </div>
           )}
+        </div>
+      </div>
+
+      {/* Sunday Management Section */}
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 mb-6">
+        <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
+          <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+            <Calendar className="h-5 w-5 text-blue-600" />
+            Sunday Holiday Management
+          </h2>
+          <p className="text-sm text-gray-600 mt-1">
+            Generate or remove Sunday holidays for a specific month
+          </p>
+        </div>
+        
+        <div className="p-6">
+          <div className="flex items-end gap-4 flex-wrap">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Month
+              </label>
+              <select
+                value={sundayMonth}
+                onChange={(e) => setSundayMonth(parseInt(e.target.value))}
+                className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(m => (
+                  <option key={m} value={m}>
+                    {new Date(2000, m - 1, 1).toLocaleString('default', { month: 'long' })}
+                  </option>
+                ))}
+              </select>
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Year
+              </label>
+              <input
+                type="number"
+                value={sundayYear}
+                onChange={(e) => setSundayYear(parseInt(e.target.value))}
+                min="2020"
+                max="2030"
+                className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-24"
+              />
+            </div>
+            
+            <button
+              onClick={handleGenerateSundays}
+              disabled={sundayLoading}
+              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              {sundayLoading ? 'Generating...' : 'Generate Sundays'}
+            </button>
+            
+            <button
+              onClick={handleRemoveSundays}
+              disabled={sundayLoading}
+              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              {sundayLoading ? 'Removing...' : 'Remove Sundays'}
+            </button>
+          </div>
+          
+          <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
+            <p className="text-sm text-blue-800">
+              <strong>Note:</strong> Use "Generate Sundays" to automatically mark all Sundays in the selected month as holidays.
+              Use "Remove Sundays" to delete Sunday holidays if your college operates on specific Sundays.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Attendance Time Settings Section */}
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 mb-6">
+        <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
+          <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+            <Clock className="h-5 w-5 text-blue-600" />
+            Attendance Time Limits
+          </h2>
+          <p className="text-sm text-gray-600 mt-1">
+            Configure time-based absence rules for attendance processing
+          </p>
+        </div>
+        
+        <div className="p-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                In Time Limit
+              </label>
+              <input
+                type="time"
+                value={inTimeLimit}
+                onChange={(e) => setInTimeLimit(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                If staff arrives after this time, mark as absent
+              </p>
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Out Time Limit
+              </label>
+              <input
+                type="time"
+                value={outTimeLimit}
+                onChange={(e) => setOutTimeLimit(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                If staff leaves before this time, mark as absent
+              </p>
+            </div>
+          </div>
+          
+          <div className="mb-4">
+            <label className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                checked={applyTimeLimits}
+                onChange={(e) => setApplyTimeLimits(e.target.checked)}
+                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span className="text-sm font-medium text-gray-700">
+                Apply time-based absence rules
+              </span>
+            </label>
+            <p className="text-xs text-gray-500 ml-6 mt-1">
+              When enabled, attendance will be marked as absent if time limits are violated during CSV upload
+            </p>
+          </div>
+          
+          <button
+            onClick={handleSaveSettings}
+            disabled={loadingSettings}
+            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+          >
+            <CheckCircle className="h-4 w-4 mr-2" />
+            {loadingSettings ? 'Saving...' : 'Save Time Settings'}
+          </button>
+          
+          <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-md">
+            <p className="text-sm text-amber-800">
+              <strong>Important:</strong> Time-based absence rules are applied during CSV upload processing.
+              Existing attendance records are not affected. Default values are 8:45 AM for in time and 5:45 PM for out time.
+            </p>
+          </div>
         </div>
       </div>
 
