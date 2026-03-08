@@ -1,0 +1,12 @@
+# Dependencies
+node_modules/
+
+# Environment – contains secrets (API keys). Use .env.example as a template.
+.env
+
+# WhatsApp session data – auth tokens, cookies, browser profile
+.wwebjs_auth/
+
+# Logs
+*.log
+npm-debug.log*

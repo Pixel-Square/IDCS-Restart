@@ -1,6 +1,6 @@
 import React from 'react';
 import LabEntry from './LabEntry';
-import { normalizeClassType } from '../constants/classTypes';
+import { normalizeObeClassType } from '../constants/classTypes';
 
 type Props = {
   subjectId: string;
@@ -10,7 +10,7 @@ type Props = {
 };
 
 export default function Review2Entry({ subjectId, teachingAssignmentId, label, classType }: Props) {
-  const useSsaPublishedLockUi = normalizeClassType(classType || '') === 'PROJECT';
+  const useSsaPublishedLockUi = normalizeObeClassType(classType || '') === 'PROJECT';
   return (
     <LabEntry
       subjectId={subjectId}

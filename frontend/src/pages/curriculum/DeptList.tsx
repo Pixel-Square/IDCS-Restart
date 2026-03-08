@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import CLASS_TYPES, { normalizeClassType } from '../../constants/classTypes';
 import CurriculumLayout from './CurriculumLayout';
-import { fetchDeptRows, updateDeptRow, approveDeptRow, createElective, fetchElectives } from '../../services/curriculum';
+import { fetchDeptRows, updateDeptRow, approveDeptRow, createElective, fetchElectives, fetchBatchYears, propagateDeptRow, DeptRow } from '../../services/curriculum';
 import fetchWithAuth from '../../services/fetchAuth';
-import { Edit, Check, X, Save, RefreshCw } from 'lucide-react';
+import { Edit, Check, X, Save, RefreshCw, Copy } from 'lucide-react';
 
 type Department = { id: number; code: string; name: string; short_name?: string };
 
@@ -14,6 +14,14 @@ export default function DeptList() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [allDepartments, setAllDepartments] = useState<Department[]>([]);
+  const [batchYears, setBatchYears] = useState<any[]>([]);
+  const [selectedBatch, setSelectedBatch] = useState<number | null>(null);
+  const [propagateRow, setPropagateRow] = useState<DeptRow | null>(null);
+  const [propagateTargets, setPropagateTargets] = useState<number[]>([]);
+  const [propagating, setPropagating] = useState(false);
+  const [propagateSection, setPropagateSection] = useState(false);
+  const [propagateSectionTargets, setPropagateSecTargets] = useState<number[]>([]);
+  const [propagatingSec, setPropagatingSec] = useState(false);
   const uniqueRegs = rows && rows.length ? Array.from(new Set(rows.map(r => r.regulation))) : [];
   const uniqueSems = rows && rows.length ? Array.from(new Set(rows.map(r => r.semester))).sort((a,b)=>a-b) : [];
   const [selectedReg, setSelectedReg] = useState<string | null>(uniqueRegs.length === 1 ? uniqueRegs[0] : (uniqueRegs[0] ?? null));
@@ -31,6 +39,7 @@ export default function DeptList() {
   }, [rows]);
   useEffect(() => {
     fetchDeptRows().then(r => setRows(r)).catch(console.error).finally(() => setLoading(false));
+    fetchBatchYears().then(setBatchYears).catch(() => {});
   }, []);
 
   // Fetch departments based on curriculum permissions
@@ -55,13 +64,15 @@ export default function DeptList() {
   async function handleRefresh() {
     setRefreshing(true);
     try {
-      const [freshRows, depsRes] = await Promise.all([
+      const [freshRows, depsRes, by] = await Promise.all([
         fetchDeptRows(),
-        fetchWithAuth('/api/curriculum/departments/')
+        fetchWithAuth('/api/curriculum/departments/'),
+        fetchBatchYears(),
       ]);
       setRows(freshRows);
       const depsData = await depsRes.json();
       setAllDepartments(depsData.results || []);
+      setBatchYears(by);
     } catch (error) {
       console.error('Failed to refresh:', error);
     } finally {
@@ -142,6 +153,7 @@ export default function DeptList() {
     parent: null,
     department_id: currentDept || null,
     department_group_id: null,
+    batch_id: null,
     regulation: selectedReg || null,
     semester_id: selectedSem || null,
     course_code: '',
@@ -232,6 +244,59 @@ export default function DeptList() {
     </CurriculumLayout>
   );
 
+  async function handlePropagateSection() {
+    const visibleRows = rows.filter(r =>
+      (!currentDept || r.department.id === currentDept) &&
+      (!selectedReg || r.regulation === selectedReg) &&
+      (!selectedSem || r.semester === selectedSem) &&
+      (!selectedBatch || (r.batch && r.batch.id === selectedBatch))
+    );
+    if (visibleRows.length === 0) return;
+    if (!confirm(`Propagate all ${visibleRows.length} visible row(s) to ${propagateSectionTargets.length} batch(es)?`)) return;
+    setPropagatingSec(true);
+    let totalSuccess = 0;
+    const allErrors: string[] = [];
+    try {
+      for (const r of visibleRows) {
+        const res = await propagateDeptRow(r as DeptRow, propagateSectionTargets);
+        totalSuccess += res.success.length;
+        allErrors.push(...res.errors);
+      }
+      if (allErrors.length) {
+        alert(`${totalSuccess} created, ${allErrors.length} failed:\n${allErrors.slice(0, 5).join('\n')}`);
+      } else {
+        alert(`Section propagated — ${totalSuccess} entries created across ${propagateSectionTargets.length} batch(es).`);
+      }
+      await handleRefresh();
+      setPropagateSection(false);
+      setPropagateSecTargets([]);
+    } catch (e: any) {
+      alert('Propagation failed: ' + String(e));
+    } finally {
+      setPropagatingSec(false);
+    }
+  }
+
+  async function handlePropagateDeptRow() {
+    if (!propagateRow || propagateTargets.length === 0) return;
+    setPropagating(true);
+    try {
+      const result = await propagateDeptRow(propagateRow, propagateTargets);
+      if (result.errors.length) {
+        alert(`${result.success.length} succeeded, ${result.errors.length} failed:\n${result.errors.join('\n')}`);
+      } else {
+        alert(`Successfully propagated to ${result.success.length} batch(es).`);
+      }
+      await handleRefresh();
+      setPropagateRow(null);
+      setPropagateTargets([]);
+    } catch (e: any) {
+      alert('Propagation failed: ' + String(e));
+    } finally {
+      setPropagating(false);
+    }
+  }
+
   async function saveAllVisible() {
     const visible = rows.filter(r => (!currentDept || r.department.id === currentDept) && (!selectedReg || r.regulation === selectedReg) && (!selectedSem || r.semester === selectedSem) && r.editable);
     if (visible.length === 0) return alert('No editable rows to save');
@@ -301,6 +366,29 @@ export default function DeptList() {
                 {uniqueSems.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
+            {batchYears.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-gray-700">Batch:</span>
+                <select
+                  value={selectedBatch ?? ''}
+                  onChange={e => setSelectedBatch(e.target.value ? Number(e.target.value) : null)}
+                  className="px-4 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">All Batches</option>
+                  {batchYears.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </select>
+              </div>
+            )}
+            {batchYears.length > 1 && (
+              <button
+                onClick={() => { setPropagateSection(true); setPropagateSecTargets([]); }}
+                className="ml-auto flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg font-medium hover:bg-purple-700 transition-all shadow-sm"
+                title="Propagate entire visible section to another batch"
+              >
+                <Copy className="w-4 h-4" />
+                Propagate Section
+              </button>
+            )}
           </div>
         )}
         
@@ -352,6 +440,7 @@ export default function DeptList() {
             <tr>
               <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Code</th>
               <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Mnemonic</th>
+              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Batch</th>
               <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap min-w-[200px]">Course</th>
               <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">CAT</th>
               <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Class</th>
@@ -377,6 +466,16 @@ export default function DeptList() {
                   <>
                     <td className="px-3 py-2 whitespace-nowrap"><input value={r.course_code || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, course_code: e.target.value } : row))} className="w-full min-w-[160px] px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
                     <td className="px-3 py-2 whitespace-nowrap"><input value={r.mnemonic || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, mnemonic: e.target.value } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      <select
+                        value={r.batch?.id ?? r.batch_id ?? ''}
+                        onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, batch_id: e.target.value ? Number(e.target.value) : null } : row))}
+                        className="w-full min-w-[100px] px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                      >
+                        <option value="">—</option>
+                        {batchYears.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                      </select>
+                    </td>
                     <td className="px-3 py-2">
                       <textarea
                         value={r.course_name || ''}
@@ -446,6 +545,11 @@ export default function DeptList() {
                   <>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.course_code || '-'}</td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.mnemonic || '-'}</td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">
+                      {r.batch ? (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-indigo-100 text-indigo-800">{r.batch.name}</span>
+                      ) : <span className="text-gray-300">—</span>}
+                    </td>
                     <td className="px-3 py-2.5 text-sm text-gray-900 font-medium">{r.course_name || '-'}</td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.category || '-'}</td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.class_type || '-'}</td>
@@ -473,6 +577,15 @@ export default function DeptList() {
                           </button>
                         ) : (
                           <div className="w-8 h-8"></div>
+                        )}
+                        {batchYears.length > 1 && (
+                          <button
+                            className="p-2 text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
+                            onClick={() => { setPropagateRow(r); setPropagateTargets([]); }}
+                            title="Propagate to other batch"
+                          >
+                            <Copy className="w-4 h-4" />
+                          </button>
                         )}
                         
                         {canApprove && r.approval_status === 'PENDING' ? (
@@ -758,6 +871,17 @@ export default function DeptList() {
                 />
               </div>
               <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Batch</label>
+                <select
+                  value={addForm.batch_id ?? ''}
+                  onChange={e => setAddForm(f => ({ ...f, batch_id: e.target.value ? Number(e.target.value) : null }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                >
+                  <option value="">— No Batch —</option>
+                  {batchYears.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </select>
+              </div>
+              <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">
                   Department Group <span className="text-xs text-gray-500">(optional)</span>
                 </label>
@@ -935,6 +1059,17 @@ export default function DeptList() {
                 />
               </div>
               <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Batch</label>
+                <select
+                  value={editElectiveForm.batch_id ?? editElectiveForm.batch?.id ?? ''}
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, batch_id: e.target.value ? Number(e.target.value) : null }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                >
+                  <option value="">— No Batch —</option>
+                  {batchYears.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </select>
+              </div>
+              <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">
                   Department Group <span className="text-xs text-gray-500">(optional)</span>
                 </label>
@@ -1085,6 +1220,108 @@ export default function DeptList() {
                 className="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors"
               >
                 Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Propagate Section Modal */}
+      {propagateSection && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+            <h3 className="text-lg font-bold text-gray-900 mb-1">Propagate Entire Section</h3>
+            <p className="text-sm text-gray-500 mb-1">
+              Copy <strong>all {rows.filter(r => (!currentDept || r.department.id === currentDept) && (!selectedReg || r.regulation === selectedReg) && (!selectedSem || r.semester === selectedSem) && (!selectedBatch || (r.batch && r.batch.id === selectedBatch))).length} visible rows</strong>
+            </p>
+            <p className="text-xs text-gray-400 mb-4">
+              Dept: <span className="font-medium">{allDepartments.find(d => d.id === currentDept)?.short_name || allDepartments.find(d => d.id === currentDept)?.code || 'All'}</span> &nbsp;|&nbsp;
+              Reg: <span className="font-medium">{selectedReg || 'All'}</span> &nbsp;|&nbsp;
+              Sem: <span className="font-medium">{selectedSem ?? 'All'}</span> &nbsp;|&nbsp;
+              Batch: <span className="font-medium">{batchYears.find(b => b.id === selectedBatch)?.name || 'All'}</span>
+            </p>
+            <p className="text-sm font-medium text-gray-700 mb-2">Select target batch(es):</p>
+            <div className="space-y-2 mb-5">
+              {batchYears
+                .filter(b => !selectedBatch || b.id !== selectedBatch)
+                .map(b => (
+                  <label key={b.id} className="flex items-center gap-3 cursor-pointer p-2 rounded-lg hover:bg-gray-50">
+                    <input
+                      type="checkbox"
+                      className="w-4 h-4 rounded border-gray-300 accent-purple-600"
+                      checked={propagateSectionTargets.includes(b.id)}
+                      onChange={e =>
+                        setPropagateSecTargets(prev =>
+                          e.target.checked ? [...prev, b.id] : prev.filter(id => id !== b.id)
+                        )
+                      }
+                    />
+                    <span className="text-sm font-medium text-gray-700">{b.name}</span>
+                  </label>
+                ))}
+            </div>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => { setPropagateSection(false); setPropagateSecTargets([]); }}
+                className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={propagateSectionTargets.length === 0 || propagatingSec}
+                onClick={handlePropagateSection}
+                className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50"
+              >
+                {propagatingSec ? 'Propagating…' : `Propagate to ${propagateSectionTargets.length} batch${propagateSectionTargets.length !== 1 ? 'es' : ''}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Propagate Row Modal */}
+      {propagateRow && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+            <h3 className="text-lg font-bold text-gray-900 mb-1">Propagate to Other Batch</h3>
+            <p className="text-sm text-gray-500 mb-4">
+              Copy <strong>{propagateRow.course_name || propagateRow.course_code}</strong>{' '}
+              from <span className="font-medium text-gray-700">{propagateRow.department?.name}</span>{' '}
+              (Batch: <span className="font-medium text-indigo-700">{propagateRow.batch?.name || '—'}</span>) to:
+            </p>
+            <div className="space-y-2 mb-5">
+              {batchYears
+                .filter(b => b.id !== (propagateRow.batch?.id ?? propagateRow.batch_id))
+                .map(b => (
+                  <label key={b.id} className="flex items-center gap-3 cursor-pointer p-2 rounded-lg hover:bg-gray-50">
+                    <input
+                      type="checkbox"
+                      className="w-4 h-4 rounded border-gray-300 accent-purple-600"
+                      checked={propagateTargets.includes(b.id)}
+                      onChange={e =>
+                        setPropagateTargets(prev =>
+                          e.target.checked ? [...prev, b.id] : prev.filter(id => id !== b.id)
+                        )
+                      }
+                    />
+                    <span className="text-sm font-medium text-gray-700">{b.name}</span>
+                  </label>
+                ))}
+            </div>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => { setPropagateRow(null); setPropagateTargets([]); }}
+                className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={propagateTargets.length === 0 || propagating}
+                onClick={handlePropagateDeptRow}
+                className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50"
+              >
+                {propagating
+                  ? 'Propagating…'
+                  : `Propagate to ${propagateTargets.length} batch${propagateTargets.length !== 1 ? 'es' : ''}`}
               </button>
             </div>
           </div>

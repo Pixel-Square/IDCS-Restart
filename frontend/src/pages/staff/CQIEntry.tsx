@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../../services/roster';
-import { lsGet, lsSet } from '../../utils/localStorage';
+import { lsGet } from '../../utils/localStorage';
 import { exportCqiPdf } from '../../utils/cqiExportPdf';
 import { getCachedMe } from '../../services/auth';
 import { fetchWithAuth } from '../../services/fetchAuth';
@@ -287,8 +287,47 @@ export default function CQIEntry({
   const [debugMode, setDebugMode] = useState(true);
   const [headerMaxVisible, setHeaderMaxVisible] = useState(true);
   const [draftLog, setDraftLog] = useState<{ updated_at?: string | null; updated_by?: any | null } | null>(null);
+  const [publishedLog, setPublishedLog] = useState<{ published_at?: string | null } | null>(null);
+  const [readOnly, setReadOnly] = useState(false);
   const [autoSaveEnabled, setAutoSaveEnabled] = useState(true);
   const [dirty, setDirty] = useState(false);
+
+  // Load published snapshot (if present) and lock editing.
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      if (!subjectId || !teachingAssignmentId) {
+        if (mounted) {
+          setReadOnly(false);
+          setPublishedLog(null);
+        }
+        return;
+      }
+      try {
+        const qp = `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}`;
+        const res = await fetchWithAuth(`/api/obe/cqi-published/${encodeURIComponent(String(subjectId))}${qp}`).catch(() => null);
+        if (!mounted) return;
+        if (res && res.ok) {
+          const j = await res.json().catch(() => null);
+          const pub = j?.published;
+          if (pub && typeof pub === 'object' && pub.entries && typeof pub.entries === 'object') {
+            setCqiEntries(pub.entries || {});
+            setReadOnly(true);
+            setDirty(false);
+            setPublishedLog({ published_at: pub.publishedAt ?? null });
+            return;
+          }
+        }
+      } catch {
+        // ignore
+      }
+      if (mounted) {
+        setReadOnly(false);
+        setPublishedLog(null);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [subjectId, teachingAssignmentId]);
 
   // Load global IQAC CQI config (applies to all courses).
   useEffect(() => {
@@ -464,17 +503,10 @@ export default function CQIEntry({
     });
   };
 
-  // Load CQI entries from localStorage
+  // Load CQI entries from server draft
   useEffect(() => {
     if (!subjectId || !teachingAssignmentId) return;
-    const key = `cqi_entries_${subjectId}_${teachingAssignmentId}`;
-    const stored = lsGet<Record<number, CQIEntry>>(key);
-    if (stored && typeof stored === 'object') {
-      setCqiEntries(stored);
-      setDirty(false);
-    }
-
-    // Try to fetch draft from server if available
+    if (readOnly) return;
     (async () => {
       try {
         const qp = teachingAssignmentId ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
@@ -488,10 +520,10 @@ export default function CQIEntry({
           }
         }
       } catch (e) {
-        // ignore if server endpoint doesn't exist
+        // ignore
       }
     })();
-  }, [subjectId, teachingAssignmentId]);
+  }, [subjectId, teachingAssignmentId, readOnly]);
 
   // Calculate CO totals from internal marks
   useEffect(() => {
@@ -999,6 +1031,7 @@ export default function CQIEntry({
   }, [subjectId, teachingAssignmentId, classType, enabledAssessments, students, coNumbers, masterCfg]);
 
   const handleCQIChange = (studentId: number, coKey: string, value: string) => {
+    if (readOnly) return;
     // allow empty to clear
     if (value === '') {
       setCqiErrors(prev => {
@@ -1041,15 +1074,6 @@ export default function CQIEntry({
 
     setCqiEntries(prev => {
       const next = { ...prev, [studentId]: { ...prev[studentId], [coKey]: numValue } };
-      // persist just this change so it survives reloads
-      if (subjectId && teachingAssignmentId) {
-        const key = `cqi_entries_${subjectId}_${teachingAssignmentId}`;
-        try {
-          lsSet(key, next);
-        } catch {
-          // ignore
-        }
-      }
       setDirty(true);
       return next;
     });
@@ -1057,13 +1081,13 @@ export default function CQIEntry({
 
   const handleSave = () => {
     if (!subjectId || !teachingAssignmentId) return;
+    if (readOnly) return;
     // validate no errors
     if (Object.keys(cqiErrors).length) {
       alert('Fix CQI input errors before saving');
       return;
     }
 
-    // Try to save to server first. If server endpoint unavailable, fallback to localStorage.
     (async () => {
       const qp = teachingAssignmentId ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
       try {
@@ -1075,15 +1099,8 @@ export default function CQIEntry({
           try { const j = await res.json().catch(() => null); if (j) setDraftLog(j); } catch(_){}
           return;
         }
-      } catch {
-        // ignore and fallback
-      }
-
-      const key = `cqi_entries_${subjectId}_${teachingAssignmentId}`;
-      try {
-        lsSet(key, cqiEntries);
-        setDirty(false);
-        alert('CQI entries saved locally');
+        const txt = res ? await res.text().catch(() => '') : '';
+        alert(txt || 'Failed to save CQI entries');
       } catch (e: any) {
         alert('Failed to save CQI entries: ' + String(e?.message || e));
       }
@@ -1146,6 +1163,7 @@ export default function CQIEntry({
           onClick={handleSave}
           className="obe-btn obe-btn-primary"
           style={{ minWidth: 100 }}
+          disabled={readOnly}
         >
           Save CQI
         </button>
@@ -1178,8 +1196,9 @@ export default function CQIEntry({
           <button
             type="button"
             onClick={async () => {
-              // Save draft to server (falls back to localStorage on error)
+              // Save draft to server
               if (!subjectId || !teachingAssignmentId) return alert('Missing subject/teaching assignment');
+              if (readOnly) return;
               try {
                 const payload = { entries: cqiEntries };
                 const qp = teachingAssignmentId ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
@@ -1193,9 +1212,8 @@ export default function CQIEntry({
                   setDirty(false);
                   alert('Draft saved to server');
                 } else {
-                  // fallback to localStorage
-                  const key = `cqi_entries_${subjectId}_${teachingAssignmentId}`;
-                  try { lsSet(key, cqiEntries); setDirty(false); alert('Draft saved locally'); } catch (e) { alert('Failed to save draft'); }
+                  const txt = res ? await res.text().catch(() => '') : '';
+                  alert(txt || 'Failed to save draft');
                 }
               } catch (e: any) {
                 alert('Failed to save draft: ' + String(e?.message || e));
@@ -1203,6 +1221,7 @@ export default function CQIEntry({
             }}
             className="obe-btn"
             style={{ minWidth: 110 }}
+            disabled={readOnly}
           >
             Save Draft
           </button>
@@ -1211,15 +1230,29 @@ export default function CQIEntry({
             type="button"
             onClick={async () => {
               if (!subjectId) return alert('Missing subject');
+              if (readOnly) return;
               if (!confirm('Publish CQI to DB? This action cannot be undone.')) return;
               try {
                 const qp = teachingAssignmentId ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
-                const res = await fetchWithAuth(`/api/obe/cqi-publish/${encodeURIComponent(String(subjectId))}${qp}`, { method: 'POST' }).catch(() => null);
-                if (res && res.ok) { alert('CQI published'); } else { alert('Publish failed (server may not support CQI publish)'); }
+                const res = await fetchWithAuth(`/api/obe/cqi-publish/${encodeURIComponent(String(subjectId))}${qp}`, {
+                  method: 'POST',
+                  body: JSON.stringify({ coNumbers, entries: cqiEntries }),
+                }).catch(() => null);
+                if (res && res.ok) {
+                  const j = await res.json().catch(() => null);
+                  setReadOnly(true);
+                  setDirty(false);
+                  setPublishedLog({ published_at: j?.published_at ?? null });
+                  alert('CQI published');
+                } else {
+                  const txt = res ? await res.text().catch(() => '') : '';
+                  alert(txt || 'Publish failed');
+                }
               } catch (e: any) { alert('Publish failed: ' + String(e?.message || e)); }
             }}
             className="obe-btn obe-btn-primary"
             style={{ minWidth: 110 }}
+            disabled={readOnly}
           >
             Publish
           </button>
@@ -1231,6 +1264,7 @@ export default function CQIEntry({
           <div style={{ fontSize: 13, color: '#475569' }}>
             Draft: {draftLog?.updated_at ? new Date(String(draftLog.updated_at)).toLocaleString() : 'never'} {draftLog?.updated_by ? `by ${draftLog.updated_by?.name || draftLog.updated_by?.username || draftLog.updated_by}` : ''}
             {dirty ? ' · unsaved changes' : ''}
+            {publishedLog?.published_at ? ` · Published: ${new Date(String(publishedLog.published_at)).toLocaleString()}` : ''}
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <label style={{ fontSize: 13, color: '#475569' }}><input type="checkbox" checked={autoSaveEnabled} onChange={() => setAutoSaveEnabled((s) => !s)} /> Auto-save</label>
@@ -1238,6 +1272,7 @@ export default function CQIEntry({
               // manual sync draft to server
               (async () => {
                 if (!subjectId || !teachingAssignmentId) return alert('Missing subject/TA');
+                if (readOnly) return;
                 try {
                   const qp = teachingAssignmentId ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
                   const res = await fetchWithAuth(`/api/obe/cqi-draft/${encodeURIComponent(String(subjectId))}${qp}`, { method: 'PUT', body: JSON.stringify({ entries: cqiEntries }) }).catch(() => null);
@@ -1245,7 +1280,7 @@ export default function CQIEntry({
                   else { alert('Server save failed'); }
                 } catch (e:any) { alert('Server save failed: ' + String(e?.message || e)); }
               })();
-            }}>Sync Draft</button>
+            }} disabled={readOnly}>Sync Draft</button>
           </div>
         </div>
         <table className="cqi-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
@@ -1497,6 +1532,7 @@ export default function CQIEntry({
                               type="number"
                               value={cqiValue ?? ''}
                               onChange={(e) => handleCQIChange(student.id, coKey, e.target.value)}
+                              disabled={readOnly}
                               placeholder="Enter CQI"
                               className="obe-input"
                               style={{

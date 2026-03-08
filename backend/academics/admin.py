@@ -14,6 +14,7 @@ from .models import (
     Semester,
     Section,
     Batch,
+    BatchYear,
     Subject,
     STAFF_STATUS_CHOICES,
     STUDENT_STATUS_CHOICES,
@@ -109,10 +110,11 @@ class StaffProfileForm(forms.ModelForm):
 @admin.register(StudentProfile)
 class StudentProfileAdmin(admin.ModelAdmin):
     form = StudentProfileForm
-    list_display = ('user', 'reg_no', 'get_department', 'batch', 'current_section_display', 'status')
+    list_display = ('user', 'reg_no', 'get_department', 'batch', 'current_section_display', 'status', 'home_department')
     search_fields = ('reg_no', 'user__username', 'user__email')
     # filter by the department through the section->semester->course relation
-    list_filter = ('section__batch__course__department', 'batch')
+    list_filter = ('section__batch__course__department', 'batch', 'home_department')
+    raw_id_fields = ('home_department',)
     actions = ('deactivate_students', 'mark_alumni', 'delete_profiles_and_users')
 
     change_list_template = 'admin/academics/studentprofile/change_list.html'
@@ -992,8 +994,10 @@ class AcademicYearAdmin(admin.ModelAdmin):
 
 @admin.register(Department)
 class DepartmentAdmin(admin.ModelAdmin):
-    list_display = ('code', 'short_name', 'name')
+    list_display = ('code', 'short_name', 'name', 'parent', 'is_sh_main')
     search_fields = ('code', 'short_name', 'name')
+    list_filter = ('is_sh_main', 'parent')
+    raw_id_fields = ('parent',)
 
 
 @admin.register(Program)
@@ -1019,9 +1023,10 @@ class SemesterAdmin(admin.ModelAdmin):
 
 @admin.register(Section)
 class SectionAdmin(admin.ModelAdmin):
-    list_display = ('batch', 'name', 'semester')
+    list_display = ('batch', 'name', 'semester', 'managing_department')
     search_fields = ('name',)
-    list_filter = ('batch',)
+    list_filter = ('batch', 'managing_department')
+    raw_id_fields = ('managing_department',)
 
 
 @admin.register(Subject)
@@ -1033,15 +1038,24 @@ class SubjectAdmin(admin.ModelAdmin):
 
 @admin.register(Batch)
 class BatchAdmin(admin.ModelAdmin):
-    list_display = ('name', 'course', 'regulation_display', 'start_year', 'end_year')
-    search_fields = ('name', 'course__name', 'regulation__code', 'regulation__name')
-    list_filter = ('course', 'regulation')
+    list_display = ('name', 'batch_year', 'department', 'course', 'regulation_display', 'start_year', 'end_year')
+    search_fields = ('name', 'course__name', 'department__name', 'regulation__code', 'regulation__name')
+    list_filter = ('batch_year', 'department', 'course', 'regulation')
     raw_id_fields = ('regulation',)
-    
+    # `department` is only required when course is blank (S&H-type batches)
+    # Leave both fields visible so admin can set either path
+
     def regulation_display(self, obj):
         reg = getattr(obj, 'regulation', None)
         return getattr(reg, 'code', '—') if reg else '—'
     regulation_display.short_description = 'Regulation'
+
+
+@admin.register(BatchYear)
+class BatchYearAdmin(admin.ModelAdmin):
+    list_display = ('name', 'start_year', 'end_year')
+    search_fields = ('name',)
+    ordering = ('-name',)
 
 
 @admin.register(TeachingAssignment)

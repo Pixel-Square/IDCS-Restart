@@ -139,112 +139,20 @@ class MobileOtpRequestView(APIView):
         }
 
         try:
-
-            tpl = NotificationTemplate.objects.filter(code='mobile_verify', enabled=True).first()
-            if tpl and str(getattr(tpl, 'template', '') or '').strip():
-                template_text = str(tpl.template)
-            if tpl and getattr(tpl, 'expiry_minutes', None):
-                ttl_minutes = int(tpl.expiry_minutes)
-        except Exception:
-            # Fall back to defaults.
-            pass
-
-        backend = str(getattr(settings, 'SMS_BACKEND', 'console') or 'console').strip().lower()
-
-        last = (
-            MobileOtp.objects.filter(user=request.user, purpose='VERIFY_MOBILE', mobile_number=mobile)
-            .order_by('-created_at')
-            .first()
-        )
-        if last and last.created_at and (now - last.created_at).total_seconds() < cooldown_seconds:
-            retry_after = int(cooldown_seconds - (now - last.created_at).total_seconds())
+            import requests as _requests
+            timeout = float(getattr(settings, 'OBE_WHATSAPP_TIMEOUT_SECONDS', 15.0) or 15.0)
+            wa_response = _requests.post(endpoint, json=payload, timeout=timeout)
+            try:
+                data = wa_response.json()
+            except Exception:
+                data = {'detail': 'Invalid response from OTP service.'}
+            return Response(data, status=wa_response.status_code)
+        except Exception as e:
+            log.error('OTP request proxy error: %s', e)
             return Response(
-                {'detail': 'Please wait before requesting another OTP.', 'retry_after_seconds': max(retry_after, 1)},
-                status=429,
+                {'detail': 'Failed to reach OTP service. Please try again.'},
+                status=status.HTTP_502_BAD_GATEWAY,
             )
-
-        # For non-Twilio backends we generate a local OTP.
-        # For Twilio Verify, Twilio generates/sends the OTP, but we still
-        # create a row to enforce cooldown/attempt limits.
-        code = MobileOtp.generate_code(6)
-        otp = MobileOtp(
-            user=request.user,
-            purpose='VERIFY_MOBILE',
-            mobile_number=mobile,
-            expires_at=now + timedelta(minutes=ttl_minutes),
-        )
-        otp.set_code(code)
-        otp.save()
-
-        if backend == 'twilio':
-            sms_message = ''
-        else:
-            full_name = ''
-            try:
-                full_name = str(getattr(request.user, 'get_full_name', lambda: '')() or '').strip()
-            except Exception:
-                full_name = ''
-            ctx = {
-                '{otp}': code,
-                '{expiry}': str(ttl_minutes),
-                '{mobile}': str(mobile),
-                '{username}': str(getattr(request.user, 'username', '') or ''),
-                '{name}': full_name or str(getattr(request.user, 'username', '') or ''),
-            }
-            sms_message = str(template_text)
-            for k, v in ctx.items():
-                sms_message = sms_message.replace(k, v)
-        sms = send_sms(mobile, sms_message)
-        if not sms.ok:
-            # In production, hard-fail when OTP delivery fails.
-            # In DEBUG, keep the OTP row and return the OTP for local testing,
-            # because WhatsApp microservice may not be running/paired yet.
-            if bool(getattr(settings, 'DEBUG', False)):
-                detail = ''
-                try:
-                    detail = str(getattr(sms, 'message', '') or '')
-                except Exception:
-                    detail = ''
-
-                return Response(
-                    {
-                        'ok': True,
-                        'mobile_number': mobile,
-                        'expires_in_seconds': ttl_minutes * 60,
-                        'cooldown_seconds': cooldown_seconds,
-                        'delivery_backend': backend,
-                        'delivery_error': detail,
-                        'debug_otp': code,
-                    }
-                )
-
-            otp.delete()
-            # surface delivery error (useful when WhatsApp client is not ready)
-            detail = 'Failed to send OTP. Please try again.'
-            try:
-                if getattr(sms, 'message', None):
-                    detail = f'{detail} ({sms.message})'
-            except Exception:
-                pass
-            return Response({'detail': detail}, status=status.HTTP_502_BAD_GATEWAY)
-
-        resp = {
-            'ok': True,
-            'mobile_number': mobile,
-            'expires_in_seconds': ttl_minutes * 60,
-            'cooldown_seconds': cooldown_seconds,
-            'delivery_backend': backend,
-        }
-
-        # Developer ergonomics: when using console backend in DEBUG, include the OTP
-        # in the response so local setups can complete verification without a real SMS gateway.
-        try:
-            if backend == 'console' and bool(getattr(settings, 'DEBUG', False)):
-                resp['debug_otp'] = code
-        except Exception:
-            pass
-
-        return Response(resp)
 
 
 

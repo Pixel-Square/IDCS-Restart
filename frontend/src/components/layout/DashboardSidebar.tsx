@@ -4,7 +4,7 @@ import { Link, useLocation } from 'react-router-dom';
 
 
 import useDashboard from '../../hooks/useDashboard';
-import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2 } from 'lucide-react';
+import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper } from 'lucide-react';
 
 import { useSidebar } from './SidebarContext';
 import { fetchPendingPublishRequestCount } from '../../services/obe';
@@ -36,6 +36,8 @@ import { fetchPendingPublishRequestCount } from '../../services/obe';
   obe_requests: Bell,
   hod_obe_requests: Bell,
   hod_result_analysis: BarChart2,
+  hod_events: PartyPopper,
+  iqac_event_approvals: PartyPopper,
   academic_controller: Layout,
   notifications: Bell,
   academic_calendar: Calendar,
@@ -128,6 +130,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   const rolesUpper = (data.roles || []).map(r => (r || '').toString().toUpperCase());
   const flags = data.flags || {};
   const isIqac = rolesUpper.includes('IQAC');
+  const isIqacMain = Boolean((data as any)?.is_iqac_main === true || (isIqac && String((data as any)?.username || '').trim() === '000000'));
   const canPbasManage = rolesUpper.some((r) => ['IQAC', 'ADMIN', 'PRINCIPAL', 'PS'].includes(r));
 
   
@@ -143,6 +146,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   const canHodObeRequests = Boolean((entry as any)?.hod_obe_requests) || rolesUpper.includes('HOD');
   if (canHodObeRequests) items.push({ key: 'hod_obe_requests', label: 'HOD: OBE Requests', to: '/hod/obe-requests' });
   if (rolesUpper.includes('HOD') || rolesUpper.includes('ADVISOR')) items.push({ key: 'hod_result_analysis', label: 'Result Analysis', to: '/hod/result-analysis' });
+  if (rolesUpper.includes('HOD')) items.push({ key: 'hod_events', label: 'Event Management', to: '/hod/events' });
+
+  if ((isIqac || isIqacMain) && !items.some((item) => item.key === 'iqac_event_approvals')) {
+    items.push({ key: 'iqac_event_approvals', label: 'Event Approvals', to: '/iqac/event-approvals' });
+  }
 
   // Staffs page: require explicit view permission
   if (permsLower.includes('academics.view_staffs_page')) {
@@ -235,7 +243,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   }
 
   // Add Token Raise for all users at the end (no permission check needed)
-  items.push({ key: 'queries', label: 'Token Raise', to: '/queries' });
+  items.push({ key: 'queries', label: 'Raise Token ', to: '/queries' });
 
   return (
     <>

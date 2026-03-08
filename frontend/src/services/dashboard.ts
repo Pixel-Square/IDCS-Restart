@@ -1,4 +1,6 @@
 export type DashboardResponse = {
+  username?: string;
+  is_iqac_main?: boolean;
   profile_type: string | null;
   roles: string[];
   permissions: string[];

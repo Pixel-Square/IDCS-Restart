@@ -1,6 +1,6 @@
 import React from 'react';
 import LabCourseMarksEntry from './LabCourseMarksEntry';
-import { normalizeClassType } from '../constants/classTypes';
+import { normalizeObeClassType } from '../constants/classTypes';
 
 type Props = {
   subjectId: string;
@@ -11,7 +11,7 @@ type Props = {
 };
 
 export default function ReviewCourseMarkEntery({ subjectId, teachingAssignmentId, assessmentKey, viewerMode, classType }: Props) {
-  const normalizedClassType = normalizeClassType(classType || '');
+  const normalizedClassType = normalizeObeClassType(classType || '');
   if (normalizedClassType && normalizedClassType !== 'PROJECT') {
     return <div style={{ color: '#6b7280' }}>Review mark entry is available only for PROJECT class type courses.</div>;
   }

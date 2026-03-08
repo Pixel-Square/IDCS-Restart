@@ -28,7 +28,7 @@ import PublishLockOverlay from './PublishLockOverlay';
 import AssessmentContainer from './containers/AssessmentContainer';
 import { ModalPortal } from './ModalPortal';
 import { fetchDeptRows, fetchMasters } from '../services/curriculum';
-import { isLabClassType, normalizeClassType } from '../constants/classTypes';
+import { isLabClassType, normalizeObeClassType } from '../constants/classTypes';
 import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
 
 const LAB_CO_MAX_OVERRIDE = { co1: 42, co2: 42, co3: 58, co4: 42, co5: 42 };
@@ -325,6 +325,11 @@ export default function LabCourseMarksEntry({
   const draftLoadedRef = React.useRef(false);
   const [publishing, setPublishing] = useState(false);
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
+
+  // Avoid leaking published state across subject/assignment switches.
+  useEffect(() => {
+    setPublishedAt(null);
+  }, [assessmentKey, subjectId, teachingAssignmentId]);
   const [publishedEditModalOpen, setPublishedEditModalOpen] = useState(false);
   const [viewMarksModalOpen, setViewMarksModalOpen] = useState(false);
   const [editRequestReason, setEditRequestReason] = useState('');
@@ -374,7 +379,7 @@ export default function LabCourseMarksEntry({
 
   const key = useMemo(() => (subjectId ? storageKey(assessmentKey, String(subjectId)) : ''), [assessmentKey, subjectId]);
 
-  const { data: publishWindow, publishAllowed, remainingSeconds, refresh: refreshPublishWindow } = usePublishWindow({
+  const { data: publishWindow, publishAllowed, remainingSeconds, editAllowed, refresh: refreshPublishWindow } = usePublishWindow({
     assessment: assessmentKey,
     subjectCode: String(subjectId || ''),
     teachingAssignmentId,
@@ -434,7 +439,10 @@ export default function LabCourseMarksEntry({
     Boolean(markManagerUnlockedUntil) &&
     (publishConsumedApprovals == null || markManagerUnlockedUntil !== (publishConsumedApprovals.markManagerUnlockedUntil ?? null));
 
-  const entryOpen = !isPublished ? true : Boolean(markLock?.entry_open) && (publishConsumedApprovals == null || markEntryApprovedFresh || markManagerApprovedFresh);
+  const entryOpen =
+    !isPublished
+      ? Boolean(editAllowed)
+      : Boolean(markLock?.entry_open) && (publishConsumedApprovals == null || markEntryApprovedFresh || markManagerApprovedFresh);
   const publishedEditLocked = Boolean(isPublished && !entryOpen);
 
   const publishButtonIsRequestEdit = Boolean(isPublished && publishedEditLocked && !viewerMode);
@@ -521,7 +529,7 @@ export default function LabCourseMarksEntry({
   }, [draft.sheet.coConfigs, draft.sheet.markManagerSnapshot, initialEnabledCoNums]);
 
   const [classType, setClassType] = useState<string | null>(null);
-  const normalizedClassType = useMemo(() => normalizeClassType(classType), [classType]);
+  const normalizedClassType = useMemo(() => normalizeObeClassType(classType), [classType]);
   const isLabCourse = useMemo(() => isLabClassType(classType), [classType]);
   const isTcpr = normalizedClassType === 'TCPR';
   const isTcpl = normalizedClassType === 'TCPL';
@@ -3129,14 +3137,16 @@ export default function LabCourseMarksEntry({
         </div>
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <button
-            onClick={saveNow}
-            className="obe-btn obe-btn-success"
-            disabled={savingDraft || !subjectId || tableBlocked}
-            title={tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : undefined}
-          >
-            {savingDraft ? 'Saving…' : 'Save Draft'}
-          </button>
+          {!publishedEditLocked ? (
+            <button
+              onClick={saveNow}
+              className="obe-btn obe-btn-success"
+              disabled={savingDraft || !subjectId || tableBlocked}
+              title={tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : undefined}
+            >
+              {savingDraft ? 'Saving…' : 'Save Draft'}
+            </button>
+          ) : null}
           <button
             onClick={publish}
             className="obe-btn obe-btn-primary"

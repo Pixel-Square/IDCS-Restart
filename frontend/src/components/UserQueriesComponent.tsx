@@ -125,7 +125,7 @@ export default function UserQueriesComponent({ user }: UserQueriesComponentProps
               <MessageSquare className="w-5 h-5 text-indigo-600" />
             </div>
             <div>
-              <h2 className="text-lg font-bold text-slate-900">Token Raise</h2>
+              <h2 className="text-lg font-bold text-slate-900">Raise Token</h2>
               <p className="text-sm text-slate-600">Submit queries, doubts, errors, or bug reports</p>
             </div>
           </div>

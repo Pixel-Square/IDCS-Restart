@@ -215,9 +215,8 @@ export default function CourseOBEPage(): JSX.Element {
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div className="min-w-0 flex-1">
                 <h2 className="text-2xl sm:text-3xl font-extrabold text-gray-900 tracking-tight">
-                  OBE - {courseId}
+                  {courseId}
                 </h2>
-                <div className="mt-1 obe-small-muted">Course OBE workspace</div>
                 {courseName ? (
                   <div className="mt-2 text-lg font-bold text-gray-900 truncate">{courseName}</div>
                 ) : null}

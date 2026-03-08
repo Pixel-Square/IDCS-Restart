@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { normalizeObeClassType } from '../../constants/classTypes';
 
 import {
   bulkResetGlobalPublishControls,
@@ -47,6 +48,8 @@ const SPECIAL_ALLOWED_ASSESSMENTS: DueAssessmentKey[] = ['ssa1', 'formative1', '
 const ALL_ASSESSMENTS: DueAssessmentKey[] = ['ssa1', 'review1', 'formative1', 'cia1', 'ssa2', 'review2', 'formative2', 'cia2', 'model'];
 
 type PublishMode = 'OFF' | 'ON' | 'UNLIMITED' | 'MIXED';
+
+const OBE_DUE_DATES_UI_STATE_KEY = 'obe.dueDates.uiState.v1';
 
 function computePublishMode(params: {
   controls: Array<{ semester?: { id: number } | null; assessment: string; is_open: boolean }> | null | undefined;
@@ -148,10 +151,7 @@ function assessmentDisplayLabel(classType: ClassTypeKey, assessment: DueAssessme
 }
 
 function normalizeClassType(v: any): ClassTypeKey {
-  const k = String(v || '')
-    .trim()
-    .toUpperCase();
-  if (k === 'THEORY') return 'THEORY';
+  const k = normalizeObeClassType(v);
   if (k === 'LAB') return 'LAB';
   if (k === 'TCPL') return 'TCPL';
   if (k === 'TCPR') return 'TCPR';
@@ -166,7 +166,34 @@ function combineDateTime(date: string, time: string): string | null {
   const dd = String(date || '').trim();
   const tt = String(time || '').trim();
   if (!dd || !tt) return null;
-  return `${dd}T${tt}:00`;
+  // Convert local date+time into an absolute instant (UTC ISO string).
+  // This avoids server timezone assumptions when parsing naive datetimes.
+  const parts = dd.split('-').map((x) => Number(x));
+  const tparts = tt.split(':').map((x) => Number(x));
+  if (parts.length !== 3 || tparts.length < 2) return null;
+  const [y, m, d] = parts;
+  const [hh, mm] = tparts;
+  const local = new Date(y, (m || 1) - 1, d || 1, hh || 0, mm || 0, 0, 0);
+  if (!Number.isFinite(local.getTime())) return null;
+  return local.toISOString();
+}
+
+function pad2(n: number): string {
+  const x = Math.trunc(Number(n) || 0);
+  return x < 10 ? `0${x}` : String(x);
+}
+
+function isoToLocalDateTime(iso: string | null | undefined): { date: string; time: string } | null {
+  const raw = String(iso || '').trim();
+  if (!raw) return null;
+  const d = new Date(raw);
+  if (!Number.isFinite(d.getTime())) return null;
+  const yyyy = d.getFullYear();
+  const mm = pad2(d.getMonth() + 1);
+  const dd = pad2(d.getDate());
+  const hh = pad2(d.getHours());
+  const mi = pad2(d.getMinutes());
+  return { date: `${yyyy}-${mm}-${dd}`, time: `${hh}:${mi}` };
 }
 
 function uniqueKeepOrder<T>(items: T[]): T[] {
@@ -241,8 +268,12 @@ export default function OBEDueDatesPage(): JSX.Element {
 
   const [selectedClassType, setSelectedClassType] = useState<ClassTypeKey>('THEORY');
   const [selectedAssessments, setSelectedAssessments] = useState<DueAssessmentKey[]>([]);
+  const [startDate, setStartDate] = useState('');
+  const [startTime, setStartTime] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [dueTime, setDueTime] = useState('');
+
+  const didHydrateUiStateRef = useRef(false);
 
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -286,6 +317,33 @@ export default function OBEDueDatesPage(): JSX.Element {
     };
   }, []);
 
+  // Persist + restore the last used “filters” (semester + class type) so navigation doesn’t reset the operator’s context.
+  useEffect(() => {
+    if (didHydrateUiStateRef.current) return;
+    didHydrateUiStateRef.current = true;
+    try {
+      const raw = window.localStorage.getItem(OBE_DUE_DATES_UI_STATE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      const sem = Number(parsed?.selectedSemNumber);
+      if (SEMESTER_NUMBERS.includes(sem as any)) setSelectedSemNumber(sem);
+      if (parsed?.selectedClassType) setSelectedClassType(normalizeClassType(parsed.selectedClassType));
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        OBE_DUE_DATES_UI_STATE_KEY,
+        JSON.stringify({ selectedSemNumber, selectedClassType })
+      );
+    } catch {
+      // ignore
+    }
+  }, [selectedSemNumber, selectedClassType]);
+
   const semesterIdByNumber = useMemo(() => {
     const map = new Map<number, number>();
     for (const s of semesters) {
@@ -296,6 +354,14 @@ export default function OBEDueDatesPage(): JSX.Element {
   }, [semesters]);
 
   const selectedSemesterId = semesterIdByNumber.get(selectedSemNumber) ?? null;
+
+  // When switching semesters, clear date/time inputs so stale values don’t carry over.
+  useEffect(() => {
+    setStartDate('');
+    setStartTime('');
+    setDueDate('');
+    setDueTime('');
+  }, [selectedSemesterId]);
 
   const allSemesterIds = useMemo(() => {
     // Only include known SEM 1..8 ids.
@@ -470,6 +536,39 @@ export default function OBEDueDatesPage(): JSX.Element {
     });
   }, [globalPublishControlsForSelected, selectedSemesterId]);
 
+  // Auto-fill the current semester timer from existing due schedules (so you can extend due date easily).
+  const commonSemesterTimer = useMemo(() => {
+    if (!selectedSemesterId) return { open_from: null as string | null, due_at: null as string | null };
+    const rows = (Array.isArray(dueSchedulesForSelected) ? dueSchedulesForSelected : []).filter((r: any) => {
+      if (!r) return false;
+      if (r?.is_active === false) return false;
+      const semId = Number(r?.semester?.id);
+      return Number.isFinite(semId) && semId === Number(selectedSemesterId);
+    });
+    if (!rows.length) return { open_from: null as string | null, due_at: null as string | null };
+
+    const openVals = uniqueKeepOrder(rows.map((r: any) => (r?.open_from ? String(r.open_from) : '')));
+    const dueVals = uniqueKeepOrder(rows.map((r: any) => (r?.due_at ? String(r.due_at) : '')));
+
+    const open_from = openVals.length === 1 && openVals[0] ? openVals[0] : null;
+    const due_at = dueVals.length === 1 && dueVals[0] ? dueVals[0] : null;
+    return { open_from, due_at };
+  }, [selectedSemesterId, dueSchedulesForSelected]);
+
+  useEffect(() => {
+    if (publishModeThisSemester !== 'ON') return;
+    const due = isoToLocalDateTime(commonSemesterTimer.due_at);
+    if (due) {
+      setDueDate(due.date);
+      setDueTime(due.time);
+    }
+    const start = isoToLocalDateTime(commonSemesterTimer.open_from);
+    if (start) {
+      setStartDate(start.date);
+      setStartTime(start.time);
+    }
+  }, [publishModeThisSemester, commonSemesterTimer.due_at, commonSemesterTimer.open_from]);
+
   const publishModeAllSemesters = useMemo<PublishMode>(() => {
     if (!allSemesterIds.length) return 'MIXED';
     return computePublishMode({
@@ -611,11 +710,26 @@ export default function OBEDueDatesPage(): JSX.Element {
       const dueAt = combineDateTime(dueDate, dueTime);
       if (!dueAt) throw new Error('Select Due Date and Due Time');
 
+      const openFrom = combineDateTime(startDate, startTime);
+      if ((startDate && !startTime) || (!startDate && startTime)) {
+        throw new Error('Select Start Date and Start Time (or leave both empty)');
+      }
+      if (openFrom) {
+        try {
+          if (new Date(openFrom).getTime() >= new Date(dueAt).getTime()) {
+            throw new Error('Start date/time must be before due date/time');
+          }
+        } catch {
+          // If Date parsing fails, let backend validate.
+        }
+      }
+
       // Apply timer to ALL subjects in the semester (all class types).
       await bulkUpsertDueSchedule({
         semester_id: selectedSemesterId,
         subject_codes: allSubjectCodesForSemester,
         assessments: ALL_ASSESSMENTS,
+        open_from: openFrom,
         due_at: dueAt,
       });
 
@@ -632,6 +746,8 @@ export default function OBEDueDatesPage(): JSX.Element {
     allSubjectCodesForSemester,
     dueDate,
     dueTime,
+    startDate,
+    startTime,
     reloadSelectedSemester,
     publishModeThisSemester,
   ]);
@@ -796,10 +912,24 @@ export default function OBEDueDatesPage(): JSX.Element {
             ) : publishModeThisSemester === 'ON' ? (
               /* ── Semester ON → show date+time picker inline ── */
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', flex: '1 1 auto' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <div style={{ fontSize: 11, fontWeight: 900, color: '#374151' }}>Start</div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} disabled={loading}
+                      style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 13 }} />
+                    <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} disabled={loading}
+                      style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 13 }} />
+                  </div>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <div style={{ fontSize: 11, fontWeight: 900, color: '#374151' }}>End</div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} disabled={loading}
                   style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 13 }} />
                 <input type="time" value={dueTime} onChange={(e) => setDueTime(e.target.value)} disabled={loading}
                   style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 13 }} />
+                  </div>
+                </div>
                 <button onClick={() => void applyTimerAndSelection()} disabled={loading}
                   className="obe-btn obe-btn-primary"
                   style={{ padding: '9px 16px', borderRadius: 8, fontWeight: 900, fontSize: 13 }}>

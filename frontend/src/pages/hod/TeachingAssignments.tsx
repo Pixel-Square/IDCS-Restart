@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { User, BookOpen, Save, Edit, X, Trash2 } from 'lucide-react'
+import { User, BookOpen, Save, Edit, X, Trash2, RefreshCw } from 'lucide-react'
 import fetchWithAuth from '../../services/fetchAuth'
 import { getCachedMe } from '../../services/auth'
 
@@ -766,14 +766,25 @@ export default function TeachingAssignmentsPage(){
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
-          <div className="flex items-center gap-3">
-            <div className="p-3 bg-blue-50 rounded-lg">
-              <User className="h-6 w-6 text-blue-600" />
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-blue-50 rounded-lg">
+                <User className="h-6 w-6 text-blue-600" />
+              </div>
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900">Teaching Assign</h1>
+                <p className="text-gray-600">Assign faculty to courses and sections</p>
+              </div>
             </div>
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">Teaching Assign</h1>
-              <p className="text-gray-600">Assign faculty to courses and sections</p>
-            </div>
+            <button
+              onClick={() => fetchData(true)}
+              disabled={loading}
+              title="Refresh — clears cached data and reloads"
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">Refresh</span>
+            </button>
           </div>
         </div>
 

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import fetchWithAuth from '../../services/fetchAuth'
-import { Users, GraduationCap, Mail, Loader2, UserCircle2, ChevronLeft, ChevronRight, Building2, Globe, UserCheck, Heart } from 'lucide-react'
+import { Users, GraduationCap, Mail, Loader2, UserCircle2, ChevronLeft, ChevronRight, Building2, Globe, UserCheck, Heart, RefreshCw, Edit2, X, Search } from 'lucide-react'
+
 
 // Cache key and expiry time (5 minutes)
 const CACHE_KEY = 'students_page_cache'
@@ -62,6 +63,19 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
   const [deptDeptFilter, setDeptDeptFilter] = useState<string>('')
   const [deptBatchFilter, setDeptBatchFilter] = useState<string>('')
   const [deptSectionFilter, setDeptSectionFilter] = useState<string>('')
+  // Edit modal state
+  const [isEditOpen, setIsEditOpen] = useState(false)
+  const [selectedStudent, setSelectedStudent] = useState<Student | null>(null)
+  const [editFormData, setEditFormData] = useState<Student | null>(null)
+  const [searchQuery, setSearchQuery] = useState<string>('')
+  const [debouncedSearch, setDebouncedSearch] = useState<string>('')
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSearch(searchQuery.trim())
+    }, 300)
+    return () => window.clearTimeout(timer)
+  }, [searchQuery])
 
   // Get user permissions from localStorage and user object
   const getPermissions = (): string[] => {
@@ -78,37 +92,64 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
   const userPermissions = getPermissions()
   const hasPermission = (permission: string) => userPermissions.includes(permission.toLowerCase())
 
-  // Available view modes based on permissions
+  // Get user roles for role-based tab exclusions
+  const getUserRoles = (): string[] => {
+    try {
+      const localRoles = JSON.parse(localStorage.getItem('roles') || '[]') as string[]
+      const userRoles = user?.roles || []
+      return [...localRoles, ...userRoles].map(r => String(r).toUpperCase().trim())
+    } catch {
+      return (user?.roles || []).map((r: string) => String(r).toUpperCase().trim())
+    }
+  }
+  const userRoles = getUserRoles()
+  const hasRole = (role: string) => userRoles.includes(role.toUpperCase())
+
+  // HOD / AHOD users manage departments — they should not see "My Students"
+  // (an advisor tab) even if they also carry the ADVISOR role.
+  const isHodRole = hasRole('HOD') || hasRole('AHOD') || hasRole('hod') || hasRole('ahod')
+
+  // IQAC users operate at the system level — they should not see the
+  // department-scoped "Department Students" tab (only "All Students").
+  const isIqacRole = hasRole('IQAC') || hasRole('iqac')
+
+  // Available view modes based on permissions + role exclusions
   const availableViews = [
     {
       key: 'my-students' as ViewMode,
       label: 'My Students',
       icon: UserCheck,
       permission: 'academics.view_my_students',
-      description: 'Students in your advised sections'
+      description: 'Students in your advised sections',
+      // HOD/AHOD must not see this tab regardless of permissions
+      roleExcluded: isHodRole,
     },
     {
       key: 'my-mentees' as ViewMode,
       label: 'My Mentees',
       icon: Heart,
       permission: 'academics.view_mentees',
-      description: 'Students assigned to you as mentor'
+      description: 'Students assigned to you as mentor',
+      roleExcluded: false,
     },
     {
       key: 'department-students' as ViewMode,
       label: 'Department Students',
       icon: Building2,
       permission: 'students.view_department_students',
-      description: 'All students in your department'
+      description: 'All students in your department',
+      // IQAC must not see department-scoped view; they use All Students
+      roleExcluded: isIqacRole,
     },
     {
       key: 'all-students' as ViewMode,
       label: 'All Students',
       icon: Globe,
       permission: 'students.view_all_students',
-      description: 'Students from all departments'
+      description: 'Students from all departments',
+      roleExcluded: false,
     }
-  ].filter(view => hasPermission(view.permission))
+  ].filter(view => hasPermission(view.permission) && !view.roleExcluded)
 
   // Get current username for user-specific caching
   const getCurrentUsername = () => {
@@ -178,6 +219,8 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
     setSelectedSection(null)
     setLazyStudents([])
     setCurrentPage(1)
+    setSearchQuery('')
+    setDebouncedSearch('')
     fetchSectionsOrStudents()
   }, [viewMode])
 
@@ -187,12 +230,13 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
       // Data is pre-loaded – pull from cache, no extra API call
       setLazyStudents(studentsCache[selectedSection] || [])
     } else {
-      fetchSectionStudents(selectedSection)
+      fetchSectionStudents(selectedSection, debouncedSearch)
     }
-  }, [selectedSection])
+  }, [selectedSection, viewMode, studentsCache, debouncedSearch])
 
   // Reset to page 1 when section changes
   useEffect(() => { setCurrentPage(1) }, [selectedSection])
+  useEffect(() => { setCurrentPage(1) }, [debouncedSearch])
 
   // Reset filters when allSections list is refreshed
   useEffect(() => {
@@ -219,7 +263,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
   // Resolve + fetch for dept-students when any dept/batch/section filter changes
   useEffect(() => {
     if (viewMode !== 'department-students') return
-    if (!deptDeptFilter && !deptBatchFilter && !deptSectionFilter) {
+    if (!deptDeptFilter && !deptBatchFilter && !deptSectionFilter && !debouncedSearch) {
       setSelectedSection(null)
       setLazyStudents([])
       return
@@ -231,14 +275,14 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
     )
     if (matched.length === 0) { setSelectedSection(null); setLazyStudents([]); return }
     setSelectedSection(null)
-    fetchDeptStudentsForSections(matched.map(s => s.section_id))
-  }, [deptDeptFilter, deptBatchFilter, deptSectionFilter])
+    fetchDeptStudentsForSections(matched.map(s => s.section_id), debouncedSearch)
+  }, [deptDeptFilter, deptBatchFilter, deptSectionFilter, debouncedSearch])
 
   // Resolve + fetch students whenever any filter changes in all-students mode
   // Works with partial selection: dept only → entire dept, dept+batch → entire batch, all three → specific section
   useEffect(() => {
     if (viewMode !== 'all-students') return
-    if (!allDeptFilter && !allBatchFilter && !allSectionFilter) {
+    if (!allDeptFilter && !allBatchFilter && !allSectionFilter && !debouncedSearch) {
       setSelectedSection(null)
       setLazyStudents([])
       return
@@ -250,8 +294,8 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
     )
     if (matched.length === 0) { setSelectedSection(null); setLazyStudents([]); return }
     setSelectedSection(null)
-    fetchAllStudentsForSections(matched.map(s => s.section_id))
-  }, [allDeptFilter, allBatchFilter, allSectionFilter])
+    fetchAllStudentsForSections(matched.map(s => s.section_id), debouncedSearch)
+  }, [allDeptFilter, allBatchFilter, allSectionFilter, debouncedSearch])
 
   // Map a raw result entry (from my-students or my-mentees response) to SectionMeta + Student[]
   function parsePreloadedSection(r: any): { meta: SectionMeta; students: Student[] } {
@@ -371,7 +415,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
     }
   }
 
-  async function fetchSectionStudents(sectionId: number) {
+  async function fetchSectionStudents(sectionId: number, searchTerm: string = '') {
     // Check cache for this specific section
     const sectionCacheKey = `${CACHE_KEY}_section_${sectionId}_${viewMode}`
     try {
@@ -387,9 +431,10 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
       }
     } catch {}
 
+    const encodedSearch = searchTerm ? `&search=${encodeURIComponent(searchTerm)}` : ''
     const endpoint = viewMode === 'department-students'
-      ? `/api/academics/department-students/?section_id=${sectionId}`
-      : `/api/academics/all-students/?section_id=${sectionId}`
+      ? `/api/academics/department-students/?section_id=${sectionId}${encodedSearch}`
+      : `/api/academics/all-students/?section_id=${sectionId}${encodedSearch}`
     setLoadingStudents(true)
     try {
       const res = await fetchWithAuth(endpoint)
@@ -413,13 +458,14 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
   }
 
   // Fetch students for multiple sections in parallel (used by all-students partial filter)
-  async function fetchAllStudentsForSections(sectionIds: number[]) {
+  async function fetchAllStudentsForSections(sectionIds: number[], searchTerm: string = '') {
     setLoadingStudents(true)
     setLazyStudents([])
     try {
+      const encodedSearch = searchTerm ? `&search=${encodeURIComponent(searchTerm)}` : ''
       const results = await Promise.all(
         sectionIds.map(async sid => {
-          const res = await fetchWithAuth(`/api/academics/all-students/?section_id=${sid}`)
+          const res = await fetchWithAuth(`/api/academics/all-students/?section_id=${sid}${encodedSearch}`)
           if (!res.ok) return [] as Student[]
           const data = await res.json()
           return (data.students || []) as Student[]
@@ -435,13 +481,14 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
   }
 
   // Fetch students for multiple sections in parallel (used by department-students partial filter)
-  async function fetchDeptStudentsForSections(sectionIds: number[]) {
+  async function fetchDeptStudentsForSections(sectionIds: number[], searchTerm: string = '') {
     setLoadingStudents(true)
     setLazyStudents([])
     try {
+      const encodedSearch = searchTerm ? `&search=${encodeURIComponent(searchTerm)}` : ''
       const results = await Promise.all(
         sectionIds.map(async sid => {
-          const res = await fetchWithAuth(`/api/academics/department-students/?section_id=${sid}`)
+          const res = await fetchWithAuth(`/api/academics/department-students/?section_id=${sid}${encodedSearch}`)
           if (!res.ok) return [] as Student[]
           const data = await res.json()
           return (data.students || []) as Student[]
@@ -462,11 +509,20 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
     : viewMode === 'my-mentees' ? myMenteesSections
     : viewMode === 'department-students' ? deptSections
     : allSections
-  const displayStudentsList: Student[] = [...lazyStudents].sort((a, b) => {
-    const nameA = (a.first_name || a.username || '').trim().toLowerCase()
-    const nameB = (b.first_name || b.username || '').trim().toLowerCase()
-    return nameA.localeCompare(nameB)
-  })
+  const normalizedSearch = debouncedSearch.toLowerCase()
+  const displayStudentsList: Student[] = [...lazyStudents]
+    .filter(student => {
+      if (!normalizedSearch) return true
+      const fullName = `${student.first_name || ''} ${student.last_name || ''}`.trim().toLowerCase()
+      const username = (student.username || '').toLowerCase()
+      const regNo = (student.reg_no || '').toLowerCase()
+      return regNo.includes(normalizedSearch) || fullName.includes(normalizedSearch) || username.includes(normalizedSearch)
+    })
+    .sort((a, b) => {
+      const nameA = `${a.first_name || ''} ${a.last_name || ''}`.trim().toLowerCase() || (a.username || '').toLowerCase()
+      const nameB = `${b.first_name || ''} ${b.last_name || ''}`.trim().toLowerCase() || (b.username || '').toLowerCase()
+      return nameA.localeCompare(nameB)
+    })
 
   // Pagination calculations
   const totalItems = displayStudentsList.length
@@ -507,6 +563,51 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
       )
     }
     return pages
+  }
+
+  // Edit Modal Handlers
+  const handleEdit = (student: Student) => {
+    setSelectedStudent(student)
+    setEditFormData({ ...student })
+    setIsEditOpen(true)
+  }
+
+  const handleEditChange = (field: keyof Student, value: any) => {
+    if (editFormData) {
+      setEditFormData({
+        ...editFormData,
+        [field]: value
+      })
+    }
+  }
+
+  const handleSaveEdit = () => {
+    if (!editFormData || !selectedStudent) return
+
+    // Update in lazyStudents
+    setLazyStudents(prev => 
+      prev.map(s => s.id === editFormData.id ? editFormData : s)
+    )
+
+    // Update in studentsCache (for my-students and my-mentees modes)
+    if (selectedSection && (viewMode === 'my-students' || viewMode === 'my-mentees')) {
+      setStudentsCache(prev => ({
+        ...prev,
+        [selectedSection]: prev[selectedSection]?.map(s => 
+          s.id === editFormData.id ? editFormData : s
+        ) || []
+      }))
+    }
+
+    setIsEditOpen(false)
+    setSelectedStudent(null)
+    setEditFormData(null)
+  }
+
+  const handleCloseEdit = () => {
+    setIsEditOpen(false)
+    setSelectedStudent(null)
+    setEditFormData(null)
   }
 
   // If user has no permissions for any view mode, show access denied
@@ -553,12 +654,23 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
               <p className="text-slate-600 text-sm">{currentView?.description || 'View and manage students'}</p>
             </div>
           </div>
-          <div className="px-4 py-2 bg-gradient-to-r from-slate-100 to-indigo-100 rounded-lg">
-            <div className="flex items-center gap-2">
-              <Users className="w-5 h-5 text-indigo-700" />
-              <span className="text-sm font-semibold text-indigo-900">
-                {totalLabel}
-              </span>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => { clearCache(); fetchSectionsOrStudents() }}
+              disabled={loading}
+              title="Refresh — clears cached data and reloads sections"
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-slate-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">Refresh</span>
+            </button>
+            <div className="px-4 py-2 bg-gradient-to-r from-slate-100 to-indigo-100 rounded-lg">
+              <div className="flex items-center gap-2">
+                <Users className="w-5 h-5 text-indigo-700" />
+                <span className="text-sm font-semibold text-indigo-900">
+                  {totalLabel}
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -629,6 +741,24 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
         </div>
       )}
 
+      {hasContent && (viewMode === 'my-students' || viewMode === 'my-mentees') && (
+        <div className="mb-6 bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Search</label>
+            <div className="relative w-full">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search by Register Number or Student Name..."
+                className="w-full pl-10 pr-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Department-Students dept + batch + section dropdowns */}
       {hasContent && viewMode === 'department-students' && (() => {
         const deptOptions = Array.from(new Set(
@@ -677,6 +807,19 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                   <option value="">-- All Sections --</option>
                   {sectionOptions.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
+              </div>
+              <div className="flex flex-col gap-1 min-w-[260px] flex-1">
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Search</label>
+                <div className="relative w-full">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search by Register Number or Student Name..."
+                    className="w-full pl-10 pr-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -730,6 +873,19 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                   {sectionOptions.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
               </div>
+              <div className="flex flex-col gap-1 min-w-[260px] flex-1">
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Search</label>
+                <div className="relative w-full">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search by Register Number or Student Name..."
+                    className="w-full pl-10 pr-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  />
+                </div>
+              </div>
             </div>
           </div>
         )
@@ -758,6 +914,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                   <th className="text-left py-3 px-4 text-sm font-semibold text-indigo-900">Department</th>
                   <th className="text-left py-3 px-4 text-sm font-semibold text-indigo-900">Email</th>
                   <th className="text-left py-3 px-4 text-sm font-semibold text-indigo-900">Status</th>
+                  <th className="text-left py-3 px-4 text-sm font-semibold text-indigo-900">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
@@ -812,6 +969,15 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                         {student.status || 'active'}
                       </span>
                     </td>
+                    <td className="py-3 px-4">
+                      <button 
+                        onClick={() => handleEdit(student)}
+                        className="p-2 bg-blue-50 text-blue-700 border border-blue-300 rounded-lg hover:bg-blue-100 transition-colors"
+                        title="Edit Student"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -857,6 +1023,109 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Edit Student Modal */}
+      {isEditOpen && editFormData && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            {/* Modal Header */}
+            <div className="sticky top-0 bg-gradient-to-r from-indigo-500 to-purple-600 text-white px-6 py-4 flex items-center justify-between border-b">
+              <div className="flex items-center gap-3">
+                <Edit2 className="w-6 h-6" />
+                <h2 className="text-xl font-bold">Edit Student Details</h2>
+              </div>
+              <button
+                onClick={handleCloseEdit}
+                className="p-1 hover:bg-white hover:bg-opacity-20 rounded-lg transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="p-6 space-y-4">
+              {/* Registration No */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-2">Registration No</label>
+                  <input
+                    type="text"
+                    value={editFormData.reg_no || ''}
+                    onChange={(e) => handleEditChange('reg_no', e.target.value)}
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-slate-900"
+                  />
+                </div>
+
+                {/* Student Name */}
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-2">Student Name</label>
+                  <input
+                    type="text"
+                    value={editFormData.username || ''}
+                    onChange={(e) => handleEditChange('username', e.target.value)}
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-slate-900"
+                  />
+                </div>
+              </div>
+
+              {/* Department */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-2">Department</label>
+                  <input
+                    type="text"
+                    value={editFormData.department_code || ''}
+                    readOnly
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg bg-slate-100 text-slate-700 cursor-not-allowed"
+                  />
+                </div>
+
+                {/* Email */}
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-2">Email</label>
+                  <input
+                    type="email"
+                    value={editFormData.email || ''}
+                    onChange={(e) => handleEditChange('email', e.target.value)}
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-slate-900"
+                  />
+                </div>
+              </div>
+
+              {/* Status */}
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">Status</label>
+                <select
+                  value={editFormData.status || 'active'}
+                  onChange={(e) => handleEditChange('status', e.target.value)}
+                  className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-slate-900 bg-white"
+                >
+                  <option value="active">Active</option>
+                  <option value="resigned">Resigned</option>
+                  <option value="debar">Debar</option>
+                  <option value="inactive">Inactive</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="border-t border-slate-200 bg-slate-50 px-6 py-4 flex items-center justify-end gap-3">
+              <button
+                onClick={handleCloseEdit}
+                className="px-5 py-2.5 bg-slate-200 text-slate-700 hover:bg-slate-300 rounded-lg font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveEdit}
+                className="px-5 py-2.5 bg-gradient-to-r from-indigo-500 to-purple-600 text-white hover:from-indigo-600 hover:to-purple-700 rounded-lg font-medium transition-colors flex items-center gap-2"
+              >
+                <span>Save Changes</span>
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

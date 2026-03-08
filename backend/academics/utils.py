@@ -5,13 +5,33 @@ from django.db.models import QuerySet
 from .models import DepartmentRole, StaffProfile, SectionAdvisor
 
 
+def get_user_staff_profile(user):
+    """Safely return the user's linked `StaffProfile`, if any.
+
+    Reverse one-to-one access (`user.staff_profile`) can raise
+    `RelatedObjectDoesNotExist` for users that do not have a staff profile.
+    Some API flows (including OBE academic-controller screens) intentionally
+    allow such users, so callers should receive `None` rather than a 500.
+    """
+    if not user or not getattr(user, 'pk', None):
+        return None
+
+    try:
+        return user.staff_profile
+    except Exception:
+        try:
+            return StaffProfile.objects.filter(user_id=user.pk).select_related('department', 'user').first()
+        except Exception:
+            return None
+
+
 def get_user_hod_department_ids(user) -> List[int]:
     """Return list of department IDs the user is HOD/AHOD for.
 
     Includes departments from active DepartmentRole entries for the user's
     `staff_profile`. Returns an empty list if no staff_profile or no roles.
     """
-    staff_profile = getattr(user, 'staff_profile', None)
+    staff_profile = get_user_staff_profile(user)
     if not staff_profile:
         return []
 
@@ -27,7 +47,7 @@ def get_user_effective_departments(user) -> List[int]:
     departments.
     """
     depts = []
-    staff_profile = getattr(user, 'staff_profile', None)
+    staff_profile = get_user_staff_profile(user)
     if staff_profile:
         try:
             cur = getattr(staff_profile, 'current_department', None) or staff_profile.get_current_department()

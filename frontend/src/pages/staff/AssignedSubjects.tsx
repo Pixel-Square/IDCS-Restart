@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { fetchAssignedSubjects, fetchDepartmentStaff, StaffMember } from '../../services/staff'
 import { fetchSubjectBatches, createSubjectBatch } from '../../services/subjectBatches'
 import fetchWithAuth from '../../services/fetchAuth'
-import { BookOpen, Users, AlertCircle, FileText, RotateCcw } from 'lucide-react'
+import { BookOpen, Users, AlertCircle, FileText, RotateCcw, Search } from 'lucide-react'
 
 type AssignedSubject = {
   id: number
@@ -51,11 +51,30 @@ export default function AssignedSubjectsPage() {
   const [editCustomNumbers, setEditCustomNumbers] = useState('')
   const [editRangeStart, setEditRangeStart] = useState('')
   const [editRangeEnd, setEditRangeEnd] = useState('')
+<<<<<<< HEAD
   const [staffList, setStaffList] = useState<StaffMember[]>([])
   const [staffLoading, setStaffLoading] = useState(false)
   const [viewBatchOpen, setViewBatchOpen] = useState(false)
   const [viewBatch, setViewBatch] = useState<any | null>(null)
   const [currentUserStaffId, setCurrentUserStaffId] = useState<number | null>(null)
+=======
+  const [searchQuery, setSearchQuery] = useState('')
+  const [editSearchQuery, setEditSearchQuery] = useState('')
+
+  // Fix scroll container height to allow all students to be visible
+  React.useEffect(() => {
+    if (pickerOpen) {
+      // Find and fix the student list container height to show 8 students
+      const containers = document.querySelectorAll('.h-\\[450px\\]')
+      containers.forEach(el => {
+        if (el instanceof HTMLElement) {
+          el.style.height = '280px'
+          el.style.maxHeight = '280px'
+        }
+      })
+    }
+  }, [pickerOpen])
+>>>>>>> 44730abc0c9f9fbdc9f85a049d9ee0da68f9519d
 
   useEffect(() => { load(); loadStaff(); loadCurrentUser() }, [])
 
@@ -125,7 +144,7 @@ export default function AssignedSubjectsPage() {
     const name = `Batch ${next}`
     // fetch students for section
     try{
-      const sres = await fetchWithAuth(`/api/academics/sections/${item.section_id}/students/`)
+      const sres = await fetchWithAuth(`/api/academics/sections/${item.section_id}/students/?page_size=1000`)
       if (!sres.ok) {
         const txt = await sres.text()
         throw new Error(txt || 'Failed to load students')
@@ -167,8 +186,8 @@ export default function AssignedSubjectsPage() {
     try{
       let sdata
       if (item.section_id) {
-        // Regular subject with section
-        const sres = await fetchWithAuth(`/api/academics/sections/${item.section_id}/students/`)
+        // Regular subject with section - fetch all students with large page_size
+        const sres = await fetchWithAuth(`/api/academics/sections/${item.section_id}/students/?page_size=1000`)
         if (!sres.ok) {
           const txt = await sres.text()
           throw new Error(txt || 'Failed to load students')
@@ -176,7 +195,7 @@ export default function AssignedSubjectsPage() {
         sdata = await sres.json()
       } else if (item.elective_subject_id) {
         // Elective subject
-        const sres = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${item.elective_subject_id}`)
+        const sres = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${item.elective_subject_id}&page_size=1000`)
         if (!sres.ok) {
           const txt = await sres.text()
           throw new Error(txt || 'Failed to load students')
@@ -187,6 +206,11 @@ export default function AssignedSubjectsPage() {
       }
       
       const raw = (sdata.results || sdata) || []
+      console.log('=== Student API Response Debug ===')
+      console.log('Full API response:', sdata)
+      console.log('Raw students array length:', raw.length)
+      console.log('Has pagination count?', sdata.count)
+      
       let studs = raw.map((s:any) => ({
         id: Number(s.id),
         reg_no: String(s.reg_no ?? s.regno ?? ''),
@@ -196,17 +220,12 @@ export default function AssignedSubjectsPage() {
         section_id: s.section_id ?? null,
       }))
       
-      // exclude students already assigned to batches for this curriculum_row
-      const crId = item.curriculum_row_id || item.curriculum_row?.id
-      if (crId) {
-        const excluded = new Set<number>()
-        for (const b of batches) {
-          if (b.curriculum_row && b.curriculum_row.id === crId) {
-            for (const s of (b.students || [])) excluded.add(s.id)
-          }
-        }
-        studs = studs.filter((s:any) => !excluded.has(s.id))
-      }
+      console.log('Mapped students count:', studs.length)
+      console.log('Student IDs:', studs.map(s => s.id))
+      
+      // Note: Showing all students, including those already in batches
+      // Previously, students in existing batches were filtered out
+      
       setPickerStudents(studs)
       setPickerSelectedIds(studs.map((s:any)=>s.id))
       setPickerStaffId(null)
@@ -214,6 +233,7 @@ export default function AssignedSubjectsPage() {
       setCustomNumbers('')
       setRangeStart('')
       setRangeEnd('')
+      setSearchQuery('')
       setPickerOpen(true)
     }catch(e:any){
       console.error('openPickerForAssignment error', e)
@@ -253,16 +273,32 @@ export default function AssignedSubjectsPage() {
       case 'custom':
         if (customNumbers.trim()) {
           const numbers = customNumbers.split(',')
-            .map(n => parseInt(n.trim()))
-            .filter(n => !isNaN(n) && n > 0 && n <= sortedStudents.length)
-          selectedIds = numbers.map(n => sortedStudents[n - 1]?.id).filter(Boolean)
+            .map(n => n.trim())
+            .filter(n => n.length > 0)
+          
+          // Match students by last digits of registration number
+          selectedIds = sortedStudents
+            .filter(s => {
+              const regNo = String(s.reg_no || '')
+              const lastDigits = regNo.slice(-2) // Get last 2 digits
+              return numbers.includes(lastDigits)
+            })
+            .map(s => s.id)
         }
         break
       case 'range':
         const start = parseInt(rangeStart)
         const end = parseInt(rangeEnd)
-        if (!isNaN(start) && !isNaN(end) && start > 0 && end <= sortedStudents.length && start <= end) {
-          selectedIds = sortedStudents.slice(start - 1, end).map(s => s.id)
+        if (!isNaN(start) && !isNaN(end) && start <= end) {
+          // Match students whose registration number last 2 digits fall in range
+          selectedIds = sortedStudents
+            .filter(s => {
+              const regNo = String(s.reg_no || '')
+              const lastDigits = regNo.slice(-2) // Get last 2 digits
+              const numValue = parseInt(lastDigits)
+              return !isNaN(numValue) && numValue >= start && numValue <= end
+            })
+            .map(s => s.id)
         }
         break
     }
@@ -302,16 +338,32 @@ export default function AssignedSubjectsPage() {
       case 'custom':
         if (editCustomNumbers.trim()) {
           const numbers = editCustomNumbers.split(',')
-            .map(n => parseInt(n.trim()))
-            .filter(n => !isNaN(n) && n > 0 && n <= sortedStudents.length)
-          selectedIds = numbers.map(n => sortedStudents[n - 1]?.id).filter(Boolean)
+            .map(n => n.trim())
+            .filter(n => n.length > 0)
+          
+          // Match students by last digits of registration number
+          selectedIds = sortedStudents
+            .filter(s => {
+              const regNo = String(s.reg_no || '')
+              const lastDigits = regNo.slice(-2) // Get last 2 digits
+              return numbers.includes(lastDigits)
+            })
+            .map(s => s.id)
         }
         break
       case 'range':
         const start = parseInt(editRangeStart)
         const end = parseInt(editRangeEnd)
-        if (!isNaN(start) && !isNaN(end) && start > 0 && end <= sortedStudents.length && start <= end) {
-          selectedIds = sortedStudents.slice(start - 1, end).map(s => s.id)
+        if (!isNaN(start) && !isNaN(end) && start <= end) {
+          // Match students whose registration number last 2 digits fall in range
+          selectedIds = sortedStudents
+            .filter(s => {
+              const regNo = String(s.reg_no || '')
+              const lastDigits = regNo.slice(-2) // Get last 2 digits
+              const numValue = parseInt(lastDigits)
+              return !isNaN(numValue) && numValue >= start && numValue <= end
+            })
+            .map(s => s.id)
         }
         break
     }
@@ -319,12 +371,12 @@ export default function AssignedSubjectsPage() {
     setEditingSelectedStudentIds(selectedIds)
   }
 
-  // Apply edit filter when filter type or values change
+  // Apply edit filter only when user explicitly changes filter options (not on initial load)
   React.useEffect(() => {
     if (editingBatchStudents.length > 0 && editingBatchId) {
       applyEditSelectionFilter()
     }
-  }, [editSelectionFilter, editCustomNumbers, editRangeStart, editRangeEnd, editingBatchStudents, editingBatchId])
+  }, [editSelectionFilter, editCustomNumbers, editRangeStart, editRangeEnd])
 
   async function submitPicker(){
     if (!pickerItem) return
@@ -361,11 +413,16 @@ export default function AssignedSubjectsPage() {
     setEditingBatchName(b.name || '')
     setEditingBatch(b)
     setEditingSelectedStudentIds((b.students || []).map((s:any) => s.id))
+<<<<<<< HEAD
     setEditingStaffId(b.staff?.id || null)
     setEditSelectionFilter('all')
+=======
+    // Don't reset filter - keep pre-selected students
+>>>>>>> 44730abc0c9f9fbdc9f85a049d9ee0da68f9519d
     setEditCustomNumbers('')
     setEditRangeStart('')
     setEditRangeEnd('')
+    setEditSearchQuery('')
     
     // Load all available students for the batch's curriculum_row
     if (b.curriculum_row && b.curriculum_row.id) {
@@ -375,14 +432,14 @@ export default function AssignedSubjectsPage() {
         if (matchingItem) {
           let sdata
           if (matchingItem.section_id) {
-            // Regular subject with section
-            const sres = await fetchWithAuth(`/api/academics/sections/${matchingItem.section_id}/students/`)
+            // Regular subject with section - fetch all students with large page_size
+            const sres = await fetchWithAuth(`/api/academics/sections/${matchingItem.section_id}/students/?page_size=1000`)
             if (sres.ok) {
               sdata = await sres.json()
             }
           } else if (matchingItem.elective_subject_id) {
             // Elective subject
-            const sres = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${matchingItem.elective_subject_id}`)
+            const sres = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${matchingItem.elective_subject_id}&page_size=1000`)
             if (sres.ok) {
               sdata = await sres.json()
             }
@@ -661,8 +718,12 @@ export default function AssignedSubjectsPage() {
         </div>
       )}
 
+<<<<<<< HEAD
 
       {/* Subject Batches - separated into Created and Assigned */}
+=======
+      {/* Subject Batches - existing only; creation via subject actions */}
+>>>>>>> 44730abc0c9f9fbdc9f85a049d9ee0da68f9519d
       <div className="mt-6">
         <div className="bg-white rounded-xl shadow-lg p-6">
           <h3 className="text-xl font-bold text-gray-900 mb-6 flex items-center gap-2">
@@ -935,8 +996,8 @@ export default function AssignedSubjectsPage() {
       {/* Picker Modal */}
       {pickerOpen && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[80vh] overflow-hidden">
-            <div className="p-6 border-b border-gray-200">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="p-6 border-b border-gray-200 flex-shrink-0">
               <div className="flex justify-between items-start">
                 <div>
                   <h3 className="text-xl font-bold text-gray-900 mb-1">
@@ -958,6 +1019,7 @@ export default function AssignedSubjectsPage() {
                       setCustomNumbers('');
                       setRangeStart('');
                       setRangeEnd('');
+                      setSearchQuery('');
                     }}
                   >
                     Cancel
@@ -973,6 +1035,7 @@ export default function AssignedSubjectsPage() {
               </div>
             </div>
             
+<<<<<<< HEAD
             <div className="p-6">
               {/* Staff Assignment */}
               <div className="mb-6">
@@ -996,15 +1059,43 @@ export default function AssignedSubjectsPage() {
                 </p>
               </div>
               
+=======
+            <div className="p-6 overflow-y-auto flex-1">
+>>>>>>> 44730abc0c9f9fbdc9f85a049d9ee0da68f9519d
               <div className="mb-4">
                 <h4 className="font-semibold text-gray-900 mb-2">Students ({pickerStudents.length})</h4>
-                <p className="text-sm text-gray-600 mb-4">Select students to include in this batch</p>
+                <p className="text-sm text-gray-600 mb-4">Select students to include in this batch - all {pickerStudents.length} students shown</p>
+                
+                {/* Search Field */}
+                <div className="mb-3">
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Search Students</label>
+                  <input
+                    type="text"
+                    placeholder="Search by name or registration number..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full px-3 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                  />
+                  <div className="mt-2 text-xs text-gray-600">
+                    Selected: {pickerSelectedIds.length} of {pickerStudents.length} students
+                    {searchQuery.trim() && (
+                      <span className="ml-2 text-blue-600">
+                        (filtering {pickerStudents.filter(s => {
+                          const query = searchQuery.toLowerCase()
+                          const name = (s.username || s.full_name || '').toLowerCase()
+                          const regNo = (s.reg_no || '').toLowerCase()
+                          return name.includes(query) || regNo.includes(query)
+                        }).length} matches)
+                      </span>
+                    )}
+                  </div>
+                </div>
                 
                 {/* Selection Filters */}
-                <div className="bg-gray-50 rounded-lg p-4 mb-4">
-                  <h5 className="font-medium text-gray-900 mb-3">Selection Options</h5>
+                <div className="bg-gray-50 rounded-lg p-3 mb-3">
+                  <h5 className="font-medium text-gray-900 mb-2 text-sm">Selection Options</h5>
                   
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                     <div>
                       <label className="flex items-center gap-2">
                         <input
@@ -1048,9 +1139,9 @@ export default function AssignedSubjectsPage() {
                     </div>
                   </div>
                   
-                  <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div>
-                      <label className="flex items-center gap-2 mb-2">
+                      <label className="flex items-center gap-2 mb-1.5">
                         <input
                           type="radio"
                           name="selectionFilter"
@@ -1067,12 +1158,12 @@ export default function AssignedSubjectsPage() {
                         value={customNumbers}
                         onChange={(e) => setCustomNumbers(e.target.value)}
                         disabled={selectionFilter !== 'custom'}
-                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                        className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
                       />
                     </div>
                     
                     <div>
-                      <label className="flex items-center gap-2 mb-2">
+                      <label className="flex items-center gap-2 mb-1.5">
                         <input
                           type="radio"
                           name="selectionFilter"
@@ -1090,9 +1181,9 @@ export default function AssignedSubjectsPage() {
                           value={rangeStart}
                           onChange={(e) => setRangeStart(e.target.value)}
                           disabled={selectionFilter !== 'range'}
-                          className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                          className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
                           min="1"
-                          max={pickerStudents.length}
+                          max="99"
                         />
                         <span className="self-center text-sm text-gray-500">to</span>
                         <input
@@ -1101,34 +1192,62 @@ export default function AssignedSubjectsPage() {
                           value={rangeEnd}
                           onChange={(e) => setRangeEnd(e.target.value)}
                           disabled={selectionFilter !== 'range'}
-                          className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                          className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
                           min="1"
-                          max={pickerStudents.length}
+                          max="99"
                         />
                       </div>
                     </div>
                   </div>
                   
-                  <div className="mt-3 text-xs text-gray-600">
-                    Selected: {pickerSelectedIds.length} of {pickerStudents.length} students
-                  </div>
+
                 </div>
               </div>
               
-              <div className="max-h-96 overflow-y-auto">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {(() => {
-                    // Sort students alphabetically by name for display
-                    const sortedStudents = [...pickerStudents].sort((a, b) => {
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {(() => {
+                  // Sort students alphabetically by name for display
+                  const sortedStudents = [...pickerStudents].sort((a, b) => {
                       const nameA = (a.username || a.full_name || a.reg_no || '').toLowerCase()
                       const nameB = (b.username || b.full_name || b.reg_no || '').toLowerCase()
                       return nameA.localeCompare(nameB)
                     })
                     
-                    return sortedStudents.map((s, index) => (
+                    console.log('=== Rendering Debug ===')
+                    console.log('pickerStudents.length:', pickerStudents.length)
+                    console.log('sortedStudents.length:', sortedStudents.length)
+                    
+                    // Filter students based on search query
+                    const filteredStudents = searchQuery.trim() 
+                      ? sortedStudents.filter(s => {
+                          const query = searchQuery.toLowerCase()
+                          const name = (s.username || s.full_name || '').toLowerCase()
+                          const regNo = (s.reg_no || '').toLowerCase()
+                          return name.includes(query) || regNo.includes(query)
+                        })
+                      : sortedStudents
+                    
+                    console.log('filteredStudents.length:', filteredStudents.length)
+                    console.log('searchQuery:', searchQuery)
+                    console.log('About to render', filteredStudents.length, 'student cards')
+                    console.log('Container class: max-h-[70vh] overflow-y-auto for full scrolling')
+                    
+                    // Show message if no students match search
+                    if (filteredStudents.length === 0 && searchQuery.trim()) {
+                      return (
+                        <div className="col-span-2 text-center py-8 text-gray-500">
+                          No students found matching "{searchQuery}"
+                        </div>
+                      )
+                    }
+                    
+                    // All students will be rendered - no slice or limit
+                    // Parent container should have max-h-[70vh] overflow-y-auto for scrolling
+                    return filteredStudents.map((s,index) => (
                       <label 
                         key={s.id} 
-                        className="flex items-center gap-3 p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors"
+                        className="flex items-center gap-2 p-2 border border-gray-200 rounded-md hover:bg-gray-50 cursor-pointer transition-colors"
+                        style={{minHeight: '56px'}}
                       >
                         <input 
                           type="checkbox" 
@@ -1136,14 +1255,14 @@ export default function AssignedSubjectsPage() {
                           onChange={() => togglePickerSelect(s.id)} 
                           className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
                         />
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-gray-400 w-6">{index + 1}.</span>
-                          <div>
-                            <div className="font-medium text-gray-900">
+                        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                          <span className="text-xs text-gray-400 w-5 flex-shrink-0">{index + 1}.</span>
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm font-medium text-gray-900 truncate">
                               {s.username || s.full_name || s.reg_no}
                             </div>
                             {s.reg_no && (
-                              <div className="text-xs text-gray-500">{s.reg_no}</div>
+                              <div className="text-xs text-gray-500 truncate">{s.reg_no}</div>
                             )}
                           </div>
                         </div>
@@ -1152,7 +1271,6 @@ export default function AssignedSubjectsPage() {
                   })()}
                 </div>
               </div>
-            </div>
           </div>
         </div>
       )}
@@ -1160,50 +1278,49 @@ export default function AssignedSubjectsPage() {
       {/* Batch Edit Modal */}
       {editingBatchId && editingBatch && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[80vh] overflow-hidden">
-            <div className="p-6 border-b border-gray-200">
-              <div className="flex justify-between items-start">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="p-3 border-b border-gray-200 flex-shrink-0">
+              <div className="flex justify-between items-start mb-2">
                 <div>
-                  <h3 className="text-xl font-bold text-gray-900 mb-1">
+                  <h3 className="text-lg font-bold text-gray-900">
                     Edit Batch
                   </h3>
-                  <div className="text-sm text-gray-600">
+                  <div className="text-xs text-gray-600">
                     Modify batch name and student assignments
                   </div>
                 </div>
                 <div className="flex gap-2">
                   <button 
                     type="button" 
-                    className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded-lg font-medium transition-colors" 
+                    className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors" 
                     onClick={cancelBatchEdit}
                   >
                     Cancel
                   </button>
                   <button 
                     type="button" 
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors" 
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors" 
                     onClick={saveBatchEdit}
                   >
                     Save Changes
                   </button>
                 </div>
               </div>
-            </div>
-            
-            <div className="p-6">
+              
               {/* Batch Name */}
-              <div className="mb-6">
-                <label className="block text-sm font-semibold text-gray-900 mb-2">
+              <div>
+                <label className="block text-xs text-gray-600 mb-0.5">
                   Batch Name
                 </label>
                 <input 
                   type="text"
                   value={editingBatchName} 
                   onChange={e=>setEditingBatchName(e.target.value)} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
                   placeholder="Enter batch name"
                 />
               </div>
+<<<<<<< HEAD
 
               {/* Staff Assignment */}
               <div className="mb-6">
@@ -1224,20 +1341,46 @@ export default function AssignedSubjectsPage() {
                 </select>
               </div>
 
+=======
+            </div>
+            
+            <div className="p-6 overflow-y-auto flex-1">
+>>>>>>> 44730abc0c9f9fbdc9f85a049d9ee0da68f9519d
               {/* Student Selection */}
-              <div>
-                <h4 className="font-semibold text-gray-900 mb-2 flex items-center justify-between">
-                  <span>Students ({editingSelectedStudentIds.length} selected)</span>
-                  <div className="text-sm text-gray-600">
-                    Click to add/remove students
+              <div className="mb-4">
+                <h4 className="font-semibold text-gray-900 mb-2">Students ({editingBatchStudents.length})</h4>
+                <p className="text-sm text-gray-600 mb-4">Select students to include in this batch - all {editingBatchStudents.length} students shown</p>
+                
+                {/* Search Field */}
+                <div className="mb-3">
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Search Students</label>
+                  <input
+                    type="text"
+                    placeholder="Search by name or registration number..."
+                    value={editSearchQuery}
+                    onChange={(e) => setEditSearchQuery(e.target.value)}
+                    className="w-full px-3 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                  />
+                  <div className="mt-2 text-xs text-gray-600">
+                    Selected: {editingSelectedStudentIds.length} of {editingBatchStudents.length} students
+                    {editSearchQuery.trim() && (
+                      <span className="ml-2 text-blue-600">
+                        (filtering {editingBatchStudents.filter(s => {
+                          const query = editSearchQuery.toLowerCase()
+                          const name = (s.username || s.full_name || '').toLowerCase()
+                          const regNo = (s.reg_no || '').toLowerCase()
+                          return name.includes(query) || regNo.includes(query)
+                        }).length} matches)
+                      </span>
+                    )}
                   </div>
-                </h4>
+                </div>
                 
                 {/* Edit Selection Filters */}
-                <div className="bg-gray-50 rounded-lg p-4 mb-4">
-                  <h5 className="font-medium text-gray-900 mb-3">Selection Options</h5>
+                <div className="bg-gray-50 rounded-lg p-3 mb-3">
+                  <h5 className="font-medium text-gray-900 mb-2 text-sm">Selection Options</h5>
                   
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                     <div>
                       <label className="flex items-center gap-2">
                         <input
@@ -1281,9 +1424,9 @@ export default function AssignedSubjectsPage() {
                     </div>
                   </div>
                   
-                  <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div>
-                      <label className="flex items-center gap-2 mb-2">
+                      <label className="flex items-center gap-2 mb-1.5">
                         <input
                           type="radio"
                           name="editSelectionFilter"
@@ -1300,12 +1443,12 @@ export default function AssignedSubjectsPage() {
                         value={editCustomNumbers}
                         onChange={(e) => setEditCustomNumbers(e.target.value)}
                         disabled={editSelectionFilter !== 'custom'}
-                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                        className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
                       />
                     </div>
                     
                     <div>
-                      <label className="flex items-center gap-2 mb-2">
+                      <label className="flex items-center gap-2 mb-1.5">
                         <input
                           type="radio"
                           name="editSelectionFilter"
@@ -1323,9 +1466,9 @@ export default function AssignedSubjectsPage() {
                           value={editRangeStart}
                           onChange={(e) => setEditRangeStart(e.target.value)}
                           disabled={editSelectionFilter !== 'range'}
-                          className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                          className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
                           min="1"
-                          max={editingBatchStudents.length}
+                          max="99"
                         />
                         <span className="self-center text-sm text-gray-500">to</span>
                         <input
@@ -1334,68 +1477,83 @@ export default function AssignedSubjectsPage() {
                           value={editRangeEnd}
                           onChange={(e) => setEditRangeEnd(e.target.value)}
                           disabled={editSelectionFilter !== 'range'}
-                          className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                          className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
                           min="1"
-                          max={editingBatchStudents.length}
+                          max="99"
                         />
                       </div>
                     </div>
                   </div>
                   
-                  <div className="mt-3 text-xs text-gray-600">
-                    Selected: {editingSelectedStudentIds.length} of {editingBatchStudents.length} students
-                  </div>
-                </div>
-                
-                <div className="max-h-80 overflow-y-auto border border-gray-200 rounded-lg p-4">
-                  {editingBatchStudents.length === 0 ? (
-                    <div className="text-center text-gray-500 py-4">
-                      <Users className="w-8 h-8 mx-auto mb-2 text-gray-300" />
-                      <p>No students available for this batch</p>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      {(() => {
-                        // Sort students alphabetically by name for display
-                        const sortedStudents = [...editingBatchStudents].sort((a, b) => {
-                          const nameA = (a.username || a.full_name || a.reg_no || '').toLowerCase()
-                          const nameB = (b.username || b.full_name || b.reg_no || '').toLowerCase()
-                          return nameA.localeCompare(nameB)
-                        })
-                        
-                        return sortedStudents.map((s, index) => (
-                          <label 
-                            key={s.id} 
-                            className={`flex items-center gap-3 p-3 border rounded-lg cursor-pointer transition-colors ${
-                              editingSelectedStudentIds.includes(s.id) 
-                                ? 'border-blue-300 bg-blue-50' 
-                                : 'border-gray-200 hover:bg-gray-50'
-                            }`}
-                          >
-                            <input 
-                              type="checkbox" 
-                              checked={editingSelectedStudentIds.includes(s.id)} 
-                              onChange={() => toggleEditingStudentSelect(s.id)} 
-                              className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                            />
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs text-gray-400 w-6">{index + 1}.</span>
-                              <div>
-                                <div className="font-medium text-gray-900">
-                                  {s.username || s.full_name || s.reg_no}
-                                </div>
-                                {s.reg_no && (
-                                  <div className="text-xs text-gray-500">{s.reg_no}</div>
-                                )}
-                              </div>
-                            </div>
-                          </label>
-                        ))
-                      })()}
-                    </div>
-                  )}
+
                 </div>
               </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {(() => {
+                    // Sort students alphabetically by name for display
+                    const sortedStudents = [...editingBatchStudents].sort((a, b) => {
+                      const nameA = (a.username || a.full_name || a.reg_no || '').toLowerCase()
+                      const nameB = (b.username || b.full_name || b.reg_no || '').toLowerCase()
+                      return nameA.localeCompare(nameB)
+                    })
+                    
+                    // Filter students based on search query
+                    const filteredStudents = editSearchQuery.trim() 
+                      ? sortedStudents.filter(s => {
+                          const query = editSearchQuery.toLowerCase()
+                          const name = (s.username || s.full_name || '').toLowerCase()
+                          const regNo = (s.reg_no || '').toLowerCase()
+                          return name.includes(query) || regNo.includes(query)
+                        })
+                      : sortedStudents
+                    
+                    // Show message if no students match search
+                    if (filteredStudents.length === 0 && editSearchQuery.trim()) {
+                      return (
+                        <div className="col-span-2 text-center py-8 text-gray-500">
+                          No students found matching "{editSearchQuery}"
+                        </div>
+                      )
+                    }
+                    
+                    // Show message if no students available
+                    if (editingBatchStudents.length === 0) {
+                      return (
+                        <div className="col-span-2 text-center py-8 text-gray-500">
+                          <Users className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+                          <p>No students available for this batch</p>
+                        </div>
+                      )
+                    }
+                    
+                    return filteredStudents.map((s, index) => (
+                      <label 
+                        key={s.id} 
+                        className="flex items-center gap-2 p-2 border border-gray-200 rounded-md hover:bg-gray-50 cursor-pointer transition-colors"
+                        style={{minHeight: '56px'}}
+                      >
+                        <input 
+                          type="checkbox" 
+                          checked={editingSelectedStudentIds.includes(s.id)} 
+                          onChange={() => toggleEditingStudentSelect(s.id)} 
+                          className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                        />
+                        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                          <span className="text-xs text-gray-400 w-5 flex-shrink-0">{index + 1}.</span>
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm font-medium text-gray-900 truncate">
+                              {s.username || s.full_name || s.reg_no}
+                            </div>
+                            {s.reg_no && (
+                              <div className="text-xs text-gray-500 truncate">{s.reg_no}</div>
+                            )}
+                          </div>
+                        </div>
+                      </label>
+                    ))
+                  })()}
+                </div>
             </div>
           </div>
         </div>

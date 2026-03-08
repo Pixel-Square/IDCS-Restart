@@ -1,13 +1,14 @@
 import React, { useEffect, useState } from 'react'
 import fetchWithAuth from '../../services/fetchAuth'
 import { fetchMentorStaff, fetchStudentsForStaff, fetchMyStudents, mapMentor, unmapStudent } from '../../services/mentor'
-import { Users, UserCheck, UserPlus, UserX, Eye, Loader2, GraduationCap } from 'lucide-react'
+import { Users, UserCheck, UserPlus, UserX, Eye, Loader2, GraduationCap, Search } from 'lucide-react'
 
 export default function MentorAssign() {
   const [staff, setStaff] = useState<any[]>([])
   const [selectedStaff, setSelectedStaff] = useState<number | null>(null)
   const [students, setStudents] = useState<any[]>([])
   const [assignedStudents, setAssignedStudents] = useState<any[]>([])
+  const [searchTerm, setSearchTerm] = useState('')
   
   const [loading, setLoading] = useState(false)
 
@@ -241,33 +242,65 @@ export default function MentorAssign() {
                     </span>
                   </h4>
                 </div>
+                
+                {/* Search Input */}
+                <div className="px-4 pt-4">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <input
+                      type="text"
+                      placeholder="Search by roll number or name..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                    />
+                  </div>
+                </div>
+
                 <div className="p-4 max-h-[300px] overflow-y-auto">
-                  {students.length > 0 ? (
-                    <div className="space-y-2">
-                      {students.map(st => (
-                        <div key={st.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg hover:bg-slate-100 transition-colors">
-                          <div className="flex-1">
-                            <div className="text-sm font-medium text-slate-900">{st.reg_no} — {st.username}</div>
-                            <div className="text-xs text-slate-600 mt-0.5">{st.section_name}</div>
+                  {(() => {
+                    const filteredStudents = students.filter(st => {
+                      if (!searchTerm.trim()) return true;
+                      const searchLower = searchTerm.toLowerCase();
+                      return (
+                        st.reg_no?.toLowerCase().includes(searchLower) ||
+                        st.username?.toLowerCase().includes(searchLower)
+                      );
+                    });
+
+                    if (students.length === 0) {
+                      return <div className="text-center py-8 text-slate-500">No available students to assign</div>;
+                    }
+
+                    if (filteredStudents.length === 0) {
+                      return <div className="text-center py-8 text-slate-500">No students found</div>;
+                    }
+
+                    return (
+                      <div className="space-y-2">
+                        {filteredStudents.map(st => (
+                          <div key={st.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg hover:bg-slate-100 transition-colors">
+                            <div className="flex-1">
+                              <div className="text-sm font-medium text-slate-900">{st.reg_no} — {st.username}</div>
+                              <div className="text-xs text-slate-600 mt-0.5">{st.section_name}</div>
+                            </div>
+                            <button 
+                              className="px-3 py-1.5 bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5"
+                              onClick={()=>assignSingle(st.id)} 
+                              disabled={loading || !selectedStaff}
+                            >
+                              {loading ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                              ) : (
+                                <UserPlus className="w-4 h-4" />
+                              )}
+                              Assign
+                            </button>
                           </div>
-                          <button 
-                            className="px-3 py-1.5 bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5"
-                            onClick={()=>assignSingle(st.id)} 
-                            disabled={loading || !selectedStaff}
-                          >
-                            {loading ? (
-                              <Loader2 className="w-4 h-4 animate-spin" />
-                            ) : (
-                              <UserPlus className="w-4 h-4" />
-                            )}
-                            Assign
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="text-center py-8 text-slate-500">No available students to assign</div>
-                  )}
+                        ))}
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             </div>
