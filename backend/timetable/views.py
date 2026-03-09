@@ -43,6 +43,9 @@ class CurriculumBySectionView(APIView):
 
             data = []
             for c in qs:
+                # Only show the elective group (parent), not individual elective subjects
+                # When assigning to timetable, staff assigns the elective group (EE, PE, etc.)
+                # Individual subjects are mapped through student's ElectiveChoice
                 data.append({
                     'id': c.pk,
                     'course_code': c.course_code,
@@ -51,54 +54,9 @@ class CurriculumBySectionView(APIView):
                     'class_type': c.class_type,
                     'is_elective': c.is_elective,
                 })
-                if c.is_elective:
-                    # 1. Own child elective subjects (parent = this curriculum row)
-                    own_children = ElectiveSubject.objects.filter(parent=c).select_related('department')
-                    for es in own_children:
-                        data.append({
-                            'id': es.pk,
-                            'course_code': es.course_code,
-                            'course_name': es.course_name,
-                            'regulation': es.regulation,
-                            'class_type': es.class_type,
-                            'is_elective': True,
-                            'is_elective_child': True,
-                            'is_cross_department': False,
-                            'parent': c.pk,
-                            'parent_id': c.pk,
-                            'parent_name': c.course_name,
-                        })
-
-                    # 2. Cross-dept shared child elective subjects via DepartmentGroup
-                    # Match by: shared department_group membership AND same parent slot name
-                    if group_ids:
-                        cross_children = ElectiveSubject.objects.filter(
-                            department_group_id__in=group_ids,
-                            parent__course_name__iexact=c.course_name,
-                        ).exclude(department=dept).select_related('department', 'parent')
-                        for es in cross_children:
-                            owner_dept = es.department
-                            short_n = (
-                                getattr(owner_dept, 'short_name', None)
-                                or getattr(owner_dept, 'code', None)
-                                or owner_dept.name
-                            )
-                            data.append({
-                                'id': es.pk,
-                                'course_code': es.course_code,
-                                'course_name': es.course_name,
-                                'regulation': es.regulation,
-                                'class_type': es.class_type,
-                                'is_elective': True,
-                                'is_elective_child': True,
-                                'is_cross_department': True,
-                                'owner_department_short_name': short_n,
-                                'owner_department_name': f"{getattr(owner_dept, 'code', '')} - {short_n}",
-                                # Map parent to our local PE row so resolveCurriculumId picks the right id
-                                'parent': c.pk,
-                                'parent_id': c.pk,
-                                'parent_name': c.course_name,
-                            })
+                # NOTE: Removed individual elective subject listing
+                # Staff now assigns the elective GROUP (e.g., "EE - Elective Elective")
+                # Students will see their chosen elective via ElectiveChoice when viewing timetable
             return Response({'results': data})
         except Exception:
             return Response({'results': []})

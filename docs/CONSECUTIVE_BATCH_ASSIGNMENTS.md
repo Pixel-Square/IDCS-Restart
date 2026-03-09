@@ -1,9 +1,114 @@
-# Consecutive Batch Assignment Guide
+# Consecutive Batch Assignment & Elective Timetable Guide
 
 ## Overview
-The IDCS system supports assigning multiple batches to the same period for timetable scheduling and attendance marking. This allows you to have different subjects for different student groups during the same time slot.
+The IDCS system supports:
+1. **Consecutive batch assignments** - Multiple batches for the same period
+2. **Elective group assignments** - Common elective names (EE, PE) instead of individual subjects
 
-## Example Scenario
+## Elective Timetable Assignment
+
+### How It Works
+
+**For Elective Subjects:**
+- Staff assigns the **elective GROUP** (e.g., "EE - Elective Elective", "PE - Professional Elective") to a period
+- Individual elective subjects (e.g., "Machine Learning", "Cloud Computing") are **not shown** in the timetable assignment dropdown
+- Students see their **chosen elective subject** when viewing their timetable
+- The mapping happens through the `ElectiveChoice` model
+
+**Example:**
+```
+Timetable Assignment:
+Period 3 → "EE - Elective Elective"
+
+Student A sees: "CS501 - Machine Learning" (their choice)
+Student B sees: "CS502 - Cloud Computing" (their choice)
+Student C sees: "CS503 - Data Mining" (their choice)
+```
+
+### Database Structure for Electives
+
+1. **CurriculumDepartment** (with `is_elective=True`)
+   - Represents the elective GROUP (EE, PE, OE, etc.)
+   - This is what gets assigned to timetable periods
+   - Example: `course_code: "EE"`, `course_name: "Elective Elective"`
+
+2. **ElectiveSubject**
+   - Individual elective options
+   - Has FK `parent` pointing to `CurriculumDepartment`
+   - Example: `course_code: "CS501"`, `course_name: "Machine Learning"`
+
+3. **ElectiveChoice**
+   - Maps student → elective subject they chose
+   - Has FK `elective_subject` pointing to `ElectiveSubject`
+   - Only active choices for current academic year are considered
+
+### Timetable Assignment for Electives
+
+**Step 1: Assign Elective Group to Period**
+```json
+POST /api/timetable/assignments/
+{
+  "period_id": 7,           // Period 3
+  "day": 1,                 // Monday
+  "section_id": 10,
+  "curriculum_row_id": 450, // Points to "EE - Elective Elective" (CurriculumDepartment)
+  "staff_id": 100           // Staff teaching this elective
+}
+```
+
+**Step 2: Students Choose Their Electives**
+Students select their specific elective subject through the elective choice interface:
+```json
+POST /api/curriculum/elective-choices/
+{
+  "elective_subject_id": 25,  // "Machine Learning"
+  "student_id": 1,
+  "academic_year_id": 1
+}
+```
+
+**Step 3: View Timetable**
+- **Staff View**: Shows "EE - Elective Elective" (the group)
+- **Student View**: Shows their chosen subject "CS501 - Machine Learning"
+
+### API Response Examples
+
+**Staff Timetable View:**
+```json
+{
+  "period_id": 7,
+  "curriculum_row": {
+    "id": 450,
+    "course_code": "EE",
+    "course_name": "Elective Elective"
+  },
+  "elective_subject": null,
+  "subject_text": "EE - Elective Elective"
+}
+```
+
+**Student Timetable View:**
+```json
+{
+  "period_id": 7,
+  "curriculum_row": {
+    "id": 450,
+    "course_code": "EE",
+    "course_name": "Elective Elective"
+  },
+  "elective_subject": {
+    "id": 25,
+    "course_code": "CS501",
+    "course_name": "Machine Learning"
+  },
+  "subject_text": "CS501 - Machine Learning",
+  "elective_subject_id": 25
+}
+```
+
+## Consecutive Batch Assignments
+
+### Example Scenario
 - **Period 1** (9:00 AM - 10:00 AM)
   - **Batch 1**: Subject A (Python Programming) - Staff: Dr. Smith
   - **Batch 2**: Subject B (Data Structures) - Staff: Dr. Jones
@@ -310,12 +415,66 @@ Response:
 2. timetable_assignment.staff (fallback)
 3. Ensure the correct staff is assigned to the batch
 
+### Issue: "Individual elective subjects not showing in timetable assignment"
+**Cause**: **This is intentional!** Individual elective subjects are no longer shown in the timetable assignment dropdown
+**Solution**: 
+1. Assign the elective GROUP (EE, PE, etc.) to the period
+2. Students will see their chosen elective automatically via ElectiveChoice
+3. No action needed - this is the correct behavior
+
+### Issue: "Students not seeing their elective choice"
+**Cause**: Student hasn't selected an elective or ElectiveChoice is not active
+**Solution**: 
+1. Ensure student has selected their elective through the elective choice interface
+2. Check that ElectiveChoice record has `is_active=True`
+3. Verify the current academic year is active and matches the ElectiveChoice
+
+## Recent Changes (March 2026)
+
+### Elective Timetable Assignment Simplified
+**What Changed:**
+- ✅ Individual elective subjects (e.g., "Machine Learning", "Cloud Computing") are **no longer shown** in the subject dropdown when creating timetable assignments
+- ✅ Only the elective GROUP (e.g., "EE - Elective Elective", "PE - Professional Elective") appears in the dropdown
+- ✅ Staff assign the elective group to a period
+- ✅ Students automatically see their chosen elective when viewing their timetable
+
+**Why This Change:**
+- Simplifies timetable assignment for staff
+- Prevents confusion when multiple elective options exist
+- Maintains proper student-specific elective display
+- Elective choices are managed separately through the elective choice interface
+
+**Migration Impact:**
+- ✅ No database migration needed
+- ✅ Existing timetable assignments still work correctly
+- ✅ Only affects the UI dropdown for creating new assignments
+- ✅ Student views remain unchanged and continue to show chosen electives
+
+**Testing Checklist:**
+1. ✅ Verify elective groups (EE, PE) appear in timetable subject dropdown
+2. ✅ Verify individual elective subjects do NOT appear in dropdown
+3. ✅ Create timetable assignment with elective group
+4. ✅ Student with elective choice sees their specific subject
+5. ✅ Student without elective choice sees the elective group name
+6. ✅ Staff view shows the elective group name
+
 ## Summary
 
-The IDCS system is **fully equipped** to handle consecutive batch assignments! The key is to:
+The IDCS system is **fully equipped** to handle:
+1. **Consecutive batch assignments** for same-period different-subject scenarios
+2. **Elective group timetable assignments** with automatic student-specific mapping
 
+### Key Features:
+
+**Consecutive Batches:**
 1. ✅ Create separate `StudentSubjectBatch` records for each group
 2. ✅ Create multiple `TimetableAssignment` records for the same period with different `subject_batch_id`
 3. ✅ Mark attendance separately for each batch using `PeriodAttendanceSession` with correct `subject_batch_id`
 
-The database constraints ensure data integrity while allowing the flexibility needed for consecutive batch scheduling.
+**Elective Assignments:**
+1. ✅ Assign elective GROUP (EE, PE) to timetable period via `curriculum_row`
+2. ✅ Students choose specific electives via `ElectiveChoice` model
+3. ✅ Student timetable views automatically show their chosen elective
+4. ✅ Staff views show the elective group name
+
+The database constraints ensure data integrity while allowing the flexibility needed for both scenarios.
