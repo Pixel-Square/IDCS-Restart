@@ -55,6 +55,19 @@ const StaffAttendanceUpload: React.FC = () => {
   const [previewData, setPreviewData] = useState<PreviewData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Upload date states
+  const now = new Date();
+  const [uploadMonth, setUploadMonth] = useState(now.getMonth() + 1); // 1-12
+  const [uploadYear, setUploadYear] = useState(now.getFullYear());
+  const [uploadDate, setUploadDate] = useState(now.getDate());
+
+  // Bulk delete states
+  const [deleteMonth, setDeleteMonth] = useState(now.getMonth() + 1);
+  const [deleteYear, setDeleteYear] = useState(now.getFullYear());
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deletePreview, setDeletePreview] = useState<any>(null);
+  const [deleting, setDeleting] = useState(false);
+
   // Holiday management states
   const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [loadingHolidays, setLoadingHolidays] = useState(false);
@@ -253,6 +266,12 @@ const StaffAttendanceUpload: React.FC = () => {
       formData.append('file', selectedFile);
       formData.append('dry_run', isDryRun ? 'true' : 'false');
       formData.append('overwrite_existing', overwriteExisting ? 'true' : 'false');
+      formData.append('month', uploadMonth.toString());
+      formData.append('year', uploadYear.toString());
+      
+      // Calculate upload_date from month, year, and date
+      const uploadDateStr = `${uploadYear}-${uploadMonth.toString().padStart(2, '0')}-${uploadDate.toString().padStart(2, '0')}`;
+      formData.append('upload_date', uploadDateStr);
 
       const response = await apiClient.post(`${getApiBase()}/api/staff-attendance/csv-upload/upload/`, formData);
 
@@ -281,6 +300,12 @@ const StaffAttendanceUpload: React.FC = () => {
       formData.append('file', selectedFile);
       formData.append('dry_run', 'false');
       formData.append('overwrite_existing', overwriteExisting ? 'true' : 'false');
+      formData.append('month', uploadMonth.toString());
+      formData.append('year', uploadYear.toString());
+      
+      // Calculate upload_date from month, year, and date
+      const uploadDateStr = `${uploadYear}-${uploadMonth.toString().padStart(2, '0')}-${uploadDate.toString().padStart(2, '0')}`;
+      formData.append('upload_date', uploadDateStr);
 
       const response = await apiClient.post(`${getApiBase()}/api/staff-attendance/csv-upload/upload/`, formData);
 
@@ -292,6 +317,46 @@ const StaffAttendanceUpload: React.FC = () => {
       setError(msg)
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handleBulkDeletePreview = async () => {
+    setDeleting(true);
+    setDeletePreview(null);
+
+    try {
+      const response = await apiClient.post(`${getApiBase()}/api/staff-attendance/csv-upload/bulk_delete_month/`, {
+        month: deleteMonth,
+        year: deleteYear,
+        confirm: false
+      });
+      setDeletePreview(response.data);
+      setShowDeleteConfirm(true);
+    } catch (err: any) {
+      const data = err.response?.data;
+      alert(data?.error || 'Failed to fetch preview');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const handleBulkDeleteConfirm = async () => {
+    setDeleting(true);
+
+    try {
+      const response = await apiClient.post(`${getApiBase()}/api/staff-attendance/csv-upload/bulk_delete_month/`, {
+        month: deleteMonth,
+        year: deleteYear,
+        confirm: true
+      });
+      alert(response.data.message || 'Records deleted successfully');
+      setShowDeleteConfirm(false);
+      setDeletePreview(null);
+    } catch (err: any) {
+      const data = err.response?.data;
+      alert(data?.error || 'Failed to delete records');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -348,6 +413,56 @@ const StaffAttendanceUpload: React.FC = () => {
                 </div>
               </div>
             )}
+          </div>
+
+          {/* Upload Date Selection */}
+          <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-3">
+            <h3 className="text-sm font-semibold text-gray-900 flex items-center">
+              <Calendar className="h-4 w-4 mr-2" />
+              Upload Date Configuration
+            </h3>
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Year</label>
+                <select
+                  value={uploadYear}
+                  onChange={(e) => setUploadYear(parseInt(e.target.value))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                >
+                  {[...Array(5)].map((_, i) => {
+                    const year = new Date().getFullYear() - 1 + i;
+                    return <option key={year} value={year}>{year}</option>;
+                  })}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Month</label>
+                <select
+                  value={uploadMonth}
+                  onChange={(e) => setUploadMonth(parseInt(e.target.value))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                >
+                  {['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'].map((month, i) => (
+                    <option key={i + 1} value={i + 1}>{month}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Date</label>
+                <select
+                  value={uploadDate}
+                  onChange={(e) => setUploadDate(parseInt(e.target.value))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                >
+                  {[...Array(31)].map((_, i) => (
+                    <option key={i + 1} value={i + 1}>{i + 1}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <p className="text-xs text-gray-600">
+              Selected upload date: <strong>{uploadYear}-{uploadMonth.toString().padStart(2, '0')}-{uploadDate.toString().padStart(2, '0')}</strong>
+            </p>
           </div>
 
           {/* Upload Options */}
@@ -698,6 +813,99 @@ const StaffAttendanceUpload: React.FC = () => {
               Existing attendance records are not affected. Default values are 8:45 AM for in time and 5:45 PM for out time.
             </p>
           </div>
+        </div>
+      </div>
+
+      {/* Bulk Delete Section */}
+      <div className="bg-white rounded-lg shadow-lg border-2 border-red-200">
+        <div className="border-b border-red-200 px-6 py-4 bg-red-50">
+          <div className="flex items-center">
+            <Trash2 className="h-5 w-5 mr-2 text-red-600" />
+            <h2 className="text-xl font-bold text-red-900">Reset Monthly Attendance</h2>
+          </div>
+          <p className="text-red-700 mt-1 text-sm">
+            <strong>Warning:</strong> This will permanently delete all attendance records for the selected month
+          </p>
+        </div>
+
+        <div className="p-6 space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Year</label>
+              <select
+                value={deleteYear}
+                onChange={(e) => setDeleteYear(parseInt(e.target.value))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-red-500"
+              >
+                {[...Array(5)].map((_, i) => {
+                  const year = new Date().getFullYear() - 1 + i;
+                  return <option key={year} value={year}>{year}</option>;
+                })}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Month</label>
+              <select
+                value={deleteMonth}
+                onChange={(e) => setDeleteMonth(parseInt(e.target.value))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-red-500"
+              >
+                {['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'].map((month, i) => (
+                  <option key={i + 1} value={i + 1}>{month}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <button
+            onClick={handleBulkDeletePreview}
+            disabled={deleting}
+            className="w-full flex items-center justify-center px-4 py-2 border border-red-600 rounded-md text-sm font-medium text-red-600 bg-white hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {deleting ? (
+              <>
+                <Clock className="animate-spin h-4 w-4 mr-2" />
+                Processing...
+              </>
+            ) : (
+              <>
+                <Trash2 className="h-4 w-4 mr-2" />
+                Preview Delete for {deleteYear}-{deleteMonth.toString().padStart(2, '0')}
+              </>
+            )}
+          </button>
+
+          {/* Delete Confirmation Modal */}
+          {showDeleteConfirm && deletePreview && (
+            <div className="mt-4 p-4 bg-red-50 border-2 border-red-300 rounded-lg">
+              <h3 className="text-lg font-bold text-red-900 mb-2">Confirm Deletion</h3>
+              <p className="text-sm text-red-800 mb-3">
+                Found <strong>{deletePreview.records_count}</strong> records for {deletePreview.year}-{deletePreview.month.toString().padStart(2, '0')}
+              </p>
+              <p className="text-sm text-red-700 mb-4">
+                Are you sure you want to permanently delete all these records? This action cannot be undone.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={handleBulkDeleteConfirm}
+                  disabled={deleting}
+                  className="flex-1 px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                >
+                  {deleting ? 'Deleting...' : 'Yes, Delete All Records'}
+                </button>
+                <button
+                  onClick={() => {
+                    setShowDeleteConfirm(false);
+                    setDeletePreview(null);
+                  }}
+                  disabled={deleting}
+                  className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

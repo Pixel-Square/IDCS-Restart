@@ -26,7 +26,7 @@ class RequestTemplateSerializer(serializers.ModelSerializer):
         model = RequestTemplate
         fields = [
             'id', 'name', 'description', 'is_active',
-            'form_schema', 'allowed_roles', 'leave_policy',
+            'form_schema', 'allowed_roles', 'leave_policy', 'attendance_action',
             'approval_steps', 'total_steps',
             'created_at', 'updated_at'
         ]
@@ -74,6 +74,24 @@ class RequestTemplateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("allotment_per_role must be a dictionary")
         
         return value
+    
+    def validate_attendance_action(self, value):
+        """Validate attendance_action structure"""
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("attendance_action must be a dictionary")
+        
+        # If attendance_action has change_status enabled, validate required fields
+        if value.get('change_status'):
+            if 'from_status' not in value or 'to_status' not in value:
+                raise serializers.ValidationError(
+                    "attendance_action with change_status=True requires 'from_status' and 'to_status'"
+                )
+            if 'apply_to_dates' not in value or not value['apply_to_dates']:
+                raise serializers.ValidationError(
+                    "attendance_action with change_status=True requires 'apply_to_dates' array"
+                )
+        
+        return value
 
 
 class RequestTemplateDetailSerializer(RequestTemplateSerializer):
@@ -117,14 +135,23 @@ class RequestTemplateDetailSerializer(RequestTemplateSerializer):
 class ApplicantSerializer(serializers.ModelSerializer):
     """Minimal user serializer for applicant info"""
     full_name = serializers.SerializerMethodField()
+    staff_id = serializers.SerializerMethodField()
     
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'full_name', 'first_name', 'last_name']
+        fields = ['id', 'username', 'email', 'full_name', 'first_name', 'last_name', 'staff_id']
         read_only_fields = fields
     
     def get_full_name(self, obj):
         return obj.get_full_name() or obj.username
+
+    def get_staff_id(self, obj):
+        try:
+            from academics.models import StaffProfile
+            profile = StaffProfile.objects.filter(user=obj).first()
+            return profile.staff_id if profile else obj.username
+        except Exception:
+            return obj.username
 
 
 class ApproverSerializer(serializers.ModelSerializer):

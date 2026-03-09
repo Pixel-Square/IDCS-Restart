@@ -29,6 +29,16 @@ export interface LeavePolicy {
   attendance_status?: string;
 }
 
+export interface AttendanceAction {
+  change_status?: boolean;
+  from_status?: string;
+  to_status?: string;
+  apply_to_dates?: string[];  // Array of field names that contain dates to update
+  date_format?: string;  // Format of the date fields (e.g., 'YYYY-MM-DD')
+  add_notes?: boolean;
+  notes_template?: string;  // Template string with {field_name} placeholders
+}
+
 export interface LeaveBalance {
   leave_type: string;
   balance: number;
@@ -53,6 +63,7 @@ export interface RequestTemplate {
   allowed_roles: string[];
   approval_steps?: ApprovalStep[];
   leave_policy?: LeavePolicy;
+  attendance_action?: AttendanceAction;
   total_steps?: number;
   created_at?: string;
   updated_at?: string;
@@ -65,6 +76,7 @@ export interface User {
   full_name?: string;
   first_name?: string;
   last_name?: string;
+  staff_id?: string;
 }
 
 export interface ApprovalLog {

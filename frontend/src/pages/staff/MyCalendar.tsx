@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, ChevronLeft, ChevronRight, CheckCircle, XCircle, AlertCircle, Clock, Plus } from 'lucide-react';
+import { Calendar, ChevronLeft, ChevronRight, CheckCircle, XCircle, AlertCircle, Clock, Plus, AlertTriangle } from 'lucide-react';
 import { apiClient } from '../../services/auth';
 import { getApiBase } from '../../services/apiBase';
-import { getMyRequests, getColClaimableInfo } from '../../services/staffRequests';
+import { getMyRequests, getColClaimableInfo, getActiveTemplates } from '../../services/staffRequests';
 import NewRequestModal from '../staff-requests/NewRequestModal';
 import LeaveBalanceBadges from '../../components/LeaveBalanceBadges';
 import type { StaffRequest } from '../../types/staffRequests';
@@ -33,17 +33,26 @@ interface Holiday {
   is_removable: boolean;
 }
 
+interface AttendanceSettings {
+  id: number;
+  attendance_in_time_limit: string;
+  attendance_out_time_limit: string;
+  apply_time_based_absence: boolean;
+}
+
 export default function MyCalendarPage() {
   const [attendanceData, setAttendanceData] = useState<{ records: AttendanceRecord[]; summary: AttendanceSummary } | null>(null);
   const [myRequests, setMyRequests] = useState<StaffRequest[]>([]);
   const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [colInfo, setColInfo] = useState<any>(null);
+  const [attendanceSettings, setAttendanceSettings] = useState<AttendanceSettings | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
   const [showNewRequestModal, setShowNewRequestModal] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [lateEntryTemplateId, setLateEntryTemplateId] = useState<number | null>(null);
 
   const months = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -57,7 +66,36 @@ export default function MyCalendarPage() {
     fetchMyRequests();
     fetchHolidays();
     fetchColInfo();
+    fetchLateEntryTemplate();
+    fetchAttendanceSettings();
   }, [selectedYear, selectedMonth]);
+
+  const fetchLateEntryTemplate = async () => {
+    try {
+      const templates = await getActiveTemplates();
+      const lateEntryTemplate = templates.find(t => t.name === 'Late Entry Permission');
+      if (lateEntryTemplate) {
+        setLateEntryTemplateId(lateEntryTemplate.id || null);
+      }
+    } catch (err) {
+      // ignore error
+    }
+  };
+
+  const fetchAttendanceSettings = async () => {
+    try {
+      const response = await apiClient.get(`${getApiBase()}/api/staff-attendance/settings/current/`);
+      setAttendanceSettings(response.data);
+    } catch (err) {
+      // Use default values if fetch fails
+      setAttendanceSettings({
+        id: 1,
+        attendance_in_time_limit: '08:45:00',
+        attendance_out_time_limit: '17:45:00',
+        apply_time_based_absence: true
+      });
+    }
+  };
 
   const fetchMonthlyAttendance = async () => {
     try {
@@ -174,15 +212,24 @@ export default function MyCalendarPage() {
 
   const isTimeInLate = (timeStr?: string | null) => {
     const t = parseTime(timeStr);
-    if (!t) return false;
-    const cutoff = new Date('2000-01-01 08:45 AM');
+    if (!t || !attendanceSettings) return false;
+    // Parse attendance_in_time_limit (format: HH:MM:SS)
+    const cutoff = new Date(`2000-01-01 ${attendanceSettings.attendance_in_time_limit}`);
     return t > cutoff;
+  };
+
+  const handleLateEntryClick = (e: React.MouseEvent, day: number) => {
+    e.stopPropagation();
+    const dateStr = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    setSelectedDate(dateStr);
+    setShowNewRequestModal(true);
   };
 
   const isTimeOutEarly = (timeStr?: string | null) => {
     const t = parseTime(timeStr);
-    if (!t) return false;
-    const cutoff = new Date('2000-01-01 05:45 PM');
+    if (!t || !attendanceSettings) return false;
+    // Parse attendance_out_time_limit (format: HH:MM:SS)
+    const cutoff = new Date(`2000-01-01 ${attendanceSettings.attendance_out_time_limit}`);
     return t < cutoff;
   };
 
@@ -315,6 +362,23 @@ export default function MyCalendarPage() {
         {/* Leave Balances */}
         <LeaveBalanceBadges />
 
+        {/* Info Box for Late Entry Feature */}
+        {attendanceData && attendanceData.summary.absent_count > 0 && (
+          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <h3 className="font-semibold text-yellow-900 mb-1">Late Entry Permission Available</h3>
+                <p className="text-sm text-yellow-800">
+                  You have {attendanceData.summary.absent_count} absent day(s). 
+                  Click the yellow "Late Entry" button on any absent date to request permission. 
+                  If approved, your attendance will be changed from absent to present.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Month Navigation & Summary */}
         <div className="bg-white rounded-lg shadow-md p-6 mb-6">
           <div className="flex items-center justify-between mb-6">
@@ -395,7 +459,38 @@ export default function MyCalendarPage() {
             </button>
           </div>
         ) : (
-          <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+          <>
+            {/* Legend */}
+            <div className="bg-white rounded-lg shadow-md p-4 mb-6">
+              <h3 className="font-semibold text-gray-900 mb-3">Calendar Legend</h3>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 bg-green-100 border-2 border-green-300 rounded"></div>
+                  <span className="text-gray-700">Present</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 bg-red-100 border-2 border-red-300 rounded"></div>
+                  <span className="text-gray-700">Absent</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 bg-yellow-100 border-2 border-yellow-300 rounded"></div>
+                  <span className="text-gray-700">Partial/Half Day</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 bg-purple-100 border-2 border-purple-300 rounded"></div>
+                  <span className="text-gray-700">Leave/OD/COL</span>
+                </div>
+              </div>
+              {attendanceSettings && (
+                <div className="mt-3 pt-3 border-t border-gray-200 text-xs text-gray-600">
+                  <span className="font-medium">Time Limits: </span>
+                  In-time after {attendanceSettings.attendance_in_time_limit} or 
+                  Out-time before {attendanceSettings.attendance_out_time_limit} highlighted in <span className="text-red-600 font-semibold">red</span>
+                </div>
+              )}
+            </div>
+
+            <div className="bg-white rounded-lg shadow-md p-6 mb-6">
             {/* Day headers */}
             <div className="grid grid-cols-7 gap-2 mb-4">
               {daysOfWeek.map(day => (
@@ -519,6 +614,17 @@ export default function MyCalendarPage() {
                           {isEarnedCol(dateStr) && (
                             <div className="text-xs text-blue-700 font-medium mt-1">Worked (COL)</div>
                           )}
+                          {/* Add Late Entry Request Button for Absent Days */}
+                          {attendance.status.toLowerCase() === 'absent' && lateEntryTemplateId && (
+                            <button
+                              onClick={(e) => handleLateEntryClick(e, day)}
+                              className="mt-2 w-full text-xs bg-yellow-500 hover:bg-yellow-600 text-white font-semibold py-1.5 px-2 rounded transition-colors flex items-center justify-center gap-1"
+                              title="Request permission for late entry"
+                            >
+                              <AlertTriangle className="w-3 h-3" />
+                              Late Entry
+                            </button>
+                          )}
                         </div>
                       ) : isEarnedCol(dateStr) ? (
                         <div className="text-center mt-1">
@@ -544,7 +650,8 @@ export default function MyCalendarPage() {
             <p className="text-xs text-gray-500 mt-4 text-center">
               Click on any date to submit a new request
             </p>
-          </div>
+            </div>
+          </>
         )}
 
         {/* My Requests Section */}

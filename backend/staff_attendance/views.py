@@ -493,8 +493,25 @@ class CSVUploadViewSet(viewsets.ViewSet):
         dry_run = serializer.validated_data.get('dry_run', False)
         overwrite_existing = serializer.validated_data.get('overwrite_existing', False)
 
-        # Use server timestamp as the authoritative "today"
-        today = timezone.now().date()
+        # Get upload date from request or use server date
+        upload_date = serializer.validated_data.get('upload_date')
+        month = serializer.validated_data.get('month')
+        year = serializer.validated_data.get('year')
+        
+        if upload_date:
+            # Use provided upload date
+            today = upload_date
+        elif month and year:
+            # Use provided month/year with current day
+            today_day = timezone.now().date().day
+            # Ensure day is valid for the month
+            from calendar import monthrange
+            max_day = monthrange(year, month)[1]
+            day = min(today_day, max_day)
+            today = date_type(year, month, day)
+        else:
+            # Use server timestamp as the authoritative "today"
+            today = timezone.now().date()
         today_day = today.day          # integer, e.g. 5
         yest_day = today_day - 1       # 4  (0 means no yesterday in this month)
         backfill_days = list(range(1, max(1, yest_day)))  # [1, 2, 3] for day 5
@@ -682,6 +699,65 @@ class CSVUploadViewSet(viewsets.ViewSet):
                  'detail': tb_module.format_exc()},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+    @action(detail=False, methods=['post'])
+    def bulk_delete_month(self, request):
+        """
+        Bulk delete all attendance records for a specific month/year.
+        
+        Body parameters:
+        - month: integer (1-12)
+        - year: integer
+        - confirm: boolean (must be true to actually delete)
+        """
+        month = request.data.get('month')
+        year = request.data.get('year')
+        confirm = request.data.get('confirm', False)
+        
+        if not month or not year:
+            return Response({'error': 'month and year are required'}, 
+                          status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            month = int(month)
+            year = int(year)
+            
+            if month < 1 or month > 12:
+                return Response({'error': 'month must be between 1 and 12'}, 
+                              status=status.HTTP_400_BAD_REQUEST)
+            
+            if year < 2020 or year > 2100:
+                return Response({'error': 'year must be between 2020 and 2100'}, 
+                              status=status.HTTP_400_BAD_REQUEST)
+        except (ValueError, TypeError):
+            return Response({'error': 'Invalid month or year'}, 
+                          status=status.HTTP_400_BAD_REQUEST)
+        
+        # Query records for the month
+        records = AttendanceRecord.objects.filter(date__year=year, date__month=month)
+        count = records.count()
+        
+        if not confirm:
+            # Preview mode - show what would be deleted
+            return Response({
+                'preview': True,
+                'month': month,
+                'year': year,
+                'records_count': count,
+                'message': f'Found {count} records for {year}-{month:02d}. Set confirm=true to delete.'
+            })
+        
+        # Actually delete
+        with transaction.atomic():
+            deleted_count, _ = records.delete()
+        
+        return Response({
+            'success': True,
+            'month': month,
+            'year': year,
+            'deleted_count': deleted_count,
+            'message': f'Successfully deleted {deleted_count} attendance records for {year}-{month:02d}'
+        }, status=status.HTTP_200_OK)
 
 
 class HalfDayRequestViewSet(viewsets.ModelViewSet):
@@ -1139,9 +1215,9 @@ class AttendanceSettingsViewSet(viewsets.ModelViewSet):
         """Update settings with the current user"""
         serializer.save(updated_by=self.request.user)
     
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def current(self, request):
-        """Get current attendance settings (create if doesn't exist)"""
+        """Get current attendance settings (create if doesn't exist) - Available to all staff"""
         settings, created = AttendanceSettings.objects.get_or_create(
             id=1,
             defaults={

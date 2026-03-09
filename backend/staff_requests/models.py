@@ -27,6 +27,13 @@ class RequestTemplate(models.Model):
         help_text="List of role names that can submit this request type"
     )
     
+    # Ledger Policy (legacy field - kept for backward compatibility)
+    ledger_policy = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Legacy ledger policy configuration"
+    )
+    
     # Leave and Attendance Policy
     # Example: {
     #   "action": "deduct",  // "deduct", "earn", or "neutral"
@@ -39,6 +46,20 @@ class RequestTemplate(models.Model):
         default=dict,
         blank=True,
         help_text="Leave and attendance policy configuration"
+    )
+    
+    # Attendance Action on Approval
+    # Example: {
+    #   "change_status": true,
+    #   "from_status": "absent",
+    #   "to_status": "present",
+    #   "apply_to_dates": ["date", "from_date"],  // Which form fields contain dates to update
+    #   "date_format": "YYYY-MM-DD"
+    # }
+    attendance_action = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Configuration for attendance status changes on approval"
     )
     
     created_at = models.DateTimeField(auto_now_add=True)

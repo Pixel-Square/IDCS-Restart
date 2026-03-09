@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Plus, Trash2, GripVertical } from 'lucide-react';
 import { createTemplate, updateTemplate } from '../../services/staffRequests';
-import type { RequestTemplate, FormField, ApprovalStep, LeavePolicy } from '../../types/staffRequests';
+import type { RequestTemplate, FormField, ApprovalStep, LeavePolicy, AttendanceAction } from '../../types/staffRequests';
 import { fetchRoles } from '../../services/accounts';
 
 interface Props {
@@ -33,11 +33,12 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
   const [approvalSteps, setApprovalSteps] = useState<Partial<ApprovalStep>[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'details' | 'fields' | 'workflow'>('details');
+  const [activeTab, setActiveTab] = useState<'details' | 'fields' | 'workflow' | 'attendance'>('details');
   const [roles, setRoles] = useState<string[]>([]);
   const [rolesLoading, setRolesLoading] = useState(false);
   const [rolesError, setRolesError] = useState<string | null>(null);
   const [leavePolicy, setLeavePolicy] = useState<LeavePolicy>({});
+  const [attendanceAction, setAttendanceAction] = useState<AttendanceAction>({});
 
   useEffect(() => {
     if (template) {
@@ -52,6 +53,7 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
           approver_role: step.approver_role
         }))
       );
+      setAttendanceAction(template.attendance_action || {});
       setLeavePolicy(template.leave_policy || {});
     }
   }, [template]);
@@ -127,6 +129,9 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
     setLeavePolicy(prev => ({ ...prev, ...updates }));
   };
 
+  const handleAttendanceActionChange = (updates: Partial<AttendanceAction>) => {
+    setAttendanceAction(prev => ({ ...prev, ...updates }));
+  };
   const handleAllotmentChange = (role: string, value: string) => {
     const numValue = parseFloat(value) || 0;
     setLeavePolicy(prev => ({
@@ -185,6 +190,7 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
       const payload: Partial<RequestTemplate> = {
         name,
         description,
+        attendance_action: attendanceAction.change_status ? attendanceAction : {},
         is_active: isActive,
         form_schema: formFields,
         allowed_roles: allowedRoles.length > 0 ? allowedRoles : [],
@@ -232,6 +238,7 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
             >
               Details
             </button>
+
             <button
               onClick={() => setActiveTab('fields')}
               className={`py-3 px-4 font-medium border-b-2 transition-colors ${
@@ -242,6 +249,7 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
             >
               Form Fields ({formFields.length})
             </button>
+
             <button
               onClick={() => setActiveTab('workflow')}
               className={`py-3 px-4 font-medium border-b-2 transition-colors ${
@@ -251,6 +259,17 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
               }`}
             >
               Approval Workflow ({approvalSteps.length})
+            </button>
+
+            <button
+              onClick={() => setActiveTab('attendance')}
+              className={`py-3 px-4 font-medium border-b-2 transition-colors ${
+                activeTab === 'attendance'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              Attendance Action
             </button>
           </div>
         </div>
@@ -655,6 +674,167 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
                         className="text-red-600 hover:text-red-700 p-2"
                       >
                         <Trash2 size={18} />
+
+          {activeTab === 'attendance' && (
+            <div className="space-y-6">
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                <p className="text-sm text-blue-900">
+                  Configure automatic attendance status changes when a request is approved.
+                  Useful for permissions that should mark absent days as present (e.g., Late Entry Permission).
+                </p>
+              </div>
+
+              <div>
+                <label className="flex items-center gap-3">
+                  <input
+                    type="checkbox"
+                    checked={attendanceAction.change_status || false}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        handleAttendanceActionChange({ 
+                          change_status: true,
+                          from_status: 'absent',
+                          to_status: 'present',
+                          apply_to_dates: [],
+                          date_format: 'YYYY-MM-DD',
+                          add_notes: false
+                        });
+                      } else {
+                        setAttendanceAction({});
+                      }
+                    }}
+                    className="w-5 h-5 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
+                  />
+                  <span className="text-base font-semibold text-gray-900">
+                    Change attendance status on approval
+                  </span>
+                </label>
+              </div>
+
+              {attendanceAction.change_status && (
+                <div className="space-y-4 pl-8 border-l-2 border-gray-200">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        From Status *
+                      </label>
+                      <input
+                        type="text"
+                        value={attendanceAction.from_status || ''}
+                        onChange={(e) => handleAttendanceActionChange({ from_status: e.target.value })}
+                        placeholder="e.g., absent"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">
+                        Attendance records with this status will be updated
+                      </p>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        To Status *
+                      </label>
+                      <input
+                        type="text"
+                        value={attendanceAction.to_status || ''}
+                        onChange={(e) => handleAttendanceActionChange({ to_status: e.target.value })}
+                        placeholder="e.g., present"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">
+                        New status to set when request is approved
+                      </p>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Apply to Date Fields *
+                    </label>
+                    <p className="text-xs text-gray-500 mb-3">
+                      Select which form fields contain dates that should have their attendance updated.
+                      For date range requests, select both start and end date fields.
+                    </p>
+                    <div className="space-y-2">
+                      {formFields.filter(f => f.type === 'date').length === 0 ? (
+                        <div className="text-sm text-gray-500 italic">
+                          No date fields defined. Add date fields in the "Form Fields" tab first.
+                        </div>
+                      ) : (
+                        formFields
+                          .filter(f => f.type === 'date')
+                          .map((field) => (
+                            <label key={field.name} className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={(attendanceAction.apply_to_dates || []).includes(field.name)}
+                                onChange={(e) => {
+                                  const current = attendanceAction.apply_to_dates || [];
+                                  if (e.target.checked) {
+                                    handleAttendanceActionChange({ 
+                                      apply_to_dates: [...current, field.name] 
+                                    });
+                                  } else {
+                                    handleAttendanceActionChange({ 
+                                      apply_to_dates: current.filter(f => f !== field.name) 
+                                    });
+                                  }
+                                }}
+                                className="w-4 h-4 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
+                              />
+                              <span className="text-sm text-gray-700">{field.label} ({field.name})</span>
+                            </label>
+                          ))
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="flex items-center gap-2 mb-3">
+                      <input
+                        type="checkbox"
+                        checked={attendanceAction.add_notes || false}
+                        onChange={(e) => handleAttendanceActionChange({ add_notes: e.target.checked })}
+                        className="w-4 h-4 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
+                      />
+                      <span className="text-sm font-medium text-gray-700">
+                        Add notes to attendance record
+                      </span>
+                    </label>
+
+                    {attendanceAction.add_notes && (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Notes Template
+                        </label>
+                        <textarea
+                          value={attendanceAction.notes_template || ''}
+                          onChange={(e) => handleAttendanceActionChange({ notes_template: e.target.value })}
+                          placeholder="e.g., Late Entry Permission: {shift} shift, {late_duration} mins late"
+                          rows={3}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">
+                          Use {'{field_name}'} to insert values from the form. Example: {'{reason}'}, {'{shift}'}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mt-4 p-4 bg-green-50 rounded-lg">
+                    <p className="text-sm text-green-900">
+                      <strong>Preview:</strong> When this request is approved, attendance records with status "{attendanceAction.from_status}" 
+                      will be changed to "{attendanceAction.to_status}" for dates from: {
+                        (attendanceAction.apply_to_dates || []).length > 0 
+                          ? (attendanceAction.apply_to_dates || []).join(', ')
+                          : 'None selected'
+                      }
+                      {attendanceAction.add_notes && ' (with notes)'}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
                       </button>
                     </div>
                   ))}

@@ -44,6 +44,9 @@ class CSVUploadSerializer(serializers.Serializer):
     file = serializers.FileField()
     dry_run = serializers.BooleanField(default=False, required=False)
     overwrite_existing = serializers.BooleanField(default=False, required=False)
+    upload_date = serializers.DateField(required=False, help_text='Date to use as "today" for upload (YYYY-MM-DD)')
+    month = serializers.IntegerField(required=False, min_value=1, max_value=12, help_text='Month (1-12)')
+    year = serializers.IntegerField(required=False, min_value=2020, max_value=2100, help_text='Year')
 
 
 class HalfDayRequestSerializer(serializers.ModelSerializer):

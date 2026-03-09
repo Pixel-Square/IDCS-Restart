@@ -94,26 +94,19 @@ def can_user_apply_with_template(user, template):
     if not template.is_active:
         return False
     
-    if not template.allowed_roles:
+    # If no roles specified or empty array, allow all authenticated users
+    if not template.allowed_roles or len(template.allowed_roles) == 0:
         return True  # No restrictions
-    
-    # PLACEHOLDER: Implement your role checking logic
-    # Example implementations:
-    
-    # Check user groups
-    if hasattr(user, 'groups'):
-        user_groups = set(user.groups.values_list('name', flat=True))
-        if any(role in user_groups for role in template.allowed_roles):
-            return True
-    
-    # Check user profile role
-    if hasattr(user, 'profile') and hasattr(user.profile, 'role'):
-        if user.profile.role in template.allowed_roles:
-            return True
     
     # Superuser override
     if user.is_superuser:
         return True
+    
+    # Check if user has any of the allowed roles
+    if hasattr(user, 'user_roles'):
+        user_role_names = list(user.user_roles.values_list('role__name', flat=True))
+        if any(role in template.allowed_roles for role in user_role_names):
+            return True
     
     return False
 
@@ -249,14 +242,21 @@ class RequestTemplateViewSet(viewsets.ModelViewSet):
             date=check_date
         ).first()
         
-        # Block all forms if date is marked absent
+        # For absent dates, only allow permission forms with attendance_action
         if attendance and attendance.status == 'absent':
+            # Find templates that can change attendance status (like Late Entry Permission)
+            permission_templates = RequestTemplate.objects.filter(
+                is_active=True,
+                attendance_action__change_status=True
+            )
+            
             return Response({
-                'templates': [],
-                'message': 'Cannot apply forms for dates marked as absent',
+                'templates': RequestTemplateSerializer(permission_templates, many=True).data,
+                'message': 'Absent date - Only permission forms available',
                 'is_holiday': is_holiday_or_sunday,
                 'is_absent': True,
-                'attendance_status': attendance.status
+                'attendance_status': attendance.status,
+                'total_available': permission_templates.count()
             })
         
         # Get all active templates
@@ -505,6 +505,15 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                         import logging
                         logger = logging.getLogger(__name__)
                         logger.exception('Failed to process leave balance for request %s: %s', staff_request.id, str(e))
+                    
+                    # Process attendance status changes (for late entry permissions, etc.)
+                    try:
+                        self._process_attendance_action(staff_request)
+                    except Exception as e:
+                        # Log and continue; do not fail the approval due to attendance processing error
+                        import logging
+                        logger = logging.getLogger(__name__)
+                        logger.exception('Failed to process attendance action for request %s: %s', staff_request.id, str(e))
                     
                     message = 'Request approved successfully (final approval)'
                 else:
@@ -884,6 +893,86 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         except Exception as e:
             logger.exception(f'[AttendanceSync] Failed to sync attendance: {e}')
     
+    def _process_attendance_action(self, staff_request):
+        """
+        Process attendance status changes based on template attendance_action configuration.
+        Used for requests like Late Entry Permission that should update attendance status when approved.
+        
+        Args:
+            staff_request: StaffRequest instance
+        """
+        import logging
+        from datetime import datetime
+        
+        logger = logging.getLogger(__name__)
+        template = staff_request.template
+        attendance_action = template.attendance_action
+        
+        # Skip if no attendance action configured
+        if not attendance_action or not attendance_action.get('change_status'):
+            logger.info(f'[AttendanceAction] Skipping - no attendance action for template {template.name}')
+            return
+        
+        from_status = attendance_action.get('from_status', 'absent')
+        to_status = attendance_action.get('to_status', 'present')
+        apply_to_dates = attendance_action.get('apply_to_dates', [])
+        add_notes = attendance_action.get('add_notes', False)
+        notes_template = attendance_action.get('notes_template', '')
+        
+        form_data = staff_request.form_data
+        logger.info(f'[AttendanceAction] Processing request #{staff_request.id} - Template: {template.name}')
+        logger.info(f'[AttendanceAction] Change: {from_status} -> {to_status}, Apply to fields: {apply_to_dates}')
+        
+        # Get dates to update
+        dates_to_update = []
+        for field_name in apply_to_dates:
+            if field_name in form_data:
+                date_val = form_data[field_name]
+                try:
+                    if isinstance(date_val, str):
+                        dt = datetime.strptime(date_val, '%Y-%m-%d').date()
+                    else:
+                        dt = date_val
+                    dates_to_update.append(dt)
+                except (ValueError, AttributeError) as e:
+                    logger.warning(f'[AttendanceAction] Failed to parse date from {field_name}: {date_val} - {e}')
+        
+        if not dates_to_update:
+            logger.warning(f'[AttendanceAction] No valid dates found in form_data')
+            return
+        
+        # Update attendance records
+        try:
+            from staff_attendance.models import AttendanceRecord
+            
+            updated_count = 0
+            for dt in dates_to_update:
+                # Only update records that match the "from_status"
+                records = AttendanceRecord.objects.filter(
+                    user=staff_request.applicant,
+                    date=dt,
+                    status=from_status
+                )
+                
+                for record in records:
+                    record.status = to_status
+                    
+                    # Add notes if configured
+                    if add_notes and notes_template:
+                        note = notes_template.format(**form_data)
+                        if record.notes:
+                            record.notes = f"{record.notes}; {note}"
+                        else:
+                            record.notes = note
+                    
+                    record.save()
+                    updated_count += 1
+            
+            logger.info(f'[AttendanceAction] Updated {updated_count} attendance record(s) for request #{staff_request.id}')
+            
+        except Exception as e:
+            logger.exception(f'[AttendanceAction] Failed to update attendance: {e}')
+    
     @action(detail=False, methods=['get'])
     def my_requests(self, request):
         """
@@ -960,19 +1049,45 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
 
         Returns list of approval log entries with a small request summary.
         """
+        from academics.models import StaffProfile
+        
         user = request.user
         logs = ApprovalLog.objects.filter(approver=user).select_related('request', 'request__template', 'request__applicant').order_by('-action_date')
 
         results = []
         for log in logs:
             item = ApprovalLogSerializer(log).data
+            
+            # Get applicant staff_id
+            applicant_staff_id = None
+            try:
+                staff_profile = StaffProfile.objects.filter(user=log.request.applicant).first()
+                applicant_staff_id = staff_profile.staff_id if staff_profile else log.request.applicant.username
+            except Exception:
+                applicant_staff_id = log.request.applicant.username
+            
+            # Get first text field value from form_data
+            form_reason = None
+            if log.request.template and hasattr(log.request.template, 'form_schema') and log.request.template.form_schema:
+                # Find first text or textarea field
+                for field in log.request.template.form_schema:
+                    if field.get('type') in ['text', 'textarea']:
+                        field_name = field.get('name')
+                        if field_name and log.request.form_data.get(field_name):
+                            form_reason = str(log.request.form_data[field_name])[:60]
+                        break
+            
             # attach small request summary
             item['request_summary'] = {
                 'id': log.request.id,
                 'template_name': getattr(log.request.template, 'name', None),
                 'applicant_name': getattr(log.request.applicant, 'get_full_name', lambda: None)() or getattr(log.request.applicant, 'username', None),
+                'applicant_username': getattr(log.request.applicant, 'username', None),
+                'applicant_staff_id': applicant_staff_id,
+                'form_reason': form_reason or '—',
                 'status': log.request.status,
             }
+            item['request_id'] = log.request.id
             results.append(item)
 
         return Response(results)
