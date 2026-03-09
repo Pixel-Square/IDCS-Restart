@@ -37,6 +37,7 @@ from .views import (
 )
 from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView, ClassAttendanceReportView, TodayPeriodAttendanceView, PeriodAttendanceReportView, OverallSectionView, MyClassStudentsView, DailyAttendanceView, DailyAttendanceLockView, DailyAttendanceUnlockView, MyClassAttendanceAnalyticsView, DailyAttendanceSessionDetailView, SectionStudentAttendanceDayView, DailyAttendanceRevertAssignmentView, DailyAttendanceUnlockRequestView, PeriodAttendanceUnlockRequestView, HODUnlockRequestsView, PeriodAttendanceSwapView, PeriodAttendanceRevertAssignmentView
 from .views import UnifiedUnlockRequestsView, DepartmentStudentsView, AllStudentsView, MentorMyMenteesView
+from .rfreader_views import RFReaderGateListCreateView, RFReaderStudentListCreateView, RFReaderLastScanView
 
 router = DefaultRouter()
 router.register(r'section-advisors', SectionAdvisorViewSet, basename='section-advisor')
@@ -116,4 +117,9 @@ urlpatterns = [
     path('period-attendance-unlock-request/', PeriodAttendanceUnlockRequestView.as_view()),
     path('hod-unlock-requests/', HODUnlockRequestsView.as_view()),
     path('unified-unlock-requests/', UnifiedUnlockRequestsView.as_view()),
+
+    # RFReader (IQAC) endpoints
+    path('rfreader/gates/', RFReaderGateListCreateView.as_view()),
+    path('rfreader/students/', RFReaderStudentListCreateView.as_view()),
+    path('rfreader/last-scan/', RFReaderLastScanView.as_view()),
 ]

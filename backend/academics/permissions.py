@@ -1,6 +1,25 @@
 from rest_framework import permissions
 from academics.models import DepartmentRole
 from accounts.utils import get_user_permissions
+from academics.services import get_effective_roles
+
+
+class IsIQAC(permissions.BasePermission):
+    """Allow access only to authenticated users with IQAC role."""
+
+    def has_permission(self, request, view):
+        user = getattr(request, 'user', None)
+        if not user or not user.is_authenticated:
+            return False
+        try:
+            roles = get_effective_roles(user)
+            return 'IQAC' in roles
+        except Exception:
+            # Fallback: direct role relation
+            try:
+                return user.roles.filter(name__iexact='IQAC').exists()
+            except Exception:
+                return False
 
 
 class IsHODOfDepartment(permissions.BasePermission):

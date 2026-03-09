@@ -17,10 +17,11 @@ import base64
 import hashlib
 import json
 import logging
+import mimetypes
 import secrets
 import time
 import os
-from urllib.parse import urlencode
+from urllib.parse import urlencode, unquote, urlparse
 
 import requests
 from django.conf import settings
@@ -64,6 +65,50 @@ def _canva_headers(access_token: str) -> dict:
         'Authorization': f'Bearer {access_token}',
         'Content-Type': 'application/json',
     }
+
+
+def _fetch_image_bytes(image_url: str) -> tuple[bytes, str, str] | None:
+    """Fetch image bytes server-side so Canva never has to reach local/private URLs."""
+    try:
+        parsed = urlparse(image_url)
+        media_url = str(getattr(settings, 'MEDIA_URL', '/media/') or '/media/')
+        local_hosts = {'127.0.0.1', 'localhost', '0.0.0.0', ''}
+
+        if parsed.scheme in ('', 'http', 'https') and parsed.hostname in local_hosts and parsed.path.startswith(media_url):
+            rel_path = parsed.path[len(media_url):].lstrip('/')
+            if rel_path:
+                from django.core.files.storage import default_storage
+
+                if default_storage.exists(rel_path):
+                    with default_storage.open(rel_path, 'rb') as fh:
+                        content_bytes = fh.read()
+                    content_type = mimetypes.guess_type(rel_path)[0] or 'application/octet-stream'
+                    if not content_type.startswith('image/'):
+                        logger.warning('Local upload is not recognized as an image: %s', rel_path)
+                        return None
+                    raw_name = os.path.basename(rel_path).strip() or 'idcs-upload.png'
+                    return content_bytes, content_type, raw_name[:80]
+
+        resp = requests.get(image_url, timeout=30)
+        if not resp.ok:
+            logger.warning('Failed to fetch image source (%s): %s', resp.status_code, image_url)
+            return None
+
+        content_type = resp.headers.get('Content-Type', 'application/octet-stream').split(';')[0].strip()
+        if not content_type.startswith('image/'):
+            logger.warning('Fetched upload source is not an image (%s): %s', content_type, image_url)
+            return None
+
+        raw_name = os.path.basename(parsed.path or '').strip() or 'idcs-upload'
+        raw_name = unquote(raw_name)
+        if '.' not in raw_name:
+            ext = mimetypes.guess_extension(content_type) or '.png'
+            raw_name = f'{raw_name}{ext}'
+
+        return resp.content, content_type, raw_name[:80]
+    except Exception as exc:
+        logger.error('_fetch_image_bytes error for %s: %s', image_url, exc)
+        return None
 
 
 def _json_body(request) -> dict:
@@ -903,20 +948,33 @@ def event_poster(request, event_id: str):
 
 def _upload_image_url_to_canva(image_url: str, access_token: str) -> str | None:
     """
-    Upload an external image URL to Canva's asset library.
+    Upload an image into Canva's asset library and return the resulting asset ID.
+
+    Important: user uploads in local development are typically saved under
+    localhost/127.0.0.1 media URLs, which Canva cannot fetch directly. So the
+    backend downloads the bytes first, then sends them to Canva's binary asset
+    upload API.
+
     Returns the Canva asset_id on success, or None if it fails.
 
-    Canva API: POST /v1/asset-uploads  (import from URL via import_metadata)
+    Canva API: POST /v1/asset-uploads with raw bytes and
+    Asset-Upload-Metadata header.
     """
     try:
-        name_b64 = base64.b64encode(b'idcs-upload.png').decode()
+        fetched = _fetch_image_bytes(image_url)
+        if not fetched:
+            return None
+
+        content_bytes, content_type, filename = fetched
+        name_b64 = base64.b64encode(filename.encode('utf-8')).decode('ascii')
         resp = requests.post(
             f'{CANVA_API_BASE}/asset-uploads',
-            headers=_canva_headers(access_token),
-            json={
-                'name_base64': name_b64,
-                'import_metadata': {'url': image_url},
+            headers={
+                'Authorization': f'Bearer {access_token}',
+                'Content-Type': 'application/octet-stream',
+                'Asset-Upload-Metadata': json.dumps({'name_base64': name_b64}),
             },
+            data=content_bytes,
             timeout=20,
         )
         if not resp.ok:
@@ -940,12 +998,7 @@ def _upload_image_url_to_canva(image_url: str, access_token: str) -> str | None:
             data = poll.json().get('job', {})
             status = data.get('status', '')
             if status == 'success':
-                asset_id = (
-                    data.get('result', {})
-                        .get('type', {})
-                        .get('asset', {})
-                        .get('id', '')
-                )
+                asset_id = data.get('asset', {}).get('id', '')
                 return asset_id or None
             if status == 'failed':
                 logger.warning('Canva asset-upload job failed: %s', data)
@@ -968,6 +1021,7 @@ def _run_generate_poster(brand_template_id: str, fields: dict, fmt: str, access_
     Returns dict with keys: design_id, export_url, dataUrl, error
     """
     result = {'design_id': '', 'export_url': '', 'dataUrl': '', 'error': ''}
+    warnings: list[str] = []
 
     if not access_token:
         result['error'] = 'No Canva service token available.'
@@ -988,6 +1042,7 @@ def _run_generate_poster(brand_template_id: str, fields: dict, fmt: str, access_
                         autofill_data[key] = {'type': 'image', 'asset_id': asset_id}
                     else:
                         logger.warning('Skipping image field %s — upload failed', key)
+                        warnings.append(f'Image field "{key}" could not be uploaded to Canva')
             # skip unknown types
         elif isinstance(value, str) and value.strip():
             # shorthand: bare string → text field
@@ -1091,6 +1146,10 @@ def _run_generate_poster(brand_template_id: str, fields: dict, fmt: str, access_
         except Exception as exc:
             logger.warning('Failed to fetch export image: %s', exc)
 
+    if warnings:
+        warning_text = '; '.join(warnings)
+        result['error'] = f"{result['error']}; {warning_text}".strip('; ').strip()
+
     return result
 
 
@@ -1172,6 +1231,19 @@ def upload_media(request):
     saved_path = default_storage.save(filename, CF(uploaded.read()))
     file_url = request.build_absolute_uri(dj_settings.MEDIA_URL + saved_path)
     return JsonResponse({'url': file_url, 'path': saved_path})
+
+
+@csrf_exempt
+@require_http_methods(['POST'])
+def poster_callback(request):
+    """Accept n8n poster callbacks for the synchronous poster-maker flow."""
+    body = _json_body(request)
+    logger.info(
+        'Poster maker callback received: design_id=%s poster_url=%s',
+        body.get('design_id', ''),
+        body.get('poster_url', ''),
+    )
+    return JsonResponse({'ok': True})
 
 
 # ── Poster Maker orchestrator (called by the React frontend) ──────────────────
@@ -1328,9 +1400,11 @@ def poster_maker(request):
             n8n_payload = {
                 'brand_template_id': brand_template_id,
                 'fields':            fields,
+                'form_fields':       fields,
                 'format':            fmt,
+                'export_format':     fmt,
                 'event_id':          str(event_data.get('event_id', 'manual')),
-                'callback_url':      '',
+                'callback_url':      'http://127.0.0.1:8000/api/canva/poster-callback',
                 'secret':            getattr(settings, 'N8N_WEBHOOK_SECRET', ''),
                 'idcs_backend_url':  'http://127.0.0.1:8000',
             }

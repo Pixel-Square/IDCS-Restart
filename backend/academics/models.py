@@ -109,6 +109,62 @@ class Program(models.Model):
         return self.name
 
 
+# ─────────────────────────────────────────────────────────────
+# RF Reader (IQAC tools)
+# ─────────────────────────────────────────────────────────────
+
+
+class RFReaderGate(models.Model):
+    name = models.CharField(max_length=64, unique=True)
+    description = models.CharField(max_length=255, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'RF Reader Gate'
+        verbose_name_plural = 'RF Reader Gates'
+        ordering = ('name',)
+
+    def __str__(self):
+        return self.name
+
+
+class RFReaderStudent(models.Model):
+    roll_no = models.CharField(max_length=32, unique=True)
+    name = models.CharField(max_length=128)
+    impres_code = models.CharField(max_length=64, blank=True)
+    rf_uid = models.CharField(max_length=32, unique=True, null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'RF Reader Student'
+        verbose_name_plural = 'RF Reader Students'
+        ordering = ('roll_no',)
+
+    def __str__(self):
+        return f"{self.roll_no} - {self.name}"
+
+
+class RFReaderScan(models.Model):
+    gate = models.ForeignKey(RFReaderGate, on_delete=models.SET_NULL, null=True, blank=True, related_name='scans')
+    uid = models.CharField(max_length=32)
+    student = models.ForeignKey(RFReaderStudent, on_delete=models.SET_NULL, null=True, blank=True, related_name='scans')
+    raw_line = models.TextField(blank=True)
+    source = models.CharField(max_length=16, default='SERIAL')
+    scanned_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        verbose_name = 'RF Reader Scan'
+        verbose_name_plural = 'RF Reader Scans'
+        ordering = ('-scanned_at',)
+
+    def __str__(self):
+        return f"{self.uid} @ {self.scanned_at}"
+
+
 class Course(models.Model):
     name = models.CharField(max_length=128)
     department = models.ForeignKey(Department, on_delete=models.CASCADE, related_name='courses')

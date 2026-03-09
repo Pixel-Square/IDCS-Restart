@@ -387,33 +387,31 @@ export default function DownloadReportModal({
         });
         afterSheet = (doc as any).lastAutoTable?.finalY ?? sheetStartY + 50;
       } else {
-        /* ── SPLIT three side-by-side third-tables (Staff, compact 1-page) ── */
-        const thirdGap = 3;
-        const thirdW   = (UW - thirdGap * 2) / 3;
+        /* ── SPLIT two side-by-side half-tables (Staff, compact 1-page) ── */
+        const halfGap = 4;
+        const halfW   = (UW - halfGap) / 2;
 
-        const third1 = Math.ceil(rows.length / 3);
-        const third2 = Math.ceil((rows.length - third1) / 2) + third1;
-        const col1Rows = rows.slice(0, third1);
-        const col2Rows = rows.slice(third1, third2);
-        const col3Rows = rows.slice(third2);
+        const half1 = Math.ceil(rows.length / 2);
+        const col1Rows = rows.slice(0, half1);
+        const col2Rows = rows.slice(half1);
 
-        const tSnoW   = 5;
-        const tRollW  = 15;
-        const tTotalW = 9;
-        const tMarkW  = cols.length > 0 ? Math.max(6, Math.floor((thirdW - tSnoW - tRollW - 14 - tTotalW) / cols.length)) : 7;
-        const tNameW  = Math.max(10, thirdW - tSnoW - tRollW - tTotalW - cols.length * tMarkW);
+        const tSnoW   = 6;
+        const tRollW  = 22;
+        const tTotalW = 12;
+        const tMarkW  = cols.length > 0 ? Math.max(8, Math.floor((halfW - tSnoW - tRollW - 22 - tTotalW) / cols.length)) : 10;
+        const tNameW  = Math.max(14, halfW - tSnoW - tRollW - tTotalW - cols.length * tMarkW);
 
-        const thirdTableStyles = {
+        const halfTableStyles = {
           theme: 'grid' as const,
           headStyles: {
             fillColor: [30, 58, 95] as [number, number, number],
             textColor: [255, 255, 255] as [number, number, number],
             fontStyle: 'bold' as const,
-            fontSize: 5.8,
+            fontSize: 6.5,
             halign: 'center' as const,
-            cellPadding: 1,
+            cellPadding: 1.2,
           },
-          bodyStyles: { fontSize: 5.5, cellPadding: 0.8 },
+          bodyStyles: { fontSize: 6.2, cellPadding: 0.9 },
           columnStyles: {
             0: { halign: 'center' as const, cellWidth: tSnoW },
             1: { halign: 'center' as const, cellWidth: tRollW },
@@ -445,46 +443,32 @@ export default function DownloadReportModal({
         };
 
         const col1X = ML;
-        const col2X = ML + thirdW + thirdGap;
-        const col3X = ML + (thirdW + thirdGap) * 2;
+        const col2X = ML + halfW + halfGap;
 
-        // Column 1
+        // Column 1 (left half)
         autoTable(doc, {
           startY: sheetStartY,
           head: sheetHead,
           body: mkBody(col1Rows, 0),
-          margin: { left: col1X, right: PW - col1X - thirdW },
-          tableWidth: thirdW,
-          ...thirdTableStyles,
+          margin: { left: col1X, right: PW - col1X - halfW },
+          tableWidth: halfW,
+          ...halfTableStyles,
         });
         const afterCol1 = (doc as any).lastAutoTable?.finalY ?? sheetStartY + 50;
 
-        // Column 2
+        // Column 2 (right half)
         if (col2Rows.length > 0) {
           autoTable(doc, {
             startY: sheetStartY,
             head: sheetHead,
-            body: mkBody(col2Rows, third1),
-            margin: { left: col2X, right: PW - col2X - thirdW },
-            tableWidth: thirdW,
-            ...thirdTableStyles,
+            body: mkBody(col2Rows, half1),
+            margin: { left: col2X, right: MR },
+            tableWidth: halfW,
+            ...halfTableStyles,
           });
         }
         const afterCol2 = (doc as any).lastAutoTable?.finalY ?? sheetStartY;
-
-        // Column 3
-        if (col3Rows.length > 0) {
-          autoTable(doc, {
-            startY: sheetStartY,
-            head: sheetHead,
-            body: mkBody(col3Rows, third2),
-            margin: { left: col3X, right: MR },
-            tableWidth: thirdW,
-            ...thirdTableStyles,
-          });
-        }
-        const afterCol3 = (doc as any).lastAutoTable?.finalY ?? sheetStartY;
-        afterSheet = Math.max(afterCol1, afterCol2, afterCol3);
+        afterSheet = Math.max(afterCol1, afterCol2);
       }
 
       /* ═══════════════════════════════════════════════════════════

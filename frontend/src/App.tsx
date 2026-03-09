@@ -56,6 +56,7 @@ import HodEventsListPage from './pages/hod/events/HodEventsListPage';
 import HodEventCreatePage from './pages/hod/events/HodEventCreatePage';
 import CanvaDesignEditorPage from './pages/hod/events/CanvaDesignEditorPage';
 import PosterMakerPage from './pages/events/PosterMakerPage';
+<<<<<<< HEAD
 import ApplicationsAdminPage from './pages/iqac/ApplicationsAdminPage';
 import ApplicationsInboxPage from './pages/applications/ApplicationsInboxPage';
 import ApplicationsPage from './pages/applications/ApplicationsPage';
@@ -63,6 +64,11 @@ import ApplicationFormPage from './pages/applications/ApplicationFormPage';
 import ApplicationDetailPage from './pages/applications/ApplicationDetailPage';
 import IDCSScanTestPage from './pages/IDCSScan/TestPage';
 import IDCSScanGatepassPage from './pages/IDCSScan/GatepassPage';
+=======
+import RFReaderCreateGatePage from './pages/RFReader/CreateGatePage';
+import RFReaderTestStudentsPage from './pages/RFReader/TestStudentsPage';
+import RFReaderAddStudentsRFPage from './pages/RFReader/AddStudentsRFPage';
+>>>>>>> 44b6445 (JUDSON CANVA)
 
 type RoleObj = { name: string };
 type Me = {
@@ -310,6 +316,28 @@ export default function App() {
                 <Route
                   path="/idscan/gatepass"
                   element={<ProtectedRoute user={user} requiredRoles={['SECURITY']} element={<IDCSScanGatepassPage />} />}
+                />
+                <Route
+                  path="/iqac/rf-reader"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={["IQAC"]}
+                      element={<Navigate to="/iqac/rf-reader/create-gate" replace />}
+                    />
+                  }
+                />
+                <Route
+                  path="/iqac/rf-reader/create-gate"
+                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} element={<RFReaderCreateGatePage />} />}
+                />
+                <Route
+                  path="/iqac/rf-reader/test-students"
+                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} element={<RFReaderTestStudentsPage />} />}
+                />
+                <Route
+                  path="/iqac/rf-reader/add-students-rf"
+                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} element={<RFReaderAddStudentsRFPage />} />}
                 />
                 <Route
                   path="/advisor/timetable"

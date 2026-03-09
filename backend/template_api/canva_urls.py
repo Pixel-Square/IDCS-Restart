@@ -45,6 +45,7 @@ urlpatterns = [
     # ── Poster Maker (new end-to-end flow) ───────────────────────────────────
     path('generate-poster', canva_views.generate_poster, name='canva-generate-poster'),
     path('upload-media',    canva_views.upload_media,    name='canva-upload-media'),
+    path('poster-callback', canva_views.poster_callback, name='canva-poster-callback'),
     path('poster-maker',    canva_views.poster_maker,    name='canva-poster-maker'),
 ]
 

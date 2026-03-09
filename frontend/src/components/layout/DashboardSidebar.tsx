@@ -45,11 +45,15 @@ import { ApplicationsNavResponse, fetchApplicationsNav } from '../../services/ap
   pbas: ClipboardList,
   pbas_manager: Layout,
   settings: Settings,
+<<<<<<< HEAD
   applications_admin: Layout,
   applications_inbox: ClipboardList,
   applications_home: Layout,
   idscan_test: ScanLine,
   idscan_gatepass: Shield,
+=======
+  rf_reader: Grid,
+>>>>>>> 44b6445 (JUDSON CANVA)
 
 };
 
@@ -114,6 +118,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     }
   }, [loc.pathname]);
 
+<<<<<<< HEAD
   useEffect(() => {
     let mounted = true;
     if (!data) return;
@@ -133,6 +138,14 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
       mounted = false;
     };
   }, [data]);
+=======
+  // auto-expand RFReader when on /iqac/rf-reader routes
+  useEffect(() => {
+    if (loc.pathname.startsWith('/iqac/rf-reader')) {
+      setExpanded((p) => ({ ...p, rf_reader: true }));
+    }
+  }, [loc.pathname]);
+>>>>>>> 44b6445 (JUDSON CANVA)
 
   if (loading) return (
     <aside className={`fixed top-16 left-0 h-[calc(100vh-4rem)] bg-white shadow-lg transition-all duration-300 z-30 ${collapsed ? '-translate-x-full lg:translate-x-0 lg:w-20' : 'w-full lg:w-64'}`}>
@@ -250,6 +263,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'settings', label: 'Settings', to: '/settings' });
   }
 
+  // RFReader (IQAC only)
+  if (isIqac && !items.some((item) => item.key === 'rf_reader')) {
+    items.push({ key: 'rf_reader', label: 'RFReader', to: '/iqac/rf-reader' });
+  }
+
   // Only add OBE once
   // Group OBE-related links under a single Academic page
   // Show Academic for all staff
@@ -332,6 +350,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                       // toggle submenu expansion for specific groups
                       if (i.key === 'academic') setExpanded((p) => ({ ...p, academic: !p.academic }));
                       if (i.key === 'academic_controller') setExpanded((p) => ({ ...p, academic_controller: !p.academic_controller }));
+                      if (i.key === 'rf_reader') setExpanded((p) => ({ ...p, rf_reader: !p.rf_reader }));
                     }}
                   >
                     <Icon className={`flex-shrink-0 ${collapsed ? 'lg:w-5 lg:h-5' : 'w-6 h-6'}`} />
@@ -385,6 +404,40 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                       <li>
                         <Link to={'/iqac/academic-controller?tab=courses'} className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/iqac/academic-controller') && new URLSearchParams(loc.search).get('tab') === 'courses' ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'}`} onClick={() => { if (window.innerWidth < 1024) toggle(); }}>
                           <Grid className="w-4 h-4" /> <span>Courses</span>
+                        </Link>
+                      </li>
+                    </ul>
+                  ) : null}
+
+                  {/* Submenu for RFReader (IQAC).
+                      Hidden when sidebar is collapsed. */}
+                  {i.key === 'rf_reader' && expanded.rf_reader && !collapsed ? (
+                    <ul className="pl-8 mt-1 space-y-1">
+                      <li>
+                        <Link
+                          to={'/iqac/rf-reader/create-gate'}
+                          className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/iqac/rf-reader') && loc.pathname.includes('/create-gate') ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'}`}
+                          onClick={() => { if (window.innerWidth < 1024) toggle(); }}
+                        >
+                          <Grid className="w-4 h-4" /> <span>Create Gate</span>
+                        </Link>
+                      </li>
+                      <li>
+                        <Link
+                          to={'/iqac/rf-reader/test-students'}
+                          className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/iqac/rf-reader') && loc.pathname.includes('/test-students') ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'}`}
+                          onClick={() => { if (window.innerWidth < 1024) toggle(); }}
+                        >
+                          <Grid className="w-4 h-4" /> <span>Test Students</span>
+                        </Link>
+                      </li>
+                      <li>
+                        <Link
+                          to={'/iqac/rf-reader/add-students-rf'}
+                          className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/iqac/rf-reader') && loc.pathname.includes('/add-students-rf') ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'}`}
+                          onClick={() => { if (window.innerWidth < 1024) toggle(); }}
+                        >
+                          <Grid className="w-4 h-4" /> <span>Add Students RF</span>
                         </Link>
                       </li>
                     </ul>
