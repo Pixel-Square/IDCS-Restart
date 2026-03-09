@@ -82,6 +82,18 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
   const userPermissions = getPermissions()
   const hasPermission = (permission: string) => userPermissions.includes(permission.toLowerCase())
 
+  // Check if user has IQAC role
+  const isIQAC = () => {
+    try {
+      const roles = user?.roles || []
+      const localRoles = JSON.parse(localStorage.getItem('roles') || '[]')
+      const allRoles = [...roles, ...localRoles].map((r: string) => String(r).toUpperCase().trim())
+      return allRoles.includes('IQAC')
+    } catch {
+      return false
+    }
+  }
+
   // Available view modes based on permissions
   const availableViews = [
     {
@@ -990,16 +1002,25 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
               {/* Status */}
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-2">Status</label>
-                <select
-                  value={editFormData.status || 'active'}
-                  onChange={(e) => handleEditChange('status', e.target.value)}
-                  className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-slate-900 bg-white"
-                >
-                  <option value="active">Active</option>
-                  <option value="resigned">Resigned</option>
-                  <option value="debar">Debar</option>
-                  <option value="inactive">Inactive</option>
-                </select>
+                {isIQAC() ? (
+                  <select
+                    value={editFormData.status || 'active'}
+                    onChange={(e) => handleEditChange('status', e.target.value)}
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-slate-900 bg-white"
+                  >
+                    <option value="active">Active</option>
+                    <option value="resigned">Resigned</option>
+                    <option value="debar">Debar</option>
+                    <option value="inactive">Inactive</option>
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={editFormData.status || 'active'}
+                    readOnly
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg bg-slate-100 text-slate-700 cursor-not-allowed capitalize"
+                  />
+                )}
               </div>
             </div>
 
