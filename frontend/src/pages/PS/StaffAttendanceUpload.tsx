@@ -273,7 +273,10 @@ const StaffAttendanceUpload: React.FC = () => {
       const uploadDateStr = `${uploadYear}-${uploadMonth.toString().padStart(2, '0')}-${uploadDate.toString().padStart(2, '0')}`;
       formData.append('upload_date', uploadDateStr);
 
-      const response = await apiClient.post(`${getApiBase()}/api/staff-attendance/csv-upload/upload/`, formData);
+      // Increase timeout to 5 minutes for large CSV uploads
+      const response = await apiClient.post(`${getApiBase()}/api/staff-attendance/csv-upload/upload/`, formData, {
+        timeout: 300000  // 5 minutes for processing large CSV files
+      });
 
       if (isDryRun) {
         setPreviewData(response.data);
@@ -307,7 +310,10 @@ const StaffAttendanceUpload: React.FC = () => {
       const uploadDateStr = `${uploadYear}-${uploadMonth.toString().padStart(2, '0')}-${uploadDate.toString().padStart(2, '0')}`;
       formData.append('upload_date', uploadDateStr);
 
-      const response = await apiClient.post(`${getApiBase()}/api/staff-attendance/csv-upload/upload/`, formData);
+      // Increase timeout to 5 minutes for large CSV uploads
+      const response = await apiClient.post(`${getApiBase()}/api/staff-attendance/csv-upload/upload/`, formData, {
+        timeout: 300000  // 5 minutes for processing large CSV files
+      });
 
       setResult(response.data);
       setPreviewData(null);

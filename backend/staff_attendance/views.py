@@ -665,21 +665,22 @@ class CSVUploadViewSet(viewsets.ViewSet):
         overwrite_existing = serializer.validated_data.get('overwrite_existing', False)
 
         # Get upload date from request or use server date
+        # PRIORITY: month+year (full month upload) > upload_date > server date
         upload_date = serializer.validated_data.get('upload_date')
         month = serializer.validated_data.get('month')
         year = serializer.validated_data.get('year')
         
-        if upload_date:
-            # Use provided upload date
-            today = upload_date
-        elif month and year:
-            # Use provided month/year with current day
-            today_day = timezone.now().date().day
-            # Ensure day is valid for the month
+        if month and year:
+            # Use provided month/year. Default to the month's last day so full-month
+            # CSV uploads (D1..D(last_day)) are processed when admins select a month.
+            # This takes priority over upload_date to support full-month uploads.
             from calendar import monthrange
             max_day = monthrange(year, month)[1]
-            day = min(today_day, max_day)
+            day = max_day
             today = date_type(year, month, day)
+        elif upload_date:
+            # Use provided upload date (specific day upload)
+            today = upload_date
         else:
             # Use server timestamp as the authoritative "today"
             today = timezone.now().date()
