@@ -96,16 +96,17 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
 
   // Edit username and name (combined) states
   const [editingProfile, setEditingProfile] = useState(false);
-  const [usernameDraft, setUsernameDraft] = useState('');
   const [nameFirstDraft, setNameFirstDraft] = useState('');
   const [nameLastDraft, setNameLastDraft] = useState('');
   const [profileEditError, setProfileEditError] = useState<string | null>(null);
   const [profileSaving, setProfileSaving] = useState(false);
+  const [profileEditLocked, setProfileEditLocked] = useState(false);
   
   const [editingEmail, setEditingEmail] = useState(false);
   const [emailDraft, setEmailDraft] = useState('');
   const [emailError, setEmailError] = useState<string | null>(null);
   const [emailSaving, setEmailSaving] = useState(false);
+  const [emailEditLocked, setEmailEditLocked] = useState(false);
 
   useEffect(() => {
     const current = profileMobile || '';
@@ -421,21 +422,15 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
 
   async function handleSaveProfile() {
     setProfileEditError(null);
-    const username = String(usernameDraft || '').trim();
     const firstName = String(nameFirstDraft || '').trim();
     const lastName = String(nameLastDraft || '').trim();
-
-    if (!username) {
-      setProfileEditError('Username cannot be empty');
-      return;
-    }
 
     try {
       setProfileSaving(true);
       const response = await fetchWithAuth('/api/accounts/profile/update/', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, first_name: firstName, last_name: lastName })
+        body: JSON.stringify({ first_name: firstName, last_name: lastName })
       });
 
       if (!response.ok) {
@@ -450,6 +445,7 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
       } as Me;
       setUser(normalized);
       setEditingProfile(false);
+      setProfileEditLocked(true);
     } catch (e: any) {
       setProfileEditError(String(e?.message || e || 'Failed to update profile'));
     } finally {
@@ -458,7 +454,7 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
   }
 
   function startEditingProfile() {
-    setUsernameDraft(user?.username || '');
+    if (profileEditLocked) return;
     setNameFirstDraft(user?.first_name || '');
     setNameLastDraft(user?.last_name || '');
     setEditingProfile(true);
@@ -494,6 +490,7 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
       } as Me;
       setUser(normalized);
       setEditingEmail(false);
+      setEmailEditLocked(true);
     } catch (e: any) {
       setEmailError(String(e?.message || e || 'Failed to update email'));
     } finally {
@@ -502,6 +499,7 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
   }
 
   function startEditingEmail() {
+    if (emailEditLocked) return;
     setEmailDraft(user?.email || '');
     setEditingEmail(true);
     setEmailError(null);
@@ -556,24 +554,16 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
               </div>
             </div>
 
-            {/* Username & Name Card (Combined) */}
+            {/* Name Card */}
             <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow">
               <div className="flex items-start gap-3">
                 <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center flex-shrink-0">
                   <User className="w-5 h-5 text-indigo-600" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-semibold text-gray-500 mb-1">Username & Name</div>
+                  <div className="text-sm font-semibold text-gray-500 mb-1">Name</div>
                   {editingProfile ? (
                     <div className="space-y-2">
-                      <input
-                        type="text"
-                        value={usernameDraft}
-                        onChange={(e) => setUsernameDraft(e.target.value)}
-                        placeholder="Username"
-                        className="w-full px-2 py-1 border rounded text-sm"
-                        disabled={profileSaving}
-                      />
                       <div className="grid grid-cols-2 gap-2">
                         <input
                           type="text"
@@ -616,23 +606,21 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                     <div>
                       <div className="space-y-1">
                         <div className="flex items-center gap-2">
-                          <span className="text-xs font-semibold text-gray-500 w-20">Username:</span>
-                          <span className="text-gray-900 font-medium">{user.username || '—'}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
                           <span className="text-xs font-semibold text-gray-500 w-20">Name:</span>
                           <span className="text-gray-900 font-medium">
                             {user.first_name || ''} {user.last_name || ''} {(!user.first_name && !user.last_name) && '—'}
                           </span>
                         </div>
                       </div>
-                      <button
-                        onClick={startEditingProfile}
-                        className="mt-2 flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700"
-                      >
-                        <Edit2 className="w-3 h-3" />
-                        Edit
-                      </button>
+                      {!profileEditLocked && (
+                        <button
+                          onClick={startEditingProfile}
+                          className="mt-2 flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700"
+                        >
+                          <Edit2 className="w-3 h-3" />
+                          Edit
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -680,13 +668,15 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                   ) : (
                     <div>
                       <div className="text-gray-900 font-medium truncate">{user.email || '—'}</div>
-                      <button
-                        onClick={startEditingEmail}
-                        className="mt-2 flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700"
-                      >
-                        <Edit2 className="w-3 h-3" />
-                        Edit
-                      </button>
+                      {!emailEditLocked && (
+                        <button
+                          onClick={startEditingEmail}
+                          className="mt-2 flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700"
+                        >
+                          <Edit2 className="w-3 h-3" />
+                          Edit
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>

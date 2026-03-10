@@ -1995,7 +1995,24 @@ class StaffsPageView(APIView):
                 'staffs': staffs,
             })
 
-        return Response({'results': results, 'can_edit': can_edit, 'can_view_all': can_view_all})
+        # Check if user can import staff (HOD, AHOD, or IQAC role required)
+        can_import = False
+        if user.is_superuser:
+            can_import = True
+        else:
+            try:
+                if user.roles.filter(name__iexact='IQAC').exists():
+                    can_import = True
+            except Exception:
+                pass
+            if not can_import:
+                from .models import DepartmentRole
+                from .utils import get_user_staff_profile
+                sp = get_user_staff_profile(user)
+                if sp and DepartmentRole.objects.filter(staff=sp, role__in=['HOD', 'AHOD'], is_active=True).exists():
+                    can_import = True
+
+        return Response({'results': results, 'can_edit': can_edit, 'can_view_all': can_view_all, 'can_import': can_import})
 
 
 class DepartmentStaffListView(APIView):
@@ -2194,7 +2211,6 @@ class StaffProfileDeleteView(APIView):
         
         return Response(status=status.HTTP_204_NO_CONTENT)
 
-
 class StaffStatusUpdateView(APIView):
     """Update only the status field of a staff profile (Active / Inactive)."""
     permission_classes = (IsAuthenticated,)
@@ -2249,7 +2265,225 @@ class StaffStatusUpdateView(APIView):
         staff_profile.save(update_fields=['status'])
 
         return Response({'id': staff_profile.pk, 'status': staff_profile.status})
+    
+class StaffImportView(APIView):
+    """Import staff members from an uploaded Excel (.xlsx) or CSV file.
 
+    Only HOD, AHOD, IQAC users, or superusers are allowed to call this endpoint.
+
+    Expected columns (case-insensitive, spaces/underscores ignored):
+      Staff ID, Username, Password, First Name, Last Name, Email, Designation, Department, Status
+
+    Required: Staff ID, Username, Email, Department, Status
+
+    Returns:
+      { imported: int, total: int, errors: [{ row: int, errors: [str] }] }
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def _is_allowed(self, user) -> bool:
+        if user.is_superuser:
+            return True
+        try:
+            if user.roles.filter(name__iexact='IQAC').exists():
+                return True
+        except Exception:
+            pass
+        from .utils import get_user_staff_profile
+        sp = get_user_staff_profile(user)
+        if sp:
+            from .models import DepartmentRole
+            if DepartmentRole.objects.filter(staff=sp, role__in=['HOD', 'AHOD'], is_active=True).exists():
+                return True
+        return False
+
+    @staticmethod
+    def _col(row: dict, *names: str) -> str:
+        """Extract a value from a row dict using any of the given normalised key names."""
+        for name in names:
+            needle = name.lower().replace(' ', '').replace('_', '')
+            for k, v in row.items():
+                if k.lower().replace(' ', '').replace('_', '') == needle:
+                    return str(v).strip() if v is not None else ''
+        return ''
+
+    def post(self, request):
+        import csv
+        import io
+        import openpyxl
+
+        user = request.user
+        if not self._is_allowed(user):
+            return Response(
+                {'detail': 'Only HOD or IQAC users can import staff.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        file_obj = request.FILES.get('file')
+        if not file_obj:
+            return Response({'detail': 'No file provided.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        filename = file_obj.name.lower()
+        if not (filename.endswith('.xlsx') or filename.endswith('.csv')):
+            return Response(
+                {'detail': 'Only .xlsx and .csv files are supported.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ── Parse file ────────────────────────────────────────────────────────
+        rows: list[dict] = []
+        if filename.endswith('.xlsx'):
+            try:
+                wb = openpyxl.load_workbook(file_obj, read_only=True, data_only=True)
+                ws = wb.active
+                headers: list[str] | None = None
+                for excel_row in ws.iter_rows(values_only=True):
+                    if headers is None:
+                        headers = [str(c).strip() if c is not None else '' for c in excel_row]
+                        continue
+                    row_data = {
+                        h: (str(v).strip() if v is not None else '')
+                        for h, v in zip(headers, excel_row)
+                    }
+                    rows.append(row_data)
+            except Exception as exc:
+                return Response(
+                    {'detail': f'Failed to parse Excel file: {exc}'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        else:
+            try:
+                content = file_obj.read().decode('utf-8-sig')
+                reader = csv.DictReader(io.StringIO(content))
+                for row in reader:
+                    rows.append({k.strip(): (v.strip() if v else '') for k, v in row.items()})
+            except Exception as exc:
+                return Response(
+                    {'detail': f'Failed to parse CSV file: {exc}'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        if not rows:
+            return Response(
+                {'detail': 'File is empty or has no data rows.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ── Process rows ──────────────────────────────────────────────────────
+        from django.contrib.auth import get_user_model
+        from accounts.models import Role
+        from .models import Department
+
+        User = get_user_model()
+        errors: list[dict] = []
+        imported = 0
+        seen_staff_ids: set[str] = set()
+
+        for idx, row in enumerate(rows, start=2):  # row 1 is header
+            staff_id   = self._col(row, 'staffid', 'staff id', 'staff_id')
+            username   = self._col(row, 'username', 'user name', 'user_name')
+            password   = self._col(row, 'password', 'pwd')
+            first_name = self._col(row, 'firstname', 'first name', 'first_name')
+            last_name  = self._col(row, 'lastname', 'last name', 'last_name')
+            email      = self._col(row, 'email', 'emailaddress', 'email address', 'email_address')
+            designation = self._col(row, 'designation')
+            department_name = self._col(row, 'department', 'dept', 'departmentname', 'department name', 'department_name')
+            record_status   = self._col(row, 'status')
+
+            # ── Validate required fields ──
+            row_errors: list[str] = []
+            if not staff_id:
+                row_errors.append('Staff ID is required.')
+            if not username:
+                row_errors.append('Username is required.')
+            if not email:
+                row_errors.append('Email is required.')
+            if not department_name:
+                row_errors.append('Department is required.')
+            if not record_status:
+                row_errors.append('Status is required.')
+            elif record_status.upper() not in ('ACTIVE', 'INACTIVE'):
+                row_errors.append(f'Status "{record_status}" is invalid. Allowed: ACTIVE, INACTIVE.')
+
+            if staff_id and staff_id in seen_staff_ids:
+                row_errors.append(f'Duplicate Staff ID "{staff_id}" in uploaded file.')
+
+            if row_errors:
+                errors.append({'row': idx, 'errors': row_errors})
+                continue
+
+            seen_staff_ids.add(staff_id)
+
+            # ── Check DB duplicates ──
+            if StaffProfile.objects.filter(staff_id=staff_id).exists():
+                errors.append({'row': idx, 'errors': [f'Staff ID "{staff_id}" already exists in the system.']})
+                continue
+            if User.objects.filter(username=username).exists():
+                errors.append({'row': idx, 'errors': [f'Username "{username}" already exists in the system.']})
+                continue
+
+            # ── Resolve department ──
+            # Supports patterns like "103 - CE", "CE", "103", full name.
+            dept = None
+            from django.db.models import Q as _Q
+            dept_search = department_name.strip()
+            # Try the full string first, then strip to code/name split on " - "
+            dept = Department.objects.filter(
+                _Q(name__iexact=dept_search)
+                | _Q(code__iexact=dept_search)
+                | _Q(short_name__iexact=dept_search)
+            ).first()
+            if not dept and ' - ' in dept_search:
+                # "103 - CE" -> try code part after " - "
+                code_part = dept_search.split(' - ', 1)[1].strip()
+                dept = Department.objects.filter(
+                    _Q(code__iexact=code_part) | _Q(short_name__iexact=code_part)
+                ).first()
+            if not dept:
+                errors.append({'row': idx, 'errors': [f'Department "{department_name}" not found. Use the department code or "<number> - <code>" format.']})
+                continue
+
+            # ── Normalise status ──
+            norm_status = record_status.upper()  # already validated above
+
+            # ── Create user + staff profile ──
+            try:
+                with transaction.atomic():
+                    user_obj = User.objects.create_user(
+                        username=username,
+                        password=password if password else 'changeme123',
+                        first_name=first_name,
+                        last_name=last_name,
+                        email=email,
+                    )
+
+                    # Create the StaffProfile BEFORE assigning the STAFF role.
+                    # The pre_add M2M signal calls validate_roles_for_user(), which
+                    # raises ValidationError if no staff_profile exists yet.
+                    # Creating the profile first avoids that and prevents the
+                    # TransactionManagementError on subsequent queries.
+                    StaffProfile.objects.create(
+                        user=user_obj,
+                        staff_id=staff_id,
+                        department=dept,
+                        designation=designation,
+                        status=norm_status,
+                    )
+
+                    try:
+                        staff_role = Role.objects.get(name='STAFF')
+                        user_obj.roles.add(staff_role)
+                    except Exception:
+                        pass  # STAFF role missing or already assigned; non-critical
+
+                    imported += 1
+            except Exception as exc:
+                errors.append({'row': idx, 'errors': [str(exc)]})
+
+        return Response(
+            {'imported': imported, 'total': len(rows), 'errors': errors},
+            status=status.HTTP_200_OK,
+        )
 
 class AdvisorStaffListView(APIView):
     """Return staff list limited to departments/sections the advisor is assigned to.

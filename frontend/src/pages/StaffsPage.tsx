@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useMemo } from 'react'
-import { Users, Building2, AlertCircle, Edit, UserPlus, Filter, List, Plus } from 'lucide-react'
+import { Users, Building2, AlertCircle, Edit, UserPlus, Filter, List, Plus, Trash2, Upload } from 'lucide-react'
 import fetchWithAuth from '../services/fetchAuth'
 import StaffFormModal from '../components/StaffFormModal'
+import StaffImportModal from '../components/StaffImportModal'
 
 type StaffMember = {
   id: number
@@ -62,6 +63,8 @@ export default function StaffsPage() {
   const [selectedDeptId, setSelectedDeptId] = useState<number | null>(null)
   const [canEdit, setCanEdit] = useState(false)
   const [canViewAllStaff, setCanViewAllStaff] = useState(false)
+  const [canImport, setCanImport] = useState(false)
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false)
   const [statusEditStaff, setStatusEditStaff] = useState<StaffMember | null>(null)
   const [statusValue, setStatusValue] = useState<string>('')
   const [statusSaving, setStatusSaving] = useState(false)
@@ -127,6 +130,7 @@ export default function StaffsPage() {
       setDepartments(depts)
       setCanEdit(data.can_edit || false)
       setCanViewAllStaff(data.can_view_all || false)
+      setCanImport(data.can_import || false)
       
       // Set first department as default (or 'all' if user can view all staff)
       if (depts.length > 0 && currentDeptId === null) {
@@ -429,12 +433,24 @@ export default function StaffsPage() {
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="bg-white rounded-lg shadow-md p-6 mb-6">
-          <div className="flex items-center space-x-3">
-            <Users className="h-8 w-8 text-indigo-600" />
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">Staff Directory</h1>
-              <p className="text-sm text-gray-600">View staff members by department</p>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <Users className="h-8 w-8 text-indigo-600" />
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900">Staff Directory</h1>
+                <p className="text-sm text-gray-600">View staff members by department</p>
+              </div>
             </div>
+            {canImport && (
+              <button
+                onClick={() => setIsImportModalOpen(true)}
+                className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                title="Import Staff from Excel/CSV"
+              >
+                <Upload className="h-4 w-4" />
+                <span className="text-sm font-medium">Import Staff</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -524,10 +540,10 @@ export default function StaffsPage() {
         {currentDeptId !== null && (() => {
           if (currentDeptId === 'all') {
             // Show all staff across all departments
-            const allStaffs = departments.flatMap(d => 
-              (d.staffs || []).map(staff => ({ ...staff, departmentInfo: d }))
+            const allStaffs = departments.flatMap(d =>
+              (d.staffs || []).map(staff => ({ ...staff, departmentInfo: d } as StaffMember & { departmentInfo: Department }))
             )
-            const filteredStaffs = getFilteredStaffs(allStaffs)
+            const filteredStaffs = getFilteredStaffs(allStaffs) as (StaffMember & { departmentInfo: Department })[]
             const staffCount = filteredStaffs.length
             const totalStaffCount = allStaffs.length
 
@@ -1086,8 +1102,8 @@ export default function StaffsPage() {
                                 </span>
                               )}
                               {/* Show HOD/AHOD roles */}
-                              {staff.department_roles && staff.department_roles.length > 0 ? (
-                                staff.department_roles.map((deptRole, idx) => (
+                              {staff.department_role_mappings && staff.department_role_mappings.length > 0 ? (
+                                staff.department_role_mappings.map((deptRole, idx) => (
                                   <span
                                     key={`role-${idx}`}
                                     className="inline-flex px-2 py-0.5 text-xs font-medium rounded bg-green-100 text-green-800 border border-green-200"
@@ -1098,7 +1114,7 @@ export default function StaffsPage() {
                                 ))
                               ) : null}
                               {/* No roles at all */}
-                              {!staff.current_department && (!staff.department_roles || staff.department_roles.length === 0) && (
+                              {!staff.current_department && (!staff.department_role_mappings || staff.department_role_mappings.length === 0) && (
                                 <span className="text-gray-400">None</span>
                               )}
                             </div>
@@ -1289,6 +1305,15 @@ export default function StaffsPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Staff Import Modal */}
+      {canImport && (
+        <StaffImportModal
+          isOpen={isImportModalOpen}
+          onClose={() => setIsImportModalOpen(false)}
+          onSuccess={fetchStaffs}
+        />
       )}
     </div>
   )
