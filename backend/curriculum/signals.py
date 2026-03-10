@@ -21,8 +21,15 @@ def propagate_master_to_departments(sender, instance: CurriculumMaster, created,
         else:
             dept_qs = instance.departments.all()
 
+        update_fields = [
+            'regulation', 'semester', 'course_code', 'course_name', 'class_type', 'category',
+            'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark',
+            'editable', 'is_elective', 'enabled_assessments',
+        ]
+
         for dept in dept_qs:
             defaults = {
+                'master': instance,
                 'regulation': instance.regulation,
                 'semester': instance.semester,
                 'course_code': instance.course_code,
@@ -40,39 +47,48 @@ def propagate_master_to_departments(sender, instance: CurriculumMaster, created,
                 'external_mark': instance.external_mark,
                 'total_mark': instance.total_mark,
                 'editable': instance.editable,
-                # defaults for dept-specific only
+                'batch': getattr(instance, 'batch', None),
+                # defaults for dept-specific fields
                 'total_hours': 20,
                 'question_paper_type': 'QP1',
-                'master': instance,
             }
 
-            obj, created_row = CurriculumDepartment.objects.get_or_create(
-                master=instance, department=dept, defaults=defaults
-            )
+            # Use the unique_together fields (department, regulation, semester, course_code)
+            # as the lookup key so get_or_create never conflicts with the DB constraint.
+            # For NULL course_code, fall back to master+department to avoid matching the
+            # wrong row (NULLs are never equal in SQL unique indexes).
+            if instance.course_code:
+                lookup = {
+                    'department': dept,
+                    'regulation': instance.regulation,
+                    'semester': instance.semester,
+                    'course_code': instance.course_code,
+                }
+            else:
+                lookup = {'master': instance, 'department': dept}
+
+            try:
+                obj, created_row = CurriculumDepartment.objects.get_or_create(
+                    **lookup, defaults=defaults
+                )
+            except Exception as e:
+                print(f"Error in get_or_create for department {dept.id}: {e}")
+                continue
 
             if not created_row:
-                # update fields from master when not overridden
+                # Always keep the master link current
+                obj.master = instance
+                # Always sync batch from master
+                obj.batch = getattr(instance, 'batch', None)
+                # Only update curriculum content fields when not overridden
                 if not obj.overridden:
-                    # update allowed fields
-                    update_fields = [
-                        'regulation', 'semester', 'course_code', 'course_name', 'class_type', 'category',
-                            'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark', 'editable', 'is_elective', 'enabled_assessments',
-
-                    ]
                     for f in update_fields:
                         if f in defaults:
                             setattr(obj, f, defaults[f])
-
-                    # Log the fields being updated for debugging
-                    updated_fields = {f: defaults[f] for f in update_fields if f in defaults}
-                    print(f"Updating fields for department {dept.id}: {updated_fields}")
-
-                    # ensure master link is set
-                    obj.master = instance
-                    try:
-                        obj.save()
-                    except Exception as e:
-                        print(f"Error saving department {dept.id}: {e}")
+                try:
+                    obj.save()
+                except Exception as e:
+                    print(f"Error saving department {dept.id}: {e}")
 
     # Run after transaction commit to ensure master is persisted
     transaction.on_commit(_propagate)

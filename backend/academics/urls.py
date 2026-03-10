@@ -33,6 +33,7 @@ from .views import (
     StaffPeriodsView,
     StudentAttendanceView,
     StudentMarksView,
+    BatchYearViewSet,
 )
 from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView, ClassAttendanceReportView, TodayPeriodAttendanceView, PeriodAttendanceReportView, OverallSectionView, MyClassStudentsView, DailyAttendanceView, DailyAttendanceLockView, DailyAttendanceUnlockView, MyClassAttendanceAnalyticsView, DailyAttendanceSessionDetailView, SectionStudentAttendanceDayView, DailyAttendanceRevertAssignmentView, DailyAttendanceUnlockRequestView, PeriodAttendanceUnlockRequestView, HODUnlockRequestsView, PeriodAttendanceSwapView, PeriodAttendanceRevertAssignmentView
 from .views import UnifiedUnlockRequestsView, DepartmentStudentsView, AllStudentsView, MentorMyMenteesView
@@ -42,6 +43,7 @@ router.register(r'section-advisors', SectionAdvisorViewSet, basename='section-ad
 router.register(r'teaching-assignments', TeachingAssignmentViewSet, basename='teaching-assignment')
 router.register(r'academic-years', AcademicYearViewSet, basename='academic-year')
 router.register(r'subject-batches', SubjectBatchViewSet, basename='subject-batch')
+router.register(r'batch-years', BatchYearViewSet, basename='batch-year')
 router.register(r'period-attendance', PeriodAttendanceSessionViewSet, basename='period-attendance')
 router.register(r'attendance-unlock-requests', AttendanceUnlockRequestViewSet, basename='attendance-unlock-request')
 router.register(r'special-assessment-edit-requests', SpecialCourseAssessmentEditRequestViewSet, basename='special-assessment-edit-request')

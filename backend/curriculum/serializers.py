@@ -1,6 +1,12 @@
 from rest_framework import serializers
 from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject, DepartmentGroup, DepartmentGroupMapping
-from academics.models import Department, Semester
+from academics.models import Department, Semester, Batch, BatchYear
+
+
+class BatchSmallSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BatchYear
+        fields = ('id', 'name', 'start_year', 'end_year')
 
 
 class DepartmentSmallSerializer(serializers.ModelSerializer):
@@ -21,11 +27,19 @@ class CurriculumMasterSerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True
     )
+    batch = BatchSmallSerializer(read_only=True)
+    batch_id = serializers.PrimaryKeyRelatedField(
+        queryset=BatchYear.objects.all(),
+        source='batch',
+        write_only=True,
+        required=False,
+        allow_null=True
+    )
 
     class Meta:
         model = CurriculumMaster
         fields = [
-            'id', 'regulation', 'semester', 'semester_id', 'course_code', 'course_name', 'class_type', 'qp_type', 'category',
+            'id', 'regulation', 'semester', 'semester_id', 'batch', 'batch_id', 'course_code', 'course_name', 'class_type', 'qp_type', 'category',
             'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark', 'is_elective', 'enabled_assessments',
             'for_all_departments', 'departments', 'departments_display', 'editable', 'created_by', 'created_at', 'updated_at'
         ]
@@ -78,11 +92,19 @@ class CurriculumDepartmentSerializer(serializers.ModelSerializer):
     department_id = serializers.PrimaryKeyRelatedField(queryset=Department.objects.all(), source='department', write_only=True)
     semester = serializers.IntegerField(source='semester.number', read_only=True)
     semester_id = serializers.PrimaryKeyRelatedField(queryset=Semester.objects.all(), source='semester', write_only=True, required=False)
+    batch = BatchSmallSerializer(read_only=True)
+    batch_id = serializers.PrimaryKeyRelatedField(
+        queryset=BatchYear.objects.all(),
+        source='batch',
+        write_only=True,
+        required=False,
+        allow_null=True
+    )
 
     class Meta:
         model = CurriculumDepartment
         fields = [
-            'id', 'master', 'department', 'department_id', 'regulation', 'semester', 'semester_id', 'course_code', 'course_name',
+            'id', 'master', 'department', 'department_id', 'regulation', 'semester', 'semester_id', 'batch', 'batch_id', 'course_code', 'course_name',
             'mnemonic', 'class_type', 'category', 'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark', 'is_elective', 'enabled_assessments',
             'total_hours', 'question_paper_type', 'editable', 'overridden',
             'approval_status', 'approved_by', 'approved_at',
@@ -133,6 +155,14 @@ class ElectiveSubjectSerializer(serializers.ModelSerializer):
     department_group_id = serializers.PrimaryKeyRelatedField(queryset=DepartmentGroup.objects.all(), source='department_group', write_only=True, required=False, allow_null=True)
     semester = serializers.IntegerField(source='semester.number', read_only=True)
     semester_id = serializers.PrimaryKeyRelatedField(queryset=Semester.objects.all(), source='semester', write_only=True, required=False)
+    batch = BatchSmallSerializer(read_only=True)
+    batch_id = serializers.PrimaryKeyRelatedField(
+        queryset=BatchYear.objects.all(),
+        source='batch',
+        write_only=True,
+        required=False,
+        allow_null=True
+    )
     student_count = serializers.IntegerField(read_only=True, default=0)
     # Indicates if this elective is from another department via group mapping
     is_cross_department = serializers.SerializerMethodField()
@@ -143,7 +173,7 @@ class ElectiveSubjectSerializer(serializers.ModelSerializer):
         model = ElectiveSubject
         fields = [
             'id', 'parent', 'parent_name', 'department', 'department_id', 'department_group', 'department_group_id',
-            'regulation', 'semester', 'semester_id', 'course_code', 'course_name',
+            'batch', 'batch_id', 'regulation', 'semester', 'semester_id', 'course_code', 'course_name',
             'class_type', 'category', 'is_elective', 'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark',
             'total_hours', 'question_paper_type', 'editable', 'overridden',
             'approval_status', 'approved_by', 'approved_at',

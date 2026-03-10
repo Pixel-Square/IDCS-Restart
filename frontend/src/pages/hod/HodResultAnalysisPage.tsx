@@ -29,6 +29,9 @@ import {
 } from '../../services/obe';
 import { fetchTeachingAssignmentRoster } from '../../services/roster';
 import fetchWithAuth from '../../services/fetchAuth';
+import DownloadReportModal from '../obe/result_analysis/DownloadReportModal';
+import { getCachedMe } from '../../services/auth';
+import { SheetCol, SheetRow } from '../obe/result_analysis/MarkAnalysisSheetPage';
 
 /* ─────────────────────── TYPES ─────────────────────── */
 
@@ -41,6 +44,7 @@ type ObeProgressSection = {
   batch: { id: number | null; name: string | null };
   course: { id: number | null; name: string | null };
   department: { id: number | null; code: string | null; name: string | null; short_name: string | null };
+  semester?: number | null;
   staff: ObeProgressStaff[];
 };
 type ObeProgressResponse = {
@@ -130,7 +134,7 @@ async function fetchTaTotal(
   const wFa  = Number((wt as any)?.fa_weight  ?? (wt as any)?.fa1  ?? 3);
 
   if (cycle === 'model') {
-    let mr: Record<string, any> = {};
+    const mr: Record<string, any> = {};
     try {
       const resp = await fetchPublishedModelSheet(subjectCode, taId);
       const m = (resp as any)?.data?.marks || (resp as any)?.marks || {};
@@ -231,17 +235,33 @@ function SectionCard({
 /* ─────────────────────── MARK ANALYSIS VIEW ─────────────────────── */
 
 function MarkAnalysisView({ taSlots, taCache, cycle }: { taSlots: TaSlot[]; taCache: Map<string, TaCacheEntry>; cycle: CycleKey }) {
-  const allStudents = useMemo(() => {
-    const map = new Map<string, Student>();
+  // IMPORTANT: don't union student rosters across subjects.
+  // Some subjects (electives/shared) can have different rosters and create anomalies.
+  // Use a single canonical roster: the largest roster among the subject TAs.
+  const classRoster = useMemo(() => {
+    let best: Student[] = [];
     for (const slot of taSlots) {
       const cached = taCache.get(`${slot.taId}_${cycle}`);
-      if (cached) for (const s of cached.roster) if (!map.has(s.regNo)) map.set(s.regNo, s);
+      if (cached?.roster?.length && cached.roster.length > best.length) best = cached.roster;
     }
-    return Array.from(map.values()).sort((a, b) => a.regNo.localeCompare(b.regNo));
+    return [...best].sort((a, b) => a.regNo.localeCompare(b.regNo));
   }, [taSlots, taCache, cycle]);
 
-  if (allStudents.length === 0)
-    return <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af' }}>No mark data for this cycle.</div>;
+  const hasAnyRoster = useMemo(() => {
+    for (const slot of taSlots) {
+      const cached = taCache.get(`${slot.taId}_${cycle}`);
+      if ((cached?.roster?.length || 0) > 0) return true;
+    }
+    return false;
+  }, [taSlots, taCache, cycle]);
+
+  if (classRoster.length === 0) {
+    return (
+      <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af' }}>
+        {hasAnyRoster ? 'No mark data for this cycle.' : 'Loading student list…'}
+      </div>
+    );
+  }
 
   return (
     <div style={{ overflowX: 'auto' }}>
@@ -260,7 +280,7 @@ function MarkAnalysisView({ taSlots, taCache, cycle }: { taSlots: TaSlot[]; taCa
           </tr>
         </thead>
         <tbody>
-          {allStudents.map((student, idx) => {
+          {classRoster.map((student, idx) => {
             const scores = taSlots.map((slot) => taCache.get(`${slot.taId}_${cycle}`)?.totals.get(student.id) ?? null);
             const valid  = scores.filter((v): v is number => v !== null);
             const avg    = valid.length > 0 ? Math.round(valid.reduce((a, b) => a + b, 0) / valid.length) : null;
@@ -292,20 +312,41 @@ function MarkAnalysisView({ taSlots, taCache, cycle }: { taSlots: TaSlot[]; taCa
 /* ─────────────────────── BELL GRAPH VIEW ─────────────────────── */
 
 function BellGraphView({ taSlots, taCache, cycle }: { taSlots: TaSlot[]; taCache: Map<string, TaCacheEntry>; cycle: CycleKey }) {
+  const classRoster = useMemo(() => {
+    let best: Student[] = [];
+    for (const slot of taSlots) {
+      const cached = taCache.get(`${slot.taId}_${cycle}`);
+      if (cached?.roster?.length && cached.roster.length > best.length) best = cached.roster;
+    }
+    return best;
+  }, [taSlots, taCache, cycle]);
+
+  const hasAnyRoster = useMemo(() => {
+    for (const slot of taSlots) {
+      const cached = taCache.get(`${slot.taId}_${cycle}`);
+      if ((cached?.roster?.length || 0) > 0) return true;
+    }
+    return false;
+  }, [taSlots, taCache, cycle]);
+
   const chartData = useMemo(() =>
     RANGES.map((range) => {
       const row: Record<string, any> = { label: range.label };
       for (const slot of taSlots) {
         const cached = taCache.get(`${slot.taId}_${cycle}`);
         row[slot.subjectCode] = cached
-          ? Array.from(cached.totals.values()).filter((v): v is number => v != null && v >= range.min && v <= range.max).length
+          ? classRoster.reduce((acc, s) => {
+            const v = cached.totals.get(s.id);
+            return acc + (v != null && v >= range.min && v <= range.max ? 1 : 0);
+          }, 0)
           : 0;
       }
       return row;
     }),
-  [taSlots, taCache, cycle]);
+  [taSlots, taCache, cycle, classRoster]);
 
   if (taSlots.length === 0) return <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af' }}>No subjects found.</div>;
+  if (classRoster.length === 0) return <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af' }}>{hasAnyRoster ? 'No mark data for this cycle.' : 'Loading student list…'}</div>;
 
   return (
     <div>
@@ -315,7 +356,7 @@ function BellGraphView({ taSlots, taCache, cycle }: { taSlots: TaSlot[]; taCache
           <div key={slot.taId} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, color: '#374151' }}>
             <div style={{ width: 28, height: 4, borderRadius: 2, background: SUBJECT_COLORS[i % SUBJECT_COLORS.length] }} />
             <span style={{ fontWeight: 700 }}>{slot.subjectCode}</span>
-            <span style={{ color: '#9ca3af', fontSize: 11 }}>{slot.subjectName}</span>
+            <span style={{ color: '#374151', fontSize: 13, fontWeight: 500 }}>— {slot.subjectName}</span>
           </div>
         ))}
       </div>
@@ -367,63 +408,39 @@ function CupSVG({ rank }: { rank: 1 | 2 | 3 }) {
 }
 
 function RankingView({ taSlots, taCache, cycle }: { taSlots: TaSlot[]; taCache: Map<string, TaCacheEntry>; cycle: CycleKey }) {
-  const allStudents = useMemo(() => {
-    const map = new Map<string, Student>();
+  const classRoster = useMemo(() => {
+    let best: Student[] = [];
     for (const slot of taSlots) {
       const cached = taCache.get(`${slot.taId}_${cycle}`);
-      if (cached) for (const s of cached.roster) if (!map.has(s.regNo)) map.set(s.regNo, s);
+      if (cached?.roster?.length && cached.roster.length > best.length) best = cached.roster;
     }
-    return Array.from(map.values());
+    return [...best].sort((a, b) => a.regNo.localeCompare(b.regNo));
+  }, [taSlots, taCache, cycle]);
+
+  const hasAnyRoster = useMemo(() => {
+    for (const slot of taSlots) {
+      const cached = taCache.get(`${slot.taId}_${cycle}`);
+      if ((cached?.roster?.length || 0) > 0) return true;
+    }
+    return false;
   }, [taSlots, taCache, cycle]);
 
   const ranked = useMemo(() =>
-    allStudents.map((student) => {
+    classRoster.map((student) => {
       const scores = taSlots.map((slot) => taCache.get(`${slot.taId}_${cycle}`)?.totals.get(student.id) ?? null);
       const valid  = scores.filter((v): v is number => v !== null);
       const sum    = valid.reduce((a, b) => a + b, 0);
       return { student, scores, sum, avg: valid.length > 0 ? Math.round(sum / valid.length) : null, count: valid.length };
     }).filter((r) => r.count > 0).sort((a, b) => b.sum - a.sum),
-  [allStudents, taSlots, taCache, cycle]);
+  [classRoster, taSlots, taCache, cycle]);
+
+  if (classRoster.length === 0) return <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af' }}>{hasAnyRoster ? 'No mark data for ranking.' : 'Loading student list…'}</div>;
 
   if (ranked.length === 0) return <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af' }}>No data for ranking.</div>;
 
-  const podium = ranked.slice(0, 3);
-  const podiumOrder = [1, 0, 2]; // display order: 2nd, 1st, 3rd
-  const HEIGHTS = [160, 210, 130];
-  const PBGS = ['#16213e','#1a1a2e','#0f3460'];
-
   return (
     <div>
-      {/* Podium */}
-      <div style={{ background: 'linear-gradient(135deg,#0f0c29,#302b63,#24243e)', borderRadius: 20, padding: '36px 24px 28px', marginBottom: 28 }}>
-        <div style={{ textAlign: 'center', fontSize: 18, fontWeight: 900, color: '#fff', marginBottom: 32, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
-          🏆 Class Rankings — {cycle === 'cycle1' ? 'Cycle 1' : cycle === 'cycle2' ? 'Cycle 2' : 'Model'}
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-end', gap: 14 }}>
-          {podiumOrder.map((pi) => {
-            const entry = podium[pi];
-            if (!entry) return <div key={pi} style={{ width: 150 }} />;
-            const rank = (pi + 1) as 1|2|3;
-            return (
-              <div key={pi} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 150 }}>
-                <CupSVG rank={rank} />
-                <div style={{ background: 'rgba(255,255,255,0.1)', borderRadius: 10, padding: '8px 12px', textAlign: 'center', marginTop: 6, border: '1px solid rgba(255,255,255,0.12)', backdropFilter: 'blur(6px)', width: '100%', boxSizing: 'border-box' }}>
-                  <div style={{ fontSize: 10, color: '#94a3b8', fontWeight: 600 }}>#{rank}</div>
-                  <div style={{ fontSize: 13, fontWeight: 800, color: '#fff', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.student.name}</div>
-                  <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 1 }}>{entry.student.regNo}</div>
-                  <div style={{ fontSize: 20, fontWeight: 900, color: rank===1?'#FFD700':rank===2?'#E8E8E8':'#CD7F32', marginTop: 4 }}>{entry.sum}<span style={{ fontSize: 11, color: '#64748b', marginLeft: 2 }}>pts</span></div>
-                  <div style={{ fontSize: 10, color: '#64748b' }}>Avg {entry.avg ?? '—'}/100</div>
-                </div>
-                <div style={{ width: 130, height: HEIGHTS[pi] - 100, background: PBGS[pi], borderRadius: '8px 8px 0 0', marginTop: 6, border: '1px solid rgba(255,255,255,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.3)', fontSize: 26, fontWeight: 900 }}>
-                  {rank}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Full table */}
+      {/* Rankings table */}
       <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e5e7eb', overflow: 'hidden', boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
         <div style={{ background: '#1e3a5f', padding: '12px 18px', color: '#fff', fontWeight: 800, fontSize: 14 }}>
           Full Rankings — {ranked.length} Students
@@ -479,12 +496,13 @@ export default function HodResultAnalysisPage(): JSX.Element {
   const [progressLoading, setProgressLoading] = useState(true);
   const [progressError,   setProgressError  ] = useState<string | null>(null);
   const [weights,         setWeights        ] = useState<Record<string, ClassTypeWeightsItem>>({});
-  const [selectedId,      setSelectedId     ] = useState<number | null>(null);
+  const [selectedKey,     setSelectedKey    ] = useState<string | null>(null);
   const [activeCycle,     setActiveCycle    ] = useState<CycleKey>('cycle1');
   const [activeView,      setActiveView     ] = useState<ViewKey>('marks');
   const [search,          setSearch         ] = useState('');
   const [marksLoading,    setMarksLoading   ] = useState(false);
   const [taCache,         setTaCache        ] = useState<Map<string, TaCacheEntry>>(new Map());
+  const [showDownload,    setShowDownload   ] = useState(false);
 
   /* fetch progress */
   useEffect(() => {
@@ -523,6 +541,7 @@ export default function HodResultAnalysisPage(): JSX.Element {
                 name: (dept as any)?.name ?? null,
                 short_name: (dept as any)?.short_name ?? null,
               },
+              semester: first.semester != null ? Number(first.semester) : null,
               staff: [
                 {
                   id: 0,
@@ -567,17 +586,29 @@ export default function HodResultAnalysisPage(): JSX.Element {
 
   const sections: ObeProgressSection[] = progressData?.sections ?? [];
 
-  const filteredSections = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return sections;
-    return sections.filter((s) =>
-      (s.name || '').toLowerCase().includes(q) ||
-      (s.batch?.name || '').toLowerCase().includes(q) ||
-      (s.course?.name || '').toLowerCase().includes(q),
-    );
-  }, [sections, search]);
+  // Create stable unique keys per card (backend can return null section IDs).
+  const sectionItems = useMemo(() => {
+    return sections.map((sec, idx) => {
+      const fallback = [sec.name, sec.batch?.name, sec.course?.name, sec.department?.short_name].filter(Boolean).join('|') || 'section';
+      return {
+        key: sec.id != null ? `id:${sec.id}` : `idx:${idx}:${fallback}`,
+        sec,
+      };
+    });
+  }, [sections]);
 
-  const selectedSection = sections.find((s) => s.id === selectedId) ?? null;
+  const filteredSectionItems = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return sectionItems;
+    return sectionItems.filter(({ sec }) =>
+      (sec.name || '').toLowerCase().includes(q) ||
+      (sec.batch?.name || '').toLowerCase().includes(q) ||
+      (sec.course?.name || '').toLowerCase().includes(q),
+    );
+  }, [sectionItems, search]);
+
+  const selectedSectionItem = sectionItems.find((x) => x.key === selectedKey) ?? null;
+  const selectedSection = selectedSectionItem?.sec ?? null;
 
   const taSlots: TaSlot[] = useMemo(() => {
     if (!selectedSection) return [];
@@ -622,6 +653,43 @@ export default function HodResultAnalysisPage(): JSX.Element {
     return () => { mounted = false; };
   }, [taSlots, activeCycle, weights]);
 
+  /* ── derive cols / rows / totals for DownloadReportModal ── */
+  const dlClassRoster = useMemo(() => {
+    let best: Student[] = [];
+    for (const slot of taSlots) {
+      const cached = taCache.get(`${slot.taId}_${activeCycle}`);
+      if (cached?.roster?.length && cached.roster.length > best.length) best = cached.roster;
+    }
+    return [...best].sort((a, b) => a.regNo.localeCompare(b.regNo));
+  }, [taSlots, taCache, activeCycle]);
+
+  const dlCols: SheetCol[] = useMemo(() =>
+    taSlots.map((slot) => ({
+      key: slot.subjectCode,
+      label: `${slot.subjectCode} — ${slot.subjectName}`,
+      max: 100,
+      weight: 1,
+    })),
+  [taSlots]);
+
+  const dlRows: SheetRow[] = useMemo(() =>
+    dlClassRoster.map((student) => {
+      const marks: Record<string, number | null> = {};
+      let validCount = 0, sum = 0;
+      for (const slot of taSlots) {
+        const v = taCache.get(`${slot.taId}_${activeCycle}`)?.totals.get(student.id) ?? null;
+        marks[slot.subjectCode] = v;
+        if (v != null) { sum += v; validCount++; }
+      }
+      const avg = validCount > 0 ? Math.round(sum / validCount) : null;
+      return { id: student.id, regNo: student.regNo, name: student.name, marks, total100: avg };
+    }),
+  [dlClassRoster, taSlots, taCache, activeCycle]);
+
+  const dlTotals: number[] = useMemo(() =>
+    dlRows.map((r) => r.total100 ?? 0),
+  [dlRows]);
+
   function studentCount(sec: ObeProgressSection) {
     for (const st of sec.staff)
       for (const ta of st.teaching_assignments)
@@ -631,6 +699,19 @@ export default function HodResultAnalysisPage(): JSX.Element {
   }
 
   const cycleLabels: Record<CycleKey, string> = { cycle1: 'Cycle 1', cycle2: 'Cycle 2', model: 'Model' };
+
+  /* ── HOD/Advisor download metadata ── */
+  const _hodUser = (() => {
+    const me = getCachedMe() as any;
+    if (!me) return '';
+    const full = `${me.first_name || ''} ${me.last_name || ''}`.replace(/\s+/g, ' ').trim();
+    return full || me.profile?.full_name || me.username || '';
+  })();
+  const _hodRoleLabel = progressData?.role === 'HOD' ? 'HOD' : 'Advisor';
+  const dlStaffName  = _hodUser;
+  const _batchYear   = selectedSection?.batch?.name ? selectedSection.batch.name.slice(0, 4) : '';
+  const _deptShort   = selectedSection?.department?.short_name || selectedSection?.department?.code || '';
+  const dlSectionName = selectedSection ? [selectedSection.name, _batchYear, _deptShort].filter(Boolean).join(' ') : '';
 
   /* ── SECTION DETAIL VIEW ── */
   if (selectedSection) {
@@ -642,7 +723,7 @@ export default function HodResultAnalysisPage(): JSX.Element {
         <div style={{ background: '#1e3a5f', color: '#fff', padding: '16px 24px 0' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
             <button
-              onClick={() => { setSelectedId(null); setTaCache(new Map()); }}
+              onClick={() => { setSelectedKey(null); setTaCache(new Map()); }}
               style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.25)', color: '#fff', borderRadius: 8, padding: '6px 16px', cursor: 'pointer', fontWeight: 700, fontSize: 13 }}
             >
               ← Back
@@ -660,6 +741,13 @@ export default function HodResultAnalysisPage(): JSX.Element {
                   </span>
                 : <span style={{ background: 'rgba(255,255,255,0.12)', borderRadius: 20, padding: '3px 12px', fontSize: 12, fontWeight: 700 }}>{taSlots.length} Subjects</span>
               }
+              <button
+                onClick={() => setShowDownload(true)}
+                disabled={dlRows.length === 0}
+                style={{ display: 'flex', alignItems: 'center', gap: 6, background: dlRows.length > 0 ? '#2563eb' : 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.25)', color: '#fff', borderRadius: 8, padding: '6px 14px', cursor: dlRows.length > 0 ? 'pointer' : 'not-allowed', fontWeight: 700, fontSize: 13, opacity: dlRows.length > 0 ? 1 : 0.5 }}
+              >
+                ⬇ Download Report
+              </button>
             </div>
           </div>
 
@@ -690,6 +778,25 @@ export default function HodResultAnalysisPage(): JSX.Element {
           {activeView === 'bell'    && <BellGraphView      taSlots={taSlots} taCache={taCache} cycle={activeCycle} />}
           {activeView === 'ranking' && <RankingView        taSlots={taSlots} taCache={taCache} cycle={activeCycle} />}
         </div>
+
+        {/* ── Download Report Modal ── */}
+        <DownloadReportModal
+          open={showDownload}
+          onClose={() => setShowDownload(false)}
+          courseId={selectedSection.batch?.name || selectedSection.department?.code || ''}
+          courseName={selectedSection.course?.name || selectedSection.batch?.name || selectedSection.name || ''}
+          ct={taSlots[0]?.classType || ''}
+          sectionName={dlSectionName}
+          staffLabel={_hodRoleLabel}
+          staffName={dlStaffName}
+          studentCount={dlClassRoster.length}
+          cycleName={cycleLabels[activeCycle]}
+          cols={dlCols}
+          rows={dlRows}
+          totals={dlTotals}
+          isClassReport={true}
+          semester={selectedSection.semester ?? null}
+        />
       </div>
     );
   }
@@ -729,14 +836,14 @@ export default function HodResultAnalysisPage(): JSX.Element {
         {progressError && !progressLoading && (
           <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 10, padding: '14px 18px', color: '#b91c1c', fontSize: 13 }}>{progressError}</div>
         )}
-        {!progressLoading && !progressError && filteredSections.length === 0 && (
+        {!progressLoading && !progressError && filteredSectionItems.length === 0 && (
           <div style={{ textAlign: 'center', padding: 60, color: '#9ca3af', fontSize: 14 }}>{search ? `No sections matching "${search}"` : 'No sections found.'}</div>
         )}
         {!progressLoading && !progressError && sections.length > 0 && (
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 20 }}>
             {[
               { label: 'Total Sections', val: sections.length, color: '#1d4ed8', bg: '#eff6ff' },
-              { label: 'Showing',        val: filteredSections.length, color: '#059669', bg: '#f0fdf4' },
+              { label: 'Showing',        val: filteredSectionItems.length, color: '#059669', bg: '#f0fdf4' },
               { label: 'Dept',           val: progressData?.department?.short_name || progressData?.department?.code || '—', color: '#7c3aed', bg: '#faf5ff' },
             ].map(({ label, val, color, bg }) => (
               <div key={label} style={{ background: bg, border: `1px solid ${color}22`, borderRadius: 8, padding: '6px 14px', fontSize: 12 }}>
@@ -748,11 +855,11 @@ export default function HodResultAnalysisPage(): JSX.Element {
         )}
         {!progressLoading && !progressError && (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(295px, 1fr))', gap: 16 }}>
-            {filteredSections.map((sec) => {
+            {filteredSectionItems.map(({ key, sec }) => {
               const subjectCount = sec.staff.reduce((n, st) => n + st.teaching_assignments.filter((ta) => ta.id && ta.subject_code).length, 0);
               return (
-                <SectionCard key={sec.id} sec={sec} subjectCount={subjectCount} studentCount={studentCount(sec)}
-                  onClick={() => { setSelectedId(sec.id); setActiveView('marks'); setActiveCycle('cycle1'); }}
+                <SectionCard key={key} sec={sec} subjectCount={subjectCount} studentCount={studentCount(sec)}
+                  onClick={() => { setSelectedKey(key); setActiveView('marks'); setActiveCycle('cycle1'); }}
                 />
               );
             })}

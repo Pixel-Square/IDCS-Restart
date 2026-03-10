@@ -148,20 +148,34 @@ export type PublishWindowResponse = {
   assessment_control_active?: boolean;
   assessment_enabled?: boolean;
   assessment_open?: boolean;
+  edit_allowed?: boolean;
+  window_state?: 'DISABLED' | 'NOT_STARTED' | 'OPEN' | 'ENDED' | 'UNLIMITED' | string;
   publish_allowed: boolean;
   allowed_by_due: boolean;
   allowed_by_approval: boolean;
   global_override_active?: boolean;
   global_is_open?: boolean | null;
   allowed_by_global?: boolean | null;
+  auto_published?: boolean;
+  open_from?: string | null;
   due_at: string | null;
   now: string | null;
   remaining_seconds: number | null;
+  starts_in_seconds?: number | null;
   approval_until: string | null;
   academic_year: { id: number; name: string } | null;
   semester?: { id: number; number: number | null } | null;
   teaching_assignment_id: number | null;
 };
+
+export async function autoPublishDue(assessment: DueAssessmentKey, subjectId: string, teachingAssignmentId?: number): Promise<{ status: string; auto_published: boolean; reason?: string }> {
+  const body: any = {};
+  if (typeof teachingAssignmentId === 'number') body.teaching_assignment_id = teachingAssignmentId;
+  const url = `${apiBase()}/api/obe/auto-publish/${encodeURIComponent(assessment)}/${encodeURIComponent(subjectId)}`;
+  const res = await fetchWithAuth(url, { method: 'POST', body: JSON.stringify(body) });
+  if (!res.ok) await parseError(res, 'Auto publish failed');
+  return res.json();
+}
 
 export type EditScope = 'MARK_ENTRY' | 'MARK_MANAGER';
 
@@ -419,6 +433,7 @@ export type DueScheduleRow = {
   subject_code: string;
   subject_name: string;
   assessment: DueAssessmentKey;
+  open_from?: string | null;
   due_at: string;
   is_active: boolean;
   updated_at: string | null;
@@ -498,7 +513,14 @@ export async function fetchDueScheduleSubjects(semesterIds: number[]): Promise<{
   return res.json();
 }
 
-export async function upsertDueSchedule(payload: { semester_id: number; subject_code: string; subject_name?: string; assessment: DueAssessmentKey; due_at: string }): Promise<any> {
+export async function upsertDueSchedule(payload: {
+  semester_id: number;
+  subject_code: string;
+  subject_name?: string;
+  assessment: DueAssessmentKey;
+  open_from?: string | null;
+  due_at: string;
+}): Promise<any> {
   const url = `${apiBase()}/api/obe/due-schedule-upsert`;
   const res = await fetch(url, {
     method: 'POST',
@@ -509,7 +531,13 @@ export async function upsertDueSchedule(payload: { semester_id: number; subject_
   return res.json();
 }
 
-export async function bulkUpsertDueSchedule(payload: { semester_id: number; subject_codes: string[]; assessments: DueAssessmentKey[]; due_at: string }): Promise<{ status: string; updated: number }> {
+export async function bulkUpsertDueSchedule(payload: {
+  semester_id: number;
+  subject_codes: string[];
+  assessments: DueAssessmentKey[];
+  open_from?: string | null;
+  due_at: string;
+}): Promise<{ status: string; updated: number }> {
   const url = `${apiBase()}/api/obe/due-schedule-bulk-upsert`;
   const res = await fetch(url, {
     method: 'POST',
@@ -999,7 +1027,15 @@ async function parseError(res: Response, fallback: string) {
     err.body = j;
     throw err;
   } catch {
-    const err: any = new Error(`${fallback}: ${res.status} ${text}`);
+    const raw = String(text ?? '').replace(/^\uFEFF/, '').trim();
+    const cleaned = raw
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const snippet = cleaned ? cleaned.slice(0, 600) : '';
+    const err: any = new Error(snippet ? `${fallback}: ${res.status} ${snippet}` : `${fallback}: ${res.status}`);
     err.status = res.status;
     err.bodyText = text;
     throw err;

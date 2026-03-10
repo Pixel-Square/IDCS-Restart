@@ -79,8 +79,8 @@ class CurriculumMasterAdminForm(forms.ModelForm):
 class CurriculumMasterAdmin(admin.ModelAdmin):
     change_list_template = 'admin/curriculum/master_change_list.html'
     form = CurriculumMasterAdminForm
-    list_display = ('regulation', 'semester', 'course_code', 'course_name', 'category', 'class_type', 'enabled_assessments_display', 'for_all_departments', 'editable')
-    list_filter = (RegulationFilter, 'semester', 'for_all_departments', 'editable')
+    list_display = ('regulation', 'semester', 'batch', 'course_code', 'course_name', 'category', 'class_type', 'enabled_assessments_display', 'for_all_departments', 'editable')
+    list_filter = (RegulationFilter, 'semester', 'batch', 'for_all_departments', 'editable')
     search_fields = ('course_code', 'course_name')
     filter_horizontal = ('departments',)
     actions = ['propagate_to_departments']
@@ -304,8 +304,8 @@ class RegulationFilter(SimpleListFilter):
 
 @admin.register(CurriculumDepartment)
 class CurriculumDepartmentAdmin(admin.ModelAdmin):
-    list_display = ('department', 'regulation', 'semester', 'course_code', 'mnemonic', 'course_name', 'is_elective', 'editable', 'overridden')
-    list_filter = ('department', RegulationFilter, 'semester', 'is_elective', 'editable', 'overridden')
+    list_display = ('department', 'regulation', 'semester', 'batch', 'course_code', 'mnemonic', 'course_name', 'is_elective', 'editable', 'overridden')
+    list_filter = ('department', RegulationFilter, 'semester', 'batch', 'is_elective', 'editable', 'overridden')
     search_fields = ('course_code', 'course_name', 'mnemonic')
 
     def get_readonly_fields(self, request, obj=None):
@@ -338,8 +338,8 @@ class ElectiveSubjectInline(admin.TabularInline):
 
 @admin.register(ElectiveSubject)
 class ElectiveSubjectAdmin(admin.ModelAdmin):
-    list_display = ('course_code', 'course_name', 'department', 'department_group', 'parent', 'regulation', 'semester', 'is_elective', 'editable', 'approval_status')
-    list_filter = ('department', 'department_group', RegulationFilter, 'semester', 'is_elective', 'approval_status')
+    list_display = ('course_code', 'course_name', 'department', 'department_group', 'batch', 'parent', 'regulation', 'semester', 'is_elective', 'editable', 'approval_status')
+    list_filter = ('department', 'department_group', 'batch', RegulationFilter, 'semester', 'is_elective', 'approval_status')
     search_fields = ('course_code', 'course_name')
 
 

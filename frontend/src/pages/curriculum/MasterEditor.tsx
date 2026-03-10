@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import CurriculumLayout from './CurriculumLayout';
 import CLASS_TYPES, { normalizeClassType, QP_TYPES } from '../../constants/classTypes';
-import { createMaster, updateMaster, fetchMasters } from '../../services/curriculum';
+import { createMaster, updateMaster, fetchMasters, fetchBatchYears } from '../../services/curriculum';
 import fetchWithAuth from '../../services/fetchAuth';
 import { BookOpen, Save, X as CancelIcon } from 'lucide-react';
 
@@ -13,6 +13,7 @@ export default function MasterEditor() {
   const [form, setForm] = useState<any>({ regulation: '', semester: 1, for_all_departments: true, editable: false, is_elective: false });
   const [loading, setLoading] = useState(false);
   const [departments, setDepartments] = useState<Array<{id:number; code:string; name:string}>>([]);
+  const [batchYears, setBatchYears] = useState<any[]>([]);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -31,6 +32,7 @@ export default function MasterEditor() {
       .then(res => res.json())
       .then(data => setDepartments(data.results || []))
       .catch(() => setDepartments([]));
+    fetchBatchYears().then(setBatchYears).catch(() => {});
   }, []);
 
   async function save() {
@@ -119,6 +121,21 @@ export default function MasterEditor() {
                 onChange={e => setForm({...form, semester: Number(e.target.value)})} 
                 required 
               />
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">Batch</label>
+              <select
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                value={form.batch_id ?? form.batch?.id ?? ''}
+                onChange={e => setForm({...form, batch_id: e.target.value ? Number(e.target.value) : null})}
+              >
+                <option value="">— No Batch —</option>
+                {batchYears.map(b => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

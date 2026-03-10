@@ -24,8 +24,25 @@ export function normalizeClassType(raw?: string | null): string {
   return String(raw ?? '').trim().toUpperCase();
 }
 
+export function normalizeObeClassType(raw?: string | null): string {
+  const normalized = normalizeClassType(raw);
+  const compact = normalized.replace(/[^A-Z0-9]/g, '');
+
+  if (!compact) return '';
+  if (compact.includes('TCPR')) return 'TCPR';
+  if (compact.includes('TCPL')) return 'TCPL';
+  if (compact === 'THEORYPMBL' || compact === 'THEORY' || compact.startsWith('THEORY')) return 'THEORY';
+  if (compact === 'PRBL' || compact === 'PROJECT' || compact.includes('PROJECT')) return 'PROJECT';
+  if (compact === 'LAB' || compact === 'L' || compact.startsWith('LAB')) return 'LAB';
+  if (compact === 'PRACTICAL' || compact.startsWith('PRACT')) return 'PRACTICAL';
+  if (compact === 'AUDIT') return 'AUDIT';
+  if (compact === 'SPECIAL') return 'SPECIAL';
+
+  return normalized;
+}
+
 export function isLabClassType(raw?: string | null): boolean {
-  const s = normalizeClassType(raw);
+  const s = normalizeObeClassType(raw);
   if (!s) return false;
   if (s === 'LAB' || s === 'L') return true;
   if (s.startsWith('LAB') || s.includes('LAB')) return true;
@@ -34,7 +51,7 @@ export function isLabClassType(raw?: string | null): boolean {
 }
 
 export function isSpecialClassType(raw?: string | null): boolean {
-  return normalizeClassType(raw) === 'SPECIAL';
+  return normalizeObeClassType(raw) === 'SPECIAL';
 }
 
 export default CLASS_TYPES;

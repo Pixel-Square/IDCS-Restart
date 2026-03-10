@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   fetchClassTypeWeights,
   fetchDraft,
+  fetchIqacCqiConfig,
   fetchIqacQpPattern,
   fetchMyTeachingAssignments,
   fetchPublishedCiaSheet,
@@ -35,6 +36,12 @@ type QuestionDef = { key: string; max: number; co: 1 | 2 | '1&2' };
 type QuestionDef34 = { key: string; max: number; co: 3 | 4 | '3&4' };
 
 type IqacPattern = { marks: number[]; cos?: Array<number | string> };
+
+type CqiPublishedSnapshot = {
+  publishedAt?: string;
+  coNumbers?: number[];
+  entries?: Record<number, Record<string, number | null>>;
+};
 
 const DEFAULT_INTERNAL_MAPPING = {
   // CO1/CO2 are split like CO3/CO4: ssa/cia/fa columns.
@@ -409,6 +416,58 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
 
   const [loadingData, setLoadingData] = useState(false);
   const [dataError, setDataError] = useState<string | null>(null);
+
+  const [cqiPublished, setCqiPublished] = useState<CqiPublishedSnapshot | null>(null);
+  const [cqiGlobalCfg, setCqiGlobalCfg] = useState<{ divider: number; multiplier: number } | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      if (!courseId || selectedTaId == null) {
+        if (mounted) setCqiPublished(null);
+        return;
+      }
+      try {
+        const qp = `?teaching_assignment_id=${encodeURIComponent(String(selectedTaId))}`;
+        const res = await fetchWithAuth(`/api/obe/cqi-published/${encodeURIComponent(String(courseId))}${qp}`);
+        if (!mounted) return;
+        if (res && res.ok) {
+          const j = await res.json().catch(() => null);
+          const pub = j?.published && typeof j.published === 'object' ? (j.published as CqiPublishedSnapshot) : null;
+          setCqiPublished(pub);
+        } else {
+          setCqiPublished(null);
+        }
+      } catch {
+        if (mounted) setCqiPublished(null);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [courseId, selectedTaId]);
+
+  // Load global IQAC CQI config (divider/multiplier).
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const res: any = await fetchIqacCqiConfig();
+        if (!mounted) return;
+        const divider = Number(res?.divider);
+        const multiplier = Number(res?.multiplier);
+        setCqiGlobalCfg({
+          divider: Number.isFinite(divider) && divider > 0 ? divider : 2,
+          multiplier: Number.isFinite(multiplier) && multiplier >= 0 ? multiplier : 0.15,
+        });
+      } catch {
+        if (mounted) setCqiGlobalCfg(null);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -875,6 +934,111 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
     const w = effMapping.weights.map((x: any) => Number(x) || 0);
     return w.reduce((s, n) => s + n, 0);
   }, [effMapping]);
+
+  const publishedCoSet = useMemo(() => {
+    const nums = (cqiPublished?.coNumbers || [])
+      .filter((n) => typeof n === 'number' && Number.isFinite(n))
+      .map((n) => Number(n));
+    return new Set<number>(nums.filter((n) => n >= 1 && n <= 20));
+  }, [cqiPublished]);
+
+  const THRESHOLD_PERCENT = 58;
+  const effectiveDivider = useMemo(() => {
+    const d = Number(cqiGlobalCfg?.divider);
+    return Number.isFinite(d) && d > 0 ? d : 2;
+  }, [cqiGlobalCfg]);
+  const effectiveMultiplier = useMemo(() => {
+    const m = Number(cqiGlobalCfg?.multiplier);
+    return Number.isFinite(m) && m >= 0 ? m : 0.15;
+  }, [cqiGlobalCfg]);
+
+  const displayCols = useMemo(() => {
+    const labels = Array.isArray((effMapping as any)?.labels) ? ((effMapping as any).labels as string[]) : [];
+    const header = Array.isArray((effMapping as any)?.header) ? ((effMapping as any).header as any[]) : [];
+    const cycles = Array.isArray((effMapping as any)?.cycles) ? ((effMapping as any).cycles as any[]) : [];
+    const weightsRow = Array.isArray((effMapping as any)?.weights) ? ((effMapping as any).weights as any[]) : [];
+
+    const out: Array<{
+      key: string;
+      indices: number[];
+      header: string;
+      cycle: string;
+      weight: number;
+      isMerged: boolean;
+      co?: number;
+    }> = [];
+
+    const mergedDone = new Set<number>();
+
+    const isInternalCoPart = (lab: string) => /^CO(\d+)-/i.exec(lab);
+
+    for (let i = 0; i < labels.length; i++) {
+      const lab = String(labels[i] || '').trim();
+      const m = isInternalCoPart(lab);
+      if (m) {
+        const co = Number(m[1]);
+        if (publishedCoSet.has(co)) {
+          if (mergedDone.has(co)) continue;
+          const idxs: number[] = [];
+          for (let j = 0; j < labels.length; j++) {
+            const mj = isInternalCoPart(String(labels[j] || '').trim());
+            if (mj && Number(mj[1]) === co) idxs.push(j);
+          }
+          idxs.sort((a, b) => a - b);
+          const wSum = round2(idxs.reduce((s, idx) => s + (Number(weightsRow[idx]) || 0), 0));
+          out.push({
+            key: `merged-co-${co}`,
+            indices: idxs,
+            header: `CO${co}`,
+            cycle: 'Total',
+            weight: wSum,
+            isMerged: true,
+            co,
+          });
+          mergedDone.add(co);
+          continue;
+        }
+      }
+
+      out.push({
+        key: `col-${i}`,
+        indices: [i],
+        header: String(header[i] ?? ''),
+        cycle: String(cycles[i] ?? ''),
+        weight: Number(weightsRow[i] ?? 0) || 0,
+        isMerged: false,
+      });
+    }
+
+    return out;
+  }, [effMapping, publishedCoSet]);
+
+  const getDisplayValue = (rowCells: any[], col: { indices: number[]; isMerged: boolean }): number | null => {
+    const cells = Array.isArray(rowCells) ? rowCells : [];
+    if (!col.indices.length) return null;
+    if (!col.isMerged) {
+      const v = cells[col.indices[0]];
+      return typeof v === 'number' && Number.isFinite(v) ? v : null;
+    }
+
+    const vals = col.indices.map((idx) => cells[idx]);
+    const hasAny = vals.some((v) => typeof v === 'number' && Number.isFinite(v));
+    if (!hasAny) return null;
+    const sum = vals.reduce((s, v) => s + (typeof v === 'number' && Number.isFinite(v) ? v : 0), 0);
+    return round2(sum);
+  };
+
+  const computeCqiAdd = (args: { coValue: number; coMax: number; totalPct: number; input: number | null | undefined }): number => {
+    const { coValue, coMax, totalPct, input } = args;
+    if (input == null) return 0;
+    const inp = Number(input);
+    if (!Number.isFinite(inp)) return 0;
+    const pct = coMax ? (Number(coValue) / Number(coMax)) * 100 : 0;
+    if (!(Number.isFinite(pct) && pct < THRESHOLD_PERCENT)) return 0;
+    const base = (inp / 10) * Number(coMax);
+    const add = totalPct < THRESHOLD_PERCENT ? base / effectiveDivider : base * effectiveMultiplier;
+    return Number.isFinite(add) && add > 0 ? add : 0;
+  };
 
   const computedRows = useMemo(() => {
     const ct = effectiveClassType;
@@ -1589,9 +1753,9 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
     });
   }, [effMapping, published, publishedReview, publishedLab, publishedTcplLab, publishedModel, students, weights, maxTotal, courseId, selectedTaId, masterCfg, effectiveClassType, iqacCiaPattern, iqacModelPattern]);
 
-  const header = effMapping.header;
-  const cycles = effMapping.cycles;
-  const weightsRow = effMapping.weights;
+  const header = displayCols.map((c) => c.header);
+  const cycles = displayCols.map((c) => c.cycle);
+  const weightsRow = displayCols.map((c) => c.weight);
 
   return (
     <div style={{ padding: 12 }}>
@@ -1632,7 +1796,16 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
               <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb' }}>Register No.</th>
               <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb' }}>Name</th>
               {header.map((h: any, i: number) => (
-                <th key={i} style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f3f4f6' }}>{String(h)}</th>
+                <th
+                  key={displayCols[i]?.key || i}
+                  style={{
+                    border: '1px solid #e5e7eb',
+                    padding: 8,
+                    background: '#f3f4f6',
+                  }}
+                >
+                  {String(h)}
+                </th>
               ))}
               <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb' }}>{round2(maxTotal)}</th>
               <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb' }}>100</th>
@@ -1640,7 +1813,16 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
             <tr>
               <th colSpan={3} style={{ border: '1px solid #e5e7eb', padding: 8, background: '#fff', textAlign: 'left', fontWeight: 800 }}>internal weightage</th>
               {weightsRow.map((w0: any, i: number) => (
-                <th key={`w-${i}`} style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f3f4f6' }}>{Number(w0).toFixed(1)}</th>
+                <th
+                  key={`w-${displayCols[i]?.key || i}`}
+                  style={{
+                    border: '1px solid #e5e7eb',
+                    padding: 8,
+                    background: '#f3f4f6',
+                  }}
+                >
+                  {Number(w0).toFixed(1)}
+                </th>
               ))}
               <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#fff' }} />
               <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#fff' }} />
@@ -1648,7 +1830,16 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
             <tr>
               <th colSpan={3} style={{ border: '1px solid #e5e7eb', padding: 8, background: '#fff', textAlign: 'left', fontWeight: 800 }}>cycle</th>
               {cycles.map((c: any, i: number) => (
-                <th key={`c-${i}`} style={{ border: '1px solid #e5e7eb', padding: 8, background: '#fff' }}>{String(c)}</th>
+                <th
+                  key={`c-${displayCols[i]?.key || i}`}
+                  style={{
+                    border: '1px solid #e5e7eb',
+                    padding: 8,
+                    background: '#fff',
+                  }}
+                >
+                  {String(c)}
+                </th>
               ))}
               <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#fff' }} />
               <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#fff' }} />
@@ -1660,9 +1851,56 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
                 <td style={{ border: '1px solid #e5e7eb', padding: 6 }}>{r.sno}</td>
                 <td style={{ border: '1px solid #e5e7eb', padding: 6 }}>{r.reg_no}</td>
                 <td style={{ border: '1px solid #e5e7eb', padding: 6 }}>{r.name}</td>
-                {(Array.isArray(r.cells) ? r.cells : []).map((v: any, i: number) => (
-                  <td key={i} style={{ border: '1px solid #e5e7eb', padding: 6, textAlign: 'center' }}>{v == null ? '' : Number(v).toFixed(2)}</td>
-                ))}
+                {(() => {
+                  const entries = (cqiPublished?.entries && typeof cqiPublished.entries === 'object') ? cqiPublished.entries : {};
+                  const studentEntry: any = (entries as any)?.[r.id] || {};
+
+                  // Row-level TOTAL% for CQI rule: based on published COs only.
+                  const mergedColsForRule = displayCols.filter((c) => c.isMerged && c.co != null && publishedCoSet.has(Number(c.co)));
+                  let totalValue = 0;
+                  let totalMax = 0;
+                  for (const c of mergedColsForRule) {
+                    const base = getDisplayValue(r.cells, c as any);
+                    const mx = Number((c as any).weight) || 0;
+                    if (base != null && Number.isFinite(base)) totalValue += Number(base);
+                    if (Number.isFinite(mx) && mx > 0) totalMax += mx;
+                  }
+                  const totalPct = totalMax ? (totalValue / totalMax) * 100 : 0;
+
+                  return displayCols.map((col, i) => {
+                    let val = getDisplayValue(r.cells, col);
+                    let changed = false;
+
+                    if (col.isMerged && col.co != null && publishedCoSet.has(Number(col.co))) {
+                      const base = val;
+                      const coMax = Number(col.weight) || 0;
+                      const input = studentEntry?.[`co${col.co}`];
+                      if (base != null && Number.isFinite(base) && coMax > 0) {
+                        const add = computeCqiAdd({ coValue: Number(base), coMax, totalPct, input: input == null ? null : Number(input) });
+                        if (add > 0) {
+                          changed = true;
+                          val = clamp(round2(Number(base) + add), 0, coMax);
+                        }
+                      }
+                    }
+
+                    return (
+                      <td
+                        key={col.key || i}
+                        style={{
+                          border: '1px solid #e5e7eb',
+                          padding: 6,
+                          textAlign: 'center',
+                          fontWeight: changed ? 900 : undefined,
+                          color: changed ? '#16a34a' : undefined,
+                          background: changed ? '#f0fdf4' : undefined,
+                        }}
+                      >
+                        {val == null ? '' : Number(val).toFixed(2)}
+                      </td>
+                    );
+                  });
+                })()}
                 <td style={{ border: '1px solid #e5e7eb', padding: 6, textAlign: 'center', fontWeight: 800 }}>{r.total == null ? '' : Number(r.total).toFixed(2)}</td>
                 <td style={{ border: '1px solid #e5e7eb', padding: 6, textAlign: 'center' }}>{r.pct == null ? '' : Number(r.pct).toFixed(2)}</td>
               </tr>

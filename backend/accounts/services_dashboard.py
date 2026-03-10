@@ -51,6 +51,8 @@ def resolve_dashboard_capabilities(user) -> Dict:
             'hod_obe_requests': False,
         }
         return {
+            'username': '',
+            'is_iqac_main': False,
             'profile_type': None,
             'roles': [],
             'permissions': [],
@@ -85,6 +87,12 @@ def resolve_dashboard_capabilities(user) -> Dict:
     for r in sorted(dept_role_names):
         if r not in {str(x).upper() for x in role_names}:
             role_names.append(r)
+
+    is_iqac_main = False
+    try:
+        is_iqac_main = ('IQAC' in {str(r or '').upper() for r in role_names}) and str(getattr(user, 'username', '') or '').strip() == '000000'
+    except Exception:
+        is_iqac_main = False
 
     Permission = models.Permission
     perms_qs = Permission.objects.filter(permission_roles__role__in=roles_qs).distinct()
@@ -163,6 +171,8 @@ def resolve_dashboard_capabilities(user) -> Dict:
     }
 
     return {
+        'username': str(getattr(user, 'username', '') or ''),
+        'is_iqac_main': bool(is_iqac_main),
         'profile_type': profile_type,
         'roles': role_names,
         'permissions': perm_codes,

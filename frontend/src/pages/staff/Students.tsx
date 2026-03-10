@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import fetchWithAuth from '../../services/fetchAuth'
-import { Users, GraduationCap, Mail, Loader2, UserCircle2, ChevronLeft, ChevronRight, Building2, Globe, UserCheck, Heart, Edit2, X } from 'lucide-react'
+import { Users, GraduationCap, Mail, Loader2, UserCircle2, ChevronLeft, ChevronRight, Building2, Globe, UserCheck, Heart, RefreshCw, Edit2, X, Search } from 'lucide-react'
+
 
 // Cache key and expiry time (5 minutes)
 const CACHE_KEY = 'students_page_cache'
@@ -66,6 +67,15 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
   const [isEditOpen, setIsEditOpen] = useState(false)
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null)
   const [editFormData, setEditFormData] = useState<Student | null>(null)
+  const [searchQuery, setSearchQuery] = useState<string>('')
+  const [debouncedSearch, setDebouncedSearch] = useState<string>('')
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSearch(searchQuery.trim())
+    }, 300)
+    return () => window.clearTimeout(timer)
+  }, [searchQuery])
 
   // Get user permissions from localStorage and user object
   const getPermissions = (): string[] => {
@@ -82,49 +92,64 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
   const userPermissions = getPermissions()
   const hasPermission = (permission: string) => userPermissions.includes(permission.toLowerCase())
 
-  // Check if user has IQAC role
-  const isIQAC = () => {
+  // Get user roles for role-based tab exclusions
+  const getUserRoles = (): string[] => {
     try {
-      const roles = user?.roles || []
-      const localRoles = JSON.parse(localStorage.getItem('roles') || '[]')
-      const allRoles = [...roles, ...localRoles].map((r: string) => String(r).toUpperCase().trim())
-      return allRoles.includes('IQAC')
+      const localRoles = JSON.parse(localStorage.getItem('roles') || '[]') as string[]
+      const userRoles = user?.roles || []
+      return [...localRoles, ...userRoles].map(r => String(r).toUpperCase().trim())
     } catch {
-      return false
+      return (user?.roles || []).map((r: string) => String(r).toUpperCase().trim())
     }
   }
+  const userRoles = getUserRoles()
+  const hasRole = (role: string) => userRoles.includes(role.toUpperCase())
 
-  // Available view modes based on permissions
+  // HOD / AHOD users manage departments — they should not see "My Students"
+  // (an advisor tab) even if they also carry the ADVISOR role.
+  const isHodRole = hasRole('HOD') || hasRole('AHOD') || hasRole('hod') || hasRole('ahod')
+
+  // IQAC users operate at the system level — they should not see the
+  // department-scoped "Department Students" tab (only "All Students").
+  const isIqacRole = hasRole('IQAC') || hasRole('iqac')
+
+  // Available view modes based on permissions + role exclusions
   const availableViews = [
     {
       key: 'my-students' as ViewMode,
       label: 'My Students',
       icon: UserCheck,
       permission: 'academics.view_my_students',
-      description: 'Students in your advised sections'
+      description: 'Students in your advised sections',
+      // HOD/AHOD must not see this tab regardless of permissions
+      roleExcluded: isHodRole,
     },
     {
       key: 'my-mentees' as ViewMode,
       label: 'My Mentees',
       icon: Heart,
       permission: 'academics.view_mentees',
-      description: 'Students assigned to you as mentor'
+      description: 'Students assigned to you as mentor',
+      roleExcluded: false,
     },
     {
       key: 'department-students' as ViewMode,
       label: 'Department Students',
       icon: Building2,
       permission: 'students.view_department_students',
-      description: 'All students in your department'
+      description: 'All students in your department',
+      // IQAC must not see department-scoped view; they use All Students
+      roleExcluded: isIqacRole,
     },
     {
       key: 'all-students' as ViewMode,
       label: 'All Students',
       icon: Globe,
       permission: 'students.view_all_students',
-      description: 'Students from all departments'
+      description: 'Students from all departments',
+      roleExcluded: false,
     }
-  ].filter(view => hasPermission(view.permission))
+  ].filter(view => hasPermission(view.permission) && !view.roleExcluded)
 
   // Get current username for user-specific caching
   const getCurrentUsername = () => {
@@ -194,6 +219,8 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
     setSelectedSection(null)
     setLazyStudents([])
     setCurrentPage(1)
+    setSearchQuery('')
+    setDebouncedSearch('')
     fetchSectionsOrStudents()
   }, [viewMode])
 
@@ -203,12 +230,13 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
       // Data is pre-loaded – pull from cache, no extra API call
       setLazyStudents(studentsCache[selectedSection] || [])
     } else {
-      fetchSectionStudents(selectedSection)
+      fetchSectionStudents(selectedSection, debouncedSearch)
     }
-  }, [selectedSection])
+  }, [selectedSection, viewMode, studentsCache, debouncedSearch])
 
   // Reset to page 1 when section changes
   useEffect(() => { setCurrentPage(1) }, [selectedSection])
+  useEffect(() => { setCurrentPage(1) }, [debouncedSearch])
 
   // Reset filters when allSections list is refreshed
   useEffect(() => {
@@ -235,7 +263,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
   // Resolve + fetch for dept-students when any dept/batch/section filter changes
   useEffect(() => {
     if (viewMode !== 'department-students') return
-    if (!deptDeptFilter && !deptBatchFilter && !deptSectionFilter) {
+    if (!deptDeptFilter && !deptBatchFilter && !deptSectionFilter && !debouncedSearch) {
       setSelectedSection(null)
       setLazyStudents([])
       return
@@ -247,14 +275,14 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
     )
     if (matched.length === 0) { setSelectedSection(null); setLazyStudents([]); return }
     setSelectedSection(null)
-    fetchDeptStudentsForSections(matched.map(s => s.section_id))
-  }, [deptDeptFilter, deptBatchFilter, deptSectionFilter])
+    fetchDeptStudentsForSections(matched.map(s => s.section_id), debouncedSearch)
+  }, [deptDeptFilter, deptBatchFilter, deptSectionFilter, debouncedSearch])
 
   // Resolve + fetch students whenever any filter changes in all-students mode
   // Works with partial selection: dept only → entire dept, dept+batch → entire batch, all three → specific section
   useEffect(() => {
     if (viewMode !== 'all-students') return
-    if (!allDeptFilter && !allBatchFilter && !allSectionFilter) {
+    if (!allDeptFilter && !allBatchFilter && !allSectionFilter && !debouncedSearch) {
       setSelectedSection(null)
       setLazyStudents([])
       return
@@ -266,8 +294,8 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
     )
     if (matched.length === 0) { setSelectedSection(null); setLazyStudents([]); return }
     setSelectedSection(null)
-    fetchAllStudentsForSections(matched.map(s => s.section_id))
-  }, [allDeptFilter, allBatchFilter, allSectionFilter])
+    fetchAllStudentsForSections(matched.map(s => s.section_id), debouncedSearch)
+  }, [allDeptFilter, allBatchFilter, allSectionFilter, debouncedSearch])
 
   // Map a raw result entry (from my-students or my-mentees response) to SectionMeta + Student[]
   function parsePreloadedSection(r: any): { meta: SectionMeta; students: Student[] } {
@@ -387,7 +415,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
     }
   }
 
-  async function fetchSectionStudents(sectionId: number) {
+  async function fetchSectionStudents(sectionId: number, searchTerm: string = '') {
     // Check cache for this specific section
     const sectionCacheKey = `${CACHE_KEY}_section_${sectionId}_${viewMode}`
     try {
@@ -403,9 +431,10 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
       }
     } catch {}
 
+    const encodedSearch = searchTerm ? `&search=${encodeURIComponent(searchTerm)}` : ''
     const endpoint = viewMode === 'department-students'
-      ? `/api/academics/department-students/?section_id=${sectionId}`
-      : `/api/academics/all-students/?section_id=${sectionId}`
+      ? `/api/academics/department-students/?section_id=${sectionId}${encodedSearch}`
+      : `/api/academics/all-students/?section_id=${sectionId}${encodedSearch}`
     setLoadingStudents(true)
     try {
       const res = await fetchWithAuth(endpoint)
@@ -429,13 +458,14 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
   }
 
   // Fetch students for multiple sections in parallel (used by all-students partial filter)
-  async function fetchAllStudentsForSections(sectionIds: number[]) {
+  async function fetchAllStudentsForSections(sectionIds: number[], searchTerm: string = '') {
     setLoadingStudents(true)
     setLazyStudents([])
     try {
+      const encodedSearch = searchTerm ? `&search=${encodeURIComponent(searchTerm)}` : ''
       const results = await Promise.all(
         sectionIds.map(async sid => {
-          const res = await fetchWithAuth(`/api/academics/all-students/?section_id=${sid}`)
+          const res = await fetchWithAuth(`/api/academics/all-students/?section_id=${sid}${encodedSearch}`)
           if (!res.ok) return [] as Student[]
           const data = await res.json()
           return (data.students || []) as Student[]
@@ -451,13 +481,14 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
   }
 
   // Fetch students for multiple sections in parallel (used by department-students partial filter)
-  async function fetchDeptStudentsForSections(sectionIds: number[]) {
+  async function fetchDeptStudentsForSections(sectionIds: number[], searchTerm: string = '') {
     setLoadingStudents(true)
     setLazyStudents([])
     try {
+      const encodedSearch = searchTerm ? `&search=${encodeURIComponent(searchTerm)}` : ''
       const results = await Promise.all(
         sectionIds.map(async sid => {
-          const res = await fetchWithAuth(`/api/academics/department-students/?section_id=${sid}`)
+          const res = await fetchWithAuth(`/api/academics/department-students/?section_id=${sid}${encodedSearch}`)
           if (!res.ok) return [] as Student[]
           const data = await res.json()
           return (data.students || []) as Student[]
@@ -478,11 +509,20 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
     : viewMode === 'my-mentees' ? myMenteesSections
     : viewMode === 'department-students' ? deptSections
     : allSections
-  const displayStudentsList: Student[] = [...lazyStudents].sort((a, b) => {
-    const nameA = (a.first_name || a.username || '').trim().toLowerCase()
-    const nameB = (b.first_name || b.username || '').trim().toLowerCase()
-    return nameA.localeCompare(nameB)
-  })
+  const normalizedSearch = debouncedSearch.toLowerCase()
+  const displayStudentsList: Student[] = [...lazyStudents]
+    .filter(student => {
+      if (!normalizedSearch) return true
+      const fullName = `${student.first_name || ''} ${student.last_name || ''}`.trim().toLowerCase()
+      const username = (student.username || '').toLowerCase()
+      const regNo = (student.reg_no || '').toLowerCase()
+      return regNo.includes(normalizedSearch) || fullName.includes(normalizedSearch) || username.includes(normalizedSearch)
+    })
+    .sort((a, b) => {
+      const nameA = `${a.first_name || ''} ${a.last_name || ''}`.trim().toLowerCase() || (a.username || '').toLowerCase()
+      const nameB = `${b.first_name || ''} ${b.last_name || ''}`.trim().toLowerCase() || (b.username || '').toLowerCase()
+      return nameA.localeCompare(nameB)
+    })
 
   // Pagination calculations
   const totalItems = displayStudentsList.length
@@ -614,12 +654,23 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
               <p className="text-slate-600 text-sm">{currentView?.description || 'View and manage students'}</p>
             </div>
           </div>
-          <div className="px-4 py-2 bg-gradient-to-r from-slate-100 to-indigo-100 rounded-lg">
-            <div className="flex items-center gap-2">
-              <Users className="w-5 h-5 text-indigo-700" />
-              <span className="text-sm font-semibold text-indigo-900">
-                {totalLabel}
-              </span>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => { clearCache(); fetchSectionsOrStudents() }}
+              disabled={loading}
+              title="Refresh — clears cached data and reloads sections"
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-slate-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">Refresh</span>
+            </button>
+            <div className="px-4 py-2 bg-gradient-to-r from-slate-100 to-indigo-100 rounded-lg">
+              <div className="flex items-center gap-2">
+                <Users className="w-5 h-5 text-indigo-700" />
+                <span className="text-sm font-semibold text-indigo-900">
+                  {totalLabel}
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -690,6 +741,24 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
         </div>
       )}
 
+      {hasContent && (viewMode === 'my-students' || viewMode === 'my-mentees') && (
+        <div className="mb-6 bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Search</label>
+            <div className="relative w-full">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search by Register Number or Student Name..."
+                className="w-full pl-10 pr-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Department-Students dept + batch + section dropdowns */}
       {hasContent && viewMode === 'department-students' && (() => {
         const deptOptions = Array.from(new Set(
@@ -738,6 +807,19 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                   <option value="">-- All Sections --</option>
                   {sectionOptions.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
+              </div>
+              <div className="flex flex-col gap-1 min-w-[260px] flex-1">
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Search</label>
+                <div className="relative w-full">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search by Register Number or Student Name..."
+                    className="w-full pl-10 pr-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -790,6 +872,19 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                   <option value="">-- Select --</option>
                   {sectionOptions.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
+              </div>
+              <div className="flex flex-col gap-1 min-w-[260px] flex-1">
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Search</label>
+                <div className="relative w-full">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search by Register Number or Student Name..."
+                    className="w-full pl-10 pr-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  />
+                </div>
               </div>
             </div>
           </div>

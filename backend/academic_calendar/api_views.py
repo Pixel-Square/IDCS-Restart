@@ -22,6 +22,7 @@ from academics.models import Department, DepartmentRole, StudentProfile
 from academics.utils import get_user_effective_departments
 
 from .models import AcademicCalendarEvent, HodColor
+from .n8n_poster_service import fire_n8n_branding_async
 
 
 def _normalize_text(s: Any) -> str:
@@ -259,6 +260,11 @@ def _serialize_events(user, events: List[AcademicCalendarEvent]) -> List[Dict[st
                 'created_at': e.created_at.isoformat() if e.created_at else None,
                 'updated_at': e.updated_at.isoformat() if e.updated_at else None,
                 'creator_color': colors.get(e.created_by_id),
+                # Branding poster
+                'branding_poster_status':    e.branding_poster_status,
+                'branding_poster_url':        e.branding_poster_url,
+                'branding_poster_design_id':  e.branding_poster_design_id,
+                'branding_poster_preview':    e.branding_poster_preview,
                 **perms,
             }
         )
@@ -435,6 +441,17 @@ def events(request):
         except Exception:
             audience_students = None
 
+    # Capture any branding-specific fields from the request payload
+    branding_data = request.data.get('branding_data')
+    if isinstance(branding_data, str):
+        import json as _json
+        try:
+            branding_data = _json.loads(branding_data)
+        except Exception:
+            branding_data = None
+    if not isinstance(branding_data, dict):
+        branding_data = None
+
     event = AcademicCalendarEvent.objects.create(
         title=title,
         description=description,
@@ -448,7 +465,11 @@ def events(request):
         created_by=user,
         image_url=image_url,
         audience_students=audience_students,
+        branding_data=branding_data,
     )
+
+    # Trigger n8n → Canva autofill branding poster (async, non-blocking)
+    fire_n8n_branding_async(event)
 
     return Response({'event': _serialize_events(user, [event])[0]})
 
@@ -534,6 +555,20 @@ def event_update(request, event_id):
     elif audience_students is None:
         audience_students = event.audience_students
 
+    # Allow callers to update branding_data on edit
+    branding_data_update = request.data.get('branding_data')
+    if isinstance(branding_data_update, str):
+        import json as _json
+        try:
+            branding_data_update = _json.loads(branding_data_update)
+        except Exception:
+            branding_data_update = None
+    if isinstance(branding_data_update, dict):
+        # Merge: existing fields are overridden by the incoming values
+        merged = dict(event.branding_data or {})
+        merged.update(branding_data_update)
+        event.branding_data = merged
+
     event.title = title
     event.description = description
     event.start_date = start
@@ -545,6 +580,9 @@ def event_update(request, event_id):
     event.image_url = image_url
     event.audience_students = audience_students
     event.save()
+
+    # Re-trigger branding poster generation on every update
+    fire_n8n_branding_async(event)
 
     return Response({'event': _serialize_events(user, [event])[0]})
 
@@ -873,3 +911,73 @@ def upload_import(request):
             inserted += len(batch)
 
     return Response({'inserted': inserted})
+
+
+# ── n8n branding-poster callback ──────────────────────────────────────────────
+
+@api_view(['POST'])
+@permission_classes([])   # open endpoint – guarded by shared secret
+def poster_callback(request, event_id):
+    """
+    POST /api/academic-calendar/events/<event_id>/poster-callback/
+
+    Called by the n8n workflow after a Canva branding poster has been generated
+    and exported.
+
+    Expected JSON body:
+      {
+        "secret":      "<N8N_WEBHOOK_SECRET>",
+        "poster_url":  "https://…/poster.png",
+        "design_id":   "DAFxyz…",
+        "preview_link": "https://www.canva.com/design/DAFxyz…/view"
+      }
+
+    The ``secret`` field must match the ``N8N_WEBHOOK_SECRET`` setting to prevent
+    unauthorised writes to event records.
+    """
+    from django.conf import settings as _settings
+
+    expected_secret = str(getattr(_settings, 'N8N_WEBHOOK_SECRET', '') or '').strip()
+    if not expected_secret:
+        return Response(
+            {'error': 'N8N_WEBHOOK_SECRET is not configured on the server.'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    body = request.data if isinstance(request.data, dict) else {}
+    incoming_secret = str(body.get('secret', '')).strip()
+
+    # Constant-time comparison to avoid timing side-channels
+    import hmac as _hmac
+    if not _hmac.compare_digest(incoming_secret, expected_secret):
+        return Response({'error': 'Invalid secret.'}, status=status.HTTP_403_FORBIDDEN)
+
+    try:
+        event = AcademicCalendarEvent.objects.get(id=event_id)
+    except (AcademicCalendarEvent.DoesNotExist, Exception):
+        return Response({'error': 'Event not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    poster_url   = str(body.get('poster_url', '')   or '').strip()
+    design_id    = str(body.get('design_id', '')    or '').strip()
+    preview_link = str(body.get('preview_link', '') or '').strip()
+
+    if not poster_url and not design_id:
+        # n8n signals a failure
+        event.branding_poster_status = AcademicCalendarEvent.PosterStatus.FAILED
+        event.save(update_fields=['branding_poster_status', 'updated_at'])
+        return Response({'ok': False, 'detail': 'No poster URL received; marked as failed.'})
+
+    event.branding_poster_url       = poster_url or event.branding_poster_url
+    event.branding_poster_design_id = design_id  or event.branding_poster_design_id
+    event.branding_poster_preview   = preview_link or event.branding_poster_preview
+    event.branding_poster_status    = AcademicCalendarEvent.PosterStatus.READY
+    event.save(update_fields=[
+        'branding_poster_url',
+        'branding_poster_design_id',
+        'branding_poster_preview',
+        'branding_poster_status',
+        'updated_at',
+    ])
+
+    logger.info('Poster callback received for event %s — design_id=%s', event_id, design_id)
+    return Response({'ok': True})

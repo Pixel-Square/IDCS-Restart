@@ -1,4 +1,5 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
+import { BookOpen, ClipboardList, TrendingUp, BarChart2 } from 'lucide-react';
 
 import CDAPPage from '../lca/CDAPPage';
 import ArticulationMatrixPage from '../lca/ArticulationMatrixPage';
@@ -140,6 +141,7 @@ type ObeProgressSection = {
   batch: { id: number | null; name: string | null };
   course: { id: number | null; name: string | null };
   department: { id: number | null; code: string | null; name: string | null; short_name: string | null };
+  semester?: number | null;
   staff: ObeProgressStaff[];
 };
 

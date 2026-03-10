@@ -49,7 +49,7 @@ from .serializers import (
 from .serializers import AcademicYearSerializer
 from .serializers import PeriodAttendanceSessionSerializer, BulkPeriodAttendanceSerializer, AttendanceUnlockRequestSerializer
 from accounts.utils import get_user_permissions
-from .utils import get_user_effective_departments
+from .utils import get_user_effective_departments, get_user_staff_profile
 from .serializers import TeachingAssignmentInfoSerializer
 from .serializers import SpecialCourseAssessmentEditRequestSerializer
 from rest_framework import routers
@@ -212,45 +212,41 @@ class MyTeachingAssignmentsView(APIView):
             'academic_year',
             'section__semester',
             'section__batch__course__department',
-            'elective_subject',
-            'elective_subject__department',
-            'elective_subject__semester',
         )
 
         qs = base_qs.filter(is_active=True)
 
-        staff_profile = getattr(user, 'staff_profile', None)
-        role_names = {r.name.upper() for r in user.roles.all()} if getattr(user, 'roles', None) is not None else set()
+        staff_profile = get_user_staff_profile(user)
+        if not staff_profile:
+            return Response([])
 
         # staff: only their teaching assignments (do not expand to department-level for HOD/ADVISOR here)
-        if staff_profile:
-            # Prefer matching by user link; it's stable even if staff profile details change.
+        # Prefer matching by user link; it's stable even if staff profile details change.
+        qs_staff = qs.filter(staff__user=user)
+        # Fallback: legacy / direct FK match.
+        if not qs_staff.exists():
+            qs_staff = qs.filter(staff=staff_profile)
+        # Final fallback: if assignments exist but are not marked active, include active academic year.
+        if not qs_staff.exists():
+            qs_staff = base_qs.filter(staff__user=user, academic_year__is_active=True)
+
+        # Backfill from StudentSubjectBatch when the staff has no teaching assignments at all.
+        if not qs_staff.exists():
+            try:
+                _ensure_teaching_assignments_from_subject_batches(staff_profile)
+            except Exception:
+                pass
             qs_staff = qs.filter(staff__user=user)
-            # Fallback: legacy / direct FK match.
             if not qs_staff.exists():
                 qs_staff = qs.filter(staff=staff_profile)
-            # Final fallback: if assignments exist but are not marked active, include active academic year.
-            if not qs_staff.exists():
-                qs_staff = base_qs.filter(staff__user=user, academic_year__is_active=True)
 
-            # Backfill from StudentSubjectBatch when the staff has no teaching assignments at all.
+        # Final fallback: do not hide assignments solely due to flags.
+        # If the staff has any TeachingAssignment rows at all, return them.
+        if not qs_staff.exists():
+            qs_staff = base_qs.filter(staff__user=user)
             if not qs_staff.exists():
-                try:
-                    _ensure_teaching_assignments_from_subject_batches(staff_profile)
-                except Exception:
-                    pass
-                qs_staff = qs.filter(staff__user=user)
-                if not qs_staff.exists():
-                    qs_staff = qs.filter(staff=staff_profile)
-
-            # Final fallback: do not hide assignments solely due to flags.
-            # If the staff has any TeachingAssignment rows at all, return them.
-            if not qs_staff.exists():
-                qs_staff = base_qs.filter(staff__user=user)
-                if not qs_staff.exists():
-                    qs_staff = base_qs.filter(staff=staff_profile)
-            qs = qs_staff
-        # else: admins can see all
+                qs_staff = base_qs.filter(staff=staff_profile)
+        qs = qs_staff
 
         ser = TeachingAssignmentInfoSerializer(qs.order_by('section__name', 'id'), many=True)
         return Response(ser.data)
@@ -274,9 +270,6 @@ class TeachingAssignmentStudentsView(APIView):
                 'curriculum_row',
                 'curriculum_row__department',
                 'curriculum_row__semester',
-                'elective_subject',
-                'elective_subject__department',
-                'elective_subject__semester',
             ).get(pk=ta_id, is_active=True)
         except TeachingAssignment.DoesNotExist:
             raise Http404('Teaching assignment not found')
@@ -2315,15 +2308,17 @@ class StaffAssignedSubjectsView(APIView):
         user = request.user
         # resolve target staff_profile
         target = None
-        try:
-            if staff_id:
+        if staff_id:
+            try:
                 target = StaffProfile.objects.filter(pk=int(staff_id)).first()
-            else:
-                target = getattr(user, 'staff_profile', None)
-        except Exception:
-            target = getattr(user, 'staff_profile', None)
+            except Exception:
+                target = None
+        else:
+            target = get_user_staff_profile(user)
 
         if not target:
+            if not staff_id:
+                return Response({'results': []})
             return Response({'detail': 'Staff not found'}, status=status.HTTP_404_NOT_FOUND)
 
         # permission: allow if user is the staff themselves, superuser, has explicit perm,
@@ -2362,7 +2357,7 @@ class StaffAssignedSubjectsView(APIView):
             is_active=True,
         ).filter(
             Q(curriculum_row__isnull=False) | Q(subject__isnull=False) | Q(elective_subject__isnull=False)
-        ).select_related('curriculum_row', 'section', 'academic_year', 'subject', 'elective_subject')
+        ).select_related('curriculum_row', 'section', 'academic_year', 'subject')
 
         try:
             if qs.filter(academic_year__is_active=True).exists():
@@ -2381,7 +2376,7 @@ class StaffAssignedSubjectsView(APIView):
                 is_active=True,
             ).filter(
                 Q(curriculum_row__isnull=False) | Q(subject__isnull=False) | Q(elective_subject__isnull=False)
-            ).select_related('curriculum_row', 'section', 'academic_year', 'subject', 'elective_subject')
+            ).select_related('curriculum_row', 'section', 'academic_year', 'subject')
 
             try:
                 if qs.filter(academic_year__is_active=True).exists():
@@ -2426,7 +2421,6 @@ class IQACCourseTeachingMapView(APIView):
             'curriculum_row',
             'curriculum_row__master',
             'section__batch__course__department',
-            'elective_subject',
         ).filter(is_active=True)
 
         # Filter to the requested course first (curriculum_row, master row, legacy subject, or elective).
@@ -5217,3 +5211,22 @@ class AllStudentsView(APIView):
             logging.getLogger(__name__).exception('AllStudentsView error: %s', e)
             return Response({'error': 'Server error', 'detail': str(e)}, status=500)
 
+
+class BatchYearViewSet(viewsets.ModelViewSet):
+    """CRUD for common BatchYear labels (e.g. '2023') that are department-agnostic."""
+    permission_classes = (IsAuthenticated,)
+
+    def get_serializer_class(self):
+        from rest_framework import serializers
+        from .models import BatchYear
+
+        class BatchYearSerializer(serializers.ModelSerializer):
+            class Meta:
+                model = BatchYear
+                fields = ('id', 'name', 'start_year', 'end_year')
+
+        return BatchYearSerializer
+
+    def get_queryset(self):
+        from .models import BatchYear
+        return BatchYear.objects.all().order_by('-name')

@@ -461,7 +461,7 @@ app.post("/send-whatsapp", async (req, res) => {
     }
 });
 
-// 🔒 Bind ONLY to localhost
+// � Bind ONLY to localhost
 app.listen(3000, "127.0.0.1", () => {
     console.log("🚀 WhatsApp API running on http://127.0.0.1:3000");
 });

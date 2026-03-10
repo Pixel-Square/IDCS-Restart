@@ -137,6 +137,7 @@ class CurriculumMaster(models.Model):
     regulation = models.CharField(max_length=32)
     # Use Semester FK so curriculum entries relate to the canonical Semester model
     semester = models.ForeignKey('academics.Semester', on_delete=models.PROTECT, related_name='master_curricula')
+    batch = models.ForeignKey('academics.BatchYear', on_delete=models.SET_NULL, null=True, blank=True, related_name='master_curricula', help_text='Optional batch year this curriculum applies to')
     # For master entries targeted to specific departments only, these fields
     # are optional — departments may provide their own details.
     course_code = models.CharField(max_length=64, blank=True, null=True)
@@ -229,6 +230,7 @@ class CurriculumDepartment(models.Model):
     regulation = models.CharField(max_length=32)
     # link to Semester for consistent filtering with Section.semester
     semester = models.ForeignKey('academics.Semester', on_delete=models.PROTECT, related_name='department_curricula')
+    batch = models.ForeignKey('academics.BatchYear', on_delete=models.SET_NULL, null=True, blank=True, related_name='department_curricula', help_text='Optional batch year this curriculum applies to')
     course_code = models.CharField(max_length=64, blank=True, null=True)
     mnemonic = models.CharField(max_length=16, blank=True, null=True)
     course_name = models.CharField(max_length=255, blank=True, null=True)
@@ -348,6 +350,7 @@ class ElectiveSubject(models.Model):
     department = models.ForeignKey(Department, on_delete=models.CASCADE, related_name='elective_subjects')
     # optional department group mapping to organize electives by group
     department_group = models.ForeignKey(DepartmentGroup, on_delete=models.SET_NULL, null=True, blank=True, related_name='elective_subjects')
+    batch = models.ForeignKey('academics.BatchYear', on_delete=models.SET_NULL, null=True, blank=True, related_name='elective_subjects', help_text='Optional batch year this elective applies to')
     regulation = models.CharField(max_length=32)
     semester = models.ForeignKey('academics.Semester', on_delete=models.PROTECT, related_name='elective_subjects')
 

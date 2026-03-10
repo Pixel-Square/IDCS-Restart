@@ -7,6 +7,7 @@ import { useSidebar } from './components/layout/SidebarContext';
 import TimetableEditor from './pages/advisor/TimetableEditor';
 import HodTimetableEditor from './pages/iqac/TimetableEditor';
 import ObeRequestsPage from './pages/iqac/ObeRequestsPage';
+import IQACEventApprovalPage from './pages/iqac/IQACEventApprovalPage';
 import AcademicControllerPage from './pages/iqac/AcademicControllerPage';
 import AcademicControllerCoursePage from './pages/iqac/AcademicControllerCoursePage';
 import AcademicControllerCourseMarksPage from './pages/iqac/AcademicControllerCourseMarksPage';
@@ -18,8 +19,6 @@ import ProtectedRoute from './components/ProtectedRoute';
 import HomePage from "./components/containers/HomePage";
 import DashboardPage from "./pages/dashboard/Dashboard";
 import ProfilePage from "./pages/profile/Profile";
-import SettingsPage from './pages/settings/SettingsPage';
-import WhatsAppSenderPage from './pages/settings/WhatsAppSenderPage';
 import MasterList from './pages/curriculum/MasterList';
 import MasterEditor from './pages/curriculum/MasterEditor';
 import DeptList from './pages/curriculum/DeptList';
@@ -34,7 +33,6 @@ import OBERequestPage from './pages/obe/OBERequestPage';
 import AdvisorAssignments from './pages/hod/AdvisorAssignments';
 import TeachingAssignmentsPage from './pages/hod/TeachingAssignments';
 import ObeEditRequestsPage from './pages/hod/ObeEditRequestsPage';
-import HodResultAnalysisPage from './pages/hod/HodResultAnalysisPage';
 import StudentsPage from './pages/staff/Students';
 import StudentTimetable from './pages/student/TimetableView';
 import StaffTimetable from './pages/staff/TimetableView';
@@ -51,6 +49,13 @@ import AcademicCalendarRedirect from './pages/academicCalendar/AcademicCalendarR
 import AcademicCalendarPage from './pages/academicCalendar/AcademicCalendarPage';
 import PBASSubmissionPage from './pages/staff/PBASSubmissionPage';
 import PBASManagerPage from './pages/iqac/PBASManagerPage';
+import BrandingLayout from './pages/branding/BrandingLayout';
+import BrandingProtectedRoute from './components/routing/BrandingProtectedRoute';
+import HodResultAnalysisPage from './pages/hod/HodResultAnalysisPage';
+import HodEventsListPage from './pages/hod/events/HodEventsListPage';
+import HodEventCreatePage from './pages/hod/events/HodEventCreatePage';
+import CanvaDesignEditorPage from './pages/hod/events/CanvaDesignEditorPage';
+import PosterMakerPage from './pages/events/PosterMakerPage';
 
 type RoleObj = { name: string };
 type Me = {
@@ -68,7 +73,16 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const { collapsed } = useSidebar();
 
+  // ── Branding role: local-only session, not backed by the API ────────────
+  const isBrandingUser = localStorage.getItem('branding_auth') === 'true';
+  // ────────────────────────────────────────────────────────────────────────
+
   useEffect(() => {
+    // Skip API fetch for Branding sessions — they authenticate locally.
+    if (isBrandingUser) {
+      setLoading(false);
+      return;
+    }
     // Check if user has an access token before attempting to fetch profile
     const token = localStorage.getItem('access')
     if (!token) {
@@ -120,6 +134,21 @@ export default function App() {
     );
   }
 
+  // ── Branding role: isolated layout, no Navbar / DashboardSidebar ────────
+  if (isBrandingUser) {
+    return (
+      <Routes>
+        <Route
+          path="/branding/*"
+          element={<BrandingProtectedRoute element={<BrandingLayout />} />}
+        />
+        {/* Any other path → redirect into branding dashboard */}
+        <Route path="*" element={<Navigate to="/branding" replace />} />
+      </Routes>
+    );
+  }
+  // ────────────────────────────────────────────────────────────────────────
+
   return (
     <div className="min-h-screen bg-gray-50 overflow-x-hidden">
       <Navbar user={user} />
@@ -138,21 +167,8 @@ export default function App() {
                 <Route path="/" element={<Navigate to="/dashboard" replace />} />
                 <Route path="/dashboard" element={<DashboardPage />} />
                 <Route path="/profile" element={<ProfilePage user={user} />} />
-                <Route
-                  path="/settings"
-                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<SettingsPage />} />}
-                />
-                <Route
-                  path="/settings/whatsapp-sender"
-                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<WhatsAppSenderPage />} />}
-                />
-                <Route
-                  path="/settings/notification-templates"
-                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<NotificationsPage />} />}
-                />
                 <Route path="/queries" element={<QueriesPage />} />
-                {/* /notifications kept as redirect for any bookmarks */}
-                <Route path="/notifications" element={<Navigate to="/settings/notification-templates" replace />} />
+                <Route path="/notifications" element={<NotificationsPage />} />
                 <Route path="/academic-calendar" element={<AcademicCalendarRedirect user={user} />} />
                 <Route
                   path="/iqac/calendar"
@@ -199,6 +215,23 @@ export default function App() {
                   element={<ProtectedRoute user={user} requiredRoles={["HOD", "ADVISOR"]} element={<HodResultAnalysisPage />} />}
                 />
                 <Route
+                  path="/hod/events"
+                  element={<ProtectedRoute user={user} requiredRoles={["HOD"]} element={<HodEventsListPage />} />}
+                />
+                <Route
+                  path="/hod/events/create"
+                  element={<ProtectedRoute user={user} requiredRoles={["HOD"]} element={<HodEventCreatePage />} />}
+                />
+                <Route
+                  path="/hod/events/canva-editor"
+                  element={<ProtectedRoute user={user} requiredRoles={["HOD"]} element={<CanvaDesignEditorPage />} />}
+                />
+                {/* Canva Poster Maker — accessible to HOD, IQAC, and STAFF */}
+                <Route
+                  path="/poster-maker"
+                  element={<ProtectedRoute user={user} requiredRoles={["HOD", "IQAC", "STAFF"]} element={<PosterMakerPage />} />}
+                />
+                <Route
                   path="/staffs"
                   element={<ProtectedRoute user={user} requiredPermissions={["academics.view_staffs_page"]} element={<StaffsPage />} />}
                 />
@@ -209,6 +242,10 @@ export default function App() {
                 <Route
                   path="/iqac/timetable"
                   element={<ProtectedRoute user={user} requiredPermissions={["timetable.manage_templates"]} element={<HodTimetableEditor />} />}
+                />
+                <Route
+                  path="/iqac/event-approvals"
+                  element={<ProtectedRoute user={user} requiredPermissions={["obe.master.manage"]} element={<IQACEventApprovalPage />} />}
                 />
                 <Route
                   path="/iqac/academic-controller"
@@ -305,6 +342,8 @@ export default function App() {
                   }
                 />
                 <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
+                {/* Prevent regular users from accessing Branding-only routes */}
+                <Route path="/branding/*" element={<Navigate to="/dashboard" replace />} />
               </Routes>
             </div>
           </main>

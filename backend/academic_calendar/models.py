@@ -32,6 +32,24 @@ class AcademicCalendarEvent(models.Model):
     image_url = models.TextField(null=True, blank=True)
     audience_students = models.JSONField(null=True, blank=True)
 
+    # ── Branding poster (generated via n8n → Canva Autofill) ─────────────────
+    class PosterStatus(models.TextChoices):
+        PENDING    = 'pending',    'Pending'
+        GENERATING = 'generating', 'Generating'
+        READY      = 'ready',      'Ready'
+        FAILED     = 'failed',     'Failed'
+
+    branding_poster_status    = models.CharField(
+        max_length=16,
+        choices=PosterStatus.choices,
+        default=PosterStatus.PENDING,
+    )
+    branding_poster_url       = models.TextField(null=True, blank=True)
+    branding_poster_design_id = models.CharField(max_length=256, blank=True)
+    branding_poster_preview   = models.TextField(null=True, blank=True)
+    # Stores the full payload that was last sent to n8n so it can be replayed
+    branding_data             = models.JSONField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
