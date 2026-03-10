@@ -875,31 +875,27 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
         let matchedTa: any = null;
         try {
           const myTAs = await fetchMyTeachingAssignments();
-          console.log('[Formative] My TAs:', myTAs?.length, 'for subject:', subjectId, 'teachingAssignmentId:', teachingAssignmentId);
+          // debug: myTAs fetched
           matchedTa = (myTAs || []).find((t: any) => {
             const codeMatch = String(t.subject_code || '').trim().toUpperCase() === String(subjectId || '').trim().toUpperCase();
             const idMatch = teachingAssignmentId ? t.id === teachingAssignmentId : false;
             return idMatch || codeMatch;
           });
           
-          if (matchedTa) {
-            console.log('[Formative] Found TA match:', matchedTa.id, 'elective_subject_id:', matchedTa.elective_subject_id, 'section_id:', matchedTa.section_id);
-          } else {
-            console.log('[Formative] No TA match found in user TAs');
-          }
+          // matchedTa determined
         } catch (err) {
           console.warn('[Formative] My TAs fetch failed:', err);
         }
 
         // If we found a TA and it's an elective (has elective_subject_id, no section_id), fetch from elective-choices
         if (matchedTa && matchedTa.elective_subject_id && !matchedTa.section_id) {
-          console.log('[Formative] Detected elective, fetching elective-choices for elective_subject_id:', matchedTa.elective_subject_id);
+          // detected elective - fetching elective choices
           try {
             const esRes = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${encodeURIComponent(String(matchedTa.elective_subject_id))}`);
             if (esRes.ok) {
               const esData = await esRes.json();
               const items = Array.isArray(esData.results) ? esData.results : Array.isArray(esData) ? esData : (esData.items || []);
-              console.log('[Formative] Elective choices returned:', items?.length, 'students');
+              // elective choices returned
               roster = (items || []).map((s: any) => ({ 
                 id: Number(s.student_id ?? s.id), 
                 reg_no: String(s.reg_no ?? s.regno ?? ''),
@@ -919,7 +915,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
         // Also covers IQAC viewer path where matchedTa is null but teachingAssignmentId is provided.
         const rosterTaId: number | undefined = (matchedTa && matchedTa.id) || (teachingAssignmentId ?? undefined);
         if (!roster.length && rosterTaId) {
-          console.log('[Formative] Fetching regular TA roster for TA ID:', rosterTaId);
+          // fetching regular TA roster
           try {
             const taResp = await fetchTeachingAssignmentRoster(rosterTaId);
             roster = (taResp.students || []).map((s: TeachingAssignmentRosterStudent) => ({ 
@@ -928,14 +924,14 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
               name: String(s.name ?? ''), 
               section: s.section ?? null 
             })).filter((s) => Number.isFinite(s.id));
-            console.log('[Formative] Regular roster returned:', roster.length, 'students');
+            // regular roster returned
             if (matchedTa && mounted) setSubjectData({ subject_name: matchedTa.subject_name, section: matchedTa.section_name });
           } catch (err) {
             console.warn('[Formative] TA roster fetch failed:', err);
           }
         }
 
-        console.log('[Formative] Final roster count:', roster.length);
+        // final roster count ready
         roster.sort(compareStudentName);
         if (mounted) setStudents(roster);
 

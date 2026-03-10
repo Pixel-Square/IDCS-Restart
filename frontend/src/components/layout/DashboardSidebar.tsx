@@ -4,7 +4,7 @@ import { Link, useLocation } from 'react-router-dom';
 
 
 import useDashboard from '../../hooks/useDashboard';
-import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper } from 'lucide-react';
+import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText } from 'lucide-react';
 
 import { useSidebar } from './SidebarContext';
 import { fetchPendingPublishRequestCount } from '../../services/obe';
@@ -44,6 +44,8 @@ import { fetchPendingPublishRequestCount } from '../../services/obe';
   pbas: ClipboardList,
   pbas_manager: Layout,
   settings: Settings,
+  hr_request_templates: FileText,
+  staff_requests_approvals: Bell,
 
 };
 
@@ -57,6 +59,10 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
 
   const perms = (data?.permissions || []).map((p) => String(p || '').toLowerCase());
   const canObeMaster = perms.includes('obe.master.manage');
+  // Debug: print permissions/roles to browser console to diagnose missing HR link
+  // Remove this log after verification
+  // eslint-disable-next-line no-console
+  console.debug('Dashboard permissions:', perms, 'roles:', (data?.roles || []).map(r => String(r || '').toUpperCase()), 'flags:', data?.flags);
 
   useEffect(() => {
     let mounted = true;
@@ -152,6 +158,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'iqac_event_approvals', label: 'Event Approvals', to: '/iqac/event-approvals' });
   }
 
+  // HOD staff attendance
+  if (rolesUpper.includes('HOD')) {
+    items.push({ key: 'hod_staff_attendance', label: 'Staff Attendance', to: '/hod/staff-attendance' });
+  }
+
   // Staffs page: require explicit view permission
   if (permsLower.includes('academics.view_staffs_page')) {
     items.push({ key: 'staffs', label: 'Staff Directory', to: '/staffs' });
@@ -193,6 +204,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   if (flags.is_staff) {
   }
 
+  // My Calendar for staff (combined attendance + requests)
+  if (flags.is_staff) {
+    items.push({ key: 'my_attendance', label: 'My Calendar', to: '/staff/my-attendance' });
+  }
+
   // Period attendance for staff
   if (flags.is_staff && (permsLower.includes('academics.mark_attendance') || rolesUpper.includes('HOD') || rolesUpper.includes('ADVISOR'))) {
     items.push({ key: 'period_attendance', label: 'Mark Attendance', to: '/staff/period-attendance' });
@@ -230,12 +246,48 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   if (isIqac && !items.some((item) => item.key === 'academic_controller')) {
     items.push({ key: 'academic_controller', label: 'Academic Controller', to: '/iqac/academic-controller' });
   }
-  // PBAS Manager link removed
+
+  if (canPbasManage && !items.some((item) => item.key === 'pbas_manager')) {
+    items.push({ key: 'pbas_manager', label: 'PBAS Manager', to: '/iqac/pbas' });
+  }
+  
+  // IQAC staff attendance
+  if (rolesUpper.includes('IQAC') && !items.some((item) => item.key === 'iqac_staff_attendance')) {
+    items.push({ key: 'iqac_staff_attendance', label: 'Staff Attendance', to: '/iqac/staff-attendance' });
+  }
+
+  // PS (Principal Secretary) specific features
+  if (rolesUpper.includes('PS')) {
+    if (!items.some((item) => item.key === 'ps_staff_attendance')) {
+      items.push({ key: 'ps_staff_attendance', label: 'Staff Attendance Upload', to: '/ps/staff-attendance/upload' });
+    }
+    if (!items.some((item) => item.key === 'ps_staff_attendance_view')) {
+      items.push({ key: 'ps_staff_attendance_view', label: 'View All Staff Attendance', to: '/ps/staff-attendance/view' });
+    }
+  }
+
   if (canObeMaster && !isIqac && !items.some(item => item.key === 'obe_due_dates')) {
     items.push({ key: 'obe_due_dates', label: 'OBE: Due Dates', to: '/obe/master/due-dates' });
   }
   if (canObeMaster && !items.some(item => item.key === 'obe_requests')) {
     items.push({ key: 'obe_requests', label: 'OBE: Requests', to: '/obe/master/requests' });
+  }
+
+  // HR Features
+  if ((permsLower.includes('staff_requests.manage_templates') || rolesUpper.includes('HR')) && !items.some(item => item.key === 'hr_request_templates')) {
+    items.push({ key: 'hr_request_templates', label: 'HR: Request Templates', to: '/hr/request-templates' });
+  }
+
+  if (rolesUpper.includes('HR') && !items.some(item => item.key === 'hr_staff_attendance_analytics')) {
+    items.push({ key: 'hr_staff_attendance_analytics', label: 'HR: Staff Attendance Analytics', to: '/hr/staff-attendance-analytics' });
+  }
+  
+  // Staff Requests system
+  // Note: 'My Requests' moved into My Calendar; keep direct link removed to avoid duplication
+  const approverRoles = ['HOD', 'AHOD', 'HR', 'HAA', 'IQAC', 'PS', 'PRINCIPAL'];
+  const isApprover = approverRoles.some(r => rolesUpper.includes(r));
+  if ((permsLower.includes('staff_requests.approve_requests') || isApprover) && !items.some(item => item.key === 'staff_requests_approvals')) {
+    items.push({ key: 'staff_requests_approvals', label: 'Pending Approvals', to: '/staff-requests/pending-approvals' });
   }
 
   // Add Token Raise for all users at the end (no permission check needed)

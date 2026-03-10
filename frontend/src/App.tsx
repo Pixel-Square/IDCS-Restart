@@ -47,7 +47,6 @@ import QueriesPage from './pages/queries/QueriesPage';
 import StaffsPage from './pages/StaffsPage';
 import AcademicCalendarRedirect from './pages/academicCalendar/AcademicCalendarRedirect';
 import AcademicCalendarPage from './pages/academicCalendar/AcademicCalendarPage';
-// PBAS pages intentionally removed to hide PBAS from all users
 import BrandingLayout from './pages/branding/BrandingLayout';
 import BrandingProtectedRoute from './components/routing/BrandingProtectedRoute';
 import HodResultAnalysisPage from './pages/hod/HodResultAnalysisPage';
@@ -55,6 +54,17 @@ import HodEventsListPage from './pages/hod/events/HodEventsListPage';
 import HodEventCreatePage from './pages/hod/events/HodEventCreatePage';
 import CanvaDesignEditorPage from './pages/hod/events/CanvaDesignEditorPage';
 import PosterMakerPage from './pages/events/PosterMakerPage';
+import PBASSubmissionPage from './pages/staff/PBASSubmissionPage';
+import PBASManagerPage from './pages/iqac/PBASManagerPage';
+import { StaffAttendanceUpload } from './pages/PS';
+import { MyAttendance } from './pages/staff';
+import HODStaffAttendancePage from './pages/hod/StaffAttendance';
+import IQACStaffAttendancePage from './pages/iqac/StaffAttendance';
+import PSStaffAttendanceViewPage from './pages/PS/StaffAttendanceView';
+import RequestTemplatesPage from './pages/hr/RequestTemplatesPage';
+import OrganizationStaffAttendanceAnalytics from './pages/hr/OrganizationStaffAttendanceAnalytics';
+import MyRequestsPage from './pages/staff-requests/MyRequestsPage';
+import PendingApprovalsPage from './pages/staff-requests/PendingApprovalsPage';
 
 type RoleObj = { name: string };
 type Me = {
@@ -168,6 +178,10 @@ export default function App() {
                 <Route path="/profile" element={<ProfilePage user={user} />} />
                 <Route path="/queries" element={<QueriesPage />} />
                 <Route path="/notifications" element={<NotificationsPage />} />
+                <Route
+                  path="/ps/staff-attendance/upload"
+                  element={<ProtectedRoute user={user} requiredRoles={['PS']} element={<StaffAttendanceUpload />} />}
+                />
                 <Route path="/academic-calendar" element={<AcademicCalendarRedirect user={user} />} />
                 <Route
                   path="/iqac/calendar"
@@ -231,6 +245,10 @@ export default function App() {
                   element={<ProtectedRoute user={user} requiredRoles={["HOD", "IQAC", "STAFF"]} element={<PosterMakerPage />} />}
                 />
                 <Route
+                  path="/hod/staff-attendance"
+                  element={<ProtectedRoute user={user} requiredRoles={["HOD"]} element={<HODStaffAttendancePage />} />}
+                />
+                <Route
                   path="/staffs"
                   element={<ProtectedRoute user={user} requiredPermissions={["academics.view_staffs_page"]} element={<StaffsPage />} />}
                 />
@@ -271,6 +289,14 @@ export default function App() {
                   element={<ProtectedRoute user={user} requiredPermissions={["obe.master.manage"]} element={<ObeRequestsPage />} />}
                 />
                 {/* PBAS IQAC route removed */}
+                <Route
+                  path="/iqac/staff-attendance"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<IQACStaffAttendancePage />} />}
+                />
+                <Route
+                  path="/ps/staff-attendance/view"
+                  element={<ProtectedRoute user={user} requiredRoles={['PS', 'ADMIN']} element={<PSStaffAttendanceViewPage />} />}
+                />
                 <Route
                   path="/advisor/timetable"
                   element={<ProtectedRoute user={user} requiredRoles={["ADVISOR"]} requiredPermissions={["timetable.assign"]} element={<TimetableEditor />} />}
@@ -330,6 +356,31 @@ export default function App() {
                     />
                   }
                 />
+                <Route
+                  path="/staff/my-attendance"
+                  element={<ProtectedRoute user={user} requiredProfile={'STAFF'} element={<MyAttendance />} />}
+                />
+                
+                {/* HR Routes */}
+                <Route
+                  path="/hr/request-templates"
+                  element={<ProtectedRoute user={user} requiredRoles={['HR']} requiredPermissions={['staff_requests.manage_templates']} element={<RequestTemplatesPage />} />}
+                />
+                <Route
+                  path="/hr/staff-attendance-analytics"
+                  element={<ProtectedRoute user={user} requiredRoles={['HR']} requiredPermissions={['staff_requests.manage_templates']} element={<OrganizationStaffAttendanceAnalytics />} />}
+                />
+                
+                {/* Staff Requests Routes */}
+                <Route
+                  path="/staff-requests/my-requests"
+                  element={<ProtectedRoute user={user} requiredProfile={'STAFF'} element={<MyRequestsPage />} />}
+                />
+                <Route
+                  path="/staff-requests/pending-approvals"
+                  element={<ProtectedRoute user={user} requiredRoles={['HOD','AHOD','HR','HAA','IQAC','PS','PRINCIPAL']} requiredPermissions={['staff_requests.approve_requests']} element={<PendingApprovalsPage />} />}
+                />
+                
                 <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
                 {/* Prevent regular users from accessing Branding-only routes */}
                 <Route path="/branding/*" element={<Navigate to="/dashboard" replace />} />

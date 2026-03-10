@@ -1,12 +1,24 @@
-import React from 'react';
-import { User, BookOpen, GraduationCap, Calendar } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { User, BookOpen, GraduationCap, Calendar, Clock, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import { apiClient } from '../../services/auth';
+import { getApiBase } from '../../services/apiBase';
 
 interface DashboardEntryPointsProps {
   user?: { username: string; profile_type?: string; profile?: any } | null;
 }
 
+interface AttendanceStatus {
+  date: string;
+  status: 'present' | 'absent' | 'partial' | 'half_day' | 'no_record';
+  morning_in: string | null;
+  evening_out: string | null;
+  has_record: boolean;
+}
+
 export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps) {
   const username = user?.username || 'User';
+  const [attendanceStatus, setAttendanceStatus] = useState<AttendanceStatus | null>(null);
+  const [loadingAttendance, setLoadingAttendance] = useState(false);
   
   // Get designation based on profile type
   const getDesignation = () => {
@@ -26,6 +38,76 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
   };
   
   const designation = getDesignation();
+  const isStaff = user?.profile_type?.toUpperCase() === 'STAFF';
+
+  // Fetch today's attendance status for staff
+  useEffect(() => {
+    if (isStaff) {
+      fetchTodayAttendance();
+    }
+  }, [isStaff]);
+
+  const fetchTodayAttendance = async () => {
+    try {
+      setLoadingAttendance(true);
+      const url = `${getApiBase()}/api/staff-attendance/records/today_status/`;
+      const response = await apiClient.get(url);
+      setAttendanceStatus(response.data);
+    } catch (error) {
+      console.error('Failed to fetch attendance status:', error);
+    } finally {
+      setLoadingAttendance(false);
+    }
+  };
+
+  const getAttendanceIcon = (status: string) => {
+    switch (status) {
+      case 'present':
+        return <CheckCircle className="w-5 h-5 text-green-600" />;
+      case 'partial':
+      case 'half_day':
+        return <AlertCircle className="w-5 h-5 text-yellow-600" />;
+      case 'no_record':
+        return <AlertCircle className="w-5 h-5 text-gray-500" />;
+      case 'absent':
+        return <XCircle className="w-5 h-5 text-red-600" />;
+      default:
+        return <AlertCircle className="w-5 h-5 text-gray-400" />;
+    }
+  };
+
+  const getAttendanceColor = (status: string) => {
+    switch (status) {
+      case 'present':
+        return 'bg-green-50 border-green-200';
+      case 'partial':
+      case 'half_day':
+        return 'bg-yellow-50 border-yellow-200';
+      case 'no_record':
+        return 'bg-gray-50 border-gray-200';
+      case 'absent':
+        return 'bg-red-50 border-red-200';
+      default:
+        return 'bg-gray-50 border-gray-200';
+    }
+  };
+
+  const getStatusText = (status: string) => {
+    switch (status) {
+      case 'present':
+        return 'Present';
+      case 'partial':
+        return 'Partial';
+      case 'half_day':
+        return 'Half Day';
+      case 'no_record':
+        return 'No Record';
+      case 'absent':
+        return 'Absent';
+      default:
+        return 'Unknown';
+    }
+  };
   
   return (
     <div className="space-y-6">
@@ -41,6 +123,48 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
           </div>
         </div>
       </div>
+
+      {/* Attendance Status for Staff */}
+      {isStaff && (
+        <div className={`rounded-xl p-6 shadow-md border ${
+          attendanceStatus ? getAttendanceColor(attendanceStatus.status) : 'bg-gray-50 border-gray-200'
+        }`}>
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center flex-shrink-0 shadow-sm">
+              {loadingAttendance ? (
+                <Clock className="w-6 h-6 text-gray-400 animate-spin" />
+              ) : attendanceStatus ? (
+                getAttendanceIcon(attendanceStatus.status)
+              ) : (
+                <AlertCircle className="w-6 h-6 text-gray-400" />
+              )}
+            </div>
+            <div className="flex-1">
+              <h3 className="text-lg font-semibold text-gray-900">Today's Attendance</h3>
+              {loadingAttendance ? (
+                <p className="text-gray-600 mt-1">Loading...</p>
+              ) : attendanceStatus ? (
+                <div className="mt-1">
+                  <p className="text-gray-900 font-medium">Status: {getStatusText(attendanceStatus.status)}</p>
+                  <div className="flex gap-4 mt-1 text-sm text-gray-600">
+                    {attendanceStatus.morning_in && (
+                      <span>In: {attendanceStatus.morning_in}</span>
+                    )}
+                    {attendanceStatus.evening_out && (
+                      <span>Out: {attendanceStatus.evening_out}</span>
+                    )}
+                    {!attendanceStatus.has_record && (
+                      <span className="text-red-600">No record found</span>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <p className="text-gray-600 mt-1">Unable to load attendance status</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Quick Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">

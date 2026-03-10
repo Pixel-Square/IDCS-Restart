@@ -22,6 +22,7 @@ from .views import (
 )
 from rest_framework_simplejwt.views import TokenRefreshView
 from .api.dashboard import DashboardView
+from .api.roles import RolesListView
 
 urlpatterns = [
     path('register/', RegisterView.as_view(), name='register'),
@@ -34,6 +35,7 @@ urlpatterns = [
     path('token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('dashboard/', DashboardView.as_view(), name='dashboard'),
+    path('roles/', RolesListView.as_view(), name='roles'),
     path('notification-templates/', NotificationTemplateApiView.as_view(), name='notification_templates'),
     path('queries/', UserQueryListCreateView.as_view(), name='user_queries'),
     path('queries/<int:pk>/', UserQueryDetailView.as_view(), name='user_query_detail'),

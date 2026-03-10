@@ -75,9 +75,9 @@ export default function AttendanceRequests(){
   }
 
   return (
-    <div className="p-4">
+    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
       <h2 className="text-xl font-semibold mb-4">
-        {permissionLevel === 'department' ? 'HOD Approval Requests' : 'Unlock Requests (Final Approval)'}
+        {permissionLevel === 'department' ? 'Session Unlock Requests' : 'Unlock Requests (Final Approval)'}
       </h2>
       {permissionLevel === 'department' && (
         <p className="text-sm text-gray-600 mb-4">

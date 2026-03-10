@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react'
 import fetchWithAuth from '../../services/fetchAuth'
 import { Calendar, Clock, Users, CheckCircle2, XCircle, Loader2, Save, X, ChevronDown, AlertCircle, Lock, Unlock, GraduationCap, Check, ArrowLeftRight } from 'lucide-react'
+import HalfDayRequestsApproval from './HalfDayRequestsApproval'
+import AttendanceRequests from './AttendanceRequests'
 
 type ViewMode = 'period' | 'daily'
 
@@ -108,6 +110,29 @@ export default function PeriodAttendance(){
   const [savingDateRange, setSavingDateRange] = useState(false)
   const [selectedStudentsForDateRange, setSelectedStudentsForDateRange] = useState<Set<number>>(new Set())
 
+  // Staff attendance check state
+  const [staffAttendanceStatus, setStaffAttendanceStatus] = useState<{
+    can_mark_attendance: boolean
+    reason: string
+    attendance_record: {
+      id?: number
+      date: string
+      status: string
+      morning_in: string | null
+      evening_out: string | null
+    } | null
+    pending_request?: {
+      id: number
+      requested_at: string
+      status: string
+      reason: string
+    } | null
+  } | null>(null)
+  const [checkingStaffAttendance, setCheckingStaffAttendance] = useState(false)
+  const [showHalfDayRequestModal, setShowHalfDayRequestModal] = useState(false)
+  const [halfDayRequestReason, setHalfDayRequestReason] = useState('')
+  const [submittingHalfDayRequest, setSubmittingHalfDayRequest] = useState(false)
+
   // Check user permissions for attendance marking
   const userPerms = (() => {
     try { return JSON.parse(localStorage.getItem('permissions') || '[]') as string[] } catch { return [] }
@@ -120,8 +145,75 @@ export default function PeriodAttendance(){
   // Class advisors always have daily attendance access regardless of mark_attendance permission
   const canAccessDailyAttendance = hasClassAdvisorPermission
 
-  useEffect(()=>{ fetchPeriods(); loadMyClassSections() }, [date])
+  useEffect(()=>{ 
+    fetchPeriods(); 
+    loadMyClassSections();
+    checkStaffAttendanceStatus();
+  }, [date])
   useEffect(()=>{ if (selectedSection && dailyMode) loadDailyAttendance() }, [selectedSection, date, dailyMode])
+
+  // Check staff attendance status for period attendance access
+  async function checkStaffAttendanceStatus() {
+    setCheckingStaffAttendance(true)
+    try {
+      const res = await fetchWithAuth(`/api/staff-attendance/halfday-requests/check_period_attendance_access/?date=${date}`)
+      if (res.ok) {
+        const data = await res.json()
+        setStaffAttendanceStatus(data)
+      } else {
+        console.error('Failed to check staff attendance status')
+        setStaffAttendanceStatus({ 
+          can_mark_attendance: true, 
+          reason: 'Error checking attendance status', 
+          attendance_record: null 
+        })
+      }
+    } catch (e) {
+      console.error('Error checking staff attendance:', e)
+      setStaffAttendanceStatus({ 
+        can_mark_attendance: true, 
+        reason: 'Error checking attendance status', 
+        attendance_record: null 
+      })
+    } finally {
+      setCheckingStaffAttendance(false)
+    }
+  }
+
+  // Submit period attendance access request
+  async function submitHalfDayRequest() {
+    if (!halfDayRequestReason.trim()) {
+      alert('Please provide a reason for your request')
+      return
+    }
+    
+    setSubmittingHalfDayRequest(true)
+    try {
+      const res = await fetchWithAuth('/api/staff-attendance/halfday-requests/', {
+        method: 'POST',
+        body: JSON.stringify({
+          attendance_date: date,
+          reason: halfDayRequestReason.trim()
+        })
+      })
+      
+      if (res.ok) {
+        alert('Period attendance access request submitted successfully! Please wait for HOD/AHOD approval.')
+        setShowHalfDayRequestModal(false)
+        setHalfDayRequestReason('')
+        // Re-check status after request
+        checkStaffAttendanceStatus()
+      } else {
+        const errorData = await res.json().catch(() => ({ error: 'Unknown error' }))
+        alert(`Failed to submit request: ${errorData.error || errorData.attendance_date?.[0] || 'Unknown error'}`)
+      }
+    } catch (e) {
+      console.error('Error submitting access request:', e)
+      alert('Failed to submit access request. Please try again.')
+    } finally {
+      setSubmittingHalfDayRequest(false)
+    }
+  }
 
   // Reset daily mode when switching to period view
   useEffect(() => {
@@ -172,6 +264,71 @@ export default function PeriodAttendance(){
       setPeriods(j.results || [])
     }catch(e){ console.error('fetchPeriods', e); setPeriods([]) }
     finally{ setLoading(false) }
+  }
+
+  // HOD/AHOD: show recent period attendance access requests (history)
+  function HodRequestHistory() {
+    const [loadingHist, setLoadingHist] = useState(true)
+    const [history, setHistory] = useState<any[]>([])
+    const [isHod, setIsHod] = useState<boolean | null>(null)
+
+    useEffect(() => { loadHistory() }, [])
+
+    async function loadHistory() {
+      setLoadingHist(true)
+      try {
+        const res = await fetchWithAuth('/api/staff-attendance/halfday-requests/?page_size=10')
+        if (!res.ok) {
+          if (res.status === 403) { setIsHod(false); setHistory([]); return }
+          throw new Error('Failed')
+        }
+        const j = await res.json().catch(() => null)
+        const list = (j && (j.results || j)) || []
+        setHistory(list)
+        setIsHod(true)
+      } catch (e) {
+        console.error('loadHistory', e)
+        setHistory([])
+        setIsHod(false)
+      } finally {
+        setLoadingHist(false)
+      }
+    }
+
+    if (isHod === false && !loadingHist) return null
+
+    return (
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 mb-6 p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="text-lg font-semibold text-gray-900">Period Attendance Request Log</h4>
+          <button onClick={loadHistory} className="px-3 py-1 text-sm bg-gray-100 rounded hover:bg-gray-200">Refresh</button>
+        </div>
+        {loadingHist ? (
+          <div className="text-center py-6">
+            <Loader2 className="w-6 h-6 text-indigo-600 animate-spin mx-auto" />
+            <p className="text-sm text-gray-600 mt-2">Loading history...</p>
+          </div>
+        ) : !history.length ? (
+          <p className="text-sm text-gray-600">No period attendance requests found for your departments.</p>
+        ) : (
+          <div className="space-y-3">
+            {history.map((r: any) => (
+              <div key={r.id} className="border border-gray-100 rounded p-3 flex items-start justify-between">
+                <div>
+                  <div className="text-sm font-medium text-gray-900">{r.staff_full_name || r.staff_name || r.staff_user?.username || 'Unknown'}</div>
+                  <div className="text-xs text-gray-500">{r.attendance_date} • {r.requested_at ? new Date(r.requested_at).toLocaleString() : ''}</div>
+                  <div className="text-xs text-gray-600 mt-1">{r.reason || ''}</div>
+                </div>
+                <div className="text-right text-sm">
+                  <div className={`px-2 py-0.5 rounded text-xs font-medium ${r.status === 'approved' ? 'bg-green-100 text-green-800' : r.status === 'rejected' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'}`}>{(r.status || '').toUpperCase()}</div>
+                  {r.reviewed_by_name && <div className="text-xs text-gray-500 mt-1">Reviewed by {r.reviewed_by_name}</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    )
   }
 
   // Find consecutive period with same subject (including with breaks/lunch in between)
@@ -431,17 +588,24 @@ export default function PeriodAttendance(){
             date,
             records: recordsBySection[sid] || [],
           }
-          console.log('Saving attendance for section', sid, 'period', pid, payload)
+          // saving attendance payload prepared
           const res = await fetchWithAuth('/api/academics/period-attendance/bulk-mark/', { method: 'POST', body: JSON.stringify(payload) })
           const j = await (res.ok ? res.json().catch(()=>null) : res.json().catch(()=>null))
+          
+          // Handle attendance locked error
+          if (res.status === 403 && j?.attendance_locked) {
+            alert(`Cannot mark period attendance: ${j.error || 'Staff attendance is locked'}\n\nYou are marked as absent for ${date}. Please request half-day access from your HOD to mark period attendance.`)
+            setSaving(false)
+            return
+          }
+          
           results.push({ section: sid, period: pid, ok: res.ok, data: j })
         }
       }
 
       const failed = results.filter(r=> !r.ok)
       if (failed.length) {
-        console.error('Some saves failed:', failed)
-        alert('Attendance saved for some sections/periods, but failed for others. Check console for details.')
+        alert('Attendance saved for some sections/periods, but failed for others.')
       } else {
         await fetchPeriods()
         const label = (selected as any).combined_period_label || (selected.period && (selected.period.label || `Period ${selected.period.index}`))
@@ -1373,6 +1537,69 @@ export default function PeriodAttendance(){
         </div>
       </div>
 
+      {/* Staff Attendance Status Notification */}
+      {checkingStaffAttendance ? (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl shadow-sm mb-6 p-4">
+          <div className="flex items-center gap-3">
+            <Loader2 className="w-5 h-5 text-blue-600 animate-spin" />
+            <span className="text-blue-800 text-sm font-medium">Checking staff attendance status...</span>
+          </div>
+        </div>
+      ) : staffAttendanceStatus && !staffAttendanceStatus.can_mark_attendance ? (
+        <div className="bg-red-50 border border-red-200 rounded-xl shadow-sm mb-6 p-4">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <h3 className="text-red-800 font-semibold text-sm mb-2">Period Attendance Access Required</h3>
+              <p className="text-red-700 text-sm mb-3">{staffAttendanceStatus.reason}</p>
+              
+              {/* Show pending request status */}
+              {staffAttendanceStatus.pending_request && (
+                <div className="mb-3 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Clock className="w-4 h-4 text-yellow-600" />
+                    <span className="text-sm font-medium text-yellow-800">Request Pending Approval</span>
+                  </div>
+                  <p className="text-xs text-yellow-700 mt-1">
+                    Your period attendance access request is pending HOD/AHOD approval.
+                  </p>
+                  <p className="text-xs text-yellow-600 mt-1">
+                    Submitted: {new Date(staffAttendanceStatus.pending_request.requested_at).toLocaleString()}
+                  </p>
+                </div>
+              )}
+              
+              {!staffAttendanceStatus.pending_request && (
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setShowHalfDayRequestModal(true)}
+                    className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors"
+                  >
+                    Request Period Attendance Access
+                  </button>
+                  <span className="text-gray-600 text-xs flex items-center">
+                    Request approval from your HOD/AHOD to mark period attendance
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : staffAttendanceStatus?.can_mark_attendance && staffAttendanceStatus.attendance_record?.status === 'partial' ? (
+        <div className="bg-yellow-50 border border-yellow-200 rounded-xl shadow-sm mb-6 p-4">
+          <div className="flex items-center gap-3">
+            <AlertCircle className="w-5 h-5 text-yellow-600" />
+            <div>
+              <span className="text-yellow-800 text-sm font-medium">
+                You are marked as partial attendance for {date} - Period attendance access is enabled
+              </span>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      
+
       {/* Date Selector */}
       <div className="bg-white rounded-xl shadow-sm mb-6 p-4 border border-slate-200">
         <div className="flex items-center gap-3">
@@ -1534,7 +1761,7 @@ export default function PeriodAttendance(){
 
       {/* Assigned Periods */}
       {viewMode === 'period' && (
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-6">
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-6 relative">
         <div className="px-6 py-4 border-b border-slate-200 bg-slate-50">
           <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
             <Users className="w-5 h-5 text-indigo-600" />
@@ -1542,7 +1769,7 @@ export default function PeriodAttendance(){
           </h2>
         </div>
 
-        <div className="p-6">
+        <div className={`p-6 transition-all ${staffAttendanceStatus && !staffAttendanceStatus.can_mark_attendance ? 'blur-sm pointer-events-none select-none' : ''}`}>
           {loading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
@@ -1673,12 +1900,87 @@ export default function PeriodAttendance(){
             </div>
           )}
         </div>
+        {/* Overlay for locked access */}
+        {staffAttendanceStatus && !staffAttendanceStatus.can_mark_attendance && (
+          <div className="absolute inset-0 bg-red-500/5 backdrop-blur-[2px] flex items-center justify-center rounded-xl z-10">
+            <div className="bg-white/95 border-2 border-red-300 rounded-xl shadow-2xl p-6 max-w-md mx-4">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="p-2 bg-red-100 rounded-full">
+                  <Lock className="w-6 h-6 text-red-600" />
+                </div>
+                <h3 className="text-lg font-bold text-red-800">Period Attendance Locked</h3>
+              </div>
+              <p className="text-sm text-red-700 mb-4">{staffAttendanceStatus.reason}</p>
+              {staffAttendanceStatus.attendance_record?.status === 'absent' && !staffAttendanceStatus.pending_request && (
+                <button
+                  onClick={() => setShowHalfDayRequestModal(true)}
+                  className="w-full px-4 py-2.5 bg-red-600 text-white font-medium rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2"
+                >
+                  <AlertCircle className="w-4 h-4" />
+                  Request Half-Day Access
+                </button>
+              )}
+              {staffAttendanceStatus.pending_request && (
+                <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Clock className="w-4 h-4 text-yellow-600" />
+                    <span className="text-sm font-medium text-yellow-800">Request Pending</span>
+                  </div>
+                  <p className="text-xs text-yellow-700">Your half-day access request is awaiting HOD/AHOD approval</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
       )}
 
+      {/* Request sections: history, access requests, unlock requests (moved below Assigned Periods) */}
+      <div className="mb-6">
+        <HodRequestHistory />
+      </div>
+      <div className="mb-6">
+        <HalfDayRequestsApproval />
+      </div>
+      <div className="mb-6">
+        <AttendanceRequests />
+      </div>
+
       {/* Daily Attendance Marking Panel */}
       {dailyMode && selectedSection && (
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-6">
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-6 relative">
+          {/* Overlay for locked access on daily mode */}
+          {staffAttendanceStatus && !staffAttendanceStatus.can_mark_attendance && (
+            <div className="absolute inset-0 bg-red-500/5 backdrop-blur-[2px] flex items-center justify-center rounded-xl z-10">
+              <div className="bg-white/95 border-2 border-red-300 rounded-xl shadow-2xl p-6 max-w-md mx-4">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="p-2 bg-red-100 rounded-full">
+                    <Lock className="w-6 h-6 text-red-600" />
+                  </div>
+                  <h3 className="text-lg font-bold text-red-800">Daily Attendance Locked</h3>
+                </div>
+                <p className="text-sm text-red-700 mb-4">{staffAttendanceStatus.reason}</p>
+                {staffAttendanceStatus.attendance_record?.status === 'absent' && !staffAttendanceStatus.pending_request && (
+                  <button
+                    onClick={() => setShowHalfDayRequestModal(true)}
+                    className="w-full px-4 py-2.5 bg-red-600 text-white font-medium rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2"
+                  >
+                    <AlertCircle className="w-4 h-4" />
+                    Request Half-Day Access
+                  </button>
+                )}
+                {staffAttendanceStatus.pending_request && (
+                  <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Clock className="w-4 h-4 text-yellow-600" />
+                      <span className="text-sm font-medium text-yellow-800">Request Pending</span>
+                    </div>
+                    <p className="text-xs text-yellow-700">Your half-day access request is awaiting HOD/AHOD approval</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
           <div className="px-4 sm:px-6 py-4 border-b border-slate-200 bg-gradient-to-r from-emerald-50 to-teal-50">
             {/* Header - Mobile First Layout */}
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
@@ -2203,7 +2505,39 @@ export default function PeriodAttendance(){
 
       {/* Session Panel */}
       {selected && (
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-6">
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-6 relative">
+          {/* Overlay for locked access on session panel */}
+          {staffAttendanceStatus && !staffAttendanceStatus.can_mark_attendance && (
+            <div className="absolute inset-0 bg-red-500/5 backdrop-blur-[2px] flex items-center justify-center rounded-xl z-10">
+              <div className="bg-white/95 border-2 border-red-300 rounded-xl shadow-2xl p-6 max-w-md mx-4">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="p-2 bg-red-100 rounded-full">
+                    <Lock className="w-6 h-6 text-red-600" />
+                  </div>
+                  <h3 className="text-lg font-bold text-red-800">Period Attendance Locked</h3>
+                </div>
+                <p className="text-sm text-red-700 mb-4">{staffAttendanceStatus.reason}</p>
+                {staffAttendanceStatus.attendance_record?.status === 'absent' && !staffAttendanceStatus.pending_request && (
+                  <button
+                    onClick={() => setShowHalfDayRequestModal(true)}
+                    className="w-full px-4 py-2.5 bg-red-600 text-white font-medium rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2"
+                  >
+                    <AlertCircle className="w-4 h-4" />
+                    Request Half-Day Access
+                  </button>
+                )}
+                {staffAttendanceStatus.pending_request && (
+                  <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Clock className="w-4 h-4 text-yellow-600" />
+                      <span className="text-sm font-medium text-yellow-800">Request Pending</span>
+                    </div>
+                    <p className="text-xs text-yellow-700">Your half-day access request is awaiting HOD/AHOD approval</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
           <div className="px-6 py-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <h3 className="text-lg font-semibold text-slate-900">
@@ -2355,8 +2689,10 @@ export default function PeriodAttendance(){
                               <select 
                                 value={marks[s.id] || 'P'} 
                                 onChange={e=> setMark(s.id, e.target.value)}
-                                disabled={isLocked}
-                                className={`appearance-none px-2 sm:px-3 py-1.5 pr-8 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent w-full ${statusCls} ${isLocked ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''}`}
+                                disabled={isLocked || (staffAttendanceStatus && !staffAttendanceStatus.can_mark_attendance)}
+                                className={`appearance-none px-2 sm:px-3 py-1.5 pr-8 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent w-full ${statusCls} ${(isLocked || (staffAttendanceStatus && !staffAttendanceStatus.can_mark_attendance)) ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''}`}
+                                title={staffAttendanceStatus && !staffAttendanceStatus.can_mark_attendance ? 
+                                       "Attendance marking is locked - you are marked as absent" : undefined}
                               >
                                 <option value="P">Present</option>
                                 <option value="A">Absent</option>
@@ -2379,8 +2715,10 @@ export default function PeriodAttendance(){
                 <>
                   <button 
                     onClick={saveMarks} 
-                    disabled={saving || selected.attendance_session_locked}
+                    disabled={saving || selected.attendance_session_locked || (staffAttendanceStatus && !staffAttendanceStatus.can_mark_attendance)}
                     className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
+                    title={staffAttendanceStatus && !staffAttendanceStatus.can_mark_attendance ? 
+                           "Period attendance is locked - you are marked as absent" : undefined}
                   >
                     {saving ? (
                       <>
@@ -2837,6 +3175,75 @@ export default function PeriodAttendance(){
                 className="w-full px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-sm font-medium transition-colors"
               >
                 Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Half-Day Request Modal */}
+      {showHalfDayRequestModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full max-h-[80vh] flex flex-col">
+            <div className="px-6 py-4 border-b border-slate-200 bg-gradient-to-r from-indigo-50 to-purple-50 flex items-center justify-between rounded-t-xl">
+              <div className="flex items-center gap-3">
+                <AlertCircle className="w-5 h-5 text-indigo-600" />
+                <h3 className="text-lg font-semibold text-slate-900">Request Period Attendance Access</h3>
+              </div>
+              <button
+                onClick={() => setShowHalfDayRequestModal(false)}
+                className="p-1 hover:bg-slate-200 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5 text-slate-600" />
+              </button>
+            </div>
+            
+            <div className="p-6 flex-1">
+              <div className="mb-4">
+                <p className="text-sm text-slate-600 mb-4">
+                  Submit a request to your HOD/AHOD for period attendance access on <strong>{date}</strong>. Once approved, you'll be able to mark student attendance for your periods.
+                </p>
+              </div>
+
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-slate-700 mb-2">
+                  Reason for Request <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  value={halfDayRequestReason}
+                  onChange={(e) => setHalfDayRequestReason(e.target.value)}
+                  placeholder="Please explain why you need period attendance access..."
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-none"
+                  rows={4}
+                  disabled={submittingHalfDayRequest}
+                />
+              </div>
+
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
+                <div className="flex gap-2">
+                  <AlertCircle className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />
+                  <p className="text-xs text-blue-800">
+                    Your HOD/AHOD will review this request. You'll be notified once it's approved or rejected.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 rounded-b-xl flex gap-3">
+              <button
+                onClick={() => setShowHalfDayRequestModal(false)}
+                className="flex-1 px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-sm font-medium transition-colors"
+                disabled={submittingHalfDayRequest}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitHalfDayRequest}
+                disabled={!halfDayRequestReason.trim() || submittingHalfDayRequest}
+                className="flex-1 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
+              >
+                {submittingHalfDayRequest && <Loader2 className="w-4 h-4 animate-spin" />}
+                Submit Request
               </button>
             </div>
           </div>
