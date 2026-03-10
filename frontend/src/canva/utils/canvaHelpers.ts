@@ -25,7 +25,7 @@ export interface TextOptions {
 /**
  * Insert a text element into the active Canva design.
  * Canva places the element in the centre of the current viewport.
- * Calling addElementAtPoint first; falls back to addElementAtCursor on older design types.
+ * Calls addElementAtPoint first; falls back to addElementAtCursor on older design types.
  */
 export async function insertText(opts: TextOptions): Promise<void> {
   const element = {
@@ -56,25 +56,12 @@ export async function insertTextGroup(items: TextOptions[]): Promise<void> {
   }
 }
 
-
-/**
- * Insert multiple text elements in one call (each becomes a separate text box).
- * Elements are stacked — Canva offsets duplicates automatically.
- */
-export async function insertTextGroup(items: TextOptions[]): Promise<void> {
-  // addNativeElement is called sequentially because the SDK queues calls.
-  for (const item of items) {
-    await insertText(item);
-  }
-}
-
 /**
  * Returns true when the current environment IS the Canva iframe.
  * Outside Canva (e.g. a plain browser tab) the SDK will throw on first use.
  */
 export function isInsideCanva(): boolean {
   try {
-    // The Canva SDK sets a global that signals it is initialised.
     return typeof window !== 'undefined' &&
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       !!(window as any).__canva_sdk_ready;

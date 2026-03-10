@@ -109,6 +109,10 @@ export default function DeptList() {
     try { return JSON.parse(localStorage.getItem('permissions') || '[]') as string[] } catch { return [] }
   })();
   const canApprove = Array.isArray(userPerms) && (userPerms.includes('curriculum.department.approve') || userPerms.includes('CURRICULUM_DEPARTMENT_APPROVE'));
+  // Propagate/copy is only for users with master curriculum or all-department curriculum access
+  const canPropagate = Array.isArray(userPerms) && (
+    userPerms.some(p => ['curriculum.master.edit', 'CURRICULUM_MASTER_EDIT', 'curriculum.master.publish', 'CURRICULUM_MASTER_PUBLISH', 'curriculum_master_edit', 'curriculum_master_publish'].includes(p))
+  );
 
   async function onApprove(rowId: number, action: 'approve'|'reject'){
     try{
@@ -379,7 +383,7 @@ export default function DeptList() {
                 </select>
               </div>
             )}
-            {batchYears.length > 1 && (
+            {batchYears.length > 1 && canPropagate && (
               <button
                 onClick={() => { setPropagateSection(true); setPropagateSecTargets([]); }}
                 className="ml-auto flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg font-medium hover:bg-purple-700 transition-all shadow-sm"
@@ -578,7 +582,7 @@ export default function DeptList() {
                         ) : (
                           <div className="w-8 h-8"></div>
                         )}
-                        {batchYears.length > 1 && (
+                        {batchYears.length > 1 && canPropagate && (
                           <button
                             className="p-2 text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
                             onClick={() => { setPropagateRow(r); setPropagateTargets([]); }}
@@ -904,12 +908,9 @@ export default function DeptList() {
                   onChange={e => setAddForm(f => ({ ...f, class_type: e.target.value }))} 
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
-                  <option value="THEORY">THEORY</option>
-                  <option value="LAB">LAB</option>
-                  <option value="TCPL">TCPL</option>
-                  <option value="TCPR">TCPR</option>
-                  <option value="PRACTICAL">PRACTICAL</option>
-                  <option value="AUDIT">AUDIT</option>
+                  {CLASS_TYPES.map((ct) => (
+                    <option key={ct.value} value={ct.value}>{ct.label}</option>
+                  ))}
                 </select>
               </div>
               <div>
@@ -1092,12 +1093,9 @@ export default function DeptList() {
                   onChange={e => setEditElectiveForm((f:any) => ({ ...f, class_type: e.target.value }))} 
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
-                  <option value="THEORY">THEORY</option>
-                  <option value="LAB">LAB</option>
-                  <option value="TCPL">TCPL</option>
-                  <option value="TCPR">TCPR</option>
-                  <option value="PRACTICAL">PRACTICAL</option>
-                  <option value="AUDIT">AUDIT</option>
+                  {CLASS_TYPES.map((ct) => (
+                    <option key={ct.value} value={ct.value}>{ct.label}</option>
+                  ))}
                 </select>
               </div>
               <div>

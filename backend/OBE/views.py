@@ -6574,7 +6574,7 @@ def publish_request_create(request):
     except Exception:
         ta_id = None
 
-    if assessment not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
+    if assessment not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model', 'cdap', 'articulation', 'lca'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
     if not subject_code:
         return Response({'detail': 'subject_code is required.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -7137,7 +7137,7 @@ def edit_request_create(request):
     except Exception:
         ta_id = None
 
-    if assessment not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
+    if assessment not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model', 'cdap', 'articulation', 'lca'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
     if not subject_code:
         return Response({'detail': 'subject_code is required.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -7404,7 +7404,7 @@ def edit_requests_my_latest(request):
     except Exception:
         ta_id = None
 
-    if assessment not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}:
+    if assessment not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model', 'cdap', 'articulation', 'lca'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
     if not subject_code:
         return Response({'detail': 'subject_code is required.'}, status=status.HTTP_400_BAD_REQUEST)

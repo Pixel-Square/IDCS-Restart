@@ -2,7 +2,7 @@
  * idcsApi.ts
  *
  * Lightweight client for the IDCS Django REST API.
- * All requests go through the Vite proxy (/api → CANVA_BACKEND_HOST).
+ * All requests go through the Vite proxy (/api → Django backend).
  *
  * Note: Inside the Canva iframe there is no active IDCS session cookie.
  * These calls use public/read-only endpoints or an API key if configured.

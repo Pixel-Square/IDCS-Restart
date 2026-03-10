@@ -34,6 +34,13 @@ type Props = {
 
 const AVAILABLE_ROLES = ['STAFF', 'HOD', 'AHOD', 'ADVISOR', 'mentor']
 const STATUS_CHOICES = ['ACTIVE', 'INACTIVE', 'RESIGNED']
+const DESIGNATION_CHOICES = [
+  'Assistant Professor',
+  'Assistant Professor - SS',
+  'Assistant Professor - SG',
+  'Associate Professor',
+  'Professor',
+]
 
 export default function StaffFormModal({ isOpen, onClose, onSuccess, staffId, initialData, departmentId }: Props) {
   const [formData, setFormData] = useState<StaffFormData>({
@@ -276,13 +283,16 @@ export default function StaffFormModal({ isOpen, onClose, onSuccess, staffId, in
               {/* Designation */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Designation</label>
-                <input
-                  type="text"
+                <select
                   value={formData.designation}
                   onChange={(e) => setFormData({ ...formData, designation: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                  placeholder="e.g., Assistant Professor"
-                />
+                >
+                  <option value="">— Select Designation —</option>
+                  {DESIGNATION_CHOICES.map((d) => (
+                    <option key={d} value={d}>{d}</option>
+                  ))}
+                </select>
               </div>
 
               {/* Department */}

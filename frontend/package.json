@@ -11,6 +11,10 @@
     "lint": "eslint \"src/**/*.{ts,tsx}\""
   },
   "dependencies": {
+    "@canva/app-ui-kit": "^3.4.0",
+    "@canva/asset": "^2.3.0",
+    "@canva/design": "^2.8.0",
+    "@canva/error": "^2.2.1",
     "@types/recharts": "^2.0.1",
     "axios": "^1.4.0",
     "jspdf": "^4.1.0",

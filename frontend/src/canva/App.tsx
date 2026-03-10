@@ -61,7 +61,7 @@ export default function App() {
   );
 }
 
-// ── Inline help panel (no separate file needed) ────────────────────────────
+// ── Inline help panel ──────────────────────────────────────────────────────────
 
 function HelpPanel() {
   return (

@@ -1,4 +1,4 @@
-/* Canva App-UI-Kit styles are now imported in index.tsx via:          */
+/* Canva App-UI-Kit styles are imported in main.tsx via:               */
 /* import '@canva/app-ui-kit/styles.css';                              */
 /* Do NOT import them here as well — doing so causes duplicate styles. */
 
@@ -238,7 +238,6 @@ body {
   background: #ede9fe;
   color: #7c3aed;
   font-size: 10px;
-  font-weight: 700;
-  padding: 2px 8px;
+  padding: 2px 7px;
   border-radius: 20px;
 }

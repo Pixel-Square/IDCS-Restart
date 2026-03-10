@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { resolve } from 'path'
 
 export default defineConfig({
   plugins: [react()],
@@ -12,6 +13,13 @@ export default defineConfig({
   build: {
     // Use a user-writable outDir; `dist/` is owned by www-data in some deployments.
     outDir: 'build_dist',
+    rollupOptions: {
+      // Multi-page app: main frontend + Canva panel (served as canva.html)
+      input: {
+        main:  resolve(__dirname, 'index.html'),
+        canva: resolve(__dirname, 'canva.html'),
+      },
+    },
   },
   server: {
     host: true,

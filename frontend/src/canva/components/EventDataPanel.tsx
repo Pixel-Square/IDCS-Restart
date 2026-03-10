@@ -105,7 +105,7 @@ export default function EventDataPanel() {
     const text = form[field.key].trim();
     if (!text) return;
     try {
-      await insertText({ text, fontSize: field.fontSize, fontWeight: field.fontWeight, color: field.color });
+      await insertText({ text, fontWeight: field.fontWeight, color: field.color });
       showToast(`"${field.label}" added ✓`);
     } catch (err) {
       showToast('Add to Design failed — open in Canva first.', true);
@@ -118,7 +118,6 @@ export default function EventDataPanel() {
       .filter((f) => form[f.key].trim())
       .map((f) => ({
         text:       form[f.key].trim(),
-        fontSize:   f.fontSize,
         fontWeight: f.fontWeight,
         color:      f.color,
       }));
