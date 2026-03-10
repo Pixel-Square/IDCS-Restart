@@ -141,7 +141,7 @@ export default function DynamicFormRenderer({ fields, values, onChange }: Props)
           </div>
         );
 
-      case 'file':
+      case 'file': {
         const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
           const file = e.target.files?.[0];
           if (!file) {
@@ -211,6 +211,7 @@ export default function DynamicFormRenderer({ fields, values, onChange }: Props)
             )}
           </div>
         );
+      }
 
       default:
         return (

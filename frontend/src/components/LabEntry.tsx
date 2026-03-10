@@ -1113,7 +1113,7 @@ export default function LabEntry({
           'S.No': idx + 1,
           'Register No': String(s.reg_no || ''),
           Name: String(s.name || ''),
-          Absent: Boolean((row as any)?.absent) ? String((row as any)?.absentKind || 'AL') : '',
+          Absent: (row as any)?.absent ? String((row as any)?.absentKind || 'AL') : '',
         };
         for (const component of reviewComponents) {
           const raw = marks[component.id];
@@ -1141,7 +1141,7 @@ export default function LabEntry({
         'S.No': idx + 1,
         'Register No': String(s.reg_no || ''),
         Name: String(s.name || ''),
-        Absent: Boolean((row as any)?.absent) ? String((row as any)?.absentKind || 'AL') : '',
+        Absent: (row as any)?.absent ? String((row as any)?.absentKind || 'AL') : '',
       };
 
       for (const m of enabledCoMetas) {

@@ -85,8 +85,8 @@ function normalizeInternalWeights(
 
   const sanitizeLabPractical = (input: Array<number | string>) => {
     const out = ensureInternalWeightsLen(k, input);
-    const labCiaFallback = Number((defaults as any)?.[1] ?? DEFAULT_INTERNAL_MARK_WEIGHTS[1] ?? 3);
-    const modelFallback = Number((defaults as any)?.[16] ?? DEFAULT_INTERNAL_MARK_WEIGHTS[16] ?? 4);
+    const labCiaFallback = Number((defaults as any)?.[1] ?? DEFAULT_INTERNAL_MARK_WEIGHTS_17[1] ?? 3);
+    const modelFallback = Number((defaults as any)?.[16] ?? DEFAULT_INTERNAL_MARK_WEIGHTS_17[16] ?? 4);
     const pickLabCia = (legacy: unknown) => {
       if (legacy === '' || legacy == null) return '';
       const n = Number(legacy);
@@ -108,8 +108,8 @@ function normalizeInternalWeights(
   // Backward compatibility: old format had 13 weights with CO1/CO2 as single cycle columns.
   if (next.length === 13) {
     if (k === 'LAB' || k === 'PRACTICAL') {
-      const labCiaFallback = Number(DEFAULT_INTERNAL_MARK_WEIGHTS[1] ?? 3);
-      const modelFallback = Number(DEFAULT_INTERNAL_MARK_WEIGHTS[16] ?? 4);
+      const labCiaFallback = Number(DEFAULT_INTERNAL_MARK_WEIGHTS_17[1] ?? 3);
+      const modelFallback = Number(DEFAULT_INTERNAL_MARK_WEIGHTS_17[16] ?? 4);
       const pickLabCia = (legacy: unknown) => {
         if (legacy === '' || legacy == null) return '';
         const n = Number(legacy);

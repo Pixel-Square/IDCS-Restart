@@ -120,6 +120,8 @@ type Props = {
   viewerMode?: boolean;
   // When true, render the Published / Request Edit floating panel over the table
   floatPanelOnTable?: boolean;
+  // When true, use the SSA published-lock UI style (same as LabEntry)
+  useSsaPublishedLockUi?: boolean;
 };
 
 const DEFAULT_EXPERIMENTS = 5;

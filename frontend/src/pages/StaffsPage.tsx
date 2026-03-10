@@ -526,8 +526,8 @@ export default function StaffsPage() {
             // Show all staff across all departments
             const allStaffs = departments.flatMap(d => 
               (d.staffs || []).map(staff => ({ ...staff, departmentInfo: d }))
-            )
-            const filteredStaffs = getFilteredStaffs(allStaffs)
+            ) as (StaffMember & { departmentInfo: Department })[]
+            const filteredStaffs = getFilteredStaffs(allStaffs) as (StaffMember & { departmentInfo: Department })[]
             const staffCount = filteredStaffs.length
             const totalStaffCount = allStaffs.length
 
@@ -1086,8 +1086,8 @@ export default function StaffsPage() {
                                 </span>
                               )}
                               {/* Show HOD/AHOD roles */}
-                              {staff.department_roles && staff.department_roles.length > 0 ? (
-                                staff.department_roles.map((deptRole, idx) => (
+                              {staff.department_role_mappings && staff.department_role_mappings.length > 0 ? (
+                                staff.department_role_mappings.map((deptRole, idx) => (
                                   <span
                                     key={`role-${idx}`}
                                     className="inline-flex px-2 py-0.5 text-xs font-medium rounded bg-green-100 text-green-800 border border-green-200"
@@ -1098,7 +1098,7 @@ export default function StaffsPage() {
                                 ))
                               ) : null}
                               {/* No roles at all */}
-                              {!staff.current_department && (!staff.department_roles || staff.department_roles.length === 0) && (
+                              {!staff.current_department && (!staff.department_role_mappings || staff.department_role_mappings.length === 0) && (
                                 <span className="text-gray-400">None</span>
                               )}
                             </div>

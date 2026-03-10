@@ -43,6 +43,12 @@ iqac-whatsapp/server.log
 iqac-whatsapp/.wwebjs_cache/
 iqac-whatsapp/node_modules/
 
+# whatsapp-server session/cache (Chromium profile, auth tokens — change constantly at runtime)
+whatsapp-server/.wwebjs_auth/
+whatsapp-server/.wwebjs_cache/
+whatsapp-server/node_modules/
+whatsapp-server/*.log
+
 # whatsapp-server (new gateway)
 whatsapp-server/.env
 whatsapp-server/node_modules/

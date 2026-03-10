@@ -126,8 +126,8 @@ export function usePublishWindow(params: {
         await autoPublishDue(assessment, subjectCode, teachingAssignmentId);
       } catch {
         // ignore; server will also auto-publish on next publish-window poll
-      } finally {
-        if (cancelled) return;
+      }
+      if (!cancelled) {
         setAutoPublishDone(true);
         refresh({ silent: true });
       }

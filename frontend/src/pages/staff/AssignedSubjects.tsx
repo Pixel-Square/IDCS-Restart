@@ -220,8 +220,20 @@ export default function AssignedSubjectsPage() {
       console.log('Mapped students count:', studs.length)
       console.log('Student IDs:', studs.map(s => s.id))
       
-      // Note: Showing all students, including those already in batches
-      // Previously, students in existing batches were filtered out
+      // Exclude students already in existing batches for this curriculum_row / subject
+      const crId = item.curriculum_row_id || item.curriculum_row?.id
+      const excluded = new Set<number>()
+      if (crId) {
+        for (const b of batches) {
+          if (b.curriculum_row && b.curriculum_row.id === crId) {
+            for (const s of (b.students || [])) excluded.add(Number(s.id))
+          }
+        }
+      }
+      if (excluded.size > 0) {
+        studs = studs.filter((s: any) => !excluded.has(s.id))
+        console.log(`Filtered out ${excluded.size} already-batched students. Remaining: ${studs.length}`)
+      }
       
       setPickerStudents(studs)
       setPickerSelectedIds(studs.map((s:any)=>s.id))
@@ -259,14 +271,16 @@ export default function AssignedSubjectsPage() {
       case 'all':
         selectedIds = sortedStudents.map(s => s.id)
         break
-      case 'first-half':
+      case 'first-half': {
         const firstHalf = Math.ceil(sortedStudents.length / 2)
         selectedIds = sortedStudents.slice(0, firstHalf).map(s => s.id)
         break
-      case 'second-half':
+      }
+      case 'second-half': {
         const secondHalf = Math.floor(sortedStudents.length / 2)
         selectedIds = sortedStudents.slice(secondHalf).map(s => s.id)
         break
+      }
       case 'custom':
         if (customNumbers.trim()) {
           const numbers = customNumbers.split(',')
@@ -283,7 +297,7 @@ export default function AssignedSubjectsPage() {
             .map(s => s.id)
         }
         break
-      case 'range':
+      case 'range': {
         const start = parseInt(rangeStart)
         const end = parseInt(rangeEnd)
         if (!isNaN(start) && !isNaN(end) && start <= end) {
@@ -298,6 +312,7 @@ export default function AssignedSubjectsPage() {
             .map(s => s.id)
         }
         break
+      }
     }
 
     setPickerSelectedIds(selectedIds)
@@ -324,14 +339,16 @@ export default function AssignedSubjectsPage() {
       case 'all':
         selectedIds = sortedStudents.map(s => s.id)
         break
-      case 'first-half':
+      case 'first-half': {
         const firstHalf = Math.ceil(sortedStudents.length / 2)
         selectedIds = sortedStudents.slice(0, firstHalf).map(s => s.id)
         break
-      case 'second-half':
+      }
+      case 'second-half': {
         const secondHalf = Math.floor(sortedStudents.length / 2)
         selectedIds = sortedStudents.slice(secondHalf).map(s => s.id)
         break
+      }
       case 'custom':
         if (editCustomNumbers.trim()) {
           const numbers = editCustomNumbers.split(',')
@@ -348,7 +365,7 @@ export default function AssignedSubjectsPage() {
             .map(s => s.id)
         }
         break
-      case 'range':
+      case 'range': {
         const start = parseInt(editRangeStart)
         const end = parseInt(editRangeEnd)
         if (!isNaN(start) && !isNaN(end) && start <= end) {
@@ -363,6 +380,7 @@ export default function AssignedSubjectsPage() {
             .map(s => s.id)
         }
         break
+      }
     }
 
     setEditingSelectedStudentIds(selectedIds)
@@ -1022,7 +1040,7 @@ export default function AssignedSubjectsPage() {
               </div>
             </div>
             
-            <div className="p-6">
+            <div className="p-6 overflow-y-auto flex-1">
               {/* Staff Assignment */}
               <div className="mb-6">
                 <label className="block text-sm font-semibold text-gray-900 mb-2">
@@ -1262,6 +1280,7 @@ export default function AssignedSubjectsPage() {
       {editingBatchId && editingBatch && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
+            {/* Fixed header with title + buttons */}
             <div className="p-3 border-b border-gray-200 flex-shrink-0">
               <div className="flex justify-between items-start mb-2">
                 <div>
@@ -1289,7 +1308,10 @@ export default function AssignedSubjectsPage() {
                   </button>
                 </div>
               </div>
-              
+            </div>
+
+            {/* Scrollable body */}
+            <div className="p-3 overflow-y-auto flex-1">
               {/* Batch Name */}
               <div>
                 <label className="block text-xs text-gray-600 mb-0.5">
@@ -1531,7 +1553,7 @@ export default function AssignedSubjectsPage() {
                     ))
                   })()}
                 </div>
-            </div>
+            </div>{/* end scrollable body */}
           </div>
         </div>
       )}

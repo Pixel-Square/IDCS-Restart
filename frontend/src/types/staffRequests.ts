@@ -28,6 +28,7 @@ export interface LeavePolicy {
   to_date?: string; // REQUIRED: End date for reset period (YYYY-MM-DD)
   overdraft_name?: string; // LOP field name (Loss of Pay)
   lop_non_reset?: boolean; // If true, LOP never resets (recommended)
+  reset_duration?: 'yearly' | 'monthly'; // Reset period for deduct action
   attendance_status?: string;
   // LOP Logic: LOP = Absent days - Approved deduct days for those absent dates
   // Absent 4 days = LOP:4, approve leave for 2 = LOP:2
