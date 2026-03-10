@@ -818,6 +818,21 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
                         className="text-red-600 hover:text-red-700 p-2"
                       >
                         <Trash2 size={18} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="mt-4 p-4 bg-blue-50 rounded-lg">
+                <p className="text-sm text-blue-900">
+                  <strong>Workflow Preview:</strong> When a request is submitted, it will go through{' '}
+                  {approvalSteps.length} step(s) in order:{' '}
+                  {approvalSteps.map(s => s.approver_role).filter(Boolean).join(' → ') || 'None'}
+                </p>
+              </div>
+            </div>
+          )}
 
           {activeTab === 'attendance' && (
             <div className="space-y-6">
@@ -977,21 +992,6 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
                   </div>
                 </div>
               )}
-            </div>
-          )}
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <div className="mt-4 p-4 bg-blue-50 rounded-lg">
-                <p className="text-sm text-blue-900">
-                  <strong>Workflow Preview:</strong> When a request is submitted, it will go through{' '}
-                  {approvalSteps.length} step(s) in order:{' '}
-                  {approvalSteps.map(s => s.approver_role).filter(Boolean).join(' → ') || 'None'}
-                </p>
-              </div>
             </div>
           )}
         </div>

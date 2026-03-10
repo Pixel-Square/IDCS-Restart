@@ -247,17 +247,11 @@ export default function ApplicationsAdminPage(): JSX.Element {
         setVersions(versionsRes)
         setFlows(flowsRes)
         setRolePermissions(permissionsRes)
-
-    useEffect(() => {
-      if (editingFlowId == null) return
-      const exists = flows.some((f) => f.id === editingFlowId)
-      if (!exists) setEditingFlowId(null)
-    }, [flows, editingFlowId])
         setSubmissions(submissionsRes)
         setFieldDraft(emptyFieldDraft((fieldsRes[fieldsRes.length - 1]?.order || 0) + 1))
         setFlowDrafts(Object.fromEntries(flowsRes.map((flow) => [flow.id, { is_active: flow.is_active, override_role_ids: flow.override_roles.map((r) => r.id), sla_hours: flow.sla_hours == null ? '' : String(flow.sla_hours) }])))
         setStepDrafts(buildStepDraftsFromFlows(flowsRes))
-        const studentRoleId = findRoleIdByName(rolesRes, 'student')
+        const studentRoleId = findRoleIdByName(roles, 'student')
         setNewStepDrafts(Object.fromEntries(flowsRes.map((flow) => {
           const last: any = flow.steps[flow.steps.length - 1]
           const nextOrder = (last?.order || 0) + 1
@@ -298,6 +292,12 @@ export default function ApplicationsAdminPage(): JSX.Element {
       mounted = false
     }
   }, [selectedTypeId, roles])
+
+  useEffect(() => {
+    if (editingFlowId == null) return
+    const exists = flows.some((f) => f.id === editingFlowId)
+    if (!exists) setEditingFlowId(null)
+  }, [flows, editingFlowId])
 
   const selectedType = useMemo(() => types.find((row) => row.id === selectedTypeId) || null, [types, selectedTypeId])
 

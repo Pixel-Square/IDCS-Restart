@@ -308,9 +308,9 @@ export default function QueriesReceiverComponent() {
                                 <Phone className="w-3 h-3" />
                                 {query.mobile_number}
                                 {query.mobile_verified ? (
-                                  <CheckCircle className="w-3 h-3 text-green-600" title="Phone Verified" />
+                                  <CheckCircle className="w-3 h-3 text-green-600" aria-label="Phone Verified" />
                                 ) : (
-                                  <XCircle className="w-3 h-3 text-red-500" title="Phone Not Verified" />
+                                  <XCircle className="w-3 h-3 text-red-500" aria-label="Phone Not Verified" />
                                 )}
                               </span>
                             </>

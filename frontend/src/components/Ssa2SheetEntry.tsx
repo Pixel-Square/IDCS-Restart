@@ -1352,7 +1352,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
     });
   };
   const sumSplit = (arr: Array<number | ''>) =>
-    arr.reduce((a: number, b) => a + (typeof b === 'number' && Number.isFinite(b) ? b : 0), 0);
+    arr.reduce<number>((a, b) => a + (typeof b === 'number' && Number.isFinite(b) ? b : 0), 0);
   const padTo = <T,>(arr: T[], len: number, fill: T) => (arr.length >= len ? arr.slice(0, len) : arr.concat(Array.from({ length: len - arr.length }, () => fill)));
 
   // Review-only CO split rows
@@ -1440,7 +1440,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
       } else {
         const parsed = Number(rawVal);
         const nextN = Number.isFinite(parsed) ? Math.trunc(parsed) : NaN;
-        const others = arr.reduce((acc, v, i) => {
+        const others = arr.reduce<number>((acc, v, i) => {
           if (i === splitIdx) return acc;
           return acc + (typeof v === 'number' && Number.isFinite(v) ? v : 0);
         }, 0);
@@ -1490,7 +1490,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
 
       const parsed = Number(rawVal);
       const n = Number.isFinite(parsed) ? Math.trunc(parsed) : NaN;
-      const otherSum = target.reduce((acc: number, v, j) => {
+      const otherSum = target.reduce<number>((acc: number, v, j) => {
         if (j === idx) return acc;
         return acc + (typeof v === 'number' && Number.isFinite(v) ? v : 0);
       }, 0);

@@ -857,6 +857,10 @@ export type ClassTypeWeightsItem = {
   cia1: number;
   formative1: number;
   internal_mark_weights?: number[] | null;
+  // Alternative field names used by some endpoints
+  cia_weight?: number;
+  ssa_weight?: number;
+  fa_weight?: number;
 };
 
 export async function fetchClassTypeWeights(): Promise<Record<string, ClassTypeWeightsItem>> {

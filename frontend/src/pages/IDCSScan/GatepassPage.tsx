@@ -224,6 +224,7 @@ export default function IDCSScanGatepassPage() {
 
     ;(async () => {
       try {
+        // eslint-disable-next-line no-constant-condition
         while (true) {
           const { value, done } = await reader.read()
           if (done) break
@@ -298,7 +299,7 @@ export default function IDCSScanGatepassPage() {
 
         {!serialSupported && (
           <div className="rounded-xl bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800">
-            âš ï¸ Web Serial API requires <strong>Google Chrome</strong> or <strong>Microsoft Edge</strong>.
+            âš ï¸ Web Serial API requires <strong>Google Chrome</strong> or <strong>Microsoft Edge</strong>.
           </div>
         )}
 

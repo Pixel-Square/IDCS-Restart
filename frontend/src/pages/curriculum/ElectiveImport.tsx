@@ -111,7 +111,7 @@ export default function ElectiveImport() {
       console.log('[Excel Download] Starting...');
       const response = await fetchWithAuth('/api/curriculum/elective-choices/template/?format=excel');
       console.log('[Excel Download] Response status:', response.status);
-      console.log('[Excel Download] Response headers:', Object.fromEntries(response.headers.entries()));
+      console.log('[Excel Download] Response headers:', Object.fromEntries((response.headers as any).entries()));
       
       if (!response.ok) {
         const errorText = await response.text();

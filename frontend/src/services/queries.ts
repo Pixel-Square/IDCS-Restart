@@ -3,6 +3,7 @@ import fetchWithAuth from './fetchAuth';
 export interface UserQuery {
   id: number;
   serial_number: number;
+  dept_serial_number?: number;
   user: number;
   username: string;
   user_roles: string[];

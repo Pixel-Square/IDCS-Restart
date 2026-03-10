@@ -20,6 +20,7 @@ export default function AcademicControllerCoursesPage(): JSX.Element {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState('');
+  const [semFilter, setSemFilter] = useState<number | 'all'>('all');
 
   useEffect(() => {
     let mounted = true;
@@ -102,14 +103,30 @@ export default function AcademicControllerCoursesPage(): JSX.Element {
     return Array.from(map.values()).sort((a, b) => a.course_code.localeCompare(b.course_code));
   }, [rows, electiveRows]);
 
+  // All distinct semester numbers from dept rows
+  const semesters = useMemo(() => {
+    const nums = Array.from(new Set(rows.map((r) => r.semester).filter(Boolean))).sort((a, b) => a - b);
+    return nums;
+  }, [rows]);
+
+  // Course codes that belong to the selected semester
+  const semesterCourseCodes = useMemo(() => {
+    if (semFilter === 'all') return null;
+    const codes = new Set(rows.filter((r) => r.semester === semFilter).map((r) => normalize((r as any).course_code)).filter(Boolean));
+    return codes;
+  }, [rows, semFilter]);
+
   const filtered = useMemo(() => {
     const needle = normalize(q).toLowerCase();
-    if (!needle) return courses;
     return courses.filter((c) => {
-      const hay = `${c.course_code} ${c.course_name}`.toLowerCase();
-      return hay.includes(needle);
+      if (semesterCourseCodes && !semesterCourseCodes.has(c.course_code)) return false;
+      if (needle) {
+        const hay = `${c.course_code} ${c.course_name}`.toLowerCase();
+        if (!hay.includes(needle)) return false;
+      }
+      return true;
     });
-  }, [courses, q]);
+  }, [courses, q, semesterCourseCodes]);
 
   if (loading) return <div style={{ color: '#6b7280' }}>Loading courses…</div>;
   if (error) return <div style={{ color: '#b91c1c' }}>{error}</div>;
@@ -121,14 +138,31 @@ export default function AcademicControllerCoursesPage(): JSX.Element {
           <div style={{ fontSize: 16, fontWeight: 800, color: '#0f172a' }}>Courses</div>
           <div style={{ fontSize: 13, color: '#6b7280' }}>Search and open a course to view sections and staff mappings.</div>
         </div>
-        <div style={{ minWidth: 280 }}>
-          <div style={{ fontSize: 12, color: '#6b7280' }}>Search</div>
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Course code or name"
-            className="obe-input"
-          />
+        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          {semesters.length > 0 && (
+            <div>
+              <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 3 }}>Semester</div>
+              <select
+                value={semFilter}
+                onChange={(e) => setSemFilter(e.target.value === 'all' ? 'all' : Number(e.target.value))}
+                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #d1d5db', fontSize: 13, background: '#fff', cursor: 'pointer', minWidth: 120 }}
+              >
+                <option value="all">All Semesters</option>
+                {semesters.map((s) => (
+                  <option key={s} value={s}>Semester {s}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          <div style={{ minWidth: 240 }}>
+            <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 3 }}>Search</div>
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Course code or name"
+              className="obe-input"
+            />
+          </div>
         </div>
       </div>
 

@@ -169,7 +169,7 @@ async function computeTaTotal(
 
   // 2. Fetch marks in parallel
   if (cycle === 'model') {
-    let modelRaw: Record<string, any> = {};
+    const modelRaw: Record<string, any> = {};
     try {
       const resp = await fetchPublishedModelSheet(subjectCode, taId);
       // sum all question marks per student
