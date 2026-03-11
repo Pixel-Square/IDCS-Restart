@@ -15,7 +15,7 @@ import { fetchSpecialCourseEnabledAssessments } from '../services/obe';
 import { normalizeClassType } from '../constants/classTypes';
 import '../styles/obe-theme.css';
 
-type TabKey = 'marks' | 'lca_instructions' | 'co_attainment' | 'internal_mark' | 'cqi' | 'result_analysis';
+type TabKey = 'marks' | 'lca_instructions' | 'internal_mark' | 'result_analysis';
 
 export default function CourseOBEPage(): JSX.Element {
   const { code } = useParams<{ code: string }>();
@@ -53,10 +53,8 @@ export default function CourseOBEPage(): JSX.Element {
     // legacy URLs: keep working but route through LCA Instructions
     else if (path.includes('/lca') || path.includes('/cdap') || path.includes('/articulation')) setActiveTab('lca_instructions');
     else if (path.includes('/marks')) setActiveTab('marks');
-    else if (path.includes('/co_attainment')) setActiveTab('co_attainment');
     else if (path.includes('/internal_mark') || path.includes('/internal-mark')) setActiveTab('internal_mark');
     else if (path.includes('/result_analysis') || path.includes('/result-analysis') || path.includes('/result')) setActiveTab('result_analysis');
-    else if (path.includes('/cqi')) setActiveTab('cqi');
     else setActiveTab('marks');
   }, [location]);
 
@@ -265,8 +263,6 @@ export default function CourseOBEPage(): JSX.Element {
             {[
               { key: 'lca_instructions', label: 'Learner Centric Approach' },
               { key: 'marks', label: 'Mark Entry' },
-              { key: 'co_attainment', label: 'CO Attainment' },
-              { key: 'cqi', label: 'CQI' },
               { key: 'internal_mark', label: 'Internal Mark' },
               { key: 'result_analysis', label: 'Result Analysis' },
             ].map((t) => {
@@ -304,13 +300,9 @@ export default function CourseOBEPage(): JSX.Element {
             {activeTab === 'lca_instructions' && (
               <LCAInstructionsPage courseCode={courseId} courseName={courseName} initialTab={lcaInitialTab} />
             )}
-            {activeTab === 'co_attainment' && (
-              <COAttainmentPage courseId={courseId} enabledAssessments={courseEnabledAssessments} classType={courseClassType} />
-            )}
             {activeTab === 'internal_mark' && (
               <InternalMarkCoursePage courseId={courseId} enabledAssessments={courseEnabledAssessments} classType={courseClassType} />
             )}
-            {activeTab === 'cqi' && <CQIPage courseId={courseId} />}
             {activeTab === 'result_analysis' && (
               <ResultAnalysisPage courseId={courseId} classType={courseClassType} enabledAssessments={courseEnabledAssessments} />
             )}
