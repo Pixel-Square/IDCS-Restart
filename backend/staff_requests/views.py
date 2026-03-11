@@ -84,6 +84,12 @@ def can_user_apply_with_template(user, template):
     """
     Check if a user's role allows them to apply using this template.
     
+    Special handling for SPL (Special) templates:
+    - SPL templates (ending with " - SPL") are only for special roles: IQAC, HR, PS, HOD, CFSW, EDC, COE, HAA
+    - Normal templates are hidden from users with special roles
+    - Users with special roles see only SPL forms
+    - Regular staff see only normal forms
+    
     Args:
         user: The user model instance
         template: The RequestTemplate instance
@@ -94,17 +100,44 @@ def can_user_apply_with_template(user, template):
     if not template.is_active:
         return False
     
-    # If no roles specified or empty array, allow all authenticated users
-    if not template.allowed_roles or len(template.allowed_roles) == 0:
-        return True  # No restrictions
-    
     # Superuser override
     if user.is_superuser:
         return True
     
-    # Check if user has any of the allowed roles
+    # Define special roles that use SPL forms
+    SPL_ROLES = {'IQAC', 'HR', 'PS', 'HOD', 'CFSW', 'EDC', 'COE', 'HAA'}
+    
+    # Get user's roles
+    user_role_names = set()
     if hasattr(user, 'user_roles'):
-        user_role_names = list(user.user_roles.values_list('role__name', flat=True))
+        user_role_names = set(user.user_roles.values_list('role__name', flat=True))
+    
+    # Check if user has any special role
+    has_special_role = bool(user_role_names & SPL_ROLES)
+    
+    # Determine if this is an SPL template
+    is_spl_template = template.name.endswith(' - SPL')
+    
+    # Apply SPL logic:
+    # - If user has special role and template is SPL → allow
+    # - If user has special role and template is normal → deny
+    # - If user has no special role and template is SPL → deny
+    # - If user has no special role and template is normal → check allowed_roles
+    
+    if is_spl_template:
+        # SPL templates: only for users with special roles
+        return has_special_role
+    else:
+        # Normal templates: hide from users with special roles
+        if has_special_role:
+            return False
+        
+        # Check normal allowed_roles logic
+        # If no roles specified or empty array, allow all authenticated users (except special roles)
+        if not template.allowed_roles or len(template.allowed_roles) == 0:
+            return True
+        
+        # Check if user has any of the allowed roles
         if any(role in template.allowed_roles for role in user_role_names):
             return True
     
@@ -147,11 +180,19 @@ class RequestTemplateViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def active(self, request):
         """
-        List only active templates.
+        List only active templates that the current user can apply with.
+        Filters based on user's roles and SPL/normal template logic.
         GET /api/request-templates/active/
         """
         active_templates = self.queryset.filter(is_active=True)
-        serializer = self.get_serializer(active_templates, many=True)
+        
+        # Filter templates based on user's ability to apply
+        filtered_templates = [
+            template for template in active_templates
+            if can_user_apply_with_template(request.user, template)
+        ]
+        
+        serializer = self.get_serializer(filtered_templates, many=True)
         return Response(serializer.data)
     
     @action(detail=True, methods=['post'])
@@ -250,13 +291,19 @@ class RequestTemplateViewSet(viewsets.ModelViewSet):
                 leave_policy__action='earn'
             )
             
+            # Filter by user roles (SPL logic)
+            filtered_absent = [
+                template for template in absent_templates
+                if can_user_apply_with_template(request.user, template)
+            ]
+            
             return Response({
-                'templates': RequestTemplateSerializer(absent_templates, many=True).data,
+                'templates': RequestTemplateSerializer(filtered_absent, many=True).data,
                 'message': 'Absent date - All forms except Earn available',
                 'is_holiday': is_holiday_or_sunday,
                 'is_absent': True,
                 'attendance_status': attendance.status,
-                'total_available': absent_templates.count()
+                'total_available': len(filtered_absent)
             })
         
         # Get all active templates
@@ -265,6 +312,10 @@ class RequestTemplateViewSet(viewsets.ModelViewSet):
         # Filter based on holiday status and action type
         filtered = []
         for template in templates:
+            # Check if user can apply with this template (SPL logic)
+            if not can_user_apply_with_template(request.user, template):
+                continue
+                
             leave_policy = template.leave_policy
             if not leave_policy or 'action' not in leave_policy:
                 continue
@@ -351,7 +402,8 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             "form_data": {
                 "from_date": "2026-03-10",
                 "to_date": "2026-03-12",
-                "reason": "Personal work"
+                "reason": "Personal work",
+                "claim_col": true  // Optional: claim COL instead of regular leave
             }
         }
         """
@@ -359,6 +411,7 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         
         template = serializer.validated_data.get('template')
+        form_data = serializer.validated_data.get('form_data', {})
         
         # Check if user can apply with this template
         if not can_user_apply_with_template(request.user, template):
@@ -373,6 +426,67 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                 {'error': 'This template has no approval workflow configured'},
                 status=status.HTTP_400_BAD_REQUEST
             )
+        
+        # Validate COL claim if requested
+        claim_col = form_data.get('claim_col', False)
+        if claim_col:
+            # Only allow COL claim for deduct templates
+            if not template.leave_policy or template.leave_policy.get('action') != 'deduct':
+                return Response(
+                    {'error': 'COL can only be claimed for leave deduction requests'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Check if user has COL balance
+            col_template = RequestTemplate.objects.filter(
+                is_active=True,
+                leave_policy__action='earn'
+            ).filter(
+                Q(name__icontains='Compensatory') | Q(name__icontains='COL')
+            ).first()
+            
+            if col_template:
+                col_balance = StaffLeaveBalance.objects.filter(
+                    staff=request.user,
+                    leave_type=col_template.name
+                ).first()
+                
+                if not col_balance or col_balance.balance <= 0:
+                    return Response(
+                        {'error': 'No COL balance available to claim'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                # Validate that request dates are after COL earned dates
+                from staff_attendance.models import AttendanceRecord, Holiday
+                from datetime import datetime
+                
+                # Get request dates
+                request_dates = []
+                for field_name in ['date', 'from_date', 'start_date', 'to_date', 'end_date']:
+                    if field_name in form_data and form_data[field_name]:
+                        try:
+                            date_val = form_data[field_name]
+                            if isinstance(date_val, str):
+                                date_val = datetime.strptime(date_val, '%Y-%m-%d').date()
+                            request_dates.append(date_val)
+                        except (ValueError, TypeError):
+                            pass
+                
+                if request_dates:
+                    earliest_request_date = min(request_dates)
+                    
+                    # Find last COL earned date
+                    last_col_work = AttendanceRecord.objects.filter(
+                        user=request.user,
+                        date__in=Holiday.objects.values_list('date', flat=True)
+                    ).exclude(status='absent').order_by('-date').first()
+                    
+                    if last_col_work and earliest_request_date <= last_col_work.date:
+                        return Response(
+                            {'error': f'Cannot claim COL for dates on or before {last_col_work.date.isoformat()} (last COL earned date)'},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
         
         # Create the request with current user as applicant
         staff_request = serializer.save(applicant=request.user)
@@ -651,11 +765,38 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
 
                     # Initialize balance for new entries (deduct action only)
                     if created:
+                        from datetime import datetime, date
+                        
                         # Get user's role (simplified - use first matching role)
                         user_role = self._get_primary_role(staff_request.applicant)
-                        balance_obj.balance = allotment.get(user_role, 0.0)
+                        full_allotment = allotment.get(user_role, 0.0)
+                        
+                        # Check for split_date logic
+                        split_date_str = leave_policy.get('split_date')
+                        today = date.today()
+                        
+                        if split_date_str:
+                            try:
+                                split_date = datetime.strptime(split_date_str, '%Y-%m-%d').date()
+                                
+                                # If today is before split_date, initialize with first half only
+                                if today < split_date:
+                                    balance_obj.balance = full_allotment / 2
+                                    logger.info(f'[LeaveBalance] Initialized with first half (split not reached): {balance_obj.balance}')
+                                else:
+                                    # After split_date, initialize with full allotment
+                                    balance_obj.balance = full_allotment
+                                    logger.info(f'[LeaveBalance] Initialized with full allotment (after split): {balance_obj.balance}')
+                            except (ValueError, TypeError):
+                                # If split_date parsing fails, use full allotment
+                                balance_obj.balance = full_allotment
+                                logger.warning(f'[LeaveBalance] Invalid split_date format, using full allotment: {balance_obj.balance}')
+                        else:
+                            # No split, use full allotment
+                            balance_obj.balance = full_allotment
+                            logger.info(f'[LeaveBalance] Initialized deduct balance for role {user_role}: {balance_obj.balance}')
+                        
                         balance_obj.save()
-                        logger.info(f'[LeaveBalance] Initialized deduct balance for role {user_role}: {balance_obj.balance}')
 
                     # Now handle remaining_days using normal deduct logic
                     if balance_obj.balance >= remaining_days:
@@ -718,77 +859,90 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                 logger.info(f'[LeaveBalance] Earned {days} days: {old_balance} -> {balance_obj.balance}')
         
         elif action == 'neutral':
-            # For neutral forms (like OD), track usage and enforce max_uses limit
-            from .models import StaffFormUsage
-            from datetime import date
-            from calendar import monthrange
+            # For neutral forms (like OD), use allotment-based deduction similar to deduct forms
+            # HR allocates days per role (e.g., 12 OD days)
+            # Usage decrements from allotment (12 → 11 → 10 ... → 0)
+            # When it reaches 0, additional usage goes to LOP
             
-            max_uses = leave_policy.get('max_uses')
+            allotment = leave_policy.get('allotment_per_role', {})
             overdraft_name = leave_policy.get('overdraft_name', 'LOP')
             
-            # Determine reset period
-            usage_reset = leave_policy.get('usage_reset_duration', 'monthly')
-            usage_from_date = leave_policy.get('usage_from_date')
-            usage_to_date = leave_policy.get('usage_to_date')
-            
-            if usage_from_date and usage_to_date:
-                # Custom date range
-                period_start = datetime.strptime(usage_from_date, '%Y-%m-%d').date()
-                period_end = datetime.strptime(usage_to_date, '%Y-%m-%d').date()
-            else:
-                # Calculate based on monthly/yearly
-                today = date.today()
-                if usage_reset == 'yearly':
-                    period_start = date(today.year, 1, 1)
-                    period_end = date(today.year, 12, 31)
-                else:  # monthly
-                    period_start = date(today.year, today.month, 1)
-                    # Get last day of current month
-                    last_day = monthrange(today.year, today.month)[1]
-                    period_end = date(today.year, today.month, last_day)
-            
-            # Get or create usage record for this period
-            usage_record, created = StaffFormUsage.objects.get_or_create(
-                staff=staff_request.applicant,
-                template=template,
-                reset_period_start=period_start,
-                defaults={
-                    'reset_period_end': period_end,
-                    'usage_count': 0
-                }
-            )
-            
-            logger.info(f'[FormUsage] Usage record - Created: {created}, Count: {usage_record.usage_count}, Max: {max_uses}')
-            
-            # Check if over limit
-            if max_uses is not None and not usage_record.is_within_limit(max_uses):
-                # Over limit - increment LOP instead of recording as neutral
-                lop_balance, _ = StaffLeaveBalance.objects.get_or_create(
-                    staff=staff_request.applicant,
-                    leave_type=overdraft_name,
-                    defaults={'balance': 0.0}
-                )
-                old_lop = lop_balance.balance
-                lop_balance.balance += days
-                lop_balance.save()
-                logger.info(f'[FormUsage] Over limit - incrementing {overdraft_name}: {old_lop} -> {lop_balance.balance}')
-            else:
-                # Within limit - record as neutral usage
+            if not allotment:
+                # If no allotment configured, just record as neutral without limits
                 balance_obj, created = StaffLeaveBalance.objects.get_or_create(
                     staff=staff_request.applicant,
                     leave_type=leave_type,
                     defaults={'balance': 0.0}
                 )
-                logger.info(f'[LeaveBalance] Neutral - Balance object - Created: {created}, Initial Balance: {balance_obj.balance}')
+                logger.info(f'[LeaveBalance] Neutral (no allotment) - Balance object - Created: {created}, Initial Balance: {balance_obj.balance}')
                 
                 old_balance = balance_obj.balance
                 balance_obj.balance += days
                 balance_obj.save()
                 logger.info(f'[LeaveBalance] Neutral action - added {days} days: {old_balance} -> {balance_obj.balance}')
-            
-            # Increment usage count
-            usage_record.increment_usage()
-            logger.info(f'[FormUsage] Incremented usage count to {usage_record.usage_count}')
+            else:
+                # Allotment configured - use deduction logic
+                balance_obj, created = StaffLeaveBalance.objects.get_or_create(
+                    staff=staff_request.applicant,
+                    leave_type=leave_type,
+                    defaults={'balance': 0.0}
+                )
+                
+                logger.info(f'[LeaveBalance] Neutral (with allotment) - Balance object - Created: {created}, Initial Balance: {balance_obj.balance}')
+                
+                # Initialize balance for new entries
+                if created:
+                    from datetime import datetime, date
+                    
+                    # Get user's role
+                    user_role = self._get_primary_role(staff_request.applicant)
+                    full_allotment = allotment.get(user_role, 0.0)
+                    
+                    # Check for split_date logic (same as deduct forms)
+                    split_date_str = leave_policy.get('split_date')
+                    today = date.today()
+                    
+                    if split_date_str:
+                        try:
+                            split_date = datetime.strptime(split_date_str, '%Y-%m-%d').date()
+                            
+                            if today < split_date:
+                                balance_obj.balance = full_allotment / 2
+                                logger.info(f'[LeaveBalance] Neutral initialized with first half (split not reached): {balance_obj.balance}')
+                            else:
+                                balance_obj.balance = full_allotment
+                                logger.info(f'[LeaveBalance] Neutral initialized with full allotment (after split): {balance_obj.balance}')
+                        except (ValueError, TypeError):
+                            balance_obj.balance = full_allotment
+                            logger.warning(f'[LeaveBalance] Invalid split_date format, using full allotment: {balance_obj.balance}')
+                    else:
+                        balance_obj.balance = full_allotment
+                        logger.info(f'[LeaveBalance] Neutral initialized for role {user_role}: {balance_obj.balance}')
+                    
+                    balance_obj.save()
+                
+                # Now handle deduction
+                if balance_obj.balance >= days:
+                    # Sufficient balance - deduct normally
+                    old_balance = balance_obj.balance
+                    balance_obj.balance -= days
+                    balance_obj.save()
+                    logger.info(f'[LeaveBalance] Neutral deducted {days} days: {old_balance} -> {balance_obj.balance}')
+                else:
+                    # Insufficient balance - deduct all and overflow to LOP
+                    overflow = days - balance_obj.balance
+                    balance_obj.balance = 0.0
+                    balance_obj.save()
+                    
+                    # Add overflow to LOP
+                    lop_balance, _ = StaffLeaveBalance.objects.get_or_create(
+                        staff=staff_request.applicant,
+                        leave_type=overdraft_name,
+                        defaults={'balance': 0.0}
+                    )
+                    lop_balance.balance += overflow
+                    lop_balance.save()
+                    logger.info(f'[LeaveBalance] Neutral insufficient balance - overflow {overflow} days to {overdraft_name}')
         
         logger.info(f'[LeaveBalance] Processing complete for request #{staff_request.id}')
         
@@ -800,11 +954,17 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
     
     def _calculate_days_from_form_data(self, form_data):
         """
-        Extract date range from form_data and calculate number of days.
-        Looks for start_date/end_date or from_date/to_date field pairs.
-        Returns inclusive day count (defaults to 1 if no dates found).
+        Extract date range from form_data and calculate number of working days (excluding holidays).
+        For leave balance deduction: counts working days only (excludes holidays and Sundays).
+        For attendance marking: shifts are respected separately in _process_attendance_action.
+        
+        Example: 
+        - March 6-10 (5 calendar days) with Sunday March 8:
+          Working days = 4 (excludes Sunday)
+          Leave balance deducted = 4 days (not 5)
         """
-        from datetime import datetime
+        from datetime import datetime, timedelta
+        from staff_attendance.models import Holiday
         
         start_date = None
         end_date = None
@@ -816,7 +976,7 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                 break
         
         for end_key in ['end_date', 'to_date', 'endDate', 'toDate', 'to']:
-            if end_key in form_data:
+            if end_key in form_data and form_data[end_key]:  # Check not empty
                 end_date = form_data[end_key]
                 break
 
@@ -839,24 +999,77 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             except (ValueError, TypeError):
                 pass
         
-        # Calculate from date range
+        # Calculate from date range (count working days, excluding holidays)
         if start_date and end_date:
             try:
                 # Parse dates (handle both date strings and date objects)
                 if isinstance(start_date, str):
-                    start = datetime.fromisoformat(start_date.replace('Z', '+00:00')).date()
+                    # Handle empty string
+                    if not start_date.strip():
+                        start_date = None
+                    else:
+                        start = datetime.fromisoformat(start_date.replace('Z', '+00:00')).date()
                 else:
                     start = start_date
                 
                 if isinstance(end_date, str):
-                    end = datetime.fromisoformat(end_date.replace('Z', '+00:00')).date()
+                    # Handle empty string
+                    if not end_date.strip():
+                        end_date = None
+                    else:
+                        end = datetime.fromisoformat(end_date.replace('Z', '+00:00')).date()
                 else:
                     end = end_date
                 
-                # Calculate inclusive days
-                return (end - start).days + 1
+                # If we have both valid dates, count working days only
+                if start and end:
+                    # Get all holidays in this date range
+                    holidays_in_range = set(
+                        Holiday.objects.filter(
+                            date__gte=start,
+                            date__lte=end
+                        ).values_list('date', flat=True)
+                    )
+                    
+                    # Count working days (exclude holidays and Sundays)
+                    working_days = 0
+                    current_date = start
+                    while current_date <= end:
+                        # Check if it's a Sunday (weekday() returns 6 for Sunday)
+                        is_sunday = current_date.weekday() == 6
+                        # Check if it's a marked holiday
+                        is_holiday = current_date in holidays_in_range
+                        
+                        # Only count if it's not a holiday or Sunday
+                        if not is_holiday and not is_sunday:
+                            working_days += 1
+                        
+                        current_date += timedelta(days=1)
+                    
+                    return working_days
             except (ValueError, AttributeError):
                 pass
+        
+        # Single date - check if it's a holiday/Sunday
+        if start_date:
+            try:
+                if isinstance(start_date, str):
+                    if not start_date.strip():
+                        return 1.0
+                    single_date = datetime.fromisoformat(start_date.replace('Z', '+00:00')).date()
+                else:
+                    single_date = start_date
+                
+                # Check if it's a holiday or Sunday
+                is_sunday = single_date.weekday() == 6
+                is_holiday = Holiday.objects.filter(date=single_date).exists()
+                
+                # If it's a holiday/Sunday, return 0 days (no leave deduction)
+                if is_holiday or is_sunday:
+                    return 0.0
+                return 1.0
+            except (ValueError, AttributeError):
+                return 1.0
         
         # Default to 1 day if no valid date info found
         return 1.0
@@ -1042,77 +1255,518 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
     def _process_attendance_action(self, staff_request):
         """
         Process attendance status changes based on template attendance_action configuration.
-        Used for requests like Late Entry Permission that should update attendance status when approved.
+        Used for requests like Late Entry Permission or Leave that should update attendance status when approved.
+        Supports shift-based updates (FN/AN) with date range support:
+        - Single shift: shift field (backward compatibility)
+        - Date range with shifts: from_noon + to_noon for from_date + to_date
+        
+        Also handles leave templates by checking leave_policy.attendance_status if attendance_action is not configured.
         
         Args:
             staff_request: StaffRequest instance
         """
         import logging
-        from datetime import datetime
+        from datetime import datetime, timedelta
         
         logger = logging.getLogger(__name__)
         template = staff_request.template
         attendance_action = template.attendance_action
+        leave_policy = template.leave_policy
         
-        # Skip if no attendance action configured
-        if not attendance_action or not attendance_action.get('change_status'):
-            logger.info(f'[AttendanceAction] Skipping - no attendance action for template {template.name}')
+        # Determine the target status to apply
+        # Priority: leave_policy.attendance_status (for leave) > attendance_action.to_status (for permissions)
+        # This ensures leave templates (CL, OD, ML) use the correct status code
+        to_status = None
+        from_status = 'absent'
+        
+        if leave_policy and leave_policy.get('attendance_status'):
+            # Use leave_policy configuration (for CL, OD, ML, etc.) - PRIORITY
+            to_status = leave_policy.get('attendance_status')
+            logger.info(f'[AttendanceAction] Using leave_policy.attendance_status: {to_status}')
+        elif attendance_action and attendance_action.get('change_status'):
+            # Use attendance_action configuration (for Late Entry Permission, etc.)
+            from_status = attendance_action.get('from_status', 'absent')
+            to_status = attendance_action.get('to_status', 'present')
+            logger.info(f'[AttendanceAction] Using attendance_action: {from_status} -> {to_status}')
+        else:
+            # No configuration - skip
+            logger.info(f'[AttendanceAction] Skipping - no attendance action or leave policy for template {template.name}')
             return
         
-        from_status = attendance_action.get('from_status', 'absent')
-        to_status = attendance_action.get('to_status', 'present')
-        apply_to_dates = attendance_action.get('apply_to_dates', [])
-        add_notes = attendance_action.get('add_notes', False)
-        notes_template = attendance_action.get('notes_template', '')
+        # Get additional settings from attendance_action if available
+        add_notes = attendance_action.get('add_notes', False) if attendance_action else False
+        notes_template = attendance_action.get('notes_template', '') if attendance_action else ''
         
         form_data = staff_request.form_data
+        # Support both old and new field names for backward compatibility
+        shift = form_data.get('shift', None)  # Old field (backward compatibility)
+        from_noon = form_data.get('from_noon', form_data.get('from_shift', None))  # New field name
+        to_noon = form_data.get('to_noon', form_data.get('to_shift', None))  # New field name
+        
+        # Clean up the shift values - strip whitespace and handle empty strings
+        if from_noon:
+            from_noon = str(from_noon).strip()
+            if not from_noon or from_noon == '':
+                from_noon = None
+        if to_noon:
+            to_noon = str(to_noon).strip()
+            if not to_noon or to_noon == '':
+                to_noon = None
+        if shift:
+            shift = str(shift).strip()
+            if not shift or shift == '':
+                shift = None
+        
         logger.info(f'[AttendanceAction] Processing request #{staff_request.id} - Template: {template.name}')
-        logger.info(f'[AttendanceAction] Change: {from_status} -> {to_status}, Apply to fields: {apply_to_dates}')
+        logger.info(f'[AttendanceAction] Change: {from_status} -> {to_status}, Shift: {shift}, From_noon: {from_noon}, To_noon: {to_noon}')
+        logger.info(f'[AttendanceAction] Form data: {form_data}')
         
-        # Get dates to update
-        dates_to_update = []
-        for field_name in apply_to_dates:
-            if field_name in form_data:
-                date_val = form_data[field_name]
+        # Handle date range with shifts (from_date + to_date + from_shift + to_shift)
+        from_date = None
+        to_date = None
+        
+        # Try to find from_date and to_date
+        for start_key in ['from_date', 'start_date', 'fromDate', 'startDate']:
+            if start_key in form_data:
                 try:
+                    date_val = form_data[start_key]
                     if isinstance(date_val, str):
-                        dt = datetime.strptime(date_val, '%Y-%m-%d').date()
+                        from_date = datetime.strptime(date_val, '%Y-%m-%d').date()
                     else:
-                        dt = date_val
-                    dates_to_update.append(dt)
+                        from_date = date_val
+                    break
                 except (ValueError, AttributeError) as e:
-                    logger.warning(f'[AttendanceAction] Failed to parse date from {field_name}: {date_val} - {e}')
+                    logger.warning(f'[AttendanceAction] Failed to parse {start_key}: {e}')
         
-        if not dates_to_update:
-            logger.warning(f'[AttendanceAction] No valid dates found in form_data')
-            return
+        for end_key in ['to_date', 'end_date', 'toDate', 'endDate']:
+            if end_key in form_data and form_data[end_key]:  # Check value is not empty
+                try:
+                    date_val = form_data[end_key]
+                    if isinstance(date_val, str):
+                        # Skip empty strings
+                        if not date_val.strip():
+                            continue
+                        to_date = datetime.strptime(date_val, '%Y-%m-%d').date()
+                    else:
+                        to_date = date_val
+                    break
+                except (ValueError, AttributeError) as e:
+                    logger.warning(f'[AttendanceAction] Failed to parse {end_key}: {e}')
+        
+        # Single date field
+        single_date = None
+        if 'date' in form_data:
+            try:
+                date_val = form_data['date']
+                if isinstance(date_val, str):
+                    single_date = datetime.strptime(date_val, '%Y-%m-%d').date()
+                else:
+                    single_date = date_val
+            except (ValueError, AttributeError) as e:
+                logger.warning(f'[AttendanceAction] Failed to parse date: {e}')
         
         # Update attendance records
         try:
             from staff_attendance.models import AttendanceRecord
             
             updated_count = 0
-            for dt in dates_to_update:
-                # Only update records that match the "from_status"
-                records = AttendanceRecord.objects.filter(
-                    user=staff_request.applicant,
-                    date=dt,
-                    status=from_status
+            
+            # Case 1: Date range with optional shifts (from_date to to_date)
+            if from_date and to_date:
+                # Import Holiday model to check for holidays
+                from staff_attendance.models import Holiday
+                
+                # Check if this is a COL earn template (Compensatory Off Leave)
+                # OR a permission template that changes attendance status (like Late Entry)
+                # For these templates, we should NOT skip holidays - treat them as working days
+                is_col_earn = (
+                    leave_policy and 
+                    leave_policy.get('action') == 'earn' and 
+                    ('compensatory' in template.name.lower() or 'col' in template.name.lower())
                 )
                 
-                for record in records:
-                    record.status = to_status
+                is_permission_form = (
+                    attendance_action and 
+                    attendance_action.get('change_status') == True
+                )
+                
+                # Get all holidays in this date range
+                holidays_in_range = set(
+                    Holiday.objects.filter(
+                        date__gte=from_date,
+                        date__lte=to_date
+                    ).values_list('date', flat=True)
+                )
+                
+                current_date = from_date
+                date_count = 0
+                skipped_holidays = 0
+                
+                while current_date <= to_date:
+                    date_count += 1
+                    
+                    # Check if current date is a holiday or Sunday
+                    is_sunday = current_date.weekday() == 6
+                    is_holiday = current_date in holidays_in_range
+                    
+                    # For COL earn forms or permission forms, don't skip holidays
+                    # For other forms (regular leave), skip holidays and Sundays
+                    if (is_holiday or is_sunday) and not (is_col_earn or is_permission_form):
+                        # Skip creating attendance record for holidays and Sundays
+                        skipped_holidays += 1
+                        logger.info(f'[AttendanceAction] Skipping {current_date} (Holiday/Sunday)')
+                        current_date += timedelta(days=1)
+                        continue
+                    
+                    if (is_col_earn or is_permission_form) and (is_holiday or is_sunday):
+                        logger.info(f'[AttendanceAction] Processing {current_date} on holiday (COL earn or permission form)')
+                    
+                    # Determine which shift to update for this date
+                    # Normalize shift values: 'Full day' -> 'FULL'
+                    normalized_from_noon = None
+                    normalized_to_noon = None
+                    
+                    if from_noon:
+                        from_noon_str = str(from_noon).strip()
+                        if from_noon_str.lower() == 'full day':
+                            normalized_from_noon = 'FULL'
+                        else:
+                            normalized_from_noon = from_noon_str.upper()
+                    
+                    if to_noon:
+                        to_noon_str = str(to_noon).strip()
+                        if to_noon_str.lower() == 'full day':
+                            normalized_to_noon = 'FULL'
+                        else:
+                            normalized_to_noon = to_noon_str.upper()
+                    
+                    target_shift = None
+                    if current_date == from_date and normalized_from_noon and normalized_from_noon in ['FN', 'AN', 'FULL']:
+                        target_shift = normalized_from_noon
+                    elif current_date == to_date and normalized_to_noon and normalized_to_noon in ['FN', 'AN', 'FULL']:
+                        target_shift = normalized_to_noon
+                    elif current_date == from_date == to_date:
+                        # Same day - apply both shifts if both specified
+                        if normalized_from_noon and normalized_to_noon:
+                            target_shift = 'FULL'  # Both FN and AN
+                        elif normalized_from_noon:
+                            target_shift = normalized_from_noon
+                        elif normalized_to_noon:
+                            target_shift = normalized_to_noon
+                    else:
+                        # Middle date - full day
+                        target_shift = 'FULL'
+                    
+                    logger.info(f'[AttendanceAction] Date {current_date}: target_shift={target_shift}')
+                    
+                    # Get or create attendance record
+                    record, created = AttendanceRecord.objects.get_or_create(
+                        user=staff_request.applicant,
+                        date=current_date,
+                        defaults={
+                            'status': 'absent',
+                            'fn_status': 'absent',
+                            'an_status': 'absent'
+                        }
+                    )
+                    
+                    # Update based on target shift
+                    if target_shift == 'FN':
+                        record.fn_status = to_status
+                    elif target_shift == 'AN':
+                        record.an_status = to_status
+                    elif target_shift == 'FULL' or not target_shift:
+                        record.fn_status = to_status
+                        record.an_status = to_status
+                    
+                    # Recalculate overall status
+                    if record.fn_status == record.an_status:
+                        # Both sessions have same status - use that status
+                        record.status = record.fn_status
+                    elif record.fn_status != 'absent' or record.an_status != 'absent':
+                        # One session has a non-absent status - half day
+                        record.status = 'half_day'
+                    else:
+                        # Both sessions absent
+                        record.status = 'absent'
                     
                     # Add notes if configured
                     if add_notes and notes_template:
+                        try:
+                            note = notes_template.format(**form_data)
+                            if record.notes:
+                                record.notes = f"{record.notes}; {note}"
+                            else:
+                                record.notes = note
+                        except (KeyError, ValueError) as e:
+                            logger.warning(f'[AttendanceAction] Failed to format notes template: {e}')
+                    
+                    record.save()
+                    updated_count += 1
+                    logger.info(f'[AttendanceAction] Updated {current_date}: FN={record.fn_status}, AN={record.an_status}, Overall={record.status}')
+                    
+                    current_date += timedelta(days=1)
+                
+                logger.info(f'[AttendanceAction] Updated {updated_count} working days from {from_date} to {to_date} (skipped {skipped_holidays} holidays/Sundays)')
+            
+            # Case 2: Single date with optional shift
+            elif single_date:
+                # Import Holiday model to check for holidays
+                from staff_attendance.models import Holiday
+                
+                # Check if this is a COL earn template (Compensatory Off Leave)
+                # OR a permission template that changes attendance status (like Late Entry)
+                # For these templates, we should NOT skip holidays - treat them as working days
+                is_col_earn = (
+                    leave_policy and 
+                    leave_policy.get('action') == 'earn' and 
+                    ('compensatory' in template.name.lower() or 'col' in template.name.lower())
+                )
+                
+                is_permission_form = (
+                    attendance_action and 
+                    attendance_action.get('change_status') == True
+                )
+                
+                # Check if single date is a holiday or Sunday
+                is_sunday = single_date.weekday() == 6
+                is_holiday = Holiday.objects.filter(date=single_date).exists()
+                
+                # For COL earn forms or permission forms, don't skip holidays
+                # For other forms (regular leave), skip holidays and Sundays
+                if (is_holiday or is_sunday) and not (is_col_earn or is_permission_form):
+                    # Skip creating attendance record for holidays and Sundays
+                    logger.info(f'[AttendanceAction] Skipping {single_date} (Holiday/Sunday) - no attendance record created')
+                else:
+                    if (is_col_earn or is_permission_form) and (is_holiday or is_sunday):
+                        logger.info(f'[AttendanceAction] Processing {single_date} on holiday (COL earn or permission form)')
+                    
+                    # For COL on holidays with half-day (FN/AN), only save the requested session
+                    is_holiday_col_half_day = (is_col_earn and (is_holiday or is_sunday) and 
+                                               shift and shift.upper() in ['FN', 'AN'])
+                    
+                    record, created = AttendanceRecord.objects.get_or_create(
+                        user=staff_request.applicant,
+                        date=single_date,
+                        defaults={
+                            'status': 'absent',
+                            'fn_status': 'absent',
+                            'an_status': 'absent'
+                        }
+                    )
+                    
+                    # If shift is specified (FN or AN), update only that session
+                    if shift and shift.upper() in ['FN', 'AN']:
+                        shift_field = 'fn_status' if shift.upper() == 'FN' else 'an_status'
+                        other_shift_field = 'an_status' if shift.upper() == 'FN' else 'fn_status'
+                        
+                        setattr(record, shift_field, to_status)
+                        
+                        # For half-day COL on holidays, leave the other session null (no data)
+                        if is_holiday_col_half_day:
+                            setattr(record, other_shift_field, None)
+                        
+                        # Recalculate overall status
+                        fn_val = record.fn_status
+                        an_val = record.an_status
+                        
+                        if fn_val is None and an_val is None:
+                            # Both sessions null - no status
+                            record.status = 'absent'
+                        elif fn_val is None or an_val is None:
+                            # One session has data - use that session's status
+                            record.status = fn_val if an_val is None else an_val
+                        elif fn_val == an_val:
+                            # Both sessions have same status - use that status
+                            record.status = fn_val
+                        elif fn_val != 'absent' or an_val != 'absent':
+                            # One session has a non-absent status - half day
+                            record.status = 'half_day'
+                        else:
+                            # Both sessions absent
+                            record.status = 'absent'
+                        
+                        logger.info(f'[AttendanceAction] Updated {shift} session for {single_date}')
+                    else:
+                        # Full day
+                        record.fn_status = to_status
+                        record.an_status = to_status
+                        record.status = to_status
+                        logger.info(f'[AttendanceAction] Updated full day for {single_date}')
+                    
+                    # Add notes if configured
+                    if add_notes and notes_template:
+                        try:
+                            note = notes_template.format(**form_data)
+                            if record.notes:
+                                record.notes = f"{record.notes}; {note}"
+                            else:
+                                record.notes = note
+                        except (KeyError, ValueError) as e:
+                            logger.warning(f'[AttendanceAction] Failed to format notes template: {e}')
+                    
+                    record.save()
+                    updated_count += 1
+            
+            # Case 3: Single from_date without to_date (half-day or full-day)
+            elif from_date:
+                logger.info(f'[AttendanceAction] Case 3: Single date {from_date}, from_noon={from_noon}')
+                
+                # Import Holiday model to check if this is a holiday
+                from staff_attendance.models import Holiday
+                
+                # Check if from_date is a holiday or Sunday
+                is_sunday = from_date.weekday() == 6
+                is_holiday = Holiday.objects.filter(date=from_date).exists()
+                
+                # Check if this is a COL earn form
+                is_col_earn = (
+                    leave_policy and 
+                    leave_policy.get('action') == 'earn' and 
+                    ('compensatory' in template.name.lower() or 'col' in template.name.lower())
+                )
+                
+                # Normalize from_noon to determine if it's half-day
+                normalized_from_noon = None
+                if from_noon:
+                    from_noon_str = str(from_noon).strip()
+                    if from_noon_str.lower() == 'full day':
+                        normalized_from_noon = 'FULL'
+                    else:
+                        normalized_from_noon = from_noon_str.upper()
+                
+                # For COL on holidays with half-day (FN/AN), only save the requested session
+                is_holiday_col_half_day = (
+                    is_col_earn and 
+                    (is_holiday or is_sunday) and 
+                    normalized_from_noon in ['FN', 'AN']
+                )
+                
+                record, created = AttendanceRecord.objects.get_or_create(
+                    user=staff_request.applicant,
+                    date=from_date,
+                    defaults={
+                        'status': 'absent',
+                        'fn_status': 'absent',
+                        'an_status': 'absent'
+                    }
+                )
+                
+                logger.info(f'[AttendanceAction] Record {"created" if created else "retrieved"}: FN={record.fn_status}, AN={record.an_status}')
+                
+                # If from_noon is specified (FN, AN, or FULL), handle accordingly
+                if normalized_from_noon and normalized_from_noon in ['FN', 'AN']:
+                    session = normalized_from_noon
+                    logger.info(f'[AttendanceAction] Updating {session} session to {to_status}')
+                    
+                    if session == 'FN':
+                        record.fn_status = to_status
+                        # For half-day COL on holidays, leave the other session null
+                        if is_holiday_col_half_day:
+                            record.an_status = None
+                    else:
+                        record.an_status = to_status
+                        # For half-day COL on holidays, leave the other session null
+                        if is_holiday_col_half_day:
+                            record.fn_status = None
+                    
+                    # Recalculate overall status
+                    fn_val = record.fn_status
+                    an_val = record.an_status
+                    
+                    if fn_val is None and an_val is None:
+                        # Both sessions null - no status
+                        record.status = 'absent'
+                    elif fn_val is None or an_val is None:
+                        # One session has data - use that session's status
+                        record.status = fn_val if an_val is None else an_val
+                    elif fn_val == an_val:
+                        # Both sessions have same status - use that status
+                        record.status = fn_val
+                    elif fn_val != 'absent' or an_val != 'absent':
+                        # One session has a non-absent status - half day
+                        record.status = 'half_day'
+                    else:
+                        # Both sessions absent
+                        record.status = 'absent'
+                    
+                    logger.info(f'[AttendanceAction] After update: FN={record.fn_status}, AN={record.an_status}, Overall={record.status}')
+                elif normalized_from_noon == 'FULL':
+                    # Full day explicitly selected
+                    logger.info(f'[AttendanceAction] Full day selected, applying to both sessions')
+                    record.fn_status = to_status
+                    record.an_status = to_status
+                    record.status = to_status
+                    logger.info(f'[AttendanceAction] Updated full day: FN={record.fn_status}, AN={record.an_status}, Overall={record.status}')
+                else:
+                    # No valid session specified - default to full day
+                    logger.info(f'[AttendanceAction] No valid session specified (from_noon={from_noon}), applying full day')
+                    record.fn_status = to_status
+                    record.an_status = to_status
+                    record.status = to_status
+                    logger.info(f'[AttendanceAction] Updated full day: FN={record.fn_status}, AN={record.an_status}, Overall={record.status}')
+                
+                # Add notes if configured
+                if add_notes and notes_template:
+                    try:
                         note = notes_template.format(**form_data)
                         if record.notes:
                             record.notes = f"{record.notes}; {note}"
                         else:
                             record.notes = note
-                    
-                    record.save()
-                    updated_count += 1
+                    except (KeyError, ValueError) as e:
+                        logger.warning(f'[AttendanceAction] Failed to format notes template: {e}')
+                
+                record.save()
+                updated_count += 1
+            
+            else:
+                logger.warning(f'[AttendanceAction] No valid dates found in form_data')
+            
+            # SCENARIO 4: Re-award COL for late entry permissions on holidays
+            # If this is a late entry permission (or similar) that makes staff present on a holiday, award COL
+            is_making_present = (to_status in ['present', 'half_day', 'partial'])
+            if is_making_present and updated_count > 0:
+                # Check if any of the updated dates are holidays
+                from staff_attendance.models import Holiday
+                
+                dates_to_check = []
+                if from_date and to_date:
+                    current = from_date
+                    while current <= to_date:
+                        dates_to_check.append(current)
+                        current += timedelta(days=1)
+                elif single_date:
+                    dates_to_check.append(single_date)
+                elif from_date:
+                    dates_to_check.append(from_date)
+                
+                for check_date in dates_to_check:
+                    is_holiday = Holiday.objects.filter(date=check_date).exists()
+                    if is_holiday:
+                        # This late entry permission makes them present on a holiday - award COL
+                        from staff_requests.models import RequestTemplate, StaffLeaveBalance
+                        
+                        col_template = RequestTemplate.objects.filter(
+                            is_active=True,
+                            leave_policy__action='earn'
+                        ).filter(
+                            Q(name__icontains='Compensatory') | Q(name__icontains='COL')
+                        ).first()
+                        
+                        if col_template:
+                            balance, created = StaffLeaveBalance.objects.get_or_create(
+                                staff=staff_request.applicant,
+                                leave_type=col_template.name,
+                                defaults={'balance': 0}
+                            )
+                            old_balance = balance.balance
+                            balance.balance += 1
+                            balance.save()
+                            logger.info(
+                                f"[COL_RESTORE] Late entry permission approved for {staff_request.applicant.username} "
+                                f"on holiday {check_date}. Awarded COL: {old_balance} -> {balance.balance}"
+                            )
             
             logger.info(f'[AttendanceAction] Updated {updated_count} attendance record(s) for request #{staff_request.id}')
             
@@ -1256,20 +1910,33 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         try:
             logger.info(f'[Balances] Fetching persisted balances for user {user.username}')
             
-            # Get all persisted balances for the user
+            # Get all active templates with leave policies
+            all_templates = RequestTemplate.objects.filter(is_active=True).exclude(leave_policy={})
+            
+            # Filter templates based on user roles (SPL logic)
+            templates = [
+                template for template in all_templates
+                if can_user_apply_with_template(request.user, template)
+            ]
+            
+            # Create a set of template names that user can apply for
+            applicable_template_names = {template.name for template in templates}
+            
+            # Get all persisted balances for the user, but only for applicable templates
             balances_qs = StaffLeaveBalance.objects.filter(staff=user)
             
             balance_data = []
             for balance_obj in balances_qs:
-                balance_data.append({
-                    'leave_type': balance_obj.leave_type,
-                    'balance': balance_obj.balance,
-                    'updated_at': balance_obj.updated_at.isoformat() if balance_obj.updated_at else None
-                })
-                logger.info(f'[Balances] {balance_obj.leave_type}: {balance_obj.balance}')
+                # Only include balances for templates the user can apply for
+                if balance_obj.leave_type in applicable_template_names:
+                    balance_data.append({
+                        'leave_type': balance_obj.leave_type,
+                        'balance': balance_obj.balance,
+                        'updated_at': balance_obj.updated_at.isoformat() if balance_obj.updated_at else None
+                    })
+                    logger.info(f'[Balances] {balance_obj.leave_type}: {balance_obj.balance}')
             
             # Also include templates with leave_policy that don't have balances yet (show as 0)
-            templates = RequestTemplate.objects.filter(is_active=True).exclude(leave_policy={})
             existing_leave_types = set(b['leave_type'] for b in balance_data)
             
             for template in templates:
@@ -1283,14 +1950,38 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                 if leave_type in existing_leave_types:
                     continue
                 
-                # For deduct/earn templates, show with 0 balance if no record exists
+                # For deduct/earn/neutral templates, show with 0 balance if no record exists
                 action = leave_policy.get('action')
-                if action in ['deduct', 'earn']:
-                    # For deduct action, initialize with allotment
-                    if action == 'deduct':
+                if action in ['deduct', 'earn', 'neutral']:
+                    # For deduct and neutral actions, initialize with allotment
+                    if action in ['deduct', 'neutral']:
+                        from datetime import datetime, date
+                        
                         allotment_per_role = leave_policy.get('allotment_per_role', {})
                         user_role = self._get_primary_role(user)
-                        allotment = allotment_per_role.get(user_role, 0)
+                        full_allotment = allotment_per_role.get(user_role, 0)
+                        
+                        # Check for split_date logic
+                        split_date_str = leave_policy.get('split_date')
+                        today = date.today()
+                        
+                        if split_date_str:
+                            try:
+                                split_date = datetime.strptime(split_date_str, '%Y-%m-%d').date()
+                                
+                                # If today is before split_date, show only first half
+                                if today < split_date:
+                                    allotment = full_allotment / 2
+                                else:
+                                    # After split_date, show full allotment (second half should have been added)
+                                    # This is initial display; actual balance will be from DB if it exists
+                                    allotment = full_allotment
+                            except (ValueError, TypeError):
+                                # If split_date parsing fails, use full allotment
+                                allotment = full_allotment
+                        else:
+                            # No split, use full allotment
+                            allotment = full_allotment
                         
                         balance_data.append({
                             'leave_type': leave_type,
@@ -1522,11 +2213,39 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         
         # Initialize balance for new entries
         if created:
+            from datetime import datetime, date
+            
             allotment = leave_policy.get('allotment_per_role', {})
             user_role = self._get_primary_role(target_user)
-            balance_obj.balance = allotment.get(user_role, 0.0)
+            full_allotment = allotment.get(user_role, 0.0)
+            
+            # Check for split_date logic
+            split_date_str = leave_policy.get('split_date')
+            today = date.today()
+            
+            if split_date_str:
+                try:
+                    split_date = datetime.strptime(split_date_str, '%Y-%m-%d').date()
+                    
+                    # If today is before split_date, initialize with first half only
+                    if today < split_date:
+                        balance_obj.balance = full_allotment / 2
+                        logger.info(f'[ProcessAbsences] Initialized with first half (split not reached): {balance_obj.balance}')
+                    else:
+                        # After split_date, initialize with full allotment
+                        balance_obj.balance = full_allotment
+                        logger.info(f'[ProcessAbsences] Initialized with full allotment (after split): {balance_obj.balance}')
+                except (ValueError, TypeError):
+                    # If split_date parsing fails, use full allotment
+                    balance_obj.balance = full_allotment
+                    logger.warning(f'[ProcessAbsences] Invalid split_date format, using full allotment: {balance_obj.balance}')
+            else:
+                # No split, use full allotment
+                balance_obj.balance = full_allotment
+                logger.info(f'[ProcessAbsences] Initialized balance for {user_role}: {balance_obj.balance}')
+            
             balance_obj.save()
-            logger.info(f'[ProcessAbsences] Initialized balance for {user_role}: {balance_obj.balance}')
+
         
         initial_balance = balance_obj.balance
         

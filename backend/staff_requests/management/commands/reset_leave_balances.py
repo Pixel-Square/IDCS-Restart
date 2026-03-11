@@ -134,14 +134,33 @@ class Command(BaseCommand):
                 allotment = leave_policy.get('allotment_per_role', {})
                 overdraft_name = leave_policy.get('overdraft_name', 'LOP')
                 lop_non_reset = leave_policy.get('lop_non_reset', False)
+                split_date_str = leave_policy.get('split_date')
+                
+                # Check if we should apply split logic
+                use_split = False
+                if split_date_str:
+                    try:
+                        split_date = datetime.strptime(split_date_str, '%Y-%m-%d').date()
+                        # At reset (start of period), initialize with first half if split is configured
+                        use_split = True
+                        self.stdout.write(f'  Split date configured: {split_date} (will initialize with half allotment)')
+                    except (ValueError, TypeError):
+                        self.stdout.write(
+                            self.style.WARNING(
+                                f'  Invalid split_date format: {split_date_str}. Using full allotment.'
+                            )
+                        )
                 
                 if allotment:
-                    self.stdout.write(f'  Resetting deduct balances to allotment_per_role')
+                    self.stdout.write(f'  Resetting deduct balances to allotment_per_role' + (' (halved for split)' if use_split else ''))
                     
                     for balance in balances:
                         # Get user's primary role
                         user_role = self._get_primary_role(balance.staff)
-                        reset_value = allotment.get(user_role, 0.0)
+                        full_allotment = allotment.get(user_role, 0.0)
+                        
+                        # Apply split logic if configured
+                        reset_value = (full_allotment / 2) if use_split else full_allotment
                         old_value = balance.balance
                         
                         if old_value != reset_value:
@@ -150,7 +169,7 @@ class Command(BaseCommand):
                                 balance.save()
                             self.stdout.write(
                                 self.style.SUCCESS(
-                                    f'    {balance.staff.username} ({user_role}): {old_value} -> {reset_value}'
+                                    f'    {balance.staff.username} ({user_role}): {old_value} -> {reset_value}' + (' [first half]' if use_split else '')
                                 )
                             )
                             total_reset += 1
@@ -182,14 +201,56 @@ class Command(BaseCommand):
                     )
             
             elif action == 'neutral':
-                # Neutral forms: Just log, no automatic reset
-                self.stdout.write(
-                    self.style.WARNING(
-                        f'  Neutral action - no automatic balance reset'
+                # Neutral forms: Reset to allotment_per_role if configured (similar to deduct)
+                allotment = leave_policy.get('allotment_per_role', {})
+                split_date_str = leave_policy.get('split_date')
+                
+                if not allotment:
+                    # No allotment configured - no reset needed
+                    self.stdout.write(
+                        self.style.WARNING(
+                            f'  Neutral action - no allotment configured, skipping reset'
+                        )
                     )
-                )
+                    continue
+                
+                # Check if we should apply split logic
+                use_split = False
+                if split_date_str:
+                    try:
+                        split_date = datetime.strptime(split_date_str, '%Y-%m-%d').date()
+                        use_split = True
+                        self.stdout.write(f'  Split date configured: {split_date} (will initialize with half allotment)')
+                    except (ValueError, TypeError):
+                        self.stdout.write(
+                            self.style.WARNING(
+                                f'  Invalid split_date format: {split_date_str}. Using full allotment.'
+                            )
+                        )
+                
+                self.stdout.write(f'  Resetting neutral balances to allotment_per_role' + (' (halved for split)' if use_split else ''))
+                
+                for balance in balances:
+                    # Get user's primary role
+                    user_role = self._get_primary_role(balance.staff)
+                    full_allotment = allotment.get(user_role, 0.0)
+                    
+                    # Apply split logic if configured
+                    reset_value = (full_allotment / 2) if use_split else full_allotment
+                    old_value = balance.balance
+                    
+                    if old_value != reset_value:
+                        if not dry_run:
+                            balance.balance = reset_value
+                            balance.save()
+                        self.stdout.write(
+                            self.style.SUCCESS(
+                                f'    {balance.staff.username} ({user_role}): {old_value} -> {reset_value}' + (' [first half]' if use_split else '')
+                            )
+                        )
+                        total_reset += 1
         
-        if dry_run:
+        if total_reset == 0:
             self.stdout.write(
                 self.style.WARNING(
                     f'\nDRY RUN: Would reset {total_reset} balance(s)'

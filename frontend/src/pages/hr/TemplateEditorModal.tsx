@@ -469,6 +469,31 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
 
                           <div>
                             <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Split Date (Optional)
+                            </label>
+                            <p className="text-xs text-gray-500 mb-2">
+                              Split the annual allocation into two equal periods. Staff get half initially, then the second half is added on this date.
+                            </p>
+                            <input
+                              type="date"
+                              value={leavePolicy.split_date || ''}
+                              onChange={(e) => handleLeavePolicyChange({ split_date: e.target.value })}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                              min={leavePolicy.from_date || ''}
+                              max={leavePolicy.to_date || ''}
+                            />
+                            {leavePolicy.split_date && (
+                              <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded text-xs text-green-800">
+                                <strong>Example:</strong> If allotment is 12 days with split on {leavePolicy.split_date}:
+                                <br />• <strong>Period 1:</strong> 6 days available (from {leavePolicy.from_date || 'start'})
+                                <br />• <strong>Period 2:</strong> Remaining balance + 6 days (from {leavePolicy.split_date})
+                                <br />• Run <code className="bg-green-100 px-1 rounded">python manage.py apply_split_allocation</code> on split date
+                              </div>
+                            )}
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
                               Overdraft Field Name (LOP)
                             </label>
                             <input
@@ -545,50 +570,66 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
                         <>
                           <div>
                             <label className="block text-sm font-medium text-gray-700 mb-2">
-                              Maximum Uses per Staff
+                              Allotment per Role
                             </label>
-                            <input
-                              type="number"
-                              min="0"
-                              step="1"
-                              value={leavePolicy.max_uses || ''}
-                              onChange={(e) => handleLeavePolicyChange({ max_uses: e.target.value ? parseInt(e.target.value) : undefined })}
-                              placeholder="e.g., 5"
-                              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            />
-                            <p className="text-xs text-gray-500 mt-1">
-                              Maximum number of times a staff member can use this form per reset period. If exceeded, it will count as LOP.
+                            <p className="text-xs text-gray-500 mb-3">
+                              Set the initial balance for each role. Usage will decrement from this balance (e.g., 12 → 11 → 10 → 0).
+                              When balance reaches 0, additional usage goes to LOP.
                             </p>
+                            <div className="space-y-2">
+                              {Object.entries(leavePolicy.allotment_per_role || {}).map(([role, days]) => (
+                                <div key={role} className="flex items-center gap-2">
+                                  <span className="text-sm font-medium text-gray-700 w-24">{role}:</span>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.5"
+                                    value={days}
+                                    onChange={(e) => handleAllotmentChange(role, e.target.value)}
+                                    className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500"
+                                  />
+                                  <span className="text-sm text-gray-500 w-12">days</span>
+                                  <button
+                                    onClick={() => removeAllotmentRole(role)}
+                                    className="text-red-600 hover:text-red-700 p-1"
+                                  >
+                                    <Trash2 size={16} />
+                                  </button>
+                                </div>
+                              ))}
+                              <select
+                                value=""
+                                onChange={(e) => {
+                                  if (e.target.value) {
+                                    handleAllotmentChange(e.target.value, '0');
+                                  }
+                                }}
+                                className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                              >
+                                <option value="">+ Add role...</option>
+                                {(rolesLoading ? FALLBACK_ROLES : (roles.length ? roles : FALLBACK_ROLES))
+                                  .filter(role => !leavePolicy.allotment_per_role?.[role])
+                                  .map(role => (
+                                    <option key={role} value={role}>{role}</option>
+                                  ))}
+                              </select>
+                            </div>
                           </div>
 
                           <div>
                             <label className="block text-sm font-medium text-gray-700 mb-2">
-                              Usage Reset Duration
-                            </label>
-                            <select
-                              value={leavePolicy.usage_reset_duration || 'monthly'}
-                              onChange={(e) => handleLeavePolicyChange({ usage_reset_duration: e.target.value as 'yearly' | 'monthly' })}
-                              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            >
-                              <option value="yearly">Yearly</option>
-                              <option value="monthly">Monthly</option>
-                            </select>
-                          </div>
-
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
-                              Custom Usage Reset Period (Optional)
+                              Reset Period <span className="text-red-500">*</span>
                             </label>
                             <p className="text-xs text-gray-500 mb-2">
-                              Override yearly/monthly with a specific date range for usage tracking.
+                              Define the date range for balance reset (e.g., Academic Year: June 1 - May 31).
                             </p>
                             <div className="grid grid-cols-2 gap-3">
                               <div>
                                 <label className="block text-xs text-gray-600 mb-1">From Date</label>
                                 <input
                                   type="date"
-                                  value={leavePolicy.usage_from_date || ''}
-                                  onChange={(e) => handleLeavePolicyChange({ usage_from_date: e.target.value })}
+                                  value={leavePolicy.from_date || ''}
+                                  onChange={(e) => handleLeavePolicyChange({ from_date: e.target.value })}
                                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                                 />
                               </div>
@@ -596,12 +637,50 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
                                 <label className="block text-xs text-gray-600 mb-1">To Date</label>
                                 <input
                                   type="date"
-                                  value={leavePolicy.usage_to_date || ''}
-                                  onChange={(e) => handleLeavePolicyChange({ usage_to_date: e.target.value })}
+                                  value={leavePolicy.to_date || ''}
+                                  onChange={(e) => handleLeavePolicyChange({ to_date: e.target.value })}
                                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                                 />
                               </div>
                             </div>
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Split Date (Optional)
+                            </label>
+                            <p className="text-xs text-gray-500 mb-2">
+                              Split the annual allocation into two equal periods.
+                            </p>
+                            <input
+                              type="date"
+                              value={leavePolicy.split_date || ''}
+                              onChange={(e) => handleLeavePolicyChange({ split_date: e.target.value })}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                              min={leavePolicy.from_date || ''}
+                              max={leavePolicy.to_date || ''}
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Overdraft Field Name (LOP)
+                            </label>
+                            <input
+                              type="text"
+                              value={leavePolicy.overdraft_name || 'LOP'}
+                              onChange={(e) => handleLeavePolicyChange({ overdraft_name: e.target.value })}
+                              placeholder="LOP"
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">
+                              When balance reaches 0, additional usage will be tracked here.
+                            </p>
+                          </div>
+
+                          <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-800">
+                            <strong>Behavior:</strong> Usage decrements from allotment (12 → 11 → 10 ... → 0).
+                            <br />When balance reaches 0, additional usage goes to LOP.
                           </div>
                         </>
                       )}

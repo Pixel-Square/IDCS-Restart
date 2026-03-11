@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Calendar, ChevronLeft, ChevronRight, CheckCircle, XCircle, AlertCircle, Clock, Plus, AlertTriangle } from 'lucide-react';
 import { apiClient } from '../../services/auth';
 import { getApiBase } from '../../services/apiBase';
@@ -11,8 +11,11 @@ interface AttendanceRecord {
   id: number;
   date: string;
   status: string;  // Any status: 'present', 'absent', 'partial', 'OD', 'CL', 'ML', 'COL', etc.
+  fn_status: string;
+  an_status: string;
   morning_in: string | null;
   evening_out: string | null;
+  has_approved_col_form: boolean;
 }
 
 interface AttendanceSummary {
@@ -36,6 +39,7 @@ interface Holiday {
 interface AttendanceSettings {
   id: number;
   attendance_in_time_limit: string;
+  mid_time_split: string;
   attendance_out_time_limit: string;
   apply_time_based_absence: boolean;
 }
@@ -91,7 +95,8 @@ export default function MyCalendarPage() {
       setAttendanceSettings({
         id: 1,
         attendance_in_time_limit: '08:45:00',
-        attendance_out_time_limit: '17:45:00',
+        mid_time_split: '13:00:00',
+        attendance_out_time_limit: '17:00:00',
         apply_time_based_absence: true
       });
     }
@@ -245,6 +250,22 @@ export default function MyCalendarPage() {
     fetchColInfo();
   };
 
+  // Calculate permission count by duration
+  const permissionCountByDuration = useMemo(() => {
+    const counts: Record<string, number> = {};
+    
+    myRequests
+      .filter(req => req.template.name === 'Late Entry Permission')
+      .forEach(req => {
+        const duration = req.form_data?.late_duration;
+        if (duration) {
+          counts[duration] = (counts[duration] || 0) + 1;
+        }
+      });
+    
+    return counts;
+  }, [myRequests]);
+
   // Get leave status for a specific date from approved requests
   const getLeaveStatusForDate = (date: number): string | null => {
     const dateStr = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${String(date).padStart(2, '0')}`;
@@ -362,17 +383,46 @@ export default function MyCalendarPage() {
         {/* Leave Balances */}
         <LeaveBalanceBadges />
 
+        {/* Permission Count Split - moved under Leave Balances */}
+        {Object.keys(permissionCountByDuration).length > 0 && (
+          <div className="bg-white rounded-lg shadow-md p-4 mb-6">
+            <h4 className="font-semibold text-gray-900 mb-2 text-sm">Permission Count Split</h4>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+              {Object.entries(permissionCountByDuration)
+                .sort((a, b) => parseInt(a[0]) - parseInt(b[0]))
+                .map(([duration, count]) => {
+                  const label = duration === '10' ? '10 mins'
+                    : duration === '30' ? '30 mins'
+                    : duration === '60' ? '1 hr'
+                    : duration === '90' ? '1.5 hrs'
+                    : duration === '120' ? '2 hrs'
+                    : `${duration} mins`;
+
+                  return (
+                    <div key={duration} className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                      <span className="text-amber-900 font-medium">{label}</span>
+                      <span className="text-amber-700 font-bold ml-1">{count}</span>
+                    </div>
+                  );
+                })}
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              Total late entry permissions: {Object.values(permissionCountByDuration).reduce((sum, count) => sum + count, 0)}
+            </p>
+          </div>
+        )}
+
         {/* Info Box for Late Entry Feature */}
         {attendanceData && attendanceData.summary.absent_count > 0 && (
           <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
             <div className="flex items-start gap-3">
               <AlertTriangle className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
               <div className="flex-1">
-                <h3 className="font-semibold text-yellow-900 mb-1">Late Entry Permission Available</h3>
+                <h3 className="font-semibold text-yellow-900 mb-1">Request Permission or Apply Leave</h3>
                 <p className="text-sm text-yellow-800">
-                  You have {attendanceData.summary.absent_count} absent day(s). 
-                  Click the yellow "Late Entry" button on any absent date to request permission. 
-                  If approved, your attendance will be changed from absent to present.
+                  You have absent sessions (FN or AN). 
+                  Click the yellow "Apply" button on dates with absent FN/AN to request Late Entry Permission, apply Leave, or On Duty. 
+                  You can specify whether you're applying for Forenoon (FN) or Afternoon (AN) session.
                 </p>
               </div>
             </div>
@@ -488,6 +538,7 @@ export default function MyCalendarPage() {
                   Out-time before {attendanceSettings.attendance_out_time_limit} highlighted in <span className="text-red-600 font-semibold">red</span>
                 </div>
               )}
+              
             </div>
 
             <div className="bg-white rounded-lg shadow-md p-6 mb-6">
@@ -517,9 +568,15 @@ export default function MyCalendarPage() {
                 const leaveStatusFromRequest = getLeaveStatusForDate(day);
                 
                 // Determine which status to display:
-                // Priority: holiday > attendance record status > request status > no data
-                const attendanceIsLeaveStatus = attendance && !['present', 'absent', 'partial', 'half_day'].includes(attendance.status.toLowerCase());
-                const displayLeaveStatus = attendanceIsLeaveStatus ? attendance.status : leaveStatusFromRequest;
+                // Priority: holiday > attendance record with FN/AN > request status (only if no attendance) > no data
+                // If attendance record exists, ALWAYS show FN/AN breakdown, never just the leave badge
+                const displayLeaveStatus = !hasAttendance ? leaveStatusFromRequest : null;
+                
+                // Check if this is a half-day leave (one session has leave status, other is present/absent)
+                const isHalfDayLeave = attendance && attendance.status === 'half_day' && (
+                  !['present', 'absent', 'partial', 'half_day'].includes(attendance.fn_status.toLowerCase()) ||
+                  !['present', 'absent', 'partial', 'half_day'].includes(attendance.an_status.toLowerCase())
+                );
 
                 return (
                   <div
@@ -570,8 +627,52 @@ export default function MyCalendarPage() {
                             {holidayInfo.name}
                           </div>
                           {hasAttendance && (
-                            <div className="text-xs text-gray-600 mt-1">
-                              <div className="font-medium">✓ Worked (COL)</div>
+                            <div className="text-xs text-gray-700 space-y-0.5 mt-1">
+                              {/* Show IN/OUT times on holidays */}
+                              {attendance.morning_in && (
+                                <div title={attendance.morning_in} className={`${lateIn ? 'text-red-700 font-semibold' : ''}`}>
+                                  In: {attendance.morning_in}
+                                </div>
+                              )}
+                              {attendance.evening_out && (
+                                <div title={attendance.evening_out} className={`${earlyOut ? 'text-red-700 font-semibold' : ''}`}>
+                                  Out: {attendance.evening_out}
+                                </div>
+                              )}
+                              {/* Show FN/AN status on holidays */}
+                              <div className="text-[10px] space-y-0.5 mt-1">
+                                {attendance.fn_status && (
+                                  <div className={`font-medium ${
+                                    attendance.fn_status === 'present' ? 'text-green-700' : 
+                                    attendance.fn_status === 'absent' ? 'text-red-700' : 
+                                    !['present', 'absent', 'partial', 'half_day'].includes(attendance.fn_status.toLowerCase()) ? 'text-purple-700' :
+                                    'text-yellow-700'
+                                  }`}>
+                                    FN: {attendance.fn_status === 'CL' ? 'Cas.Leave' :
+                                         attendance.fn_status === 'OD' ? 'On Duty' :
+                                         attendance.fn_status === 'COL' ? 'Comp Off' :
+                                         attendance.fn_status === 'ML' ? 'Med.Leave' :
+                                         attendance.fn_status}
+                                  </div>
+                                )}
+                                {attendance.an_status && (
+                                  <div className={`font-medium ${
+                                    attendance.an_status === 'present' ? 'text-green-700' : 
+                                    attendance.an_status === 'absent' ? 'text-red-700' : 
+                                    !['present', 'absent', 'partial', 'half_day'].includes(attendance.an_status.toLowerCase()) ? 'text-purple-700' :
+                                    'text-yellow-700'
+                                  }`}>
+                                    AN: {attendance.an_status === 'CL' ? 'Cas.Leave' :
+                                         attendance.an_status === 'OD' ? 'On Duty' :
+                                         attendance.an_status === 'COL' ? 'Comp Off' :
+                                         attendance.an_status === 'ML' ? 'Med.Leave' :
+                                         attendance.an_status}
+                                  </div>
+                                )}
+                              </div>
+                              {attendance.has_approved_col_form && (
+                                <div className="font-medium text-blue-700 mt-1">✓ Worked (COL)</div>
+                              )}
                             </div>
                           )}
                         </div>
@@ -598,31 +699,74 @@ export default function MyCalendarPage() {
                         </div>
                       ) : hasAttendance ? (
                         <div className="text-xs text-gray-700 space-y-0.5">
-                          {attendance.morning_in && (
-                            <div title={attendance.morning_in} className={`${lateIn ? 'text-red-700 font-semibold' : ''}`}>
-                              In: {attendance.morning_in}
-                            </div>
-                          )}
-                          {attendance.evening_out && (
-                            <div title={attendance.evening_out} className={`${earlyOut ? 'text-red-700 font-semibold' : ''}`}>
-                              Out: {attendance.evening_out}
-                            </div>
-                          )}
-                          <div className="capitalize font-medium text-gray-900">
-                            {attendance.status}
+                          {(() => {
+                            // Display times as-is from backend (no swapping)
+                            // Backend stores: morning_in (entry time), evening_out (exit time)
+                            const inTime = attendance.morning_in;
+                            const outTime = attendance.evening_out;
+                            
+                            return (
+                              <>
+                                {inTime && (
+                                  <div title={inTime} className={`${lateIn ? 'text-red-700 font-semibold' : ''}`}>
+                                    In: {inTime}
+                                  </div>
+                                )}
+                                {outTime && (
+                                  <div title={outTime} className={`${earlyOut ? 'text-red-700 font-semibold' : ''}`}>
+                                    Out: {outTime}
+                                  </div>
+                                )}
+                              </>
+                            );
+                          })()}
+                          <div className="text-[10px] space-y-0.5 mt-1">
+                            {attendance.fn_status && (
+                              <div className={`font-medium ${
+                                attendance.fn_status === 'present' ? 'text-green-700' : 
+                                attendance.fn_status === 'absent' ? 'text-red-700' : 
+                                !['present', 'absent', 'partial', 'half_day'].includes(attendance.fn_status.toLowerCase()) ? 'text-purple-700' :
+                                'text-yellow-700'
+                              }`}>
+                                FN: {attendance.fn_status === 'CL' ? 'Cas.Leave' :
+                                     attendance.fn_status === 'OD' ? 'On Duty' :
+                                     attendance.fn_status === 'COL' ? 'Comp Off' :
+                                     attendance.fn_status === 'ML' ? 'Med.Leave' :
+                                     attendance.fn_status}
+                              </div>
+                            )}
+                            {attendance.an_status && (
+                              <div className={`font-medium ${
+                                attendance.an_status === 'present' ? 'text-green-700' : 
+                                attendance.an_status === 'absent' ? 'text-red-700' : 
+                                !['present', 'absent', 'partial', 'half_day'].includes(attendance.an_status.toLowerCase()) ? 'text-purple-700' :
+                                'text-yellow-700'
+                              }`}>
+                                AN: {attendance.an_status === 'CL' ? 'Cas.Leave' :
+                                     attendance.an_status === 'OD' ? 'On Duty' :
+                                     attendance.an_status === 'COL' ? 'Comp Off' :
+                                     attendance.an_status === 'ML' ? 'Med.Leave' :
+                                     attendance.an_status}
+                              </div>
+                            )}
+                            {isHalfDayLeave && (
+                              <div className="text-[9px] text-purple-600 font-bold mt-0.5">
+                                HALF DAY
+                              </div>
+                            )}
                           </div>
                           {isEarnedCol(dateStr) && (
                             <div className="text-xs text-blue-700 font-medium mt-1">Worked (COL)</div>
                           )}
-                          {/* Add Late Entry Request Button for Absent Days */}
-                          {attendance.status.toLowerCase() === 'absent' && lateEntryTemplateId && (
+                          {/* Add Late Entry/Request Button for Absent Days */}
+                          {(attendance.fn_status === 'absent' || attendance.an_status === 'absent') && lateEntryTemplateId && (
                             <button
                               onClick={(e) => handleLateEntryClick(e, day)}
                               className="mt-2 w-full text-xs bg-yellow-500 hover:bg-yellow-600 text-white font-semibold py-1.5 px-2 rounded transition-colors flex items-center justify-center gap-1"
-                              title="Request permission for late entry"
+                              title="Request permission or apply leave"
                             >
                               <AlertTriangle className="w-3 h-3" />
-                              Late Entry
+                              Apply
                             </button>
                           )}
                         </div>

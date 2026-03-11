@@ -17,6 +17,12 @@ class AttendanceRecord(models.Model):
     morning_in = models.TimeField(null=True, blank=True)
     evening_out = models.TimeField(null=True, blank=True)
     status = models.CharField(max_length=20, default='absent', help_text='Attendance status code - can be any value from leave templates')
+    
+    # Split attendance for FN (Forenoon) and AN (Afternoon)
+    # null=True allows recording only one session (e.g., FN COL on holiday without AN status)
+    fn_status = models.CharField(max_length=20, null=True, blank=True, help_text='Forenoon attendance status')
+    an_status = models.CharField(max_length=20, null=True, blank=True, help_text='Afternoon attendance status')
+    
     notes = models.TextField(blank=True)
     
     # Audit fields
@@ -42,15 +48,134 @@ class AttendanceRecord(models.Model):
         return f"{self.user.username} - {self.date} - {self.status}"
     
     def update_status(self):
-        """Auto-determine status based on morning_in and evening_out"""
-        if not self.morning_in and not self.evening_out:
-            self.status = 'absent'
-        elif self.morning_in and self.evening_out:
-            self.status = 'present'
-        elif self.morning_in or self.evening_out:
-            self.status = 'partial'
-        else:
-            self.status = 'absent'
+        """Auto-determine status based on morning_in, evening_out, and time limits.
+        Preserves leave statuses (CL, OD, ML, COL, etc.) - only updates biometric statuses.
+        
+        FN/AN Split Logic:
+        - FN (Forenoon): Based on morning_in time vs in_time_limit (default 08:45)
+        - AN (Afternoon): Based on morning_in vs mid_split (1 PM) and evening_out vs out_time_limit
+        """
+        # Define statuses that can be auto-updated from biometric data
+        BIOMETRIC_STATUSES = ['present', 'absent', 'partial', 'half_day']
+        
+        try:
+            settings = AttendanceSettings.objects.first()
+            
+            if settings and settings.apply_time_based_absence:
+                in_limit = settings.attendance_in_time_limit  # Default: 08:45
+                out_limit = settings.attendance_out_time_limit  # Default: 17:00
+                mid_split = settings.mid_time_split  # Default: 13:00 (1 PM)
+                
+                # === Calculate FN status (only if current status is biometric) ===
+                if self.fn_status in BIOMETRIC_STATUSES:
+                    if self.morning_in:
+                        # FN: Present if came before/at the in_time_limit
+                        if self.morning_in <= in_limit:
+                            self.fn_status = 'present'
+                        else:
+                            # Came late (after in_time_limit) - FN absent
+                            self.fn_status = 'absent'
+                    else:
+                        # No morning_in time - FN absent
+                        self.fn_status = 'absent'
+                # else: Preserve leave status (CL, OD, ML, COL, etc.)
+                
+                # === Calculate AN status (only if current status is biometric) ===
+                if self.an_status in BIOMETRIC_STATUSES:
+                    if self.morning_in and self.evening_out:
+                        # Has both in and out times
+                        # AN is absent if:
+                        # 1. Came after mid_split (came after 1 PM - missed forenoon and morning)
+                        # 2. OR left before out_limit (left early from afternoon session)
+                        if self.morning_in > mid_split:
+                            # Came after 1 PM - didn't attend morning/FN, so likely didn't attend full AN either
+                            self.an_status = 'absent'
+                        elif self.evening_out < out_limit:
+                            # Left before required out time - didn't complete AN session
+                            self.an_status = 'absent'
+                        else:
+                            # Came before/at 1 PM and left after required time - AN present
+                            self.an_status = 'present'
+                    elif self.morning_in:
+                        # Has morning_in but no evening_out - probably partial day
+                        # If came before mid_split, completed FN but not AN
+                        if self.morning_in <= mid_split:
+                            self.an_status = 'absent'  # Has FN but no AN
+                        else:
+                            # Came after mid_split - no proper attendance
+                            self.an_status = 'absent'
+                    else:
+                        # No times at all
+                        self.an_status = 'absent'
+                # else: Preserve leave status (CL, OD, ML, COL, etc.)
+                
+            else:
+                # No settings OR time-based absence is disabled
+                # Use simple logic - only update if both statuses are biometric
+                if self.fn_status in BIOMETRIC_STATUSES:
+                    if self.morning_in:
+                        self.fn_status = 'present'
+                    else:
+                        self.fn_status = 'absent'
+                
+                if self.an_status in BIOMETRIC_STATUSES:
+                    if self.evening_out:
+                        self.an_status = 'present'
+                    else:
+                        self.an_status = 'absent'
+            
+            # === Calculate overall status based on FN and AN ===
+            # Overall status logic:
+            # - If both FN and AN are null → absent (no data)
+            # - If one is null and other has value → use the non-null value
+            # - If both FN and AN have same status → use that status
+            # - If one is non-absent → half_day
+            # - If both absent → absent
+            
+            if self.fn_status is None and self.an_status is None:
+                # Both sessions null (no data)
+                self.status = 'absent'
+            elif self.fn_status is None:
+                # Only AN has data, use AN status
+                self.status = self.an_status
+            elif self.an_status is None:
+                # Only FN has data, use FN status
+                self.status = self.fn_status
+            elif self.fn_status == self.an_status:
+                # Both sessions have same status
+                self.status = self.fn_status
+            elif self.fn_status != 'absent' or self.an_status != 'absent':
+                # At least one session has non-absent status
+                self.status = 'half_day'
+            else:
+                # Both absent
+                self.status = 'absent'
+                
+        except Exception as e:
+            # Fallback on any error - preserve leave statuses
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.exception(f'Error in update_status for {self.user} on {self.date}: {e}')
+            
+            # Simple fallback - only update if statuses are biometric
+            if self.fn_status in BIOMETRIC_STATUSES:
+                self.fn_status = 'present' if self.morning_in else 'absent'
+            if self.an_status in BIOMETRIC_STATUSES:
+                self.an_status = 'present' if self.evening_out else 'absent'
+            
+            # Recalculate overall (with null handling)
+            if self.fn_status is None and self.an_status is None:
+                self.status = 'absent'
+            elif self.fn_status is None:
+                self.status = self.an_status
+            elif self.an_status is None:
+                self.status = self.fn_status
+            elif self.fn_status == self.an_status:
+                self.status = self.fn_status
+            elif self.fn_status != 'absent' or self.an_status != 'absent':
+                self.status = 'half_day'
+            else:
+                self.status = 'absent'
 
 
 class UploadLog(models.Model):
@@ -161,11 +286,15 @@ class AttendanceSettings(models.Model):
     """Global settings for attendance time limits and absence rules"""
     attendance_in_time_limit = models.TimeField(
         default='08:45:00',
-        help_text="If morning_in is after this time, mark as absent"
+        help_text="If morning_in is after this time, mark FN as absent"
     )
     attendance_out_time_limit = models.TimeField(
-        default='17:45:00',
-        help_text="If evening_out is before this time, mark as absent"
+        default='17:00:00',
+        help_text="If evening_out is before this time, mark AN as absent"
+    )
+    mid_time_split = models.TimeField(
+        default='13:00:00',
+        help_text="Time that splits FN (Forenoon) and AN (Afternoon) sessions"
     )
     apply_time_based_absence = models.BooleanField(
         default=True,

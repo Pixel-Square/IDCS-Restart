@@ -11,7 +11,7 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
         model = AttendanceRecord
         fields = [
             'id', 'user', 'user_name', 'full_name', 'staff_id', 'date',
-            'morning_in', 'evening_out', 'status', 'notes',
+            'morning_in', 'evening_out', 'status', 'fn_status', 'an_status', 'notes',
             'uploaded_by', 'uploaded_at', 'source_file'
         ]
         read_only_fields = ['uploaded_by', 'uploaded_at']
@@ -150,7 +150,7 @@ class AttendanceSettingsSerializer(serializers.ModelSerializer):
     class Meta:
         model = AttendanceSettings
         fields = [
-            'id', 'attendance_in_time_limit', 'attendance_out_time_limit',
+            'id', 'attendance_in_time_limit', 'attendance_out_time_limit', 'mid_time_split',
             'apply_time_based_absence', 'updated_by', 'updated_by_name',
             'created_at', 'updated_at'
         ]

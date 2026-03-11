@@ -1,0 +1,925 @@
+[
+{
+  "model": "staff_requests.requesttemplate",
+  "pk": 1,
+  "fields": {
+    "name": "Casual Leave",
+    "description": "Staffs can apply leave",
+    "is_active": true,
+    "form_schema": [
+      {
+        "name": "reason",
+        "type": "text",
+        "label": "Reason",
+        "required": true
+      },
+      {
+        "name": "from_date",
+        "type": "date",
+        "label": "From Date",
+        "required": true,
+        "help_text": "Start date of leave/request"
+      },
+      {
+        "name": "from_noon",
+        "type": "select",
+        "label": "From Noon",
+        "options": [
+          "Full day",
+          "FN",
+          "AN"
+        ],
+        "required": true,
+        "help_text": "Select FN (morning) or AN (afternoon) for start date"
+      },
+      {
+        "name": "to_date",
+        "type": "date",
+        "label": "To Date",
+        "required": false,
+        "help_text": "End date (optional, leave empty for same day)"
+      },
+      {
+        "name": "to_noon",
+        "type": "select",
+        "label": "To Noon",
+        "options": [
+          "Full day",
+          "FN",
+          "AN"
+        ],
+        "required": false,
+        "help_text": "Select FN or AN for end date (optional)"
+      }
+    ],
+    "allowed_roles": [
+      "STAFF",
+      "FACULTY",
+      "ASSISTANT",
+      "CLERK"
+    ],
+    "ledger_policy": {},
+    "leave_policy": {
+      "action": "deduct",
+      "to_date": "2026-12-31",
+      "from_date": "2026-01-01",
+      "split_date": "2026-07-01",
+      "overdraft_name": "LOP",
+      "reset_duration": "monthly",
+      "attendance_status": "CL",
+      "allotment_per_role": {
+        "HOD": 12,
+        "STAFF": 12
+      }
+    },
+    "attendance_action": {
+      "add_notes": true,
+      "to_status": "present",
+      "date_format": "YYYY-MM-DD",
+      "from_status": "absent",
+      "change_status": true,
+      "apply_to_dates": [
+        "from_date",
+        "to_date"
+      ],
+      "notes_template": "Leave approved"
+    },
+    "created_at": "2026-03-07T10:45:39.908Z",
+    "updated_at": "2026-03-11T18:48:22.511Z"
+  }
+},
+{
+  "model": "staff_requests.requesttemplate",
+  "pk": 2,
+  "fields": {
+    "name": "ON duty",
+    "description": "staffs will apply",
+    "is_active": true,
+    "form_schema": [
+      {
+        "name": "type",
+        "type": "select",
+        "label": "OD Type",
+        "options": [
+          "ODB - Basic",
+          "ODR - Research",
+          "ODP - Professional",
+          "ODO - Out Reach"
+        ],
+        "required": true
+      },
+      {
+        "name": "reason",
+        "type": "text",
+        "label": "Reason",
+        "required": true
+      },
+      {
+        "name": "from_date",
+        "type": "date",
+        "label": "From Date",
+        "required": true
+      },
+      {
+        "name": "from_noon",
+        "type": "select",
+        "label": "From Noon",
+        "options": [
+          "Full Day ",
+          "FN ",
+          "AN"
+        ],
+        "required": true
+      },
+      {
+        "name": "to_date",
+        "type": "date",
+        "label": "To Date",
+        "required": false
+      },
+      {
+        "name": "to_noon",
+        "type": "select",
+        "label": "To Noon",
+        "options": [
+          "Full Day ",
+          "FN ",
+          "AN"
+        ],
+        "required": false
+      }
+    ],
+    "allowed_roles": [
+      "STAFF",
+      "FACULTY",
+      "ASSISTANT",
+      "CLERK"
+    ],
+    "ledger_policy": {},
+    "leave_policy": {
+      "action": "neutral",
+      "to_date": "2026-12-31",
+      "max_uses": 2,
+      "from_date": "2026-01-01",
+      "overdraft_name": "LOP",
+      "attendance_status": "OD",
+      "allotment_per_role": {
+        "HOD": 12,
+        "STAFF": 12
+      }
+    },
+    "attendance_action": {
+      "add_notes": true,
+      "to_status": "present",
+      "date_format": "YYYY-MM-DD",
+      "from_status": "absent",
+      "change_status": true,
+      "apply_to_dates": [
+        "from",
+        "to_date",
+        "from_date"
+      ],
+      "notes_template": "OD approved"
+    },
+    "created_at": "2026-03-07T11:07:16.824Z",
+    "updated_at": "2026-03-11T18:48:22.583Z"
+  }
+},
+{
+  "model": "staff_requests.requesttemplate",
+  "pk": 3,
+  "fields": {
+    "name": "Compensatory leave",
+    "description": "can be used for compensating the leaves",
+    "is_active": true,
+    "form_schema": [
+      {
+        "name": "reason",
+        "type": "text",
+        "label": "Reason",
+        "required": true
+      },
+      {
+        "name": "from_date",
+        "type": "date",
+        "label": "From Date",
+        "required": true,
+        "help_text": "Start date of leave/request"
+      },
+      {
+        "name": "from_noon",
+        "type": "select",
+        "label": "From Noon",
+        "options": [
+          "Full day",
+          "FN",
+          "AN"
+        ],
+        "required": true,
+        "help_text": "Select FN (morning) or AN (afternoon) for start date"
+      },
+      {
+        "name": "to_date",
+        "type": "date",
+        "label": "To Date",
+        "required": false,
+        "help_text": "End date (optional, leave empty for same day)"
+      },
+      {
+        "name": "to_noon",
+        "type": "select",
+        "label": "To Noon",
+        "options": [
+          "Full day",
+          "FN",
+          "AN"
+        ],
+        "required": false,
+        "help_text": "Select FN or AN for end date (optional)"
+      }
+    ],
+    "allowed_roles": [
+      "STAFF",
+      "FACULTY",
+      "ASSISTANT",
+      "CLERK"
+    ],
+    "ledger_policy": {},
+    "leave_policy": {
+      "action": "earn",
+      "to_date": "2026-07-31",
+      "from_date": "2026-03-01",
+      "attendance_status": "COL"
+    },
+    "attendance_action": {},
+    "created_at": "2026-03-07T14:59:06.780Z",
+    "updated_at": "2026-03-11T18:48:22.542Z"
+  }
+},
+{
+  "model": "staff_requests.requesttemplate",
+  "pk": 5,
+  "fields": {
+    "name": "Late Entry Permission",
+    "description": "Request permission for late entry with specified time duration. If approved, attendance status changes from absent to present.",
+    "is_active": true,
+    "form_schema": [
+      {
+        "name": "date",
+        "type": "date",
+        "label": "Date",
+        "required": true,
+        "help_text": "Date of late entry"
+      },
+      {
+        "name": "shift",
+        "type": "select",
+        "label": "Shift",
+        "options": [
+          "FN",
+          "AN"
+        ],
+        "required": true,
+        "help_text": "Which shift you will be late for"
+      },
+      {
+        "name": "late_duration",
+        "type": "select",
+        "label": "Expected Late Duration",
+        "options": [
+          "10 mins",
+          "1 hr"
+        ],
+        "required": true,
+        "help_text": "How late you expect to be"
+      },
+      {
+        "name": "reason",
+        "type": "textarea",
+        "label": "Reason",
+        "required": true,
+        "help_text": "Reason for late entry"
+      }
+    ],
+    "allowed_roles": [
+      "FACULTY",
+      "ASSISTANT",
+      "CLERK",
+      "STAFF"
+    ],
+    "ledger_policy": {},
+    "leave_policy": {
+      "action": "neutral",
+      "to_date": "2026-03-31",
+      "from_date": "2026-03-01",
+      "allotment_per_role": {
+        "STAFF": 2
+      }
+    },
+    "attendance_action": {
+      "add_notes": true,
+      "to_status": "present",
+      "date_format": "YYYY-MM-DD",
+      "from_status": "absent",
+      "change_status": true,
+      "apply_to_dates": [
+        "date"
+      ],
+      "notes_template": "Late Entry Permission: {shift} shift, {late_duration} mins late"
+    },
+    "created_at": "2026-03-09T09:26:10.609Z",
+    "updated_at": "2026-03-11T18:48:22.561Z"
+  }
+},
+{
+  "model": "staff_requests.requesttemplate",
+  "pk": 6,
+  "fields": {
+    "name": "Test Casual Leave",
+    "description": "Test CL template",
+    "is_active": false,
+    "form_schema": {
+      "fields": [
+        {
+          "name": "from_date",
+          "type": "date",
+          "label": "From Date",
+          "required": true
+        },
+        {
+          "name": "to_date",
+          "type": "date",
+          "label": "To Date",
+          "required": true
+        },
+        {
+          "name": "from_noon",
+          "type": "select",
+          "label": "From Shift",
+          "options": [
+            "FN",
+            "AN",
+            "Full day"
+          ]
+        },
+        {
+          "name": "to_noon",
+          "type": "select",
+          "label": "To Shift",
+          "options": [
+            "FN",
+            "AN",
+            "Full day"
+          ]
+        },
+        {
+          "name": "reason",
+          "type": "textarea",
+          "label": "Reason",
+          "required": true
+        }
+      ]
+    },
+    "allowed_roles": [],
+    "ledger_policy": {},
+    "leave_policy": {
+      "action": "deduct",
+      "to_date": "2026-12-31",
+      "from_date": "2026-01-01",
+      "leave_type": "CL",
+      "attendance_status": "CL",
+      "allotment_per_role": {
+        "Teaching Staff": 12.0,
+        "Non-Teaching Staff": 12.0
+      }
+    },
+    "attendance_action": {},
+    "created_at": "2026-03-11T16:05:55.881Z",
+    "updated_at": "2026-03-11T18:09:10.608Z"
+  }
+},
+{
+  "model": "staff_requests.requesttemplate",
+  "pk": 7,
+  "fields": {
+    "name": "Others",
+    "description": "",
+    "is_active": true,
+    "form_schema": [
+      {
+        "name": "type",
+        "type": "select",
+        "label": "Type",
+        "options": [
+          "Medical Leave ",
+          "Maternity Leave ",
+          "Special Leave"
+        ],
+        "required": true
+      },
+      {
+        "name": "from_date",
+        "type": "date",
+        "label": "From Date",
+        "required": true
+      },
+      {
+        "name": "from_noon",
+        "type": "select",
+        "label": "From Noon",
+        "options": [
+          "Full Day ",
+          "FN ",
+          "AN"
+        ],
+        "required": true
+      },
+      {
+        "name": "to_date",
+        "type": "date",
+        "label": "To Date",
+        "required": false
+      },
+      {
+        "name": "to_noon",
+        "type": "select",
+        "label": "To Noon",
+        "options": [
+          "Full Day ",
+          "FN ",
+          "AN"
+        ],
+        "required": false
+      }
+    ],
+    "allowed_roles": [
+      "STAFF",
+      "FACULTY",
+      "ASSISTANT",
+      "CLERK"
+    ],
+    "ledger_policy": {},
+    "leave_policy": {
+      "action": "neutral",
+      "to_date": "2026-05-30",
+      "from_date": "2026-01-01",
+      "allotment_per_role": {
+        "STAFF": 5.5
+      }
+    },
+    "attendance_action": {
+      "add_notes": true,
+      "to_status": "present",
+      "date_format": "YYYY-MM-DD",
+      "from_status": "absent",
+      "change_status": true,
+      "apply_to_dates": [
+        "from_date",
+        "to_date"
+      ],
+      "notes_template": "Others type form is Approved"
+    },
+    "created_at": "2026-03-11T17:49:49.140Z",
+    "updated_at": "2026-03-11T18:48:22.609Z"
+  }
+},
+{
+  "model": "staff_requests.requesttemplate",
+  "pk": 8,
+  "fields": {
+    "name": "Casual Leave - SPL",
+    "description": "Staffs can apply leave (For special roles: IQAC, HR, PS, HOD, CFSW, EDC, COE, HAA)",
+    "is_active": true,
+    "form_schema": [
+      {
+        "name": "reason",
+        "type": "text",
+        "label": "Reason",
+        "required": true
+      },
+      {
+        "name": "from_date",
+        "type": "date",
+        "label": "From Date",
+        "required": true,
+        "help_text": "Start date of leave/request"
+      },
+      {
+        "name": "from_noon",
+        "type": "select",
+        "label": "From Noon",
+        "options": [
+          "Full day",
+          "FN",
+          "AN"
+        ],
+        "required": true,
+        "help_text": "Select FN (morning) or AN (afternoon) for start date"
+      },
+      {
+        "name": "to_date",
+        "type": "date",
+        "label": "To Date",
+        "required": false,
+        "help_text": "End date (optional, leave empty for same day)"
+      },
+      {
+        "name": "to_noon",
+        "type": "select",
+        "label": "To Noon",
+        "options": [
+          "Full day",
+          "FN",
+          "AN"
+        ],
+        "required": false,
+        "help_text": "Select FN or AN for end date (optional)"
+      }
+    ],
+    "allowed_roles": [
+      "IQAC",
+      "HR",
+      "PS",
+      "HOD",
+      "CFSW",
+      "EDC",
+      "COE",
+      "HAA"
+    ],
+    "ledger_policy": {},
+    "leave_policy": {
+      "action": "deduct",
+      "to_date": "2026-12-31",
+      "from_date": "2026-01-01",
+      "split_date": "2026-07-01",
+      "overdraft_name": "LOP",
+      "reset_duration": "monthly",
+      "attendance_status": "CL",
+      "allotment_per_role": {
+        "HOD": 12,
+        "STAFF": 12
+      }
+    },
+    "attendance_action": {
+      "add_notes": true,
+      "to_status": "present",
+      "date_format": "YYYY-MM-DD",
+      "from_status": "absent",
+      "change_status": true,
+      "apply_to_dates": [
+        "from_date",
+        "to_date"
+      ],
+      "notes_template": "Leave approved"
+    },
+    "created_at": "2026-03-11T18:09:10.621Z",
+    "updated_at": "2026-03-11T18:48:22.530Z"
+  }
+},
+{
+  "model": "staff_requests.requesttemplate",
+  "pk": 9,
+  "fields": {
+    "name": "Compensatory leave - SPL",
+    "description": "can be used for compensating the leaves (For special roles: IQAC, HR, PS, HOD, CFSW, EDC, COE, HAA)",
+    "is_active": true,
+    "form_schema": [
+      {
+        "name": "reason",
+        "type": "text",
+        "label": "Reason",
+        "required": true
+      },
+      {
+        "name": "from_date",
+        "type": "date",
+        "label": "From Date",
+        "required": true,
+        "help_text": "Start date of leave/request"
+      },
+      {
+        "name": "from_noon",
+        "type": "select",
+        "label": "From Noon",
+        "options": [
+          "Full day",
+          "FN",
+          "AN"
+        ],
+        "required": true,
+        "help_text": "Select FN (morning) or AN (afternoon) for start date"
+      },
+      {
+        "name": "to_date",
+        "type": "date",
+        "label": "To Date",
+        "required": false,
+        "help_text": "End date (optional, leave empty for same day)"
+      },
+      {
+        "name": "to_noon",
+        "type": "select",
+        "label": "To Noon",
+        "options": [
+          "Full day",
+          "FN",
+          "AN"
+        ],
+        "required": false,
+        "help_text": "Select FN or AN for end date (optional)"
+      }
+    ],
+    "allowed_roles": [
+      "IQAC",
+      "HR",
+      "PS",
+      "HOD",
+      "CFSW",
+      "EDC",
+      "COE",
+      "HAA"
+    ],
+    "ledger_policy": {},
+    "leave_policy": {
+      "action": "earn",
+      "to_date": "2026-07-31",
+      "from_date": "2026-03-01",
+      "attendance_status": "COL"
+    },
+    "attendance_action": {},
+    "created_at": "2026-03-11T18:09:10.635Z",
+    "updated_at": "2026-03-11T18:48:22.546Z"
+  }
+},
+{
+  "model": "staff_requests.requesttemplate",
+  "pk": 10,
+  "fields": {
+    "name": "Late Entry Permission - SPL",
+    "description": "Request permission for late entry with specified time duration. If approved, attendance status changes from absent to present. (For special roles: IQAC, HR, PS, HOD, CFSW, EDC, COE, HAA)",
+    "is_active": true,
+    "form_schema": [
+      {
+        "name": "date",
+        "type": "date",
+        "label": "Date",
+        "required": true,
+        "help_text": "Date of late entry"
+      },
+      {
+        "name": "shift",
+        "type": "select",
+        "label": "Shift",
+        "options": [
+          "FN",
+          "AN"
+        ],
+        "required": true,
+        "help_text": "Which shift you will be late for"
+      },
+      {
+        "name": "late_duration",
+        "type": "select",
+        "label": "Expected Late Duration",
+        "options": [
+          "10 mins",
+          "1 hr"
+        ],
+        "required": true,
+        "help_text": "How late you expect to be"
+      },
+      {
+        "name": "reason",
+        "type": "textarea",
+        "label": "Reason",
+        "required": true,
+        "help_text": "Reason for late entry"
+      }
+    ],
+    "allowed_roles": [
+      "IQAC",
+      "HR",
+      "PS",
+      "HOD",
+      "CFSW",
+      "EDC",
+      "COE",
+      "HAA"
+    ],
+    "ledger_policy": {},
+    "leave_policy": {
+      "action": "neutral",
+      "to_date": "2026-03-31",
+      "from_date": "2026-03-01",
+      "allotment_per_role": {
+        "HR": 2,
+        "HOD": 2,
+        "STAFF": 2
+      }
+    },
+    "attendance_action": {
+      "add_notes": true,
+      "to_status": "present",
+      "date_format": "YYYY-MM-DD",
+      "from_status": "absent",
+      "change_status": true,
+      "apply_to_dates": [
+        "date"
+      ],
+      "notes_template": "Late Entry Permission: {shift} shift, {late_duration} mins late"
+    },
+    "created_at": "2026-03-11T18:09:10.654Z",
+    "updated_at": "2026-03-11T18:48:22.574Z"
+  }
+},
+{
+  "model": "staff_requests.requesttemplate",
+  "pk": 11,
+  "fields": {
+    "name": "ON duty - SPL",
+    "description": "staffs will apply (For special roles: IQAC, HR, PS, HOD, CFSW, EDC, COE, HAA)",
+    "is_active": true,
+    "form_schema": [
+      {
+        "name": "type",
+        "type": "select",
+        "label": "OD Type",
+        "options": [
+          "ODB - Basic",
+          "ODR - Research",
+          "ODP - Professional",
+          "ODO - Out Reach"
+        ],
+        "required": true
+      },
+      {
+        "name": "reason",
+        "type": "text",
+        "label": "Reason",
+        "required": true
+      },
+      {
+        "name": "from_date",
+        "type": "date",
+        "label": "From Date",
+        "required": true
+      },
+      {
+        "name": "from_noon",
+        "type": "select",
+        "label": "From Noon",
+        "options": [
+          "Full Day ",
+          "FN ",
+          "AN"
+        ],
+        "required": true
+      },
+      {
+        "name": "to_date",
+        "type": "date",
+        "label": "To Date",
+        "required": false
+      },
+      {
+        "name": "to_noon",
+        "type": "select",
+        "label": "To Noon",
+        "options": [
+          "Full Day ",
+          "FN ",
+          "AN"
+        ],
+        "required": false
+      }
+    ],
+    "allowed_roles": [
+      "IQAC",
+      "HR",
+      "PS",
+      "HOD",
+      "CFSW",
+      "EDC",
+      "COE",
+      "HAA"
+    ],
+    "ledger_policy": {},
+    "leave_policy": {
+      "action": "neutral",
+      "to_date": "2026-12-31",
+      "max_uses": 2,
+      "from_date": "2026-01-01",
+      "overdraft_name": "LOP",
+      "attendance_status": "OD",
+      "allotment_per_role": {
+        "HOD": 12,
+        "STAFF": 12
+      }
+    },
+    "attendance_action": {
+      "add_notes": true,
+      "to_status": "present",
+      "date_format": "YYYY-MM-DD",
+      "from_status": "absent",
+      "change_status": true,
+      "apply_to_dates": [
+        "from",
+        "to_date",
+        "from_date"
+      ],
+      "notes_template": "OD approved"
+    },
+    "created_at": "2026-03-11T18:09:10.654Z",
+    "updated_at": "2026-03-11T18:48:22.594Z"
+  }
+},
+{
+  "model": "staff_requests.requesttemplate",
+  "pk": 12,
+  "fields": {
+    "name": "Others - SPL",
+    "description": " (For special roles: IQAC, HR, PS, HOD, CFSW, EDC, COE, HAA)",
+    "is_active": true,
+    "form_schema": [
+      {
+        "name": "type",
+        "type": "select",
+        "label": "Type",
+        "options": [
+          "Medical Leave ",
+          "Maternity Leave ",
+          "Special Leave"
+        ],
+        "required": true
+      },
+      {
+        "name": "from_date",
+        "type": "date",
+        "label": "From Date",
+        "required": true
+      },
+      {
+        "name": "from_noon",
+        "type": "select",
+        "label": "From Noon",
+        "options": [
+          "Full Day ",
+          "FN ",
+          "AN"
+        ],
+        "required": true
+      },
+      {
+        "name": "to_date",
+        "type": "date",
+        "label": "To Date",
+        "required": false
+      },
+      {
+        "name": "to_noon",
+        "type": "select",
+        "label": "To Noon",
+        "options": [
+          "Full Day ",
+          "FN ",
+          "AN"
+        ],
+        "required": false
+      }
+    ],
+    "allowed_roles": [
+      "IQAC",
+      "HR",
+      "PS",
+      "HOD",
+      "CFSW",
+      "EDC",
+      "COE",
+      "HAA"
+    ],
+    "ledger_policy": {},
+    "leave_policy": {
+      "action": "neutral",
+      "to_date": "2026-05-30",
+      "from_date": "2026-01-01",
+      "allotment_per_role": {
+        "STAFF": 5.5
+      }
+    },
+    "attendance_action": {
+      "add_notes": true,
+      "to_status": "present",
+      "date_format": "YYYY-MM-DD",
+      "from_status": "absent",
+      "change_status": true,
+      "apply_to_dates": [
+        "from_date",
+        "to_date"
+      ],
+      "notes_template": "Others type form is Approved"
+    },
+    "created_at": "2026-03-11T18:09:10.672Z",
+    "updated_at": "2026-03-11T18:48:22.614Z"
+  }
+}
+]

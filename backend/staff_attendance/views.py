@@ -54,6 +54,8 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
             return Response({
                 'date': today.isoformat(),
                 'status': record.status,
+                'fn_status': record.fn_status,
+                'an_status': record.an_status,
                 'morning_in': record.morning_in.strftime('%H:%M') if record.morning_in else None,
                 'evening_out': record.evening_out.strftime('%H:%M') if record.evening_out else None,
                 'has_record': True
@@ -62,6 +64,8 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
             return Response({
                 'date': today.isoformat(),
                 'status': 'no_record',  # Changed from 'absent' to 'no_record'
+                'fn_status': 'no_record',
+                'an_status': 'no_record',
                 'morning_in': None,
                 'evening_out': None,
                 'has_record': False
@@ -187,9 +191,25 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         # Order by date
         records = queryset.order_by('date', 'user__username').select_related('user', 'user__staff_profile__department')
         
+        # Get COL template for checking approved forms
+        from staff_requests.models import RequestTemplate, StaffRequest
+        col_template = RequestTemplate.objects.filter(name__iexact='col').first()
+        
         # Serialize the records
         data = []
         for record in records:
+            # Check if there's an approved COL form for this date
+            has_approved_col_form = False
+            if col_template:
+                has_approved_col_form = StaffRequest.objects.filter(
+                    applicant=record.user,
+                    template=col_template,
+                    status='approved'
+                ).filter(
+                    Q(form_data__date=record.date.isoformat()) |
+                    Q(form_data__from_date=record.date.isoformat())
+                ).exists()
+            
             data.append({
                 'id': record.id,
                 'user_id': record.user.id,
@@ -198,9 +218,12 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                 'full_name': f"{record.user.first_name} {record.user.last_name}".strip() or record.user.username,
                 'date': record.date,
                 'status': record.status,
+                'fn_status': record.fn_status,
+                'an_status': record.an_status,
                 'morning_in': record.morning_in.strftime('%H:%M') if record.morning_in else None,
                 'evening_out': record.evening_out.strftime('%H:%M') if record.evening_out else None,
                 'notes': record.notes,
+                'has_approved_col_form': has_approved_col_form,
             })
         
         # Calculate summary stats
@@ -262,13 +285,19 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         to_date_str = request.query_params.get('to_date')
         department_id = request.query_params.get('department_id')
         export_format = request.query_params.get('format', 'json')
-        
-        if not from_date_str or not to_date_str:
+
+        # `from_date` is required; `to_date` is optional. If only `from_date` provided,
+        # analytics will show data for that single date.
+        if not from_date_str:
             return Response(
-                {'error': 'Both from_date and to_date are required (format: YYYY-MM-DD)'},
+                {'error': 'from_date is required (format: YYYY-MM-DD)'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
+        # If to_date is missing, default it to from_date (single-day analytics)
+        if not to_date_str:
+            to_date_str = from_date_str
+
         try:
             from_date = datetime.strptime(from_date_str, '%Y-%m-%d').date()
             to_date = datetime.strptime(to_date_str, '%Y-%m-%d').date()
@@ -309,23 +338,64 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                 'name': f"{user_obj.first_name} {user_obj.last_name}".strip() or user_obj.username,
                 'email': user_obj.email,
                 'department': getattr(user_obj.staff_profile, 'department', None).__str__() if getattr(user_obj.staff_profile, 'department', None) else 'N/A',
-                'present': 0,
-                'absent': 0,
-                'partial': 0,
+                'present': 0.0,
+                'absent': 0.0,
                 'no_record': 0,
+                'cl_count': 0,
+                'od_count': 0,
+                'late_entry_count': 0,
+                'col_count': 0,
+                'others_count': 0,
             }
         
-        # Count records by status
+        # Count records by FN/AN status (0.5 per session)
         for record in queryset:
             if record.user.id in analytics_by_staff:
-                if record.status == 'present':
-                    analytics_by_staff[record.user.id]['present'] += 1
-                elif record.status == 'absent':
-                    analytics_by_staff[record.user.id]['absent'] += 1
-                elif record.status == 'partial':
-                    analytics_by_staff[record.user.id]['partial'] += 1
-                else:
-                    analytics_by_staff[record.user.id]['no_record'] += 1
+                # FN (Forenoon) session - 0.5 day
+                if record.fn_status:
+                    if record.fn_status == 'present':
+                        analytics_by_staff[record.user.id]['present'] += 0.5
+                    elif record.fn_status == 'absent':
+                        analytics_by_staff[record.user.id]['absent'] += 0.5
+                
+                # AN (Afternoon) session - 0.5 day
+                if record.an_status:
+                    if record.an_status == 'present':
+                        analytics_by_staff[record.user.id]['present'] += 0.5
+                    elif record.an_status == 'absent':
+                        analytics_by_staff[record.user.id]['absent'] += 0.5
+        
+        # Get staff request counts for each individual staff (combining normal and SPL forms)
+        from staff_requests.models import StaffRequest
+        
+        # Query all approved requests in the date range
+        all_requests = StaffRequest.objects.filter(
+            created_at__date__gte=from_date,
+            created_at__date__lte=to_date,
+            status='approved'
+        ).select_related('template', 'applicant')
+        
+        # Count forms per staff
+        for request in all_requests:
+            applicant_id = request.applicant_id
+            if applicant_id in analytics_by_staff:
+                template_name = request.template.name if request.template else ''
+                
+                # CL: "Casual Leave" or "Casual Leave - SPL"
+                if template_name in ['Casual Leave', 'Casual Leave - SPL']:
+                    analytics_by_staff[applicant_id]['cl_count'] += 1
+                # OD: "ON duty" or "ON duty - SPL"
+                elif template_name in ['ON duty', 'ON duty - SPL']:
+                    analytics_by_staff[applicant_id]['od_count'] += 1
+                # Late Entry: "Late Entry Permission" or "Late Entry Permission - SPL"
+                elif template_name in ['Late Entry Permission', 'Late Entry Permission - SPL']:
+                    analytics_by_staff[applicant_id]['late_entry_count'] += 1
+                # COL: "Compensatory leave" or "Compensatory leave - SPL"
+                elif template_name in ['Compensatory leave', 'Compensatory leave - SPL']:
+                    analytics_by_staff[applicant_id]['col_count'] += 1
+                # Others: "Others" or "Others - SPL"
+                elif template_name in ['Others', 'Others - SPL']:
+                    analytics_by_staff[applicant_id]['others_count'] += 1
         
         # Convert to list
         analytics_list = list(analytics_by_staff.values())
@@ -334,9 +404,77 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         total_staff = len(analytics_list)
         total_present = sum(item['present'] for item in analytics_list)
         total_absent = sum(item['absent'] for item in analytics_list)
-        total_partial = sum(item['partial'] for item in analytics_list)
-        total_records = total_present + total_absent + total_partial
-        working_days = (to_date - from_date).days + 1
+        total_records = total_present + total_absent
+
+        # Calculate working days excluding marked holidays and Sundays
+        from staff_attendance.models import Holiday
+        try:
+            holidays_in_range = set(
+                Holiday.objects.filter(date__gte=from_date, date__lte=to_date).values_list('date', flat=True)
+            )
+            working_days = 0
+            current_date = from_date
+            while current_date <= to_date:
+                is_sunday = current_date.weekday() == 6
+                is_holiday = current_date in holidays_in_range
+                if not is_holiday and not is_sunday:
+                    working_days += 1
+                current_date += timedelta(days=1)
+        except Exception:
+            # Fallback to simple day count if holidays cannot be determined
+            working_days = (to_date - from_date).days + 1
+        
+        # Calculate unique staff counts by status
+        staff_present_count = len([item for item in analytics_list if item['present'] > 0])
+        staff_absent_count = len([item for item in analytics_list if item['absent'] > 0])
+        
+        # Get staff request counts (combining normal and SPL forms)
+        from staff_requests.models import StaffRequest
+        
+        # CL: "Casual Leave" or "Casual Leave - SPL"
+        cl_requests = StaffRequest.objects.filter(
+            created_at__date__gte=from_date,
+            created_at__date__lte=to_date,
+            template__name__in=['Casual Leave', 'Casual Leave - SPL'],
+            status='approved'
+        ).values_list('applicant_id', flat=True).distinct()
+        staff_cl_count = len(set(cl_requests))
+        
+        # OD: "ON duty" or "ON duty - SPL"
+        od_requests = StaffRequest.objects.filter(
+            created_at__date__gte=from_date,
+            created_at__date__lte=to_date,
+            template__name__in=['ON duty', 'ON duty - SPL'],
+            status='approved'
+        ).values_list('applicant_id', flat=True).distinct()
+        staff_od_count = len(set(od_requests))
+        
+        # Late Entry: "Late Entry Permission" or "Late Entry Permission - SPL"
+        late_entry_requests = StaffRequest.objects.filter(
+            created_at__date__gte=from_date,
+            created_at__date__lte=to_date,
+            template__name__in=['Late Entry Permission', 'Late Entry Permission - SPL'],
+            status='approved'
+        ).values_list('applicant_id', flat=True).distinct()
+        staff_late_entry_count = len(set(late_entry_requests))
+        
+        # COL: "Compensatory leave" or "Compensatory leave - SPL"
+        col_requests = StaffRequest.objects.filter(
+            created_at__date__gte=from_date,
+            created_at__date__lte=to_date,
+            template__name__in=['Compensatory leave', 'Compensatory leave - SPL'],
+            status='approved'
+        ).values_list('applicant_id', flat=True).distinct()
+        staff_col_count = len(set(col_requests))
+        
+        # Others: "Others" or "Others - SPL"
+        others_requests = StaffRequest.objects.filter(
+            created_at__date__gte=from_date,
+            created_at__date__lte=to_date,
+            template__name__in=['Others', 'Others - SPL'],
+            status='approved'
+        ).values_list('applicant_id', flat=True).distinct()
+        staff_others_count = len(set(others_requests))
         
         if export_format == 'csv':
             # Generate CSV export
@@ -354,27 +492,34 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
             writer.writerow(['ORGANIZATION ATTENDANCE SUMMARY'])
             writer.writerow(['Total Staff', total_staff])
             writer.writerow(['Total Records', total_records])
+            writer.writerow(['No. of Staff with CL', staff_cl_count])
+            writer.writerow(['No. of Staff with OD', staff_od_count])
+            writer.writerow(['No. of Staff with Late Entry', staff_late_entry_count])
+            writer.writerow(['No. of Staff with COL', staff_col_count])
+            writer.writerow(['No. of Staff with Others', staff_others_count])
             writer.writerow(['Total Present Days', total_present])
             writer.writerow(['Total Absent Days', total_absent])
-            writer.writerow(['Total Partial Days', total_partial])
-            writer.writerow(['Working Days in Period', working_days])
+            writer.writerow(['Total Working Days (excluding holidays)', working_days])
             writer.writerow([])
             
             # Write staff-wise details
             writer.writerow(['STAFF-WISE ATTENDANCE'])
-            writer.writerow(['Staff Name', 'Email', 'Department', 'Present', 'Absent', 'Partial', 'No Record', 'Attendance %'])
+            writer.writerow(['Staff Name', 'Email', 'Department', 'Present', 'Absent', 'CL', 'OD', 'Late Entry', 'COL', 'Others', 'Attendance %'])
             
             for item in sorted(analytics_list, key=lambda x: x['name']):
-                total_days = item['present'] + item['absent'] + item['partial']
-                attendance_pct = (item['present'] / total_days * 100) if total_days > 0 else 0
+                # Attendance percentage = present days / total working days (excluding holidays)
+                attendance_pct = (item['present'] / working_days * 100) if working_days and working_days > 0 else 0
                 writer.writerow([
                     item['name'],
                     item['email'],
                     item['department'],
-                    item['present'],
-                    item['absent'],
-                    item['partial'],
-                    item['no_record'],
+                    f"{item['present']:.1f}",
+                    f"{item['absent']:.1f}",
+                    item['cl_count'],
+                    item['od_count'],
+                    item['late_entry_count'],
+                    item['col_count'],
+                    item['others_count'],
                     f"{attendance_pct:.2f}%"
                 ])
             
@@ -397,7 +542,14 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                     'total_records': total_records,
                     'total_present': total_present,
                     'total_absent': total_absent,
-                    'total_partial': total_partial,
+                    # New staff counts
+                    'staff_present_count': staff_present_count,
+                    'staff_absent_count': staff_absent_count,
+                    'staff_cl_count': staff_cl_count,
+                    'staff_od_count': staff_od_count,
+                    'staff_late_entry_count': staff_late_entry_count,
+                    'staff_col_count': staff_col_count,
+                    'staff_others_count': staff_others_count,
                 },
                 'staff_analytics': analytics_list,
             })
@@ -526,9 +678,25 @@ class CSVUploadViewSet(viewsets.ViewSet):
         except Exception:
             return False
 
-    def _auto_create_col_for_holiday(self, user, holiday_date):
-        """Auto-create COL (Compensatory Leave) for staff who worked on holiday"""
-        from staff_requests.models import RequestTemplate, StaffLeaveBalance
+    def _auto_create_col_for_holiday(self, user, holiday_date, morning_in=None, evening_out=None):
+        """
+        Auto-create COL (Compensatory Leave) for staff who worked on holiday.
+        Now validates hours worked:
+        - Full day: >= 8 hours → 1.0 COL
+        - Half day: >= 4 hours → 0.5 COL
+        - Less than 4 hours → No COL
+        
+        Args:
+            user: User object
+            holiday_date: Date object
+            morning_in: Time object (IN time)
+            evening_out: Time object (OUT time)
+        """
+        from staff_requests.models import RequestTemplate, StaffLeaveBalance, StaffRequest
+        from datetime import datetime, time
+        import logging
+        
+        logger = logging.getLogger(__name__)
         
         try:
             # Find COL template (Compensatory leave with earn action)
@@ -540,23 +708,186 @@ class CSVUploadViewSet(viewsets.ViewSet):
             ).first()
             
             if not col_template:
+                logger.warning(f"COL template not found")
                 return False
             
-            # Update COL balance directly (no approval needed for holiday work)
+            # Calculate hours worked if both IN and OUT times provided
+            hours_worked = 0
+            if morning_in and evening_out:
+                # Convert to datetime for calculation
+                in_dt = datetime.combine(holiday_date, morning_in)
+                out_dt = datetime.combine(holiday_date, evening_out)
+                
+                # Calculate hours
+                diff = out_dt - in_dt
+                hours_worked = diff.total_seconds() / 3600
+                
+                logger.info(f"[COL_HOURS] {user.username} on {holiday_date}: IN={morning_in}, OUT={evening_out}, Hours={hours_worked:.2f}")
+            else:
+                logger.warning(f"[COL_HOURS] Cannot calculate hours for {user.username} on {holiday_date}: IN={morning_in}, OUT={evening_out}")
+                # Don't award COL without proper time data
+                return False
+            
+            # Check if there's an approved COL form to determine full/half day expectation
+            approved_col_request = StaffRequest.objects.filter(
+                applicant=user,
+                template=col_template,
+                status='approved'
+            ).filter(
+                Q(form_data__date=holiday_date.isoformat()) |
+                Q(form_data__from_date=holiday_date.isoformat())
+            ).first()
+            
+            # Determine if it's a half-day claim (FN or AN)
+            is_half_day_claim = False
+            shift_claimed = None
+            if approved_col_request and approved_col_request.form_data:
+                from_noon = approved_col_request.form_data.get('from_noon') or approved_col_request.form_data.get('from_shift')
+                to_noon = approved_col_request.form_data.get('to_noon') or approved_col_request.form_data.get('to_shift')
+                
+                # Check if it's a half-day claim (FN or AN, not FULL)
+                if from_noon and str(from_noon).upper() in ['FN', 'AN']:
+                    is_half_day_claim = True
+                    shift_claimed = str(from_noon).upper()
+                elif to_noon and str(to_noon).upper() in ['FN', 'AN']:
+                    is_half_day_claim = True
+                    shift_claimed = str(to_noon).upper()
+                
+                logger.info(f"[COL_CLAIM] Found approved COL request: Half day={is_half_day_claim}, Shift={shift_claimed}")
+            
+            # Determine COL amount based on hours worked
+            col_amount = 0
+            if is_half_day_claim:
+                # Half day claim: need 4+ hours
+                if hours_worked >= 4:
+                    col_amount = 0.5
+                    logger.info(f"[COL_AWARD] Half day ({shift_claimed}): {hours_worked:.2f} hrs >= 4 hrs → 0.5 COL")
+                else:
+                    logger.warning(f"[COL_REJECT] Half day ({shift_claimed}): {hours_worked:.2f} hrs < 4 hrs → No COL")
+                    return False
+            else:
+                # Full day claim: need 8+ hours
+                if hours_worked >= 8:
+                    col_amount = 1.0
+                    logger.info(f"[COL_AWARD] Full day: {hours_worked:.2f} hrs >= 8 hrs → 1.0 COL")
+                else:
+                    logger.warning(f"[COL_REJECT] Full day: {hours_worked:.2f} hrs < 8 hrs → No COL")
+                    return False
+            
+            # Update COL balance
             balance, created = StaffLeaveBalance.objects.get_or_create(
                 staff=user,
                 leave_type=col_template.name,
                 defaults={'balance': 0}
             )
-            balance.balance += 1  # Add 1 COL day
+            balance.balance += col_amount
             balance.save()
             
+            logger.info(f"[COL_SUCCESS] Awarded {col_amount} COL to {user.username} for {holiday_date}. New balance: {balance.balance}")
             return True
+            
         except Exception as e:
             # Log error but don't fail the upload
-            import logging
-            logger = logging.getLogger(__name__)
             logger.error(f"Failed to create COL for {user.username} on {holiday_date}: {e}")
+            return False
+
+    def _check_and_revoke_col_for_absence(self, user, holiday_date):
+        """
+        Check if staff has approved COL earn form for this holiday but is actually absent.
+        If so, revoke the COL that was awarded when form was approved.
+        """
+        import logging
+        from staff_requests.models import StaffRequest, RequestTemplate, StaffLeaveBalance
+        
+        logger = logging.getLogger(__name__)
+        
+        try:
+            # Find COL template
+            col_template = RequestTemplate.objects.filter(
+                is_active=True,
+                leave_policy__action='earn'
+            ).filter(
+                Q(name__icontains='Compensatory') | Q(name__icontains='COL')
+            ).first()
+            
+            if not col_template:
+                return False
+            
+            # Check if there's an approved COL earn request for this date
+            approved_col_requests = StaffRequest.objects.filter(
+                applicant=user,
+                template=col_template,
+                status='approved'
+            )
+            
+            for request in approved_col_requests:
+                form_data = request.form_data
+                # Check if this request covers the holiday_date
+                covers_date = False
+                
+                # Check single date field
+                if 'date' in form_data:
+                    from datetime import datetime
+                    try:
+                        date_val = form_data['date']
+                        if isinstance(date_val, str):
+                            request_date = datetime.strptime(date_val, '%Y-%m-%d').date()
+                        else:
+                            request_date = date_val
+                        if request_date == holiday_date:
+                            covers_date = True
+                    except (ValueError, AttributeError):
+                        pass
+                
+                # Check date range
+                if not covers_date and 'from_date' in form_data:
+                    from datetime import datetime, timedelta
+                    try:
+                        from_date_val = form_data['from_date']
+                        to_date_val = form_data.get('to_date', from_date_val)
+                        
+                        if isinstance(from_date_val, str):
+                            from_date = datetime.strptime(from_date_val, '%Y-%m-%d').date()
+                        else:
+                            from_date = from_date_val
+                        
+                        if isinstance(to_date_val, str):
+                            to_date = datetime.strptime(to_date_val, '%Y-%m-%d').date()
+                        else:
+                            to_date = to_date_val
+                        
+                        # Check if holiday_date is in range
+                        current = from_date
+                        while current <= to_date:
+                            if current == holiday_date:
+                                covers_date = True
+                                break
+                            current += timedelta(days=1)
+                    except (ValueError, AttributeError):
+                        pass
+                
+                if covers_date:
+                    # This COL request covers the holiday date but staff was absent
+                    # Revoke the COL (decrement balance by 1)
+                    balance = StaffLeaveBalance.objects.filter(
+                        staff=user,
+                        leave_type=col_template.name
+                    ).first()
+                    
+                    if balance and balance.balance > 0:
+                        old_balance = balance.balance
+                        balance.balance -= 1
+                        balance.save()
+                        logger.warning(
+                            f"[COL_REVOKE] Staff {user.username} was absent on {holiday_date} "
+                            f"despite approved COL form. Revoked COL: {old_balance} -> {balance.balance}"
+                        )
+                        return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Failed to check/revoke COL for {user.username} on {holiday_date}: {e}")
             return False
 
     def _resolve_user(self, user_id, errors):
@@ -623,22 +954,13 @@ class CSVUploadViewSet(viewsets.ViewSet):
                         # Had morning entry but was marked absent, now adding evening - should be present
                         pass  # Status will be recalculated below
 
-            # Recompute status ONLY if current status is a biometric status (not leave/OD)
-            # Preserve approved leave statuses (OD, CL, ML, COL, LEAVE, LOP, etc.)
-            BIOMETRIC_STATUSES = ['present', 'absent', 'partial', 'half_day']
-            if record.status in BIOMETRIC_STATUSES:
-                # Only recalculate for biometric statuses
-                if self._check_time_based_absence(record.morning_in, record.evening_out):
-                    record.status = 'absent'  # Time limit violated = absent
-                elif record.morning_in is None:
-                    record.status = 'absent'  # No morning entry = absent
-                elif record.morning_in and record.evening_out:
-                    record.status = 'present'  # Has morning + evening = present
-                elif record.morning_in:
-                    record.status = 'partial'  # Has morning only = partial
-                else:
-                    record.status = 'absent'   # Fallback
-            # else: preserve existing leave status (OD, CL, ML, etc.)
+        # Always recompute status for both NEW and UPDATED records
+        # The update_status() method intelligently preserves leave statuses (CL, OD, ML, COL, etc.)
+        # for individual FN/AN sessions while recalculating biometric statuses (present, absent, etc.)
+        # This ensures:
+        # 1. Default 'absent' statuses CAN be overridden by CSV uploads (e.g., tomorrow's upload adds evening_out)
+        # 2. Leave form statuses (CL, OD, etc.) CANNOT be overridden by CSV uploads (preserved by update_status)
+        record.update_status()
 
         record.source_file = source_file
         record.save()
@@ -711,6 +1033,9 @@ class CSVUploadViewSet(viewsets.ViewSet):
                     t_in, t_out = self._parse_time_range(today_val)
 
                     yest_val = row.get(self._col(yest_day), '') if yest_day >= 1 else ''
+                    # For yesterday: parse BOTH morning_in and evening_out
+                    # morning_in: for staff who came after 9 AM (after upload time)
+                    # evening_out: deferred exit time
                     y_in, y_out = self._parse_time_range(yest_val)
 
                     backfill_count = 0
@@ -727,8 +1052,8 @@ class CSVUploadViewSet(viewsets.ViewSet):
                         'today_morning_in': t_in.isoformat() if t_in else None,
                         'today_evening_out': t_out.isoformat() if t_out else None,
                         'today_raw': today_val,
-                        # Yesterday deferred
-                        'yesterday_date': (today - timedelta(days=1)).isoformat(),
+                        # Yesterday deferred (both IN for late arrivals and OUT for deferred exit)
+                        'yesterday_date': (today - timedelta(days=1)).isoformat() if yest_day >= 1 else None,
                         'yesterday_morning_in': y_in.isoformat() if y_in else None,
                         'yesterday_evening_out': y_out.isoformat() if y_out else None,
                         'yesterday_raw': yest_val,
@@ -762,6 +1087,52 @@ class CSVUploadViewSet(viewsets.ViewSet):
                     file=csv_file,
                 )
 
+                # SPECIAL HANDLING: When uploading on a holiday, mark absent for previous working day
+                # if staff have no attendance record for that day
+                if self._is_holiday(today) and yest_day >= 1:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    
+                    yest_date = today - timedelta(days=1)
+                    # Check if yesterday was a working day (not holiday, not Sunday)
+                    is_yest_working_day = not self._is_holiday(yest_date) and yest_date.weekday() != 6
+                    
+                    if is_yest_working_day:
+                        logger.info(f"[HOLIDAY_UPLOAD] Uploading on holiday {today}, checking absence for previous working day {yest_date}")
+                        
+                        # Get all user IDs from CSV
+                        csv_user_ids = set()
+                        for row in rows:
+                            user_id = row.get('USER_ID', '').strip()
+                            if user_id:
+                                csv_user_ids.add(user_id)
+                        
+                        # Check each user for absence on the previous working day
+                        for user_id in csv_user_ids:
+                            user = self._resolve_user(user_id, errors)
+                            if user is None:
+                                continue
+                            
+                            # Check if user has an attendance record for yesterday
+                            existing_record = AttendanceRecord.objects.filter(
+                                user=user,
+                                date=yest_date
+                            ).first()
+                            
+                            if not existing_record:
+                                # No record exists - mark absent for both FN & AN
+                                AttendanceRecord.objects.create(
+                                    user=user,
+                                    date=yest_date,
+                                    morning_in=None,
+                                    evening_out=None,
+                                    fn_status='absent',
+                                    an_status='absent',
+                                    status='absent',
+                                    notes=f'Marked absent (no record found when uploading on holiday {today})'
+                                )
+                                logger.info(f"[HOLIDAY_ABSENCE] Marked {user.username} absent for {yest_date} (previous working day)")
+
                 for row in rows:
                     user_id = row.get('USER_ID', '').strip()
                     if not user_id:
@@ -784,12 +1155,26 @@ class CSVUploadViewSet(viewsets.ViewSet):
                             if self._upsert_record(user, today, t_in, t_out,
                                                    'backfill', overwrite_existing, source_file):
                                 row_saved = True
-                                # Award COL for working on holiday
-                                self._auto_create_col_for_holiday(user, today)
-                        elif overwrite_existing:
-                            # If overwrite_existing and no data, delete any existing record for this holiday
-                            AttendanceRecord.objects.filter(user=user, date=today).delete()
-                        # else: no attendance on holiday = skip (don't save absent record)
+                                # Award COL for working on holiday (with hour validation)
+                                self._auto_create_col_for_holiday(user, today, t_in, t_out)
+                        else:
+                            # No biometric data on holiday
+                            # Check if there's an existing attendance record (from COL form approval)
+                            existing_record = AttendanceRecord.objects.filter(user=user, date=today).first()
+                            if existing_record:
+                                # COL form was approved but staff didn't actually come - mark absent and revoke COL
+                                existing_record.morning_in = None
+                                existing_record.evening_out = None
+                                existing_record.fn_status = 'absent'
+                                existing_record.an_status = 'absent'
+                                existing_record.status = 'absent'
+                                existing_record.save()
+                                self._check_and_revoke_col_for_absence(user, today)
+                                row_saved = True
+                            elif overwrite_existing:
+                                # If overwrite_existing and no data, delete any existing record for this holiday
+                                AttendanceRecord.objects.filter(user=user, date=today).delete()
+                            # else: no attendance on holiday = skip (don't save absent record)
                     else:
                         # Normal working day processing
                         t_in, t_out = self._parse_time_range(row.get(self._col(today_day), ''))
@@ -797,28 +1182,47 @@ class CSVUploadViewSet(viewsets.ViewSet):
                                                'today', overwrite_existing, source_file):
                             row_saved = True
 
-                    # 2. YESTERDAY: deferred evening_out (half-day / late swipe)
+                    # 2. YESTERDAY: both morning_in (late arrivals) and evening_out (deferred exit)
+                    # PS uploads at 9 AM, so staff arriving after 9 AM won't have morning_in yet
+                    # Also capture evening_out (deferred exit) for those who exited late
                     if yest_day >= 1:
                         yest_date = today - timedelta(days=1)
                         # Check if yesterday was a holiday
                         if self._is_holiday(yest_date):
                             y_in, y_out = self._parse_time_range(row.get(self._col(yest_day), ''))
                             if y_in or y_out:
-                                # Save attendance for holiday work (respects overwrite_existing)
+                                # Save attendance for holiday work (use 'yesterday' mode to allow updates)
                                 if self._upsert_record(user, yest_date, y_in, y_out,
-                                                       'backfill', overwrite_existing, source_file):
+                                                       'yesterday', overwrite_existing, source_file):
                                     row_saved = True
-                                    # Award COL for working on holiday
-                                    self._auto_create_col_for_holiday(user, yest_date)
-                            elif overwrite_existing:
-                                # If overwrite_existing and no data, delete any existing record for this holiday
-                                AttendanceRecord.objects.filter(user=user, date=yest_date).delete()
+                                    # Award COL for working on holiday (with hour validation)
+                                    self._auto_create_col_for_holiday(user, yest_date, y_in, y_out)
+                            else:
+                                # No biometric data on holiday
+                                # Check if there's an existing attendance record (from COL form approval)
+                                existing_record = AttendanceRecord.objects.filter(user=user, date=yest_date).first()
+                                if existing_record:
+                                    # COL form was approved but staff didn't actually come - mark absent and revoke COL
+                                    existing_record.morning_in = None
+                                    existing_record.evening_out = None
+                                    existing_record.fn_status = 'absent'
+                                    existing_record.an_status = 'absent'
+                                    existing_record.status = 'absent'
+                                    existing_record.save()
+                                    self._check_and_revoke_col_for_absence(user, yest_date)
+                                    row_saved = True
+                                elif overwrite_existing:
+                                    # If overwrite_existing and no data, delete any existing record for this holiday
+                                    AttendanceRecord.objects.filter(user=user, date=yest_date).delete()
                         else:
-                            # Normal yesterday processing
+                            # Normal yesterday processing: use BOTH morning_in and evening_out
+                            # morning_in: for late arrivals (after 9 AM upload time)
+                            # evening_out: deferred exit time
                             y_in, y_out = self._parse_time_range(row.get(self._col(yest_day), ''))
-                            if self._upsert_record(user, yest_date, y_in, y_out,
-                                                   'yesterday', overwrite_existing, source_file):
-                                row_saved = True
+                            if y_in or y_out:  # Process if there's any time data
+                                if self._upsert_record(user, yest_date, y_in, y_out,
+                                                       'yesterday', overwrite_existing, source_file):
+                                    row_saved = True
 
                     # 3. BACKFILL: D1 … D(today-2)  — only save if not yet in DB
                     for d in backfill_days:
@@ -831,11 +1235,25 @@ class CSVUploadViewSet(viewsets.ViewSet):
                                 if self._upsert_record(user, past_date, p_in, p_out,
                                                        'backfill', overwrite_existing, source_file):
                                     row_saved = True
-                                    # Award COL for working on holiday
-                                    self._auto_create_col_for_holiday(user, past_date)
-                            elif overwrite_existing:
-                                # If overwrite_existing and no data, delete any existing record for this holiday
-                                AttendanceRecord.objects.filter(user=user, date=past_date).delete()
+                                    # Award COL for working on holiday (with hour validation)
+                                    self._auto_create_col_for_holiday(user, past_date, p_in, p_out)
+                            else:
+                                # No biometric data on holiday
+                                # Check if there's an existing attendance record (from COL form approval)
+                                existing_record = AttendanceRecord.objects.filter(user=user, date=past_date).first()
+                                if existing_record:
+                                    # COL form was approved but staff didn't actually come - mark absent and revoke COL
+                                    existing_record.morning_in = None
+                                    existing_record.evening_out = None
+                                    existing_record.fn_status = 'absent'
+                                    existing_record.an_status = 'absent'
+                                    existing_record.status = 'absent'
+                                    existing_record.save()
+                                    self._check_and_revoke_col_for_absence(user, past_date)
+                                    row_saved = True
+                                elif overwrite_existing:
+                                    # If overwrite_existing and no data, delete any existing record for this holiday
+                                    AttendanceRecord.objects.filter(user=user, date=past_date).delete()
                         else:
                             # Normal backfill processing
                             p_in, p_out = self._parse_time_range(row.get(self._col(d), ''))

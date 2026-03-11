@@ -20,7 +20,7 @@ interface PreviewRow {
   today_morning_in: string | null;
   today_evening_out: string | null;
   today_raw: string;
-  yesterday_date: string;
+  yesterday_date: string | null;
   yesterday_morning_in: string | null;
   yesterday_evening_out: string | null;
   yesterday_raw: string;
