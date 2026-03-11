@@ -76,6 +76,7 @@ import IDCSScanGatepassPage from './pages/IDCSScan/GatepassPage';
 import RFReaderCreateGatePage from './pages/RFReader/CreateGatePage';
 import RFReaderTestStudentsPage from './pages/RFReader/TestStudentsPage';
 import RFReaderAddStudentsRFPage from './pages/RFReader/AddStudentsRFPage';
+import AttendanceAnalyticsRequestsPage from './pages/attendance/AttendanceAnalyticsRequestsPage';
 
 type RoleObj = { name: string };
 type Me = {
@@ -407,7 +408,7 @@ export default function App() {
                   element={
                     <ProtectedRoute
                       user={user}
-                      requiredProfile={'STAFF'}
+                      requiredRoles={['HOD', 'IQAC']}
                       requiredPermissions={[
                         'academics.view_all_attendance',
                         'academics.view_attendance_overall',
@@ -420,6 +421,7 @@ export default function App() {
                     />
                   }
                 />
+                <Route
                 <Route
                   path="/staff/my-attendance"
                   element={<ProtectedRoute user={user} requiredProfile={'STAFF'} element={<MyAttendance />} />}
@@ -445,6 +447,16 @@ export default function App() {
                   element={<ProtectedRoute user={user} requiredRoles={['HOD','AHOD','HR','HAA','IQAC','PS','PRINCIPAL']} requiredPermissions={['staff_requests.approve_requests']} element={<PendingApprovalsPage />} />}
                 />
                 
+                <Route
+                  path="/attendance-analytics/requests"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['HOD', 'IQAC']}
+                      element={<AttendanceAnalyticsRequestsPage />}
+                    />
+                  }
+                />
                 <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
                 {/* Prevent regular users from accessing Branding-only routes */}
                 <Route path="/branding/*" element={<Navigate to="/dashboard" replace />} />

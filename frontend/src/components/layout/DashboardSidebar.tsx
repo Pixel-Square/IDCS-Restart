@@ -6,6 +6,7 @@ import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, Cli
 import { useSidebar } from './SidebarContext';
 import { fetchPendingPublishRequestCount } from '../../services/obe';
 import { ApplicationsNavResponse, fetchApplicationsNav } from '../../services/applications';
+import { useAttendanceNotificationCount } from '../../hooks/useAttendanceNotificationCount';
 
   const ICON_MAP: Record<string, any> = {
   profile: User,
@@ -62,6 +63,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   const [pendingAttendanceReqCount, setPendingAttendanceReqCount] = useState<number>(0);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [applicationsNav, setApplicationsNav] = useState<ApplicationsNavResponse | null>(null);
+
+  const permsForHook = (data?.permissions || []).map((p) => String(p || '').toLowerCase());
+  const rolesForHook = (data?.roles || []).map((r) => String(r || '').toUpperCase());
+  const isHodOrIqac = rolesForHook.includes('HOD') || rolesForHook.includes('IQAC');
+  const { count: attendanceNotifCount } = useAttendanceNotificationCount(isHodOrIqac);
 
   const perms = (data?.permissions || []).map((p) => String(p || '').toLowerCase());
   const canObeMaster = perms.includes('obe.master.manage');
@@ -283,14 +289,20 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   }
 
   // Attendance analytics for staff (use academics.* permission codenames)
-  if (flags.is_staff && (
-    permsLower.includes('academics.view_all_attendance') ||
-    permsLower.includes('academics.view_attendance_overall') ||
-    permsLower.includes('academics.view_all_departments') ||
-    permsLower.includes('academics.view_department_attendance') ||
-    permsLower.includes('academics.view_class_attendance') ||
-    permsLower.includes('academics.view_section_attendance')
-  )) {
+  // Also shown for HOD and IQAC roles so they can see the pending-request badge
+  const canSeeAttendanceAnalytics =
+    flags.is_staff &&
+    (
+      rolesUpper.includes('HOD') ||
+      rolesUpper.includes('IQAC') ||
+      permsLower.includes('academics.view_all_attendance') ||
+      permsLower.includes('academics.view_attendance_overall') ||
+      permsLower.includes('academics.view_all_departments') ||
+      permsLower.includes('academics.view_department_attendance') ||
+      permsLower.includes('academics.view_class_attendance') ||
+      permsLower.includes('academics.view_section_attendance')
+    );
+  if (canSeeAttendanceAnalytics) {
     items.push({ key: 'attendance_analytics', label: 'Attendance Analytics', to: '/staff/analytics' });
   }
 
@@ -440,6 +452,9 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                       ) : null}
                       {i.key === 'period_attendance' && pendingAttendanceReqCount > 0 ? (
                         <span className="ml-2 inline-flex items-center justify-center px-2 py-0.5 text-xs font-medium rounded-full bg-blue-600 text-white">{pendingAttendanceReqCount}</span>
+                      ) : null}
+                      {i.key === 'attendance_analytics' && attendanceNotifCount > 0 ? (
+                        <span className="ml-2 inline-flex items-center justify-center px-2 py-0.5 text-xs font-medium rounded-full bg-red-600 text-white">{attendanceNotifCount > 99 ? '99+' : attendanceNotifCount}</span>
                       ) : null}
                     </span>
                   </Link>

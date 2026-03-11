@@ -1,6 +1,10 @@
 import React, { useEffect, useState } from 'react'
 import fetchWithAuth from '../../services/fetchAuth'
 
+/** Custom event dispatched whenever an unlock request is approved/rejected.
+ *  The notification bell in the Navbar listens for this to refresh instantly. */
+export const ATTENDANCE_REQUEST_PROCESSED_EVENT = 'attendance-request-processed'
+
 export default function AttendanceRequests(){
   const [loading, setLoading] = useState(false)
   const [requests, setRequests] = useState<any[]>([])
@@ -58,6 +62,8 @@ export default function AttendanceRequests(){
         ? 'Request approved and forwarded to final approver' 
         : `Request ${action}ed successfully`
       alert(successMsg)
+      // Notify the Navbar bell to refresh its count immediately
+      window.dispatchEvent(new CustomEvent(ATTENDANCE_REQUEST_PROCESSED_EVENT))
     }catch(e){ console.error(action, e); alert('Failed: '+(e instanceof Error? e.message: String(e))) }
   }
 

@@ -28,3 +28,9 @@ export async function fetchIQACCourseTeachingMap(courseCode: string): Promise<IQ
   const results = (data as any)?.results;
   return Array.isArray(results) ? (results as IQACTeachingMapRow[]) : [];
 }
+
+export async function fetchAttendanceNotificationCount(): Promise<{ count: number; role: string }> {
+  const res = await fetchWithAuth('/api/academics/analytics/attendance-notification-count/');
+  if (!res.ok) return { count: 0, role: 'none' };
+  return res.json();
+}

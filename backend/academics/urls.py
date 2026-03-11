@@ -41,7 +41,7 @@ from .views import (
     StaffDepartmentRoleRemoveView,
     BatchListView,
 )
-from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView, ClassAttendanceReportView, TodayPeriodAttendanceView, PeriodAttendanceReportView, OverallSectionView, MyClassStudentsView, DailyAttendanceView, DailyAttendanceLockView, DailyAttendanceUnlockView, MyClassAttendanceAnalyticsView, DailyAttendanceSessionDetailView, SectionStudentAttendanceDayView, DailyAttendanceRevertAssignmentView, DailyAttendanceUnlockRequestView, PeriodAttendanceUnlockRequestView, HODUnlockRequestsView, PeriodAttendanceSwapView, PeriodAttendanceRevertAssignmentView, AttendanceAssignmentRequestView, AttendanceAssignmentRequestActionView
+from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView, ClassAttendanceReportView, TodayPeriodAttendanceView, PeriodAttendanceReportView, OverallSectionView, MyClassStudentsView, DailyAttendanceView, DailyAttendanceLockView, DailyAttendanceUnlockView, MyClassAttendanceAnalyticsView, DailyAttendanceSessionDetailView, SectionStudentAttendanceDayView, DailyAttendanceRevertAssignmentView, DailyAttendanceUnlockRequestView, PeriodAttendanceUnlockRequestView, HODUnlockRequestsView, PeriodAttendanceSwapView, PeriodAttendanceRevertAssignmentView, AttendanceAssignmentRequestView, AttendanceAssignmentRequestActionView, AttendanceNotificationCountView
 from .views import UnifiedUnlockRequestsView, DepartmentStudentsView, AllStudentsView, MentorMyMenteesView
 from .student_import_views import StudentImportTemplateDownloadView, StudentBulkImportView
 from .rfreader_views import RFReaderGateListCreateView, RFReaderStudentListCreateView, RFReaderLastScanView
@@ -140,4 +140,5 @@ urlpatterns = [
     path('rfreader/last-scan/', RFReaderLastScanView.as_view()),
     path('attendance-assignment-requests/', AttendanceAssignmentRequestView.as_view()),
     path('attendance-assignment-requests/<int:pk>/<str:action>/', AttendanceAssignmentRequestActionView.as_view()),
+    path('analytics/attendance-notification-count/', AttendanceNotificationCountView.as_view()),
 ]
