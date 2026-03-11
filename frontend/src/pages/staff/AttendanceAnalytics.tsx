@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { Lock, Unlock, RefreshCw, X, Calendar, Clock, Users, BarChart3, FileText, CheckCircle2, XCircle, AlertCircle, Building2, GraduationCap, Loader2, FileSpreadsheet, ChevronDown, ChevronUp } from 'lucide-react'
 import fetchWithAuth from '../../services/fetchAuth'
 import AttendanceRequests from './AttendanceRequests'
+import { useAttendanceNotificationCount } from '../../hooks/useAttendanceNotificationCount'
 
 interface PeriodStat {
   session_id: number
@@ -60,6 +61,8 @@ const AttendanceAnalytics: React.FC = () => {
   const [completedRequests, setCompletedRequests] = useState<Record<string, string>>({})
   const [showRequestsModal, setShowRequestsModal] = useState(false)
   const [showHODRequestsModal, setShowHODRequestsModal] = useState(false)
+  const isHodOrIqac = permissionLevel === 'department' || permissionLevel === 'all'
+  const { count: attendanceNotifCount, refresh: refreshNotifCount } = useAttendanceNotificationCount(isHodOrIqac)
   const [reportModalOpen, setReportModalOpen] = useState(false)
   const [reportData, setReportData] = useState<any | null>(null)
   const [reportLoading, setReportLoading] = useState(false)
@@ -839,6 +842,11 @@ const AttendanceAnalytics: React.FC = () => {
             >
               <Lock className="w-4 h-4" />
               {permissionLevel === 'department' ? 'HOD Approval Requests' : 'Unlock Requests'}
+              {attendanceNotifCount > 0 && (
+                <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1 text-xs font-bold text-white bg-red-500 rounded-full leading-none">
+                  {attendanceNotifCount > 99 ? '99+' : attendanceNotifCount}
+                </span>
+              )}
             </button>
           )}
         </div>
@@ -2083,7 +2091,7 @@ const AttendanceAnalytics: React.FC = () => {
       
       {showRequestsModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm">
-          <div className="fixed inset-0 bg-black/50" onClick={() => setShowRequestsModal(false)} />
+          <div className="fixed inset-0 bg-black/50" onClick={() => { setShowRequestsModal(false); refreshNotifCount(); }} />
           <div className="bg-white rounded-xl shadow-2xl w-[75vw] max-w-[80vw] mx-4 z-50 overflow-auto max-h-[80vh]">
             <div className="flex items-center justify-between p-6 border-b bg-gradient-to-r from-indigo-600 to-blue-600">
               <div className="flex items-center gap-3">
@@ -2095,7 +2103,7 @@ const AttendanceAnalytics: React.FC = () => {
                 </h3>
               </div>
               <button 
-                onClick={() => setShowRequestsModal(false)} 
+                onClick={() => { setShowRequestsModal(false); refreshNotifCount(); }} 
                 className="px-4 py-2 bg-white/20 hover:bg-white/30 text-white rounded-lg transition-colors font-medium"
               >
                 <X className="w-5 h-5" />

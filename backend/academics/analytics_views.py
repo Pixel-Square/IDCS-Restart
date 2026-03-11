@@ -2896,3 +2896,57 @@ class PeriodAttendanceRevertAssignmentView(APIView):
         except Exception as e:
             return Response({'error': f'Failed to revert: {str(e)}'}, status=500)
 
+
+class AttendanceNotificationCountView(APIView):
+    """
+    GET /api/academics/analytics/attendance-notification-count/
+    Returns the count of pending attendance unlock requests visible to the current user.
+    - HOD: counts PENDING requests in their department (awaiting HOD approval)
+    - IQAC / view_all_analytics: counts HOD_APPROVED period requests + PENDING/HOD_APPROVED daily requests
+      (awaiting final approval)
+    Only returns a count > 0 for users who have something to action; all others receive 0.
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        from .models import AttendanceUnlockRequest, DailyAttendanceUnlockRequest, DepartmentRole
+
+        user = request.user
+        perms = get_user_permissions(user)
+        staff_profile = getattr(user, 'staff_profile', None)
+
+        can_view_all = 'analytics.view_all_analytics' in perms or user.is_superuser
+
+        if can_view_all:
+            # IQAC / admin: count requests that have passed HOD and are awaiting final approval
+            period_count = AttendanceUnlockRequest.objects.filter(
+                hod_status='HOD_APPROVED', status='HOD_APPROVED'
+            ).count()
+            daily_count = DailyAttendanceUnlockRequest.objects.filter(
+                status__in=['PENDING', 'HOD_APPROVED']
+            ).count()
+            total = period_count + daily_count
+            return Response({'count': total, 'role': 'iqac'})
+
+        # Check HOD role via DepartmentRole
+        if staff_profile:
+            hod_dept_ids = list(
+                DepartmentRole.objects.filter(
+                    staff=staff_profile, role='HOD', is_active=True
+                ).values_list('department_id', flat=True)
+            )
+            if hod_dept_ids:
+                period_count = AttendanceUnlockRequest.objects.filter(
+                    session__section__batch__course__department_id__in=hod_dept_ids,
+                    hod_status='PENDING'
+                ).count()
+                daily_count = DailyAttendanceUnlockRequest.objects.filter(
+                    session__section__batch__course__department_id__in=hod_dept_ids,
+                    hod_status='PENDING'
+                ).count()
+                total = period_count + daily_count
+                return Response({'count': total, 'role': 'hod'})
+
+        # User has no actionable requests
+        return Response({'count': 0, 'role': 'none'})
+

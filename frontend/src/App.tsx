@@ -56,6 +56,7 @@ import HodEventsListPage from './pages/hod/events/HodEventsListPage';
 import HodEventCreatePage from './pages/hod/events/HodEventCreatePage';
 import CanvaDesignEditorPage from './pages/hod/events/CanvaDesignEditorPage';
 import PosterMakerPage from './pages/events/PosterMakerPage';
+import AttendanceAnalyticsRequestsPage from './pages/attendance/AttendanceAnalyticsRequestsPage';
 
 type RoleObj = { name: string };
 type Me = {
@@ -328,7 +329,7 @@ export default function App() {
                   element={
                     <ProtectedRoute
                       user={user}
-                      requiredProfile={'STAFF'}
+                      requiredRoles={['HOD', 'IQAC']}
                       requiredPermissions={[
                         'academics.view_all_attendance',
                         'academics.view_attendance_overall',
@@ -338,6 +339,16 @@ export default function App() {
                         'academics.view_section_attendance',
                       ]}
                       element={<AttendanceAnalytics />}
+                    />
+                  }
+                />
+                <Route
+                  path="/attendance-analytics/requests"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['HOD', 'IQAC']}
+                      element={<AttendanceAnalyticsRequestsPage />}
                     />
                   }
                 />
