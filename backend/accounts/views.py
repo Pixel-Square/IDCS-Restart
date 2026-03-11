@@ -109,6 +109,8 @@ def _set_verified_mobile_on_profile(user, mobile_number: str, verified_at):
 
 class MobileOtpRequestView(APIView):
     # Allow both authenticated and unauthenticated users to request OTP
+    # Bypass authentication completely to avoid 401 errors from expired tokens
+    authentication_classes = []
     permission_classes = (permissions.AllowAny,)
 
     def post(self, request):
