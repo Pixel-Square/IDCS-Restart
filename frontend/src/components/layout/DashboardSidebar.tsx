@@ -4,7 +4,7 @@ import { Link, useLocation } from 'react-router-dom';
 
 
 import useDashboard from '../../hooks/useDashboard';
-import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper } from 'lucide-react';
+import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, MessageCircle } from 'lucide-react';
 
 import { useSidebar } from './SidebarContext';
 import { fetchPendingPublishRequestCount } from '../../services/obe';
@@ -44,6 +44,7 @@ import { fetchPendingPublishRequestCount } from '../../services/obe';
   pbas: ClipboardList,
   pbas_manager: Layout,
   settings: Settings,
+  feedback: MessageCircle,
 
 };
 
@@ -160,6 +161,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // Students page: require explicit view permission  
   if (permsLower.includes('students.view_students')) {
     items.push({ key: 'staff_students', label: 'Students', to: '/staff/students' });
+  }
+
+  // Feedback page: require explicit feedback permission
+  if (permsLower.includes('feedback.feedback_page')) {
+    items.push({ key: 'feedback', label: 'Feedback', to: '/feedback' });
   }
 
   // Advisor pages: require ADVISOR role or explicit permission
