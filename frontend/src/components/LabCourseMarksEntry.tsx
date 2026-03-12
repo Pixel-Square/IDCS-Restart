@@ -347,6 +347,7 @@ export default function LabCourseMarksEntry({
   const [rosterRefreshKey, setRosterRefreshKey] = useState(0);
   const [excelBusy, setExcelBusy] = useState(false);
   const excelFileInputRef = useRef<HTMLInputElement | null>(null);
+  const marksTableScrollRef = useRef<HTMLDivElement | null>(null);
 
   const [markManagerModal, setMarkManagerModal] = useState<null | { mode: 'confirm' | 'request' }>(null);
   const [markManagerBusy, setMarkManagerBusy] = useState(false);
@@ -415,6 +416,7 @@ export default function LabCourseMarksEntry({
     markEntryUnblockedUntil: string | null;
     markManagerUnlockedUntil: string | null;
   }>(null);
+  const [marksTableScrollState, setMarksTableScrollState] = useState({ canLeft: false, canRight: false });
 
   const isPublished = Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published);
 
@@ -540,6 +542,7 @@ export default function LabCourseMarksEntry({
     [normalizedClassType],
   );
   const isStrictLabMode = normalizedClassType === 'LAB' || normalizedClassType === 'PRACTICAL';
+  const ciaExamMaxConfigurable = isTcpr || isStrictLabMode;
   const usesLegacyTcplProfile = isTcplOrReviewBased && !isStrictLabMode && !isTcpr;
 
   // Load master config for term label
@@ -956,6 +959,18 @@ export default function LabCourseMarksEntry({
     draft.sheet.markManagerApprovalUntil,
   ]);
 
+  // When the lock row is deleted (e.g., after IQAC reset), clear local mark manager state
+  // so the UI reflects the unlocked/unconfirmed state immediately.
+  useEffect(() => {
+    if (markLock == null) return; // still loading
+    if (!markLock.exists) {
+      setDraft((p) => {
+        if (p.sheet.markManagerSnapshot == null && !p.sheet.markManagerLocked) return p;
+        return { ...p, sheet: { ...p.sheet, markManagerSnapshot: null, markManagerLocked: false } };
+      });
+    }
+  }, [markLock?.exists]);
+
   const coANum = clampInt(Number(draft.sheet.coANum ?? coA ?? 1), 1, 5);
   const coBNumRaw = (draft.sheet as any).coBNum ?? coB ?? null;
   const coBNum = coBNumRaw == null ? null : clampInt(Number(coBNumRaw), 1, 5);
@@ -973,9 +988,8 @@ export default function LabCourseMarksEntry({
   const markManagerLocked = Boolean(draft.sheet.markManagerLocked);
   const ciaExamEnabled = ciaAvailable ? (isTcpl ? true : draft.sheet.ciaExamEnabled !== false) : false;
   const ciaExamMaxEffective = useMemo(() => {
-    if (!isTcpr) return DEFAULT_CIA_EXAM_MAX;
     return clampInt(Number((draft.sheet as any).ciaExamMax ?? DEFAULT_CIA_EXAM_MAX), 0, 100);
-  }, [isTcpr, (draft.sheet as any).ciaExamMax]);
+  }, [(draft.sheet as any).ciaExamMax]);
   const markManagerCurrentSnapshot = useMemo(() => markManagerSnapshotOf(coConfigs, ciaExamEnabled), [coConfigs, ciaExamEnabled]);
 
   // TCPL policy: CIA Exam is mandatory (always enabled).
@@ -1343,7 +1357,7 @@ export default function LabCourseMarksEntry({
   }
 
   function setCiaExamMax(v: number) {
-    if (!isTcpr) return;
+    if (!ciaExamMaxConfigurable) return;
     setDraft((p) => {
       if (!ciaAvailable) return p;
       if (p.sheet.markManagerLocked) return p;
@@ -1997,8 +2011,7 @@ export default function LabCourseMarksEntry({
         const canEditAbsent = Boolean(showAbsenteesOnly && absent && (kind === 'ML' || kind === 'SKL'));
         if (absent && !canEditAbsent) return p;
       }
-      if (isStrictLabMode) return p;
-      const max = isTcpr ? clampInt(Number((p.sheet as any).ciaExamMax ?? DEFAULT_CIA_EXAM_MAX), 0, 100) : DEFAULT_CIA_EXAM_MAX;
+      const max = clampInt(Number((p.sheet as any).ciaExamMax ?? DEFAULT_CIA_EXAM_MAX), 0, 100);
       const nextValue = value === '' ? '' : clampInt(Number(value), 0, max);
       return {
         ...p,
@@ -2517,6 +2530,38 @@ export default function LabCourseMarksEntry({
     return Math.max(900, stickyW + restW);
   }, [restColWidths]);
 
+  useEffect(() => {
+    const el = marksTableScrollRef.current;
+    const syncScrollButtons = () => {
+      if (!el) {
+        setMarksTableScrollState({ canLeft: false, canRight: false });
+        return;
+      }
+      const maxScrollLeft = Math.max(0, el.scrollWidth - el.clientWidth);
+      setMarksTableScrollState({
+        canLeft: el.scrollLeft > 4,
+        canRight: maxScrollLeft - el.scrollLeft > 4,
+      });
+    };
+
+    syncScrollButtons();
+    if (!el) return;
+
+    el.addEventListener('scroll', syncScrollButtons);
+    window.addEventListener('resize', syncScrollButtons);
+    return () => {
+      el.removeEventListener('scroll', syncScrollButtons);
+      window.removeEventListener('resize', syncScrollButtons);
+    };
+  }, [headerCols, minTableWidth, students.length, ciaExamEnabled, totalExpCols, coAttainmentCols, visibleBtlIndices.length]);
+
+  function scrollMarksTable(direction: 'left' | 'right') {
+    const el = marksTableScrollRef.current;
+    if (!el) return;
+    const delta = Math.max(280, Math.floor(el.clientWidth * 0.7));
+    el.scrollBy({ left: direction === 'left' ? -delta : delta, behavior: 'smooth' });
+  }
+
   const stickyTh = (left: number, width?: number): React.CSSProperties => ({
     position: 'sticky',
     left,
@@ -2532,6 +2577,11 @@ export default function LabCourseMarksEntry({
     ...(width != null ? { width, minWidth: width, maxWidth: width } : null),
     background: '#fff',
   });
+
+  const rollDividerStyle: React.CSSProperties = {
+    borderRight: '2px solid #111',
+    boxShadow: '2px 0 0 0 #111',
+  };
 
   function renderColGroup(totalCols: number, includeAb: boolean, widths?: number[]) {
     const stickyCols = 3 + (includeAb ? 1 : 0);
@@ -2999,7 +3049,7 @@ export default function LabCourseMarksEntry({
               marginTop: 8,
             }}
           >
-            {isTcpr && ciaAvailable && ciaExamEnabled ? (
+            {ciaExamMaxConfigurable && ciaAvailable && ciaExamEnabled ? (
               <div
                 key="cfg_cia_exam"
                 style={{
@@ -3260,9 +3310,21 @@ export default function LabCourseMarksEntry({
       </div>
 
       <div style={cardStyle}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>Use the side scroll buttons to move across the marks table while entering marks.</div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button type="button" className="obe-btn obe-btn-secondary" disabled={!marksTableScrollState.canLeft} onClick={() => scrollMarksTable('left')}>
+              Scroll Left
+            </button>
+            <button type="button" className="obe-btn obe-btn-secondary" disabled={!marksTableScrollState.canRight} onClick={() => scrollMarksTable('right')}>
+              Scroll Right
+            </button>
+          </div>
+        </div>
         <PublishLockOverlay locked={globalLocked}>
           <div
             className="obe-table-wrapper"
+            ref={marksTableScrollRef}
             style={{
               overflowX: 'auto',
               position: 'relative',
@@ -3285,7 +3347,7 @@ export default function LabCourseMarksEntry({
                   <th style={{ ...cellTh, ...stickyTh(0, COL_SNO_W) }} rowSpan={5}>
                     S.No
                   </th>
-                  <th style={{ ...cellTh, ...stickyTh(COL_SNO_W, COL_RNO_W) }} rowSpan={5}>
+                  <th style={{ ...cellTh, ...stickyTh(COL_SNO_W, COL_RNO_W), ...rollDividerStyle }} rowSpan={5}>
                     R.No
                   </th>
                   <th style={{ ...cellTh, ...stickyTh(COL_SNO_W + COL_RNO_W, COL_NAME_W), textAlign: 'left' }} rowSpan={5}>
@@ -3550,7 +3612,7 @@ export default function LabCourseMarksEntry({
                   return (
                     <tr key={s.id} style={tableBlocked && idx < 3 ? { position: 'relative', zIndex: 35, background: '#fff' } : undefined}>
                       <td style={{ ...cellTd, ...stickyTd(0, COL_SNO_W), textAlign: 'center' }}>{idx + 1}</td>
-                      <td style={{ ...cellTd, ...stickyTd(COL_SNO_W, COL_RNO_W), textAlign: 'center' }} title={String(s.reg_no || '')}>
+                      <td style={{ ...cellTd, ...stickyTd(COL_SNO_W, COL_RNO_W), ...rollDividerStyle, textAlign: 'center' }} title={String(s.reg_no || '')}>
                         {shortenRollNo(s.reg_no, 7)}
                       </td>
                       <td style={{ ...cellTd, ...stickyTd(COL_SNO_W + COL_RNO_W, COL_NAME_W) }} title={String(s.name || '')}>
@@ -3931,7 +3993,7 @@ export default function LabCourseMarksEntry({
                         <tr>
                           <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>CIA Exam</td>
                           <td colSpan={2} style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>
-                            {ciaExamEnabled ? 'Enabled' : 'Disabled'}
+                            {ciaExamEnabled ? `Enabled • Max ${ciaExamMaxEffective}` : 'Disabled'}
                           </td>
                         </tr>
                       ) : null}
@@ -4340,7 +4402,7 @@ export default function LabCourseMarksEntry({
                     <th style={{ ...cellTh, ...stickyTh(0, COL_SNO_W) }} rowSpan={5}>
                       S.No
                     </th>
-                    <th style={{ ...cellTh, ...stickyTh(COL_SNO_W, COL_RNO_W) }} rowSpan={5}>
+                    <th style={{ ...cellTh, ...stickyTh(COL_SNO_W, COL_RNO_W), ...rollDividerStyle }} rowSpan={5}>
                       R.No
                     </th>
                     <th style={{ ...cellTh, ...stickyTh(COL_SNO_W + COL_RNO_W, COL_NAME_W), textAlign: 'left' }} rowSpan={5}>
@@ -4372,7 +4434,7 @@ export default function LabCourseMarksEntry({
                         >
                           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, lineHeight: 1.05 }}>
                             <div style={{ whiteSpace: 'pre-line' }}>{'CIA\nEXAM'}</div>
-                            {isTcpr ? <div style={{ fontSize: 12, fontWeight: 900 }}>{ciaExamMaxEffective}</div> : null}
+                            <div style={{ fontSize: 12, fontWeight: 900 }}>{ciaExamMaxEffective}</div>
                           </div>
                         </th>
                       )
@@ -4557,7 +4619,7 @@ export default function LabCourseMarksEntry({
                     return (
                       <tr key={`view_${s.id}`}>
                         <td style={{ ...cellTd, ...stickyTd(0, COL_SNO_W), textAlign: 'center' }}>{idx + 1}</td>
-                        <td style={{ ...cellTd, ...stickyTd(COL_SNO_W, COL_RNO_W) }} title={String(s.reg_no || '')}>
+                        <td style={{ ...cellTd, ...stickyTd(COL_SNO_W, COL_RNO_W), ...rollDividerStyle }} title={String(s.reg_no || '')}>
                           {shortenRollNo(s.reg_no, 7)}
                         </td>
                         <td style={{ ...cellTd, ...stickyTd(COL_SNO_W + COL_RNO_W, COL_NAME_W) }} title={String(s.name || '')}>

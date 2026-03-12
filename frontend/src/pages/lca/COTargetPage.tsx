@@ -18,6 +18,11 @@ const styles: { [k: string]: React.CSSProperties } = {
   th: { background: '#f3f8ff', color: '#0b4a6f', fontWeight: 700, padding: '12px', border: '1px solid #e6eef8', textAlign: 'center', fontSize: 13 },
   td: { padding: '12px', border: '1px solid #eef6fb', color: '#234451', fontSize: 13, textAlign: 'center' },
   tdLeft: { padding: '10px', border: '1px solid #eef6fb', color: '#234451', fontSize: 13, textAlign: 'left' },
+  targetTable: { width: '100%', borderCollapse: 'collapse', border: '2px solid #0b3b57', tableLayout: 'fixed' as const },
+  targetTh: { padding: '12px 10px', border: '1px solid #0b3b57', textAlign: 'center' as const, verticalAlign: 'middle' as const, fontWeight: 800, fontSize: 13, lineHeight: 1.35 },
+  targetTd: { padding: '12px 10px', border: '1px solid #d7e3ee', textAlign: 'center' as const, verticalAlign: 'middle' as const, fontSize: 13, lineHeight: 1.35 },
+  targetTdLabel: { padding: '12px 10px', border: '1px solid #d7e3ee', textAlign: 'left' as const, verticalAlign: 'middle' as const, fontSize: 13, lineHeight: 1.35, fontWeight: 700 },
+  targetWeightInput: { ...({ width: '100%', maxWidth: 86, margin: '0 auto', display: 'block', padding: '8px 10px', borderRadius: 6, border: '1px solid #cbd5e1', textAlign: 'center' } as React.CSSProperties), background: '#f8fafc', color: '#64748b', cursor: 'not-allowed' },
   checkbox: { transform: 'scale(1.2)', cursor: 'pointer', margin: '0' },
   inputNumber: { width: 80, padding: '6px 8px', borderRadius: 6, border: '1px solid #d1e3f0', textAlign: 'center' },
   note: { color: '#557085', fontSize: 13, marginTop: 8 },
@@ -828,40 +833,50 @@ export default function COTargetPage({
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'stretch' }}>
                   <div style={{ width: '100%' }}>
                     <div style={{ fontWeight: 800, marginBottom: 8, textAlign: 'center', color: '#0b3b57' }}>The Course Outcome Attainment Targets</div>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', border: '2px solid #0b3b57' }}>
+                    <table style={styles.targetTable}>
+                      <colgroup>
+                        <col style={{ width: '14%' }} />
+                        <col style={{ width: '11%' }} />
+                        <col style={{ width: '11%' }} />
+                        <col style={{ width: '11%' }} />
+                        <col style={{ width: '11%' }} />
+                        <col style={{ width: '11%' }} />
+                        <col style={{ width: '14%' }} />
+                        <col style={{ width: '17%' }} />
+                      </colgroup>
                       <thead>
                         <tr>
-                          <th style={{ padding: 10, borderRight: '1px solid #0b3b57', background: '#e6f2ff', color: '#0b3b57' }}>COs</th>
-                          <th style={{ padding: 10, borderRight: '1px solid #0b3b57', background: '#e6f8ff', color: '#0b4a6f' }}>ICO</th>
-                          <th style={{ padding: 10, borderRight: '1px solid #0b3b57', background: '#e6f8ff', color: '#0b4a6f' }}>BCO</th>
-                          <th style={{ padding: 10, borderRight: '1px solid #0b3b57', background: '#fde8f0', color: '#6b213f' }}>ACO</th>
-                          <th style={{ padding: 10, borderRight: '1px solid #0b3b57', background: '#fde8f0', color: '#6b213f' }}>API</th>
-                          <th style={{ padding: 10, borderRight: '1px solid #0b3b57', background: '#fde8f0', color: '#6b213f' }}>IIC</th>
-                          <th style={{ padding: 10, borderRight: '1px solid #0b3b57', background: '#fff7d6', color: '#6b4a00' }}>COs Targets</th>
-                          <th style={{ padding: 10, background: '#fff7d6', color: '#6b4a00' }}>CO TARGET IN 3 POINT SCALE</th>
+                          <th style={{ ...styles.targetTh, background: '#e6f2ff', color: '#0b3b57' }}>COs</th>
+                          <th style={{ ...styles.targetTh, background: '#e6f8ff', color: '#0b4a6f' }}>ICO</th>
+                          <th style={{ ...styles.targetTh, background: '#e6f8ff', color: '#0b4a6f' }}>BCO</th>
+                          <th style={{ ...styles.targetTh, background: '#fde8f0', color: '#6b213f' }}>ACO</th>
+                          <th style={{ ...styles.targetTh, background: '#fde8f0', color: '#6b213f' }}>API</th>
+                          <th style={{ ...styles.targetTh, background: '#fde8f0', color: '#6b213f' }}>IIC</th>
+                          <th style={{ ...styles.targetTh, background: '#fff7d6', color: '#6b4a00' }}>COs Targets</th>
+                          <th style={{ ...styles.targetTh, background: '#fff7d6', color: '#6b4a00' }}>CO TARGET IN 3 POINT SCALE</th>
                         </tr>
                       </thead>
                       <tbody>
                         <tr>
-                          <td style={{ padding: 10, borderTop: '1px solid #e6eef8', background: '#f3f8ff', fontWeight: 700 }}>Weight Values</td>
-                          <td style={{ padding: 10, borderTop: '1px solid #eef6fb' }}><input min={0} step="any" style={{ ...styles.inputNumber, background: '#f8fafc', color: '#64748b', cursor: 'not-allowed' }} type="number" value={weights.ico} readOnly disabled aria-label="ICO weight (locked)" title="ICO weight is locked" /></td>
-                          <td style={{ padding: 10, borderTop: '1px solid #eef6fb' }}><input min={0} step="any" style={{ ...styles.inputNumber, background: '#f8fafc', color: '#64748b', cursor: 'not-allowed' }} type="number" value={weights.bco} readOnly disabled aria-label="BCO weight (locked)" title="BCO weight is locked" /></td>
-                          <td style={{ padding: 10, borderTop: '1px solid #eef6fb' }}><input min={0} step="any" style={{ ...styles.inputNumber, background: '#f8fafc', color: '#64748b', cursor: 'not-allowed' }} type="number" value={weights.aco} readOnly disabled aria-label="ACO weight (locked)" title="ACO weight is locked" /></td>
-                          <td style={{ padding: 10, borderTop: '1px solid #eef6fb' }}><input min={0} step="any" style={{ ...styles.inputNumber, background: '#f8fafc', color: '#64748b', cursor: 'not-allowed' }} type="number" value={weights.api} readOnly disabled aria-label="API weight (locked)" title="API weight is locked" /></td>
-                          <td style={{ padding: 10, borderTop: '1px solid #eef6fb' }}><input min={0} step="any" style={{ ...styles.inputNumber, background: '#f8fafc', color: '#64748b', cursor: 'not-allowed' }} type="number" value={weights.iic} readOnly disabled aria-label="IIC weight (locked)" title="IIC weight is locked" /></td>
-                          <td style={{ padding: 10, borderTop: '1px solid #eef6fb' }}></td>
-                          <td style={{ padding: 10, borderTop: '1px solid #eef6fb' }}></td>
+                          <td style={{ ...styles.targetTdLabel, background: '#f3f8ff' }}>Weight Values</td>
+                          <td style={styles.targetTd}><input min={0} step="any" style={styles.targetWeightInput} type="number" value={weights.ico} readOnly disabled aria-label="ICO weight (locked)" title="ICO weight is locked" /></td>
+                          <td style={styles.targetTd}><input min={0} step="any" style={styles.targetWeightInput} type="number" value={weights.bco} readOnly disabled aria-label="BCO weight (locked)" title="BCO weight is locked" /></td>
+                          <td style={styles.targetTd}><input min={0} step="any" style={styles.targetWeightInput} type="number" value={weights.aco} readOnly disabled aria-label="ACO weight (locked)" title="ACO weight is locked" /></td>
+                          <td style={styles.targetTd}><input min={0} step="any" style={styles.targetWeightInput} type="number" value={weights.api} readOnly disabled aria-label="API weight (locked)" title="API weight is locked" /></td>
+                          <td style={styles.targetTd}><input min={0} step="any" style={styles.targetWeightInput} type="number" value={weights.iic} readOnly disabled aria-label="IIC weight (locked)" title="IIC weight is locked" /></td>
+                          <td style={styles.targetTd}></td>
+                          <td style={styles.targetTd}></td>
                         </tr>
                         {['CO-1','CO-2','CO-3','CO-4','CO-5'].map((c, idx) => (
                           <tr key={c}>
-                            <td style={{ padding: 10, borderTop: '1px solid #eef6fb', textAlign: 'left', fontWeight: 700 }}>{c}</td>
-                            <td style={{ padding: 10, borderTop: '1px solid #eef6fb' }}>{(icoComputed && icoComputed[idx]) ? icoComputed[idx].ico.toFixed(2) : ''}</td>
-                            <td style={{ padding: 10, borderTop: '1px solid #eef6fb' }}>{bcoComputed[idx] ?? ''}</td>
-                               <td style={{ padding: 10, borderTop: '1px solid #eef6fb' }}>{acoComputed[idx] != null ? acoComputed[idx]?.toFixed(2) : ''}</td>
-                                 <td style={{ padding: 10, borderTop: '1px solid #eef6fb' }}>{apiGpaComputed != null ? apiGpaComputed.toFixed(2) : ''}</td>
-                                 <td style={{ padding: 10, borderTop: '1px solid #eef6fb' }}>{iicComputed ?? ''}</td>
-                            <td style={{ padding: 10, borderTop: '1px solid #eef6fb' }}>{coTargetComputed[idx]?.target != null ? coTargetComputed[idx].target.toFixed(2) : ''}</td>
-                            <td style={{ padding: 10, borderTop: '1px solid #eef6fb' }}>{coTargetComputed[idx]?.scale != null ? coTargetComputed[idx].scale.toFixed(2) : ''}</td>
+                            <td style={styles.targetTdLabel}>{c}</td>
+                            <td style={styles.targetTd}>{(icoComputed && icoComputed[idx]) ? icoComputed[idx].ico.toFixed(2) : ''}</td>
+                            <td style={styles.targetTd}>{bcoComputed[idx] ?? ''}</td>
+                            <td style={styles.targetTd}>{acoComputed[idx] != null ? acoComputed[idx]?.toFixed(2) : ''}</td>
+                            <td style={styles.targetTd}>{apiGpaComputed != null ? apiGpaComputed.toFixed(2) : ''}</td>
+                            <td style={styles.targetTd}>{iicComputed ?? ''}</td>
+                            <td style={styles.targetTd}>{coTargetComputed[idx]?.target != null ? coTargetComputed[idx].target.toFixed(2) : ''}</td>
+                            <td style={styles.targetTd}>{coTargetComputed[idx]?.scale != null ? coTargetComputed[idx].scale.toFixed(2) : ''}</td>
                           </tr>
                         ))}
                       </tbody>

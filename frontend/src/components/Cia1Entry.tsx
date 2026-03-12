@@ -429,6 +429,18 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
     if (next !== (publishedAt || '')) setPublishedAt(next);
   }, [markLock?.is_published, markLock?.updated_at, publishedAt]);
 
+  // When the lock row is deleted (e.g., after IQAC reset), clear local mark manager state
+  // so the UI reflects the unlocked/unconfirmed state immediately.
+  useEffect(() => {
+    if (markLock == null) return; // still loading
+    if (!markLock.exists) {
+      setSheet((p) => {
+        if (p.markManagerSnapshot == null && !p.markManagerLocked) return p;
+        return { ...p, markManagerSnapshot: null, markManagerLocked: false };
+      });
+    }
+  }, [markLock?.exists]);
+
   const markEntryApprovalUntil = markEntryEditWindow?.approval_until ? String(markEntryEditWindow.approval_until) : null;
   const markManagerApprovalUntil = markManagerEditWindow?.approval_until ? String(markManagerEditWindow.approval_until) : null;
   const markEntryApprovedFresh =

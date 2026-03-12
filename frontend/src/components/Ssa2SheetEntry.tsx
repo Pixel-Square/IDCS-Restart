@@ -37,6 +37,8 @@ type Ssa2Row = {
   section: string;
   registerNo: string;
   name: string;
+  co3: number | '';
+  co4: number | '';
   total: number | '';
   reviewCoMarks?: {
     co3?: Array<number | ''>;
@@ -575,6 +577,18 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
     publishConsumedApprovals?.markManagerApprovalUntil,
   ]);
 
+  // When the lock row is deleted (e.g., after IQAC reset), clear local mark manager state
+  // so the UI reflects the unlocked/unconfirmed state immediately.
+  useEffect(() => {
+    if (markLock == null) return; // still loading
+    if (!markLock.exists) {
+      setSheet((p) => {
+        if (p.markManagerSnapshot == null && !p.markManagerLocked) return p;
+        return { ...p, markManagerSnapshot: null, markManagerLocked: false };
+      });
+    }
+  }, [markLock?.exists]);
+
   const mergeRosterIntoRows = (students: TeachingAssignmentRosterStudent[]) => {
     setSheet((prev) => {
       const existingById = new Map<number, Ssa2Row>();
@@ -594,6 +608,14 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
             section: String(s.section || ''),
             registerNo: String(s.reg_no || ''),
             name: String(s.name || ''),
+            co3:
+              typeof (prevRow as any)?.co3 === 'number'
+                ? clamp(Number((prevRow as any).co3), 0, CO_MAX.co3)
+                : '',
+            co4:
+              typeof (prevRow as any)?.co4 === 'number'
+                ? clamp(Number((prevRow as any).co4), 0, CO_MAX.co4)
+                : '',
             total:
               typeof (prevRow as any)?.total === 'number'
                 ? clamp(Number((prevRow as any).total), 0, MAX_ASMT2)
@@ -965,7 +987,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
     if (tableBlocked) return;
     setSheet((prev) => ({
       ...prev,
-      rows: (prev.rows || []).map((r) => ({ ...r, total: '' })),
+      rows: (prev.rows || []).map((r) => ({ ...r, co3: '', co4: '', total: '' })),
     }));
   };
 
@@ -1087,8 +1109,15 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
   const updateRow = (idx: number, patch: Partial<Ssa2Row>) => {
     setSheet((prev) => {
       const copy = prev.rows.slice();
-      const existing = copy[idx] || ({ studentId: 0, section: '', registerNo: '', name: '', total: '' } as Ssa2Row);
-      copy[idx] = { ...existing, ...patch };
+      const existing = copy[idx] || ({ studentId: 0, section: '', registerNo: '', name: '', co3: '', co4: '', total: '' } as Ssa2Row);
+      const updated = { ...existing, ...patch };
+      // Auto-compute total from co3 + co4
+      if ('co3' in patch || 'co4' in patch) {
+        const c3 = typeof updated.co3 === 'number' ? updated.co3 : 0;
+        const c4 = typeof updated.co4 === 'number' ? updated.co4 : 0;
+        updated.total = (updated.co3 === '' && updated.co4 === '') ? '' : round1(c3 + c4);
+      }
+      copy[idx] = updated;
       return { ...prev, rows: copy };
     });
   };
@@ -1098,10 +1127,8 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
       const totalRaw = typeof r.total === 'number' ? clamp(Number(r.total), 0, MAX_ASMT2) : null;
       const total = totalRaw == null ? '' : round1(totalRaw);
 
-      const coSplitCount = 2;
-      const coShare = totalRaw == null ? null : round1(totalRaw / coSplitCount);
-      const co3 = coShare == null ? null : clamp(coShare, 0, CO_MAX.co3);
-      const co4 = coShare == null ? null : clamp(coShare, 0, CO_MAX.co4);
+      const co3 = typeof r.co3 === 'number' ? clamp(r.co3, 0, CO_MAX.co3) : (totalRaw != null ? clamp(round1(totalRaw / 2), 0, CO_MAX.co3) : null);
+      const co4 = typeof r.co4 === 'number' ? clamp(r.co4, 0, CO_MAX.co4) : (totalRaw != null ? clamp(round1(totalRaw / 2), 0, CO_MAX.co4) : null);
 
       const visibleIndicesZeroBased = visibleBtlIndices.map((n) => n - 1);
       const rawBtlMaxByIndex = [BTL_MAX.btl1, BTL_MAX.btl2, BTL_MAX.btl3, BTL_MAX.btl4, BTL_MAX.btl5, BTL_MAX.btl6];
@@ -1255,6 +1282,8 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
 
           nextRows[idx] = {
             ...nextRows[idx],
+            co3: round1(q1Clamped),
+            co4: round1(q2Clamped),
             total: round1(finalTotal),
           };
         }
@@ -1955,9 +1984,9 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
                 const reviewTotal = isReview ? clamp(round1(reviewCo3Total + reviewCo4Total), 0, MAX_ASMT2) : null;
                 const totalRaw = isReview ? reviewTotal : typeof r.total === 'number' ? clamp(Number(r.total), 0, MAX_ASMT2) : null;
 
-                const coShare = isReview ? null : totalRaw == null ? null : round1(totalRaw / 2);
-                const co3 = isReview ? null : coShare == null ? null : clamp(coShare, 0, CO_MAX.co3);
-                const co4 = isReview ? null : coShare == null ? null : clamp(coShare, 0, CO_MAX.co4);
+                // CO3/CO4: read from row fields; fall back to total/2 for old drafts without co3/co4
+                const co3 = isReview ? null : typeof r.co3 === 'number' ? clamp(r.co3, 0, CO_MAX.co3) : (totalRaw != null ? clamp(round1(totalRaw / 2), 0, CO_MAX.co3) : null);
+                const co4 = isReview ? null : typeof r.co4 === 'number' ? clamp(r.co4, 0, CO_MAX.co4) : (totalRaw != null ? clamp(round1(totalRaw / 2), 0, CO_MAX.co4) : null);
 
                 const visibleIndicesZeroBased = visibleBtlIndices.map((n) => n - 1);
                 const rawBtlMaxByIndex = [BTL_MAX.btl1, BTL_MAX.btl2, BTL_MAX.btl3, BTL_MAX.btl4, BTL_MAX.btl5, BTL_MAX.btl6];
@@ -1979,35 +2008,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
                     <td style={cellTd}>{shortenRegisterNo(r.registerNo)}</td>
                     <td style={cellTd}>{r.name}</td>
                     <td style={{ ...cellTd, width: 90, background: '#fff7ed' }}>
-                      {isReview ? (
-                        <div style={inputStyle}>{totalRaw == null ? '' : round1(totalRaw)}</div>
-                      ) : marksEditDisabled ? (
-                        <div style={inputStyle}>{typeof r.total === 'number' ? round1(r.total) : ''}</div>
-                      ) : (
-                        <input
-                          style={inputStyle}
-                          type="number"
-                          value={r.total}
-                          min={0}
-                          max={MAX_ASMT2}
-                          onChange={(e) => {
-                            if (marksEditDisabled) return;
-                            const raw = e.target.value;
-                            if (raw === '') return updateRow(idx, { total: '' });
-                            const next = Number(raw);
-                            if (!Number.isFinite(next)) return updateRow(idx, { total: '' });
-                            if (next > MAX_ASMT2) {
-                              e.currentTarget.setCustomValidity(`Max mark is ${MAX_ASMT2}`);
-                              e.currentTarget.reportValidity();
-                              window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
-                              return;
-                            }
-                            e.currentTarget.setCustomValidity('');
-                            const n = clamp(next, 0, MAX_ASMT2);
-                            updateRow(idx, { total: n });
-                          }}
-                        />
-                      )}
+                      <div style={inputStyle}>{totalRaw == null ? '' : round1(totalRaw)}</div>
                     </td>
                     {showTotalColumn ? <td style={{ ...cellTd, textAlign: 'center' }}>{totalRaw ?? ''}</td> : null}
                     {isReview
@@ -2030,7 +2031,34 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
                           <td key={`co3-pct-${idx}-${splitIdx}`} style={{ ...cellTd, textAlign: 'center' }}>{pct(mark === '' ? null : Number(mark), reviewCo3MaxByCol[splitIdx] || CO_MAX.co3)}</td>,
                         ])
                       : [
-                          <td key={`co3-single-${idx}`} style={{ ...cellTd, textAlign: 'center' }}>{co3 ?? ''}</td>,
+                          <td key={`co3-single-${idx}`} style={{ ...cellTd, textAlign: 'center', minWidth: 86 }}>
+                            {marksEditDisabled ? (
+                              <span>{co3 ?? ''}</span>
+                            ) : (
+                              <input
+                                style={inputStyle}
+                                type="number"
+                                min={0}
+                                max={CO_MAX.co3}
+                                value={typeof r.co3 === 'number' ? r.co3 : (co3 ?? '')}
+                                onChange={(e) => {
+                                  if (marksEditDisabled) return;
+                                  const raw = e.target.value;
+                                  if (raw === '') return updateRow(idx, { co3: '' });
+                                  const next = Number(raw);
+                                  if (!Number.isFinite(next)) return updateRow(idx, { co3: '' });
+                                  if (next > CO_MAX.co3) {
+                                    e.currentTarget.setCustomValidity(`Max CO-3 mark is ${CO_MAX.co3}`);
+                                    e.currentTarget.reportValidity();
+                                    window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                                    return;
+                                  }
+                                  e.currentTarget.setCustomValidity('');
+                                  updateRow(idx, { co3: clamp(next, 0, CO_MAX.co3) });
+                                }}
+                              />
+                            )}
+                          </td>,
                           <td key={`co3-single-pct-${idx}`} style={{ ...cellTd, textAlign: 'center' }}>{pct(co3, CO_MAX.co3)}</td>,
                         ]}
                     {isReview
@@ -2053,7 +2081,34 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
                           <td key={`co4-pct-${idx}-${splitIdx}`} style={{ ...cellTd, textAlign: 'center' }}>{pct(mark === '' ? null : Number(mark), reviewCo4MaxByCol[splitIdx] || CO_MAX.co4)}</td>,
                         ])
                       : [
-                          <td key={`co4-single-${idx}`} style={{ ...cellTd, textAlign: 'center' }}>{co4 ?? ''}</td>,
+                          <td key={`co4-single-${idx}`} style={{ ...cellTd, textAlign: 'center', minWidth: 86 }}>
+                            {marksEditDisabled ? (
+                              <span>{co4 ?? ''}</span>
+                            ) : (
+                              <input
+                                style={inputStyle}
+                                type="number"
+                                min={0}
+                                max={CO_MAX.co4}
+                                value={typeof r.co4 === 'number' ? r.co4 : (co4 ?? '')}
+                                onChange={(e) => {
+                                  if (marksEditDisabled) return;
+                                  const raw = e.target.value;
+                                  if (raw === '') return updateRow(idx, { co4: '' });
+                                  const next = Number(raw);
+                                  if (!Number.isFinite(next)) return updateRow(idx, { co4: '' });
+                                  if (next > CO_MAX.co4) {
+                                    e.currentTarget.setCustomValidity(`Max CO-4 mark is ${CO_MAX.co4}`);
+                                    e.currentTarget.reportValidity();
+                                    window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                                    return;
+                                  }
+                                  e.currentTarget.setCustomValidity('');
+                                  updateRow(idx, { co4: clamp(next, 0, CO_MAX.co4) });
+                                }}
+                              />
+                            )}
+                          </td>,
                           <td key={`co4-single-pct-${idx}`} style={{ ...cellTd, textAlign: 'center' }}>{pct(co4, CO_MAX.co4)}</td>,
                         ]}
 

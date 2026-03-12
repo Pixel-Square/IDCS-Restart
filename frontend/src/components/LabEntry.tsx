@@ -819,6 +819,18 @@ export default function LabEntry({
     draft.sheet.markManagerApprovalUntil,
   ]);
 
+  // When the lock row is deleted (e.g., after IQAC reset), clear local mark manager state
+  // so the UI reflects the unlocked/unconfirmed state immediately.
+  useEffect(() => {
+    if (markLock == null) return; // still loading
+    if (!markLock.exists) {
+      setDraft((p) => {
+        if (p.sheet.markManagerSnapshot == null && !p.sheet.markManagerLocked) return p;
+        return { ...p, sheet: { ...p.sheet, markManagerSnapshot: null, markManagerLocked: false } };
+      });
+    }
+  }, [markLock?.exists]);
+
   // Autosave draft to backend (debounced)
   // Guard: do not autosave until the initial draft has been loaded from the backend
   // to prevent overwriting real marks with an empty initial draft.
