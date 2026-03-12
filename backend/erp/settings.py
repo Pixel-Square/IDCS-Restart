@@ -68,14 +68,10 @@ INSTALLED_APPS = [
     'feedback',
     'academic_calendar',
     'applications',
-    'bi',
     'OBE',
-    'pbas',
-    'powerbi_portal',
     'question_bank',
     'template_api',
-    
-    # ...existing code...]
+]
 # Staff requests dynamic forms & workflow engine
 INSTALLED_APPS.append('staff_requests')
 

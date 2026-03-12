@@ -1,11 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { getMe, requestMobileOtp, verifyMobileOtp, removeMobileNumber, changePassword, getCachedMe } from '../../services/auth';
-import { User, Mail, Shield, Building, Briefcase, School, Phone, CheckCircle2, Trash2, Key, Eye, EyeOff, Edit2, Save, X } from 'lucide-react';
+import { User, Mail, Shield, Building, Briefcase, School, Phone, CheckCircle2, Trash2, Key, Eye, EyeOff, Edit2, Save, X, Camera } from 'lucide-react';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import { ModalPortal } from '../../components/ModalPortal';
 import logo from '../../assets/idcs-logo.png';
 import indiaFlag from '../../assets/india-flag.svg';
 import fetchWithAuth from '../../services/fetchAuth';
+import { getApiBase } from '../../services/apiBase';
 
 type RoleObj = { name: string };
 type Me = {
@@ -19,6 +20,8 @@ type Me = {
   profile_type?: string | null;
   profile_status?: string | null;
   capabilities?: Record<string, string[]>;
+  profile_image?: string;
+  profile_image_updated?: boolean;
   profile?: any;
   college?: {
     code?: string;
@@ -107,6 +110,10 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
   const [emailError, setEmailError] = useState<string | null>(null);
   const [emailSaving, setEmailSaving] = useState(false);
   const [emailEditLocked, setEmailEditLocked] = useState(false);
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
+  const [avatarCandidateIndex, setAvatarCandidateIndex] = useState(0);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const current = profileMobile || '';
@@ -182,6 +189,14 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
     };
   }, [initialUser]);
 
+  useEffect(() => {
+    return () => {
+      if (avatarPreviewUrl) {
+        URL.revokeObjectURL(avatarPreviewUrl);
+      }
+    };
+  }, [avatarPreviewUrl]);
+
   if (loading) return (
     <DashboardLayout>
       <div className="flex items-center justify-center min-h-[400px]">
@@ -212,6 +227,38 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
   );
 
   const initials = (user.username || 'U').slice(0, 2).toUpperCase();
+
+  const avatarUrlCandidates = useMemo(() => {
+    const rootValue = String((user as any)?.profile_image || '').trim();
+    const nestedValue = String((user as any)?.profile?.profile_image || '').trim();
+    const raw = rootValue || nestedValue;
+    if (!raw) return [] as string[];
+
+    const normalized = raw.replace(/\\+/g, '/');
+
+    if (normalized.startsWith('http://') || normalized.startsWith('https://') || normalized.startsWith('blob:') || normalized.startsWith('data:')) {
+      return [normalized];
+    }
+
+    if (normalized.startsWith('/')) {
+      const direct = normalized;
+      const apiBaseUrl = `${getApiBase()}${normalized}`;
+      return direct === apiBaseUrl ? [direct] : [direct, apiBaseUrl];
+    }
+
+    const direct = `/media/${normalized}`;
+    const apiBaseUrl = `${getApiBase()}/media/${normalized}`;
+    return direct === apiBaseUrl ? [direct] : [direct, apiBaseUrl];
+  }, [user]);
+
+  useEffect(() => {
+    setAvatarCandidateIndex(0);
+  }, [avatarUrlCandidates]);
+
+  const resolvedCandidate = avatarUrlCandidates[avatarCandidateIndex] || '';
+  const hasLoadableCandidate = Boolean(avatarPreviewUrl) || avatarCandidateIndex < avatarUrlCandidates.length;
+  const activeAvatarUrl = avatarPreviewUrl || resolvedCandidate;
+  const avatarLocked = Boolean((user as any)?.profile_image_updated ?? (user as any)?.profile?.profile_image_updated);
 
   const showVerifiedCheck = Boolean(profileMobileVerified && !mobileEditing && profileMobile);
 
@@ -439,6 +486,7 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
       }
 
       const updated = await getMe();
+      console.debug('[profile] uploaded avatar, API returned profile_image:', (updated as any)?.profile_image || (updated as any)?.profile?.profile_image || '');
       const normalized = {
         ...updated,
         roles: Array.isArray(updated.roles) ? updated.roles.map((role: any) => (typeof role === 'string' ? role : role.name)) : [],
@@ -510,6 +558,65 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
     setEmailError(null);
   }
 
+  function handleAvatarEditClick() {
+    if (avatarLocked || avatarUploading) return;
+    avatarInputRef.current?.click();
+  }
+
+  async function handleAvatarFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const lowerName = String(file.name || '').toLowerCase();
+    const validType = file.type === 'image/jpeg' || file.type === 'image/png' || file.type === 'image/jpg';
+    const validExt = lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg') || lowerName.endsWith('.png');
+
+    if (!validType && !validExt) {
+      window.alert('Please select a JPG or PNG image.');
+      e.target.value = '';
+      return;
+    }
+
+    const previewUrl = URL.createObjectURL(file);
+    if (avatarPreviewUrl) {
+      URL.revokeObjectURL(avatarPreviewUrl);
+    }
+    setAvatarPreviewUrl(previewUrl);
+
+    try {
+      setAvatarUploading(true);
+      const formData = new FormData();
+      formData.append('profile_image', file);
+
+      const response = await fetchWithAuth('/api/accounts/profile/update/', {
+        method: 'PATCH',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.detail || 'Failed to upload profile image');
+      }
+
+      const updated = await getMe();
+      const normalized = {
+        ...updated,
+        roles: Array.isArray(updated.roles) ? updated.roles.map((role: any) => (typeof role === 'string' ? role : role.name)) : [],
+      } as Me;
+      setUser(normalized);
+
+      URL.revokeObjectURL(previewUrl);
+      setAvatarPreviewUrl(null);
+    } catch (err: any) {
+      window.alert(String(err?.message || err || 'Failed to upload profile image'));
+      URL.revokeObjectURL(previewUrl);
+      setAvatarPreviewUrl(null);
+    } finally {
+      setAvatarUploading(false);
+      e.target.value = '';
+    }
+  }
+
   return (
     <DashboardLayout>
       <div className="px-4 sm:px-6 lg:px-8 pb-6 space-y-6">
@@ -517,8 +624,44 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
         <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-6 sm:p-8 shadow-md">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div className="flex items-center gap-4">
-              <div className="w-16 h-16 sm:w-20 sm:h-20 bg-blue-600 rounded-full flex items-center justify-center flex-shrink-0">
-                <span className="text-2xl sm:text-3xl font-bold text-white">{initials}</span>
+              <div className="relative w-16 h-16 sm:w-20 sm:h-20 flex-shrink-0">
+                <div
+                  className="w-full h-full bg-blue-600 rounded-full flex items-center justify-center overflow-hidden"
+                  aria-label="Profile image"
+                >
+                  {activeAvatarUrl && hasLoadableCandidate ? (
+                    <img
+                      src={activeAvatarUrl}
+                      alt="Profile"
+                      className="w-full h-full object-cover"
+                      onError={() => {
+                        setAvatarCandidateIndex((prev) => {
+                          const next = prev + 1;
+                          return next;
+                        });
+                      }}
+                    />
+                  ) : (
+                    <span className="text-2xl sm:text-3xl font-bold text-white">{initials}</span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={handleAvatarEditClick}
+                  disabled={avatarLocked || avatarUploading}
+                  title={avatarLocked ? 'Profile image can only be updated once.' : 'Change profile image'}
+                  aria-label={avatarLocked ? 'Profile image can only be updated once.' : 'Change profile image'}
+                  className="absolute -bottom-1 -right-1 h-7 w-7 sm:h-8 sm:w-8 rounded-full border-2 border-white bg-blue-600 text-white shadow-md flex items-center justify-center transition-colors hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                >
+                  <Camera className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                </button>
+                <input
+                  ref={avatarInputRef}
+                  type="file"
+                  accept=".jpg,.jpeg,.png,image/jpeg,image/png"
+                  className="hidden"
+                  onChange={handleAvatarFileChange}
+                />
               </div>
               <div>
                 <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">{user.username}</h1>
