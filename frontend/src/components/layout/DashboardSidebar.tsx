@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
 import useDashboard from '../../hooks/useDashboard';
-import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText, ScanLine, Shield } from 'lucide-react';
+import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText, ScanLine, Shield, MessageCircle } from 'lucide-react';
 import { useSidebar } from './SidebarContext';
 import { fetchPendingPublishRequestCount } from '../../services/obe';
 import { ApplicationsNavResponse, fetchApplicationsNav } from '../../services/applications';
@@ -51,6 +51,7 @@ import { useAttendanceNotificationCount } from '../../hooks/useAttendanceNotific
   idscan_test: ScanLine,
   idscan_gatepass: Shield,
   rf_reader: Grid,
+  feedback: MessageCircle,
 };
 
 export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string }) {
@@ -245,6 +246,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // Students page: require explicit view permission  
   if (permsLower.includes('students.view_students')) {
     items.push({ key: 'staff_students', label: 'Students', to: '/staff/students' });
+  }
+
+  // Feedback page: require explicit feedback permission
+  if (permsLower.includes('feedback.feedback_page')) {
+    items.push({ key: 'feedback', label: 'Feedback', to: '/feedback' });
   }
 
   // Advisor pages: require ADVISOR role or explicit permission

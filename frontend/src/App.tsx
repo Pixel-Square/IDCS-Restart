@@ -47,6 +47,7 @@ import StudentAcademics from './pages/student/Academics';
 import MentorAssign from './pages/advisor/MentorAssign';
 import NotificationsPage from './pages/Notifications';
 import QueriesPage from './pages/queries/QueriesPage';
+import FeedbackPage from './pages/feedback/FeedbackPage';
 import StaffsPage from './pages/StaffsPage';
 import AcademicCalendarRedirect from './pages/academicCalendar/AcademicCalendarRedirect';
 import AcademicCalendarPage from './pages/academicCalendar/AcademicCalendarPage';
@@ -223,6 +224,10 @@ export default function App() {
                 <Route
                   path="/ps/staff-attendance/upload"
                   element={<ProtectedRoute user={user} requiredRoles={['PS']} element={<StaffAttendanceUpload />} />}
+                />
+                <Route
+                  path="/feedback"
+                  element={<ProtectedRoute user={user} requiredPermissions={["feedback.feedback_page"]} element={<FeedbackPage />} />}
                 />
                 <Route path="/academic-calendar" element={<AcademicCalendarRedirect user={user} />} />
                 <Route
