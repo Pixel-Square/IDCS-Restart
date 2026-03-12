@@ -19,10 +19,13 @@ type Student = {
   section_name?: string;
   department_code?: string;
   department_name?: string;
+  home_department_code?: string;
+  home_department_short_name?: string;
   batch?: string;
   status?: string;
   mentor_id?: number;
   mentor_name?: string;
+  is_shared_section?: boolean;
 }
 
 type SectionMeta = {
@@ -32,6 +35,7 @@ type SectionMeta = {
   department_code?: string
   department_short_name?: string
   department_name?: string
+  is_shared_section?: boolean
   label: string  // formatted display label
 }
 
@@ -486,7 +490,11 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
         const data = await res.json()
         const sections: SectionMeta[] = (data.sections || []).map((s: any) => ({
           ...s,
-          label: [s.department_short_name || s.department_code, s.batch_name, s.section_name].filter(Boolean).join(' · ')
+          label: [
+            s.is_shared_section ? `${s.department_short_name || s.department_code} (Y1)` : (s.department_short_name || s.department_code),
+            s.batch_name,
+            s.section_name
+          ].filter(Boolean).join(' · ')
         }))
         setDeptSections(sections)
         if (sections.length > 0) setSelectedSection(sections[0].section_id)
@@ -931,17 +939,21 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
 
       {/* Department-Students dept + batch + section dropdowns */}
       {hasContent && viewMode === 'department-students' && (() => {
-        // Use all departments for dropdown (not just those with sections)
-        const deptOptions = allDepartments
-          .map(d => d.short_name || d.code || '')
-          .filter(Boolean)
-          .sort()
-        // Batch options: filter by selected dept (if any), deduplicate by name, show active status
+        // Derive dept options only from the sections the user actually has access to
+        const deptOptions = Array.from(new Set(
+          deptSections.map(s => s.department_short_name || s.department_code || '').filter(Boolean)
+        )).sort()
+        // Batch options: filter by selected dept, use allBatches scoped to accessible dept codes
         const batchOptions = (() => {
+          const accessibleDeptCodes = new Set(
+            deptSections.map(s => s.department_short_name || s.department_code || '').filter(Boolean)
+          )
+          const scopedBatches = allBatches.filter(b =>
+            accessibleDeptCodes.has((b.department_short_name || b.department_code) || '')
+          )
           const deptFiltered = deptDeptFilter
-            ? allBatches.filter(b => (b.department_short_name || b.department_code) === deptDeptFilter)
-            : allBatches
-          // Deduplicate by name, preferring inactive=false (active) if mixed
+            ? scopedBatches.filter(b => (b.department_short_name || b.department_code) === deptDeptFilter)
+            : scopedBatches
           const map = new Map<string, { name: string; is_active: boolean }>()
           for (const b of deptFiltered) {
             if (!b.name) continue
@@ -1142,7 +1154,13 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                     </td>
                     <td className="py-3 px-4">
                         <span className="text-sm text-slate-700">
-                          {student.department_code || '-'}
+                          {student.home_department_short_name
+                            ? <span title={`Home: ${student.home_department_short_name} | Section: ${student.department_code || ''}`}>
+                                {student.home_department_short_name}
+                                {student.is_shared_section && <span className="ml-1 text-xs text-amber-600 font-medium">(Y1)</span>}
+                              </span>
+                            : (student.department_code || '-')
+                          }
                         </span>
                       </td>
                     <td className="py-3 px-4">

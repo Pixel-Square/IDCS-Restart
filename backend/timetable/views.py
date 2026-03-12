@@ -25,18 +25,28 @@ class CurriculumBySectionView(APIView):
         if not sec_id:
             return Response({'results': []})
         try:
-            sec = Section.objects.select_related('batch__course__department', 'semester').get(pk=int(sec_id))
+            sec = Section.objects.select_related(
+                'batch__course__department', 'batch__department', 'semester'
+            ).get(pk=int(sec_id))
         except Exception:
             return Response({'results': []})
 
+        sem_num = getattr(sec.semester, 'number', None)
+        if sem_num is None:
+            return Response({'results': []})
+
+        # Shared section: batch has no course (e.g. S&H Year-1).  Derive curriculum
+        # from the home-departments of students currently enrolled in this section.
+        if getattr(sec.batch, 'course_id', None) is None:
+            return self._shared_section_curriculum(sec, sem_num)
+
         dept = getattr(sec.batch.course, 'department', None)
-        sem = getattr(sec.semester, 'number', None)
-        if dept is None or sem is None:
+        if dept is None:
             return Response({'results': []})
 
         try:
             from curriculum.models import CurriculumDepartment, ElectiveSubject, DepartmentGroupMapping
-            qs = CurriculumDepartment.objects.filter(department=dept, semester__number=sem)
+            qs = CurriculumDepartment.objects.filter(department=dept, semester__number=sem_num)
 
             # Find department groups that this department belongs to (for cross-dept elective matching)
             group_ids = list(DepartmentGroupMapping.objects.filter(
@@ -60,6 +70,58 @@ class CurriculumBySectionView(APIView):
                 # Staff now assigns the elective GROUP (e.g., "EE - Elective Elective")
                 # Students will see their chosen elective via ElectiveChoice when viewing timetable
             return Response({'results': data})
+        except Exception:
+            return Response({'results': []})
+
+    def _shared_section_curriculum(self, sec, sem_num):
+        """Return union of curriculum rows for all home-departments present in a shared section.
+
+        Used by S&H-type sections where batch.course is None and students come from
+        multiple core departments.  Each subject is deduplicated by course_code and the
+        returned row's `id` is the CurriculumDepartment pk for one representative dept.
+        `home_dept_codes` lists all depts that share that subject code.
+        """
+        try:
+            from curriculum.models import CurriculumDepartment
+            from academics.models import StudentSectionAssignment
+
+            # Collect unique home-department IDs from currently-enrolled students
+            home_dept_ids = list(
+                StudentSectionAssignment.objects.filter(
+                    section=sec,
+                    end_date__isnull=True,
+                    student__home_department__isnull=False,
+                ).values_list('student__home_department_id', flat=True).distinct()
+            )
+            if not home_dept_ids:
+                return Response({'results': []})
+
+            qs = CurriculumDepartment.objects.filter(
+                department_id__in=home_dept_ids,
+                semester__number=sem_num,
+                course_code__isnull=False,
+            ).select_related('department').order_by('course_code', 'department_id')
+
+            # Deduplicate by course_code, collecting which depts share each subject.
+            seen: dict = {}
+            for c in qs:
+                code = c.course_code
+                if code not in seen:
+                    seen[code] = {
+                        'id': c.pk,
+                        'course_code': code,
+                        'course_name': c.course_name,
+                        'regulation': c.regulation,
+                        'class_type': c.class_type,
+                        'is_elective': c.is_elective,
+                        'home_dept_ids': [c.department_id],
+                        'home_dept_codes': [getattr(c.department, 'short_name', None)],
+                    }
+                else:
+                    seen[code]['home_dept_ids'].append(c.department_id)
+                    seen[code]['home_dept_codes'].append(getattr(c.department, 'short_name', None))
+
+            return Response({'results': list(seen.values())})
         except Exception:
             return Response({'results': []})
 
@@ -417,8 +479,14 @@ class SectionSubjectsStaffView(APIView):
 
     def get(self, request, section_id: int):
         try:
-            sec = Section.objects.select_related('batch__course__department').get(pk=int(section_id))
+            sec = Section.objects.select_related(
+                'batch__course__department', 'batch__department', 'semester'
+            ).get(pk=int(section_id))
         except Exception:
+            return Response({'results': []})
+
+        sem_num = getattr(sec.semester, 'number', None)
+        if sem_num is None:
             return Response({'results': []})
 
         results = []
@@ -426,11 +494,35 @@ class SectionSubjectsStaffView(APIView):
             # fetch curriculum rows for the section
             from curriculum.models import CurriculumDepartment, ElectiveSubject
             from django.db.models import Q
-            dept = getattr(sec.batch.course, 'department', None)
-            sem = getattr(sec.semester, 'number', None)
-            if dept is None or sem is None:
-                return Response({'results': []})
-            qs = CurriculumDepartment.objects.filter(department=dept, semester__number=sem)
+
+            # Shared section (S&H-type): derive dept curriculum from enrolled students' home depts
+            if getattr(sec.batch, 'course_id', None) is None:
+                from academics.models import StudentSectionAssignment
+                home_dept_ids = list(
+                    StudentSectionAssignment.objects.filter(
+                        section=sec, end_date__isnull=True,
+                        student__home_department__isnull=False,
+                    ).values_list('student__home_department_id', flat=True).distinct()
+                )
+                if not home_dept_ids:
+                    return Response({'results': []})
+                # Union of all home-dept curriculum rows, deduplicated by course_code
+                qs_all = CurriculumDepartment.objects.filter(
+                    department_id__in=home_dept_ids,
+                    semester__number=sem_num,
+                    course_code__isnull=False,
+                ).order_by('course_code', 'department_id')
+                seen: dict = {}
+                for c in qs_all:
+                    if c.course_code not in seen:
+                        seen[c.course_code] = c
+                qs = list(seen.values())
+                dept = None
+            else:
+                dept = getattr(sec.batch.course, 'department', None)
+                if dept is None:
+                    return Response({'results': []})
+                qs = CurriculumDepartment.objects.filter(department=dept, semester__number=sem_num)
             # build a map from curriculum_row id -> staff (from TeachingAssignment)
             staff_map = {}
             from academics.models import TeachingAssignment
@@ -465,7 +557,7 @@ class SectionSubjectsStaffView(APIView):
             # 1. From TeachingAssignment with elective_subject (section match or null section)
             elective_tas = TeachingAssignment.objects.filter(
                 elective_subject__isnull=False,
-                elective_subject__semester__number=sem,
+                elective_subject__semester__number=sem_num,
                 is_active=True,
             ).filter(
                 Q(section=sec) | Q(section__isnull=True)
@@ -477,10 +569,11 @@ class SectionSubjectsStaffView(APIView):
                         elective_staff_map[ta.elective_subject_id] = staff_name
 
             # 2. Fetch all ElectiveSubject rows for this section's dept+sem and add to results
+            # Electives are only defined per-department; skip for shared sections (dept=None)
             elective_qs = ElectiveSubject.objects.filter(
                 parent__department=dept,
-                semester__number=sem,
-            ).select_related('parent')
+                semester__number=sem_num,
+            ).select_related('parent') if dept is not None else []
             for es in elective_qs:
                 results.append({
                     'id': es.pk,

@@ -432,7 +432,6 @@ export default function App() {
                   }
                 />
                 <Route
-                <Route
                   path="/staff/my-attendance"
                   element={<ProtectedRoute user={user} requiredProfile={'STAFF'} element={<MyAttendance />} />}
                 />

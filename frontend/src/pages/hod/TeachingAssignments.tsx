@@ -5,7 +5,7 @@ import { getCachedMe } from '../../services/auth'
 
 type Section = { id: number; name: string; batch: string; batch_regulation?: { id: number; code: string; name?: string } | null; department_id?: number; department_short_name?: string; semester?: number; department?: { id: number; code?: string } }
 type Staff = { id: number; user: string | { username?: string; first_name?: string; last_name?: string }; staff_id: string; department?: { id?: number; code?: string; name?: string } }
-type CurriculumRow = { id: number; course_code?: string; course_name?: string; department?: { id: number; code?: string }; semester?: number; regulation?: string }
+type CurriculumRow = { id: number; course_code?: string; course_name?: string; department?: { id: number; code?: string }; semester?: number; regulation?: string; home_dept_codes?: string[] }
 type TeachingAssignment = { 
   id: number
   staff: string | number
@@ -68,6 +68,8 @@ export default function TeachingAssignmentsPage(){
   const [selectedElectiveRegulation, setSelectedElectiveRegulation] = useState<string | null>(null)
   const [selectedElectiveSemester, setSelectedElectiveSemester] = useState<number | null>(null)
   const [curriculum, setCurriculum] = useState<CurriculumRow[]>([])
+  // Per-section curriculum for shared sections (S&H-type: department_id === null)
+  const [sharedSectionCurriculum, setSharedSectionCurriculum] = useState<Record<number, CurriculumRow[]>>({})
   const [assignments, setAssignments] = useState<TeachingAssignment[]>([])
   const [electiveOptions, setElectiveOptions] = useState<any[]>([])
   const [electiveParents, setElectiveParents] = useState<any[]>([])
@@ -332,7 +334,24 @@ export default function TeachingAssignmentsPage(){
         assignmentsData = d.results || d
         setAssignments(assignmentsData) 
       }
-      
+
+      // For shared sections (S&H-type: department_id === null), fetch the union of
+      // home-department curriculum rows via the per-section endpoint.
+      const sharedSecs = sectionsData.filter(s => s.department_id === null && s.department_short_name === null)
+      if (sharedSecs.length > 0) {
+        const sharedCurriculumMap: Record<number, CurriculumRow[]> = {}
+        await Promise.all(sharedSecs.map(async sec => {
+          try {
+            const r = await fetchWithAuth(`/api/timetable/curriculum-for-section/?section_id=${sec.id}`)
+            if (r.ok) {
+              const d = await r.json()
+              sharedCurriculumMap[sec.id] = (d.results || []) as CurriculumRow[]
+            }
+          } catch { /* ignore */ }
+        }))
+        setSharedSectionCurriculum(sharedCurriculumMap)
+      }
+
       // Cache the loaded data for faster subsequent loads
       setCachedData({
         sections: sectionsData,
@@ -443,6 +462,21 @@ export default function TeachingAssignmentsPage(){
   }, [selectedDept])
 
   // Helper functions for assignment management
+
+  // Returns the relevant curriculum rows for a section:
+  // - Shared sections (S&H, department_id === null): use per-section fetched curriculum
+  // - Normal sections: filter global curriculum by semester + regulation
+  const getSectionSubjects = (section: Section): CurriculumRow[] => {
+    if (section.department_id === null && section.department_short_name === null) {
+      return (sharedSectionCurriculum[section.id] || []).filter(c => !(c as any).is_elective)
+    }
+    return curriculum.filter(c =>
+      (section.semester ? (c.semester === section.semester) : true) &&
+      (section.batch_regulation ? (c.regulation === section.batch_regulation.code) : true) &&
+      !((c as any).is_elective)
+    )
+  }
+
   const findExistingAssignment = (sectionId: number, curricularRowId: number) => {
     return assignments.find(a => {
       // Check section match using section_details
@@ -569,11 +603,7 @@ export default function TeachingAssignmentsPage(){
     // Show all sections - department filter only affects staff dropdown
     const visibleSections = sections
     visibleSections.forEach(section => {
-      const sectionSubjects = curriculum.filter(c => 
-        (section.semester ? (c.semester === section.semester) : true) &&
-        (section.batch_regulation ? (c.regulation === section.batch_regulation.code) : true) &&
-        !((c as any).is_elective)
-      );
+      const sectionSubjects = getSectionSubjects(section);
       sectionSubjects.forEach(subject => {
         const key = getAssignmentKey(section.id, subject.id);
         bulkKeys.add(key);
@@ -596,11 +626,7 @@ export default function TeachingAssignmentsPage(){
       // Show all sections - department filter only affects staff dropdown
       const visibleSections = sections
       for (const section of visibleSections) {
-        const sectionSubjects = curriculum.filter(c => 
-          (section.semester ? (c.semester === section.semester) : true) &&
-          (section.batch_regulation ? (c.regulation === section.batch_regulation.code) : true) &&
-          !((c as any).is_elective)
-        );
+        const sectionSubjects = getSectionSubjects(section);
 
         for (const subject of sectionSubjects) {
           const staffSel = document.getElementById(`staff-${section.id}-${subject.id}`) as HTMLSelectElement;
@@ -865,20 +891,18 @@ export default function TeachingAssignmentsPage(){
             return (
             <div className="space-y-6">
               {visibleSections.map(section => {
-                const sectionSubjects = curriculum.filter(c => 
-                  (section.semester ? (c.semester === section.semester) : true) &&
-                  (section.batch_regulation ? (c.regulation === section.batch_regulation.code) : true) &&
-                  !((c as any).is_elective)
-                );
+                const sectionSubjects = getSectionSubjects(section);
                 
                 return (
                   <div key={section.id} className="border border-gray-200 rounded-lg p-4">
                     {/* Section Header */}
-                    <div className="bg-blue-50 rounded-lg p-4 mb-4">
+                    <div className={`rounded-lg p-4 mb-4 ${section.department_id === null && section.department_short_name === null ? 'bg-amber-50' : 'bg-blue-50'}`}>
                       <div className="flex items-center justify-between">
                         <div>
-                          <h4 className="text-lg font-semibold text-blue-900">
-                            {[section.department_short_name || section.department?.code, section.batch, section.name].filter(Boolean).join(' · ')}
+                          <h4 className={`text-lg font-semibold ${section.department_id === null && section.department_short_name === null ? 'text-amber-900' : 'text-blue-900'}`}>
+                            {section.department_id === null && section.department_short_name === null
+                              ? `S&H (Year-1) · ${section.batch} · ${section.name}`
+                              : [section.department_short_name || section.department?.code, section.batch, section.name].filter(Boolean).join(' · ')}
                           </h4>
                           <div className="flex items-center gap-3 mt-1">
                             <p className="text-blue-700 text-sm">
@@ -924,7 +948,12 @@ export default function TeachingAssignmentsPage(){
                                     {subject.course_code || '-'}
                                   </td>
                                   <td className="px-4 py-3 text-gray-700">
-                                    {subject.course_name || 'Unnamed'}
+                                    <div>{subject.course_name || 'Unnamed'}</div>
+                                    {subject.home_dept_codes && subject.home_dept_codes.length > 0 && (
+                                      <div className="text-xs text-amber-600 font-medium mt-0.5">
+                                        {subject.home_dept_codes.join(', ')}
+                                      </div>
+                                    )}
                                   </td>
                                   <td className="px-4 py-3">
                                     {editing ? (
