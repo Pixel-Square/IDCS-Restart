@@ -17,8 +17,11 @@ from datetime import timedelta
 import re
 import logging
 from django.conf import settings
+from django.core.files.storage import default_storage
 from urllib.parse import urlparse
 import posixpath
+import os
+import uuid
 
 from .models import MobileOtp, NotificationTemplate, UserQuery, Role
 from .services.sms import send_sms, send_whatsapp, verify_otp
@@ -442,6 +445,7 @@ class ProfileUpdateView(APIView):
         last_name = request.data.get('last_name')
         email = request.data.get('email')
         username = request.data.get('username')
+        profile_image = request.FILES.get('profile_image')
 
         # Update user fields if provided
         updated = False
@@ -470,6 +474,58 @@ class ProfileUpdateView(APIView):
 
             user.username = new_username
             updated = True
+
+        if profile_image is not None:
+            if bool(getattr(user, 'profile_image_updated', False)):
+                return Response(
+                    {'detail': 'Profile image can only be updated once.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            filename = str(getattr(profile_image, 'name', '') or '').strip()
+            ext = os.path.splitext(filename)[1].lower()
+            content_type = str(getattr(profile_image, 'content_type', '') or '').lower()
+            allowed_ext = {'.jpg', '.jpeg', '.png'}
+            allowed_types = {'image/jpeg', 'image/jpg', 'image/png'}
+
+            if ext not in allowed_ext and content_type not in allowed_types:
+                return Response({'detail': 'Only JPG, JPEG, and PNG images are allowed.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            unique_name = f"profile_images/{uuid.uuid4().hex}{ext if ext in allowed_ext else '.jpg'}"
+            saved_name = default_storage.save(unique_name, profile_image)
+
+            old_value = ''
+
+            # Prefer saving to role profile image fields so admin + API stay aligned.
+            student_profile = getattr(user, 'student_profile', None)
+            staff_profile = getattr(user, 'staff_profile', None)
+            if student_profile is not None:
+                try:
+                    old_value = str(getattr(student_profile.profile_image, 'name', '') or '').strip().lstrip('/')
+                except Exception:
+                    old_value = ''
+                student_profile.profile_image = saved_name
+                student_profile.save(update_fields=['profile_image'])
+            elif staff_profile is not None:
+                try:
+                    old_value = str(getattr(staff_profile.profile_image, 'name', '') or '').strip().lstrip('/')
+                except Exception:
+                    old_value = ''
+                staff_profile.profile_image = saved_name
+                staff_profile.save(update_fields=['profile_image'])
+            else:
+                old_value = str(getattr(user, 'profile_image', '') or '').strip().lstrip('/')
+                user.profile_image = saved_name
+
+            user.profile_image_updated = True
+            updated = True
+
+            if old_value and old_value != saved_name:
+                try:
+                    if default_storage.exists(old_value):
+                        default_storage.delete(old_value)
+                except Exception:
+                    pass
 
         if updated:
             user.save()

@@ -66,6 +66,14 @@ class MeSerializer(serializers.Serializer):
     profile = serializers.SerializerMethodField()
     college = serializers.SerializerMethodField()
     is_iqac_main = serializers.SerializerMethodField()
+    profile_image = serializers.SerializerMethodField()
+    profile_image_updated = serializers.SerializerMethodField()
+
+    def get_profile_image_updated(self, obj):
+        try:
+            return bool(getattr(obj, 'profile_image_updated', False))
+        except Exception:
+            return False
 
     def get_roles(self, obj):
         roles = [r.name for r in obj.roles.all()]
@@ -120,6 +128,40 @@ class MeSerializer(serializers.Serializer):
         except Exception:
             return False
 
+    def get_profile_image(self, obj):
+        value = ''
+
+        # Prefer profile-bound images managed in academics admin.
+        try:
+            student_profile = getattr(obj, 'student_profile', None)
+            if student_profile is not None and getattr(student_profile, 'profile_image', None):
+                value = str(student_profile.profile_image)
+        except Exception:
+            value = ''
+
+        if not value:
+            try:
+                staff_profile = getattr(obj, 'staff_profile', None)
+                if staff_profile is not None and getattr(staff_profile, 'profile_image', None):
+                    value = str(staff_profile.profile_image)
+            except Exception:
+                value = ''
+
+        # Backward-compatible fallback to legacy user.profile_image.
+        if not value:
+            value = str(getattr(obj, 'profile_image', '') or '')
+
+        value = value.strip()
+        if not value:
+            return ''
+
+        if value.startswith('http://') or value.startswith('https://'):
+            return value
+
+        # Normalize stored relative media path to URL path.
+        cleaned = value.lstrip('/')
+        return f'/media/{cleaned}'
+
     def get_permissions(self, obj):
         from .utils import get_user_permissions
 
@@ -136,6 +178,7 @@ class MeSerializer(serializers.Serializer):
         return None
 
     def get_profile(self, obj):
+        profile_image_url = self.get_profile_image(obj)
         # Minimal profile payload to avoid touching academic serializers
         if hasattr(obj, 'student_profile') and obj.student_profile is not None:
             sp = obj.student_profile
@@ -154,6 +197,8 @@ class MeSerializer(serializers.Serializer):
             return {
                 'reg_no': sp.reg_no,
                 'student_id': sp.reg_no,  # Alias for consistency
+                'profile_image': profile_image_url,
+                'profile_image_updated': self.get_profile_image_updated(obj),
                 'mobile_number': getattr(sp, 'mobile_number', '') or '',
                 'mobile_verified': bool(getattr(sp, 'mobile_number_verified_at', None)),
                 'section_id': getattr(sec_obj, 'id', None),
@@ -171,6 +216,8 @@ class MeSerializer(serializers.Serializer):
             st = obj.staff_profile
             return {
                 'staff_id': st.staff_id,
+                'profile_image': profile_image_url,
+                'profile_image_updated': self.get_profile_image_updated(obj),
                 'mobile_number': getattr(st, 'mobile_number', '') or '',
                 'mobile_verified': bool(getattr(st, 'mobile_number_verified_at', None)),
                 'department': {

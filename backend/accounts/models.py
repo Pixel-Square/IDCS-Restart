@@ -45,6 +45,10 @@ class User(AbstractUser):
         help_text='Optional mobile number (leave empty if unknown).',
     )
 
+    # Relative media path for user avatar (e.g. profile_images/abc123.jpg).
+    profile_image = models.CharField(max_length=500, blank=True, default='')
+    profile_image_updated = models.BooleanField(default=False)
+
     def __str__(self):
         return self.username
 
