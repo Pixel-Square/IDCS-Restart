@@ -30,6 +30,8 @@ import { ModalPortal } from './ModalPortal';
 import { fetchDeptRows, fetchMasters } from '../services/curriculum';
 import { isLabClassType, normalizeObeClassType } from '../constants/classTypes';
 import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
+import { useMarkEntryEditRequestsEnabled } from '../utils/requestControl';
+import { normalizeRegisterNo, registerNoKeys } from '../utils/excelImport';
 
 const LAB_CO_MAX_OVERRIDE = { co1: 42, co2: 42, co3: 58, co4: 42, co5: 42 };
 const TCPL_REVIEW_EXPERIMENT_WEIGHT: Record<number, number> = { 1: 9, 2: 9, 3: 4.5 };
@@ -443,13 +445,15 @@ export default function LabCourseMarksEntry({
     Boolean(markManagerUnlockedUntil) &&
     (publishConsumedApprovals == null || markManagerUnlockedUntil !== (publishConsumedApprovals.markManagerUnlockedUntil ?? null));
 
+  const editRequestsEnabled = useMarkEntryEditRequestsEnabled();
   const entryOpen =
     !isPublished
       ? Boolean(editAllowed)
-      : Boolean(markLock?.entry_open) && (publishConsumedApprovals == null || markEntryApprovedFresh || markManagerApprovedFresh);
-  const publishedEditLocked = Boolean(isPublished && !entryOpen);
+      : !editRequestsEnabled || (Boolean(markLock?.entry_open) && (publishConsumedApprovals == null || markEntryApprovedFresh || markManagerApprovedFresh));
+  const publishedEditLocked = Boolean(isPublished && editRequestsEnabled && !entryOpen);
+  const editRequestsBlocked = Boolean(isPublished && publishedEditLocked && !editRequestsEnabled);
 
-  const publishButtonIsRequestEdit = Boolean(isPublished && publishedEditLocked && !viewerMode);
+  const publishButtonIsRequestEdit = Boolean(isPublished && publishedEditLocked && !viewerMode && editRequestsEnabled);
 
   const {
     pending: markEntryReqPending,
@@ -1007,7 +1011,7 @@ export default function LabCourseMarksEntry({
   // DB controls post-publish; local confirmation controls pre-publish.
   // Deterministic: block whenever backend says entry is not open.
   // (Pre-publish: entry_open stays false until Mark Manager is confirmed/locked.)
-  const tableBlocked = !entryOpen;
+  const tableBlocked = isPublished ? (editRequestsEnabled && !entryOpen) : !entryOpen;
   const enabledCoMetas = useMemo(() => {
     return Object.entries(coConfigs || {})
       .filter(([coNumber, cfg]) => allowedCoSet.has(String(coNumber)) && Boolean(cfg && cfg.enabled))
@@ -2337,6 +2341,10 @@ export default function LabCourseMarksEntry({
 
   async function requestMarkEntryEdit() {
     if (!subjectId) return;
+    if (!editRequestsEnabled) {
+      alert('Edit requests are disabled by IQAC.');
+      return;
+    }
 
     const mobileOk = await ensureMobileVerified();
     if (!mobileOk) {
@@ -2767,14 +2775,14 @@ export default function LabCourseMarksEntry({
       const n = Number(v);
       return Number.isFinite(n) ? n : null;
     };
-    const normalizeReg = (v: any) => String(v ?? '').trim().replace(/\s+/g, '').toLowerCase();
+    const normalizeReg = (v: any) => normalizeRegisterNo(v);
 
     try {
       setExcelBusy(true);
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(buffer, { type: 'array' });
       const sheet0 = workbook.Sheets[workbook.SheetNames[0]];
-      const rows: any[][] = XLSX.utils.sheet_to_json(sheet0, { header: 1 });
+      const rows: any[][] = XLSX.utils.sheet_to_json(sheet0, { header: 1, defval: '', blankrows: false, raw: false });
       if (!Array.isArray(rows) || rows.length < 2) {
         alert('Excel file is empty.');
         return;
@@ -2808,7 +2816,9 @@ export default function LabCourseMarksEntry({
       }));
 
       const studentByReg = new Map<string, Student>();
-      for (const st of students) studentByReg.set(normalizeReg(st.reg_no), st);
+      for (const st of students) {
+        for (const k of registerNoKeys(st.reg_no)) studentByReg.set(k, st);
+      }
 
       let matched = 0;
       setDraft((p) => {
@@ -2977,6 +2987,9 @@ export default function LabCourseMarksEntry({
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <button
                 onClick={() => {
+                  if (markManagerLocked && !editRequestsEnabled) {
+                    return;
+                  }
                   if (markManagerLocked) {
                     setMarkManagerModal({ mode: 'request' });
                     return;
@@ -3001,7 +3014,7 @@ export default function LabCourseMarksEntry({
                   setMarkManagerModal({ mode: 'confirm' });
                 }}
                 className="obe-btn obe-btn-success"
-                disabled={!subjectId || markManagerBusy}
+                disabled={!subjectId || markManagerBusy || (markManagerLocked && !editRequestsEnabled)}
                 style={markManagerBusy ? { opacity: 0.6, cursor: 'not-allowed' } : undefined}
               >
                 {markManagerLocked ? 'Edit' : 'Save'}
@@ -3202,7 +3215,7 @@ export default function LabCourseMarksEntry({
           <button
             onClick={publish}
             className="obe-btn obe-btn-primary"
-            disabled={publishButtonIsRequestEdit ? markEntryReqPending : !subjectId || publishing || tableBlocked || globalLocked || !publishAllowed}
+            disabled={editRequestsBlocked || (publishButtonIsRequestEdit ? markEntryReqPending : !subjectId || publishing || tableBlocked || globalLocked || !publishAllowed)}
             title={tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : !publishAllowed ? 'Publish window closed' : globalLocked ? 'Publishing locked' : 'Publish'}
           >
             {publishButtonIsRequestEdit ? (markEntryReqPending ? 'Request Pending' : 'Request Edit') : publishing ? 'Publishing…' : 'Publish'}
@@ -3855,28 +3868,30 @@ export default function LabCourseMarksEntry({
               <div style={floatingPanelStyle}>
                 <div style={{ textAlign: 'center' }}>
                   <div style={{ fontWeight: 950, color: '#065f46' }}>Published — Locked</div>
-                  <div style={{ fontSize: 13, color: '#065f46' }}>Table is locked. Request IQAC approval to edit.</div>
+                  <div style={{ fontSize: 13, color: '#065f46' }}>{editRequestsEnabled ? 'Table is locked. Request IQAC approval to edit.' : 'Table is locked. Edit requests are disabled by IQAC.'}</div>
                 </div>
                 <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
                   <button type="button" className="obe-btn" onClick={() => setViewMarksModalOpen(true)}>
                     View
                   </button>
-                  <button
-                    type="button"
-                    className="obe-btn obe-btn-success"
-                    disabled={markEntryReqPending}
-                    onClick={async () => {
-                      const mobileOk = await ensureMobileVerified();
-                      if (!mobileOk) {
-                        alert('Please verify your mobile number in Profile before requesting edits.');
-                        window.location.href = '/profile';
-                        return;
-                      }
-                      setPublishedEditModalOpen(true);
-                    }}
-                  >
-                    {markEntryReqPending ? 'Request Pending' : 'Request Edit'}
-                  </button>
+                  {editRequestsEnabled ? (
+                    <button
+                      type="button"
+                      className="obe-btn obe-btn-success"
+                      disabled={markEntryReqPending}
+                      onClick={async () => {
+                        const mobileOk = await ensureMobileVerified();
+                        if (!mobileOk) {
+                          alert('Please verify your mobile number in Profile before requesting edits.');
+                          window.location.href = '/profile';
+                          return;
+                        }
+                        setPublishedEditModalOpen(true);
+                      }}
+                    >
+                      {markEntryReqPending ? 'Request Pending' : 'Request Edit'}
+                    </button>
+                  ) : null}
                 </div>
 
                 <div

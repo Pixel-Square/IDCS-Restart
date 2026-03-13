@@ -30,6 +30,8 @@ import AssessmentContainer from './containers/AssessmentContainer';
 import { ModalPortal } from './ModalPortal';
 import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
 import { clearLocalDraftCache } from '../utils/obeDraftCache';
+import { useMarkEntryEditRequestsEnabled } from '../utils/requestControl';
+import { normalizeRegisterNo, registerNoKeys } from '../utils/excelImport';
 
 type Props = { subjectId: string; teachingAssignmentId?: number; label?: string; assessmentKey?: 'ssa1' | 'review1' };
 
@@ -346,10 +348,12 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
     Boolean(markManagerApprovalUntil) &&
     markManagerApprovalUntil !== (publishConsumedApprovals?.markManagerApprovalUntil ?? null);
 
-  // When published, the list must be locked unless IQAC explicitly opens editing.
-  // Any approval that existed at the moment of publishing is treated as consumed.
-  const entryOpen = !isPublished ? Boolean(editAllowed) : Boolean(markLock?.entry_open) || markEntryApprovedFresh || markManagerApprovedFresh;
-  const publishedEditLocked = Boolean(isPublished && !entryOpen);
+  const editRequestsEnabled = useMarkEntryEditRequestsEnabled();
+
+  // When published, the list normally locks unless IQAC explicitly opens editing.
+  // If IQAC disables edit requests entirely, bypass that published lock state.
+  const entryOpen = !isPublished ? Boolean(editAllowed) : !editRequestsEnabled || Boolean(markLock?.entry_open) || markEntryApprovedFresh || markManagerApprovedFresh;
+  const publishedEditLocked = Boolean(isPublished && editRequestsEnabled && !entryOpen);
 
   const {
     pending: markEntryReqPending,
@@ -374,9 +378,9 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
   const tableBlocked = Boolean(
     globalLocked ||
       lockStatusUnknown ||
-      !entryOpen ||
       (!isPublished && !markManagerLocked) ||
-      (markLock ? !markLock.entry_open : false),
+      (isPublished ? (editRequestsEnabled && !entryOpen) : false) ||
+      (!isPublished && markLock ? !markLock.entry_open : false),
   );
 
   const marksEditDisabled = Boolean(globalLocked || publishedEditLocked || tableBlocked);
@@ -1003,6 +1007,10 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
 
   async function requestMarkManagerEdit() {
     if (!subjectId) return;
+    if (!editRequestsEnabled) {
+      alert('Edit requests are disabled by IQAC.');
+      return;
+    }
     setMarkManagerBusy(true);
     setMarkManagerError(null);
     try {
@@ -1019,6 +1027,10 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
 
   async function requestMarkEntryEdit() {
     if (!subjectId) return;
+    if (!editRequestsEnabled) {
+      alert('Edit requests are disabled by IQAC.');
+      return;
+    }
 
     const mobileOk = await ensureMobileVerified();
     if (!mobileOk) {
@@ -1235,7 +1247,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
       const firstName = workbook.SheetNames?.[0];
       if (!firstName) throw new Error('No sheet found in the Excel file.');
       const sheet0 = workbook.Sheets[firstName];
-      const rows: any[][] = XLSX.utils.sheet_to_json(sheet0, { header: 1 });
+      const rows: any[][] = XLSX.utils.sheet_to_json(sheet0, { header: 1, defval: '', blankrows: false, raw: false });
       if (!rows.length) throw new Error('Excel sheet is empty.');
 
       const headerRow = (rows[0] || []).map(normalizeHeaderCell);
@@ -1256,16 +1268,14 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
       const regToIdx = new Map<string, number>();
       sheet.rows.forEach((r, idx) => {
         const full = String(r.registerNo || '').trim();
-        if (full) regToIdx.set(full, idx);
-        const short = shortenRegisterNo(full);
-        if (short) regToIdx.set(short, idx);
+        for (const key of registerNoKeys(full)) regToIdx.set(key, idx);
       });
 
       setSheet((prev) => {
         const nextRows = prev.rows.slice();
         for (let i = 1; i < rows.length; i++) {
           const row = rows[i] || [];
-          const reg = String(row[regCol] ?? '').trim();
+          const reg = normalizeRegisterNo(row[regCol]);
           if (!reg) continue;
           const idx = regToIdx.get(reg);
           if (idx == null) continue;
@@ -1629,8 +1639,13 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
     setSelectedBtls([]);
   };
 
-  const publishButtonIsRequestEdit = Boolean(isPublished && publishedEditLocked);
+  const editRequestsBlocked = Boolean(isPublished && publishedEditLocked && !editRequestsEnabled);
+  const publishButtonIsRequestEdit = Boolean(isPublished && publishedEditLocked && editRequestsEnabled);
   const openEditRequestModal = async () => {
+    if (!editRequestsEnabled) {
+      alert('Edit requests are disabled by IQAC.');
+      return;
+    }
     if (markEntryReqPending) {
       alert('Edit request is pending. Please wait for approval.');
       return;
@@ -1645,7 +1660,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
     setPublishedEditModalOpen(true);
   };
   const publishButtonOnClick = publishButtonIsRequestEdit ? openEditRequestModal : publish;
-  const publishButtonDisabled = publishButtonIsRequestEdit ? markEntryReqPending : Boolean(publishing || !publishAllowed || tableBlocked || !reviewSplitsOk);
+  const publishButtonDisabled = editRequestsBlocked ? true : publishButtonIsRequestEdit ? markEntryReqPending : Boolean(publishing || !publishAllowed || tableBlocked || !reviewSplitsOk);
 
   return (
     <>
@@ -2020,9 +2035,10 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                 onClick={() => {
                   // If Mark Manager has not been confirmed (no snapshot), open confirm modal
                   // to allow selecting BTLs and saving. If already confirmed, open request mode.
+                  if (markManagerConfirmed && !editRequestsEnabled) return;
                   setMarkManagerModal({ mode: markManagerConfirmed ? 'request' : 'confirm' });
                 }}
-                disabled={!subjectId || markManagerBusy}
+                disabled={!subjectId || markManagerBusy || (markManagerConfirmed && !editRequestsEnabled)}
               >
                 {markManagerConfirmed ? 'Edit' : 'Save'}
               </button>
@@ -2068,7 +2084,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
             <PublishLockOverlay
               locked={Boolean(globalLocked || publishedEditLocked || (isPublished && lockStatusUnknown))}
               title={globalLocked ? 'Locked by IQAC' : publishedEditLocked ? 'Published — Locked' : 'Table Locked'}
-              subtitle={globalLocked ? 'Publishing is turned OFF globally for this assessment.' : publishedEditLocked ? 'Marks are published. Request IQAC approval to edit.' : 'Confirm the Mark Manager'}
+              subtitle={globalLocked ? 'Publishing is turned OFF globally for this assessment.' : publishedEditLocked ? (editRequestsEnabled ? 'Marks are published. Request IQAC approval to edit.' : 'Marks are published. Edit requests are disabled by IQAC.') : 'Confirm the Mark Manager'}
             >
               <table className="ssa-modern-table" style={{ borderCollapse: 'separate', borderSpacing: 0, width: '100%', minWidth: 920 }}>
                 <thead>
@@ -2389,14 +2405,16 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
             <div style={{ display: 'grid', placeItems: 'center', padding: 40 }}>
               <div style={{ fontSize: 40 }}>🔒</div>
               <div style={{ fontWeight: 800, fontSize: 16, marginTop: 8 }}>{publishedEditLocked ? 'Published — Locked' : 'Table Locked'}</div>
-              <div style={{ color: '#6b7280', marginTop: 6 }}>{publishedEditLocked ? 'Marks published. Use View to inspect or Request Edit to ask IQAC for edit access.' : 'Confirm the Mark Manager to unlock the student list.'}</div>
+              <div style={{ color: '#6b7280', marginTop: 6 }}>{publishedEditLocked ? (editRequestsEnabled ? 'Marks published. Use View to inspect or Request Edit to ask IQAC for edit access.' : 'Marks published. Edit requests are disabled by IQAC.') : 'Confirm the Mark Manager to unlock the student list.'}</div>
               <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
                 {publishedEditLocked ? (
                   <>
                     <button className="obe-btn" onClick={() => setViewMarksModalOpen(true)}>View</button>
-                    <button className="obe-btn obe-btn-success" disabled={markEntryReqPending} onClick={openEditRequestModal}>
-                      {markEntryReqPending ? 'Request Pending' : 'Request Edit'}
-                    </button>
+                    {editRequestsEnabled ? (
+                      <button className="obe-btn obe-btn-success" disabled={markEntryReqPending} onClick={openEditRequestModal}>
+                        {markEntryReqPending ? 'Request Pending' : 'Request Edit'}
+                      </button>
+                    ) : null}
                   </>
                 ) : (
                   <>

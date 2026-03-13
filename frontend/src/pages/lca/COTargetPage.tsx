@@ -99,6 +99,10 @@ export default function COTargetPage({
     { batchCay: '', noOfSuccessful: '', meanCgpa: '' }
   );
 
+  const [lcaLevels, setLcaLevels] = useState<{ l1: string; l2: string; l3: string }>(
+    { l1: '', l2: '', l3: '' }
+  );
+
   // Load previously saved CO Target inputs
   useEffect(() => {
     let mounted = true;
@@ -131,6 +135,13 @@ export default function COTargetPage({
             batchCay: String((d.apiSummary as any).batchCay ?? p.batchCay),
             noOfSuccessful: String((d.apiSummary as any).noOfSuccessful ?? p.noOfSuccessful),
             meanCgpa: String((d.apiSummary as any).meanCgpa ?? p.meanCgpa),
+          }));
+        }
+        if (d.lcaLevels && typeof d.lcaLevels === 'object') {
+          setLcaLevels((p) => ({
+            l1: String((d.lcaLevels as any).l1 ?? p.l1),
+            l2: String((d.lcaLevels as any).l2 ?? p.l2),
+            l3: String((d.lcaLevels as any).l3 ?? p.l3),
           }));
         }
         setSaveNote('Loaded');
@@ -169,6 +180,7 @@ export default function COTargetPage({
           weights,
           manuals,
           apiSummary,
+          lcaLevels,
         },
         'published',
       );
@@ -814,16 +826,46 @@ export default function COTargetPage({
                         <td colSpan={2} style={{ padding: '10px 12px', background: '#f8fafc', fontWeight: 800, color: '#0b3b57' }}>Learner Centric Approach (LCA)</td>
                       </tr>
                       <tr>
-                        <td style={{ width: '45%', padding: '8px 10px', background: '#bfdbfe', textAlign: 'right', paddingRight: 10, fontWeight: 700 }}>L3</td>
-                        <td style={{ width: '55%', padding: '8px 10px', background: '#bfdbfe', textAlign: 'center', fontWeight: 800 }}>60</td>
+                        <td style={{ padding: 10, background: '#bfdbfe', textAlign: 'right', paddingRight: 20, fontWeight: 700 }}>L3</td>
+                        <td style={{ padding: 10, background: '#bfdbfe', textAlign: 'center', fontWeight: 800 }}>
+                          <input
+                            type="number"
+                            min={0}
+                            step="any"
+                            value={lcaLevels.l3}
+                            onChange={(e) => setLcaLevels((prev) => ({ ...prev, l3: e.target.value }))}
+                            placeholder="0"
+                            style={{ width: 90, padding: '6px 8px', borderRadius: 6, border: '1px solid #0b3b57', textAlign: 'center', fontWeight: 700, background: '#fff' }}
+                          />
+                        </td>
                       </tr>
                       <tr>
-                        <td style={{ width: '45%', padding: '8px 10px', background: '#bfdbfe', textAlign: 'right', paddingRight: 10, fontWeight: 700 }}>L2</td>
-                        <td style={{ width: '55%', padding: '8px 10px', background: '#bfdbfe', textAlign: 'center', fontWeight: 800 }}>55</td>
+                        <td style={{ padding: 10, background: '#bfdbfe', textAlign: 'right', paddingRight: 20, fontWeight: 700 }}>L2</td>
+                        <td style={{ padding: 10, background: '#bfdbfe', textAlign: 'center', fontWeight: 800 }}>
+                          <input
+                            type="number"
+                            min={0}
+                            step="any"
+                            value={lcaLevels.l2}
+                            onChange={(e) => setLcaLevels((prev) => ({ ...prev, l2: e.target.value }))}
+                            placeholder="0"
+                            style={{ width: 90, padding: '6px 8px', borderRadius: 6, border: '1px solid #0b3b57', textAlign: 'center', fontWeight: 700, background: '#fff' }}
+                          />
+                        </td>
                       </tr>
                       <tr>
-                        <td style={{ width: '45%', padding: '8px 10px', background: '#bfdbfe', textAlign: 'right', paddingRight: 10, fontWeight: 700 }}>L1</td>
-                        <td style={{ width: '55%', padding: '8px 10px', background: '#bfdbfe', textAlign: 'center', fontWeight: 800 }}>50</td>
+                        <td style={{ padding: 10, background: '#bfdbfe', textAlign: 'right', paddingRight: 20, fontWeight: 700 }}>L1</td>
+                        <td style={{ padding: 10, background: '#bfdbfe', textAlign: 'center', fontWeight: 800 }}>
+                          <input
+                            type="number"
+                            min={0}
+                            step="any"
+                            value={lcaLevels.l1}
+                            onChange={(e) => setLcaLevels((prev) => ({ ...prev, l1: e.target.value }))}
+                            placeholder="0"
+                            style={{ width: 90, padding: '6px 8px', borderRadius: 6, border: '1px solid #0b3b57', textAlign: 'center', fontWeight: 700, background: '#fff' }}
+                          />
+                        </td>
                       </tr>
                     </tbody>
                   </table>

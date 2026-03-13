@@ -30,6 +30,8 @@ import AssessmentContainer from './containers/AssessmentContainer';
 import { ModalPortal } from './ModalPortal';
 import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
 import { clearLocalDraftCache } from '../utils/obeDraftCache';
+import { useMarkEntryEditRequestsEnabled } from '../utils/requestControl';
+import { normalizeRegisterNo, registerNoKeys } from '../utils/excelImport';
 
 type Props = { subjectId: string; teachingAssignmentId?: number; label?: string; assessmentKey?: 'ssa2' | 'review2' };
 
@@ -345,8 +347,9 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
     Boolean(markManagerApprovalUntil) &&
     markManagerApprovalUntil !== (publishConsumedApprovals?.markManagerApprovalUntil ?? null);
 
-  const entryOpen = !isPublished ? Boolean(editAllowed) : Boolean(markLock?.entry_open) || markEntryApprovedFresh || markManagerApprovedFresh;
-  const publishedEditLocked = Boolean(isPublished && !entryOpen);
+  const editRequestsEnabled = useMarkEntryEditRequestsEnabled();
+  const entryOpen = !isPublished ? Boolean(editAllowed) : !editRequestsEnabled || Boolean(markLock?.entry_open) || markEntryApprovedFresh || markManagerApprovedFresh;
+  const publishedEditLocked = Boolean(isPublished && editRequestsEnabled && !entryOpen);
 
   const {
     pending: markEntryReqPending,
@@ -363,9 +366,14 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
 
   useLockBodyScroll(Boolean(publishedEditModalOpen) || Boolean(markManagerModal) || Boolean(viewMarksModalOpen));
 
-  const publishButtonIsRequestEdit = Boolean(isPublished && publishedEditLocked);
+  const editRequestsBlocked = Boolean(isPublished && publishedEditLocked && !editRequestsEnabled);
+  const publishButtonIsRequestEdit = Boolean(isPublished && publishedEditLocked && editRequestsEnabled);
 
   const openEditRequestModal = async () => {
+    if (!editRequestsEnabled) {
+      alert('Edit requests are disabled by IQAC.');
+      return;
+    }
     if (markEntryReqPending) {
       alert('Edit request is pending. Please wait for approval.');
       return;
@@ -388,9 +396,9 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
   const tableBlocked = Boolean(
     globalLocked ||
       lockStatusUnknown ||
-      !entryOpen ||
       (!isPublished && !markManagerLocked) ||
-      (markLock ? !markLock.entry_open : false),
+      (isPublished ? (editRequestsEnabled && !entryOpen) : false) ||
+      (!isPublished && markLock ? !markLock.entry_open : false),
   );
 
   const showNameList = Boolean(sheet.markManagerSnapshot != null);
@@ -1062,6 +1070,10 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
 
   async function requestMarkManagerEdit() {
     if (!subjectId) return;
+    if (!editRequestsEnabled) {
+      alert('Edit requests are disabled by IQAC.');
+      return;
+    }
     setMarkManagerBusy(true);
     setMarkManagerError(null);
     try {
@@ -1087,6 +1099,10 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
 
   async function requestMarkEntryEdit() {
     if (!subjectId) return;
+    if (!editRequestsEnabled) {
+      alert('Edit requests are disabled by IQAC.');
+      return;
+    }
 
     const mobileOk = await ensureMobileVerified();
     if (!mobileOk) {
@@ -1292,7 +1308,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
       const firstName = workbook.SheetNames?.[0];
       if (!firstName) throw new Error('No sheet found in the Excel file.');
       const sheet0 = workbook.Sheets[firstName];
-      const rows: any[][] = XLSX.utils.sheet_to_json(sheet0, { header: 1 });
+      const rows: any[][] = XLSX.utils.sheet_to_json(sheet0, { header: 1, defval: '', blankrows: false, raw: false });
       if (!rows.length) throw new Error('Excel sheet is empty.');
 
       const headerRow = (rows[0] || []).map(normalizeHeaderCell);
@@ -1312,16 +1328,14 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
       const regToIdx = new Map<string, number>();
       sheet.rows.forEach((r, idx) => {
         const full = String(r.registerNo || '').trim();
-        if (full) regToIdx.set(full, idx);
-        const short = shortenRegisterNo(full);
-        if (short) regToIdx.set(short, idx);
+        for (const key of registerNoKeys(full)) regToIdx.set(key, idx);
       });
 
       setSheet((prev) => {
         const nextRows = prev.rows.slice();
         for (let i = 1; i < rows.length; i++) {
           const row = rows[i] || [];
-          const reg = String(row[regCol] ?? '').trim();
+          const reg = normalizeRegisterNo(row[regCol]);
           if (!reg) continue;
           const idx = regToIdx.get(reg);
           if (idx == null) continue;
@@ -1726,7 +1740,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
           <button
             onClick={publish}
             className="obe-btn obe-btn-primary"
-            disabled={publishButtonIsRequestEdit ? markEntryReqPending : publishing || !publishAllowed || tableBlocked || !reviewSplitsOk}
+            disabled={editRequestsBlocked || (publishButtonIsRequestEdit ? markEntryReqPending : publishing || !publishAllowed || tableBlocked || !reviewSplitsOk)}
             title={tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : undefined}
           >
             {publishButtonIsRequestEdit ? (markEntryReqPending ? 'Request Pending' : 'Request Edit') : publishing ? 'Publishing…' : 'Publish'}
@@ -1835,9 +1849,10 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
               className="obe-btn obe-btn-success"
               onClick={() => {
                 if (uiReadOnly) return;
+                if (markManagerConfirmed && !editRequestsEnabled) return;
                 setMarkManagerModal({ mode: markManagerConfirmed ? 'request' : 'confirm' });
               }}
-              disabled={!subjectId || markManagerBusy || uiReadOnly}
+              disabled={!subjectId || markManagerBusy || uiReadOnly || (markManagerConfirmed && !editRequestsEnabled)}
             >
               {markManagerConfirmed ? 'Edit' : 'Save'}
             </button>
@@ -1893,7 +1908,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
               <PublishLockOverlay
                 locked={Boolean(globalLocked || publishedEditLocked || (isPublished && lockStatusUnknown))}
                 title={globalLocked ? 'Locked by IQAC' : publishedEditLocked ? 'Published — Locked' : 'Table Locked'}
-                subtitle={globalLocked ? 'Publishing is turned OFF globally for this assessment.' : publishedEditLocked ? 'Marks are published. Request IQAC approval to edit.' : 'Confirm the Mark Manager'}
+                subtitle={globalLocked ? 'Publishing is turned OFF globally for this assessment.' : publishedEditLocked ? (editRequestsEnabled ? 'Marks are published. Request IQAC approval to edit.' : 'Marks are published. Edit requests are disabled by IQAC.') : 'Confirm the Mark Manager'}
               >
                 <table className="ssa-modern-table" style={{ borderCollapse: 'separate', borderSpacing: 0, width: '100%', minWidth: 920 }}>
           <thead>
@@ -2223,7 +2238,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
                   {publishedEditLocked ? (
                     <>
                       <div style={{ fontWeight: 900, color: '#065f46' }}>Published</div>
-                      <div style={{ fontSize: 13, color: '#065f46' }}>Marks are locked. Request IQAC approval to edit.</div>
+                      <div style={{ fontSize: 13, color: '#065f46' }}>{editRequestsEnabled ? 'Marks are locked. Request IQAC approval to edit.' : 'Marks are locked. Edit requests are disabled by IQAC.'}</div>
                     </>
                   ) : (
                     <>
@@ -2236,9 +2251,11 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
                   <button className="obe-btn" onClick={() => setViewMarksModalOpen(true)}>
                     View
                   </button>
-                  <button className="obe-btn obe-btn-success" disabled={markEntryReqPending} onClick={openEditRequestModal}>
-                    {markEntryReqPending ? 'Request Pending' : 'Request Edit'}
-                  </button>
+                  {editRequestsEnabled ? (
+                    <button className="obe-btn obe-btn-success" disabled={markEntryReqPending} onClick={openEditRequestModal}>
+                      {markEntryReqPending ? 'Request Pending' : 'Request Edit'}
+                    </button>
+                  ) : null}
                 </div>
               </div>
             ) : null}
@@ -2256,7 +2273,9 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
               <div style={{ fontWeight: 800, fontSize: 16, marginTop: 8 }}>{publishedEditLocked ? 'Published — Locked' : 'Table Locked'}</div>
               <div style={{ color: '#6b7280', marginTop: 6 }}>
                 {publishedEditLocked
-                  ? 'Marks published. Use View to inspect or Request Edit to ask IQAC for edit access.'
+                  ? editRequestsEnabled
+                    ? 'Marks published. Use View to inspect or Request Edit to ask IQAC for edit access.'
+                    : 'Marks published. Edit requests are disabled by IQAC.'
                   : 'Confirm the Mark Manager to unlock the student list.'}
               </div>
               <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
@@ -2265,9 +2284,11 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
                     <button className="obe-btn" onClick={() => setViewMarksModalOpen(true)}>
                       View
                     </button>
-                    <button className="obe-btn obe-btn-success" disabled={markEntryReqPending} onClick={openEditRequestModal}>
-                      {markEntryReqPending ? 'Request Pending' : 'Request Edit'}
-                    </button>
+                    {editRequestsEnabled ? (
+                      <button className="obe-btn obe-btn-success" disabled={markEntryReqPending} onClick={openEditRequestModal}>
+                        {markEntryReqPending ? 'Request Pending' : 'Request Edit'}
+                      </button>
+                    ) : null}
                   </>
                 ) : (
                   <>
