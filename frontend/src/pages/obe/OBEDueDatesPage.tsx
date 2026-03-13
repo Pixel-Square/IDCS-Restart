@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { normalizeObeClassType } from '../../constants/classTypes';
+import { normalizeClassType as normalizeRawClassType, normalizeObeClassType } from '../../constants/classTypes';
 
 import {
   bulkResetGlobalPublishControls,
@@ -21,10 +21,10 @@ type SemesterRow = { id: number; number: number | null };
 
 const SEMESTER_NUMBERS = [1, 2, 3, 4, 5, 6, 7, 8] as const;
 
-type ClassTypeKey = 'THEORY' | 'LAB' | 'TCPL' | 'TCPR' | 'PRACTICAL' | 'PROJECT' | 'AUDIT' | 'SPECIAL';
+type ClassTypeKey = 'THEORY' | 'LAB' | 'TCPL' | 'TCPR' | 'PRACTICAL' | 'PRBL' | 'PROJECT' | 'AUDIT' | 'SPECIAL';
 
 // Mirrored from backend: curriculum.models.CLASS_TYPE_CHOICES
-const CLASS_TYPE_ORDER: ClassTypeKey[] = ['THEORY', 'LAB', 'TCPL', 'TCPR', 'PRACTICAL', 'PROJECT', 'AUDIT', 'SPECIAL'];
+const CLASS_TYPE_ORDER: ClassTypeKey[] = ['THEORY', 'LAB', 'TCPL', 'TCPR', 'PRACTICAL', 'PRBL', 'PROJECT', 'AUDIT', 'SPECIAL'];
 
 const CLASS_TYPE_LABEL: Record<ClassTypeKey, string> = {
   THEORY: 'Theory',
@@ -32,6 +32,7 @@ const CLASS_TYPE_LABEL: Record<ClassTypeKey, string> = {
   TCPL: 'TCPL',
   TCPR: 'TCPR',
   PRACTICAL: 'Practical',
+  PRBL: 'PRBL',
   PROJECT: 'Project',
   AUDIT: 'Audit',
   SPECIAL: 'Special',
@@ -42,6 +43,7 @@ const THEORY_DEFAULT_ASSESSMENTS: DueAssessmentKey[] = ['ssa1', 'formative1', 'c
 const TCPR_ASSESSMENTS: DueAssessmentKey[] = ['ssa1', 'review1', 'cia1', 'ssa2', 'review2', 'cia2', 'model'];
 const LAB_ASSESSMENTS: DueAssessmentKey[] = ['cia1', 'cia2', 'model'];
 const PRACTICAL_ASSESSMENTS: DueAssessmentKey[] = ['cia1', 'cia2', 'model'];
+const PRBL_ASSESSMENTS: DueAssessmentKey[] = ['ssa1', 'review1', 'ssa2', 'review2', 'model'];
 const PROJECT_ASSESSMENTS: DueAssessmentKey[] = ['review1', 'review2'];
 const SPECIAL_ALLOWED_ASSESSMENTS: DueAssessmentKey[] = ['ssa1', 'formative1', 'cia1', 'ssa2', 'formative2', 'cia2'];
 
@@ -90,6 +92,7 @@ function expectedAssessmentsForClassType(classType: ClassTypeKey, subjectsForLea
   if (classType === 'LAB') return LAB_ASSESSMENTS;
   if (classType === 'TCPR') return TCPR_ASSESSMENTS;
   if (classType === 'PRACTICAL') return PRACTICAL_ASSESSMENTS;
+  if (classType === 'PRBL') return PRBL_ASSESSMENTS;
   if (classType === 'PROJECT') return PROJECT_ASSESSMENTS;
 
   // SPECIAL: only explicitly enabled assessments are shown (no model/review).
@@ -147,6 +150,10 @@ function assessmentDisplayLabel(classType: ClassTypeKey, assessment: DueAssessme
 }
 
 function normalizeClassType(v: any): ClassTypeKey {
+  const raw = normalizeRawClassType(v);
+  const compactRaw = raw.replace(/[^A-Z0-9]/g, '');
+  if (compactRaw === 'PRBL' || compactRaw.includes('PRBL')) return 'PRBL';
+
   const k = normalizeObeClassType(v);
   if (k === 'LAB') return 'LAB';
   if (k === 'TCPL') return 'TCPL';

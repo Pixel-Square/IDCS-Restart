@@ -1,4 +1,3 @@
-
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   rfreaderFetchLastScan,
@@ -122,7 +121,12 @@ function StudentPopup({
               🎓
             </div>
             <div>
-              <p className="text-indigo-200 text-xs font-semibold uppercase tracking-widest mb-0.5">Student Card</p>
+              <div className="flex items-center gap-2">
+                <p className="text-indigo-200 text-xs font-semibold uppercase tracking-widest mb-0.5">Student Card</p>
+                <span className="text-[10px] px-2 py-0.5 rounded-full border font-semibold bg-indigo-50 border-indigo-200 text-indigo-700">
+                  STUDENT
+                </span>
+              </div>
               <h2 className="text-xl font-bold text-white leading-tight">{profile.name}</h2>
             </div>
           </div>
@@ -179,7 +183,12 @@ function StaffPopup({
               👔
             </div>
             <div>
-              <p className="text-emerald-200 text-xs font-semibold uppercase tracking-widest mb-0.5">Staff Card</p>
+              <div className="flex items-center gap-2">
+                <p className="text-emerald-200 text-xs font-semibold uppercase tracking-widest mb-0.5">Staff Card</p>
+                <span className="text-[10px] px-2 py-0.5 rounded-full border font-semibold bg-emerald-50 border-emerald-200 text-emerald-700">
+                  STAFF
+                </span>
+              </div>
               <h2 className="text-xl font-bold text-white leading-tight">{profile.name}</h2>
             </div>
           </div>
@@ -220,39 +229,50 @@ function InfoCell({ label, value, mono }: { label: string; value?: string | null
   );
 }
 
+// ── Combined search (students + staff) with one box ──────────────────────
+
+type AssignCandidate =
+  | { kind: 'student'; id: number; title: string; subtitle?: string; profile: ScannedStudent }
+  | { kind: 'staff'; id: number; title: string; subtitle?: string; profile: ScannedStaff };
+
+function coerceArray<T>(v: any): T[] {
+  if (Array.isArray(v)) return v as T[];
+  if (v && Array.isArray(v.results)) return v.results as T[];
+  return [];
+}
+
 // ── Main Page ──────────────────────────────────────────────────────────────
 
 const DISMISS_MS = 7000;
 
 export default function RFReaderTestStudentsPage() {
-  const [last, setLast]           = useState<RFReaderLastScan | null>(null);
+  const [last, setLast] = useState<RFReaderLastScan | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
-  const [popup, setPopup]         = useState<PopupState | null>(null);
-  const [progress, setProgress]   = useState(100);
+  const [popup, setPopup] = useState<PopupState | null>(null);
+  const [progress, setProgress] = useState(100);
+
+  // Unknown/Unassigned UID (drives the Assign panel + badge)
   const [pendingUid, setPendingUid] = useState<string | null>(null);
 
   // ── WebSerial state ────────────────────────────────────────────────────────
-  const [port, setPort]         = useState<any | null>(null);
+  const [port, setPort] = useState<any | null>(null);
   const [deviceName, setDeviceName] = useState('');
   const [scanning, setScanning] = useState(false);
+  const [baudRate, setBaudRate] = useState<number>(115200);
   const [serialError, setSerialError] = useState<string | null>(null);
-  const readerRef    = useRef<ReadableStreamDefaultReader<string> | null>(null);
-  const bufferRef    = useRef('');
-  const lastScanRef  = useRef<{ uid: string; time: number }>({ uid: '', time: 0 });
+  const readerRef = useRef<ReadableStreamDefaultReader<string> | null>(null);
+  const bufferRef = useRef('');
+  const lastScanRef = useRef<{ uid: string; time: number }>({ uid: '', time: 0 });
   const serialSupported = typeof (navigator as any).serial !== 'undefined';
 
-  // Assign panel state
-  const [assignTab, setAssignTab]         = useState<'student' | 'staff'>('student');
-  const [query, setQuery]                 = useState('');
-  const [studentResults, setStudentResults] = useState<ScannedStudent[]>([]);
-  const [staffResults, setStaffResults]   = useState<ScannedStaff[]>([]);
-  const [searchLoading, setSearchLoading] = useState(false);
+  // ── Assign (single box for Student+Staff) ─────────────────────────────────
+  const [assignQuery, setAssignQuery] = useState('');
   const [assignLoading, setAssignLoading] = useState(false);
-  const [assignMsg, setAssignMsg]         = useState<{ ok: boolean; text: string } | null>(null);
+  const [assignError, setAssignError] = useState<string | null>(null);
+  const [assignResults, setAssignResults] = useState<AssignCandidate[]>([]);
+  const [assignSelected, setAssignSelected] = useState<AssignCandidate | null>(null);
 
-  const [searchError, setSearchError] = useState<string | null>(null);
-
-  const dismissTimerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ── Auto-dismiss timer ───────────────────────────────────────────────────
@@ -327,7 +347,7 @@ export default function RFReaderTestStudentsPage() {
 
     try {
       try {
-        await port.open({ baudRate: 115200 });
+        await port.open({ baudRate });
       } catch (openErr: any) {
         // InvalidStateError = already open — that's fine, continue
         if (openErr?.name !== 'InvalidStateError' && !openErr?.message?.toLowerCase().includes('already open')) {
@@ -350,7 +370,9 @@ export default function RFReaderTestStudentsPage() {
             const { value, done } = await reader.read();
             if (done) break;
             bufferRef.current += value;
-            const lines = bufferRef.current.split('\n');
+            // Some devices use "\r" without "\n". Normalize to simplify splitting.
+            const normalized = bufferRef.current.replace(/\r/g, '\n');
+            const lines = normalized.split('\n');
             bufferRef.current = lines.pop() ?? '';
             for (const raw of lines) {
               const trimmed = raw.trim().toUpperCase();
@@ -388,100 +410,150 @@ export default function RFReaderTestStudentsPage() {
 
   const handleStopScan = async () => {
     try { await readerRef.current?.cancel(); } catch {}
+    try { readerRef.current?.releaseLock?.(); } catch {}
     try { await port?.close(); } catch {}
+    readerRef.current = null;
+    bufferRef.current = '';
     setScanning(false);
   };
 
-  // ── processUID: lookup and show popup or assign panel ───────────────────
+  // Ensure port is closed if the user navigates away
+  useEffect(() => {
+    return () => {
+      try { readerRef.current?.cancel(); } catch {}
+      try { port?.close(); } catch {}
+    };
+  }, [port]);
+
+  // ── Combined search effect (runs only when an unknown UID is present) ─────
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!pendingUid) {
+      setAssignResults([]);        // should already exist in your file
+      setAssignSelected(null);
+      setAssignLoading(false);
+      setAssignError(null);
+      return;
+    }
+
+    const q = assignQuery.trim();
+    if (q.length < 1) {
+      setAssignResults([]);
+      setAssignSelected(null);
+      setAssignLoading(false);
+      setAssignError(null);
+      return;
+    }
+
+    setAssignLoading(true);
+    setAssignError(null);
+
+    const t = window.setTimeout(async () => {
+      try {
+        const [studentsRaw, staffRaw] = await Promise.all([searchStudents(q), searchStaff(q)]);
+        if (cancelled) return;
+
+        const students = coerceArray<ScannedStudent>(studentsRaw);
+        const staff = coerceArray<ScannedStaff>(staffRaw);
+
+        const merged: AssignCandidate[] = [
+          ...students.map((s) => ({
+            kind: 'student' as const,
+            id: s.id,
+            title: `${s.reg_no} — ${s.name}`,
+            subtitle: [s.department, s.section].filter(Boolean).join(' · ') || undefined,
+            profile: s,
+          })),
+          ...staff.map((s) => ({
+            kind: 'staff' as const,
+            id: s.id, // IMPORTANT: this is StaffProfile.pk (not staff_id string)
+            title: `${s.staff_id} — ${s.name}`,
+            subtitle: [s.department, s.designation].filter(Boolean).join(' · ') || undefined,
+            profile: s,
+          })),
+        ];
+
+        setAssignResults(merged);
+        setAssignSelected((prev) => {
+          if (!prev) return null;
+          return merged.find((m) => m.kind === prev.kind && m.id === prev.id) ?? null;
+        });
+      } catch (e: any) {
+        if (!cancelled) setAssignError(String(e?.message ?? e));
+      } finally {
+        if (!cancelled) setAssignLoading(false);
+      }
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t);
+    };
+  }, [assignQuery, pendingUid]);
+
+  // ── processUID: known -> popup; unknown -> open assign panel ──────────────
   const processUID = useCallback(async (uid: string) => {
-    // Clear any existing popup immediately
     closePopup();
 
     try {
       const result = await lookupAny(uid);
+
       if (result.found && result.profile_type === 'student') {
+        setPendingUid(null);
         setPopup({ kind: 'student', profile: result.profile, uid });
         startDismissTimer();
-      } else if (result.found && result.profile_type === 'staff') {
+        return;
+      }
+
+      if (result.found && result.profile_type === 'staff') {
+        setPendingUid(null);
         setPopup({ kind: 'staff', profile: result.profile, uid });
         startDismissTimer();
-      } else {
-        // Unknown card — show in assign panel
-        setPendingUid(uid);
+        return;
       }
-    } catch {
-      // Network error — still surface the UID so operator can act
+
+      // Unknown card: open assign panel
       setPendingUid(uid);
+      setAssignQuery('');
+      setAssignResults([]);
+      setAssignSelected(null);
+      setAssignError(null);
+    } catch (e: any) {
+      setSerialError(String(e?.message ?? e));
     }
   }, [closePopup, startDismissTimer]);
 
-  // ── Search debounce ──────────────────────────────────────────────────────
-  useEffect(() => {
-    if (query.length < 1) {
-      setStudentResults([]);
-      setStaffResults([]);
-      setSearchLoading(false);
-      return;
-    }
-    setSearchLoading(true);
-    setSearchError(null);
-    const t = setTimeout(async () => {
-      try {
-        if (assignTab === 'student') setStudentResults(await searchStudents(query));
-        else                         setStaffResults(await searchStaff(query));
-      } catch (e: any) {
-        setSearchError(e?.message ?? 'Search failed');
+  // ── Assign selected profile to pendingUid ─────────────────────────────────
+  const handleAssign = useCallback(async () => {
+    if (!pendingUid || !assignSelected) return;
+
+    const uid = pendingUid;
+    setAssignError(null);
+
+    try {
+      if (assignSelected.kind === 'student') {
+        await assignUID(assignSelected.id, uid);
+      } else {
+        await assignStaffUID(assignSelected.id, uid);
       }
-      setSearchLoading(false);
-    }, 280);
-    return () => clearTimeout(t);
-  }, [query, assignTab]);
 
-  // ── Assign helpers ───────────────────────────────────────────────────────
-  const flash = (ok: boolean, text: string) => {
-    setAssignMsg({ ok, text });
-    setTimeout(() => setAssignMsg(null), 4000);
-  };
-
-  const handleAssignStudent = async (s: ScannedStudent) => {
-    if (!pendingUid || assignLoading) return;
-    setAssignLoading(true);
-    try {
-      await assignUID(s.id, pendingUid);
-      flash(true, `Assigned ${pendingUid} → ${s.name} (${s.reg_no})`);
+      // clear assign UI
       setPendingUid(null);
-      setQuery('');
-      setStudentResults([]);
+      setAssignQuery('');
+      setAssignResults([]);
+      setAssignSelected(null);
+
+      // allow immediate re-scan of same UID
+      lastScanRef.current = { uid: '', time: 0 };
+
+      // show popup immediately (student/staff) with role label
+      await processUID(uid);
     } catch (e: any) {
-      flash(false, e.message);
+      setAssignError(String(e?.message ?? e));
     }
-    setAssignLoading(false);
-  };
+  }, [pendingUid, assignSelected, processUID]);
 
-  const handleAssignStaff = async (s: ScannedStaff) => {
-    if (!pendingUid || assignLoading) return;
-    setAssignLoading(true);
-    try {
-      await assignStaffUID(s.id, pendingUid);
-      flash(true, `Assigned ${pendingUid} → ${s.name} (${s.staff_id})`);
-      setPendingUid(null);
-      setQuery('');
-      setStaffResults([]);
-    } catch (e: any) {
-      flash(false, e.message);
-    }
-    setAssignLoading(false);
-  };
-
-  const switchTab = (tab: 'student' | 'staff') => {
-    setAssignTab(tab);
-    setQuery('');
-    setStudentResults([]);
-    setStaffResults([]);
-    setSearchError(null);
-  };
-
-  // ── Render ───────────────────────────────────────────────────────────────
   return (
     <div className="p-6 min-h-screen bg-gray-50">
       {/* Page header */}
@@ -531,9 +603,23 @@ export default function RFReaderTestStudentsPage() {
             <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-3 py-2 text-xs">
               <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
               <span className="font-bold text-green-800">{deviceName || 'Device connected'}</span>
-              <span className="text-green-600">· 115200 baud</span>
+              <span className="text-green-600">· {baudRate} baud</span>
             </div>
           )}
+
+          {/* Baud rate */}
+          <label className="inline-flex items-center gap-2 text-xs text-gray-600">
+            <span className="font-semibold">Baud</span>
+            <select
+              value={baudRate}
+              onChange={(e) => setBaudRate(Number(e.target.value))}
+              disabled={scanning}
+              className="border border-gray-200 rounded-md px-2 py-1 text-xs bg-white disabled:opacity-50"
+            >
+              <option value={115200}>115200</option>
+              <option value={9600}>9600</option>
+            </select>
+          </label>
 
           {/* Start / Stop scan */}
           {port && !scanning && (
@@ -581,9 +667,8 @@ export default function RFReaderTestStudentsPage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        {/* ── Assign panel ──────────────────────────────────────────────── */}
+        {/* ── Assign panel (single combined search) ─────────────────────── */}
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden flex flex-col">
-          {/* Panel header */}
           <div className="px-5 py-3.5 border-b border-gray-100 flex items-center justify-between">
             <h2 className="text-sm font-semibold text-gray-800">Assign Card</h2>
             {pendingUid ? (
@@ -595,132 +680,81 @@ export default function RFReaderTestStudentsPage() {
             )}
           </div>
 
-          {/* Tabs */}
-          <div className="flex border-b border-gray-100">
-            {(['student', 'staff'] as const).map((tab) => (
-              <button
-                key={tab}
-                onClick={() => switchTab(tab)}
-                className={`flex-1 py-2.5 text-sm font-medium transition-colors ${
-                  assignTab === tab
-                    ? tab === 'student'
-                      ? 'text-indigo-600 border-b-2 border-indigo-500 bg-indigo-50/40'
-                      : 'text-emerald-600 border-b-2 border-emerald-500 bg-emerald-50/40'
-                    : 'text-gray-400 hover:text-gray-600'
-                }`}
-              >
-                {tab === 'student' ? '🎓 Student' : '👔 Staff'}
-              </button>
-            ))}
-          </div>
-
           <div className="p-4 flex-1 flex flex-col gap-3">
             <input
               type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={
-                assignTab === 'student'
-                  ? 'Search by reg no or name…'
-                  : 'Search by staff ID or name…'
-              }
-              className={`w-full border rounded-lg px-3 py-2 text-sm outline-none transition-shadow ${
-                assignTab === 'student'
-                  ? 'focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400'
-                  : 'focus:ring-2 focus:ring-emerald-300 focus:border-emerald-400'
-              } border-gray-200`}
+              value={assignQuery}
+              onChange={(e) => setAssignQuery(e.target.value)}
+              disabled={!pendingUid}
+              placeholder="Type Reg No / Student Name / Staff ID / Staff Name"
+              className="w-full border rounded-lg px-3 py-2 text-sm outline-none border-gray-200 disabled:bg-gray-50"
             />
 
-            {searchLoading && (
-              <p className="text-center text-xs text-gray-400 py-2">Searching…</p>
-            )}
-
-            {searchError && !searchLoading && (
+            {assignError && (
               <p className="text-xs text-red-500 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                {searchError}
+                {assignError}
               </p>
             )}
 
-            {/* Student results */}
-            {assignTab === 'student' && !searchLoading && studentResults.length > 0 && (
-              <div className="space-y-1.5 overflow-y-auto max-h-64">
-                {studentResults.map((s) => (
-                  <div
-                    key={s.id}
-                    className="flex items-center justify-between rounded-lg border border-gray-100 px-3 py-2 hover:border-indigo-200 hover:bg-indigo-50/50 transition-colors"
-                  >
-                    <div className="min-w-0 mr-2">
-                      <p className="text-sm font-medium text-gray-800 truncate">{s.name}</p>
-                      <p className="text-xs text-gray-400 font-mono">
-                        {s.reg_no}
-                        {s.rfid_uid
-                          ? <span className="ml-1.5 text-amber-500" title="Already has a card">· UID: {s.rfid_uid}</span>
-                          : <span className="ml-1.5 text-gray-300">· No card</span>}
-                      </p>
-                    </div>
-                    <button
-                      disabled={!pendingUid || assignLoading}
-                      onClick={() => handleAssignStudent(s)}
-                      className={`flex-shrink-0 text-xs px-3 py-1.5 rounded-md font-semibold transition-colors ${
-                        pendingUid && !assignLoading
-                          ? 'bg-indigo-600 text-white hover:bg-indigo-700'
-                          : 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                      }`}
-                    >
-                      Assign
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
+            <div className="border rounded-lg overflow-hidden max-h-64 overflow-y-auto">
+              {assignLoading && <div className="p-3 text-xs text-gray-500">Searching…</div>}
 
-            {/* Staff results */}
-            {assignTab === 'staff' && !searchLoading && staffResults.length > 0 && (
-              <div className="space-y-1.5 overflow-y-auto max-h-64">
-                {staffResults.map((s) => (
-                  <div
-                    key={s.id}
-                    className="flex items-center justify-between rounded-lg border border-gray-100 px-3 py-2 hover:border-emerald-200 hover:bg-emerald-50/50 transition-colors"
-                  >
-                    <div className="min-w-0 mr-2">
-                      <p className="text-sm font-medium text-gray-800 truncate">{s.name}</p>
-                      <p className="text-xs text-gray-400 font-mono">
-                        {s.staff_id}
-                        {s.designation && <span className="ml-1 not-font-mono text-gray-400">· {s.designation}</span>}
-                        {s.rfid_uid
-                          ? <span className="ml-1.5 text-amber-500">· UID: {s.rfid_uid}</span>
-                          : <span className="ml-1.5 text-gray-300">· No card</span>}
-                      </p>
-                    </div>
-                    <button
-                      disabled={!pendingUid || assignLoading}
-                      onClick={() => handleAssignStaff(s)}
-                      className={`flex-shrink-0 text-xs px-3 py-1.5 rounded-md font-semibold transition-colors ${
-                        pendingUid && !assignLoading
-                          ? 'bg-emerald-600 text-white hover:bg-emerald-700'
-                          : 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                      }`}
-                    >
-                      Assign
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
+              {!assignLoading && pendingUid && assignResults.length === 0 && assignQuery.trim().length > 0 && (
+                <div className="p-3 text-xs text-gray-400">No results</div>
+              )}
 
-            {/* Assign feedback */}
-            {assignMsg && (
-              <div
-                className={`rounded-lg px-3 py-2 text-xs font-medium ${
-                  assignMsg.ok
-                    ? 'bg-green-50 text-green-700 border border-green-200'
-                    : 'bg-red-50 text-red-600 border border-red-200'
-                }`}
+              {!assignLoading && assignResults.map((r) => {
+                const active = assignSelected?.kind === r.kind && assignSelected?.id === r.id;
+                return (
+                  <button
+                    key={`${r.kind}:${r.id}`}
+                    onClick={() => setAssignSelected(r)}
+                    className={[
+                      'w-full text-left px-3 py-2 border-b last:border-b-0',
+                      active ? 'bg-slate-100' : 'hover:bg-slate-50',
+                    ].join(' ')}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={[
+                          'text-[10px] px-2 py-0.5 rounded-full border font-semibold',
+                          r.kind === 'student'
+                            ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
+                            : 'bg-emerald-50 border-emerald-200 text-emerald-700',
+                        ].join(' ')}
+                      >
+                        {r.kind === 'student' ? 'STUDENT' : 'STAFF'}
+                      </span>
+                      <div className="text-sm font-medium truncate">{r.title}</div>
+                    </div>
+                    {r.subtitle && <div className="text-xs opacity-70 mt-0.5">{r.subtitle}</div>}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={handleAssign}
+                disabled={!pendingUid || !assignSelected}
+                className="rounded-lg bg-indigo-600 text-white px-4 py-2 text-sm font-semibold disabled:opacity-50"
               >
-                {assignMsg.ok ? '✓ ' : '✗ '}
-                {assignMsg.text}
-              </div>
-            )}
+                Assign Card
+              </button>
+              <button
+                onClick={() => {
+                  setPendingUid(null);
+                  setAssignQuery('');
+                  setAssignResults([]);
+                  setAssignSelected(null);
+                  setAssignError(null);
+                }}
+                disabled={!pendingUid}
+                className="rounded-lg border px-4 py-2 text-sm font-semibold disabled:opacity-50"
+              >
+                Skip
+              </button>
+            </div>
           </div>
         </div>
 

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { lsGet, lsRemove, lsSet } from '../utils/localStorage';
-import { normalizeObeClassType } from '../constants/classTypes';
+import { normalizeClassType, normalizeObeClassType } from '../constants/classTypes';
 import Cia1Entry from './Cia1Entry';
 import Cia2Entry from './Cia2Entry';
 import Formative1List from './Formative1List';
@@ -136,6 +136,9 @@ function normalizeEnabledAssessments(enabledAssessments: string[] | null | undef
 }
 
 function getVisibleTabs(classType: string | null | undefined, enabledAssessments?: string[] | null): TabDef[] {
+  const raw = normalizeClassType(classType);
+  const compactRaw = raw.replaceAll(/[^A-Z0-9]/g, '');
+  const isPrbl = compactRaw === 'PRBL' || compactRaw.includes('PRBL');
   const ct = normalizeObeClassType(classType);
   const enabled = normalizeEnabledAssessments(enabledAssessments);
 
@@ -157,6 +160,18 @@ function getVisibleTabs(classType: string | null | undefined, enabledAssessments
       if (t.key === 'model') return { ...t, label: 'MODEL Review' };
       return t;
     });
+  }
+
+  // PRBL: keep Project-style review flow, but include SSA and MODEL tabs.
+  if (isPrbl) {
+    return [
+      { key: 'dashboard', label: 'Dashboard' },
+      { key: 'ssa1', label: 'SSA1' },
+      { key: 'review1', label: 'Review 1' },
+      { key: 'ssa2', label: 'SSA2' },
+      { key: 'review2', label: 'Review 2' },
+      { key: 'model', label: 'MODEL' },
+    ];
   }
 
   // PROJECT: show only Review 1 and Review 2 (plus dashboard)

@@ -2,7 +2,7 @@ import React, { useCallback, useRef, useState } from 'react'
 import {
   ScannedStudent, ScannedStaff,
   assignUID, assignStaffUID,
-  lookupByUID,
+  lookupAny,
   searchStudents, searchStaff,
 } from '../../services/idscan'
 
@@ -97,6 +97,53 @@ function StudentCard({ student, onClose }: { student: ScannedStudent; onClose: (
   )
 }
 
+// ─── Staff Card Popup ───────────────────────────────────────────────────────
+function StaffCard({ staff, onClose }: { staff: ScannedStaff; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+      <div className="relative animate-bounce-in bg-white rounded-3xl shadow-2xl border-4 border-emerald-400 w-full max-w-md mx-4 overflow-hidden">
+        {/* Emerald header */}
+        <div className="bg-gradient-to-r from-emerald-600 to-teal-500 px-6 py-5 text-white">
+          <div className="flex items-center gap-3">
+            <div className="w-14 h-14 rounded-full bg-white/25 flex items-center justify-center flex-shrink-0">
+              <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <div className="min-w-0">
+              <div className="text-xs font-semibold uppercase tracking-widest text-emerald-100">Card Recognised</div>
+              <div className="text-xl font-bold truncate">{staff.name}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Details */}
+        <div className="px-6 pt-4 pb-3 space-y-1.5">
+          <Row label="Staff ID" value={staff.staff_id} />
+          {staff.department && <Row label="Department" value={staff.department} />}
+          {staff.designation && <Row label="Designation" value={staff.designation} />}
+          <Row label="Status" value={staff.status} />
+          <Row label="UID" value={staff.rfid_uid ?? '—'} mono />
+        </div>
+
+        {/* Hint */}
+        <div className="px-6 pb-4 pt-1">
+          <p className="text-xs text-center text-gray-400">Scan another card or press ✕ to close</p>
+        </div>
+
+        {/* Close */}
+        <button
+          onClick={onClose}
+          className="absolute top-3 right-3 w-8 h-8 rounded-full bg-black/10 hover:bg-black/20 text-gray-600 flex items-center justify-center transition text-sm font-bold"
+          aria-label="Close"
+        >
+          ✕
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
     <div className="flex justify-between items-center py-1 border-b border-gray-100 last:border-0">
@@ -106,8 +153,17 @@ function Row({ label, value, mono }: { label: string; value: string; mono?: bool
   )
 }
 
-// ─── Assign UID Popup ─────────────────────────────────────────────────────────
-type AssignTab = 'student' | 'staff'
+// ─── Assign UID Popup (single combined search) ───────────────────────────────
+
+type AssignCandidate =
+  | { kind: 'student'; id: number; title: string; subtitle?: string; profile: ScannedStudent }
+  | { kind: 'staff'; id: number; title: string; subtitle?: string; profile: ScannedStaff }
+
+function coerceArray<T>(v: any): T[] {
+  if (Array.isArray(v)) return v as T[]
+  if (v && Array.isArray(v.results)) return v.results as T[]
+  return []
+}
 
 function AssignPopup({
   uid,
@@ -115,43 +171,54 @@ function AssignPopup({
   onClose,
 }: {
   uid: string
-  onAssigned: (student: ScannedStudent) => void
+  onAssigned: (kind: 'student' | 'staff', profile: ScannedStudent | ScannedStaff) => void
   onClose: () => void
 }) {
-  const [tab, setTab]                           = useState<AssignTab>('student')
   const [query, setQuery]                       = useState('')
-  const [studentResults, setStudentResults]     = useState<ScannedStudent[]>([])
-  const [staffResults, setStaffResults]         = useState<ScannedStaff[]>([])
+  const [results, setResults]                   = useState<AssignCandidate[]>([])
   const [searching, setSearching]               = useState(false)
-  const [selectedStudent, setSelectedStudent]   = useState<ScannedStudent | null>(null)
-  const [selectedStaff, setSelectedStaff]       = useState<ScannedStaff | null>(null)
+  const [selected, setSelected]                 = useState<AssignCandidate | null>(null)
   const [assigning, setAssigning]               = useState(false)
   const [error, setError]                       = useState<string | null>(null)
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const switchTab = (t: AssignTab) => {
-    setTab(t)
-    setQuery('')
-    setStudentResults([])
-    setStaffResults([])
-    setSelectedStudent(null)
-    setSelectedStaff(null)
-    setError(null)
-  }
-
-  const doSearch = useCallback((q: string, currentTab: AssignTab) => {
+  const doSearch = useCallback((q: string) => {
     if (debounce.current) clearTimeout(debounce.current)
     if (q.length < 1) {
-      setStudentResults([])
-      setStaffResults([])
+      setResults([])
+      setSelected(null)
       setSearching(false)
       return
     }
     setSearching(true)
     debounce.current = setTimeout(async () => {
       try {
-        if (currentTab === 'student') setStudentResults(await searchStudents(q))
-        else                          setStaffResults(await searchStaff(q))
+        const [studentsRaw, staffRaw] = await Promise.all([searchStudents(q), searchStaff(q)])
+        const students = coerceArray<ScannedStudent>(studentsRaw)
+        const staff = coerceArray<ScannedStaff>(staffRaw)
+
+        const merged: AssignCandidate[] = [
+          ...students.map((s) => ({
+            kind: 'student' as const,
+            id: s.id,
+            title: `${s.reg_no} — ${s.name}`,
+            subtitle: [s.department, s.section].filter(Boolean).join(' · ') || undefined,
+            profile: s,
+          })),
+          ...staff.map((s) => ({
+            kind: 'staff' as const,
+            id: s.id,
+            title: `${s.staff_id} — ${s.name}`,
+            subtitle: [s.department, s.designation].filter(Boolean).join(' · ') || undefined,
+            profile: s,
+          })),
+        ]
+
+        setResults(merged)
+        setSelected((prev) => {
+          if (!prev) return null
+          return merged.find((m) => m.kind === prev.kind && m.id === prev.id) ?? null
+        })
       } catch (e: any) {
         setError(e?.message || 'Search failed')
       } finally {
@@ -164,26 +231,26 @@ function AssignPopup({
     const q = e.target.value
     setQuery(q)
     setError(null)
-    if (tab === 'student') setSelectedStudent(null)
-    else                   setSelectedStaff(null)
-    doSearch(q, tab)
+    setSelected(null)
+    doSearch(q)
   }
 
-  const isStudent = tab === 'student'
-  const selectedId = isStudent ? selectedStudent?.id : selectedStaff?.id
-  const hasSelection = isStudent ? !!selectedStudent : !!selectedStaff
+  const hasSelection = !!selected
 
   const handleAssign = async () => {
     setAssigning(true)
     setError(null)
     try {
-      if (isStudent && selectedStudent) {
-        const res = await assignUID(selectedStudent.id, uid)
-        onAssigned(res.student)
-      } else if (!isStudent && selectedStaff) {
-        await assignStaffUID(selectedStaff.id, uid)
-        onClose()
+      if (!selected) return
+
+      if (selected.kind === 'student') {
+        const res = await assignUID(selected.id, uid)
+        onAssigned('student', res.student)
+        return
       }
+
+      const res = await assignStaffUID(selected.id, uid)
+      onAssigned('staff', res.staff)
     } catch (e: any) {
       setError(e.message || 'Failed to assign UID')
     } finally {
@@ -191,14 +258,8 @@ function AssignPopup({
     }
   }
 
-  const accentRing  = isStudent ? 'focus:ring-indigo-400'  : 'focus:ring-emerald-400'
-  const accentBg    = isStudent ? 'bg-indigo-600 hover:bg-indigo-700'  : 'bg-emerald-600 hover:bg-emerald-700'
-  const accentPrev  = isStudent ? 'bg-indigo-50 border-indigo-200'     : 'bg-emerald-50 border-emerald-200'
-  const accentText  = isStudent ? 'text-indigo-900'  : 'text-emerald-900'
-  const accentSub   = isStudent ? 'text-indigo-600'  : 'text-emerald-600'
-  const accentCheck = isStudent ? 'text-indigo-600'  : 'text-emerald-600'
-  const accentHover = isStudent ? 'hover:bg-indigo-50' : 'hover:bg-emerald-50'
-  const accentSel   = isStudent ? 'bg-indigo-100'      : 'bg-emerald-100'
+  const accentRing = 'focus:ring-indigo-400'
+  const accentBg = 'bg-indigo-600 hover:bg-indigo-700'
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -218,28 +279,9 @@ function AssignPopup({
           </button>
         </div>
 
-        {/* Tabs */}
-        <div className="flex border-b border-gray-100">
-          {(['student', 'staff'] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => switchTab(t)}
-              className={`flex-1 py-2.5 text-sm font-medium transition-colors ${
-                tab === t
-                  ? t === 'student'
-                    ? 'text-indigo-600 border-b-2 border-indigo-500'
-                    : 'text-emerald-600 border-b-2 border-emerald-500'
-                  : 'text-gray-400 hover:text-gray-600'
-              }`}
-            >
-              {t === 'student' ? '🎓 Student' : '👔 Staff'}
-            </button>
-          ))}
-        </div>
-
         <div className="p-5 space-y-4">
           <p className="text-sm text-gray-600">
-            This UID is not yet assigned. Search a {tab} below and assign the card.
+            This UID is not yet assigned. Search a student or staff below and assign the card.
           </p>
 
           {/* Search */}
@@ -249,11 +291,7 @@ function AssignPopup({
               type="text"
               value={query}
               onChange={handleQueryChange}
-              placeholder={
-                isStudent
-                  ? 'Search by name or reg. no…'
-                  : 'Search by name or staff ID…'
-              }
+              placeholder="Search by Reg No / Student Name / Staff ID / Staff Name…"
               className={`w-full border border-gray-300 rounded-lg px-4 py-2.5 pr-10 text-sm focus:outline-none focus:ring-2 ${accentRing}`}
             />
             {searching && (
@@ -261,78 +299,43 @@ function AssignPopup({
             )}
           </div>
 
-          {/* Results — Students */}
-          {isStudent && studentResults.length > 0 && (
+          {/* Results */}
+          {results.length > 0 && (
             <ul className="max-h-48 overflow-y-auto divide-y divide-gray-100 border rounded-lg text-sm">
-              {studentResults.map((s) => (
-                <li
-                  key={s.id}
-                  onClick={() => setSelectedStudent(s)}
-                  className={`px-4 py-2.5 cursor-pointer ${accentHover} transition flex items-center justify-between ${
-                    selectedId === s.id ? accentSel : ''
-                  }`}
-                >
-                  <div>
-                    <div className="font-semibold text-gray-800">{s.name}</div>
-                    <div className="text-xs text-gray-500 font-mono">
-                      {s.reg_no}{s.section ? ` · ${s.section}` : ''}
-                      {s.rfid_uid ? <span className="ml-1 text-amber-500"> · UID: {s.rfid_uid}</span> : ''}
+              {results.map((r) => {
+                const active = selected?.kind === r.kind && selected?.id === r.id
+                return (
+                  <li
+                    key={`${r.kind}:${r.id}`}
+                    onClick={() => setSelected(r)}
+                    className={`px-4 py-2.5 cursor-pointer hover:bg-gray-50 transition flex items-center justify-between ${
+                      active ? 'bg-gray-100' : ''
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={
+                            r.kind === 'student'
+                              ? 'text-[10px] px-2 py-0.5 rounded-full border font-semibold bg-indigo-50 border-indigo-200 text-indigo-700'
+                              : 'text-[10px] px-2 py-0.5 rounded-full border font-semibold bg-emerald-50 border-emerald-200 text-emerald-700'
+                          }
+                        >
+                          {r.kind === 'student' ? 'STUDENT' : 'STAFF'}
+                        </span>
+                        <div className="font-semibold text-gray-800 truncate">{r.title}</div>
+                      </div>
+                      {r.subtitle && <div className="text-xs text-gray-500 truncate mt-0.5">{r.subtitle}</div>}
                     </div>
-                  </div>
-                  {selectedId === s.id && (
-                    <svg className={`w-5 h-5 ${accentCheck} flex-shrink-0`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                  )}
-                </li>
-              ))}
+                    {active && (
+                      <svg className="w-5 h-5 text-indigo-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                    )}
+                  </li>
+                )
+              })}
             </ul>
-          )}
-
-          {/* Results — Staff */}
-          {!isStudent && staffResults.length > 0 && (
-            <ul className="max-h-48 overflow-y-auto divide-y divide-gray-100 border rounded-lg text-sm">
-              {staffResults.map((s) => (
-                <li
-                  key={s.id}
-                  onClick={() => setSelectedStaff(s)}
-                  className={`px-4 py-2.5 cursor-pointer ${accentHover} transition flex items-center justify-between ${
-                    selectedId === s.id ? accentSel : ''
-                  }`}
-                >
-                  <div>
-                    <div className="font-semibold text-gray-800">{s.name}</div>
-                    <div className="text-xs text-gray-500 font-mono">
-                      {s.staff_id}{s.designation ? ` · ${s.designation}` : ''}
-                      {s.rfid_uid ? <span className="ml-1 text-amber-500"> · UID: {s.rfid_uid}</span> : ''}
-                    </div>
-                  </div>
-                  {selectedId === s.id && (
-                    <svg className={`w-5 h-5 ${accentCheck} flex-shrink-0`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-
-          {/* Selected preview */}
-          {isStudent && selectedStudent && (
-            <div className={`rounded-lg ${accentPrev} border px-4 py-3 text-sm`}>
-              <div className={`font-semibold ${accentText}`}>{selectedStudent.name}</div>
-              <div className={`text-xs ${accentSub}`}>
-                {selectedStudent.reg_no}{selectedStudent.department ? ` · ${selectedStudent.department}` : ''}
-              </div>
-            </div>
-          )}
-          {!isStudent && selectedStaff && (
-            <div className={`rounded-lg ${accentPrev} border px-4 py-3 text-sm`}>
-              <div className={`font-semibold ${accentText}`}>{selectedStaff.name}</div>
-              <div className={`text-xs ${accentSub}`}>
-                {selectedStaff.staff_id}{selectedStaff.department ? ` · ${selectedStaff.department}` : ''}
-              </div>
-            </div>
           )}
 
           {error && <p className="text-sm text-red-600">{error}</p>}
@@ -365,6 +368,7 @@ export default function IDCSScanTestPage() {
   const [scanning, setScanning]                 = useState(false)
   const [log, setLog]                           = useState<ScanLog[]>([])
   const [successStudent, setSuccessStudent]     = useState<ScannedStudent | null>(null)
+  const [successStaff, setSuccessStaff]         = useState<ScannedStaff | null>(null)
   const [assignUID_val, setAssignUID]           = useState<string | null>(null)
   const readerRef                               = useRef<ReadableStreamDefaultReader<string> | null>(null)
   const buffer                                  = useRef('')
@@ -455,17 +459,24 @@ export default function IDCSScanTestPage() {
   const processUID = useCallback(async (uid: string) => {
     // Dismiss any currently open popup the moment a new card is detected
     setSuccessStudent(null)
+    setSuccessStaff(null)
     setAssignUID(null)
 
     const ts = new Date()
     try {
-      const result = await lookupByUID(uid)
-      setLog((prev) => [{ uid, timestamp: ts, found: result.found }, ...prev.slice(0, 49)])
-      if (result.found && result.student) {
-        setSuccessStudent(result.student)
-      } else {
-        setAssignUID(uid)
+      const result = await lookupAny(uid)
+      setLog((prev) => [{ uid, timestamp: ts, found: !!result.found }, ...prev.slice(0, 49)])
+
+      if (result.found && result.profile_type === 'student') {
+        setSuccessStudent(result.profile)
+        return
       }
+      if (result.found && result.profile_type === 'staff') {
+        setSuccessStaff(result.profile)
+        return
+      }
+
+      setAssignUID(uid)
     } catch {
       setLog((prev) => [{ uid, timestamp: ts, found: false }, ...prev.slice(0, 49)])
     }
@@ -477,10 +488,17 @@ export default function IDCSScanTestPage() {
       {successStudent && (
         <StudentCard student={successStudent} onClose={() => setSuccessStudent(null)} />
       )}
+      {successStaff && (
+        <StaffCard staff={successStaff} onClose={() => setSuccessStaff(null)} />
+      )}
       {assignUID_val && (
         <AssignPopup
           uid={assignUID_val}
-          onAssigned={(s) => { setAssignUID(null); setSuccessStudent(s) }}
+          onAssigned={(kind, profile) => {
+            setAssignUID(null)
+            if (kind === 'student') setSuccessStudent(profile as ScannedStudent)
+            else setSuccessStaff(profile as ScannedStaff)
+          }}
           onClose={() => setAssignUID(null)}
         />
       )}

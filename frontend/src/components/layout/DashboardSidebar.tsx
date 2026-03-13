@@ -325,6 +325,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   const isSecurity = rolesUpper.includes('SECURITY');
   if (isSecurity && !items.some((i) => i.key === 'idscan_test')) {
     items.push({ key: 'idscan_test',     label: 'RFID Scanner Test', to: '/idscan/test' });
+    items.push({ key: 'idscan_assign_cards', label: 'RFID Card Assignment', to: '/idscan/assign-cards' });
     items.push({ key: 'idscan_gatepass', label: 'Gatepass Scanner',   to: '/idscan/gatepass' });
   }
   if (!isSecurity && applicationsNav?.show_applications && !items.some((item) => item.key === 'applications_home')) {
