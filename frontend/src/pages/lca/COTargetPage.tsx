@@ -92,6 +92,10 @@ export default function COTargetPage({
     { batchCay: '', noOfSuccessful: '', meanCgpa: '' }
   );
 
+  const [lcaLevels, setLcaLevels] = useState<{ l1: string; l2: string; l3: string }>(
+    { l1: '', l2: '', l3: '' }
+  );
+
   // Load previously saved CO Target inputs
   useEffect(() => {
     let mounted = true;
@@ -124,6 +128,13 @@ export default function COTargetPage({
             batchCay: String((d.apiSummary as any).batchCay ?? p.batchCay),
             noOfSuccessful: String((d.apiSummary as any).noOfSuccessful ?? p.noOfSuccessful),
             meanCgpa: String((d.apiSummary as any).meanCgpa ?? p.meanCgpa),
+          }));
+        }
+        if (d.lcaLevels && typeof d.lcaLevels === 'object') {
+          setLcaLevels((p) => ({
+            l1: String((d.lcaLevels as any).l1 ?? p.l1),
+            l2: String((d.lcaLevels as any).l2 ?? p.l2),
+            l3: String((d.lcaLevels as any).l3 ?? p.l3),
           }));
         }
         setSaveNote('Loaded');
@@ -183,6 +194,7 @@ export default function COTargetPage({
           weights,
           manuals,
           apiSummary,
+          lcaLevels,
         },
         'published',
       );
@@ -359,6 +371,18 @@ export default function COTargetPage({
     }
     return rowsOut;
   }, [icoComputed, bcoComputed, manuals, weights]);
+
+  const apiGpaComputed = React.useMemo(() => {
+    const strength = Number(apiSummary.batchCay);
+    const successful = Number(apiSummary.noOfSuccessful);
+    const meanCgpa = Number(apiSummary.meanCgpa);
+
+    if (!Number.isFinite(strength) || !Number.isFinite(successful) || !Number.isFinite(meanCgpa) || strength <= 0) {
+      return null;
+    }
+
+    return roundHalfUp((meanCgpa * successful / strength) * 10, 2);
+  }, [apiSummary]);
 
   useEffect(() => {
     let mounted = true;
@@ -667,13 +691,14 @@ export default function COTargetPage({
                     </thead>
                     <tbody>
                       <tr>
-                        <td style={{ padding: '10px 12px', background: '#fff', fontWeight: 700, fontSize: 13, borderRight: '1px solid #94a3b8', borderBottom: '1px solid #e2e8f0', minWidth: 160 }}>BATCH (CAY)</td>
+                        <td style={{ padding: '10px 12px', background: '#fff', fontWeight: 700, fontSize: 13, borderRight: '1px solid #94a3b8', borderBottom: '1px solid #e2e8f0', minWidth: 160 }}>STRENGTH</td>
                         <td style={{ padding: '6px 10px', background: '#fef9c3', borderBottom: '1px solid #e2e8f0' }}>
                           <input
-                            type="text"
+                            type="number"
+                            min={0}
                             value={apiSummary.batchCay}
                             onChange={(e) => setApiSummary((p) => ({ ...p, batchCay: e.target.value }))}
-                            placeholder="e.g. 2024-25"
+                            placeholder="0"
                             style={{ width: '100%', border: 'none', background: 'transparent', fontSize: 14, outline: 'none', fontWeight: 700, boxSizing: 'border-box' }}
                           />
                         </td>
@@ -712,32 +737,12 @@ export default function COTargetPage({
                   <div style={{ marginTop: 12, background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 8, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <span style={{ color: '#0b4a6f', fontWeight: 700, fontSize: 13 }}>API (GPA) =</span>
                     <span style={{ background: '#fff', border: '2px solid #0b4a6f', padding: '4px 14px', borderRadius: 6, fontWeight: 900, fontSize: 15, minWidth: 60, textAlign: 'center' }}>
-                      {apiSummary.meanCgpa || '—'}
+                      {apiGpaComputed ?? '—'}
                     </span>
                     <span style={{ color: '#557085', fontSize: 13 }}>/100</span>
                   </div>
                 </div>
 
-                {/* Right: Per-CO API manual inputs */}
-                <div style={{ flex: '1 1 220px', minWidth: 200 }}>
-                  <div style={{ fontWeight: 700, marginBottom: 8, color: '#334e68', fontSize: 13 }}>Per-CO API Value</div>
-                  <table style={styles.table}>
-                    <thead>
-                      <tr>
-                        <th style={styles.th}>CO</th>
-                        <th style={styles.th}>API</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {['CO1','CO2','CO3','CO4','CO5'].map((co, idx) => (
-                        <tr key={co}>
-                          <td style={styles.tdLeft}>{co}</td>
-                          <td style={styles.td}><input min={0} step="any" style={styles.inputNumber} type="number" value={manuals[idx]?.api ?? ''} onChange={(e) => { const v = e.target.value === '' ? null : e.target.value; setManuals((m) => { const copy = [...m]; copy[idx] = { ...copy[idx], api: v === null ? null : Number(v) }; return copy; }); }} onBlur={(e) => { const v = normalizeNumberInput(e.target.value, 2, true); setManuals((m) => { const copy = [...m]; copy[idx] = { ...copy[idx], api: v }; return copy; }); }} /></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
               </div>
             </div>
 
@@ -755,15 +760,45 @@ export default function COTargetPage({
                       </tr>
                       <tr>
                         <td style={{ padding: 10, background: '#bfdbfe', textAlign: 'right', paddingRight: 20, fontWeight: 700 }}>L3</td>
-                        <td style={{ padding: 10, background: '#bfdbfe', textAlign: 'center', fontWeight: 800 }}></td>
+                        <td style={{ padding: 10, background: '#bfdbfe', textAlign: 'center', fontWeight: 800 }}>
+                          <input
+                            type="number"
+                            min={0}
+                            step="any"
+                            value={lcaLevels.l3}
+                            onChange={(e) => setLcaLevels((prev) => ({ ...prev, l3: e.target.value }))}
+                            placeholder="0"
+                            style={{ width: 90, padding: '6px 8px', borderRadius: 6, border: '1px solid #0b3b57', textAlign: 'center', fontWeight: 700, background: '#fff' }}
+                          />
+                        </td>
                       </tr>
                       <tr>
                         <td style={{ padding: 10, background: '#bfdbfe', textAlign: 'right', paddingRight: 20, fontWeight: 700 }}>L2</td>
-                        <td style={{ padding: 10, background: '#bfdbfe', textAlign: 'center', fontWeight: 800 }}></td>
+                        <td style={{ padding: 10, background: '#bfdbfe', textAlign: 'center', fontWeight: 800 }}>
+                          <input
+                            type="number"
+                            min={0}
+                            step="any"
+                            value={lcaLevels.l2}
+                            onChange={(e) => setLcaLevels((prev) => ({ ...prev, l2: e.target.value }))}
+                            placeholder="0"
+                            style={{ width: 90, padding: '6px 8px', borderRadius: 6, border: '1px solid #0b3b57', textAlign: 'center', fontWeight: 700, background: '#fff' }}
+                          />
+                        </td>
                       </tr>
                       <tr>
                         <td style={{ padding: 10, background: '#bfdbfe', textAlign: 'right', paddingRight: 20, fontWeight: 700 }}>L1</td>
-                        <td style={{ padding: 10, background: '#bfdbfe', textAlign: 'center', fontWeight: 800 }}></td>
+                        <td style={{ padding: 10, background: '#bfdbfe', textAlign: 'center', fontWeight: 800 }}>
+                          <input
+                            type="number"
+                            min={0}
+                            step="any"
+                            value={lcaLevels.l1}
+                            onChange={(e) => setLcaLevels((prev) => ({ ...prev, l1: e.target.value }))}
+                            placeholder="0"
+                            style={{ width: 90, padding: '6px 8px', borderRadius: 6, border: '1px solid #0b3b57', textAlign: 'center', fontWeight: 700, background: '#fff' }}
+                          />
+                        </td>
                       </tr>
                     </tbody>
                   </table>

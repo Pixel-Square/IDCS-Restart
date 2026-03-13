@@ -30,6 +30,8 @@ import PublishLockOverlay from './PublishLockOverlay';
 import AssessmentContainer from './containers/AssessmentContainer';
 import { ModalPortal } from './ModalPortal';
 import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
+import { useMarkEntryEditRequestsEnabled } from '../utils/requestControl';
+import { normalizeRegisterNo, registerNoKeys } from '../utils/excelImport';
 
 const DEFAULT_API_BASE = 'https://db.krgi.co.in';
 const API_BASE = import.meta.env.VITE_API_BASE || (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://localhost:8000' : DEFAULT_API_BASE);
@@ -285,14 +287,15 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
     Boolean(markManagerEditWindow?.allowed_by_approval) &&
     Boolean(markManagerApprovalUntil) &&
     markManagerApprovalUntil !== (publishConsumedApprovals?.markManagerApprovalUntil ?? null);
-  const entryOpen = !isPublished ? Boolean(editAllowed) : Boolean(markLock?.entry_open) || markEntryApprovedFresh || markManagerApprovedFresh;
-  const publishedEditLocked = Boolean(isPublished && !entryOpen);
+  const editRequestsEnabled = useMarkEntryEditRequestsEnabled();
+  const entryOpen = !isPublished ? Boolean(editAllowed) : !editRequestsEnabled || Boolean(markLock?.entry_open) || markEntryApprovedFresh || markManagerApprovedFresh;
+  const publishedEditLocked = Boolean(isPublished && editRequestsEnabled && !entryOpen);
   const showPublishedLockPanel = Boolean(isPublished && publishedEditLocked);
-
-  const publishButtonIsRequestEdit = Boolean(isPublished && publishedEditLocked);
+  const editRequestsBlocked = Boolean(isPublished && publishedEditLocked && !editRequestsEnabled);
+  const publishButtonIsRequestEdit = Boolean(isPublished && publishedEditLocked && editRequestsEnabled);
   const tableBlocked = skipMarkManager
-    ? Boolean(globalLocked || (isPublished ? !entryOpen : !editAllowed))
-    : Boolean(globalLocked || (isPublished ? !entryOpen : !markManagerLocked || !editAllowed));
+    ? Boolean(globalLocked || (isPublished ? (editRequestsEnabled && !entryOpen) : !editAllowed))
+    : Boolean(globalLocked || (isPublished ? (editRequestsEnabled && !entryOpen) : !markManagerLocked || !editAllowed));
   const showNameList = skipMarkManager ? true : Boolean(sheet.markManagerSnapshot != null) || Boolean(isPublished);
 
   const [markManagerModal, setMarkManagerModal] = useState<null | { mode: 'confirm' | 'request' }>(null);
@@ -471,6 +474,10 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
 
   async function requestMarkEntryEdit() {
     if (!subjectId) return;
+    if (!editRequestsEnabled) {
+      alert('Edit requests are disabled by IQAC.');
+      return;
+    }
 
     const mobileOk = await ensureMobileVerified();
     if (!mobileOk) {
@@ -689,6 +696,10 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
 
   async function requestMarkManagerEdit() {
     if (!subjectId) return;
+    if (!editRequestsEnabled) {
+      alert('Edit requests are disabled by IQAC.');
+      return;
+    }
     setMarkManagerBusy(true);
     const startedAt = new Date();
     const baselineApprovalUntil = markManagerEditWindow?.approval_until ? String(markManagerEditWindow.approval_until) : null;
@@ -1323,7 +1334,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
       const firstName = workbook.SheetNames?.[0];
       if (!firstName) throw new Error('No sheet found in the Excel file.');
       const sheet0 = workbook.Sheets[firstName];
-      const rows: any[][] = XLSX.utils.sheet_to_json(sheet0, { header: 1 });
+      const rows: any[][] = XLSX.utils.sheet_to_json(sheet0, { header: 1, defval: '', blankrows: false, raw: false });
       if (!rows.length) throw new Error('Excel sheet is empty.');
 
       const headerRow = (rows[0] || []).map(normalizeHeaderCell);
@@ -1341,9 +1352,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
       const regToStudentId = new Map<string, number>();
       for (const s of students) {
         const full = String(s.reg_no || '').trim();
-        if (full) regToStudentId.set(full, s.id);
-        const short = shortenRegisterNo(full);
-        if (short) regToStudentId.set(short, s.id);
+        for (const key of registerNoKeys(full)) regToStudentId.set(key, s.id);
       }
 
       const normalizePart = (n: number | null): number | '' => {
@@ -1358,7 +1367,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
 
         for (let i = 1; i < rows.length; i++) {
           const row = rows[i] || [];
-          const reg = String(row[regCol] ?? '').trim();
+          const reg = normalizeRegisterNo(row[regCol]);
           if (!reg) continue;
           const studentId = regToStudentId.get(reg);
           if (!studentId) continue;
@@ -1480,7 +1489,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
           ) : null}
           <button
             onClick={publish}
-            disabled={publishButtonIsRequestEdit ? markEntryReqPending : publishing || students.length === 0 || !publishAllowed || globalLocked}
+            disabled={editRequestsBlocked || (publishButtonIsRequestEdit ? markEntryReqPending : publishing || students.length === 0 || !publishAllowed || globalLocked)}
             className="obe-btn obe-btn-primary"
           >
             {publishButtonIsRequestEdit ? (markEntryReqPending ? 'Request Pending' : 'Request Edit') : publishing ? 'Publishing…' : 'Publish'}
@@ -2159,9 +2168,11 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                       <button className="obe-btn obe-btn-success" onClick={() => setMarkManagerModal({ mode: 'confirm' })} disabled={!subjectId || markManagerBusy}>
                         Save Mark Manager
                       </button>
-                      <button className="obe-btn" onClick={() => requestMarkManagerEdit()} disabled={markManagerBusy}>
-                        Request Access
-                      </button>
+                      {editRequestsEnabled ? (
+                        <button className="obe-btn" onClick={() => requestMarkManagerEdit()} disabled={markManagerBusy}>
+                          Request Access
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                 </>
@@ -2200,7 +2211,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                   >
                     <div>
                       <div style={{ fontWeight: 950, color: '#065f46' }}>Published — Locked</div>
-                      <div style={{ fontSize: 12, color: '#065f46', marginTop: 4 }}>Marks are published. Use View or Request Edit to ask IQAC for access.</div>
+                      <div style={{ fontSize: 12, color: '#065f46', marginTop: 4 }}>{editRequestsEnabled ? 'Marks are published. Use View or Request Edit to ask IQAC for access.' : 'Marks are published. Edit requests are disabled by IQAC.'}</div>
                     </div>
                     <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                       <button
@@ -2217,25 +2228,27 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                       >
                         View
                       </button>
-                      <button
-                        className="obe-btn obe-btn-success"
-                        disabled={markEntryReqPending}
-                        onClick={async () => {
-                          if (markEntryReqPending) {
-                            alert('Edit request is pending. Please wait.');
-                            return;
-                          }
-                          const mobileOk = await ensureMobileVerified();
-                          if (!mobileOk) {
-                            alert('Please verify your mobile number in Profile before requesting edits.');
-                            window.location.href = '/profile';
-                            return;
-                          }
-                          setPublishedEditModalOpen(true);
-                        }}
-                      >
-                        {markEntryReqPending ? 'Request Pending' : 'Request Edit'}
-                      </button>
+                      {editRequestsEnabled ? (
+                        <button
+                          className="obe-btn obe-btn-success"
+                          disabled={markEntryReqPending}
+                          onClick={async () => {
+                            if (markEntryReqPending) {
+                              alert('Edit request is pending. Please wait.');
+                              return;
+                            }
+                            const mobileOk = await ensureMobileVerified();
+                            if (!mobileOk) {
+                              alert('Please verify your mobile number in Profile before requesting edits.');
+                              window.location.href = '/profile';
+                              return;
+                            }
+                            setPublishedEditModalOpen(true);
+                          }}
+                        >
+                          {markEntryReqPending ? 'Request Pending' : 'Request Edit'}
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                 </>
@@ -2244,7 +2257,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
           ) : (
             <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 20, background: '#fff' }}>
               <div style={{ fontWeight: 900, fontSize: 16 }}>{displayPublishedLocked ? 'Published — Locked' : 'Table Locked'}</div>
-              <div style={{ color: '#6b7280', marginTop: 8 }}>{displayPublishedLocked ? 'Marks published. Use View or Request Edit to ask IQAC for access.' : 'Confirm the Mark Manager to unlock the student list.'}</div>
+              <div style={{ color: '#6b7280', marginTop: 8 }}>{displayPublishedLocked ? (editRequestsEnabled ? 'Marks published. Use View or Request Edit to ask IQAC for access.' : 'Marks published. Edit requests are disabled by IQAC.') : 'Confirm the Mark Manager to unlock the student list.'}</div>
               <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'flex-end' }}>
                 {!displayPublishedLocked ? (
                   <>
@@ -2266,25 +2279,27 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                     >
                       View
                     </button>
-                    <button
-                      className="obe-btn obe-btn-success"
-                      disabled={markEntryReqPending}
-                      onClick={async () => {
-                        if (markEntryReqPending) {
-                          alert('Edit request is pending. Please wait.');
-                          return;
-                        }
-                        const mobileOk = await ensureMobileVerified();
-                        if (!mobileOk) {
-                          alert('Please verify your mobile number in Profile before requesting edits.');
-                          window.location.href = '/profile';
-                          return;
-                        }
-                        setPublishedEditModalOpen(true);
-                      }}
-                    >
-                      {markEntryReqPending ? 'Request Pending' : 'Request Edit'}
-                    </button>
+                    {editRequestsEnabled ? (
+                      <button
+                        className="obe-btn obe-btn-success"
+                        disabled={markEntryReqPending}
+                        onClick={async () => {
+                          if (markEntryReqPending) {
+                            alert('Edit request is pending. Please wait.');
+                            return;
+                          }
+                          const mobileOk = await ensureMobileVerified();
+                          if (!mobileOk) {
+                            alert('Please verify your mobile number in Profile before requesting edits.');
+                            window.location.href = '/profile';
+                            return;
+                          }
+                          setPublishedEditModalOpen(true);
+                        }}
+                      >
+                        {markEntryReqPending ? 'Request Pending' : 'Request Edit'}
+                      </button>
+                    ) : null}
                   </>
                 )}
               </div>
