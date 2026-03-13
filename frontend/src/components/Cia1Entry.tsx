@@ -30,6 +30,8 @@ import { ModalPortal } from './ModalPortal';
 import { normalizeObeClassType } from '../constants/classTypes';
 import * as XLSX from 'xlsx';
 import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
+import { useMarkEntryEditRequestsEnabled } from '../utils/requestControl';
+import { normalizeRegisterNo } from '../utils/excelImport';
 
 type Student = {
   id: number;
@@ -452,11 +454,13 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
     Boolean(markManagerApprovalUntil) &&
     markManagerApprovalUntil !== (publishConsumedApprovals?.markManagerApprovalUntil ?? null);
 
-  const entryOpen = !isPublished ? Boolean(editAllowed) : Boolean(markLock?.entry_open) || markEntryApprovedFresh || markManagerApprovedFresh;
-  const publishedEditLocked = Boolean(isPublished && !entryOpen);
-  const tableBlocked = Boolean(globalLocked || !entryOpen || (!isPublished && !markManagerLocked));
+  const editRequestsEnabled = useMarkEntryEditRequestsEnabled();
+  const entryOpen = !isPublished ? Boolean(editAllowed) : !editRequestsEnabled || Boolean(markLock?.entry_open) || markEntryApprovedFresh || markManagerApprovedFresh;
+  const publishedEditLocked = Boolean(isPublished && editRequestsEnabled && !entryOpen);
+  const tableBlocked = Boolean(globalLocked || (isPublished ? (editRequestsEnabled && !entryOpen) : !markManagerLocked));
+  const editRequestsBlocked = Boolean(isPublished && publishedEditLocked && !editRequestsEnabled);
 
-  const publishButtonIsRequestEdit = Boolean(isPublished && publishedEditLocked);
+  const publishButtonIsRequestEdit = Boolean(isPublished && publishedEditLocked && editRequestsEnabled);
 
   const {
     pending: markEntryReqPending,
@@ -492,6 +496,10 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
 
   async function requestMarkManagerEdit() {
     if (!subjectId) return;
+    if (!editRequestsEnabled) {
+      alert('Edit requests are disabled by IQAC.');
+      return;
+    }
     setMarkManagerBusy(true);
     setMarkManagerError(null);
     try {
@@ -514,6 +522,10 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
 
   async function requestMarkEntryEdit() {
     if (!subjectId) return;
+    if (!editRequestsEnabled) {
+      alert('Edit requests are disabled by IQAC.');
+      return;
+    }
 
     const mobileOk = await ensureMobileVerified();
     if (!mobileOk) {
@@ -1597,7 +1609,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       const data = await file.arrayBuffer();
       const workbook = XLSX.read(data, { type: 'array' });
       const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-      const rows: any[][] = XLSX.utils.sheet_to_json(firstSheet, { header: 1 });
+      const rows: any[][] = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: '', blankrows: false, raw: false });
 
       if (rows.length < 2) {
         throw new Error('Excel file is empty or has no data rows');
@@ -1653,7 +1665,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       // Build a map from reg_no to student
       const studentsByRegNo = new Map<string, Student>();
       students.forEach((s) => {
-        const normalizedReg = String(s.reg_no || '').trim().toUpperCase();
+        const normalizedReg = normalizeRegisterNo(s.reg_no);
         if (normalizedReg) {
           studentsByRegNo.set(normalizedReg, s);
         }
@@ -1668,7 +1680,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         const row = rows[i];
         if (!row || row.length === 0) continue;
 
-        const regNo = String(row[regNoIdx] || '').trim().toUpperCase();
+        const regNo = normalizeRegisterNo(row[regNoIdx]);
         if (!regNo) continue;
 
         const student = studentsByRegNo.get(regNo);
@@ -1962,7 +1974,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
           ) : null}
           <button
             onClick={publish}
-            disabled={publishButtonIsRequestEdit ? markEntryReqPending : publishing || students.length === 0 || !publishAllowed || tableBlocked || globalLocked}
+            disabled={editRequestsBlocked || (publishButtonIsRequestEdit ? markEntryReqPending : publishing || students.length === 0 || !publishAllowed || tableBlocked || globalLocked)}
             className="obe-btn obe-btn-primary"
           >
             {publishButtonIsRequestEdit ? (markEntryReqPending ? 'Request Pending' : 'Request Edit') : publishing ? 'Publishing…' : 'Publish'}
@@ -2081,8 +2093,11 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button
                     className="obe-btn obe-btn-success"
-                    disabled={!subjectId || markManagerBusy}
-                    onClick={() => setMarkManagerModal({ mode: markManagerLocked ? 'request' : 'confirm' })}
+                    disabled={!subjectId || markManagerBusy || (markManagerLocked && !editRequestsEnabled)}
+                    onClick={() => {
+                      if (markManagerLocked && !editRequestsEnabled) return;
+                      setMarkManagerModal({ mode: markManagerLocked ? 'request' : 'confirm' });
+                    }}
                   >
                     {markManagerLocked ? 'Edit' : 'Save'}
                   </button>
@@ -2108,7 +2123,9 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                   <div style={{ fontWeight: 800, fontSize: 18, marginTop: 8 }}>{isPublished ? 'Published — Locked' : 'Table Locked'}</div>
                   <div style={{ color: '#6b7280', marginTop: 6 }}>
                     {isPublished
-                      ? 'Marks are published. Use View to inspect or Request Edit to ask IQAC for access.'
+                      ? editRequestsEnabled
+                        ? 'Marks are published. Use View to inspect or Request Edit to ask IQAC for access.'
+                        : 'Marks are published. Edit requests are disabled by IQAC.'
                       : 'Confirm the Mark Manager to unlock the student list.'}
                   </div>
                   {isPublished && editRequestMessage ? <div style={{ marginTop: 8, fontSize: 13, color: '#065f46' }}>{editRequestMessage}</div> : null}
@@ -2122,9 +2139,11 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                         <button className="obe-btn" onClick={() => setViewMarksModalOpen(true)} style={{ marginRight: 8 }}>
                           View
                         </button>
-                        <button className="obe-btn obe-btn-success" onClick={async () => { await openEditRequestModal(); }} disabled={editRequestBusy || markEntryReqPending}>
-                          {markEntryReqPending ? 'Request Pending' : 'Request Edit'}
-                        </button>
+                        {editRequestsEnabled ? (
+                          <button className="obe-btn obe-btn-success" onClick={async () => { await openEditRequestModal(); }} disabled={editRequestBusy || markEntryReqPending}>
+                            {markEntryReqPending ? 'Request Pending' : 'Request Edit'}
+                          </button>
+                        ) : null}
                       </>
                     )}
                   </div>

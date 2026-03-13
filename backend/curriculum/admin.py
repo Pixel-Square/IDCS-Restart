@@ -304,8 +304,8 @@ class RegulationFilter(SimpleListFilter):
 
 @admin.register(CurriculumDepartment)
 class CurriculumDepartmentAdmin(admin.ModelAdmin):
-    list_display = ('department', 'regulation', 'semester', 'batch', 'course_code', 'mnemonic', 'course_name', 'is_elective', 'editable', 'overridden')
-    list_filter = ('department', RegulationFilter, 'semester', 'batch', 'is_elective', 'editable', 'overridden')
+    list_display = ('department', 'regulation', 'semester', 'batch', 'course_code', 'mnemonic', 'course_name', 'is_elective', 'is_dept_core', 'editable', 'overridden')
+    list_filter = ('department', RegulationFilter, 'semester', 'batch', 'is_elective', 'is_dept_core', 'editable', 'overridden')
     search_fields = ('course_code', 'course_name', 'mnemonic')
 
     def get_readonly_fields(self, request, obj=None):
@@ -314,7 +314,7 @@ class CurriculumDepartmentAdmin(admin.ModelAdmin):
         ro = list(super().get_readonly_fields(request, obj))
         if obj and obj.master and not getattr(obj.master, 'editable', False):
             ro += [
-                'regulation', 'semester', 'course_code', 'mnemonic', 'course_name', 'category', 'is_elective',
+                'regulation', 'semester', 'course_code', 'mnemonic', 'course_name', 'category', 'is_elective', 'is_dept_core',
                 'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark',
                 'total_hours', 'question_paper_type',
             ]

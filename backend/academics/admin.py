@@ -110,7 +110,7 @@ class StaffProfileForm(forms.ModelForm):
 @admin.register(StudentProfile)
 class StudentProfileAdmin(admin.ModelAdmin):
     form = StudentProfileForm
-    list_display = ('user', 'reg_no', 'get_department', 'batch', 'current_section_display', 'status', 'home_department')
+    list_display = ('user', 'reg_no', 'get_department', 'batch', 'current_section_display', 'status', 'get_section_dept')
     search_fields = ('reg_no', 'user__username', 'user__email')
     # filter by the department through the section->semester->course relation
     list_filter = ('section__batch__course__department', 'batch', 'home_department')
@@ -266,21 +266,37 @@ class StudentProfileAdmin(admin.ModelAdmin):
     mark_alumni.short_description = 'Mark selected students as ALUMNI'
 
     def get_department(self, obj):
-        # obj.section -> semester -> course -> department
+        # Primary: use home_department (stores the student's permanent degree department).
+        # For S&H Year-1 students this is the core degree dept (AI&DS/ECE);
+        # for regular students it equals their section's course department.
+        if obj.home_department_id:
+            return obj.home_department
+        # Fallback: derive from section → batch → course → department
         sec = getattr(obj, 'section', None)
         if not sec:
             return None
-        # section is now batch-wise; resolve course via batch
         batch = getattr(sec, 'batch', None)
         if not batch:
             return None
         course = getattr(batch, 'course', None)
-        if not course:
-            return None
-        dept = getattr(course, 'department', None)
+        dept = getattr(course, 'department', None) if course else getattr(batch, 'department', None)
         return dept
 
     get_department.short_description = 'Department'
+
+    def get_section_dept(self, obj):
+        """Show the student's current physical section department (e.g. S&H for Year-1)."""
+        sec = getattr(obj, 'section', None)
+        if not sec:
+            return '-'
+        batch = getattr(sec, 'batch', None)
+        if not batch:
+            return '-'
+        course = getattr(batch, 'course', None)
+        dept = (getattr(course, 'department', None) if course else None) or getattr(batch, 'department', None)
+        return dept or '-'
+
+    get_section_dept.short_description = 'Home Dept'
 
     def current_section_display(self, obj):
         sec = obj.current_section
@@ -934,9 +950,9 @@ class StaffProfileAdmin(admin.ModelAdmin):
 
 @admin.register(StudentSectionAssignment)
 class StudentSectionAssignmentAdmin(admin.ModelAdmin):
-    list_display = ('student', 'section', 'start_date', 'end_date', 'created_at')
+    list_display = ('student', 'section', 'section_type', 'start_date', 'end_date', 'created_at')
     search_fields = ('student__reg_no', 'student__user__username')
-    list_filter = ('section',)
+    list_filter = ('section_type', 'section')
     actions = ('end_assignments',)
 
     def end_assignments(self, request, queryset):

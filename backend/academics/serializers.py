@@ -1099,7 +1099,7 @@ class StaffProfileSerializer(serializers.ModelSerializer):
         model = StaffProfile
         fields = [
             'id', 'staff_id', 'department', 'designation', 'status',
-            'mobile_number', 'mobile_number_verified_at', 'rfid_uid',
+            'mobile_number', 'mobile_number_verified_at', 'profile_image', 'rfid_uid',
             # Write-only user fields
             'username', 'password', 'first_name', 'last_name', 'email',
             # Read-only user fields

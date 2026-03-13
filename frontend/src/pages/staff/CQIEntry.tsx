@@ -65,6 +65,11 @@ const MODEL_THEORY_QUESTIONS: Array<{ key: string; max: number }> = [
 ];
 
 const MODEL_THEORY_CO_ROW = [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 1, 2, 3, 4, 5, 5] as const;
+const TCPL_REVIEW_EXPERIMENT_WEIGHT: Record<number, number> = { 1: 9, 2: 9, 3: 4.5 };
+const TCPL_REVIEW_CAA_WEIGHT: Record<number, number> = { 1: 3, 2: 3, 3: 1.5 };
+const TCPL_REVIEW_CAA_RAW_MAX: Record<number, number> = { 1: 20, 2: 20, 3: 10 };
+const TCPL_REVIEW_CO_MAX: Record<number, number> = { 1: 12, 2: 12, 3: 6 };
+const LAB_EXPERIMENT_WEIGHT_BY_CO: Record<number, number> = { 1: 9, 2: 9, 3: 4.5, 4: 9, 5: 9 };
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
@@ -88,6 +93,24 @@ function avgMarks(arr: Array<number | ''>): number | null {
   const nums = (arr || []).filter((x) => typeof x === 'number' && Number.isFinite(x)) as number[];
   if (!nums.length) return null;
   return nums.reduce((s, n) => s + n, 0) / nums.length;
+}
+
+function sumMarks(arr: Array<number | ''>): number {
+  return (arr || []).reduce<number>((sum, value) => {
+    return typeof value === 'number' && Number.isFinite(value) ? sum + value : sum;
+  }, 0);
+}
+
+function normalizedContribution(obtained: number, totalMax: number, weight: number): number {
+  if (!Number.isFinite(obtained) || !Number.isFinite(totalMax) || !Number.isFinite(weight)) return 0;
+  if (totalMax <= 0 || weight <= 0) return 0;
+  const safeObtained = clamp(obtained, 0, totalMax);
+  return (safeObtained / totalMax) * weight;
+}
+
+function clampInt(n: number, min: number, max: number) {
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, Math.trunc(n)));
 }
 
 function round2(n: number) {
@@ -770,46 +793,153 @@ export default function CQIEntry({
           review2: { co3: Number(review2Cfg?.coMax?.co3 ?? review2Cfg?.coMax?.co1) || 15, co4: Number(review2Cfg?.coMax?.co4 ?? review2Cfg?.coMax?.co2) || 15 },
         };
 
-        const readTcplLabPair = (snapshot: any | null) => {
-          const sheet = snapshot?.sheet && typeof snapshot.sheet === 'object' ? snapshot.sheet : {};
+        const readLabAssessmentByCo = (
+          snapshot: any | null,
+          options?: { fallbackCiaEnabled?: boolean; profile?: 'strict-lab' | 'tcpl' | 'simple' },
+        ) => {
+          const sheet = snapshot?.sheet && typeof snapshot.sheet === 'object'
+            ? snapshot.sheet
+            : snapshot && typeof snapshot === 'object'
+              ? snapshot
+              : {};
           const rowsByStudentId = sheet?.rowsByStudentId && typeof sheet.rowsByStudentId === 'object' ? sheet.rowsByStudentId : {};
-          const expCountA = clamp(Number(sheet?.expCountA ?? 0), 0, 12);
-          const expCountB = clamp(Number(sheet?.expCountB ?? 0), 0, 12);
-          const expMaxA = Number.isFinite(Number(sheet?.expMaxA)) ? Number(sheet.expMaxA) : 25;
-          const expMaxB = Number.isFinite(Number(sheet?.expMaxB)) ? Number(sheet.expMaxB) : 25;
-          const ciaEnabled = (sheet as any)?.ciaExamEnabled !== false;
-          const HALF = 30 / 2;
-          const CO_MAX_A = expMaxA + (ciaEnabled ? HALF : 0);
-          const CO_MAX_B = expMaxB + (ciaEnabled ? HALF : 0);
+          const snapshotCoConfigs = (() => {
+            const rawSnapshot = sheet?.markManagerSnapshot;
+            if (!rawSnapshot) return null;
+            try {
+              const parsed = JSON.parse(String(rawSnapshot));
+              const enabled = Array.isArray(parsed?.enabled) ? parsed.enabled : [];
+              const out: Record<string, { enabled: boolean; expCount: number; expMax: number }> = {};
+              enabled.forEach((item: any) => {
+                const coNumber = clampInt(Number(item?.co), 1, 5);
+                out[String(coNumber)] = {
+                  enabled: true,
+                  expCount: clampInt(Number(item?.expCount ?? 0), 0, 12),
+                  expMax: Number.isFinite(Number(item?.expMax)) ? Number(item.expMax) : 25,
+                };
+              });
+              return out;
+            } catch {
+              return null;
+            }
+          })();
+          const rawCoConfigs = sheet?.coConfigs && typeof sheet.coConfigs === 'object' ? sheet.coConfigs : {};
+          const effectiveCoConfigs = snapshotCoConfigs && Object.keys(snapshotCoConfigs).length ? snapshotCoConfigs : rawCoConfigs;
+          const legacyCoA = Number.isFinite(Number(sheet?.coANum)) ? clampInt(Number(sheet.coANum), 1, 5) : 1;
+          const legacyCoB = Number.isFinite(Number(sheet?.coBNum)) ? clampInt(Number(sheet.coBNum), 1, 5) : null;
+          const defaultCiaMax = Number.isFinite(Number(sheet?.ciaExamMax)) ? Number(sheet.ciaExamMax) : 30;
+          const ciaEnabled = typeof sheet?.ciaExamEnabled === 'boolean'
+            ? Boolean(sheet.ciaExamEnabled)
+            : Boolean(options?.fallbackCiaEnabled);
 
-          const get = (sid: number) => {
+          const enabledCoNumbers = (() => {
+            const fromConfigs = Object.entries(effectiveCoConfigs)
+              .filter(([, cfg]) => Boolean((cfg as any)?.enabled))
+              .map(([co]) => Number(co))
+              .filter((co) => Number.isFinite(co));
+            if (fromConfigs.length) return fromConfigs;
+            const legacy: number[] = [];
+            if ((sheet?.coAEnabled ?? true) && Number.isFinite(legacyCoA)) legacy.push(legacyCoA);
+            if ((sheet?.coBEnabled ?? false) && legacyCoB != null) legacy.push(legacyCoB);
+            return legacy;
+          })();
+
+          const coShareCount = Math.max(1, enabledCoNumbers.length || (legacyCoB != null ? 2 : 1));
+
+          const getCoConfig = (coNumber: number) => {
+            const rawCfg = (effectiveCoConfigs as any)?.[String(coNumber)];
+            if (rawCfg && typeof rawCfg === 'object') {
+              return {
+                expCount: clampInt(Number((rawCfg as any).expCount ?? 0), 0, 12),
+                expMax: Number.isFinite(Number((rawCfg as any).expMax)) ? Number((rawCfg as any).expMax) : 25,
+              };
+            }
+            if (coNumber === legacyCoA) {
+              return {
+                expCount: clampInt(Number(sheet?.expCountA ?? 0), 0, 12),
+                expMax: Number.isFinite(Number(sheet?.expMaxA)) ? Number(sheet.expMaxA) : 25,
+              };
+            }
+            if (legacyCoB != null && coNumber === legacyCoB) {
+              return {
+                expCount: clampInt(Number(sheet?.expCountB ?? 0), 0, 12),
+                expMax: Number.isFinite(Number(sheet?.expMaxB)) ? Number(sheet.expMaxB) : 25,
+              };
+            }
+            return { expCount: 0, expMax: 25 };
+          };
+
+          const get = (sid: number, coNumber: number): { value: number; max: number } | null => {
             const row = rowsByStudentId[String(sid)] || {};
-            const marksA = normalizeMarksArray((row as any)?.marksA, expCountA);
-            const marksB = normalizeMarksArray((row as any)?.marksB, expCountB);
-            const avgA = avgMarks(marksA);
-            const avgB = avgMarks(marksB);
-            const ciaExamRaw = (row as any)?.ciaExam;
-            const ciaExamNum = typeof ciaExamRaw === 'number' && Number.isFinite(ciaExamRaw) ? ciaExamRaw : null;
-            const hasAny = avgA != null || avgB != null || ciaExamNum != null;
+            const cfg = getCoConfig(coNumber);
+            const marksByCo = row?.marksByCo && typeof row.marksByCo === 'object' ? row.marksByCo : {};
+            const fallbackMarks = coNumber === legacyCoA ? row?.marksA : coNumber === legacyCoB ? row?.marksB : undefined;
+            const rawMarks = (marksByCo as any)?.[String(coNumber)] ?? fallbackMarks;
+            const sourceLength = Array.isArray(rawMarks) ? rawMarks.length : 0;
+            const expCount = clampInt(sourceLength > 0 ? sourceLength : cfg.expCount, 0, 12);
+            const marks = normalizeMarksArray(rawMarks, expCount);
+            const markTotal = sumMarks(marks);
+            const avgMark = avgMarks(marks);
+            const hasExperimentMarks = marks.some((value) => typeof value === 'number' && Number.isFinite(value));
+            const expTotalMax = expCount * Math.max(0, cfg.expMax);
 
-            const a = !hasAny ? null : (avgA ?? 0) + (ciaEnabled ? (ciaExamNum ?? 0) / 2 : 0);
-            const b = !hasAny ? null : (avgB ?? 0) + (ciaEnabled ? (ciaExamNum ?? 0) / 2 : 0);
+            const ciaByCo = row?.ciaExamByCo && typeof row.ciaExamByCo === 'object' ? row.ciaExamByCo : {};
+            const perCoCia = toNumOrNull((ciaByCo as any)?.[String(coNumber)]);
+            const sharedCia = ciaEnabled ? toNumOrNull(row?.ciaExam) : null;
+            const ciaPortion = perCoCia != null ? perCoCia : sharedCia != null ? sharedCia / coShareCount : null;
+            const profile = options?.profile ?? 'simple';
+
+            if (profile === 'tcpl') {
+              const expWeight = Number(TCPL_REVIEW_EXPERIMENT_WEIGHT[coNumber] || 0);
+              const caaWeight = Number(TCPL_REVIEW_CAA_WEIGHT[coNumber] || 0);
+              const caaRawMax = Number(TCPL_REVIEW_CAA_RAW_MAX[coNumber] || 0);
+              const coMax = Number(TCPL_REVIEW_CO_MAX[coNumber] || 0);
+              const caaByCo = row?.caaExamByCo && typeof row.caaExamByCo === 'object' ? row.caaExamByCo : {};
+              const rawCaa = toNumOrNull((caaByCo as any)?.[String(coNumber)]);
+              const caaValue = rawCaa ?? 0;
+              const value = normalizedContribution(markTotal, expTotalMax, expWeight) + normalizedContribution(caaValue, caaRawMax, caaWeight);
+              const hasAny = hasExperimentMarks || rawCaa != null;
+              if (!hasAny || coMax <= 0) return null;
+              return {
+                value: clamp(value, 0, coMax),
+                max: coMax,
+              };
+            }
+
+            if (profile === 'strict-lab') {
+              const ciaMaxPerCo = ciaEnabled ? defaultCiaMax / coShareCount : 0;
+              const expWeight = Number(LAB_EXPERIMENT_WEIGHT_BY_CO[coNumber] || 0);
+              const expContribution = normalizedContribution(markTotal, expTotalMax, expWeight);
+              const ciaContribution = ciaEnabled ? normalizedContribution(ciaPortion ?? 0, ciaMaxPerCo, ciaMaxPerCo) : 0;
+              const coMax = expWeight + ciaMaxPerCo;
+              const hasAny = hasExperimentMarks || (ciaPortion != null && Number.isFinite(ciaPortion));
+              if (!hasAny || coMax <= 0) return null;
+              return {
+                value: clamp(expContribution + ciaContribution, 0, coMax),
+                max: coMax,
+              };
+            }
+
+            const ciaMax = ciaEnabled ? defaultCiaMax / coShareCount : 0;
+            const coMax = Math.max(0, cfg.expMax) + ciaMax;
+            const hasAny = hasExperimentMarks || ciaPortion != null;
+            if (!hasAny) return null;
 
             return {
-              a: a == null ? null : clamp(a, 0, CO_MAX_A),
-              b: b == null ? null : clamp(b, 0, CO_MAX_B),
+              value: clamp((avgMark ?? 0) + (ciaPortion ?? 0), 0, coMax),
+              max: coMax,
             };
           };
 
-          return { get, CO_MAX_A, CO_MAX_B };
+          return { get };
         };
 
-        const tcplLab1 = isTcpl ? readTcplLabPair((labF1Res as any)?.data ?? null) : null;
-        const tcplLab2 = isTcpl ? readTcplLabPair((labF2Res as any)?.data ?? null) : null;
+        const tcplLab1 = isTcpl ? readLabAssessmentByCo((labF1Res as any)?.data ?? null, { fallbackCiaEnabled: true, profile: 'simple' }) : null;
+        const tcplLab2 = isTcpl ? readLabAssessmentByCo((labF2Res as any)?.data ?? null, { fallbackCiaEnabled: true, profile: 'simple' }) : null;
 
-        const labCia1 = isLabLike ? readTcplLabPair((labCia1Res as any)?.data ?? null) : null;
-        const labCia2 = isLabLike ? readTcplLabPair((labCia2Res as any)?.data ?? null) : null;
-        const labModel = isLabLike ? readTcplLabPair((labModelRes as any)?.data ?? null) : null;
+        const labCia1 = isLabLike ? readLabAssessmentByCo((labCia1Res as any)?.data ?? null, { fallbackCiaEnabled: true, profile: 'strict-lab' }) : null;
+        const labCia2 = isLabLike ? readLabAssessmentByCo((labCia2Res as any)?.data ?? null, { fallbackCiaEnabled: true, profile: 'strict-lab' }) : null;
+        const labModel = isLabLike ? readLabAssessmentByCo((labModelRes as any)?.data ?? null, { fallbackCiaEnabled: true, profile: 'strict-lab' }) : null;
 
         const totals: Record<number, Record<string, { value: number; max: number } | null>> = {};
 
@@ -889,11 +1019,10 @@ export default function CQIEntry({
 
                 // TCPL: LAB1 replaces Formative1
                 if (isTcpl && tcplLab1) {
-                  const r = tcplLab1.get(student.id);
-                  const v = coNum === 1 ? r.a : r.b;
-                  if (v != null) {
-                    faMark = v;
-                    faMax = coNum === 1 ? tcplLab1.CO_MAX_A : tcplLab1.CO_MAX_B;
+                  const coData = tcplLab1.get(student.id, coNum);
+                  if (coData) {
+                    faMark = coData.value;
+                    faMax = coData.max;
                   }
                 }
 
@@ -912,11 +1041,10 @@ export default function CQIEntry({
               } else {
                 // LAB/PRACTICAL: CIA1 lab-style provides CO1/CO2 values.
                 if (labCia1) {
-                  const r = labCia1.get(student.id);
-                  const v = coNum === 1 ? r.a : r.b;
-                  if (v != null) {
-                    ciaMark = v;
-                    ciaMax = coNum === 1 ? labCia1.CO_MAX_A : labCia1.CO_MAX_B;
+                  const coData = labCia1.get(student.id, coNum);
+                  if (coData) {
+                    ciaMark = coData.value;
+                    ciaMax = coData.max;
                   }
                 }
               }
@@ -970,11 +1098,10 @@ export default function CQIEntry({
 
                 // TCPL: LAB2 replaces Formative2
                 if (isTcpl && tcplLab2) {
-                  const r = tcplLab2.get(student.id);
-                  const v = coNum === 3 ? r.a : r.b;
-                  if (v != null) {
-                    faMark = v;
-                    faMax = coNum === 3 ? tcplLab2.CO_MAX_A : tcplLab2.CO_MAX_B;
+                  const coData = tcplLab2.get(student.id, coNum);
+                  if (coData) {
+                    faMark = coData.value;
+                    faMax = coData.max;
                   }
                 }
 
@@ -993,11 +1120,10 @@ export default function CQIEntry({
               } else {
                 // LAB/PRACTICAL: CIA2 lab-style provides CO3/CO4 values.
                 if (labCia2) {
-                  const r = labCia2.get(student.id);
-                  const v = coNum === 3 ? r.a : r.b;
-                  if (v != null) {
-                    ciaMark = v;
-                    ciaMax = coNum === 3 ? labCia2.CO_MAX_A : labCia2.CO_MAX_B;
+                  const coData = labCia2.get(student.id, coNum);
+                  if (coData) {
+                    ciaMark = coData.value;
+                    ciaMax = coData.max;
                   }
                 }
               }
@@ -1005,10 +1131,10 @@ export default function CQIEntry({
 
             // LAB/PRACTICAL: MODEL is read from lab sheet (not localStorage)
             if (isLabLike && coNum === 5 && labModel) {
-              const r = labModel.get(student.id);
-              if (r.a != null) {
-                meMark = r.a;
-                meMax = labModel.CO_MAX_A;
+              const coData = labModel.get(student.id, coNum);
+              if (coData) {
+                meMark = coData.value;
+                meMax = coData.max;
               }
             }
 

@@ -39,9 +39,11 @@ from .views import (
     AllStaffListView,
     StaffDepartmentAssignView,
     StaffDepartmentRoleRemoveView,
+    BatchListView,
 )
-from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView, ClassAttendanceReportView, TodayPeriodAttendanceView, PeriodAttendanceReportView, OverallSectionView, MyClassStudentsView, DailyAttendanceView, DailyAttendanceLockView, DailyAttendanceUnlockView, MyClassAttendanceAnalyticsView, DailyAttendanceSessionDetailView, SectionStudentAttendanceDayView, DailyAttendanceRevertAssignmentView, DailyAttendanceUnlockRequestView, PeriodAttendanceUnlockRequestView, HODUnlockRequestsView, PeriodAttendanceSwapView, PeriodAttendanceRevertAssignmentView
+from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView, ClassAttendanceReportView, TodayPeriodAttendanceView, PeriodAttendanceReportView, OverallSectionView, MyClassStudentsView, DailyAttendanceView, DailyAttendanceLockView, DailyAttendanceUnlockView, MyClassAttendanceAnalyticsView, DailyAttendanceSessionDetailView, SectionStudentAttendanceDayView, DailyAttendanceRevertAssignmentView, DailyAttendanceUnlockRequestView, PeriodAttendanceUnlockRequestView, HODUnlockRequestsView, PeriodAttendanceSwapView, PeriodAttendanceRevertAssignmentView, AttendanceAssignmentRequestView, AttendanceAssignmentRequestActionView, AttendanceNotificationCountView
 from .views import UnifiedUnlockRequestsView, DepartmentStudentsView, AllStudentsView, MentorMyMenteesView
+from .views import BulkAssignSecondarySectionView, RemoveSecondarySectionView
 from .student_import_views import StudentImportTemplateDownloadView, StudentBulkImportView
 from .rfreader_views import RFReaderGateListCreateView, RFReaderStudentListCreateView, RFReaderLastScanView
 
@@ -73,6 +75,7 @@ urlpatterns = [
     path('hod-staff/', HODStaffListView.as_view()),
     path('staffs-page/', StaffsPageView.as_view()),
     path('all-staff/', AllStaffListView.as_view()),
+    path('batches/', BatchListView.as_view(), name='batch-list'),
     path('staff-department-assign/', StaffDepartmentAssignView.as_view()),
     path('staff-department-role-remove/', StaffDepartmentRoleRemoveView.as_view()),
     path('department-staff/', DepartmentStaffListView.as_view()),
@@ -103,6 +106,8 @@ urlpatterns = [
     path('mentor/my-mentees/', MentorMyMenteesView.as_view()),
     path('department-students/', DepartmentStudentsView.as_view()),
     path('all-students/', AllStudentsView.as_view()),
+    path('bulk-assign-secondary-section/', BulkAssignSecondarySectionView.as_view()),
+    path('remove-secondary-section/', RemoveSecondarySectionView.as_view()),
     path('students/import/', StudentBulkImportView.as_view()),
     path('students/import/template/', StudentImportTemplateDownloadView.as_view()),
     path('staff/periods/', StaffPeriodsView.as_view()),
@@ -136,4 +141,7 @@ urlpatterns = [
     path('rfreader/gates/', RFReaderGateListCreateView.as_view()),
     path('rfreader/students/', RFReaderStudentListCreateView.as_view()),
     path('rfreader/last-scan/', RFReaderLastScanView.as_view()),
+    path('attendance-assignment-requests/', AttendanceAssignmentRequestView.as_view()),
+    path('attendance-assignment-requests/<int:pk>/<str:action>/', AttendanceAssignmentRequestActionView.as_view()),
+    path('analytics/attendance-notification-count/', AttendanceNotificationCountView.as_view()),
 ]

@@ -62,4 +62,35 @@ body {
 .animate-bounce-in {
   animation: bounce-in 0.35s ease-out forwards;
 }
+/* Custom scrollbar utilities for feedback responses */
+@layer utilities {
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
 
+  .scrollbar-thumb-slate-300::-webkit-scrollbar-thumb {
+    background-color: #cbd5e1;
+    border-radius: 4px;
+  }
+
+  .scrollbar-thumb-slate-400::-webkit-scrollbar-thumb {
+    background-color: #94a3b8;
+  }
+
+  .scrollbar-track-slate-100::-webkit-scrollbar-track {
+    background-color: #f1f5f9;
+    border-radius: 4px;
+  }
+
+  /* Hover state for scrollbar */
+  .hover\:scrollbar-thumb-slate-400:hover::-webkit-scrollbar-thumb {
+    background-color: #94a3b8;
+  }
+
+  /* For Firefox */
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: #cbd5e1 #f1f5f9;
+  }
+}

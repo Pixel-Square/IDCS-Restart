@@ -11,12 +11,31 @@ backend/.venv/
 
 # Django
 backend/db.sqlite3
+db.sqlite3
 /media/
+backend/media/
 /staticfiles/
+backend/media/
+backend/staticfiles/
 
 # Env files
 .env
 .env.local
+.env.dev
+.env.prod
+backend/.env
+
+# Test files (temporary diagnostic and test scripts)
+backend/test_*.py
+backend/check_*.py
+backend/diagnose_*.py
+backend/find_*.py
+backend/quick_*.py
+backend/verify_*.py
+backend/debug_*.py
+backend/final_*.py
+backend/*.csv
+backend/STUDENT_ELECTIVE_IMPLEMENTATION_SUMMARY.md
 
 # Node
 node_modules/

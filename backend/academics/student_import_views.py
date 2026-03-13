@@ -48,8 +48,8 @@ class StudentImportTemplateDownloadView(APIView):
             # Fallback: return a CSV template
             output = io.StringIO()
             writer = csv.writer(output)
-            writer.writerow(['student_reg_no', 'name', 'department', 'section', 'email', 'batch', 'status'])
-            writer.writerow(['REG2024001', 'John Doe', 'AI&DS', 'A', 'john.doe@example.com', '2024', 'ACTIVE'])
+            writer.writerow(['student_reg_no', 'name', 'department', 'section', 'email', 'batch', 'status', 'core_department'])
+            writer.writerow(['REG2024001', 'John Doe', 'AI&DS', 'A', 'john.doe@example.com', '2024', 'ACTIVE', ''])
             response = HttpResponse(output.getvalue(), content_type='text/csv')
             response['Content-Disposition'] = 'attachment; filename="students_import_template.csv"'
             return response
@@ -68,11 +68,11 @@ class StudentImportTemplateDownloadView(APIView):
             ws = wb.active
             ws.title = 'Students Import'
 
-            headers = ['student_reg_no', 'name', 'department', 'section', 'email', 'batch', 'status']
+            headers = ['student_reg_no', 'name', 'department', 'section', 'email', 'batch', 'status', 'core_department']
             ws.append(headers)
 
             sample_dept = departments[0] if departments else 'AI&DS'
-            ws.append(['REG2024001', 'John Doe', sample_dept, 'A', 'john.doe@example.com', '2024', 'ACTIVE'])
+            ws.append(['REG2024001', 'John Doe', sample_dept, 'A', 'john.doe@example.com', '2024', 'ACTIVE', ''])
 
             # Build a hidden "_Lists" sheet for dropdown reference data.
             # Cross-sheet references avoid the 255-char inline list limit.
@@ -89,6 +89,10 @@ class StudentImportTemplateDownloadView(APIView):
                 ws.add_data_validation(dv_dept)
                 dv_dept.add('C2:C1000')
 
+                dv_core_dept = DataValidation(type='list', formula1=dept_ref, allow_blank=True)
+                ws.add_data_validation(dv_core_dept)
+                dv_core_dept.add('H2:H1000')
+
             status_ref = f"_Lists!$B$1:$B${len(STUDENT_STATUS_CHOICES)}"
             dv_status = DataValidation(type='list', formula1=status_ref, allow_blank=False)
             ws.add_data_validation(dv_status)
@@ -101,6 +105,7 @@ class StudentImportTemplateDownloadView(APIView):
             ws.column_dimensions['E'].width = 32
             ws.column_dimensions['F'].width = 12
             ws.column_dimensions['G'].width = 12
+            ws.column_dimensions['H'].width = 20
 
             # Save to buffer first
             raw_buf = BytesIO()
@@ -236,6 +241,7 @@ class StudentBulkImportView(APIView):
                     email = row.get('email', '').strip()
                     batch_year = row.get('batch', '').strip()
                     row_status = row.get('status', 'ACTIVE').strip().upper()
+                    core_dept_name = row.get('core_department', '').strip()
 
                     # Required field
                     if not reg_no:
@@ -262,6 +268,17 @@ class StudentBulkImportView(APIView):
                         if not department:
                             errors.append(
                                 f'Row {row_idx}: Department "{dept_name}" not found.'
+                            )
+                            continue
+
+                    # Resolve core_department (optional – for Year 1 S&H students whose
+                    # home_department differs from their section's department)
+                    core_department = None
+                    if core_dept_name:
+                        core_department = dept_map.get(core_dept_name.upper())
+                        if not core_department:
+                            errors.append(
+                                f'Row {row_idx}: core_department "{core_dept_name}" not found.'
                             )
                             continue
 
@@ -305,7 +322,10 @@ class StudentBulkImportView(APIView):
                     existing = StudentProfile.objects.filter(reg_no=reg_no).first()
                     if existing:
                         existing.status = row_status
-                        if department:
+                        # Use core_department for home_department if provided; otherwise use section's department
+                        if core_department:
+                            existing.home_department = core_department
+                        elif department:
                             existing.home_department = department
                         if section:
                             existing.section = section
@@ -338,25 +358,36 @@ class StudentBulkImportView(APIView):
                                 changed = True
                             if changed:
                                 user_obj.save(update_fields=['email', 'first_name', 'last_name'])
+                            # Ensure STUDENT role is assigned
+                            try:
+                                from accounts.models import Role, UserRole
+                                student_role = Role.objects.filter(name='STUDENT').first()
+                                if student_role:
+                                    UserRole.objects.get_or_create(user=user_obj, role=student_role)
+                            except Exception:
+                                pass
                         updated_count += 1
 
                     # -- Create new student --
                     else:
-                        # Generate a unique username from the reg_no
-                        base_username = re.sub(r'[^a-zA-Z0-9]', '', reg_no).lower() or 'student'
+                        # Name is required to create a meaningful student account
+                        if not name:
+                            errors.append(
+                                f'Row {row_idx}: name is required for new student (reg_no: "{reg_no}").'
+                            )
+                            continue
+
+                        # Use the student's name as username (matching existing student convention)
+                        base_username = name
                         username = base_username
                         counter = 1
                         while User.objects.filter(username=username).exists():
                             username = f'{base_username}{counter}'
                             counter += 1
 
-                        if name:
-                            parts = name.split()
-                            first_name = parts[0]
-                            last_name = ' '.join(parts[1:]) if len(parts) > 1 else ''
-                        else:
-                            first_name = ''
-                            last_name = ''
+                        parts = name.split()
+                        first_name = parts[0]
+                        last_name = ' '.join(parts[1:]) if len(parts) > 1 else ''
 
                         new_user = User(
                             username=username,
@@ -371,7 +402,7 @@ class StudentBulkImportView(APIView):
                             user=new_user,
                             reg_no=reg_no,
                             status=row_status,
-                            home_department=department,
+                            home_department=core_department if core_department else department,
                             section=section,
                             batch=batch_year,
                         )
@@ -382,6 +413,15 @@ class StudentBulkImportView(APIView):
                                 student=new_profile,
                                 section=section,
                             )
+
+                        # Assign STUDENT role so the account has proper access
+                        try:
+                            from accounts.models import Role, UserRole
+                            student_role = Role.objects.filter(name='STUDENT').first()
+                            if student_role:
+                                UserRole.objects.get_or_create(user=new_user, role=student_role)
+                        except Exception:
+                            pass
 
                         created_count += 1
 

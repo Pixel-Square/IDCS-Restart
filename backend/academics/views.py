@@ -479,12 +479,20 @@ class SectionAdvisorViewSet(viewsets.ModelViewSet):
         # If user has assign permission, allow viewing assignments for their departments
         if 'academics.assign_advisor' in perms:
             if allowed_depts:
-                return self.queryset.filter(section__batch__course__department_id__in=allowed_depts)
+                return self.queryset.filter(
+                    Q(section__batch__course__department_id__in=allowed_depts) |
+                    Q(section__batch__department_id__in=allowed_depts) |
+                    Q(section__managing_department_id__in=allowed_depts)
+                )
             return SectionAdvisor.objects.none()
 
         # fallback: HODs (role-based) can view for their HOD departments
         hod_depts = DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True).values_list('department_id', flat=True)
-        return self.queryset.filter(section__batch__course__department_id__in=hod_depts)
+        return self.queryset.filter(
+            Q(section__batch__course__department_id__in=hod_depts) |
+            Q(section__batch__department_id__in=hod_depts) |
+            Q(section__managing_department_id__in=hod_depts)
+        )
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -1733,10 +1741,13 @@ class AcademicYearViewSet(viewsets.ModelViewSet):
                 elif ta:
                     es = getattr(ta, 'elective_subject', None)
                 parent_dept_id = getattr(getattr(es, 'parent', None), 'department_id', None)
+                es_dept_id = getattr(es, 'department_id', None)
                 staff_profile = getattr(user, 'staff_profile', None)
-                if staff_profile and parent_dept_id:
+                if staff_profile:
                     hod_depts = list(DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True).values_list('department_id', flat=True))
-                    if parent_dept_id in hod_depts:
+                    # HOD of the parent dept (normal elective) OR HOD of the variant's own dept
+                    # (dept-core: parent is S&H but variant belongs to AI&DS HOD etc.)
+                    if (parent_dept_id and parent_dept_id in hod_depts) or (es_dept_id and es_dept_id in hod_depts):
                         serializer.save()
                         return
             except Exception:
@@ -1776,14 +1787,47 @@ class HODSectionsView(APIView):
         if not dept_ids:
             return Response({'results': []})
 
-        sections = Section.objects.filter(batch__course__department_id__in=dept_ids).select_related(
-            'batch__course__department', 'batch__regulation', 'semester'
-        ).order_by('batch__course__department__code', 'batch__name', 'name')
+        # Primary own sections (batch belongs to the HOD's department(s))
+        own_section_ids = set(Section.objects.filter(
+            Q(batch__course__department_id__in=dept_ids) |
+            Q(batch__department_id__in=dept_ids) |
+            Q(managing_department_id__in=dept_ids)
+        ).values_list('pk', flat=True))
+
+        # Secondary: sections where Year-1 students have SECONDARY assignments belonging
+        # to this HOD's department (e.g. AI&DS A / B for Year-1 dept-core periods).
+        from django.db.models import Exists, OuterRef
+        from .models import StudentSectionAssignment as _SSA
+        has_secondary_from_dept = _SSA.objects.filter(
+            section_id=OuterRef('pk'),
+            end_date__isnull=True,
+            section_type='SECONDARY',
+            student__home_department_id__in=dept_ids,
+        )
+        secondary_section_ids = set(Section.objects.filter(
+            Exists(has_secondary_from_dept)
+        ).values_list('pk', flat=True))
+
+        all_section_ids = own_section_ids | secondary_section_ids
+
+        sections = Section.objects.filter(
+            pk__in=all_section_ids
+        ).select_related(
+            'batch__course__department', 'batch__department', 'batch__regulation', 'semester'
+        ).order_by('batch__name', 'name')
+
         results = []
         for s in sections:
             batch = getattr(s, 'batch', None)
             course = getattr(batch, 'course', None) if batch else None
-            dept = getattr(course, 'department', None) if course is not None else None
+            # For S&H dept-only batches course is None; fall back to batch.department
+            # then to section.managing_department
+            dept = (
+                getattr(course, 'department', None)
+                if course is not None
+                else (getattr(batch, 'department', None) if batch else None)
+                    or getattr(s, 'managing_department', None)
+            )
             reg = getattr(batch, 'regulation', None) if batch else None
             sem_obj = getattr(s, 'semester', None)
             sem_val = getattr(sem_obj, 'number', None) if sem_obj else None
@@ -1847,9 +1891,10 @@ class DepartmentsListView(APIView):
         from .models import Department
 
         # accept either view_all_departments or view_all_staff permission as global access
-        if ({'academics.view_all_departments', 'academics.view_all_staff'} & perms) or user.is_staff or user.is_superuser:
+        if ({'academics.view_all_departments', 'academics.view_all_staff'} & perms) or user.is_superuser:
             qs = Department.objects.all()
         else:
+            # Use effective departments (own dept + DepartmentRole HOD/AHOD mappings)
             dept_ids = get_user_effective_departments(user) or []
             if not dept_ids:
                 return Response({'results': []})
@@ -2567,7 +2612,8 @@ class SectionStudentsView(APIView):
         except Exception:
             return Response({'results': []})
 
-        # current assignments
+        # current assignments — include both PRIMARY and SECONDARY so that core-dept sections
+        # show their Year-1 students (those have SECONDARY assignments to core-dept sections).
         from .models import StudentSectionAssignment, StudentProfile
         assign_qs = StudentSectionAssignment.objects.filter(section_id=sid, end_date__isnull=True).exclude(student__status__in=['INACTIVE', 'DEBAR']).select_related('student__user')
         students = [a.student for a in assign_qs]
@@ -5543,22 +5589,48 @@ class DepartmentStudentsView(APIView):
             if not dept_ids:
                 return Response({'sections': [], 'results': []})
 
-            sections = Section.objects.filter(
-                batch__course__department_id__in=dept_ids
-            ).select_related('batch', 'batch__course', 'batch__course__department').order_by(
-                'batch__course__department__code', 'batch__name', 'name'
+            # Own sections: batch belongs to the user's departments (via course or direct dept FK)
+            own_sections = Section.objects.filter(
+                Q(batch__course__department_id__in=dept_ids) | Q(batch__department_id__in=dept_ids)
+            ).select_related(
+                'batch', 'batch__course', 'batch__course__department', 'batch__department'
             )
+
+            # Shared sections: dept-only batches (e.g. S&H Year-1) that contain students
+            # whose home_department is one of the user's departments. These students are
+            # temporarily housed in the shared batch for Year-1 but belong to the core dept.
+            from django.db.models import Exists, OuterRef
+            has_home_dept_student = StudentSectionAssignment.objects.filter(
+                section_id=OuterRef('pk'),
+                end_date__isnull=True,
+                student__home_department_id__in=dept_ids,
+            )
+            shared_sections = Section.objects.filter(
+                batch__course__isnull=True,       # dept-only batch (no course → S&H style)
+                batch__department__isnull=False,   # has explicit batch department
+            ).exclude(
+                batch__department_id__in=dept_ids  # exclude own dept-only batches
+            ).filter(
+                Exists(has_home_dept_student)
+            ).select_related(
+                'batch', 'batch__department'
+            )
+
+            # Combined set IDs for fast lookup
+            own_section_ids = set(own_sections.values_list('id', flat=True))
+            shared_section_ids = set(shared_sections.values_list('id', flat=True))
+            all_accessible_ids = own_section_ids | shared_section_ids
 
             section_id_param = request.query_params.get('section_id')
 
             # ── Section list mode (no section_id param) ──────────────────────
             if not section_id_param:
-                # Return lightweight section metadata only
                 section_list = []
-                for sec in sections:
+                # Own sections
+                for sec in own_sections.order_by('batch__name', 'name'):
                     batch = getattr(sec, 'batch', None)
                     course = getattr(batch, 'course', None) if batch else None
-                    dept = getattr(course, 'department', None) if course else None
+                    dept = (getattr(course, 'department', None) if course else None) or getattr(batch, 'department', None)
                     section_list.append({
                         'section_id': sec.id,
                         'section_name': sec.name,
@@ -5566,6 +5638,20 @@ class DepartmentStudentsView(APIView):
                         'department_code': getattr(dept, 'code', None) if dept else None,
                         'department_short_name': (getattr(dept, 'short_name', None) or getattr(dept, 'code', None)) if dept else None,
                         'department_name': getattr(dept, 'name', None) if dept else None,
+                        'is_shared_section': False,
+                    })
+                # Shared sections (Year-1 / S&H style)
+                for sec in shared_sections.order_by('batch__name', 'name'):
+                    batch = getattr(sec, 'batch', None)
+                    shared_dept = getattr(batch, 'department', None) if batch else None
+                    section_list.append({
+                        'section_id': sec.id,
+                        'section_name': sec.name,
+                        'batch_name': getattr(batch, 'name', None),
+                        'department_code': getattr(shared_dept, 'code', None) if shared_dept else None,
+                        'department_short_name': (getattr(shared_dept, 'short_name', None) or getattr(shared_dept, 'code', None)) if shared_dept else None,
+                        'department_name': getattr(shared_dept, 'name', None) if shared_dept else None,
+                        'is_shared_section': True,
                     })
                 return Response({'sections': section_list})
 
@@ -5575,23 +5661,41 @@ class DepartmentStudentsView(APIView):
             except ValueError:
                 return Response({'error': 'Invalid section_id'}, status=400)
 
-            sec = sections.filter(id=section_id_int).first()
+            if section_id_int not in all_accessible_ids:
+                return Response({'error': 'Section not found or not in your departments'}, status=404)
+
+            is_shared = section_id_int in shared_section_ids
+
+            # Fetch the section object
+            sec = (shared_sections if is_shared else own_sections).filter(id=section_id_int).first()
             if not sec:
                 return Response({'error': 'Section not found or not in your departments'}, status=404)
 
             batch = getattr(sec, 'batch', None)
             course = getattr(batch, 'course', None) if batch else None
-            dept = getattr(course, 'department', None) if course else None
+            dept = (getattr(course, 'department', None) if course else None) or getattr(batch, 'department', None)
+
+            # For shared sections only return students belonging to the user's home departments
+            if is_shared:
+                assign_qs = StudentSectionAssignment.objects.filter(
+                    section_id=section_id_int,
+                    end_date__isnull=True,
+                    student__home_department_id__in=dept_ids,
+                ).select_related('student__user', 'student__home_department')
+                legacy_qs = StudentProfile.objects.filter(
+                    section_id=section_id_int,
+                    home_department_id__in=dept_ids,
+                ).select_related('user', 'home_department')
+            else:
+                assign_qs = StudentSectionAssignment.objects.filter(
+                    section_id=section_id_int, end_date__isnull=True
+                ).select_related('student__user')
+                legacy_qs = StudentProfile.objects.filter(section_id=section_id_int).select_related('user')
 
             studs = []
-            assign_qs = StudentSectionAssignment.objects.filter(
-                section_id=section_id_int, end_date__isnull=True
-            ).select_related('student__user')
             for a in assign_qs:
                 studs.append(a.student)
 
-            # Legacy section field
-            legacy_qs = StudentProfile.objects.filter(section_id=section_id_int).select_related('user')
             present_pks = {s.pk for s in studs}
             for s in legacy_qs:
                 if s.pk not in present_pks:
@@ -5604,6 +5708,7 @@ class DepartmentStudentsView(APIView):
                     f"{getattr(user_obj, 'first_name', '')} {getattr(user_obj, 'last_name', '')}".strip()
                     if user_obj else ''
                 )
+                home_dept_obj = getattr(st, 'home_department', None)
                 students_out.append({
                     'id': st.pk,
                     'reg_no': st.reg_no,
@@ -5617,7 +5722,10 @@ class DepartmentStudentsView(APIView):
                     'section_name': sec.name,
                     'department_code': getattr(dept, 'code', None) if dept else None,
                     'department_name': getattr(dept, 'name', None) if dept else None,
+                    'home_department_code': getattr(home_dept_obj, 'code', None) if home_dept_obj else None,
+                    'home_department_short_name': getattr(home_dept_obj, 'short_name', None) if home_dept_obj else None,
                     'batch': getattr(batch, 'name', None),
+                    'is_shared_section': is_shared,
                 })
 
             return Response({
@@ -5626,6 +5734,7 @@ class DepartmentStudentsView(APIView):
                 'batch_name': getattr(batch, 'name', None),
                 'department_code': getattr(dept, 'code', None) if dept else None,
                 'department_name': getattr(dept, 'name', None) if dept else None,
+                'is_shared_section': is_shared,
                 'students': sorted(students_out, key=lambda x: x['reg_no'] or ''),
             })
             
@@ -5658,10 +5767,10 @@ class AllStudentsView(APIView):
             from .models import Section, StudentSectionAssignment, StudentProfile
             
             sections = Section.objects.filter(
-                batch__course__department__isnull=False
-            ).select_related('batch', 'batch__course', 'batch__course__department').order_by(
-                'batch__course__department__code', 'batch__name', 'name'
-            )
+                Q(batch__course__department__isnull=False) | Q(batch__department__isnull=False)
+            ).select_related(
+                'batch', 'batch__course', 'batch__course__department', 'batch__department'
+            ).order_by('batch__name', 'name')
 
             section_id_param = request.query_params.get('section_id')
 
@@ -5671,7 +5780,7 @@ class AllStudentsView(APIView):
                 for sec in sections:
                     batch = getattr(sec, 'batch', None)
                     course = getattr(batch, 'course', None) if batch else None
-                    dept = getattr(course, 'department', None) if course else None
+                    dept = (getattr(course, 'department', None) if course else None) or getattr(batch, 'department', None)
                     section_list.append({
                         'section_id': sec.id,
                         'section_name': sec.name,
@@ -5694,7 +5803,7 @@ class AllStudentsView(APIView):
 
             batch = getattr(sec, 'batch', None)
             course = getattr(batch, 'course', None) if batch else None
-            dept = getattr(course, 'department', None) if course else None
+            dept = (getattr(course, 'department', None) if course else None) or getattr(batch, 'department', None)
 
             studs = []
             assign_qs = StudentSectionAssignment.objects.filter(
@@ -5764,6 +5873,30 @@ class BatchYearViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         from .models import BatchYear
         return BatchYear.objects.all().order_by('-name')
+
+
+class BatchListView(APIView):
+    """List all Batch objects with department info and is_active status.
+
+    Used by frontend dropdowns that need per-department active flags.
+    Returns: id, name, department_code, department_short_name, is_active
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        from .models import Batch
+        qs = Batch.objects.select_related('course__department', 'department').order_by('-name')
+        results = []
+        for b in qs:
+            dept = b.effective_department
+            results.append({
+                'id': b.id,
+                'name': b.name,
+                'department_code': getattr(dept, 'code', None),
+                'department_short_name': getattr(dept, 'short_name', None),
+                'is_active': b.is_active,
+            })
+        return Response(results)
 
 
 class AllStaffListView(APIView):
@@ -6145,3 +6278,139 @@ class StaffDepartmentRoleRemoveView(APIView):
                 return Response({
                     'detail': f'Staff does not have an active {role} role in this department.',
                 }, status=status.HTTP_400_BAD_REQUEST)
+
+
+class BulkAssignSecondarySectionView(APIView):
+    """Bulk-assign Year-1 students to their core-dept (SECONDARY) sections.
+
+    POST /api/academics/bulk-assign-secondary-section/
+    {
+      "section_id": <int>,          // target core-dept section (AI&DS A, AI&DS B, …)
+      "student_ids": [<int>, ...]   // student PKs to assign
+    }
+
+    The endpoint creates a SECONDARY StudentSectionAssignment for each student,
+    ending any previous SECONDARY assignment for the same student first.
+    The students' PRIMARY (S&H) assignments are untouched.
+
+    Requires the caller to be a HOD/AHOD for the section's department or a superuser.
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request):
+        from .models import Section, StudentSectionAssignment, StudentProfile, DepartmentRole
+        user = request.user
+        staff_profile = getattr(user, 'staff_profile', None)
+
+        section_id = request.data.get('section_id')
+        student_ids = request.data.get('student_ids', [])
+
+        if not section_id or not student_ids:
+            return Response({'detail': 'section_id and student_ids are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            section = Section.objects.select_related(
+                'batch__course__department', 'batch__department'
+            ).get(pk=int(section_id))
+        except Section.DoesNotExist:
+            return Response({'detail': 'Section not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Determine the section's department
+        batch = getattr(section, 'batch', None)
+        course = getattr(batch, 'course', None) if batch else None
+        dept = (getattr(course, 'department', None) if course else None) or getattr(batch, 'department', None)
+
+        # Permission check: user must be HOD/AHOD for this dept, or superuser
+        if not user.is_superuser:
+            if not staff_profile:
+                return Response({'detail': 'Permission denied.'}, status=status.HTTP_403_FORBIDDEN)
+            dept_id = getattr(dept, 'pk', None)
+            is_hod = DepartmentRole.objects.filter(
+                staff=staff_profile, role__in=['HOD', 'AHOD'], is_active=True,
+                department_id=dept_id
+            ).exists() if dept_id else False
+            if not is_hod:
+                return Response({'detail': 'Only the HOD/AHOD of the section department can assign secondary sections.'}, status=status.HTTP_403_FORBIDDEN)
+
+        from django.utils import timezone
+        today = timezone.now().date()
+        created_count = 0
+        updated_count = 0
+        errors = []
+
+        for sid in student_ids:
+            try:
+                student = StudentProfile.objects.get(pk=int(sid))
+                # End existing active SECONDARY assignment for this student
+                existing = StudentSectionAssignment.objects.filter(
+                    student=student,
+                    end_date__isnull=True,
+                    section_type=StudentSectionAssignment.SECTION_TYPE_SECONDARY,
+                ).first()
+                if existing:
+                    if existing.section_id == section.pk:
+                        # Already assigned to this section; skip
+                        continue
+                    existing.end_date = today
+                    existing.save(update_fields=['end_date'])
+                    updated_count += 1
+
+                StudentSectionAssignment.objects.create(
+                    student=student,
+                    section=section,
+                    section_type=StudentSectionAssignment.SECTION_TYPE_SECONDARY,
+                    start_date=today,
+                )
+                created_count += 1
+            except StudentProfile.DoesNotExist:
+                errors.append(f'Student {sid} not found.')
+            except Exception as e:
+                errors.append(f'Error assigning student {sid}: {str(e)}')
+
+        return Response({
+            'created': created_count,
+            'updated': updated_count,
+            'errors': errors,
+        }, status=status.HTTP_200_OK)
+
+
+class RemoveSecondarySectionView(APIView):
+    """Remove a student's SECONDARY section assignment.
+
+    POST /api/academics/remove-secondary-section/
+    {
+      "student_ids": [<int>, ...],   // optional; if omitted + section_id provided, clears all in section
+      "section_id": <int>            // optional filter
+    }
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request):
+        from .models import StudentSectionAssignment, StudentProfile, DepartmentRole, Section
+        user = request.user
+        staff_profile = getattr(user, 'staff_profile', None)
+
+        student_ids = request.data.get('student_ids', [])
+        section_id = request.data.get('section_id')
+
+        if not student_ids and not section_id:
+            return Response({'detail': 'Provide student_ids or section_id.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not user.is_superuser and not staff_profile:
+            return Response({'detail': 'Permission denied.'}, status=status.HTTP_403_FORBIDDEN)
+
+        from django.utils import timezone
+        today = timezone.now().date()
+
+        qs = StudentSectionAssignment.objects.filter(
+            end_date__isnull=True,
+            section_type=StudentSectionAssignment.SECTION_TYPE_SECONDARY,
+        )
+        if student_ids:
+            qs = qs.filter(student_id__in=[int(s) for s in student_ids])
+        if section_id:
+            qs = qs.filter(section_id=int(section_id))
+
+        count = qs.count()
+        qs.update(end_date=today)
+        return Response({'ended': count})

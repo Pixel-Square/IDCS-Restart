@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import fetchWithAuth from '../../services/fetchAuth'
-import { Calendar, Clock, Users, CheckCircle2, XCircle, Loader2, Save, X, ChevronDown, AlertCircle, Lock, Unlock, GraduationCap, Check, ArrowLeftRight } from 'lucide-react'
+import AttendanceAssignmentRequestsModal from '../../components/AttendanceAssignmentRequestsModal'
+import { Calendar, Clock, Users, CheckCircle2, XCircle, Loader2, Save, X, ChevronDown, AlertCircle, Lock, Unlock, GraduationCap, Check, ArrowLeftRight, Bell } from 'lucide-react'
 import HalfDayRequestsApproval from './HalfDayRequestsApproval'
 import AttendanceRequests from './AttendanceRequests'
 
@@ -101,6 +102,10 @@ export default function PeriodAttendance(){
   const [loadingStaff, setLoadingStaff] = useState(false)
   const [selectedSwapStaff, setSelectedSwapStaff] = useState<any>(null)
   const [actualMarkedBy, setActualMarkedBy] = useState<any>(null) // Who actually marked the saved attendance
+  const [pendingAssignmentRequests, setPendingAssignmentRequests] = useState<any[]>([]) // DAILY assignment requests sent by this staff
+  const [pendingPeriodRequests, setPendingPeriodRequests] = useState<any[]>([]) // PERIOD assignment requests sent by this staff
+  const [pendingReceivedCount, setPendingReceivedCount] = useState(0) // Received requests count (DAILY + PERIOD)
+  const [showRequestsModal, setShowRequestsModal] = useState(false)
 
   // Date range attendance marking state
   const [showDateRangeSection, setShowDateRangeSection] = useState(false)
@@ -145,11 +150,7 @@ export default function PeriodAttendance(){
   // Class advisors always have daily attendance access regardless of mark_attendance permission
   const canAccessDailyAttendance = hasClassAdvisorPermission
 
-  useEffect(()=>{ 
-    fetchPeriods(); 
-    loadMyClassSections();
-    checkStaffAttendanceStatus();
-  }, [date])
+  useEffect(()=>{ fetchPeriods(); loadMyClassSections(); checkStaffAttendanceStatus(); fetchAllPendingRequests() }, [date])
   useEffect(()=>{ if (selectedSection && dailyMode) loadDailyAttendance() }, [selectedSection, date, dailyMode])
 
   // Check staff attendance status for period attendance access
@@ -981,6 +982,8 @@ export default function PeriodAttendance(){
       setAttendanceStatus(statusMap)
       setAttendanceRemarks(remarksMap)
       setActualMarkedBy(markedByInfo)
+      // Load pending requests BEFORE hiding spinner so button renders correctly
+      await fetchAllPendingRequests()
     } catch (error) {
       console.error('Error loading daily attendance:', error)
       setDailyAttendance([])
@@ -988,6 +991,24 @@ export default function PeriodAttendance(){
       setActualMarkedBy(null)
     } finally {
       setLoadingDaily(false)
+    }
+  }
+
+  async function fetchAllPendingRequests() {
+    try {
+      const res = await fetchWithAuth('/api/academics/attendance-assignment-requests/?status=PENDING')
+      if (res.ok) {
+        const data = await res.json()
+        const sent = data.sent || []
+        setPendingAssignmentRequests(sent.filter((r: any) => r.assignment_type === 'DAILY' && r.date === date))
+        setPendingPeriodRequests(sent.filter((r: any) => r.assignment_type === 'PERIOD' && r.date === date))
+        const received = (data.received || []).filter((r: any) => r.status === 'PENDING')
+        setPendingReceivedCount(received.length)
+      }
+    } catch (err) {
+      console.error('Failed to load pending requests:', err)
+      setPendingAssignmentRequests([])
+      setPendingPeriodRequests([])
     }
   }
 
@@ -1169,95 +1190,69 @@ export default function PeriodAttendance(){
     loadDepartmentStaff()
   }
 
-  // Handle staff selection for swap - IMMEDIATELY assigns on backend
+  // Handle staff selection — CREATE REQUEST (pending approval by selected staff)
   async function handleSwapStaff(staff: any) {
     if (swapFor === 'period') {
       await handlePeriodSwapStaff(staff)
       return
     }
-    if (!confirm(`Assign attendance taking to ${staff.name}? This will immediately transfer responsibility for marking attendance to them. You will no longer be able to access this attendance session.`)) {
-      return
-    }
-    
+
     setSwapModalOpen(false)
     setSavingDaily(true)
-    
     try {
-      // Immediately send assignment to backend
-      const response = await fetchWithAuth('/api/academics/analytics/daily-attendance/', {
+      const response = await fetchWithAuth('/api/academics/attendance-assignment-requests/', {
         method: 'POST',
         body: JSON.stringify({
+          assignment_type: 'DAILY',
           section_id: selectedSection.section_id,
           date: date,
-          attendance: [],  // Empty array - we're only assigning, not marking attendance yet
-          taken_by_staff_id: staff.id
+          requested_to_id: staff.id
         })
       })
-
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.error || 'Failed to assign attendance')
+        throw new Error(errorData.error || 'Failed to send request')
       }
-      
-      alert(`Attendance successfully assigned to ${staff.name}! They will now see this section in their daily attendance list. You will be redirected back to the section list.`)
-      
-      // Close the panel and go back to section list since advisor no longer has access
-      setDailyMode(false)
-      setSelectedSection(null)
-      setSelectedSwapStaff(null)
-      setActualMarkedBy(null)
-      
-      // Reload sections in case there are other assigned sections
-      await loadMyClassSections()
+      const data = await response.json()
+      // Refresh pending state before alert so button updates
+      await fetchAllPendingRequests()
+      alert(data.message || `Request sent to ${staff.name}. They will be notified and can approve or reject it.`)
     } catch (error) {
-      console.error('Error assigning attendance:', error)
-      alert('Failed to assign attendance: ' + (error instanceof Error ? error.message : String(error)))
+      console.error('Error sending request:', error)
+      alert('Failed: ' + (error instanceof Error ? error.message : String(error)))
     } finally {
       setSavingDaily(false)
     }
   }
 
-  // Assign period attendance to another staff
+  // Assign period attendance to another staff via REQUEST (pending approval)
   async function handlePeriodSwapStaff(staff: any) {
     const p = selectedPeriodForSwap || selected
     if (!p) return
 
-    if (!confirm(`Assign ${p.period?.label || 'this period'} attendance to ${staff.name}? They will be responsible for marking this period's attendance.`)) {
-      setSwapModalOpen(false)
-      return
-    }
-
     setSwapModalOpen(false)
     setSaving(true)
     try {
-      const body: any = {
-        section_id: p.section_id,
-        period_id: p.period?.id,
-        date: date,
-        taken_by_staff_id: staff.id,
-      }
-      if (p.teaching_assignment_id) body.teaching_assignment_id = p.teaching_assignment_id
-
-      const res = await fetchWithAuth('/api/academics/analytics/period-attendance-swap/', {
+      const response = await fetchWithAuth('/api/academics/attendance-assignment-requests/', {
         method: 'POST',
-        body: JSON.stringify(body)
+        body: JSON.stringify({
+          assignment_type: 'PERIOD',
+          section_id: p.section_id,
+          period_id: p.period?.id,
+          date: date,
+          requested_to_id: staff.id
+        })
       })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        throw new Error(err.error || 'Failed to assign')
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || 'Failed to send request')
       }
-      const data = await res.json()
-      // Update local period card to reflect assignment
-      setPeriods(prev => prev.map(pp =>
-        pp.id === p.id ? { ...pp, assigned_to: data.assigned_to, attendance_session_id: data.session_id } : pp
-      ))
-      if (selected && selected.id === p.id) {
-        setSelected((s: any) => s ? { ...s, assigned_to: data.assigned_to, attendance_session_id: data.session_id } : s)
-      }
-      alert(`Period attendance assigned to ${staff.name}. They can now mark attendance for this period.`)
-    } catch (e) {
-      console.error('Period swap error:', e)
-      alert('Failed to assign: ' + (e instanceof Error ? e.message : String(e)))
+      const data = await response.json()
+      await fetchAllPendingRequests()
+      alert(data.message || `Request sent to ${staff.name}. They can approve or reject it.`)
+    } catch (error) {
+      console.error('Period request error:', error)
+      alert('Failed: ' + (error instanceof Error ? error.message : String(error)))
     } finally {
       setSaving(false)
       setSelectedPeriodForSwap(null)
@@ -1613,6 +1608,19 @@ export default function PeriodAttendance(){
             onChange={e=> setDate(e.target.value)}
             className="px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
           />
+          <button
+            onClick={() => setShowRequestsModal(true)}
+            className="ml-auto px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
+          >
+            <Bell className="w-4 h-4" />
+            Requests
+            {pendingReceivedCount > 0 && (
+              <span className="inline-flex items-center justify-center px-2 py-0.5 text-xs font-bold rounded-full bg-white text-blue-600">
+                {pendingReceivedCount}
+              </span>
+            )}
+          </button>
+      {/* date selector row needs flex to push Requests button right */}
         </div>
       </div>
 
@@ -2073,18 +2081,28 @@ export default function PeriodAttendance(){
                     </span>
                   </span>
                 )}
-                {!dailySessionData?.assigned_to && (
-                  <button 
-                    onClick={openSwapModal}
-                    disabled={dailySessionData?.is_locked}
-                    className="px-2 sm:px-3 py-1.5 bg-indigo-100 hover:bg-indigo-200 text-indigo-800 border border-indigo-300 rounded-lg text-xs sm:text-sm font-medium transition-colors flex items-center gap-1 sm:gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                    title={dailySessionData?.is_locked ? 'Cannot swap locked session' : 'Assign attendance to another staff member'}
-                  >
-                    <ArrowLeftRight className="w-3 sm:w-4 h-3 sm:h-4" />
-                    <span className="hidden sm:inline">Assign to Staff</span>
-                    <span className="sm:hidden">Assign</span>
-                  </button>
-                )}
+                {!dailySessionData?.assigned_to && (() => {
+                  const sectionPending = pendingAssignmentRequests.filter((r: any) => Number(r.section_id) === Number(selectedSection?.section_id))
+                  const hasPending = sectionPending.length > 0
+                  return hasPending ? (
+                    <span className="px-2 sm:px-3 py-1.5 bg-yellow-100 text-yellow-800 border border-yellow-300 rounded-lg text-xs sm:text-sm font-medium flex items-center gap-1 sm:gap-2">
+                      <Clock className="w-3 sm:w-4 h-3 sm:h-4" />
+                      <span className="hidden sm:inline">Pending — {sectionPending[0].requested_to_name}</span>
+                      <span className="sm:hidden">Pending</span>
+                    </span>
+                  ) : (
+                    <button
+                      onClick={openSwapModal}
+                      disabled={dailySessionData?.is_locked}
+                      className="px-2 sm:px-3 py-1.5 bg-indigo-100 hover:bg-indigo-200 text-indigo-800 border border-indigo-300 rounded-lg text-xs sm:text-sm font-medium transition-colors flex items-center gap-1 sm:gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                      title={dailySessionData?.is_locked ? 'Cannot request: session is locked' : 'Request another staff to take this attendance'}
+                    >
+                      <ArrowLeftRight className="w-3 sm:w-4 h-3 sm:h-4" />
+                      <span className="hidden sm:inline">Request Staff</span>
+                      <span className="sm:hidden">Request</span>
+                    </button>
+                  )
+                })()}
                 {dailySessionData?.is_read_only && dailySessionData?.assigned_to && (
                   <button 
                     onClick={revertAssignment}
@@ -2600,17 +2618,28 @@ export default function PeriodAttendance(){
                   )}
                 </>
               ) : (
-                /* No assignment yet — allow assigning to another staff */
-                !selected.attendance_session_locked && (
-                  <button
-                    onClick={() => openPeriodSwapModal(selected)}
-                    disabled={saving}
-                    className="px-3 py-1.5 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 border border-indigo-300 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 disabled:opacity-50"
-                  >
-                    <ArrowLeftRight className="w-3.5 h-3.5" />
-                    Assign to Staff
-                  </button>
-                )
+                /* No assignment yet — show Pending badge if request sent, else Request Staff button */
+                !selected.attendance_session_locked && (() => {
+                  const periodPending = pendingPeriodRequests.filter(
+                    (r: any) => Number(r.period_id) === Number(selected.period?.id) &&
+                                Number(r.section_id) === Number(selected.section_id)
+                  )
+                  return periodPending.length > 0 ? (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-yellow-100 text-yellow-800 border border-yellow-300 rounded-lg text-sm font-medium">
+                      <Clock className="w-3.5 h-3.5" />
+                      Pending — {periodPending[0].requested_to_name}
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => openPeriodSwapModal(selected)}
+                      disabled={saving}
+                      className="px-3 py-1.5 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 border border-indigo-300 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      <ArrowLeftRight className="w-3.5 h-3.5" />
+                      Request Staff
+                    </button>
+                  )
+                })()
               )}
               <button 
                 onClick={()=> setSelected(null)}
@@ -3250,6 +3279,11 @@ export default function PeriodAttendance(){
         </div>
       )}
 
+      <AttendanceAssignmentRequestsModal
+        isOpen={showRequestsModal}
+        onClose={() => setShowRequestsModal(false)}
+        onRequestUpdated={() => { fetchAllPendingRequests() }}
+      />
     </div>
   )
 }

@@ -19,6 +19,8 @@ import ProtectedRoute from './components/ProtectedRoute';
 import HomePage from "./components/containers/HomePage";
 import DashboardPage from "./pages/dashboard/Dashboard";
 import ProfilePage from "./pages/profile/Profile";
+import SettingsPage from './pages/settings/SettingsPage';
+import WhatsAppSenderPage from './pages/settings/WhatsAppSenderPage';
 import MasterList from './pages/curriculum/MasterList';
 import MasterEditor from './pages/curriculum/MasterEditor';
 import DeptList from './pages/curriculum/DeptList';
@@ -45,6 +47,7 @@ import StudentAcademics from './pages/student/Academics';
 import MentorAssign from './pages/advisor/MentorAssign';
 import NotificationsPage from './pages/Notifications';
 import QueriesPage from './pages/queries/QueriesPage';
+import FeedbackPage from './pages/feedback/FeedbackPage';
 import StaffsPage from './pages/StaffsPage';
 import AcademicCalendarRedirect from './pages/academicCalendar/AcademicCalendarRedirect';
 import AcademicCalendarPage from './pages/academicCalendar/AcademicCalendarPage';
@@ -77,6 +80,7 @@ import RFReaderAssignCardsPage from './pages/RFReader/AssignCardsPage';
 import RFReaderCreateGatePage from './pages/RFReader/CreateGatePage';
 import RFReaderTestStudentsPage from './pages/RFReader/TestStudentsPage';
 import RFReaderAddStudentsRFPage from './pages/RFReader/AddStudentsRFPage';
+import AttendanceAnalyticsRequestsPage from './pages/attendance/AttendanceAnalyticsRequestsPage';
 
 type RoleObj = { name: string };
 type Me = {
@@ -189,6 +193,14 @@ export default function App() {
                 <Route path="/dashboard" element={<DashboardPage />} />
                 <Route path="/profile" element={<ProfilePage user={user} />} />
                 <Route
+                  path="/settings"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<SettingsPage />} />}
+                />
+                <Route
+                  path="/settings/whatsapp-sender"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<WhatsAppSenderPage />} />}
+                />
+                <Route
                   path="/iqac/applications-admin"
                   element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<ApplicationsAdminPage />} />}
                 />
@@ -213,6 +225,10 @@ export default function App() {
                 <Route
                   path="/ps/staff-attendance/upload"
                   element={<ProtectedRoute user={user} requiredRoles={['PS']} element={<StaffAttendanceUpload />} />}
+                />
+                <Route
+                  path="/feedback"
+                  element={<ProtectedRoute user={user} requiredPermissions={["feedback.feedback_page"]} element={<FeedbackPage />} />}
                 />
                 <Route path="/academic-calendar" element={<AcademicCalendarRedirect user={user} />} />
                 <Route
@@ -412,7 +428,7 @@ export default function App() {
                   element={
                     <ProtectedRoute
                       user={user}
-                      requiredProfile={'STAFF'}
+                      requiredRoles={['HOD', 'IQAC']}
                       requiredPermissions={[
                         'academics.view_all_attendance',
                         'academics.view_attendance_overall',
@@ -450,6 +466,16 @@ export default function App() {
                   element={<ProtectedRoute user={user} requiredRoles={['HOD','AHOD','HR','HAA','IQAC','PS','PRINCIPAL']} requiredPermissions={['staff_requests.approve_requests']} element={<PendingApprovalsPage />} />}
                 />
                 
+                <Route
+                  path="/attendance-analytics/requests"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['HOD', 'IQAC']}
+                      element={<AttendanceAnalyticsRequestsPage />}
+                    />
+                  }
+                />
                 <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
                 {/* Prevent regular users from accessing Branding-only routes */}
                 <Route path="/branding/*" element={<Navigate to="/dashboard" replace />} />

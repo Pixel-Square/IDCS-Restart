@@ -2896,3 +2896,278 @@ class PeriodAttendanceRevertAssignmentView(APIView):
         except Exception as e:
             return Response({'error': f'Failed to revert: {str(e)}'}, status=500)
 
+
+
+class AttendanceAssignmentRequestView(APIView):
+    """
+    GET  /api/academics/attendance-assignment-requests/?status=PENDING
+    POST /api/academics/attendance-assignment-requests/
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def _serialize(self, req):
+        return {
+            'id': req.id,
+            'assignment_type': req.assignment_type,
+            'status': req.status,
+            'date': req.date.isoformat() if req.date else None,
+            'section_id': req.section_id,
+            'section_name': req.section.name if req.section else '',
+            'period_id': req.period_id,
+            'period_label': (req.period.label or f'Period {req.period.index}') if req.period else None,
+            'requested_by_id': req.requested_by_id,
+            'requested_by_name': req.requested_by.user.get_full_name() if req.requested_by and req.requested_by.user else '',
+            'requested_to_id': req.requested_to_id,
+            'requested_to_name': req.requested_to.user.get_full_name() if req.requested_to and req.requested_to.user else '',
+            'reason': req.reason or '',
+            'created_at': req.created_at.isoformat() if req.created_at else None,
+            'responded_at': req.responded_at.isoformat() if req.responded_at else None,
+            'response_message': req.response_message or '',
+        }
+
+    def get(self, request):
+        from .models import AttendanceAssignmentRequest
+        user = request.user
+        staff_profile = getattr(user, 'staff_profile', None)
+        if not staff_profile:
+            raise PermissionDenied('Staff profile required')
+        status_filter = request.query_params.get('status')
+        base_qs = dict(requested_by=staff_profile) if True else {}
+        sent_qs = AttendanceAssignmentRequest.objects.filter(
+            requested_by=staff_profile
+        ).select_related('requested_by__user', 'requested_to__user', 'section')
+        received_qs = AttendanceAssignmentRequest.objects.filter(
+            requested_to=staff_profile
+        ).select_related('requested_by__user', 'requested_to__user', 'section')
+        if status_filter:
+            sent_qs = sent_qs.filter(status=status_filter)
+            received_qs = received_qs.filter(status=status_filter)
+        return Response({
+            'sent': [self._serialize(r) for r in sent_qs],
+            'received': [self._serialize(r) for r in received_qs],
+        })
+
+    def post(self, request):
+        from .models import AttendanceAssignmentRequest, StaffProfile, Section, SectionAdvisor
+        from datetime import date as date_class
+        user = request.user
+        staff_profile = getattr(user, 'staff_profile', None)
+        if not staff_profile:
+            raise PermissionDenied('Staff profile required')
+        section_id = request.data.get('section_id')
+        date_str = request.data.get('date')
+        requested_to_id = request.data.get('requested_to_id')
+        assignment_type = request.data.get('assignment_type', 'DAILY')
+        if not section_id or not date_str or not requested_to_id:
+            return Response({'error': 'section_id, date, and requested_to_id are required'}, status=400)
+        try:
+            date_obj = date_class.fromisoformat(str(date_str))
+        except ValueError:
+            return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=400)
+        try:
+            section = Section.objects.get(id=section_id)
+        except Section.DoesNotExist:
+            return Response({'error': 'Section not found'}, status=404)
+        try:
+            requested_to = StaffProfile.objects.select_related('user').get(id=requested_to_id, status='ACTIVE')
+        except StaffProfile.DoesNotExist:
+            return Response({'error': 'Target staff not found or inactive'}, status=404)
+        if requested_to == staff_profile:
+            return Response({'error': 'Cannot request yourself'}, status=400)
+        # Resolve period for PERIOD type
+        period_obj = None
+        if assignment_type == 'PERIOD':
+            period_id_val = request.data.get('period_id')
+            if not period_id_val:
+                return Response({'error': 'period_id is required for PERIOD type'}, status=400)
+            try:
+                from timetable.models import TimetableSlot
+                period_obj = TimetableSlot.objects.get(id=period_id_val)
+            except TimetableSlot.DoesNotExist:
+                return Response({'error': 'Period not found'}, status=404)
+        # Duplicate check (for PERIOD also match on period)
+        dup_qs = AttendanceAssignmentRequest.objects.filter(
+            section=section, date=date_obj, assignment_type=assignment_type,
+            status='PENDING', requested_by=staff_profile
+        )
+        if period_obj:
+            dup_qs = dup_qs.filter(period=period_obj)
+        existing = dup_qs.first()
+        if existing:
+            to_name = existing.requested_to.user.get_full_name() if existing.requested_to and existing.requested_to.user else ''
+            return Response({'error': f'You already have a pending request for this session (sent to {to_name}).'}, status=400)
+        req = AttendanceAssignmentRequest.objects.create(
+            assignment_type=assignment_type,
+            section=section,
+            date=date_obj,
+            requested_by=staff_profile,
+            requested_to=requested_to,
+            status='PENDING',
+            period=period_obj,
+        )
+        to_name = requested_to.user.get_full_name() if requested_to.user else requested_to.staff_id
+        return Response({
+            'success': True,
+            'id': req.id,
+            'message': f'Request sent to {to_name}. They can approve or reject it.',
+            'request': self._serialize(req),
+        }, status=201)
+
+
+class AttendanceAssignmentRequestActionView(APIView):
+    """
+    POST /api/academics/attendance-assignment-requests/<pk>/approve/
+    POST /api/academics/attendance-assignment-requests/<pk>/reject/
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request, pk, action):
+        from .models import AttendanceAssignmentRequest, DailyAttendanceSession, DailyAttendanceSwapRecord
+        from .models import PeriodAttendanceSession, PeriodAttendanceSwapRecord
+        from django.utils import timezone as tz
+        from django.db import transaction
+        user = request.user
+        staff_profile = getattr(user, 'staff_profile', None)
+        if not staff_profile:
+            raise PermissionDenied('Staff profile required')
+        if action not in ('approve', 'reject'):
+            return Response({'error': 'Invalid action'}, status=400)
+        try:
+            req = AttendanceAssignmentRequest.objects.select_related(
+                'requested_by__user', 'requested_to__user', 'section'
+            ).get(id=pk)
+        except AttendanceAssignmentRequest.DoesNotExist:
+            return Response({'error': 'Request not found'}, status=404)
+        if req.requested_to != staff_profile:
+            raise PermissionDenied('Only the requested staff can respond')
+        if req.status != 'PENDING':
+            return Response({'error': f'Request is already {req.status.lower()}'}, status=400)
+        with transaction.atomic():
+            req.responded_at = tz.now()
+            if action == 'approve':
+                req.status = 'APPROVED'
+                req.response_message = request.data.get('message', '')
+                req.save()
+                if req.assignment_type == 'DAILY':
+                    session, _ = DailyAttendanceSession.objects.get_or_create(
+                        section=req.section,
+                        date=req.date,
+                        defaults={'created_by': req.requested_by}
+                    )
+                    old_assigned = session.assigned_to
+                    session.assigned_to = req.requested_to
+                    session.save(update_fields=['assigned_to'])
+                    if old_assigned != req.requested_to:
+                        by_name = req.requested_by.user.get_full_name() if req.requested_by.user else req.requested_by.staff_id
+                        to_name = req.requested_to.user.get_full_name() if req.requested_to.user else req.requested_to.staff_id
+                        DailyAttendanceSwapRecord.objects.create(
+                            session=session,
+                            assigned_by=req.requested_by,
+                            assigned_to=req.requested_to,
+                            reason=f'Assignment request approved by {to_name}'
+                        )
+                    req.daily_session = session
+                    req.save(update_fields=['daily_session'])
+                elif req.assignment_type == 'PERIOD' and req.period:
+                    # Assign all existing period sessions for section+period+date; create one if none exist
+                    period_sessions = list(PeriodAttendanceSession.objects.filter(
+                        section=req.section, period=req.period, date=req.date
+                    ))
+                    if period_sessions:
+                        for ps in period_sessions:
+                            ps.assigned_to = req.requested_to
+                            ps.save(update_fields=['assigned_to'])
+                            PeriodAttendanceSwapRecord.objects.create(
+                                session=ps,
+                                assigned_by=req.requested_by,
+                                assigned_to=req.requested_to,
+                                reason='Period attendance request approved'
+                            )
+                        req.period_session = period_sessions[0]
+                        req.save(update_fields=['period_session'])
+                    else:
+                        # No session yet — create a placeholder so the assignee sees it
+                        try:
+                            ps = PeriodAttendanceSession.objects.create(
+                                section=req.section, period=req.period, date=req.date,
+                                created_by=req.requested_by, assigned_to=req.requested_to,
+                            )
+                            PeriodAttendanceSwapRecord.objects.create(
+                                session=ps,
+                                assigned_by=req.requested_by,
+                                assigned_to=req.requested_to,
+                                reason='Period attendance request approved'
+                            )
+                            req.period_session = ps
+                            req.save(update_fields=['period_session'])
+                        except Exception:
+                            pass  # Unique constraint edge case — sessions will be updated on next load
+                # Cancel other pending requests for the same session
+                cancel_qs = AttendanceAssignmentRequest.objects.filter(
+                    section=req.section, date=req.date,
+                    assignment_type=req.assignment_type, status='PENDING'
+                ).exclude(id=req.id)
+                if req.assignment_type == 'PERIOD' and req.period:
+                    cancel_qs = cancel_qs.filter(period=req.period)
+                cancel_qs.update(status='CANCELLED')
+                to_name = req.requested_to.user.get_full_name() if req.requested_to.user else req.requested_to.staff_id
+                return Response({'success': True, 'message': f'Approved. Daily attendance for {req.section} on {req.date} is now assigned to {to_name}.'})
+            else:
+                req.status = 'REJECTED'
+                req.response_message = request.data.get('message', '')
+                req.save()
+                by_name = req.requested_by.user.get_full_name() if req.requested_by.user else req.requested_by.staff_id
+                return Response({'success': True, 'message': f'Request from {by_name} has been rejected.'})
+
+class AttendanceNotificationCountView(APIView):
+    """
+    GET /api/academics/analytics/attendance-notification-count/
+    Returns the count of pending attendance unlock requests visible to the current user.
+    - HOD: counts PENDING requests in their department (awaiting HOD approval)
+    - IQAC / view_all_analytics: counts HOD_APPROVED period requests + PENDING/HOD_APPROVED daily requests
+      (awaiting final approval)
+    Only returns a count > 0 for users who have something to action; all others receive 0.
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        from .models import AttendanceUnlockRequest, DailyAttendanceUnlockRequest, DepartmentRole
+
+        user = request.user
+        perms = get_user_permissions(user)
+        staff_profile = getattr(user, 'staff_profile', None)
+
+        can_view_all = 'analytics.view_all_analytics' in perms or user.is_superuser
+
+        if can_view_all:
+            # IQAC / admin: count requests that have passed HOD and are awaiting final approval
+            period_count = AttendanceUnlockRequest.objects.filter(
+                hod_status='HOD_APPROVED', status='HOD_APPROVED'
+            ).count()
+            daily_count = DailyAttendanceUnlockRequest.objects.filter(
+                status__in=['PENDING', 'HOD_APPROVED']
+            ).count()
+            total = period_count + daily_count
+            return Response({'count': total, 'role': 'iqac'})
+
+        # Check HOD role via DepartmentRole
+        if staff_profile:
+            hod_dept_ids = list(
+                DepartmentRole.objects.filter(
+                    staff=staff_profile, role='HOD', is_active=True
+                ).values_list('department_id', flat=True)
+            )
+            if hod_dept_ids:
+                period_count = AttendanceUnlockRequest.objects.filter(
+                    session__section__batch__course__department_id__in=hod_dept_ids,
+                    hod_status='PENDING'
+                ).count()
+                daily_count = DailyAttendanceUnlockRequest.objects.filter(
+                    session__section__batch__course__department_id__in=hod_dept_ids,
+                    hod_status='PENDING'
+                ).count()
+                total = period_count + daily_count
+                return Response({'count': total, 'role': 'hod'})
+
+        # User has no actionable requests
+        return Response({'count': 0, 'role': 'none'})

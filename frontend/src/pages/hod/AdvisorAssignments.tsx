@@ -3,7 +3,7 @@ import { User, Edit, BookOpen, Save, X, Trash2, Edit2, RefreshCw } from 'lucide-
 import fetchWithAuth from '../../services/fetchAuth'
 import { getCachedMe } from '../../services/auth'
 
-type Section = { id: number; name: string; batch: string; department_id?: number; department_code?: string; department_short_name?: string }
+type Section = { id: number; name: string; batch_name?: string; department_id?: number; department_code?: string; department_short_name?: string }
 type Staff = { id: number; user: string; staff_id: string; department?: number }
 type Advisor = { id: number; section: string; section_id: number; advisor: string; advisor_id: number; is_active: boolean; department_id?: number }
 
@@ -307,7 +307,7 @@ export default function AdvisorAssignments() {
 
                             return (
                               <tr key={sec.id} className="hover:bg-gray-50 transition-colors">
-                                <td className="px-4 py-3 text-gray-700">{sec.name}</td>
+                                <td className="px-4 py-3 text-gray-700">{sec.batch_name ? `${sec.batch_name} - ${sec.name}` : sec.name}</td>
                                 <td className="px-4 py-3">
                                   {showDropdown ? (
                                     <select

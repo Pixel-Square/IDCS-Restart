@@ -13,6 +13,8 @@ import { useEditRequestPending } from '../hooks/useEditRequestPending';
 import { useLockBodyScroll } from '../hooks/useLockBodyScroll';
 import { ModalPortal } from './ModalPortal';
 import AssessmentContainer from './containers/AssessmentContainer';
+import { useMarkEntryEditRequestsEnabled } from '../utils/requestControl';
+import { normalizeRegisterNo, registerNoKeys } from '../utils/excelImport';
 
 type Props = {
   subjectId: string;
@@ -222,11 +224,13 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     }
     if (next !== (publishedAt || '')) setPublishedAt(next);
   }, [markLock?.is_published, markLock?.updated_at, publishedAt]);
+  const editRequestsEnabled = useMarkEntryEditRequestsEnabled();
   const approvalOpen = Boolean(markEntryEditWindow?.allowed_by_approval);
-  const entryOpen = !isPublished ? Boolean(editAllowed) : approvalOpen;
-  const publishedEditLocked = Boolean(isPublished && !approvalOpen);
+  const entryOpen = !isPublished ? Boolean(editAllowed) : !editRequestsEnabled || approvalOpen;
+  const publishedEditLocked = Boolean(isPublished && editRequestsEnabled && !entryOpen);
+  const editRequestsBlocked = Boolean(isPublished && publishedEditLocked && !editRequestsEnabled);
 
-  const publishButtonIsRequestEdit = Boolean(isPublished && publishedEditLocked);
+  const publishButtonIsRequestEdit = Boolean(isPublished && publishedEditLocked && editRequestsEnabled);
 
   const {
     pending: markEntryReqPending,
@@ -249,7 +253,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   // - If globally locked, table blocked
   // - If published, table blocked when entry is not open
   // - If not published, table is not blocked (no mark-manager on model)
-  const tableBlocked = Boolean(globalLocked || !entryOpen || (isPublished ? !entryOpen : false));
+  const tableBlocked = Boolean(globalLocked || (isPublished ? (editRequestsEnabled && !entryOpen) : false));
 
   useEffect(() => {
     // Reset the locked-view toggle when switching subjects or when editing becomes open.
@@ -682,6 +686,11 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     if (!mobileOk) {
       alert('Please verify your mobile number in Profile before requesting edits.');
       window.location.href = '/profile';
+      return;
+    }
+
+    if (!editRequestsEnabled) {
+      setActionError('Edit requests are disabled by IQAC.');
       return;
     }
 
@@ -1183,7 +1192,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
       const firstName = workbook.SheetNames?.[0];
       if (!firstName) throw new Error('No sheet found in the Excel file.');
       const sheet0 = workbook.Sheets[firstName];
-      const rows: any[][] = XLSX.utils.sheet_to_json(sheet0, { header: 1 });
+      const rows: any[][] = XLSX.utils.sheet_to_json(sheet0, { header: 1, defval: '', blankrows: false, raw: false });
       if (!rows.length) throw new Error('Excel sheet is empty.');
 
       const headerRow = (rows[0] || []).map(normalizeHeaderCell);
@@ -1208,14 +1217,15 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
       students.forEach((s, idx) => {
         const reg = String((s as any).reg_no || '').trim();
         if (!reg) return;
-        regToKey.set(reg, getRowKey(s as any, idx));
+        const rowKey = getRowKey(s as any, idx);
+        for (const k of registerNoKeys(reg)) regToKey.set(k, rowKey);
       });
 
       const nextSheet: TcplSheetState = { ...(activeSheet || {}) };
 
       for (let i = 1; i < rows.length; i++) {
         const rowArr = rows[i] || [];
-        const reg = String(rowArr[regCol] ?? '').trim();
+        const reg = normalizeRegisterNo(rowArr[regCol]);
         if (!reg) continue;
         const rowKey = regToKey.get(reg);
         if (!rowKey) continue;
@@ -1479,7 +1489,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
           <button
             onClick={publish}
             className="obe-btn obe-btn-primary"
-            disabled={publishButtonIsRequestEdit ? markEntryReqPending : publishing || students.length === 0 || !publishAllowed || tableBlocked || globalLocked}
+            disabled={editRequestsBlocked || (publishButtonIsRequestEdit ? markEntryReqPending : publishing || students.length === 0 || !publishAllowed || tableBlocked || globalLocked)}
             title={
               students.length === 0
                 ? 'No students in roster'

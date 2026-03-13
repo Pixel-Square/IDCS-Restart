@@ -25,18 +25,28 @@ class CurriculumBySectionView(APIView):
         if not sec_id:
             return Response({'results': []})
         try:
-            sec = Section.objects.select_related('batch__course__department', 'semester').get(pk=int(sec_id))
+            sec = Section.objects.select_related(
+                'batch__course__department', 'batch__department', 'semester'
+            ).get(pk=int(sec_id))
         except Exception:
             return Response({'results': []})
 
+        sem_num = getattr(sec.semester, 'number', None)
+        if sem_num is None:
+            return Response({'results': []})
+
+        # Shared section: batch has no course (e.g. S&H Year-1).  Derive curriculum
+        # from the home-departments of students currently enrolled in this section.
+        if getattr(sec.batch, 'course_id', None) is None:
+            return self._shared_section_curriculum(sec, sem_num)
+
         dept = getattr(sec.batch.course, 'department', None)
-        sem = getattr(sec.semester, 'number', None)
-        if dept is None or sem is None:
+        if dept is None:
             return Response({'results': []})
 
         try:
             from curriculum.models import CurriculumDepartment, ElectiveSubject, DepartmentGroupMapping
-            qs = CurriculumDepartment.objects.filter(department=dept, semester__number=sem)
+            qs = CurriculumDepartment.objects.filter(department=dept, semester__number=sem_num)
 
             # Find department groups that this department belongs to (for cross-dept elective matching)
             group_ids = list(DepartmentGroupMapping.objects.filter(
@@ -55,11 +65,130 @@ class CurriculumBySectionView(APIView):
                     'regulation': c.regulation,
                     'class_type': c.class_type,
                     'is_elective': c.is_elective,
+                    'is_dept_core': getattr(c, 'is_dept_core', False),
                 })
                 # NOTE: Removed individual elective subject listing
                 # Staff now assigns the elective GROUP (e.g., "EE - Elective Elective")
                 # Students will see their chosen elective via ElectiveChoice when viewing timetable
             return Response({'results': data})
+        except Exception:
+            return Response({'results': []})
+
+    def _shared_section_curriculum(self, sec, sem_num):
+        """Return union of curriculum rows for all home-departments present in a shared section.
+
+        Used by S&H-type sections where batch.course is None and students come from
+        multiple core departments.  Each subject is deduplicated by course_code.
+
+        Dept-Core subjects (is_dept_core=True): These are subjects like "Program Core" /
+        "Engineering Science" that are managed by the S&H (managing_department) but
+        taught department-wise.  They appear as a SINGLE entry here (owned by managing_dept);
+        individual per-department variants are ElectiveSubject children of this row.
+        The timetable view resolves the actual subject per student via home_department.
+        """
+        try:
+            from curriculum.models import CurriculumDepartment
+            from academics.models import StudentSectionAssignment
+
+            # Collect unique home-department IDs from currently-enrolled students
+            # Only PRIMARY assignments — SECONDARY assignments represent core-dept sections
+            # and are handled separately via the normal core dept curriculum path.
+            home_dept_ids = list(
+                StudentSectionAssignment.objects.filter(
+                    section=sec,
+                    end_date__isnull=True,
+                    section_type='PRIMARY',
+                    student__home_department__isnull=False,
+                ).values_list('student__home_department_id', flat=True).distinct()
+            )
+
+            # Include managing_department (S&H) curriculum — holds is_dept_core placeholders
+            managing_dept = getattr(sec, 'managing_department', None)
+            managing_dept_id = getattr(managing_dept, 'pk', None) if managing_dept else None
+
+            # Also include the section's batch.department (fallback for S&H batches)
+            batch_dept_id = None
+            try:
+                batch_dept_id = sec.batch.department_id
+            except Exception:
+                pass
+
+            all_dept_ids = list(set(home_dept_ids))
+            if managing_dept_id:
+                all_dept_ids = list(set(all_dept_ids + [managing_dept_id]))
+            if batch_dept_id:
+                all_dept_ids = list(set(all_dept_ids + [batch_dept_id]))
+
+            if not all_dept_ids:
+                return Response({'results': []})
+
+            # Fetch ALL curriculum rows — including those with null course_code.
+            # Null-code subjects (e.g. "Program Core I", "Engineering Science") are
+            # deduplicated by course_name instead.
+            qs = CurriculumDepartment.objects.filter(
+                department_id__in=all_dept_ids,
+                semester__number=sem_num,
+            ).select_related('department').order_by('is_dept_core', 'course_code', 'department_id')
+
+            # Dept-core subjects owned by managing/S&H dept take priority and appear once.
+            # Regular shared subjects are deduplicated by course_code (or course_name for
+            # null-code entries) across home depts.  Managing-dept entries always win when
+            # the same key appears in both managing and home depts.
+            seen: dict = {}
+            for c in qs:
+                code = c.course_code  # may be None/empty
+                is_managing = c.department_id in (managing_dept_id, batch_dept_id) if (managing_dept_id or batch_dept_id) else False
+
+                # Determine the deduplication key
+                if code:
+                    key = f'code:{code}'
+                elif c.course_name:
+                    key = f'name:{c.course_name.strip().lower()}'
+                else:
+                    # Last resort: individual row keyed by pk so it always shows
+                    key = f'pk:{c.pk}'
+
+                if c.is_dept_core or c.is_elective:
+                    # Single entry; managing-dept row wins if duplicate.
+                    # is_elective (e.g. Language Elective) uses same model so the
+                    # managing-dept row becomes the stable parent for ElectiveSubject FKs.
+                    if key not in seen or is_managing:
+                        seen[key] = {
+                            'id': c.pk,
+                            'course_code': code,
+                            'course_name': c.course_name,
+                            'regulation': c.regulation,
+                            'semester': sem_num,
+                            'class_type': c.class_type,
+                            'is_elective': c.is_elective,
+                            'is_dept_core': c.is_dept_core,
+                        }
+                    # Don't collect home_dept_codes for these;
+                    # per-dept resolution happens via ElectiveSubject.department
+                elif key not in seen:
+                    seen[key] = {
+                        'id': c.pk,
+                        'course_code': code,
+                        'course_name': c.course_name,
+                        'regulation': c.regulation,
+                        'semester': sem_num,
+                        'class_type': c.class_type,
+                        'is_elective': c.is_elective,
+                        'is_dept_core': False,
+                        'home_dept_ids': [c.department_id],
+                        'home_dept_codes': [getattr(c.department, 'short_name', None)],
+                    }
+                else:
+                    if not seen[key].get('is_dept_core'):
+                        # Managing-dept entry should be the representative row
+                        if is_managing:
+                            seen[key]['id'] = c.pk
+                            seen[key]['course_code'] = code
+                            seen[key]['course_name'] = c.course_name
+                        seen[key]['home_dept_ids'].append(c.department_id)
+                        seen[key]['home_dept_codes'].append(getattr(c.department, 'short_name', None))
+
+            return Response({'results': list(seen.values())})
         except Exception:
             return Response({'results': []})
 
@@ -128,12 +257,24 @@ class SectionTimetableView(APIView):
                 # prefer the student's chosen ElectiveChoice when viewing as a student.
                 if a.curriculum_row:
                     if student_profile:
-                        from curriculum.models import ElectiveChoice
-                        ec = ElectiveChoice.objects.filter(student=student_profile, elective_subject__parent=a.curriculum_row, is_active=True, academic_year__is_active=True).select_related('elective_subject').first()
-                        if ec and getattr(ec, 'elective_subject', None):
-                            es = ec.elective_subject
-                            subj_text = f"{getattr(es, 'course_code', '')} - {getattr(es, 'course_name', '')}".strip(' -')
-                            elective_id = getattr(es, 'id', None)
+                        # Dept-core subjects: auto-resolve via student's home_department.
+                        # No ElectiveChoice needed — the mapping is by department membership.
+                        if getattr(a.curriculum_row, 'is_dept_core', False) and student_profile.home_department:
+                            from curriculum.models import ElectiveSubject
+                            es = ElectiveSubject.objects.filter(
+                                parent=a.curriculum_row,
+                                department=student_profile.home_department,
+                            ).first()
+                            if es:
+                                subj_text = f"{getattr(es, 'course_code', '')} - {getattr(es, 'course_name', '')}".strip(' -')
+                                elective_id = getattr(es, 'id', None)
+                        else:
+                            from curriculum.models import ElectiveChoice
+                            ec = ElectiveChoice.objects.filter(student=student_profile, elective_subject__parent=a.curriculum_row, is_active=True, academic_year__is_active=True).select_related('elective_subject').first()
+                            if ec and getattr(ec, 'elective_subject', None):
+                                es = ec.elective_subject
+                                subj_text = f"{getattr(es, 'course_code', '')} - {getattr(es, 'course_name', '')}".strip(' -')
+                                elective_id = getattr(es, 'id', None)
                     else:
                         # For non-student views, prefer any TeachingAssignment elective mapping.
                         # Prefer section-scoped mapping first, then department-wide mappings
@@ -311,15 +452,29 @@ class SectionTimetableView(APIView):
                     if e.curriculum_row:
                         try:
                             if student_profile:
-                                from curriculum.models import ElectiveChoice
-                                ec = ElectiveChoice.objects.filter(student=student_profile, elective_subject__parent=e.curriculum_row, is_active=True, academic_year__is_active=True).select_related('elective_subject').first()
-                                if ec and getattr(ec, 'elective_subject', None):
-                                    es = ec.elective_subject
-                                    subj_text = f"{getattr(es, 'course_code', '')} - {getattr(es, 'course_name', '')}".strip(' -')
-                                    elective_obj = {'id': es.pk, 'course_code': getattr(es, 'course_code', None), 'course_name': getattr(es, 'course_name', None)}
-                                    elective_id = es.pk
+                                # Dept-core: auto-resolve by home_department (no ElectiveChoice needed)
+                                if getattr(e.curriculum_row, 'is_dept_core', False) and student_profile.home_department:
+                                    from curriculum.models import ElectiveSubject
+                                    es = ElectiveSubject.objects.filter(
+                                        parent=e.curriculum_row,
+                                        department=student_profile.home_department,
+                                    ).first()
+                                    if es:
+                                        subj_text = f"{getattr(es, 'course_code', '')} - {getattr(es, 'course_name', '')}".strip(' -')
+                                        elective_obj = {'id': es.pk, 'course_code': getattr(es, 'course_code', None), 'course_name': getattr(es, 'course_name', None)}
+                                        elective_id = es.pk
+                                    else:
+                                        curr_obj = {'id': e.curriculum_row.id, 'course_code': getattr(e.curriculum_row, 'course_code', None), 'course_name': getattr(e.curriculum_row, 'course_name', None), 'mnemonic': getattr(e.curriculum_row, 'mnemonic', None)}
                                 else:
-                                    curr_obj = {'id': e.curriculum_row.id, 'course_code': getattr(e.curriculum_row, 'course_code', None), 'course_name': getattr(e.curriculum_row, 'course_name', None), 'mnemonic': getattr(e.curriculum_row, 'mnemonic', None)}
+                                    from curriculum.models import ElectiveChoice
+                                    ec = ElectiveChoice.objects.filter(student=student_profile, elective_subject__parent=e.curriculum_row, is_active=True, academic_year__is_active=True).select_related('elective_subject').first()
+                                    if ec and getattr(ec, 'elective_subject', None):
+                                        es = ec.elective_subject
+                                        subj_text = f"{getattr(es, 'course_code', '')} - {getattr(es, 'course_name', '')}".strip(' -')
+                                        elective_obj = {'id': es.pk, 'course_code': getattr(es, 'course_code', None), 'course_name': getattr(es, 'course_name', None)}
+                                        elective_id = es.pk
+                                    else:
+                                        curr_obj = {'id': e.curriculum_row.id, 'course_code': getattr(e.curriculum_row, 'course_code', None), 'course_name': getattr(e.curriculum_row, 'course_name', None), 'mnemonic': getattr(e.curriculum_row, 'mnemonic', None)}
                             else:
                                 curr_obj = {'id': e.curriculum_row.id, 'course_code': getattr(e.curriculum_row, 'course_code', None), 'course_name': getattr(e.curriculum_row, 'course_name', None), 'mnemonic': getattr(e.curriculum_row, 'mnemonic', None)}
                         except Exception:
@@ -417,8 +572,14 @@ class SectionSubjectsStaffView(APIView):
 
     def get(self, request, section_id: int):
         try:
-            sec = Section.objects.select_related('batch__course__department').get(pk=int(section_id))
+            sec = Section.objects.select_related(
+                'batch__course__department', 'batch__department', 'semester'
+            ).get(pk=int(section_id))
         except Exception:
+            return Response({'results': []})
+
+        sem_num = getattr(sec.semester, 'number', None)
+        if sem_num is None:
             return Response({'results': []})
 
         results = []
@@ -426,11 +587,44 @@ class SectionSubjectsStaffView(APIView):
             # fetch curriculum rows for the section
             from curriculum.models import CurriculumDepartment, ElectiveSubject
             from django.db.models import Q
-            dept = getattr(sec.batch.course, 'department', None)
-            sem = getattr(sec.semester, 'number', None)
-            if dept is None or sem is None:
-                return Response({'results': []})
-            qs = CurriculumDepartment.objects.filter(department=dept, semester__number=sem)
+
+            # Shared section (S&H-type): derive dept curriculum from enrolled students' home depts
+            if getattr(sec.batch, 'course_id', None) is None:
+                from academics.models import StudentSectionAssignment
+                home_dept_ids = list(
+                    StudentSectionAssignment.objects.filter(
+                        section=sec, end_date__isnull=True,
+                        student__home_department__isnull=False,
+                    ).values_list('student__home_department_id', flat=True).distinct()
+                )
+                # Also include managing_department (S&H) and batch.department
+                managing_dept_id2 = getattr(getattr(sec, 'managing_department', None), 'pk', None)
+                batch_dept_id2 = None
+                try:
+                    batch_dept_id2 = sec.batch.department_id
+                except Exception:
+                    pass
+                all_ids = list(set(home_dept_ids + [x for x in [managing_dept_id2, batch_dept_id2] if x]))
+                if not all_ids:
+                    return Response({'results': []})
+                # Union of all dept curriculum rows, deduplicated by course_code or course_name
+                qs_all = CurriculumDepartment.objects.filter(
+                    department_id__in=all_ids,
+                    semester__number=sem_num,
+                ).order_by('course_code', 'department_id')
+                seen: dict = {}
+                for c in qs_all:
+                    key = f'code:{c.course_code}' if c.course_code else f'name:{(c.course_name or "").strip().lower()}' or f'pk:{c.pk}'
+                    is_managing2 = c.department_id in (managing_dept_id2, batch_dept_id2) if (managing_dept_id2 or batch_dept_id2) else False
+                    if key not in seen or is_managing2:
+                        seen[key] = c
+                qs = list(seen.values())
+                dept = None
+            else:
+                dept = getattr(sec.batch.course, 'department', None)
+                if dept is None:
+                    return Response({'results': []})
+                qs = CurriculumDepartment.objects.filter(department=dept, semester__number=sem_num)
             # build a map from curriculum_row id -> staff (from TeachingAssignment)
             staff_map = {}
             from academics.models import TeachingAssignment
@@ -465,7 +659,7 @@ class SectionSubjectsStaffView(APIView):
             # 1. From TeachingAssignment with elective_subject (section match or null section)
             elective_tas = TeachingAssignment.objects.filter(
                 elective_subject__isnull=False,
-                elective_subject__semester__number=sem,
+                elective_subject__semester__number=sem_num,
                 is_active=True,
             ).filter(
                 Q(section=sec) | Q(section__isnull=True)
@@ -477,10 +671,11 @@ class SectionSubjectsStaffView(APIView):
                         elective_staff_map[ta.elective_subject_id] = staff_name
 
             # 2. Fetch all ElectiveSubject rows for this section's dept+sem and add to results
+            # Electives are only defined per-department; skip for shared sections (dept=None)
             elective_qs = ElectiveSubject.objects.filter(
                 parent__department=dept,
-                semester__number=sem,
-            ).select_related('parent')
+                semester__number=sem_num,
+            ).select_related('parent') if dept is not None else []
             for es in elective_qs:
                 results.append({
                     'id': es.pk,

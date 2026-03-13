@@ -9,10 +9,10 @@ import {
   Palette,
   ChevronLeft,
   ChevronRight,
-  Menu,
   LayoutTemplate,
   Sparkles,
 } from 'lucide-react';
+import LogoutConfirmationModal from '../../components/LogoutConfirmationModal';
 
 interface NavItem {
   key: string;
@@ -38,10 +38,12 @@ interface Props {
 export default function BrandingSidebar({ collapsed, onToggle }: Props) {
   const location = useLocation();
   const navigate = useNavigate();
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
 
   function handleLogout() {
     localStorage.removeItem('branding_auth');
     localStorage.removeItem('branding_user');
+    setShowLogoutModal(false);
     navigate('/login');
   }
 
@@ -112,7 +114,7 @@ export default function BrandingSidebar({ collapsed, onToggle }: Props) {
         {/* Logout */}
         <div className="p-3 border-t border-purple-700">
           <button
-            onClick={handleLogout}
+            onClick={() => setShowLogoutModal(true)}
             className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-purple-200 hover:bg-red-600/80 hover:text-white transition-all duration-200
               ${collapsed ? 'lg:justify-center lg:px-0' : ''}`}
             title={collapsed ? 'Logout' : undefined}
@@ -122,6 +124,12 @@ export default function BrandingSidebar({ collapsed, onToggle }: Props) {
           </button>
         </div>
       </aside>
+
+      <LogoutConfirmationModal
+        isOpen={showLogoutModal}
+        onCancel={() => setShowLogoutModal(false)}
+        onConfirm={handleLogout}
+      />
     </>
   );
 }

@@ -105,7 +105,7 @@ class CurriculumDepartmentSerializer(serializers.ModelSerializer):
         model = CurriculumDepartment
         fields = [
             'id', 'master', 'department', 'department_id', 'regulation', 'semester', 'semester_id', 'batch', 'batch_id', 'course_code', 'course_name',
-            'mnemonic', 'class_type', 'category', 'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark', 'is_elective', 'enabled_assessments',
+            'mnemonic', 'class_type', 'category', 'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark', 'is_elective', 'is_dept_core', 'enabled_assessments',
             'total_hours', 'question_paper_type', 'editable', 'overridden',
             'approval_status', 'approved_by', 'approved_at',
             'created_by', 'created_at', 'updated_at'
@@ -168,11 +168,14 @@ class ElectiveSubjectSerializer(serializers.ModelSerializer):
     is_cross_department = serializers.SerializerMethodField()
     owner_department_name = serializers.SerializerMethodField()
     parent_name = serializers.SerializerMethodField()
+    parent_is_dept_core = serializers.SerializerMethodField()
+    parent_department_id = serializers.SerializerMethodField()
 
     class Meta:
         model = ElectiveSubject
         fields = [
-            'id', 'parent', 'parent_name', 'department', 'department_id', 'department_group', 'department_group_id',
+            'id', 'parent', 'parent_name', 'parent_is_dept_core', 'parent_department_id',
+            'department', 'department_id', 'department_group', 'department_group_id',
             'batch', 'batch_id', 'regulation', 'semester', 'semester_id', 'course_code', 'course_name',
             'class_type', 'category', 'is_elective', 'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark',
             'total_hours', 'question_paper_type', 'editable', 'overridden',
@@ -180,7 +183,7 @@ class ElectiveSubjectSerializer(serializers.ModelSerializer):
             'student_count', 'is_cross_department', 'owner_department_name',
             'created_by', 'created_at', 'updated_at'
         ]
-        read_only_fields = ('created_by', 'created_at', 'updated_at', 'student_count', 'is_cross_department', 'owner_department_name', 'parent_name')
+        read_only_fields = ('created_by', 'created_at', 'updated_at', 'student_count', 'is_cross_department', 'owner_department_name', 'parent_name', 'parent_is_dept_core', 'parent_department_id')
     
     def get_is_cross_department(self, obj):
         """Check if this elective is being shown in a different department's view via group mapping."""
@@ -211,6 +214,18 @@ class ElectiveSubjectSerializer(serializers.ModelSerializer):
         """Return the parent curriculum row's course name."""
         if obj.parent:
             return obj.parent.course_name or obj.parent.course_code or f"Elective {obj.parent.id}"
+        return None
+
+    def get_parent_is_dept_core(self, obj):
+        """Return True when the parent curriculum row is marked is_dept_core."""
+        if obj.parent:
+            return getattr(obj.parent, 'is_dept_core', False)
+        return False
+
+    def get_parent_department_id(self, obj):
+        """Return the parent curriculum row's department ID."""
+        if obj.parent:
+            return obj.parent.department_id
         return None
 
     def create(self, validated_data):

@@ -24,7 +24,7 @@ def propagate_master_to_departments(sender, instance: CurriculumMaster, created,
         update_fields = [
             'regulation', 'semester', 'course_code', 'course_name', 'class_type', 'category',
             'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark',
-            'editable', 'is_elective', 'enabled_assessments',
+            'editable', 'is_elective', 'is_dept_core', 'enabled_assessments',
         ]
 
         for dept in dept_qs:
@@ -47,6 +47,7 @@ def propagate_master_to_departments(sender, instance: CurriculumMaster, created,
                 'external_mark': instance.external_mark,
                 'total_mark': instance.total_mark,
                 'editable': instance.editable,
+                'is_dept_core': getattr(instance, 'is_dept_core', False),
                 'batch': getattr(instance, 'batch', None),
                 # defaults for dept-specific fields
                 'total_hours': 20,

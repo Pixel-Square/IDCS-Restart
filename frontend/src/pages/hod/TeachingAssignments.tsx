@@ -5,7 +5,7 @@ import { getCachedMe } from '../../services/auth'
 
 type Section = { id: number; name: string; batch: string; batch_regulation?: { id: number; code: string; name?: string } | null; department_id?: number; department_short_name?: string; semester?: number; department?: { id: number; code?: string } }
 type Staff = { id: number; user: string | { username?: string; first_name?: string; last_name?: string }; staff_id: string; department?: { id?: number; code?: string; name?: string } }
-type CurriculumRow = { id: number; course_code?: string; course_name?: string; department?: { id: number; code?: string }; semester?: number; regulation?: string }
+type CurriculumRow = { id: number; course_code?: string; course_name?: string; department?: { id: number; code?: string }; semester?: number; regulation?: string; home_dept_codes?: string[] }
 type TeachingAssignment = { 
   id: number
   staff: string | number
@@ -68,6 +68,8 @@ export default function TeachingAssignmentsPage(){
   const [selectedElectiveRegulation, setSelectedElectiveRegulation] = useState<string | null>(null)
   const [selectedElectiveSemester, setSelectedElectiveSemester] = useState<number | null>(null)
   const [curriculum, setCurriculum] = useState<CurriculumRow[]>([])
+  // Per-section curriculum for shared sections (S&H-type: department_id === null)
+  const [sharedSectionCurriculum, setSharedSectionCurriculum] = useState<Record<number, CurriculumRow[]>>({})
   const [assignments, setAssignments] = useState<TeachingAssignment[]>([])
   const [electiveOptions, setElectiveOptions] = useState<any[]>([])
   const [electiveParents, setElectiveParents] = useState<any[]>([])
@@ -84,8 +86,11 @@ export default function TeachingAssignmentsPage(){
 
   // permissions (used to decide which staff endpoint to call)
   const perms = (() => { try { return JSON.parse(localStorage.getItem('permissions') || '[]') as string[] } catch { return [] } })()
+  const canAssignTeaching = perms.includes('academics.assign_teaching')
   const canViewElectives = perms.includes('academics.view_elective_teaching')
   const canAssignElectives = perms.includes('academics.assign_elective_teaching')
+  const showCourseAssignments = canAssignTeaching && !canViewElectives && !canAssignElectives
+  const useCachedTeachingData = showCourseAssignments
 
   // Helper functions for elective filtering
   const getUniqueElectiveRegulations = () => {
@@ -110,10 +115,22 @@ export default function TeachingAssignmentsPage(){
 
   const getFilteredElectiveParents = () => {
     return electiveParents.filter(p => {
-      const deptMatch = !selectedElectiveDept || (p.department && p.department.id === selectedElectiveDept);
+      if ((p as any).is_dept_core) return false; // dept-core handled in its own section
+      // Parents from shared sections have no 'department' (they span multiple depts);
+      // always include them regardless of the dept filter so Y1 electives are visible.
+      const deptMatch = !selectedElectiveDept || !p.department || p.department.id === selectedElectiveDept;
       const regulationMatch = !selectedElectiveRegulation || p.regulation === selectedElectiveRegulation;
       const semesterMatch = !selectedElectiveSemester || p.semester === selectedElectiveSemester;
       return deptMatch && regulationMatch && semesterMatch;
+    });
+  }
+
+  const getDeptCoreParents = () => {
+    return electiveParents.filter(p => {
+      if (!(p as any).is_dept_core) return false;
+      if (!p.department) return false;
+      const deptMatch = !selectedDept || !p.department || p.department.id === selectedDept;
+      return deptMatch;
     });
   }
 
@@ -166,28 +183,51 @@ export default function TeachingAssignmentsPage(){
       }
       
       // Check cache first unless force refresh
-      if (!forceRefresh) {
+      if (!forceRefresh && useCachedTeachingData) {
         const cached = getCachedData()
         if (cached) {
           console.log('Loading teaching assignments from cache')
-          setSections(cached.sections || [])
+          const cachedSections: Section[] = cached.sections || []
+          const cachedElectiveParents: any[] = cached.electiveParents || []
+          setSections(cachedSections)
           setStaff(cached.staff || [])
           setElectiveStaff(cached.staff || [])
           setCurriculum(cached.curriculum || [])
-          setElectiveParents(cached.electiveParents || [])
+          setElectiveParents(cachedElectiveParents)
           setElectiveOptions(cached.electiveOptions || [])
           setAssignments(cached.assignments || [])
           setDepartments(cached.departments || [])
           setUserDepartments(cached.userDepartments || [])
+          // Always fetch shared-section curriculum (not in cache) so shared sections
+          // show subjects and is_elective rows are merged into electiveParents.
+          const sharedSecsFromCache = cachedSections.filter(s => s.department_id === null && s.department_short_name === null)
+          if (sharedSecsFromCache.length > 0) {
+            const sharedMapFromCache: Record<number, CurriculumRow[]> = {}
+            await Promise.all(sharedSecsFromCache.map(async sec => {
+              try {
+                const r = await fetchWithAuth(`/api/timetable/curriculum-for-section/?section_id=${sec.id}`)
+                if (r.ok) { sharedMapFromCache[sec.id] = ((await r.json()).results || []) as CurriculumRow[] }
+              } catch { /* ignore */ }
+            }))
+            setSharedSectionCurriculum(sharedMapFromCache)
+            const allSharedRows = Object.values(sharedMapFromCache).flat()
+            const sharedElectiveRows = allSharedRows.filter((c: any) => c.is_elective)
+            const existIds = new Set(cachedElectiveParents.map((p: any) => p.id))
+            const newParents = sharedElectiveRows.filter((c: any) => !existIds.has(c.id))
+            if (newParents.length > 0) setElectiveParents([...cachedElectiveParents, ...newParents])
+          }
           setLoading(false)
           return
         }
       }
 
       console.log('Fetching teaching assignments from API')
-      // Always load only the logged-in user's assigned advisor sections (my-students)
-      // so Course Assignments never shows unrelated dept/HOD sections
-      const sectionsEndpoint = '/api/academics/my-students/'
+      // HOD-capable users need the department section list so Year-1 dept-core
+      // subjects can be assigned to core department sections like AI&DS A.
+      // Advisors without HOD permissions still use only their own sections.
+      const sectionsEndpoint = showCourseAssignments
+        ? '/api/academics/my-students/'
+        : '/api/academics/sections/?page_size=0'
       const sres = await fetchWithAuth(sectionsEndpoint)
       const staffEndpoint = (canViewElectives || canAssignElectives) ? '/api/academics/hod-staff/?page_size=0' : '/api/academics/advisor-staff/?page_size=0'
       // fetch staff list optionally filtered by selected department
@@ -250,7 +290,7 @@ export default function TeachingAssignmentsPage(){
         const d = await safeJson(curRes); 
         const rows = (d.results || d); 
         curriculumData = rows
-        electiveParentsData = rows.filter((r:any)=> r.is_elective)
+        electiveParentsData = rows.filter((r:any)=> r.is_elective || r.is_dept_core)
         setCurriculum(curriculumData); 
         setElectiveParents(electiveParentsData);
 
@@ -332,18 +372,47 @@ export default function TeachingAssignmentsPage(){
         assignmentsData = d.results || d
         setAssignments(assignmentsData) 
       }
-      
+
+      // For shared sections (S&H-type: department_id === null), fetch the union of
+      // home-department curriculum rows via the per-section endpoint.
+      const sharedSecs = sectionsData.filter(s => s.department_id === null && s.department_short_name === null)
+      if (sharedSecs.length > 0) {
+        const sharedCurriculumMap: Record<number, CurriculumRow[]> = {}
+        await Promise.all(sharedSecs.map(async sec => {
+          try {
+            const r = await fetchWithAuth(`/api/timetable/curriculum-for-section/?section_id=${sec.id}`)
+            if (r.ok) {
+              const d = await r.json()
+              sharedCurriculumMap[sec.id] = (d.results || []) as CurriculumRow[]
+            }
+          } catch { /* ignore */ }
+        }))
+        setSharedSectionCurriculum(sharedCurriculumMap)
+        // Merge is_elective rows from shared sections into electiveParents so they
+        // appear in the Elective Subject Assignments section.
+        const allSharedRows = Object.values(sharedCurriculumMap).flat()
+        const sharedElectiveRows = allSharedRows.filter((c: any) => c.is_elective)
+        const existElectiveIds = new Set(electiveParentsData.map((p: any) => p.id))
+        const newSharedElectiveParents = sharedElectiveRows.filter((c: any) => !existElectiveIds.has(c.id))
+        if (newSharedElectiveParents.length > 0) {
+          electiveParentsData = [...electiveParentsData, ...newSharedElectiveParents]
+          setElectiveParents(electiveParentsData)
+        }
+      }
+
       // Cache the loaded data for faster subsequent loads
-      setCachedData({
-        sections: sectionsData,
-        staff: staffData,
-        curriculum: curriculumData,
-        electiveParents: electiveParentsData,
-        electiveOptions: electiveOptionsData,
-        assignments: assignmentsData,
-        departments: departmentsData,
-        userDepartments: userDepartmentsData
-      })
+      if (useCachedTeachingData) {
+        setCachedData({
+          sections: sectionsData,
+          staff: staffData,
+          curriculum: curriculumData,
+          electiveParents: electiveParentsData,
+          electiveOptions: electiveOptionsData,
+          assignments: assignmentsData,
+          departments: departmentsData,
+          userDepartments: userDepartmentsData
+        })
+      }
     }catch(e){ console.error(e); alert('Failed to load teaching assignment data') }
     finally{ setLoading(false) }
   }
@@ -443,6 +512,24 @@ export default function TeachingAssignmentsPage(){
   }, [selectedDept])
 
   // Helper functions for assignment management
+
+  // Returns the relevant curriculum rows for a section:
+  // - Shared sections (S&H, department_id === null): use per-section fetched curriculum
+  // - Normal sections: filter global curriculum by semester + regulation
+  const getSectionSubjects = (section: Section): CurriculumRow[] => {
+    if (section.department_id === null && section.department_short_name === null) {
+      // For shared sections, exclude both is_elective and is_dept_core rows;
+      // those appear in the Elective Subject Assignments panel below.
+      return (sharedSectionCurriculum[section.id] || []).filter(c => !(c as any).is_elective && !(c as any).is_dept_core)
+    }
+    return curriculum.filter(c =>
+      (section.semester ? (c.semester === section.semester) : true) &&
+      (section.batch_regulation ? (c.regulation === section.batch_regulation.code) : true) &&
+      !((c as any).is_elective) &&
+      !((c as any).is_dept_core)
+    )
+  }
+
   const findExistingAssignment = (sectionId: number, curricularRowId: number) => {
     return assignments.find(a => {
       // Check section match using section_details
@@ -569,11 +656,7 @@ export default function TeachingAssignmentsPage(){
     // Show all sections - department filter only affects staff dropdown
     const visibleSections = sections
     visibleSections.forEach(section => {
-      const sectionSubjects = curriculum.filter(c => 
-        (section.semester ? (c.semester === section.semester) : true) &&
-        (section.batch_regulation ? (c.regulation === section.batch_regulation.code) : true) &&
-        !((c as any).is_elective)
-      );
+      const sectionSubjects = getSectionSubjects(section);
       sectionSubjects.forEach(subject => {
         const key = getAssignmentKey(section.id, subject.id);
         bulkKeys.add(key);
@@ -596,11 +679,7 @@ export default function TeachingAssignmentsPage(){
       // Show all sections - department filter only affects staff dropdown
       const visibleSections = sections
       for (const section of visibleSections) {
-        const sectionSubjects = curriculum.filter(c => 
-          (section.semester ? (c.semester === section.semester) : true) &&
-          (section.batch_regulation ? (c.regulation === section.batch_regulation.code) : true) &&
-          !((c as any).is_elective)
-        );
+        const sectionSubjects = getSectionSubjects(section);
 
         for (const subject of sectionSubjects) {
           const staffSel = document.getElementById(`staff-${section.id}-${subject.id}`) as HTMLSelectElement;
@@ -815,6 +894,7 @@ export default function TeachingAssignmentsPage(){
         )}
 
         {/* Assignment Table */}
+        {showCourseAssignments && (
         <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-2">
@@ -865,20 +945,18 @@ export default function TeachingAssignmentsPage(){
             return (
             <div className="space-y-6">
               {visibleSections.map(section => {
-                const sectionSubjects = curriculum.filter(c => 
-                  (section.semester ? (c.semester === section.semester) : true) &&
-                  (section.batch_regulation ? (c.regulation === section.batch_regulation.code) : true) &&
-                  !((c as any).is_elective)
-                );
+                const sectionSubjects = getSectionSubjects(section);
                 
                 return (
                   <div key={section.id} className="border border-gray-200 rounded-lg p-4">
                     {/* Section Header */}
-                    <div className="bg-blue-50 rounded-lg p-4 mb-4">
+                    <div className={`rounded-lg p-4 mb-4 ${section.department_id === null && section.department_short_name === null ? 'bg-amber-50' : 'bg-blue-50'}`}>
                       <div className="flex items-center justify-between">
                         <div>
-                          <h4 className="text-lg font-semibold text-blue-900">
-                            {[section.department_short_name || section.department?.code, section.batch, section.name].filter(Boolean).join(' · ')}
+                          <h4 className={`text-lg font-semibold ${section.department_id === null && section.department_short_name === null ? 'text-amber-900' : 'text-blue-900'}`}>
+                            {section.department_id === null && section.department_short_name === null
+                              ? `S&H (Year-1) · ${section.batch} · ${section.name}`
+                              : [section.department_short_name || section.department?.code, section.batch, section.name].filter(Boolean).join(' · ')}
                           </h4>
                           <div className="flex items-center gap-3 mt-1">
                             <p className="text-blue-700 text-sm">
@@ -924,7 +1002,17 @@ export default function TeachingAssignmentsPage(){
                                     {subject.course_code || '-'}
                                   </td>
                                   <td className="px-4 py-3 text-gray-700">
-                                    {subject.course_name || 'Unnamed'}
+                                    <div>{subject.course_name || 'Unnamed'}</div>
+                                    {subject.home_dept_codes && subject.home_dept_codes.length > 0 && (
+                                      <div className="text-xs text-amber-600 font-medium mt-0.5">
+                                        {subject.home_dept_codes.join(', ')}
+                                      </div>
+                                    )}
+                                    {(subject as any).is_dept_core && (
+                                      <div className="text-xs text-purple-600 font-medium mt-0.5">
+                                        Dept-Core
+                                      </div>
+                                    )}
                                   </td>
                                   <td className="px-4 py-3">
                                     {editing ? (
@@ -1064,6 +1152,180 @@ export default function TeachingAssignmentsPage(){
             )
           })()}
         </div>
+        )}
+
+        {/* Elective Subject Assignments */}
+        {/* Dept-Core Subject Assignments */}
+        {getDeptCoreParents().length > 0 && (
+        <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+          <div className="flex items-center gap-2 mb-6">
+            <BookOpen className="h-5 w-5 text-purple-600" />
+            <h3 className="text-lg font-semibold text-gray-900">Dept-Core Subject Assignments</h3>
+          </div>
+          <div className="space-y-4">
+            {getDeptCoreParents().map(parent => {
+              // Find shared sections that have this dept-core curriculum row
+              const parentDeptId = parent.department?.id;
+              const relevantSections = sections.filter(sec => {
+                const secDeptId = sec.department_id ?? sec.department?.id;
+                const regulationMatch = !parent.regulation || sec.batch_regulation?.code === parent.regulation;
+                const semesterMatch = !parent.semester || sec.semester === parent.semester;
+
+                // Normal core-department section, e.g. AI&DS A / batch 2025 / sem 2.
+                if (parentDeptId && secDeptId === parentDeptId) {
+                  return regulationMatch && semesterMatch;
+                }
+
+                // Shared S&H section fallback when the dept-core row is exposed there.
+                if (sec.department_id === null && sec.department_short_name === null) {
+                  return (sharedSectionCurriculum[sec.id] || []).some((row: any) => row.id === parent.id);
+                }
+
+                return false;
+              });
+              // Prefer staff from the subject's own department
+              const deptCoreStaff = parent.department
+                ? staff.filter(st =>
+                    (st as any).department === parent.department.id ||
+                    (st.department && (st.department as any).id === parent.department.id)
+                  )
+                : staff;
+              return (
+                <div key={parent.id} className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                  <div className="mb-4">
+                    <div className="font-semibold text-gray-900">{parent.course_name || parent.course_code || 'Unnamed'}</div>
+                    <div className="flex flex-wrap items-center gap-2 mt-1">
+                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800 border border-purple-200">Dept-Core</span>
+                      {parent.department && (
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700 border border-gray-200">
+                          {(parent.department as any).short_name || (parent.department as any).code || `Dept ${parent.department.id}`}
+                        </span>
+                      )}
+                      {parent.regulation && (
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800 border border-indigo-200">{parent.regulation}</span>
+                      )}
+                      {parent.semester && (
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 border border-blue-200">Semester {parent.semester}</span>
+                      )}
+                    </div>
+                  </div>
+                  {relevantSections.length === 0 ? (
+                    <div className="text-gray-400 text-sm py-2">No Year-1 sections found for this subject.</div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead>
+                          <tr className="bg-white border-b border-gray-200">
+                            <th className="px-4 py-2 text-left text-sm font-medium text-gray-600">Section</th>
+                            <th className="px-4 py-2 text-left text-sm font-medium text-gray-600">Assigned Staff</th>
+                            <th className="px-4 py-2 text-center text-sm font-medium text-gray-600">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {relevantSections.map(sec => {
+                            const existingAssignment = findExistingAssignment(sec.id, parent.id);
+                            const editing = isEditing(sec.id, parent.id);
+                            return (
+                              <tr key={sec.id} className="hover:bg-white/60">
+                                <td className="px-4 py-2 text-sm text-gray-700">
+                                  {[sec.batch, sec.name].filter(Boolean).join(' · ')}
+                                </td>
+                                <td className="px-4 py-2">
+                                  {editing ? (
+                                    <select
+                                      id={`staff-${sec.id}-${parent.id}`}
+                                      defaultValue={existingAssignment?.staff_details?.id ?? (existingAssignment?.staff as any) ?? ''}
+                                      className="w-full px-3 py-1.5 border border-gray-300 rounded-lg bg-white text-gray-700 text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+                                    >
+                                      <option value="">-- select staff --</option>
+                                      {(deptCoreStaff.length > 0 ? deptCoreStaff : staff).map(st => (
+                                        <option key={st.id} value={st.id}>{st.staff_id} - {getStaffDisplayName(st)}</option>
+                                      ))}
+                                    </select>
+                                  ) : existingAssignment ? (
+                                    <span className="text-sm text-gray-900 font-medium">
+                                      {existingAssignment.staff_details?.staff_id} - {getAssignmentStaffName(existingAssignment.staff_details)}
+                                    </span>
+                                  ) : (
+                                    <span className="text-sm text-gray-400 italic">Not assigned</span>
+                                  )}
+                                </td>
+                                <td className="px-4 py-2 text-center">
+                                  {editing ? (
+                                    <div className="flex items-center justify-center gap-2">
+                                      <button
+                                        onClick={async () => {
+                                          const sel = document.getElementById(`staff-${sec.id}-${parent.id}`) as HTMLSelectElement;
+                                          if (!sel?.value) return alert('Select a staff member');
+                                          try {
+                                            let res;
+                                            if (existingAssignment) {
+                                              res = await fetchWithAuth(`/api/academics/teaching-assignments/${existingAssignment.id}/`, {
+                                                method: 'PATCH',
+                                                body: JSON.stringify({ staff_id: Number(sel.value), is_active: true })
+                                              });
+                                            } else {
+                                              res = await fetchWithAuth('/api/academics/teaching-assignments/', {
+                                                method: 'POST',
+                                                body: JSON.stringify({ section_id: sec.id, curriculum_row_id: parent.id, staff_id: Number(sel.value), is_active: true })
+                                              });
+                                            }
+                                            if (res.ok) { cancelEditing(sec.id, parent.id); fetchData(true); }
+                                            else { const txt = await res.text(); alert('Error: ' + txt); }
+                                          } catch (e) { alert('Error: ' + e); }
+                                        }}
+                                        className="p-1.5 text-green-600 hover:bg-green-50 rounded-lg border border-green-300"
+                                        title="Save"
+                                      >
+                                        <Save className="h-4 w-4" />
+                                      </button>
+                                      <button
+                                        onClick={() => cancelEditing(sec.id, parent.id)}
+                                        className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg border border-red-300"
+                                        title="Cancel"
+                                      >
+                                        <X className="h-4 w-4" />
+                                      </button>
+                                      {existingAssignment && (
+                                        <button
+                                          onClick={async () => {
+                                            if (!confirm('Remove this dept-core staff assignment?')) return;
+                                            try {
+                                              const res = await fetchWithAuth(`/api/academics/teaching-assignments/${existingAssignment.id}/`, { method: 'DELETE' });
+                                              if (res.ok) { cancelEditing(sec.id, parent.id); fetchData(true); }
+                                              else { alert('Failed to delete'); }
+                                            } catch (e) { alert('Error: ' + e); }
+                                          }}
+                                          className="p-1.5 text-red-700 hover:bg-red-50 rounded-lg border border-red-300"
+                                          title="Delete Assignment"
+                                        >
+                                          <Trash2 className="h-4 w-4" />
+                                        </button>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <button
+                                      onClick={() => startEditing(sec.id, parent.id)}
+                                      className="p-1.5 text-purple-600 hover:bg-purple-50 rounded-lg border border-purple-300"
+                                      title="Assign Staff"
+                                    >
+                                      <Edit className="h-4 w-4" />
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        )}
 
         {/* Elective Subject Assignments */}
         {canViewElectives && (
@@ -1180,6 +1442,11 @@ export default function TeachingAssignmentsPage(){
                     <div>
                       <div className="font-semibold text-gray-900">{parent.course_name || parent.course_code || 'Elective'}</div>
                       <div className="flex items-center gap-3 mt-1">
+                        {(parent as any).is_dept_core && (
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800 border border-purple-200">
+                            Dept-Core
+                          </span>
+                        )}
                         {parent.regulation && (
                           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800 border border-indigo-200">
                             {parent.regulation}
@@ -1195,15 +1462,14 @@ export default function TeachingAssignmentsPage(){
                   </div>
                   <div className="space-y-3">
                     {(() => {
-                      // Get own electives matching this parent by ID and same department
-                      // Filter by parent ID to get electives that directly belong to this parent row
-                      // Also ensure the elective's department matches the parent's department
+                      // Get own electives matching this parent by parent ID.
+                      // When parent comes from a shared section it has no 'department' field;
+                      // rely on parent.id (CurriculumDepartment PK) uniqueness instead.
                       const ownElectives = (electiveOptions || []).filter((e: any) => 
                         e.parent === parent.id && 
                         !e.is_cross_department &&
-                        e.department && 
-                        parent.department && 
-                        e.department.id === parent.department.id
+                        // Only add dept check when parent has explicit department info
+                        (!parent.department || !e.department || e.department.id === parent.department.id)
                       );
                       // Get cross-dept electives matching this parent by name, regulation, and semester
                       // This ensures we only show shared electives that belong to the same curriculum context

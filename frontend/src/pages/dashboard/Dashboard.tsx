@@ -3,6 +3,7 @@ import DashboardEntryPoints from '../../components/layout/DashboardEntryPoints';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import UserQueriesComponent from '../../components/UserQueriesComponent';
 import SwapRequestPopup from '../../components/SwapRequestPopup';
+import AttendanceRequestPopup from '../../components/AttendanceRequestPopup';
 import { getCachedMe } from '../../services/auth';
 
 export default function DashboardPage() {
@@ -19,6 +20,10 @@ export default function DashboardPage() {
       {/* Swap Request Popup - rendered outside layout to avoid stacking context issues */}
       {user?.profile_type === 'STAFF' && (
         <SwapRequestPopup />
+      )}
+      {/* Attendance Assignment Request Popup */}
+      {user?.profile_type === 'STAFF' && (
+        <AttendanceRequestPopup />
       )}
       
       <DashboardLayout>

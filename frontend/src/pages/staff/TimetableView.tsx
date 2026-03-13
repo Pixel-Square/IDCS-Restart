@@ -73,6 +73,7 @@ export default function StaffTimetable(){
   const [periods, setPeriods] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [pendingRequestCount, setPendingRequestCount] = useState(0)
+  const [pendingSentRequests, setPendingSentRequests] = useState<any[]>([])
   const [showRequestsModal, setShowRequestsModal] = useState(false)
   
   // Date selector state
@@ -162,6 +163,7 @@ export default function StaffTimetable(){
       if (res.ok) {
         const respData = await res.json();
         setPendingRequestCount((respData.received || []).length);
+        setPendingSentRequests(respData.sent || []);
       }
     } catch (e) {
       console.error('Error fetching pending requests:', e);
@@ -499,6 +501,9 @@ export default function StaffTimetable(){
                                     // Only swap periods can be clicked if special, regular periods and electives cannot be swapped
                                     const isNonSwapSpecial = a.is_special && !a.is_swap
                                     const clickable = a.is_swap ? !!sectionId : (!isElective && !isNonSwapSpecial && !isCustomSubject && !!sectionId && canStartSwap)
+                                    const pendingSwap = !a.is_swap && pendingSentRequests.find(
+                                      r => r.from_period === p.id && r.from_date === dayDate && r.status === 'PENDING'
+                                    )
                                     return (
                                       <div
                                         key={idx}
@@ -534,6 +539,12 @@ export default function StaffTimetable(){
                                           {formatSectionInfo(g)}
                                         </div>
                                         {overridden && <div className="text-xs text-red-600 mt-1 font-medium">Overridden</div>}
+                                        {pendingSwap && (
+                                          <div className="text-xs text-yellow-700 bg-yellow-100 rounded px-1 py-0.5 mt-1 font-medium flex items-center gap-1">
+                                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-500"></span>
+                                            Pending — {pendingSwap.requested_to_name}
+                                          </div>
+                                        )}
                                         {a.is_swap && <div className="text-xs text-green-600 mt-0.5 font-medium">Swap • {a.date || ''}</div>}
                                         {a.is_swap && a.date && (
                                           <div className="mt-1.5" onClick={e => e.stopPropagation()}>

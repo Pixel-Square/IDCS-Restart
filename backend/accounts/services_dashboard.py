@@ -155,6 +155,9 @@ def resolve_dashboard_capabilities(user) -> Dict:
         'can_view_timetable': 'timetable.view' in lower_perms,
         'can_assign_advisor': 'academics.assign_advisor' in lower_perms,
         'can_assign_teaching': 'academics.assign_teaching' in lower_perms,
+        'can_view_feedback_page': 'feedback.feedback_page' in lower_perms,
+        'can_create_feedback': 'feedback.create' in lower_perms,
+        'can_reply_feedback': 'feedback.reply' in lower_perms,
     }
 
     hod_role_present = any(str(r).upper() == 'HOD' for r in role_names)
@@ -168,6 +171,7 @@ def resolve_dashboard_capabilities(user) -> Dict:
         'hod_teaching': bool(flags.get('can_assign_teaching') or hod_role_present),
         'staff_students': bool('students.view_students' in lower_perms),
         'hod_obe_requests': bool(hod_role_present),
+        'feedback_page': bool(flags.get('can_view_feedback_page')),
     }
 
     return {

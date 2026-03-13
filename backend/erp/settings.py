@@ -43,30 +43,34 @@ ALLOWED_HOSTS = (
 )
 
 INSTALLED_APPS = [
-    # 'grappelli',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    
+    # Third party apps
     'rest_framework',
     'corsheaders',
+    
+    # Local apps - order matters for dependencies
     'accounts',
-    'academics',
-    'curriculum',
     'college',
-    'applications',
-    'academic_calendar',
-    'OBE.apps.ObeConfig',
-    'template_api.apps.TemplateApiConfig',
-    'question_bank.apps.QuestionBankConfig',
+    'curriculum',  # Must come before academics
+    'academics',
     'timetable',
     'bi.apps.BiConfig',
     'powerbi_portal.apps.PowerbiPortalConfig',
     'pbas.apps.PbasConfig',
     'staff_attendance.apps.StaffAttendanceConfig',
     'idcsscan',
+    'feedback',
+    'academic_calendar',
+    'applications',
+    'OBE',
+    'question_bank',
+    'template_api',
 ]
 # Staff requests dynamic forms & workflow engine
 INSTALLED_APPS.append('staff_requests')

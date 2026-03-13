@@ -37,6 +37,7 @@ urlpatterns = [
     # Staff Requests API (dynamic forms & workflow engine)
     path('api/staff-requests/', include('staff_requests.urls')),
     path('api/idscan/', include('idcsscan.urls')),
+    path('api/feedback/', include('feedback.urls')),
 ]
 
 # Admin dashboard data endpoint (counts for models) - always available
@@ -45,12 +46,19 @@ urlpatterns += [
     path('admin/rfid-login/', admin_views.rfid_admin_login, name='admin-rfid-login'),
 ]
 
+# Serve media files for local/dev environments, including non-runserver
+# modes on localhost where nginx may not be configured.
+urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+
 # During development using `manage.py runserver` we serve media and project
 # static files directly so the admin CSS and our logo are available even if
 # DEBUG is not toggled via env vars. This is a convenience for local work only.
 if 'runserver' in sys.argv or settings.DEBUG:
-    # Serve media
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+    # Serve uploaded media during local runserver even when DEBUG is disabled.
+    urlpatterns += [
+        re_path(r'^media/(?P<path>.*)$', _serve, {'document_root': settings.MEDIA_ROOT}),
+    ]
+
     # Serve project static files (from backend/static) when not using collectstatic
     urlpatterns += [
         re_path(r'^static/(?P<path>.*)$', _serve, {'document_root': settings.BASE_DIR / 'static'}),
