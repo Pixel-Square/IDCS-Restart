@@ -7,7 +7,7 @@ import {
 } from '../../services/idscan'
 
 // ─── USB device filtering & name lookup ──────────────────────────────────────
-// Filters shown to the browser's port-picker dialog — only USB-serial adapters
+// Filters shown to tdhe browser's port-picker dialog — only USB-serial adapters
 // commonly used with NodeMCU / Arduino boards are included, which excludes
 // audio devices, HID devices, webcams, etc.
 const SERIAL_FILTERS = [
