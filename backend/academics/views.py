@@ -1741,10 +1741,13 @@ class AcademicYearViewSet(viewsets.ModelViewSet):
                 elif ta:
                     es = getattr(ta, 'elective_subject', None)
                 parent_dept_id = getattr(getattr(es, 'parent', None), 'department_id', None)
+                es_dept_id = getattr(es, 'department_id', None)
                 staff_profile = getattr(user, 'staff_profile', None)
-                if staff_profile and parent_dept_id:
+                if staff_profile:
                     hod_depts = list(DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True).values_list('department_id', flat=True))
-                    if parent_dept_id in hod_depts:
+                    # HOD of the parent dept (normal elective) OR HOD of the variant's own dept
+                    # (dept-core: parent is S&H but variant belongs to AI&DS HOD etc.)
+                    if (parent_dept_id and parent_dept_id in hod_depts) or (es_dept_id and es_dept_id in hod_depts):
                         serializer.save()
                         return
             except Exception:
@@ -1784,13 +1787,35 @@ class HODSectionsView(APIView):
         if not dept_ids:
             return Response({'results': []})
 
-        sections = Section.objects.filter(
+        # Primary own sections (batch belongs to the HOD's department(s))
+        own_section_ids = set(Section.objects.filter(
             Q(batch__course__department_id__in=dept_ids) |
             Q(batch__department_id__in=dept_ids) |
             Q(managing_department_id__in=dept_ids)
+        ).values_list('pk', flat=True))
+
+        # Secondary: sections where Year-1 students have SECONDARY assignments belonging
+        # to this HOD's department (e.g. AI&DS A / B for Year-1 dept-core periods).
+        from django.db.models import Exists, OuterRef
+        from .models import StudentSectionAssignment as _SSA
+        has_secondary_from_dept = _SSA.objects.filter(
+            section_id=OuterRef('pk'),
+            end_date__isnull=True,
+            section_type='SECONDARY',
+            student__home_department_id__in=dept_ids,
+        )
+        secondary_section_ids = set(Section.objects.filter(
+            Exists(has_secondary_from_dept)
+        ).values_list('pk', flat=True))
+
+        all_section_ids = own_section_ids | secondary_section_ids
+
+        sections = Section.objects.filter(
+            pk__in=all_section_ids
         ).select_related(
             'batch__course__department', 'batch__department', 'batch__regulation', 'semester'
         ).order_by('batch__name', 'name')
+
         results = []
         for s in sections:
             batch = getattr(s, 'batch', None)
@@ -2587,7 +2612,8 @@ class SectionStudentsView(APIView):
         except Exception:
             return Response({'results': []})
 
-        # current assignments
+        # current assignments — include both PRIMARY and SECONDARY so that core-dept sections
+        # show their Year-1 students (those have SECONDARY assignments to core-dept sections).
         from .models import StudentSectionAssignment, StudentProfile
         assign_qs = StudentSectionAssignment.objects.filter(section_id=sid, end_date__isnull=True).exclude(student__status__in=['INACTIVE', 'DEBAR']).select_related('student__user')
         students = [a.student for a in assign_qs]
@@ -6252,3 +6278,139 @@ class StaffDepartmentRoleRemoveView(APIView):
                 return Response({
                     'detail': f'Staff does not have an active {role} role in this department.',
                 }, status=status.HTTP_400_BAD_REQUEST)
+
+
+class BulkAssignSecondarySectionView(APIView):
+    """Bulk-assign Year-1 students to their core-dept (SECONDARY) sections.
+
+    POST /api/academics/bulk-assign-secondary-section/
+    {
+      "section_id": <int>,          // target core-dept section (AI&DS A, AI&DS B, …)
+      "student_ids": [<int>, ...]   // student PKs to assign
+    }
+
+    The endpoint creates a SECONDARY StudentSectionAssignment for each student,
+    ending any previous SECONDARY assignment for the same student first.
+    The students' PRIMARY (S&H) assignments are untouched.
+
+    Requires the caller to be a HOD/AHOD for the section's department or a superuser.
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request):
+        from .models import Section, StudentSectionAssignment, StudentProfile, DepartmentRole
+        user = request.user
+        staff_profile = getattr(user, 'staff_profile', None)
+
+        section_id = request.data.get('section_id')
+        student_ids = request.data.get('student_ids', [])
+
+        if not section_id or not student_ids:
+            return Response({'detail': 'section_id and student_ids are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            section = Section.objects.select_related(
+                'batch__course__department', 'batch__department'
+            ).get(pk=int(section_id))
+        except Section.DoesNotExist:
+            return Response({'detail': 'Section not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Determine the section's department
+        batch = getattr(section, 'batch', None)
+        course = getattr(batch, 'course', None) if batch else None
+        dept = (getattr(course, 'department', None) if course else None) or getattr(batch, 'department', None)
+
+        # Permission check: user must be HOD/AHOD for this dept, or superuser
+        if not user.is_superuser:
+            if not staff_profile:
+                return Response({'detail': 'Permission denied.'}, status=status.HTTP_403_FORBIDDEN)
+            dept_id = getattr(dept, 'pk', None)
+            is_hod = DepartmentRole.objects.filter(
+                staff=staff_profile, role__in=['HOD', 'AHOD'], is_active=True,
+                department_id=dept_id
+            ).exists() if dept_id else False
+            if not is_hod:
+                return Response({'detail': 'Only the HOD/AHOD of the section department can assign secondary sections.'}, status=status.HTTP_403_FORBIDDEN)
+
+        from django.utils import timezone
+        today = timezone.now().date()
+        created_count = 0
+        updated_count = 0
+        errors = []
+
+        for sid in student_ids:
+            try:
+                student = StudentProfile.objects.get(pk=int(sid))
+                # End existing active SECONDARY assignment for this student
+                existing = StudentSectionAssignment.objects.filter(
+                    student=student,
+                    end_date__isnull=True,
+                    section_type=StudentSectionAssignment.SECTION_TYPE_SECONDARY,
+                ).first()
+                if existing:
+                    if existing.section_id == section.pk:
+                        # Already assigned to this section; skip
+                        continue
+                    existing.end_date = today
+                    existing.save(update_fields=['end_date'])
+                    updated_count += 1
+
+                StudentSectionAssignment.objects.create(
+                    student=student,
+                    section=section,
+                    section_type=StudentSectionAssignment.SECTION_TYPE_SECONDARY,
+                    start_date=today,
+                )
+                created_count += 1
+            except StudentProfile.DoesNotExist:
+                errors.append(f'Student {sid} not found.')
+            except Exception as e:
+                errors.append(f'Error assigning student {sid}: {str(e)}')
+
+        return Response({
+            'created': created_count,
+            'updated': updated_count,
+            'errors': errors,
+        }, status=status.HTTP_200_OK)
+
+
+class RemoveSecondarySectionView(APIView):
+    """Remove a student's SECONDARY section assignment.
+
+    POST /api/academics/remove-secondary-section/
+    {
+      "student_ids": [<int>, ...],   // optional; if omitted + section_id provided, clears all in section
+      "section_id": <int>            // optional filter
+    }
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request):
+        from .models import StudentSectionAssignment, StudentProfile, DepartmentRole, Section
+        user = request.user
+        staff_profile = getattr(user, 'staff_profile', None)
+
+        student_ids = request.data.get('student_ids', [])
+        section_id = request.data.get('section_id')
+
+        if not student_ids and not section_id:
+            return Response({'detail': 'Provide student_ids or section_id.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not user.is_superuser and not staff_profile:
+            return Response({'detail': 'Permission denied.'}, status=status.HTTP_403_FORBIDDEN)
+
+        from django.utils import timezone
+        today = timezone.now().date()
+
+        qs = StudentSectionAssignment.objects.filter(
+            end_date__isnull=True,
+            section_type=StudentSectionAssignment.SECTION_TYPE_SECONDARY,
+        )
+        if student_ids:
+            qs = qs.filter(student_id__in=[int(s) for s in student_ids])
+        if section_id:
+            qs = qs.filter(section_id=int(section_id))
+
+        count = qs.count()
+        qs.update(end_date=today)
+        return Response({'ended': count})

@@ -145,6 +145,16 @@ class CurriculumMaster(models.Model):
     qp_type = models.CharField(max_length=16, choices=QP_TYPE_CHOICES, default='QP1', blank=True, null=True)
     category = models.CharField(max_length=64, blank=True)
     is_elective = models.BooleanField(default=False)
+    # Dept-Core flag: subjects like Program Core / Engineering Science that are taught
+    # department-wise inside a shared S&H Year-1 section.  During these periods students
+    # regroup by home_department; the timetable auto-resolves the subject variant per
+    # student via ElectiveSubject.department == student.home_department (no ElectiveChoice
+    # needed — the mapping is automatic).
+    is_dept_core = models.BooleanField(
+        default=False,
+        help_text='True for department-specific core subjects taught inside shared (S&H) Year-1 sections. '
+                  'Each department owns an ElectiveSubject child; timetable auto-resolves by home_department.'
+    )
 
     l = models.PositiveSmallIntegerField(default=0, null=True, blank=True)
     t = models.PositiveSmallIntegerField(default=0, null=True, blank=True)
@@ -251,6 +261,11 @@ class CurriculumDepartment(models.Model):
     question_paper_type = models.CharField(max_length=64, choices=QP_TYPE_CHOICES, default='QP1', blank=True)
     editable = models.BooleanField(default=False)
     overridden = models.BooleanField(default=False)
+    # Dept-Core flag: see CurriculumMaster.is_dept_core for full explanation.
+    is_dept_core = models.BooleanField(
+        default=False,
+        help_text='Mark this subject as a department-core variant for shared Year-1 S&H sections.'
+    )
 
     # Copied from master when present; for SPECIAL courses controls visible assessments.
     enabled_assessments = models.JSONField(default=list, blank=True)

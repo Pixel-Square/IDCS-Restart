@@ -554,9 +554,29 @@ class StudentSectionAssignment(models.Model):
     """Time-bound assignment of a student to a section.
 
     Keeps history of which section a student belonged to during time ranges.
+
+    section_type:
+      PRIMARY   – the student's main section (S&H Year-1 section, or regular
+                  dept section for Year 2+). Synced to StudentProfile.section.
+      SECONDARY – an additional section for a specific context, e.g. the
+                  core-dept section (AI&DS A) that a Year-1 student attends
+                  for dept-core subjects.  Does NOT affect StudentProfile.section.
     """
+    SECTION_TYPE_PRIMARY = 'PRIMARY'
+    SECTION_TYPE_SECONDARY = 'SECONDARY'
+    SECTION_TYPE_CHOICES = [
+        (SECTION_TYPE_PRIMARY, 'Primary'),
+        (SECTION_TYPE_SECONDARY, 'Secondary (Dept-Core)'),
+    ]
+
     student = models.ForeignKey(StudentProfile, on_delete=models.CASCADE, related_name='section_assignments')
     section = models.ForeignKey(Section, on_delete=models.PROTECT, related_name='student_assignments')
+    section_type = models.CharField(
+        max_length=16,
+        choices=SECTION_TYPE_CHOICES,
+        default=SECTION_TYPE_PRIMARY,
+        help_text='PRIMARY = main section; SECONDARY = core-dept section for Year-1 dept-core subjects.',
+    )
     start_date = models.DateField(default=date.today)
     end_date = models.DateField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -565,7 +585,13 @@ class StudentSectionAssignment(models.Model):
         verbose_name = 'Student Section Assignment'
         verbose_name_plural = 'Student Section Assignments'
         constraints = [
-            models.UniqueConstraint(fields=['student'], condition=Q(end_date__isnull=True), name='unique_active_section_per_student')
+            # One active assignment per (student, section_type) — students can now
+            # have one active PRIMARY and one or more active SECONDARY sections simultaneously.
+            models.UniqueConstraint(
+                fields=['student', 'section_type'],
+                condition=Q(end_date__isnull=True),
+                name='unique_active_section_per_student_type',
+            )
         ]
 
     def clean(self):
@@ -574,9 +600,15 @@ class StudentSectionAssignment(models.Model):
             raise ValidationError({'end_date': _('end_date cannot be before start_date')})
 
     def save(self, *args, **kwargs):
-        # if creating a new active assignment (end_date is None), end any existing active assignment
+        # When creating a new active assignment, only end existing assignments
+        # of the SAME section_type for this student (so PRIMARY and SECONDARY
+        # can coexist simultaneously).
         if self.pk is None and self.end_date is None:
-            qs = StudentSectionAssignment.objects.filter(student=self.student, end_date__isnull=True)
+            qs = StudentSectionAssignment.objects.filter(
+                student=self.student,
+                end_date__isnull=True,
+                section_type=self.section_type,
+            )
             for a in qs:
                 a.end_date = self.start_date
                 a.save(update_fields=['end_date'])
@@ -586,7 +618,14 @@ class StudentSectionAssignment(models.Model):
 # Signal handlers to keep StudentProfile.section in sync with active StudentSectionAssignment
 @receiver(post_save, sender=StudentSectionAssignment)
 def _sync_student_section_on_assignment_save(sender, instance: StudentSectionAssignment, created, **kwargs):
-    """Update StudentProfile.section when a StudentSectionAssignment is created or updated."""
+    """Update StudentProfile.section when a PRIMARY StudentSectionAssignment is saved.
+
+    SECONDARY assignments never touch StudentProfile.section — they represent
+    the dept-core section membership and are resolved separately.
+    """
+    # Only PRIMARY assignments drive the canonical section on StudentProfile
+    if instance.section_type != StudentSectionAssignment.SECTION_TYPE_PRIMARY:
+        return
     try:
         student = instance.student
         if student is None or not student.pk:
@@ -600,15 +639,14 @@ def _sync_student_section_on_assignment_save(sender, instance: StudentSectionAss
             # Always update to ensure sync
             StudentProfile.objects.filter(pk=student.pk).update(section=instance.section)
         else:
-            # If this assignment was ended, find the newest active assignment
-            # Don't clear the section field yet - let the new active assignment set it
+            # If this assignment was ended, find the newest active PRIMARY assignment
             active_assignment = StudentSectionAssignment.objects.filter(
-                student=student, 
-                end_date__isnull=True
+                student=student,
+                end_date__isnull=True,
+                section_type=StudentSectionAssignment.SECTION_TYPE_PRIMARY,
             ).select_related('section').order_by('-start_date').first()
             
             if active_assignment:
-                # Sync with the active assignment
                 StudentProfile.objects.filter(pk=student.pk).update(section=active_assignment.section)
             # Don't clear section if no active assignment - it might be created in same transaction
     except Exception:
@@ -618,29 +656,29 @@ def _sync_student_section_on_assignment_save(sender, instance: StudentSectionAss
 
 @receiver(post_delete, sender=StudentSectionAssignment)
 def _sync_student_section_on_assignment_delete(sender, instance: StudentSectionAssignment, **kwargs):
-    """Update StudentProfile.section when a StudentSectionAssignment is deleted."""
+    """Update StudentProfile.section when a PRIMARY StudentSectionAssignment is deleted."""
+    if instance.section_type != StudentSectionAssignment.SECTION_TYPE_PRIMARY:
+        return
     try:
         student = instance.student
         # If student is being deleted (CASCADE), skip sync
         if student is None or student._state.adding or not student.pk:
             return
         
-        # Find any remaining active assignment
+        # Find any remaining active PRIMARY assignment
         active_assignment = StudentSectionAssignment.objects.filter(
             student=student,
-            end_date__isnull=True
+            end_date__isnull=True,
+            section_type=StudentSectionAssignment.SECTION_TYPE_PRIMARY,
         ).select_related('section').first()
         
         if active_assignment:
-            # Sync with the remaining active assignment
             if student.section_id != active_assignment.section_id:
                 StudentProfile.objects.filter(pk=student.pk).update(section=active_assignment.section)
         else:
-            # No active assignments remain; clear the legacy section field
             if student.section_id is not None:
                 StudentProfile.objects.filter(pk=student.pk).update(section=None)
     except Exception:
-        # Silently fail to avoid breaking the delete operation
         pass
 
 

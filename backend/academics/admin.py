@@ -950,9 +950,9 @@ class StaffProfileAdmin(admin.ModelAdmin):
 
 @admin.register(StudentSectionAssignment)
 class StudentSectionAssignmentAdmin(admin.ModelAdmin):
-    list_display = ('student', 'section', 'start_date', 'end_date', 'created_at')
+    list_display = ('student', 'section', 'section_type', 'start_date', 'end_date', 'created_at')
     search_fields = ('student__reg_no', 'student__user__username')
-    list_filter = ('section',)
+    list_filter = ('section_type', 'section')
     actions = ('end_assignments',)
 
     def end_assignments(self, request, queryset):
