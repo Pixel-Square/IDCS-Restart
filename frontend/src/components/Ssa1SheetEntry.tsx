@@ -88,8 +88,19 @@ function pct(mark: number | null, max: number) {
 
 function readFiniteNumber(value: any): number | null {
   if (value === '' || value == null) return null;
-  if (typeof value === 'string' && value.trim() === '') return null;
-  const n = Number(value);
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  const s = String(value).trim();
+  if (!s) return null;
+
+  // Fast path for clean numeric strings.
+  const direct = Number(s);
+  if (Number.isFinite(direct)) return direct;
+
+  // Be tolerant of common Excel/text formats: '18/20', '90%', '18 (out of 20)', '1,234'.
+  const cleaned = s.replace(/,/g, '');
+  const match = cleaned.match(/[-+]?\d*\.?\d+/);
+  if (!match) return null;
+  const n = Number(match[0]);
   return Number.isFinite(n) ? n : null;
 }
 
@@ -1136,7 +1147,15 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
     return String(v ?? '')
       .trim()
       .toLowerCase()
+      .replace(/[^0-9a-z]+/g, ' ')
       .replace(/\s+/g, ' ');
+  }
+
+  function normalizeNameKey(v: any): string {
+    return String(v ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '');
   }
 
   const triggerExcelImport = () => {
@@ -1154,46 +1173,98 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
       const firstName = workbook.SheetNames?.[0];
       if (!firstName) throw new Error('No sheet found in the Excel file.');
       const sheet0 = workbook.Sheets[firstName];
-      const rows: any[][] = XLSX.utils.sheet_to_json(sheet0, { header: 1, defval: '', blankrows: false, raw: false });
-      if (!rows.length) throw new Error('Excel sheet is empty.');
 
-      const headerRow = (rows[0] || []).map(normalizeHeaderCell);
+      const ref = (sheet0 as any)['!ref'];
+      if (!ref) throw new Error('Excel sheet is empty.');
+      const range = XLSX.utils.decode_range(ref);
+
+      const getCell = (r: number, c: number): any => {
+        const addr = XLSX.utils.encode_cell({ r, c });
+        return (sheet0 as any)[addr];
+      };
+      const readCellText = (r: number, c: number): string => {
+        const cell = getCell(r, c);
+        if (!cell) return '';
+        const raw = cell.w ?? cell.v ?? '';
+        return String(raw ?? '');
+      };
+      const readCellAny = (r: number, c: number): any => {
+        const cell = getCell(r, c);
+        return cell?.v ?? cell?.w ?? '';
+      };
+
+      const headerRow: string[] = [];
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        headerRow.push(normalizeHeaderCell(readCellText(range.s.r, c)));
+      }
 
       const findCol = (pred: (h: string) => boolean) => headerRow.findIndex((h) => pred(h));
 
-      const regCol = findCol((h) => h === 'register no' || h === 'reg no' || h.includes('register'));
-      const q1Col = findCol((h) => h.startsWith('q1'));
-      const q2Col = findCol((h) => h.startsWith('q2'));
-      const totalCol = findCol((h) => h === 'total' || h.includes('total'));
-      const statusCol = findCol((h) => h === 'status' || h.includes('status'));
+      const regColRel = findCol((h) => h === 'register no' || h === 'reg no' || h === 'regno' || h.includes('register'));
+      const nameColRel = findCol((h) => h === 'student name' || h === 'name' || h.includes('student'));
+      const q1ColRel = findCol((h) => h.startsWith('q1'));
+      const q2ColRel = findCol((h) => h.startsWith('q2'));
+      const totalColRel = findCol((h) => h === 'total' || h.includes('total'));
+      const statusColRel = findCol((h) => h === 'status' || h.includes('status'));
 
-      if (regCol < 0) throw new Error('Could not find “Register No” column.');
+      if (regColRel < 0) throw new Error('Could not find “Register No” column.');
+
+      const regCol = range.s.c + regColRel;
+      const nameCol = nameColRel >= 0 ? range.s.c + nameColRel : -1;
+      const q1Col = q1ColRel >= 0 ? range.s.c + q1ColRel : -1;
+      const q2Col = q2ColRel >= 0 ? range.s.c + q2ColRel : -1;
+      const totalCol = totalColRel >= 0 ? range.s.c + totalColRel : -1;
+      const statusCol = statusColRel >= 0 ? range.s.c + statusColRel : -1;
 
       const q1Max = Number.isFinite(Number(CO_MAX.co1)) ? Number(CO_MAX.co1) : 0;
       const q2Max = Number.isFinite(Number(CO_MAX.co2)) ? Number(CO_MAX.co2) : 0;
 
-      const regToIdx = new Map<string, number>();
-      sheet.rows.forEach((r, idx) => {
-        const full = String(r.registerNo || '').trim();
-        for (const key of registerNoKeys(full)) regToIdx.set(key, idx);
-      });
-
       setSheet((prev) => {
+        const regToIdx = new Map<string, number>();
+        const nameToIdx = new Map<string, number | null>();
+        prev.rows.forEach((row, idx) => {
+          const full = String(row.registerNo || '').trim();
+          for (const key of registerNoKeys(full)) {
+            if (!regToIdx.has(key)) regToIdx.set(key, idx);
+          }
+
+          const nk = normalizeNameKey(row.name);
+          if (nk) {
+            if (!nameToIdx.has(nk)) nameToIdx.set(nk, idx);
+            else nameToIdx.set(nk, null); // not unique
+          }
+        });
+
         const nextRows = prev.rows.slice();
-        for (let i = 1; i < rows.length; i++) {
-          const row = rows[i] || [];
-          const reg = normalizeRegisterNo(row[regCol]);
-          if (!reg) continue;
-          const idx = regToIdx.get(reg);
+        for (let r = range.s.r + 1; r <= range.e.r; r++) {
+          const regRaw = readCellText(r, regCol);
+          const keys = registerNoKeys(regRaw);
+          if (!keys.length) continue;
+
+          let idx: number | undefined;
+          for (const k of keys) {
+            const hit = regToIdx.get(k);
+            if (hit != null) {
+              idx = hit;
+              break;
+            }
+          }
+
+          if (idx == null && nameCol >= 0) {
+            const nameRaw = readCellText(r, nameCol);
+            const nk = normalizeNameKey(nameRaw);
+            const hit = nk ? nameToIdx.get(nk) : undefined;
+            if (typeof hit === 'number') idx = hit;
+          }
           if (idx == null) continue;
 
-          const statusRaw = statusCol >= 0 ? String(row[statusCol] ?? '') : '';
+          const statusRaw = statusCol >= 0 ? String(readCellText(r, statusCol) ?? '') : '';
           const status = statusRaw.trim().toLowerCase();
           const isAbsent = status === 'absent' || status === 'ab' || status === 'a';
 
-          const q1 = q1Col >= 0 ? readFiniteNumber(row[q1Col]) : null;
-          const q2 = q2Col >= 0 ? readFiniteNumber(row[q2Col]) : null;
-          const totalX = totalCol >= 0 ? readFiniteNumber(row[totalCol]) : null;
+          const q1 = q1Col >= 0 ? readFiniteNumber(readCellAny(r, q1Col)) : null;
+          const q2 = q2Col >= 0 ? readFiniteNumber(readCellAny(r, q2Col)) : null;
+          const totalX = totalCol >= 0 ? readFiniteNumber(readCellAny(r, totalCol)) : null;
 
           const q1Clamped = q1 == null ? 0 : clamp(q1, 0, q1Max);
           const q2Clamped = q2 == null ? 0 : clamp(q2, 0, q2Max);

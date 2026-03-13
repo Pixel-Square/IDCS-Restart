@@ -95,6 +95,7 @@ function normalizeHeaderCell(v: any): string {
   return String(v ?? '')
     .trim()
     .toLowerCase()
+    .replace(/[^0-9a-z]+/g, ' ')
     .replace(/\s+/g, ' ');
 }
 
@@ -1192,13 +1193,13 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
       const firstName = workbook.SheetNames?.[0];
       if (!firstName) throw new Error('No sheet found in the Excel file.');
       const sheet0 = workbook.Sheets[firstName];
-      const rows: any[][] = XLSX.utils.sheet_to_json(sheet0, { header: 1, defval: '', blankrows: false, raw: false });
+      const rows: any[][] = XLSX.utils.sheet_to_json(sheet0, { header: 1, defval: '', blankrows: false, raw: true });
       if (!rows.length) throw new Error('Excel sheet is empty.');
 
       const headerRow = (rows[0] || []).map(normalizeHeaderCell);
       const findCol = (pred: (h: string) => boolean) => headerRow.findIndex((h) => pred(h));
 
-      const regCol = findCol((h) => h === 'register no' || h === 'reg no' || h.includes('register'));
+      const regCol = findCol((h) => h === 'register no' || h === 'reg no' || h === 'regno' || h.includes('register'));
       const statusCol = findCol((h) => h === 'status' || h.includes('status'));
       const kindCol = findCol((h) => h === 'absence kind' || h === 'absent kind' || h === 'kind');
       if (regCol < 0) throw new Error('Could not find Register No column.');

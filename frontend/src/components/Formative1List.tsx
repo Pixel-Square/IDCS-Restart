@@ -1295,6 +1295,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
     return String(v ?? '')
       .trim()
       .toLowerCase()
+      .replace(/[^0-9a-z]+/g, ' ')
       .replace(/\s+/g, ' ');
   }
 
@@ -1334,13 +1335,13 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
       const firstName = workbook.SheetNames?.[0];
       if (!firstName) throw new Error('No sheet found in the Excel file.');
       const sheet0 = workbook.Sheets[firstName];
-      const rows: any[][] = XLSX.utils.sheet_to_json(sheet0, { header: 1, defval: '', blankrows: false, raw: false });
+      const rows: any[][] = XLSX.utils.sheet_to_json(sheet0, { header: 1, defval: '', blankrows: false, raw: true });
       if (!rows.length) throw new Error('Excel sheet is empty.');
 
       const headerRow = (rows[0] || []).map(normalizeHeaderCell);
       const findCol = (pred: (h: string) => boolean) => headerRow.findIndex((h) => pred(h));
 
-      const regCol = findCol((h) => h === 'register no' || h === 'reg no' || h.includes('register'));
+      const regCol = findCol((h) => h === 'register no' || h === 'reg no' || h === 'regno' || h.includes('register'));
       const skill1Col = findCol((h) => h.startsWith('skill 1') || h.startsWith('skill1'));
       const skill2Col = findCol((h) => h.startsWith('skill 2') || h.startsWith('skill2'));
       const att1Col = findCol((h) => h.startsWith('attitude 1') || h.startsWith('att1') || h.startsWith('attitude1'));

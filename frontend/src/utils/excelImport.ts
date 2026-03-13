@@ -15,10 +15,24 @@ export function normalizeRegisterNo(value: unknown): string {
   // Remove thousands separators.
   s = s.replace(/,/g, '');
 
-  // Handle scientific notation strings (rare, but happens when Excel auto-formats).
-  if (/^[+-]?\d+(?:\.\d+)?e[+-]?\d+$/i.test(s)) {
-    const n = Number(s);
-    if (Number.isFinite(n)) s = String(Math.trunc(n));
+  // Handle scientific notation strings (happens when Excel auto-formats long numbers).
+  // Important: do NOT use Number() here because it can lose digits for large integers.
+  // Example: '1.14221104001E+11' must become '114221104001' exactly.
+  const sciMatch = s.match(/^([+-])?(\d+)(?:\.(\d+))?[eE]([+-]?\d+)$/);
+  if (sciMatch) {
+    const sign = sciMatch[1] === '-' ? '-' : '';
+    const intPart = sciMatch[2] || '';
+    const fracPart = sciMatch[3] || '';
+    const exp = Number.parseInt(sciMatch[4] || '0', 10);
+
+    if (Number.isFinite(exp) && exp >= 0) {
+      const digits = `${intPart}${fracPart}`.replace(/^0+(?=\d)/, '');
+      const shift = exp - fracPart.length;
+      // Only accept if the result is an integer (decimal point moved right past all fractional digits).
+      if (digits && shift >= 0) {
+        s = `${sign}${digits}${'0'.repeat(shift)}`;
+      }
+    }
   }
 
   // If Excel exports numeric-looking text with trailing .0

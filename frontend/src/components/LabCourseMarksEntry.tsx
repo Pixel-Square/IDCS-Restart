@@ -2726,13 +2726,20 @@ export default function LabCourseMarksEntry({
       return Number.isFinite(n) ? n : null;
     };
     const normalizeReg = (v: any) => normalizeRegisterNo(v);
+    const normalizeHeaderKey = (v: any) =>
+      String(v ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^0-9a-z]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
 
     try {
       setExcelBusy(true);
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(buffer, { type: 'array' });
       const sheet0 = workbook.Sheets[workbook.SheetNames[0]];
-      const rows: any[][] = XLSX.utils.sheet_to_json(sheet0, { header: 1, defval: '', blankrows: false, raw: false });
+      const rows: any[][] = XLSX.utils.sheet_to_json(sheet0, { header: 1, defval: '', blankrows: false, raw: true });
       if (!Array.isArray(rows) || rows.length < 2) {
         alert('Excel file is empty.');
         return;
@@ -2741,28 +2748,47 @@ export default function LabCourseMarksEntry({
       const header = (rows[0] || []).map((h) => String(h ?? '').trim());
       const colMap = new Map<string, number>();
       header.forEach((h, i) => {
-        if (h) colMap.set(h, i);
+        if (!h) return;
+        colMap.set(h, i);
+        const norm = normalizeHeaderKey(h);
+        if (norm) colMap.set(norm, i);
       });
 
-      const regIdx = colMap.get('Register No');
+      const getCol = (...names: string[]) => {
+        for (const name of names) {
+          const direct = colMap.get(name);
+          if (direct != null) return direct;
+          const norm = normalizeHeaderKey(name);
+          if (!norm) continue;
+          const idx = colMap.get(norm);
+          if (idx != null) return idx;
+        }
+        return null;
+      };
+
+      const regIdx = getCol('Register No', 'Register No.', 'Reg No', 'Reg No.', 'Reg.No', 'RegNo', 'Register Number', 'Roll No', 'Roll No.', 'Roll Number');
       if (regIdx == null) {
         alert('Invalid file format: Register No column not found.');
         return;
       }
 
-      const absentIdx = colMap.get('Absent');
+      const absentIdx = getCol('Absent');
       const expCols = enabledCoMetas.flatMap((m) =>
         Array.from({ length: m.expCount }, (_, i) => ({
           coNumber: m.coNumber,
           expIndex: i,
           expMax: m.expMax,
-          idx: colMap.get(`CO${m.coNumber}_${itemColAbbrev}${i + 1}`),
+          idx: getCol(
+            `CO${m.coNumber}_${itemColAbbrev}${i + 1}`,
+            `CO${m.coNumber} ${itemColAbbrev}${i + 1}`,
+            `CO${m.coNumber}-${itemColAbbrev}${i + 1}`,
+          ),
         })),
       );
-      const ciaIdx = colMap.get('CIA Exam');
+      const ciaIdx = getCol('CIA Exam', 'CIA');
       const caaCols = tcplReviewCaaMetas.map((m) => ({
         coNumber: m.coNumber,
-        idx: colMap.get(`CAA_CO${m.coNumber}`),
+        idx: getCol(`CAA_CO${m.coNumber}`, `CAA CO${m.coNumber}`, `CAA-CO${m.coNumber}`),
       }));
 
       const studentByReg = new Map<string, Student>();

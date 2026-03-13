@@ -31,7 +31,7 @@ import { normalizeObeClassType } from '../constants/classTypes';
 import * as XLSX from 'xlsx';
 import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
 import { useMarkEntryEditRequestsEnabled } from '../utils/requestControl';
-import { normalizeRegisterNo } from '../utils/excelImport';
+import { normalizeRegisterNo, registerNoKeys } from '../utils/excelImport';
 
 type Student = {
   id: number;
@@ -1597,16 +1597,32 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       const data = await file.arrayBuffer();
       const workbook = XLSX.read(data, { type: 'array' });
       const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-      const rows: any[][] = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: '', blankrows: false, raw: false });
+      const rows: any[][] = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: '', blankrows: false, raw: true });
 
       if (rows.length < 2) {
         throw new Error('Excel file is empty or has no data rows');
       }
 
       // Parse header row to find column indices
-      const headerRow = rows[0] as string[];
-      const regNoIdx = headerRow.findIndex((h) => String(h || '').toLowerCase().includes('register'));
-      const statusIdx = headerRow.findIndex((h) => String(h || '').toLowerCase().includes('status'));
+      const normalizeHeader = (h: any) =>
+        String(h ?? '')
+          .trim()
+          .toLowerCase()
+          .replace(/[^0-9a-z]+/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+
+      const headerRow = (rows[0] || []).map(normalizeHeader) as string[];
+
+      const regNoIdx = headerRow.findIndex(
+        (h) =>
+          h.includes('register') ||
+          h === 'reg no' ||
+          h === 'regno' ||
+          (h.startsWith('reg') && h.includes('no')) ||
+          ((h.startsWith('roll') || h.includes('roll')) && (h.includes('no') || h.includes('number'))),
+      );
+      const statusIdx = headerRow.findIndex((h) => h === 'status' || h.includes('status'));
 
       if (regNoIdx === -1) {
         throw new Error('Could not find "Register No" column in Excel file');
@@ -1653,10 +1669,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       // Build a map from reg_no to student
       const studentsByRegNo = new Map<string, Student>();
       students.forEach((s) => {
-        const normalizedReg = normalizeRegisterNo(s.reg_no);
-        if (normalizedReg) {
-          studentsByRegNo.set(normalizedReg, s);
-        }
+        for (const key of registerNoKeys(s.reg_no)) studentsByRegNo.set(key, s);
       });
 
       // Process data rows
