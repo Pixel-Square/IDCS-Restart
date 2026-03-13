@@ -772,7 +772,7 @@ export default function RFReaderTestStudentsPage() {
                     </div>
                   </button>
                 );
-              }})
+              })}
             </div>
 
             <div className="flex gap-2">

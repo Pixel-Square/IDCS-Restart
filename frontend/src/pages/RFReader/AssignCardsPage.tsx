@@ -44,35 +44,80 @@ function Row({ label, value, mono }: { label: string; value: string; mono?: bool
 }
 
 function StudentCard({ student, uid, onClose }: { student: ScannedStudent; uid: string; onClose: () => void }) {
+  const profileImageUrl = student.profile_image_url
+  const initials = student.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
+  
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-      <div className="relative bg-white rounded-3xl shadow-2xl border-4 border-indigo-400 w-full max-w-md mx-4 overflow-hidden">
-        <div className="bg-gradient-to-r from-indigo-600 to-violet-500 px-6 py-5 text-white">
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <div className="text-xs font-semibold uppercase tracking-widest text-indigo-100">Card Recognised</div>
-                <span className="text-[10px] px-2 py-0.5 rounded-full border font-semibold bg-indigo-50 border-indigo-200 text-indigo-700">STUDENT</span>
-              </div>
-              <div className="text-xl font-bold truncate">{student.name}</div>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+      <div className="relative bg-white rounded-3xl shadow-2xl border-4 border-indigo-400 w-full max-w-2xl overflow-hidden">
+        {/* Header */}
+        <div className="bg-gradient-to-r from-indigo-600 to-violet-500 px-8 py-4 text-white flex items-center justify-between">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <div className="text-xs font-semibold uppercase tracking-widest text-indigo-100">Card Recognised</div>
+              <span className="text-[10px] px-2 py-0.5 rounded-full border font-semibold bg-indigo-50 border-indigo-200 text-indigo-700">STUDENT</span>
             </div>
-            <button
-              onClick={onClose}
-              className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/40 flex items-center justify-center transition text-white"
-              aria-label="Close"
-            >
-              ✕
-            </button>
+            <div className="text-2xl font-bold">{student.name}</div>
           </div>
+          <button
+            onClick={onClose}
+            className="w-10 h-10 rounded-full bg-white/20 hover:bg-white/40 flex items-center justify-center transition text-white text-xl flex-shrink-0"
+            aria-label="Close"
+          >
+            ✕
+          </button>
         </div>
 
-        <div className="px-6 pt-4 pb-5 space-y-1.5">
-          <Row label="Reg No" value={student.reg_no} />
-          {student.department && <Row label="Department" value={student.department} />}
-          {student.batch && <Row label="Batch" value={student.batch} />}
-          {student.section && <Row label="Section" value={student.section} />}
-          <Row label="Status" value={student.status} />
-          <Row label="UID" value={uid} mono />
+        {/* Content - Horizontal Layout */}
+        <div className="px-8 py-6 flex gap-8 items-center">
+          {/* Profile Photo */}
+          <div className="flex-shrink-0">
+            {profileImageUrl ? (
+              <img
+                src={profileImageUrl}
+                alt={student.name}
+                className="w-40 h-40 rounded-2xl object-cover shadow-lg border-4 border-indigo-100"
+              />
+            ) : (
+              <div className="w-40 h-40 rounded-2xl bg-gradient-to-br from-indigo-400 to-violet-500 flex items-center justify-center shadow-lg">
+                <span className="text-6xl font-bold text-white">{initials}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Details Grid */}
+          <div className="flex-1 grid grid-cols-2 gap-4">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Registration No</div>
+              <div className="text-lg font-bold text-gray-800 mt-0.5">{student.reg_no}</div>
+            </div>
+            {student.batch && (
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Batch</div>
+                <div className="text-lg font-bold text-gray-800 mt-0.5">{student.batch}</div>
+              </div>
+            )}
+            {student.department && (
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Department</div>
+                <div className="text-lg font-bold text-gray-800 mt-0.5">{student.department}</div>
+              </div>
+            )}
+            {student.section && (
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Section</div>
+                <div className="text-lg font-bold text-gray-800 mt-0.5">{student.section}</div>
+              </div>
+            )}
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Status</div>
+              <div className="text-lg font-bold text-gray-800 mt-0.5">{student.status}</div>
+            </div>
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">RFID UID</div>
+              <div className="text-sm font-mono font-bold text-indigo-600 mt-0.5 break-all">{uid}</div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -80,34 +125,74 @@ function StudentCard({ student, uid, onClose }: { student: ScannedStudent; uid: 
 }
 
 function StaffCard({ staff, uid, onClose }: { staff: ScannedStaff; uid: string; onClose: () => void }) {
+  const profileImageUrl = staff.profile_image_url
+  const initials = staff.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
+  
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-      <div className="relative bg-white rounded-3xl shadow-2xl border-4 border-emerald-400 w-full max-w-md mx-4 overflow-hidden">
-        <div className="bg-gradient-to-r from-emerald-600 to-teal-500 px-6 py-5 text-white">
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <div className="text-xs font-semibold uppercase tracking-widest text-emerald-100">Card Recognised</div>
-                <span className="text-[10px] px-2 py-0.5 rounded-full border font-semibold bg-emerald-50 border-emerald-200 text-emerald-700">STAFF</span>
-              </div>
-              <div className="text-xl font-bold truncate">{staff.name}</div>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+      <div className="relative bg-white rounded-3xl shadow-2xl border-4 border-emerald-400 w-full max-w-2xl overflow-hidden">
+        {/* Header */}
+        <div className="bg-gradient-to-r from-emerald-600 to-teal-500 px-8 py-4 text-white flex items-center justify-between">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <div className="text-xs font-semibold uppercase tracking-widest text-emerald-100">Card Recognised</div>
+              <span className="text-[10px] px-2 py-0.5 rounded-full border font-semibold bg-emerald-50 border-emerald-200 text-emerald-700">STAFF</span>
             </div>
-            <button
-              onClick={onClose}
-              className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/40 flex items-center justify-center transition text-white"
-              aria-label="Close"
-            >
-              ✕
-            </button>
+            <div className="text-2xl font-bold">{staff.name}</div>
           </div>
+          <button
+            onClick={onClose}
+            className="w-10 h-10 rounded-full bg-white/20 hover:bg-white/40 flex items-center justify-center transition text-white text-xl flex-shrink-0"
+            aria-label="Close"
+          >
+            ✕
+          </button>
         </div>
 
-        <div className="px-6 pt-4 pb-5 space-y-1.5">
-          <Row label="Staff ID" value={staff.staff_id} />
-          {staff.department && <Row label="Department" value={staff.department} />}
-          {staff.designation && <Row label="Designation" value={staff.designation} />}
-          <Row label="Status" value={staff.status} />
-          <Row label="UID" value={uid} mono />
+        {/* Content - Horizontal Layout */}
+        <div className="px-8 py-6 flex gap-8 items-center">
+          {/* Profile Photo */}
+          <div className="flex-shrink-0">
+            {profileImageUrl ? (
+              <img
+                src={profileImageUrl}
+                alt={staff.name}
+                className="w-40 h-40 rounded-2xl object-cover shadow-lg border-4 border-emerald-100"
+              />
+            ) : (
+              <div className="w-40 h-40 rounded-2xl bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center shadow-lg">
+                <span className="text-6xl font-bold text-white">{initials}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Details Grid */}
+          <div className="flex-1 grid grid-cols-2 gap-4">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Staff ID</div>
+              <div className="text-lg font-bold text-gray-800 mt-0.5">{staff.staff_id}</div>
+            </div>
+            {staff.department && (
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Department</div>
+                <div className="text-lg font-bold text-gray-800 mt-0.5">{staff.department}</div>
+              </div>
+            )}
+            {staff.designation && (
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Designation</div>
+                <div className="text-lg font-bold text-gray-800 mt-0.5">{staff.designation}</div>
+              </div>
+            )}
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Status</div>
+              <div className="text-lg font-bold text-gray-800 mt-0.5">{staff.status}</div>
+            </div>
+            <div className="col-span-2">
+              <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">RFID UID</div>
+              <div className="text-sm font-mono font-bold text-emerald-600 mt-0.5 break-all">{uid}</div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
