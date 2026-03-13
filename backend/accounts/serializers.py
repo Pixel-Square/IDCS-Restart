@@ -70,12 +70,23 @@ class MeSerializer(serializers.Serializer):
     is_iqac_main = serializers.SerializerMethodField()
     profile_image = serializers.SerializerMethodField()
     profile_image_updated = serializers.SerializerMethodField()
+    name_email_edited = serializers.SerializerMethodField()
+    profileEdited = serializers.SerializerMethodField()
 
     def get_profile_image_updated(self, obj):
         try:
             return bool(getattr(obj, 'profile_image_updated', False))
         except Exception:
             return False
+
+    def get_name_email_edited(self, obj):
+        try:
+            return bool(getattr(obj, 'name_email_edited', False))
+        except Exception:
+            return False
+
+    def get_profileEdited(self, obj):
+        return self.get_name_email_edited(obj)
 
     def get_roles(self, obj):
         roles = [r.name for r in obj.roles.all()]

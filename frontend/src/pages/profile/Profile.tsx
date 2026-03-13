@@ -15,6 +15,8 @@ type Me = {
   email?: string;
   first_name?: string;
   last_name?: string;
+  profileEdited?: boolean;
+  name_email_edited?: boolean;
   roles?: string[] | RoleObj[];
   permissions?: string[];
   profile_type?: string | null;
@@ -97,19 +99,13 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
   const [changePasswordError, setChangePasswordError] = useState<string | null>(null);
   const [changePasswordSuccess, setChangePasswordSuccess] = useState(false);
 
-  // Edit username and name (combined) states
-  const [editingProfile, setEditingProfile] = useState(false);
-  const [nameFirstDraft, setNameFirstDraft] = useState('');
-  const [nameLastDraft, setNameLastDraft] = useState('');
-  const [profileEditError, setProfileEditError] = useState<string | null>(null);
-  const [profileSaving, setProfileSaving] = useState(false);
-  const [profileEditLocked, setProfileEditLocked] = useState(false);
-  
-  const [editingEmail, setEditingEmail] = useState(false);
+  // One-time edit states for name + email
+  const [editingNameEmail, setEditingNameEmail] = useState(false);
+  const [nameDraft, setNameDraft] = useState({ first: '', last: '' });
+  const [nameEmailEditError, setNameEmailEditError] = useState<string | null>(null);
+  const [nameEmailSaving, setNameEmailSaving] = useState(false);
+  const [nameEmailEditLocked, setNameEmailEditLocked] = useState(false);
   const [emailDraft, setEmailDraft] = useState('');
-  const [emailError, setEmailError] = useState<string | null>(null);
-  const [emailSaving, setEmailSaving] = useState(false);
-  const [emailEditLocked, setEmailEditLocked] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
   const [avatarCandidateIndex, setAvatarCandidateIndex] = useState(0);
@@ -196,6 +192,21 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
       }
     };
   }, [avatarPreviewUrl]);
+
+  useEffect(() => {
+    const edited = Boolean((user as any)?.profileEdited ?? (user as any)?.name_email_edited);
+    setNameEmailEditLocked(edited);
+    if (edited) {
+      setEditingNameEmail(false);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    setNameDraft({
+      first: user?.first_name || '',
+      last: user?.last_name || '',
+    });
+  }, [user?.first_name, user?.last_name]);
 
   if (loading) return (
     <DashboardLayout>
@@ -467,17 +478,28 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
     }
   }
 
-  async function handleSaveProfile() {
-    setProfileEditError(null);
-    const firstName = String(nameFirstDraft || '').trim();
-    const lastName = String(nameLastDraft || '').trim();
+  async function handleSaveNameEmail() {
+    setNameEmailEditError(null);
+    const firstName = String(nameDraft.first || '').trim();
+    const lastName = String(nameDraft.last || '').trim();
+    const email = String(emailDraft || '').trim();
+
+    const confirmEdit = window.confirm(
+      'This is a one-time edit. After saving you cannot edit your Name or Email again. Continue?'
+    );
+    if (!confirmEdit) return;
 
     try {
-      setProfileSaving(true);
+      setNameEmailSaving(true);
       const response = await fetchWithAuth('/api/accounts/profile/update/', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ first_name: firstName, last_name: lastName })
+        body: JSON.stringify({
+          first_name: firstName,
+          last_name: lastName,
+          email,
+          profileEdited: true,
+        })
       });
 
       if (!response.ok) {
@@ -492,70 +514,33 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
         roles: Array.isArray(updated.roles) ? updated.roles.map((role: any) => (typeof role === 'string' ? role : role.name)) : [],
       } as Me;
       setUser(normalized);
-      setEditingProfile(false);
-      setProfileEditLocked(true);
+      setEditingNameEmail(false);
+      setNameEmailEditLocked(true);
     } catch (e: any) {
-      setProfileEditError(String(e?.message || e || 'Failed to update profile'));
+      setNameEmailEditError(String(e?.message || e || 'Failed to update profile'));
     } finally {
-      setProfileSaving(false);
+      setNameEmailSaving(false);
     }
   }
 
-  function startEditingProfile() {
-    if (profileEditLocked) return;
-    setNameFirstDraft(user?.first_name || '');
-    setNameLastDraft(user?.last_name || '');
-    setEditingProfile(true);
-    setProfileEditError(null);
-  }
-
-  function cancelEditingProfile() {
-    setEditingProfile(false);
-    setProfileEditError(null);
-  }
-
-  async function handleSaveEmail() {
-    setEmailError(null);
-    const email = String(emailDraft || '').trim();
-
-    try {
-      setEmailSaving(true);
-      const response = await fetchWithAuth('/api/accounts/profile/update/', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email })
-      });
-
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.detail || 'Failed to update email');
-      }
-
-      const updated = await getMe();
-      const normalized = {
-        ...updated,
-        roles: Array.isArray(updated.roles) ? updated.roles.map((role: any) => (typeof role === 'string' ? role : role.name)) : [],
-      } as Me;
-      setUser(normalized);
-      setEditingEmail(false);
-      setEmailEditLocked(true);
-    } catch (e: any) {
-      setEmailError(String(e?.message || e || 'Failed to update email'));
-    } finally {
-      setEmailSaving(false);
-    }
-  }
-
-  function startEditingEmail() {
-    if (emailEditLocked) return;
+  function startEditingNameEmail() {
+    if (nameEmailEditLocked) return;
+    setNameDraft({
+      first: user?.first_name || '',
+      last: user?.last_name || '',
+    });
     setEmailDraft(user?.email || '');
-    setEditingEmail(true);
-    setEmailError(null);
+    setEditingNameEmail(true);
+    setNameEmailEditError(null);
   }
 
-  function cancelEditingEmail() {
-    setEditingEmail(false);
-    setEmailError(null);
+  function cancelEditingNameEmail() {
+    setNameDraft({
+      first: user?.first_name || '',
+      last: user?.last_name || '',
+    });
+    setEditingNameEmail(false);
+    setNameEmailEditError(null);
   }
 
   function handleAvatarEditClick() {
@@ -705,39 +690,47 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-semibold text-gray-500 mb-1">Name</div>
-                  {editingProfile ? (
+                  {editingNameEmail ? (
                     <div className="space-y-2">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-semibold text-gray-500 w-20">Name:</span>
+                          <span className="text-gray-900 font-medium">
+                            {String(`${nameDraft.first || ''} ${nameDraft.last || ''}`).trim() || '—'}
+                          </span>
+                        </div>
+                      </div>
                       <div className="grid grid-cols-2 gap-2">
                         <input
                           type="text"
-                          value={nameFirstDraft}
-                          onChange={(e) => setNameFirstDraft(e.target.value)}
+                          value={nameDraft.first}
+                          onChange={(e) => setNameDraft((prev) => ({ ...prev, first: e.target.value }))}
                           placeholder="First Name"
                           className="w-full px-2 py-1 border rounded text-sm"
-                          disabled={profileSaving}
+                          disabled={nameEmailSaving}
                         />
                         <input
                           type="text"
-                          value={nameLastDraft}
-                          onChange={(e) => setNameLastDraft(e.target.value)}
+                          value={nameDraft.last}
+                          onChange={(e) => setNameDraft((prev) => ({ ...prev, last: e.target.value }))}
                           placeholder="Last Name"
                           className="w-full px-2 py-1 border rounded text-sm"
-                          disabled={profileSaving}
+                          disabled={nameEmailSaving}
                         />
                       </div>
-                      {profileEditError && <div className="text-xs text-red-600">{profileEditError}</div>}
+                      {nameEmailEditError && <div className="text-xs text-red-600">{nameEmailEditError}</div>}
                       <div className="flex gap-2">
                         <button
-                          onClick={handleSaveProfile}
-                          disabled={profileSaving}
+                          onClick={handleSaveNameEmail}
+                          disabled={nameEmailSaving}
                           className="flex items-center gap-1 px-2 py-1 bg-green-600 text-white rounded text-xs hover:bg-green-700"
                         >
                           <Save className="w-3 h-3" />
-                          {profileSaving ? 'Saving...' : 'Save'}
+                          {nameEmailSaving ? 'Saving...' : 'Save'}
                         </button>
                         <button
-                          onClick={cancelEditingProfile}
-                          disabled={profileSaving}
+                          onClick={cancelEditingNameEmail}
+                          disabled={nameEmailSaving}
                           className="flex items-center gap-1 px-2 py-1 bg-gray-200 text-gray-700 rounded text-xs hover:bg-gray-300"
                         >
                           <X className="w-3 h-3" />
@@ -751,13 +744,13 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-semibold text-gray-500 w-20">Name:</span>
                           <span className="text-gray-900 font-medium">
-                            {user.first_name || ''} {user.last_name || ''} {(!user.first_name && !user.last_name) && '—'}
+                            {String(`${nameDraft.first || ''} ${nameDraft.last || ''}`).trim() || '—'}
                           </span>
                         </div>
                       </div>
-                      {!profileEditLocked && (
+                      {!nameEmailEditLocked && (
                         <button
-                          onClick={startEditingProfile}
+                          onClick={startEditingNameEmail}
                           className="mt-2 flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700"
                         >
                           <Edit2 className="w-3 h-3" />
@@ -778,7 +771,7 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-semibold text-gray-500 mb-1">Email</div>
-                  {editingEmail ? (
+                  {editingNameEmail ? (
                     <div className="space-y-2">
                       <input
                         type="email"
@@ -786,21 +779,21 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                         onChange={(e) => setEmailDraft(e.target.value)}
                         placeholder="Email"
                         className="w-full px-2 py-1 border rounded text-sm"
-                        disabled={emailSaving}
+                        disabled={nameEmailSaving}
                       />
-                      {emailError && <div className="text-xs text-red-600">{emailError}</div>}
+                      {nameEmailEditError && <div className="text-xs text-red-600">{nameEmailEditError}</div>}
                       <div className="flex gap-2">
                         <button
-                          onClick={handleSaveEmail}
-                          disabled={emailSaving}
+                          onClick={handleSaveNameEmail}
+                          disabled={nameEmailSaving}
                           className="flex items-center gap-1 px-2 py-1 bg-green-600 text-white rounded text-xs hover:bg-green-700"
                         >
                           <Save className="w-3 h-3" />
-                          {emailSaving ? 'Saving...' : 'Save'}
+                          {nameEmailSaving ? 'Saving...' : 'Save'}
                         </button>
                         <button
-                          onClick={cancelEditingEmail}
-                          disabled={emailSaving}
+                          onClick={cancelEditingNameEmail}
+                          disabled={nameEmailSaving}
                           className="flex items-center gap-1 px-2 py-1 bg-gray-200 text-gray-700 rounded text-xs hover:bg-gray-300"
                         >
                           <X className="w-3 h-3" />
@@ -811,9 +804,9 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                   ) : (
                     <div>
                       <div className="text-gray-900 font-medium truncate">{user.email || '—'}</div>
-                      {!emailEditLocked && (
+                      {!nameEmailEditLocked && (
                         <button
-                          onClick={startEditingEmail}
+                          onClick={startEditingNameEmail}
                           className="mt-2 flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700"
                         >
                           <Edit2 className="w-3 h-3" />
