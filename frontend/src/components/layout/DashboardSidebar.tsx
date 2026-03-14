@@ -348,7 +348,16 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   }
   // IDCSScan — available to SECURITY, IQAC, and ADMIN roles
   const isSecurity = rolesUpper.includes('SECURITY');
-  if (isSecurity && !items.some((i) => i.key === 'idscan_test')) {
+  const isLibrary = rolesUpper.includes('LIBRARY');
+  
+  // LIBRARY role: only Profile and Assign Cards
+  if (isLibrary) {
+    // Remove all items except Profile that was added via unshift
+    const profileItem = items.find(i => i.key === 'profile');
+    items.length = 0;
+    if (profileItem) items.push(profileItem);
+    items.push({ key: 'idscan_assign_cards', label: 'Assign Cards', to: '/idscan/assign-cards' });
+  } else if (isSecurity && !items.some((i) => i.key === 'idscan_test')) {
     items.push({ key: 'idscan_test',     label: 'RFID Scanner Test', to: '/idscan/test' });
     items.push({ key: 'idscan_assign_cards', label: 'RFID Card Assignment', to: '/idscan/assign-cards' });
     items.push({ key: 'idscan_gatepass', label: 'Gatepass Scanner',   to: '/idscan/gatepass' });

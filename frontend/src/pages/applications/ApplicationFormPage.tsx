@@ -86,6 +86,35 @@ function FieldInput({
   const base =
     'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400'
 
+  const composite = (typeof value === 'object' && value !== null) ? (value as Record<string, string>) : {}
+
+  const renderComposite = (timeOrder: Array<'in_time' | 'out_time'>) => (
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+      <div>
+        <label className="block text-xs font-medium text-gray-600 mb-1">Date</label>
+        <input
+          type="date"
+          className={base}
+          value={typeof composite.date === 'string' ? composite.date : ''}
+          onChange={(e) => onChange(field.field_key, { ...composite, date: e.target.value })}
+        />
+      </div>
+      {timeOrder.map((k) => (
+        <div key={k}>
+          <label className="block text-xs font-medium text-gray-600 mb-1">
+            {k === 'in_time' ? 'In Time' : 'Out Time'}
+          </label>
+          <input
+            type="time"
+            className={base}
+            value={typeof composite[k] === 'string' ? composite[k] : ''}
+            onChange={(e) => onChange(field.field_key, { ...composite, [k]: e.target.value })}
+          />
+        </div>
+      ))}
+    </div>
+  )
+
   switch (field.field_type) {
     case 'DATE':
       return (
@@ -96,6 +125,19 @@ function FieldInput({
           onChange={(e) => onChange(field.field_key, e.target.value)}
         />
       )
+    case 'TIME':
+      return (
+        <input
+          type="time"
+          className={base}
+          value={typeof value === 'string' ? value : ''}
+          onChange={(e) => onChange(field.field_key, e.target.value)}
+        />
+      )
+    case 'DATE IN OUT':
+      return renderComposite(['in_time', 'out_time'])
+    case 'DATE OUT IN':
+      return renderComposite(['out_time', 'in_time'])
     case 'NUMBER':
       return (
         <input
@@ -188,6 +230,7 @@ export default function ApplicationFormPage(): JSX.Element {
         const defaults: Record<string, unknown> = {}
         for (const f of s.fields) {
           if (f.field_type === 'BOOLEAN') defaults[f.field_key] = false
+          else if (f.field_type === 'DATE IN OUT' || f.field_type === 'DATE OUT IN') defaults[f.field_key] = { date: '', in_time: '', out_time: '' }
           else defaults[f.field_key] = ''
         }
         setFormData(defaults)
@@ -213,6 +256,15 @@ export default function ApplicationFormPage(): JSX.Element {
     for (const f of schema.fields) {
       if (f.is_required) {
         const val = formData[f.field_key]
+        const isComposite = f.field_type === 'DATE IN OUT' || f.field_type === 'DATE OUT IN'
+        if (isComposite) {
+          const comp = (typeof val === 'object' && val !== null) ? (val as Record<string, unknown>) : {}
+          if (!comp.date || !comp.in_time || !comp.out_time) {
+            setError(`"${f.label}" is required.`)
+            return
+          }
+          continue
+        }
         if (val === '' || val === null || val === undefined) {
           setError(`"${f.label}" is required.`)
           return

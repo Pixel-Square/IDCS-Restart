@@ -88,6 +88,33 @@ function emptyTypeDraft(): TypeDraft {
   return { id: null, name: '', code: '', description: '', is_active: true }
 }
 
+function getDefaultMetaForFieldType(fieldType: string): string {
+  const typeMetadata: Record<string, any> = {
+    'TEXT': { placeholder: '' },
+    'DATE': { placeholder: 'Select date' },
+    'TIME': { placeholder: 'Select time' },
+    'DATE IN OUT': {
+      subfields: {
+        date: { type: 'date', label: 'Date' },
+        in_time: { type: 'time', label: 'In Time' },
+        out_time: { type: 'time', label: 'Out Time' }
+      }
+    },
+    'DATE OUT IN': {
+      subfields: {
+        date: { type: 'date', label: 'Date' },
+        out_time: { type: 'time', label: 'Out Time' },
+        in_time: { type: 'time', label: 'In Time' }
+      }
+    },
+    'BOOLEAN': { placeholder: '' },
+    'FILE': { placeholder: '' },
+    'NUMBER': { placeholder: '' },
+    'SELECT': { options: [] }
+  }
+  return JSON.stringify(typeMetadata[fieldType] || {}, null, 2)
+}
+
 function emptyFieldDraft(nextOrder = 1): FieldDraft {
   return {
     id: null,
@@ -96,7 +123,7 @@ function emptyFieldDraft(nextOrder = 1): FieldDraft {
     field_type: 'TEXT',
     is_required: false,
     order: nextOrder,
-    metaText: '{\n  "placeholder": ""\n}',
+    metaText: getDefaultMetaForFieldType('TEXT'),
   }
 }
 
@@ -193,6 +220,11 @@ export default function ApplicationsAdminPage(): JSX.Element {
   const [newStepDrafts, setNewStepDrafts] = useState<Record<number, StepDraft>>({})
   const [permissionDrafts, setPermissionDrafts] = useState<Record<number, { can_edit_all: boolean; can_override_flow: boolean }>>({})
   const [editingFlowId, setEditingFlowId] = useState<number | null>(null)
+
+  const [showGroupModal, setShowGroupModal] = useState(false)
+  const [groupDraft, setGroupDraft] = useState<{ name: string; role_ids: number[] }>({ name: '', role_ids: [] })
+  const [groups, setGroups] = useState<Array<{ id: string; name: string; role_ids: number[] }>>([])
+
 
   useEffect(() => {
     const p = (new URLSearchParams(location.search).get('tab') as TabKey | null) || 'overview'
@@ -900,11 +932,31 @@ export default function ApplicationsAdminPage(): JSX.Element {
                         <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono" placeholder="field_key" value={fieldDraft.field_key} onChange={(e) => setFieldDraft((v) => ({ ...v, field_key: e.target.value }))} />
                         <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="Label" value={fieldDraft.label} onChange={(e) => setFieldDraft((v) => ({ ...v, label: e.target.value }))} />
                         <div className="grid grid-cols-2 gap-3">
-                          <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={fieldDraft.field_type} onChange={(e) => setFieldDraft((v) => ({ ...v, field_type: e.target.value }))}>
-                            {['TEXT', 'DATE', 'BOOLEAN', 'FILE', 'NUMBER', 'SELECT'].map((option) => <option key={option} value={option}>{option}</option>)}
+                          <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={fieldDraft.field_type} onChange={(e) => setFieldDraft((v) => ({ ...v, field_type: e.target.value, metaText: getDefaultMetaForFieldType(e.target.value) }))}>
+                            {['TEXT', 'DATE', 'TIME', 'DATE IN OUT', 'DATE OUT IN', 'BOOLEAN', 'FILE', 'NUMBER', 'SELECT'].map((option) => <option key={option} value={option}>{option}</option>)}
                           </select>
                           <input type="number" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={fieldDraft.order} onChange={(e) => setFieldDraft((v) => ({ ...v, order: Number(e.target.value || 0) }))} placeholder="Order" />
                         </div>
+                        {(fieldDraft.field_type === 'DATE IN OUT' || fieldDraft.field_type === 'DATE OUT IN') && (
+                          <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700">
+                            <div className="font-semibold mb-1">Composite Field: {fieldDraft.field_type}</div>
+                            <div>This field will render with three sub-components:</div>
+                            <ul className="mt-1 ml-2 list-disc text-blue-600">
+                              <li>DATE - Date field</li>
+                              {fieldDraft.field_type === 'DATE IN OUT' ? (
+                                <>
+                                  <li>IN TIME - Time field</li>
+                                  <li>OUT TIME - Time field</li>
+                                </>
+                              ) : (
+                                <>
+                                  <li>OUT TIME - Time field</li>
+                                  <li>IN TIME - Time field</li>
+                                </>
+                              )}
+                            </ul>
+                          </div>
+                        )}
                         <label className="flex items-center gap-2 text-sm text-gray-700">
                           <input type="checkbox" checked={fieldDraft.is_required} onChange={(e) => setFieldDraft((v) => ({ ...v, is_required: e.target.checked }))} />
                           Required field
@@ -982,7 +1034,17 @@ export default function ApplicationsAdminPage(): JSX.Element {
                       </div>
                     </div>
                   </div>
-                  <div className="mt-4 flex justify-end">
+                  <div className="mt-4 flex justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGroupDraft({ name: '', role_ids: [] })
+                        setShowGroupModal(true)
+                      }}
+                      className="bg-purple-600 hover:bg-purple-700 text-white rounded-lg px-4 py-2 text-sm font-medium"
+                    >
+                      Create Group
+                    </button>
                     <button type="button" onClick={createFlow} disabled={!selectedType || busy === 'create-flow'} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white rounded-lg px-4 py-2 text-sm font-medium">{busy === 'create-flow' ? 'Creating…' : 'Create Flow'}</button>
                   </div>
                 </SectionCard>
@@ -1336,6 +1398,105 @@ export default function ApplicationsAdminPage(): JSX.Element {
           </div>
         </div>
       </div>
+
+      {/* Group Creation Modal */}
+      {showGroupModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h3 className="text-lg font-bold text-gray-900">Create Role Group</h3>
+              <p className="text-sm text-gray-500 mt-1">Define a group name and select roles</p>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Group Name</label>
+                <input
+                  type="text"
+                  value={groupDraft.name}
+                  onChange={(e) => setGroupDraft((v) => ({ ...v, name: e.target.value }))}
+                  placeholder="e.g., Finance Team"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Select Roles</label>
+                <div className="space-y-2 max-h-64 overflow-y-auto border border-gray-200 rounded-lg p-3 bg-gray-50">
+                  {roles.length === 0 ? (
+                    <div className="text-sm text-gray-500">No roles available</div>
+                  ) : (
+                    roles.map((role) => {
+                      const checked = groupDraft.role_ids.includes(role.id)
+                      return (
+                        <label key={role.id} className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) =>
+                              setGroupDraft((v) => ({
+                                ...v,
+                                role_ids: e.target.checked
+                                  ? [...v.role_ids, role.id]
+                                  : v.role_ids.filter((id) => id !== role.id),
+                              }))
+                            }
+                            className="w-4 h-4"
+                          />
+                          <span className="text-sm text-gray-700">{role.name}</span>
+                        </label>
+                      )
+                    })
+                  )}
+                </div>
+              </div>
+              {groupDraft.role_ids.length > 0 && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+                  <div className="text-xs text-blue-700 font-semibold mb-1">Selected Roles:</div>
+                  <div className="flex flex-wrap gap-1">
+                    {groupDraft.role_ids.map((roleId) => {
+                      const role = roles.find((r) => r.id === roleId)
+                      return (
+                        <span key={roleId} className="inline-flex items-center gap-1 bg-blue-100 text-blue-700 px-2 py-1 rounded text-xs font-medium">
+                          {role?.name}
+                        </span>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="px-6 py-4 border-t border-gray-200 flex gap-2 justify-end">
+              <button
+                type="button"
+                onClick={() => setShowGroupModal(false)}
+                className="border border-gray-200 rounded-lg px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (groupDraft.name.trim() && groupDraft.role_ids.length > 0) {
+                    const newGroup = {
+                      id: `group-${Date.now()}`,
+                      name: groupDraft.name,
+                      role_ids: groupDraft.role_ids,
+                    }
+                    setGroups((v) => [...v, newGroup])
+                    setShowGroupModal(false)
+                    setGroupDraft({ name: '', role_ids: [] })
+                    setNotice(`Group "${newGroup.name}" created successfully`)
+                    window.setTimeout(() => setNotice(null), 2500)
+                  }
+                }}
+                disabled={!groupDraft.name.trim() || groupDraft.role_ids.length === 0}
+                className="bg-purple-600 hover:bg-purple-700 disabled:bg-purple-300 text-white rounded-lg px-4 py-2 text-sm font-medium"
+              >
+                Create Group
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   )
 }

@@ -58,7 +58,7 @@ export type ApplicationField = {
   id: number
   field_key: string
   label: string
-  field_type: 'TEXT' | 'DATE' | 'BOOLEAN' | 'FILE' | 'NUMBER' | 'SELECT'
+  field_type: 'TEXT' | 'DATE' | 'TIME' | 'DATE IN OUT' | 'DATE OUT IN' | 'BOOLEAN' | 'FILE' | 'NUMBER' | 'SELECT'
   is_required: boolean
   order: number
   meta: Record<string, unknown>

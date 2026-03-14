@@ -352,7 +352,7 @@ export default function App() {
                 />
                 <Route
                   path="/idscan/assign-cards"
-                  element={<ProtectedRoute user={user} requiredRoles={['SECURITY']} element={<RFReaderAssignCardsPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['SECURITY', 'LIBRARY']} element={<RFReaderAssignCardsPage />} />}
                 />
                 <Route
                   path="/idscan/gatepass"

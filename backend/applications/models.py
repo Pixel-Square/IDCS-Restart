@@ -20,6 +20,9 @@ class ApplicationField(models.Model):
     class FieldType(models.TextChoices):
         TEXT = 'TEXT', 'Text'
         DATE = 'DATE', 'Date'
+        TIME = 'TIME', 'Time'
+        DATE_IN_OUT = 'DATE IN OUT', 'Date In Out'
+        DATE_OUT_IN = 'DATE OUT IN', 'Date Out In'
         BOOLEAN = 'BOOLEAN', 'Boolean'
         FILE = 'FILE', 'File'
         NUMBER = 'NUMBER', 'Number'

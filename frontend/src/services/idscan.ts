@@ -71,7 +71,7 @@ export type GatepassTimelineStep = {
 export type GatepassCheckResult = {
   allowed: boolean
   message: string
-  reason?: 'unknown_uid' | 'already_scanned' | 'not_approved' | 'not_fully_approved' | 'no_gatepass'
+  reason?: 'unknown_uid' | 'already_scanned' | 'not_approved' | 'not_fully_approved' | 'no_gatepass' | 'outside_gate_window'
   application_id?: number
   application_type?: string
   scanned_at?: string

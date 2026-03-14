@@ -25,11 +25,12 @@ Assign/unassign/gatepass-check require SECURITY role.
 from __future__ import annotations
 
 import re
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from typing import Any, Optional
 
 from django.db import transaction
 from django.db.models import Q
+from django.utils.dateparse import parse_date
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -63,6 +64,87 @@ def _display_name(user: Any) -> Optional[str]:
 def _has_scan_permission(user: Any) -> bool:
     roles = [r.name.upper() for r in user.roles.all()] if hasattr(user, "roles") else []
     return "SECURITY" in roles
+
+
+def _parse_clock_time(value: Any) -> Optional[time]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    for fmt in ("%H:%M", "%H:%M:%S"):
+        try:
+            return datetime.strptime(raw, fmt).time()
+        except ValueError:
+            continue
+    return None
+
+
+def _extract_gate_window(app: app_models.Application) -> Optional[dict]:
+    """
+    Build an allowed scan window from composite application fields.
+
+    Supported field types:
+    - DATE IN OUT  -> Date + In Time + Out Time
+    - DATE OUT IN  -> Date + Out Time + In Time
+    """
+    rows = (
+        app.data.select_related("field")
+        .all()
+    )
+
+    for row in sorted(rows, key=lambda r: (getattr(r.field, "order", 0), getattr(r.field, "field_key", ""))):
+        ftype = str(getattr(row.field, "field_type", "") or "").upper()
+        if ftype not in ("DATE IN OUT", "DATE OUT IN"):
+            continue
+
+        payload = row.value if isinstance(row.value, dict) else {}
+        date_str = str(payload.get("date") or "").strip()
+        day = parse_date(date_str)
+        if not day:
+            continue
+
+        if ftype == "DATE IN OUT":
+            start_key, end_key = "in_time", "out_time"
+        else:
+            start_key, end_key = "out_time", "in_time"
+
+        start_t = _parse_clock_time(payload.get(start_key))
+        end_t = _parse_clock_time(payload.get(end_key))
+        if not start_t or not end_t:
+            continue
+
+        tz = timezone.get_current_timezone()
+        start_dt = timezone.make_aware(datetime.combine(day, start_t), tz)
+        end_dt = timezone.make_aware(datetime.combine(day, end_t), tz)
+        # If end is earlier than start, treat as overnight window.
+        if end_dt <= start_dt:
+            end_dt = end_dt + timedelta(days=1)
+
+        return {
+            "field_key": getattr(row.field, "field_key", ""),
+            "field_type": ftype,
+            "start": start_dt,
+            "end": end_dt,
+        }
+
+    return None
+
+
+def _validate_scan_time_window(app: app_models.Application, now: Optional[datetime] = None) -> tuple[bool, Optional[str], Optional[dict]]:
+    window = _extract_gate_window(app)
+    if not window:
+        return True, None, None
+
+    current = now or timezone.now()
+    if window["start"] <= current <= window["end"]:
+        return True, None, window
+
+    start_local = timezone.localtime(window["start"])
+    end_local = timezone.localtime(window["end"])
+    msg = (
+        "Gatepass is valid only during the allowed duration: "
+        f"{start_local.strftime('%d %b %Y, %I:%M %p')} to {end_local.strftime('%d %b %Y, %I:%M %p')}."
+    )
+    return False, msg, window
 
 
 def _student_detail(sp: StudentProfile) -> dict:
@@ -341,6 +423,8 @@ class GatepassCheckView(APIView):
 
         ready_app = None
         ready_flow = None
+        outside_window_message = None
+        now_ref = timezone.now()
 
         for app in pending_qs:
             flow = _get_flow_for_application(app)
@@ -369,9 +453,13 @@ class GatepassCheckView(APIView):
                         break
 
             if not blocking:
-                ready_app = app
-                ready_flow = flow
-                break
+                in_window, window_msg, _ = _validate_scan_time_window(app, now_ref)
+                if in_window:
+                    ready_app = app
+                    ready_flow = flow
+                    break
+                if not outside_window_message:
+                    outside_window_message = window_msg
 
         # Case: already approved but scan pending
         if ready_app is None:
@@ -386,12 +474,28 @@ class GatepassCheckView(APIView):
                     continue
                 final_step = flow.steps.filter(is_final=True).select_related("role").first()
                 if final_step and final_step.role and final_step.role.name.upper() == "SECURITY":
-                    ready_app = app
-                    ready_flow = flow
-                    break
+                    in_window, window_msg, _ = _validate_scan_time_window(app, now_ref)
+                    if in_window:
+                        ready_app = app
+                        ready_flow = flow
+                        break
+                    if not outside_window_message:
+                        outside_window_message = window_msg
+
+        if ready_app is None and outside_window_message:
+            return Response(
+                {
+                    "allowed": False,
+                    "reason": "outside_gate_window",
+                    "message": outside_window_message,
+                    "student": student_data,
+                    "approval_timeline": [],
+                },
+                status=status.HTTP_200_OK,
+            )
 
         if ready_app is not None:
-            now = timezone.now()
+            now = now_ref
             with transaction.atomic():
                 locked = app_models.Application.objects.select_for_update().get(pk=ready_app.pk)
 
