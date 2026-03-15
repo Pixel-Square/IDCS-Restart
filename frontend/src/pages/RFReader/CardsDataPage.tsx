@@ -144,6 +144,15 @@ export default function RFReaderCardsDataPage() {
       const HEADER_H = 26;
       let curY = 10;
 
+      // Watermark (KR logo) - compute once and apply to all pages for consistency
+      const wm = await (async () => {
+        if (!b64Kr) return null;
+        const { w, h } = await imgSize(b64Kr);
+        const wmW = 100;
+        const wmH = (h / w) * wmW;
+        return { wmW, wmH };
+      })();
+
       const drawHeader = async () => {
         let maxLogoY = curY;
         if (b64Banner) {
@@ -176,16 +185,17 @@ export default function RFReaderCardsDataPage() {
         curY += 6;
       };
 
-      const drawWatermark = async () => {
-        if (!b64Kr) return;
-        const { w: kw, h: kh } = await imgSize(b64Kr);
-        const wmSize = 100;
-        const sh = (kh / kw) * wmSize;
-        const cx = (PW - wmSize) / 2;
-        const cy = (PH - sh) / 2;
-        doc.setGState(new (doc as any).GState({ opacity: 0.1 }));
-        doc.addImage(b64Kr, 'PNG', cx, cy, wmSize, sh);
-        doc.setGState(new (doc as any).GState({ opacity: 1 }));
+      const applyWatermarkAllPages = () => {
+        if (!b64Kr || !wm) return;
+        const pageCount = doc.getNumberOfPages();
+        for (let page = 1; page <= pageCount; page++) {
+          doc.setPage(page);
+          const cx = (PW - wm.wmW) / 2;
+          const cy = (PH - wm.wmH) / 2;
+          doc.setGState(new (doc as any).GState({ opacity: 0.08 }));
+          doc.addImage(b64Kr, 'PNG', cx, cy, wm.wmW, wm.wmH);
+          doc.setGState(new (doc as any).GState({ opacity: 1 }));
+        }
       };
 
       await drawHeader();
@@ -236,18 +246,10 @@ export default function RFReaderCardsDataPage() {
         headStyles: { fillColor: [79, 70, 229], textColor: 255, fontStyle: 'bold' },
         styles: { fontSize: 8, cellPadding: 2 },
         alternateRowStyles: { fillColor: [249, 250, 251] },
-        didDrawPage: (data) => {
-          if (data.pageNumber > 1) {
-            // Draw watermark on subsequent pages
-            doc.setGState(new (doc as any).GState({ opacity: 0.08 }));
-            doc.addImage(b64Kr, 'PNG', (PW - 100) / 2, (PH - 100) / 2, 100, 100);
-            doc.setGState(new (doc as any).GState({ opacity: 1 }));
-          }
-        },
       });
 
-      // Add watermark to initially created page
-      await drawWatermark();
+      // Ensure watermark is present on page 1 and consistent across all pages.
+      applyWatermarkAllPages();
 
       doc.save('Cards_Data_Report.pdf');
     } catch (e) {

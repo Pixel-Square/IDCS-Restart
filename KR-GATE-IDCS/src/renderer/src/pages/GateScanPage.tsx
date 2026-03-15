@@ -33,6 +33,27 @@ function isNetworkError(e: any): boolean {
   return e?.name === 'TypeError' || msg.includes('network') || msg.includes('failed to fetch')
 }
 
+const COOLDOWN_MS = 5 * 60 * 1000
+
+function checkCooldown(uid: string): { allowed: true } | { allowed: false; remainingStr: string } {
+  const lastStr = window.localStorage.getItem(`cooldown_${uid}`)
+  if (!lastStr) return { allowed: true }
+  const lastTime = parseInt(lastStr, 10)
+  if (isNaN(lastTime)) return { allowed: true }
+
+  const diff = Date.now() - lastTime
+  if (diff >= COOLDOWN_MS) return { allowed: true }
+
+  const remaining = COOLDOWN_MS - diff
+  const mm = Math.floor(remaining / 60000)
+  const ss = Math.floor((remaining % 60000) / 1000)
+  return { allowed: false, remainingStr: `${mm}m ${ss}s` }
+}
+
+function setCooldown(uid: string) {
+  window.localStorage.setItem(`cooldown_${uid}`, Date.now().toString())
+}
+
 export default function GateScanPage(): JSX.Element {
   const nav = useNavigate()
   const { me } = useAuth()
@@ -65,8 +86,7 @@ export default function GateScanPage(): JSX.Element {
 
   const showFlash = useCallback((next: Flash) => {
     setFlash(next)
-    if (flashTimer.current) window.clearTimeout(flashTimer.current)
-    flashTimer.current = window.setTimeout(() => setFlash(null), 1800)
+    // Removed flash timer so the flash stays until next scan or manual stop
   }, [])
 
   const stopScan = useCallback(async () => {
@@ -94,6 +114,7 @@ export default function GateScanPage(): JSX.Element {
       const rec = addOfflineRecord(uid)
       // OFFLINE scans are always treated as green entries; show only IN/OUT.
       appendScanLog({ uid, mode: 'OFFLINE', direction: rec.direction, title: rec.direction })
+      setCooldown(uid)
       showFlash({ kind: 'allowed', title: rec.direction })
     },
     [showFlash],
@@ -145,6 +166,7 @@ export default function GateScanPage(): JSX.Element {
         const title = isLate ? 'LATE' : 'ALLOWED'
         const subtitle = result.message || (isLate ? 'Late return recorded.' : 'Allowed.')
         appendScanLog({ uid, mode: 'ONLINE', title, subtitle })
+        setCooldown(uid)
         showFlash({ kind: 'allowed', title, subtitle, detail: flowDetail, studentLine, profile: flashProfile })
         return
       }
@@ -186,6 +208,18 @@ export default function GateScanPage(): JSX.Element {
 
   const processUID = useCallback(
     async (uid: string) => {
+      const cd = checkCooldown(uid)
+      if (!cd.allowed) {
+        appendScanLog({ uid, mode: 'ONLINE', title: 'COOLDOWN', subtitle: `Try IN after ${cd.remainingStr}` })
+        setFlash({
+          kind: 'denied',
+          title: 'PLEASE WAIT',
+          subtitle: `Try the IN after ${cd.remainingStr}`,
+          studentLine: `UID: ${uid}`
+        })
+        return
+      }
+
       if (!isOnline) {
         await processOffline(uid)
         return
