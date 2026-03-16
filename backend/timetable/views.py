@@ -2121,6 +2121,180 @@ class SpecialTimetableEntryViewSet(viewsets.ModelViewSet):
             pass
 
 
+class BulkSpecialTimetableEntryCreateView(APIView):
+    """Create multiple special timetable entries at once for multiple periods and dates.
+    
+    POST /api/timetable/special-entries-bulk/
+    Body: {
+        timetable_id: <int>,
+        period_ids: [<int>, ...],  # List of period IDs
+        day_numbers: [1-7],        # List of day numbers (1=Mon, ..., 7=Sun)
+        date_start: "YYYY-MM-DD",
+        date_end: "YYYY-MM-DD",
+        curriculum_row: <int> or null,
+        subject_batch_id: <int> or null,
+        subject_text: <str> or null,
+        staff_id: <int> or null
+    }
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request):
+        from datetime import datetime, timedelta
+        from academics.models import TeachingAssignment, PeriodAttendanceSession
+        
+        user = request.user
+        perms = get_user_permissions(user)
+        
+        # Check permissions
+        role_names = {r.name.upper() for r in user.roles.all()}
+        allowed = False
+        if 'timetable.manage_special_timetable' in perms or 'academics.manage_special_timetable' in perms or user.is_staff:
+            allowed = True
+        if 'timetable.assign' in perms:
+            allowed = True
+
+        # Advisors can create bulk entries for sections they advise
+        if 'ADVISOR' in role_names:
+            timetable_id = request.data.get('timetable_id')
+            try:
+                if timetable_id:
+                    st = SpecialTimetable.objects.filter(pk=int(timetable_id)).select_related('section').first()
+                    staff_profile = getattr(user, 'staff_profile', None)
+                    if st and staff_profile:
+                        from academics.models import SectionAdvisor
+                        if SectionAdvisor.objects.filter(section=st.section, advisor=staff_profile, is_active=True, academic_year__is_active=True).exists():
+                            allowed = True
+            except Exception:
+                pass
+
+        if not allowed:
+            return Response({'detail': 'You do not have permission to create special timetable entries'}, status=status.HTTP_403_FORBIDDEN)
+
+        # Extract request data
+        timetable_id = request.data.get('timetable_id')
+        period_ids = request.data.get('period_ids', [])
+        day_numbers = request.data.get('day_numbers', [])
+        date_start_str = request.data.get('date_start')
+        date_end_str = request.data.get('date_end')
+        curriculum_row_id = request.data.get('curriculum_row')
+        subject_batch_id = request.data.get('subject_batch_id')
+        subject_text = request.data.get('subject_text')
+        staff_id = request.data.get('staff_id')
+
+        # Validate required fields
+        if not timetable_id or not date_start_str or not date_end_str:
+            return Response({'detail': 'Missing timetable_id, date_start, or date_end'}, status=status.HTTP_400_BAD_REQUEST)
+        if not period_ids or not day_numbers:
+            return Response({'detail': 'Must select at least one period and one day'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Get timetable
+            timetable = SpecialTimetable.objects.select_related('section').get(pk=int(timetable_id))
+            
+            # Parse dates
+            date_start = datetime.strptime(date_start_str, '%Y-%m-%d').date()
+            date_end = datetime.strptime(date_end_str, '%Y-%m-%d').date()
+            
+            if date_start > date_end:
+                return Response({'detail': 'date_start cannot be after date_end'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Get staff profile
+            staff_profile = getattr(user, 'staff_profile', None)
+            if staff_id and staff_profile.id != int(staff_id) and not user.is_staff:
+                # Non-staff cannot assign to other staff
+                return Response({'detail': 'You cannot assign entries to other staff'}, status=status.HTTP_403_FORBIDDEN)
+            
+            # Resolve staff
+            resolved_staff = staff_profile
+            if staff_id:
+                from academics.models import StaffProfile
+                resolved_staff = StaffProfile.objects.get(pk=int(staff_id))
+
+            # Convert period_ids and day_numbers to integers
+            period_ids = [int(p) for p in period_ids]
+            day_numbers = [int(d) for d in day_numbers]
+
+            logger.info(f'🟦 BULK SPECIAL ENTRY START')
+            logger.info(f'  ✓ period_ids={period_ids}')
+            logger.info(f'  ✓ day_numbers={day_numbers}')
+            logger.info(f'  ✓ date_range={date_start} to {date_end}')
+            logger.info(f'  ✓ timetable_id={timetable_id}')
+            logger.info(f'  ✓ subject_type: curriculum_row={curriculum_row_id}, subject_text={subject_text}')
+
+            entries_created = []
+            current_date = date_start
+            iterate_count = 0
+            match_count = 0
+            
+            # Iterate through date range
+            while current_date <= date_end:
+                iterate_count += 1
+                # Get day of week for current date (Python: 0=Mon, 6=Sun)
+                current_dow = current_date.weekday()  # 0-6
+                # Convert to 1-7 format (1=Mon, ..., 7=Sun)
+                current_dow_1_7 = current_dow + 1
+                is_match = current_dow_1_7 in day_numbers
+                
+                logger.info(f'  [{iterate_count}] {current_date}: weekday()={current_dow}, 1-7={current_dow_1_7}, match={is_match}')
+                
+                # Only create entries for matching days of week
+                if is_match:
+                    match_count += 1
+                    # Create entry for each selected period
+                    for period_id in period_ids:
+                        try:
+                            entry, created = SpecialTimetableEntry.objects.get_or_create(
+                                timetable=timetable,
+                                date=current_date,
+                                period_id=int(period_id),
+                                defaults={
+                                    'staff': resolved_staff,
+                                    'curriculum_row_id': int(curriculum_row_id) if curriculum_row_id else None,
+                                    'subject_batch_id': int(subject_batch_id) if subject_batch_id else None,
+                                    'subject_text': subject_text,
+                                    'is_active': True
+                                }
+                            )
+                            if created:
+                                entries_created.append(entry.id)
+                                logger.info(f'    ✅ Created entry {entry.id} for period {period_id}')
+                            else:
+                                logger.info(f'    ⚠️ Entry already exists for period {period_id}')
+                                
+                                # Create PeriodAttendanceSession for this entry
+                            try:
+                                PeriodAttendanceSession.objects.get_or_create(
+                                    section=timetable.section,
+                                    period_id=int(period_id),
+                                    date=current_date,
+                                    defaults={'timetable_assignment': None, 'created_by': resolved_staff}
+                                )
+                            except Exception as e:
+                                logger.warning(f'Failed to create attendance session: {e}')
+                        except Exception as e:
+                            logger.error(f'Failed to create entry for {current_date} period {period_id}: {e}')
+                            continue
+
+                current_date += timedelta(days=1)
+
+            logger.info(f'🟦 BULK SPECIAL ENTRY END: Iterated {iterate_count} days, Matched {match_count} days, Created {len(entries_created)} entries')
+
+            return Response({
+                'entries_created': len(entries_created),
+                'entry_ids': entries_created,
+                'message': f'Created {len(entries_created)} special period entries'
+            }, status=status.HTTP_201_CREATED)
+
+        except SpecialTimetable.DoesNotExist:
+            return Response({'detail': 'Special timetable not found'}, status=status.HTTP_404_NOT_FOUND)
+        except ValueError as e:
+            return Response({'detail': f'Invalid data: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.error(f'Bulk special entry creation error: {e}')
+            return Response({'detail': f'Error: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 class PeriodSwapRequestView(APIView):
     """Handle period swap requests that require approval.
     

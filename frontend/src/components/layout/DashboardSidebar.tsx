@@ -442,25 +442,15 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   
   // Staff Requests system
   // Note: 'My Requests' moved into My Calendar; keep direct link removed to avoid duplication
-  const approverRoles = ['HOD', 'AHOD', 'HR', 'HAA', 'IQAC', 'PS', 'PRINCIPAL'];
-  const isApprover = approverRoles.some(r => rolesUpper.includes(r));
-  if ((permsLower.includes('staff_requests.approve_requests') || isApprover) && !items.some(item => item.key === 'staff_requests_approvals')) {
+  // PERMISSION-BASED ONLY: Only show request approvals to users with explicit staff_requests.approve_requests permission
+  const hasApprovePermission = permsLower.includes('staff_requests.approve_requests');
+  
+  if (hasApprovePermission && !items.some(item => item.key === 'staff_requests_approvals')) {
     items.push({ key: 'staff_requests_approvals', label: 'Pending Approvals', to: '/staff-requests/pending-approvals' });
   }
 
-  const canSeeRequestsHub =
-    isApprover ||
-    permsLower.includes('staff_requests.approve_requests') ||
-    permsLower.includes('accounts.profile_image_unlock_approve') ||
-    permsLower.includes('obe.master.manage') ||
-    permsLower.includes('academics.view_all_attendance') ||
-    permsLower.includes('academics.view_attendance_overall') ||
-    permsLower.includes('academics.view_all_departments') ||
-    permsLower.includes('academics.view_department_attendance') ||
-    permsLower.includes('academics.view_class_attendance') ||
-    permsLower.includes('academics.view_section_attendance');
-
-  if (canSeeRequestsHub && !items.some(item => item.key === 'requests_hub')) {
+  // Requests Hub: ONLY for users with staff_requests.approve_requests permission
+  if (hasApprovePermission && !items.some(item => item.key === 'requests_hub')) {
     items.push({ key: 'requests_hub', label: 'Requests', to: '/requests' });
   }
 

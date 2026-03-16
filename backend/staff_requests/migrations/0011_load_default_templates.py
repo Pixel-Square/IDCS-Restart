@@ -17,10 +17,10 @@ def load_default_templates(apps, schema_editor):
     RequestTemplate = apps.get_model('staff_requests', 'RequestTemplate')
     ApprovalStep = apps.get_model('staff_requests', 'ApprovalStep')
     
-    # Check if templates already exist (skip if migration re-run)
-    if RequestTemplate.objects.exists():
-        print('Templates already exist, skipping default template creation')
-        return
+    # Delete old templates and recreate with fresh 10
+    print('Clearing old templates...')
+    RequestTemplate.objects.all().delete()
+    print('✓ Cleared old templates')
     
     # Common form schemas
     # Insert `others_category` before `reason` so fresh installs include the dropdown

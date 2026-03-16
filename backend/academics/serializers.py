@@ -351,7 +351,16 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
             st = getattr(obj, 'staff', None)
             if not st:
                 return None
-            return {'id': st.id, 'user': getattr(getattr(st, 'user', None), 'username', None), 'staff_id': getattr(st, 'staff_id', None)}
+            user = getattr(st, 'user', None)
+            return {
+                'id': st.id, 
+                'user': {
+                    'username': getattr(user, 'username', None),
+                    'first_name': getattr(user, 'first_name', None),
+                    'last_name': getattr(user, 'last_name', None),
+                } if user else None,
+                'staff_id': getattr(st, 'staff_id', None)
+            }
         except Exception:
             return None
 

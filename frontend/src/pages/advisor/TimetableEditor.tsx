@@ -66,6 +66,12 @@ function CellPopup(props: any) {
   const [specialSubjectType, setSpecialSubjectType] = useState<'curriculum' | 'custom' | 'otherdept' | 'event'>('curriculum')
   const [specialEventText, setSpecialEventText] = useState<string>('')
   
+  // Bulk mode states
+  const [bulkMode, setBulkMode] = useState<boolean>(false)
+  const [selectedPeriods, setSelectedPeriods] = useState<Set<number>>(new Set())
+  const [selectedDays, setSelectedDays] = useState<Set<number>>(new Set())
+  const [specialDateStart, setSpecialDateStart] = useState<string>((new Date()).toISOString().slice(0,10))
+  const [specialDateEnd, setSpecialDateEnd] = useState<string>((new Date()).toISOString().slice(0,10))
 
 
   if(!editingCell) return null
@@ -610,23 +616,144 @@ function CellPopup(props: any) {
               </div>
 
               <div className="mt-6 border-t border-gray-200 pt-6">
-                <div className="flex items-center gap-2 mb-3">
-                  <AlertCircle className="h-5 w-5 text-amber-600" />
-                  <h4 className="text-lg font-semibold text-gray-900">Mark Special Period</h4>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="h-5 w-5 text-amber-600" />
+                    <h4 className="text-lg font-semibold text-gray-900">Mark Special Period</h4>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setBulkMode(!bulkMode)
+                      if (!bulkMode) {
+                        // Entering bulk mode
+                        setSelectedPeriods(new Set([periodId]))
+                        setSelectedDays(new Set([day]))
+                      }
+                    }}
+                    className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
+                      bulkMode
+                        ? 'bg-amber-600 text-white'
+                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                    }`}
+                  >
+                    {bulkMode ? 'Bulk Mode ON' : 'Single'}
+                  </button>
                 </div>
-                <p className="text-sm text-gray-600 mb-4">Create a date-specific override for this period.</p>
+                <p className="text-sm text-gray-600 mb-4">
+                  {bulkMode 
+                    ? 'Select multiple periods and days to create special entries in bulk.'
+                    : 'Create a date-specific override for this period.'
+                  }
+                </p>
 
                 <div className="space-y-4">
-                  {/* Date */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Date</label>
-                    <input
-                      type="date"
-                      value={specialDate || ''}
-                      onChange={e => setSpecialDate(e.target.value || null)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
-                    />
-                  </div>
+                  {/* Bulk mode controls */}
+                  {bulkMode && (
+                    <>
+                      {/* Period Selection */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Select Periods</label>
+                        <div className="grid grid-cols-4 gap-2 bg-gray-50 p-3 rounded-lg">
+                          {periods.map((p: any) => (
+                            <label key={p.id} className="flex items-center gap-2 text-sm text-gray-700">
+                              <input
+                                type="checkbox"
+                                checked={selectedPeriods.has(p.id)}
+                                onChange={(e) => {
+                                  const newSet = new Set(selectedPeriods)
+                                  if (e.target.checked) {
+                                    newSet.add(p.id)
+                                  } else {
+                                    newSet.delete(p.id)
+                                  }
+                                  setSelectedPeriods(newSet)
+                                }}
+                                className="rounded"
+                              />
+                              <span>{p.label || `P${p.index}`}</span>
+                            </label>
+                          ))}
+                        </div>
+                        {selectedPeriods.size === 0 && (
+                          <p className="text-xs text-red-600 mt-1">Select at least one period</p>
+                        )}
+                      </div>
+
+                      {/* Day Selection */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Select Days</label>
+                        <div className="grid grid-cols-7 gap-1.5 bg-gray-50 p-3 rounded-lg">
+                          {[1, 2, 3, 4, 5, 6, 7].map(dayNum => (
+                            <label key={dayNum} className="flex items-center justify-center gap-1 text-xs text-gray-700">
+                              <input
+                                type="checkbox"
+                                checked={selectedDays.has(dayNum)}
+                                onChange={(e) => {
+                                  const newSet = new Set(selectedDays)
+                                  if (e.target.checked) {
+                                    newSet.add(dayNum)
+                                  } else {
+                                    newSet.delete(dayNum)
+                                  }
+                                  setSelectedDays(newSet)
+                                }}
+                                className="rounded"
+                              />
+                              <span>{['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][dayNum - 1]}</span>
+                            </label>
+                          ))}
+                        </div>
+                        {selectedDays.size === 0 && (
+                          <p className="text-xs text-red-600 mt-1">Select at least one day</p>
+                        )}
+                      </div>
+
+                      {/* Date Range */}
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1.5">From Date</label>
+                          <input
+                            type="date"
+                            value={specialDateStart}
+                            onChange={e => setSpecialDateStart(e.target.value)}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                          />
+                          {specialDateStart && (
+                            <p className="text-xs text-gray-500 mt-1">
+                              {new Date(specialDateStart + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long' })}
+                            </p>
+                          )}
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1.5">To Date</label>
+                          <input
+                            type="date"
+                            value={specialDateEnd}
+                            onChange={e => setSpecialDateEnd(e.target.value)}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                          />
+                          {specialDateEnd && (
+                            <p className="text-xs text-gray-500 mt-1">
+                              {new Date(specialDateEnd + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long' })}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {/* Single mode date selector */}
+                  {!bulkMode && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Date</label>
+                      <input
+                        type="date"
+                        value={specialDate || ''}
+                        onChange={e => setSpecialDate(e.target.value || null)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                      />
+                    </div>
+                  )}
 
                   {/* Subject type tabs */}
                   <div>
@@ -831,17 +958,26 @@ function CellPopup(props: any) {
 
                   <button
                     onClick={async () => {
-                      if (!specialDate) return alert('Select a date')
                       // Validate subject selection based on type
                       if (specialSubjectType === 'curriculum' && !editingCurriculumId) return alert('Select a subject from curriculum')
                       if (specialSubjectType === 'custom' && !customSubjectText) return alert('Select a custom subject')
                       if (specialSubjectType === 'otherdept' && !editingCurriculumId) return alert('Select a department and subject')
                       if (specialSubjectType === 'event' && !specialEventText.trim()) return alert('Enter an event name')
+
                       try {
                         // Auto-create special timetable with a descriptive name
-                        const ttName = specialSubjectType === 'event'
-                          ? `Event: ${specialEventText.trim()} - ${specialDate}`
-                          : `Special - ${specialDate}`
+                        let ttName: string
+                        if (bulkMode) {
+                          ttName = specialSubjectType === 'event'
+                            ? `Event: ${specialEventText.trim()} - ${specialDateStart} to ${specialDateEnd}`
+                            : `Special - ${specialDateStart} to ${specialDateEnd}`
+                        } else {
+                          if (!specialDate) return alert('Select a date')
+                          ttName = specialSubjectType === 'event'
+                            ? `Event: ${specialEventText.trim()} - ${specialDate}`
+                            : `Special - ${specialDate}`
+                        }
+
                         const tRes = await fetchWithAuth('/api/timetable/special-timetables/', {
                           method: 'POST',
                           body: JSON.stringify({ name: ttName, section: sectionId, is_active: true })
@@ -850,25 +986,80 @@ function CellPopup(props: any) {
                         const tData = await tRes.json()
                         const timetableId = tData.id
 
-                        const entryPayload: any = { timetable_id: timetableId, period_id: periodId, date: specialDate }
-                        if (specialSubjectType === 'curriculum' || specialSubjectType === 'otherdept') {
-                          entryPayload.curriculum_row = editingCurriculumId
-                          if (editingBatchId) entryPayload.subject_batch_id = editingBatchId
-                        } else if (specialSubjectType === 'custom') {
-                          entryPayload.subject_text = customSubjectText
-                        } else if (specialSubjectType === 'event') {
-                          entryPayload.subject_text = specialEventText.trim()
-                          // staff left null = will be auto-set to request user on backend
+                        if (bulkMode) {
+                          // Validate bulk mode inputs
+                          if (selectedPeriods.size === 0) return alert('Select at least one period')
+                          if (selectedDays.size === 0) return alert('Select at least one day')
+                          if (specialDateStart > specialDateEnd) return alert('Start date must be before or equal to end date')
+
+                          const bulkPayload: any = {
+                            timetable_id: timetableId,
+                            period_ids: Array.from(selectedPeriods),
+                            day_numbers: Array.from(selectedDays),
+                            date_start: specialDateStart,
+                            date_end: specialDateEnd
+                          }
+
+                          if (specialSubjectType === 'curriculum' || specialSubjectType === 'otherdept') {
+                            bulkPayload.curriculum_row = editingCurriculumId
+                            if (editingBatchId) bulkPayload.subject_batch_id = editingBatchId
+                          } else if (specialSubjectType === 'custom') {
+                            bulkPayload.subject_text = customSubjectText
+                          } else if (specialSubjectType === 'event') {
+                            bulkPayload.subject_text = specialEventText.trim()
+                          }
+
+                          console.log('📤 Bulk special timetable request:', {
+                            payload: bulkPayload,
+                            dateStart: specialDateStart,
+                            dateEnd: specialDateEnd,
+                            selectedPeriods: Array.from(selectedPeriods),
+                            selectedDays: Array.from(selectedDays),
+                            dateStartObj: new Date(specialDateStart + 'T00:00:00'),
+                            dateEndObj: new Date(specialDateEnd + 'T00:00:00')
+                          })
+
+                          const eRes = await fetchWithAuth('/api/timetable/special-entries-bulk/', {
+                            method: 'POST',
+                            body: JSON.stringify(bulkPayload)
+                          })
+                          
+                          console.log('📥 Bulk response status:', eRes.status)
+                          
+                          if (!eRes.ok) { 
+                            const txt = await eRes.text()
+                            console.error('❌ Bulk create failed:', { status: eRes.status, error: txt })
+                            return alert('Failed to create bulk entries: ' + txt) 
+                          }
+                          
+                          const eData = await eRes.json()
+                          console.log('✅ Bulk create success:', eData)
+                          alert(`Successfully created ${eData.entries_created} special period entries`)
+                        } else {
+                          // Single mode (original logic)
+                          const entryPayload: any = { timetable_id: timetableId, period_id: periodId, date: specialDate }
+                          if (specialSubjectType === 'curriculum' || specialSubjectType === 'otherdept') {
+                            entryPayload.curriculum_row = editingCurriculumId
+                            if (editingBatchId) entryPayload.subject_batch_id = editingBatchId
+                          } else if (specialSubjectType === 'custom') {
+                            entryPayload.subject_text = customSubjectText
+                          } else if (specialSubjectType === 'event') {
+                            entryPayload.subject_text = specialEventText.trim()
+                          }
+
+                          const eRes = await fetchWithAuth('/api/timetable/special-entries/', {
+                            method: 'POST',
+                            body: JSON.stringify(entryPayload)
+                          })
+                          if (!eRes.ok) { const txt = await eRes.text(); return alert('Failed to create special entry: ' + txt) }
+                          alert('Special period created')
                         }
 
-                        const eRes = await fetchWithAuth('/api/timetable/special-entries/', {
-                          method: 'POST',
-                          body: JSON.stringify(entryPayload)
-                        })
-                        if (!eRes.ok) { const txt = await eRes.text(); return alert('Failed to create special entry: ' + txt) }
-                        alert('Special period created')
                         setSpecialEventText('')
                         setSpecialSubjectType('curriculum')
+                        setBulkMode(false)
+                        setSelectedPeriods(new Set())
+                        setSelectedDays(new Set())
                         await loadTimetable()
                         setShowCellPopup(false)
                         setEditingCell(null)
@@ -877,7 +1068,7 @@ function CellPopup(props: any) {
                     className="w-full px-4 py-2.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors flex items-center justify-center gap-2 font-medium"
                   >
                     <AlertCircle className="h-4 w-4" />
-                    Mark Special Period
+                    {bulkMode ? `Create ${Array.from(selectedPeriods).length * Array.from(selectedDays).length} Special Periods` : 'Mark Special Period'}
                   </button>
                 </div>
               </div>

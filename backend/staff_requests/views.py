@@ -527,6 +527,25 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         3. Return only those where the user is the designated approver
         """
         user = request.user
+        
+        # Permission check: Only approvers can access this endpoint
+        approver_roles = ['HOD', 'AHOD', 'HR', 'HAA', 'IQAC', 'PS', 'PRINCIPAL', 'ADMIN']
+        user_roles = set()
+        
+        if hasattr(user, 'user_roles'):
+            user_roles = set(
+                user.user_roles.values_list('role__name', flat=True).distinct()
+            )
+        
+        has_approver_role = any(role.upper() in [r.upper() for r in approver_roles] for role in user_roles)
+        has_permission = user.has_perm('staff_requests.approve_requests')
+        
+        if not (has_approver_role or has_permission or user.is_superuser):
+            return Response(
+                {'detail': 'You do not have permission to access pending approvals.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
         pending_requests = []
         
         # Get all pending requests

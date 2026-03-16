@@ -19,10 +19,8 @@ export default function RequestsPage({ user }: RequestsPageProps) {
   const roles = ((user?.roles || []) as string[]).map((r) => String(r || '').toUpperCase());
   const perms = ((user?.permissions || []) as string[]).map((p) => String(p || '').toLowerCase());
 
-  const approverRoles = ['HOD', 'AHOD', 'HR', 'HAA', 'IQAC', 'PS', 'PRINCIPAL'];
-  const isApprover = approverRoles.some((role) => roles.includes(role));
-
-  const canSeeStaffApprovals = isApprover || perms.includes('staff_requests.approve_requests');
+  // PERMISSION-BASED ONLY: Staff approvals require explicit permission
+  const canSeeStaffApprovals = perms.includes('staff_requests.approve_requests');
   const canSeeAttendanceRequests =
     roles.includes('HOD') ||
     roles.includes('IQAC') ||
