@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
-import { getActiveTemplates, createRequest, filterTemplatesForDate } from '../../services/staffRequests';
+import { createRequest, filterTemplatesForDate } from '../../services/staffRequests';
 import type { RequestTemplate, FormField } from '../../types/staffRequests';
 import DynamicFormRenderer from './DynamicFormRenderer';
 
@@ -32,17 +32,15 @@ export default function NewRequestModal({ onClose, onCreated, onSuccess, presele
     try {
       let data: RequestTemplate[];
       let message: string | undefined;
-      
-      // Use filtered templates if date is provided
-      if (preselectedDate) {
-        const result = await filterTemplatesForDate(preselectedDate);
-        data = result.templates;
-        message = result.message;
-        if (message) {
-          setFilterMessage(message);
-        }
-      } else {
-        data = await getActiveTemplates();
+
+      // Always filter by date: use preselectedDate or today so earn/deduct
+      // forms are correctly separated based on holiday vs working day.
+      const dateToFilter = preselectedDate || new Date().toISOString().slice(0, 10);
+      const result = await filterTemplatesForDate(dateToFilter);
+      data = result.templates;
+      message = result.message;
+      if (message) {
+        setFilterMessage(message);
       }
       
       setTemplates(data);
@@ -72,14 +70,13 @@ export default function NewRequestModal({ onClose, onCreated, onSuccess, presele
     // Pre-fill date fields if preselectedDate is provided
     if (preselectedDate) {
       template.form_schema.forEach(field => {
-        // Check if field is a date type or has date-related names
+        // Only auto-fill START/FROM date fields and single 'date' field
+        // Do NOT auto-fill end/to dates - let user choose if they want a range
         if (
-          field.type === 'date' ||
-          field.name === 'start_date' ||
-          field.name === 'end_date' ||
-          field.name === 'from_date' ||
-          field.name === 'to_date' ||
-          field.name === 'date'
+          field.type === 'date' &&
+          (field.name === 'start_date' ||
+           field.name === 'from_date' ||
+           field.name === 'date')
         ) {
           initialData[field.name] = preselectedDate;
         }
@@ -90,6 +87,32 @@ export default function NewRequestModal({ onClose, onCreated, onSuccess, presele
     setError(null);
     setUseColClaim(false);
   };
+
+  // Auto-uncheck COL claim if dates change and become invalid
+  useEffect(() => {
+    if (!selectedTemplate || !useColClaim || !colInfo) return;
+    
+    // Get earliest date from form
+    let earliestRequestDate: string | null = null;
+    selectedTemplate.form_schema.forEach(field => {
+      if ((field.type === 'date' || field.name.includes('date')) && formData[field.name]) {
+        const dateVal = formData[field.name];
+        if (!earliestRequestDate || dateVal < earliestRequestDate) {
+          earliestRequestDate = dateVal;
+        }
+      }
+    });
+
+    // Check if still valid
+    if (earliestRequestDate && colInfo.earned_dates && colInfo.earned_dates.length > 0) {
+      const latestEarnedDate = colInfo.earned_dates[0]?.date;
+      if (earliestRequestDate <= latestEarnedDate) {
+        // Dates are now invalid, uncheck
+        setUseColClaim(false);
+      }
+    }
+  }, [formData, selectedTemplate, colInfo, useColClaim]);
+
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -229,15 +252,83 @@ export default function NewRequestModal({ onClose, onCreated, onSuccess, presele
                     onChange={setFormData}
                   />
 
-                  {/* Claim COL option for deduct templates */}
-                  {selectedTemplate.leave_policy && selectedTemplate.leave_policy.action === 'deduct' && colInfo && colInfo.col_balance > 0 && preselectedDate && (
-                    // Check if the selected date is in claimable_dates
-                    (colInfo.claimable_dates || []).some((d: any) => String(d.date).slice(0,10) === String(preselectedDate).slice(0,10)) && (
-                      <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded text-green-800 text-sm flex items-center gap-3">
-                        <input id="claim_col" type="checkbox" checked={useColClaim} onChange={e => setUseColClaim(e.target.checked)} />
-                        <label htmlFor="claim_col">Claim Compensatory Leave (use COL balance: {colInfo.col_balance})</label>
-                      </div>
-                    )
+                  {/* Claim COL option for deduct templates (Casual Leave) */}
+                  {selectedTemplate.leave_policy && 
+                   selectedTemplate.leave_policy.action === 'deduct' && 
+                   colInfo && 
+                   colInfo.col_balance > 0 && (
+                    <div>
+                      {(() => {
+                        // Check if form has date fields filled
+                        const hasDateFields = selectedTemplate.form_schema.some(f => 
+                          (f.type === 'date' || f.name.includes('date')) && formData[f.name]
+                        );
+                        
+                        // Get the earliest date from form
+                        let earliestRequestDate: string | null = null;
+                        selectedTemplate.form_schema.forEach(field => {
+                          if ((field.type === 'date' || field.name.includes('date')) && formData[field.name]) {
+                            const dateVal = formData[field.name];
+                            if (!earliestRequestDate || dateVal < earliestRequestDate) {
+                              earliestRequestDate = dateVal;
+                            }
+                          }
+                        });
+
+                        // Check if request date is after COL earned dates
+                        let canClaim = true;
+                        let warningMsg = '';
+                        
+                        if (earliestRequestDate && colInfo.earned_dates && colInfo.earned_dates.length > 0) {
+                          const latestEarnedDate = colInfo.earned_dates[0]?.date; // Already sorted desc in backend
+                          if (earliestRequestDate <= latestEarnedDate) {
+                            canClaim = false;
+                            warningMsg = `Cannot claim COL for dates on or before ${latestEarnedDate} (last COL earned)`;
+                          }
+                        }
+
+                        // Show checkbox only if has date fields
+                        if (!hasDateFields) {
+                          return null;
+                        }
+
+                        return (
+                          <div className="mt-4 space-y-2">
+                            <div className={`p-3 border rounded flex items-start gap-3 ${canClaim ? 'bg-green-50 border-green-200' : 'bg-yellow-50 border-yellow-200'}`}>
+                              {canClaim ? (
+                                <>
+                                  <input 
+                                    id="claim_col" 
+                                    type="checkbox" 
+                                    checked={useColClaim} 
+                                    onChange={e => setUseColClaim(e.target.checked)}
+                                    className="mt-0.5"
+                                  />
+                                  <div className="flex-1">
+                                    <label htmlFor="claim_col" className="text-sm font-medium text-green-800 cursor-pointer">
+                                      ✓ Claim Compensatory Off Leave (COL)
+                                    </label>
+                                    <p className="text-xs text-green-700 mt-1">
+                                      Available COL balance: <strong>{colInfo.col_balance}</strong> days
+                                      {colInfo.earned_dates && colInfo.earned_dates.length > 0 && (
+                                        <> · Last earned: {new Date(colInfo.earned_dates[0].date).toLocaleDateString()}</>
+                                      )}
+                                    </p>
+                                  </div>
+                                </>
+                              ) : (
+                                <div className="flex-1">
+                                  <p className="text-sm font-medium text-yellow-800">⚠️ COL Not Claimable</p>
+                                  <p className="text-xs text-yellow-700 mt-1">
+                                    {warningMsg}
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
                   )}
 
                   {/* Approval Workflow Preview */}

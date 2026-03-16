@@ -29,14 +29,17 @@ class Command(BaseCommand):
         )
 
     def _get_primary_role(self, user):
-        """Get primary role for a user (simplified)"""
+        """Get primary role for a user.
+        SPL roles take priority over generic STAFF/FACULTY."""
         try:
-            roles = user.roles.values_list('name', flat=True)
-            role_priority = ['HOD', 'FACULTY', 'STAFF', 'HR']
+            roles = list(user.roles.values_list('name', flat=True))
+            # SPL roles first so staff who also hold an SPL role get the SPL allotment
+            role_priority = ['HOD', 'IQAC', 'HR', 'PS', 'CFSW', 'EDC', 'COE', 'HAA',
+                             'AHOD', 'FACULTY', 'STAFF']
             for role in role_priority:
                 if role in roles:
                     return role
-            return list(roles)[0] if roles else 'STAFF'
+            return roles[0] if roles else 'STAFF'
         except Exception:
             return 'STAFF'
 
@@ -56,13 +59,13 @@ class Command(BaseCommand):
             users = User.objects.filter(staff_profile__isnull=False).select_related('staff_profile')
             self.stdout.write(f"Checking all {users.count()} staff members\n")
         
-        # Get all active deduct templates
+        # Get all active deduct and neutral templates with allotment
         deduct_templates = RequestTemplate.objects.filter(
             is_active=True,
-            leave_policy__action='deduct'
-        )
+            leave_policy__action__in=['deduct', 'neutral']
+        ).exclude(leave_policy__allotment_per_role={})
         
-        self.stdout.write(self.style.SUCCESS(f"Found {deduct_templates.count()} active deduct templates:\n"))
+        self.stdout.write(self.style.SUCCESS(f"Found {deduct_templates.count()} active deduct/neutral templates with allotment:\n"))
         for template in deduct_templates:
             allotment = template.leave_policy.get('allotment_per_role', {})
             self.stdout.write(f"  - {template.name}: {allotment}")
@@ -96,15 +99,39 @@ class Command(BaseCommand):
             # Check what balances should exist
             self.stdout.write(f"\nExpected balances from templates:")
             for template in deduct_templates:
+                from datetime import datetime, date
+                
                 allotment_per_role = template.leave_policy.get('allotment_per_role', {})
-                expected_balance = allotment_per_role.get(user_role, 0)
+                full_allotment = allotment_per_role.get(user_role, 0)
+                
+                # Check for split_date logic
+                split_date_str = template.leave_policy.get('split_date')
+                today = date.today()
+                
+                if split_date_str and full_allotment > 0:
+                    try:
+                        split_date = datetime.strptime(split_date_str, '%Y-%m-%d').date()
+                        
+                        # If today is before split_date, initialize with first half only
+                        if today < split_date:
+                            expected_balance = full_allotment / 2
+                        else:
+                            # After split_date, use full allotment
+                            expected_balance = full_allotment
+                    except (ValueError, TypeError):
+                        # If split_date parsing fails, use full allotment
+                        expected_balance = full_allotment
+                else:
+                    # No split, use full allotment
+                    expected_balance = full_allotment
                 
                 # Check if balance exists
                 balance_exists = existing_balances.filter(leave_type=template.name).exists()
                 
                 if expected_balance > 0:
                     status = "[OK]" if balance_exists else "[MISSING]"
-                    self.stdout.write(f"  - {template.name}: {expected_balance} days {status}")
+                    split_info = f" [split: {split_date_str}]" if split_date_str else ""
+                    self.stdout.write(f"  - {template.name}: {expected_balance} days {status}{split_info}")
                     
                     # Initialize if requested and missing
                     if options['initialize'] and not balance_exists:

@@ -23,20 +23,23 @@ export interface ApprovalStep {
 
 export interface LeavePolicy {
   action?: 'deduct' | 'earn' | 'neutral';
-  allotment_per_role?: Record<string, number>;
-  from_date?: string; // REQUIRED: Start date for reset period (YYYY-MM-DD)
-  to_date?: string; // REQUIRED: End date for reset period (YYYY-MM-DD)
+  allotment_per_role?: Record<string, number>; // For deduct and neutral: initial balance allocation
+  from_date?: string; // REQUIRED for deduct/neutral: Start date for reset period (YYYY-MM-DD)
+  to_date?: string; // REQUIRED for deduct/neutral: End date for reset period (YYYY-MM-DD)
+  split_date?: string; // OPTIONAL: Mid-period split date (YYYY-MM-DD) - splits allotment into two equal halves
   overdraft_name?: string; // LOP field name (Loss of Pay)
   lop_non_reset?: boolean; // If true, LOP never resets (recommended)
-  reset_duration?: 'yearly' | 'monthly'; // Reset period for deduct action
+  reset_duration?: 'yearly' | 'monthly'; // Deprecated: old reset period for deduct action
   attendance_status?: string;
   // LOP Logic: LOP = Absent days - Approved deduct days for those absent dates
   // Absent 4 days = LOP:4, approve leave for 2 = LOP:2
-  // Reset Behavior: COL resets to 0, Deduct resets to allotment, LOP resets to 0 (unless lop_non_reset)
-  max_uses?: number; // For neutral: Maximum uses per staff per period
-  usage_reset_duration?: 'yearly' | 'monthly'; // For neutral: Reset period for usage
-  usage_from_date?: string; // For neutral: Custom usage reset start date
-  usage_to_date?: string; // For neutral: Custom usage reset end date
+  // Reset Behavior: COL resets to 0, Deduct/Neutral reset to allotment, LOP resets to 0 (unless lop_non_reset)
+  // Split Logic: If split_date set, staff gets half initially (from_date), then second half added on split_date
+  // Neutral forms now use allotment deduction (12 → 11 → 10 ... → 0), overflow goes to LOP
+  max_uses?: number; // Deprecated: Old neutral usage limit (no longer used)
+  usage_reset_duration?: 'yearly' | 'monthly'; // Deprecated: Old neutral reset period
+  usage_from_date?: string; // Deprecated: Old neutral custom usage reset start
+  usage_to_date?: string; // Deprecated: Old neutral custom usage reset end
 }
 
 export interface AttendanceAction {
@@ -53,6 +56,13 @@ export interface LeaveBalance {
   leave_type: string;
   balance: number;
   updated_at?: string;
+}
+
+export interface LateEntryStats {
+  month: string;
+  ten_mins: number;
+  one_hr: number;
+  total: number;
 }
 
 export interface LeaveBalancesResponse {

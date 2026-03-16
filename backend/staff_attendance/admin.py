@@ -4,8 +4,8 @@ from .models import AttendanceRecord, UploadLog, Holiday, AttendanceSettings
 
 @admin.register(AttendanceRecord)
 class AttendanceRecordAdmin(admin.ModelAdmin):
-    list_display = ['user', 'date', 'morning_in', 'evening_out', 'status', 'uploaded_at']
-    list_filter = ['status', 'date', 'uploaded_at']
+    list_display = ['user', 'date', 'morning_in', 'evening_out', 'status', 'fn_status', 'an_status', 'uploaded_at']
+    list_filter = ['status', 'fn_status', 'an_status', 'date', 'uploaded_at']
     search_fields = ['user__username', 'user__first_name', 'user__last_name']
     date_hierarchy = 'date'
     readonly_fields = ['uploaded_by', 'uploaded_at', 'source_file']
@@ -16,6 +16,10 @@ class AttendanceRecordAdmin(admin.ModelAdmin):
         }),
         ('Time Records', {
             'fields': ('morning_in', 'evening_out')
+        }),
+        ('Session Status', {
+            'fields': ('fn_status', 'an_status'),
+            'description': 'FN (Forenoon) and AN (Afternoon) attendance status'
         }),
         ('Additional Info', {
             'fields': ('notes',)
@@ -56,7 +60,7 @@ class HolidayAdmin(admin.ModelAdmin):
 
 @admin.register(AttendanceSettings)
 class AttendanceSettingsAdmin(admin.ModelAdmin):
-    list_display = ['id', 'attendance_in_time_limit', 'attendance_out_time_limit', 'apply_time_based_absence', 'updated_by', 'updated_at']
+    list_display = ['id', 'attendance_in_time_limit', 'mid_time_split', 'attendance_out_time_limit', 'apply_time_based_absence', 'updated_by', 'updated_at']
     readonly_fields = ['created_at', 'updated_at']
     
     def save_model(self, request, obj, form, change):

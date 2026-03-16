@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Calendar, ChevronLeft, ChevronRight, CheckCircle, XCircle, AlertCircle, Clock, Plus, AlertTriangle } from 'lucide-react';
 import { apiClient } from '../../services/auth';
 import { getApiBase } from '../../services/apiBase';
@@ -11,8 +11,11 @@ interface AttendanceRecord {
   id: number;
   date: string;
   status: string;  // Any status: 'present', 'absent', 'partial', 'OD', 'CL', 'ML', 'COL', etc.
+  fn_status: string;
+  an_status: string;
   morning_in: string | null;
   evening_out: string | null;
+  has_approved_col_form: boolean;
 }
 
 interface AttendanceSummary {
@@ -31,11 +34,14 @@ interface Holiday {
   notes: string;
   is_sunday: boolean;
   is_removable: boolean;
+  department_ids: number[];
+  departments_info: { id: number; name: string; code: string; short_name: string }[];
 }
 
 interface AttendanceSettings {
   id: number;
   attendance_in_time_limit: string;
+  mid_time_split: string;
   attendance_out_time_limit: string;
   apply_time_based_absence: boolean;
 }
@@ -53,6 +59,7 @@ export default function MyCalendarPage() {
   const [showNewRequestModal, setShowNewRequestModal] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [lateEntryTemplateId, setLateEntryTemplateId] = useState<number | null>(null);
+  const [mobileWeekIndex, setMobileWeekIndex] = useState(0);
 
   const months = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -91,7 +98,8 @@ export default function MyCalendarPage() {
       setAttendanceSettings({
         id: 1,
         attendance_in_time_limit: '08:45:00',
-        attendance_out_time_limit: '17:45:00',
+        mid_time_split: '13:00:00',
+        attendance_out_time_limit: '17:00:00',
         apply_time_based_absence: true
       });
     }
@@ -245,6 +253,22 @@ export default function MyCalendarPage() {
     fetchColInfo();
   };
 
+  // Calculate permission count by duration
+  const permissionCountByDuration = useMemo(() => {
+    const counts: Record<string, number> = {};
+    
+    myRequests
+      .filter(req => req.template.name === 'Late Entry Permission')
+      .forEach(req => {
+        const duration = req.form_data?.late_duration;
+        if (duration) {
+          counts[duration] = (counts[duration] || 0) + 1;
+        }
+      });
+    
+    return counts;
+  }, [myRequests]);
+
   // Get leave status for a specific date from approved requests
   const getLeaveStatusForDate = (date: number): string | null => {
     const dateStr = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${String(date).padStart(2, '0')}`;
@@ -350,6 +374,31 @@ export default function MyCalendarPage() {
     calendarDays.push(day);
   }
 
+  // Pad to full weeks so mobile week-wise pagination always has 7 cells.
+  while (calendarDays.length % 7 !== 0) {
+    calendarDays.push(null);
+  }
+
+  const totalWeeks = Math.max(1, Math.ceil(calendarDays.length / 7));
+  const mobileWeekStart = mobileWeekIndex * 7;
+  const mobileWeekEnd = mobileWeekStart + 6;
+
+  useEffect(() => {
+    const now = new Date();
+    if (selectedYear === now.getFullYear() && selectedMonth === now.getMonth() + 1) {
+      const weekOfToday = Math.floor((firstDay + now.getDate() - 1) / 7);
+      setMobileWeekIndex(Math.min(Math.max(weekOfToday, 0), totalWeeks - 1));
+    } else {
+      setMobileWeekIndex(0);
+    }
+  }, [selectedYear, selectedMonth, firstDay, totalWeeks]);
+
+  useEffect(() => {
+    if (mobileWeekIndex > totalWeeks - 1) {
+      setMobileWeekIndex(Math.max(0, totalWeeks - 1));
+    }
+  }, [mobileWeekIndex, totalWeeks]);
+
   return (
     <div className="p-6">
       <div className="max-w-7xl mx-auto">
@@ -362,17 +411,46 @@ export default function MyCalendarPage() {
         {/* Leave Balances */}
         <LeaveBalanceBadges />
 
+        {/* Permission Count Split - moved under Leave Balances */}
+        {Object.keys(permissionCountByDuration).length > 0 && (
+          <div className="bg-white rounded-lg shadow-md p-4 mb-6">
+            <h4 className="font-semibold text-gray-900 mb-2 text-sm">Permission Count Split</h4>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+              {Object.entries(permissionCountByDuration)
+                .sort((a, b) => parseInt(a[0]) - parseInt(b[0]))
+                .map(([duration, count]) => {
+                  const label = duration === '10' ? '10 mins'
+                    : duration === '30' ? '30 mins'
+                    : duration === '60' ? '1 hr'
+                    : duration === '90' ? '1.5 hrs'
+                    : duration === '120' ? '2 hrs'
+                    : `${duration} mins`;
+
+                  return (
+                    <div key={duration} className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                      <span className="text-amber-900 font-medium">{label}</span>
+                      <span className="text-amber-700 font-bold ml-1">{count}</span>
+                    </div>
+                  );
+                })}
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              Total late entry permissions: {Object.values(permissionCountByDuration).reduce((sum, count) => sum + count, 0)}
+            </p>
+          </div>
+        )}
+
         {/* Info Box for Late Entry Feature */}
         {attendanceData && attendanceData.summary.absent_count > 0 && (
           <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
             <div className="flex items-start gap-3">
               <AlertTriangle className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
               <div className="flex-1">
-                <h3 className="font-semibold text-yellow-900 mb-1">Late Entry Permission Available</h3>
+                <h3 className="font-semibold text-yellow-900 mb-1">Request Permission or Apply Leave</h3>
                 <p className="text-sm text-yellow-800">
-                  You have {attendanceData.summary.absent_count} absent day(s). 
-                  Click the yellow "Late Entry" button on any absent date to request permission. 
-                  If approved, your attendance will be changed from absent to present.
+                  You have absent sessions (FN or AN). 
+                  Click the yellow "Apply" button on dates with absent FN/AN to request Late Entry Permission, apply Leave, or On Duty. 
+                  You can specify whether you're applying for Forenoon (FN) or Afternoon (AN) session.
                 </p>
               </div>
             </div>
@@ -488,23 +566,47 @@ export default function MyCalendarPage() {
                   Out-time before {attendanceSettings.attendance_out_time_limit} highlighted in <span className="text-red-600 font-semibold">red</span>
                 </div>
               )}
+              
             </div>
 
-            <div className="bg-white rounded-lg shadow-md p-6 mb-6">
-            {/* Day headers */}
-            <div className="grid grid-cols-7 gap-2 mb-4">
+            <div className="bg-white rounded-lg shadow-md p-3 sm:p-6 mb-6">
+            {/* Day headers - hidden on mobile, shown on desktop */}
+            <div className="hidden sm:grid grid-cols-7 gap-1 sm:gap-2 mb-3 sm:mb-4">
               {daysOfWeek.map(day => (
-                <div key={day} className="text-center font-semibold text-gray-600 text-sm py-2">
+                <div key={day} className="text-center font-semibold text-gray-600 text-xs sm:text-sm py-1.5 sm:py-2">
                   {day}
                 </div>
               ))}
             </div>
 
+            <div className="sm:hidden flex items-center justify-between mb-3">
+              <button
+                type="button"
+                onClick={() => setMobileWeekIndex(prev => Math.max(0, prev - 1))}
+                disabled={mobileWeekIndex === 0}
+                className="px-2.5 py-1.5 text-xs font-semibold rounded-md border border-gray-300 text-gray-700 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Prev Week
+              </button>
+              <span className="text-xs font-semibold text-gray-600">
+                Week {mobileWeekIndex + 1} / {totalWeeks}
+              </span>
+              <button
+                type="button"
+                onClick={() => setMobileWeekIndex(prev => Math.min(totalWeeks - 1, prev + 1))}
+                disabled={mobileWeekIndex >= totalWeeks - 1}
+                className="px-2.5 py-1.5 text-xs font-semibold rounded-md border border-gray-300 text-gray-700 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Next Week
+              </button>
+            </div>
+
             {/* Calendar days */}
-            <div className="grid grid-cols-7 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-7 gap-1 sm:gap-2">
               {calendarDays.map((day, index) => {
+                const hideOnMobile = index < mobileWeekStart || index > mobileWeekEnd;
                 if (day === null) {
-                  return <div key={`empty-${index}`} className="aspect-square" />;
+                  return <div key={`empty-${index}`} className={`${hideOnMobile ? 'hidden sm:block ' : ''}min-h-[92px] sm:aspect-square`} />;
                 }
 
                 const dateStr = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
@@ -517,15 +619,21 @@ export default function MyCalendarPage() {
                 const leaveStatusFromRequest = getLeaveStatusForDate(day);
                 
                 // Determine which status to display:
-                // Priority: holiday > attendance record status > request status > no data
-                const attendanceIsLeaveStatus = attendance && !['present', 'absent', 'partial', 'half_day'].includes(attendance.status.toLowerCase());
-                const displayLeaveStatus = attendanceIsLeaveStatus ? attendance.status : leaveStatusFromRequest;
+                // Priority: holiday > attendance record with FN/AN > request status (only if no attendance) > no data
+                // If attendance record exists, ALWAYS show FN/AN breakdown, never just the leave badge
+                const displayLeaveStatus = !hasAttendance ? leaveStatusFromRequest : null;
+                
+                // Check if this is a half-day leave (one session has leave status, other is present/absent)
+                const isHalfDayLeave = attendance && attendance.status === 'half_day' && (
+                  !['present', 'absent', 'partial', 'half_day'].includes(attendance.fn_status.toLowerCase()) ||
+                  !['present', 'absent', 'partial', 'half_day'].includes(attendance.an_status.toLowerCase())
+                );
 
                 return (
                   <div
                     key={day}
                     onClick={() => handleDateClick(day)}
-                    className={`aspect-square border-2 rounded-lg p-2 cursor-pointer transition-all hover:shadow-md ${
+                    className={`${hideOnMobile ? 'hidden sm:block ' : ''}min-h-[92px] sm:aspect-square border-2 rounded-lg p-1.5 sm:p-2 cursor-pointer transition-all hover:shadow-md overflow-hidden ${
                       holidayInfo
                         ? holidayInfo.is_sunday 
                           ? 'bg-blue-50 border-blue-300'
@@ -540,10 +648,10 @@ export default function MyCalendarPage() {
                     <div className="h-full flex flex-col justify-between">
                       {/* Day number */}
                       <div className="flex items-center justify-between">
-                        <span className="font-semibold text-gray-900">{day}</span>
+                        <span className="font-bold text-gray-900 text-xl sm:text-2xl">{day}</span>
                         {holidayInfo ? (
                           <span 
-                            className={`text-xs font-bold px-1.5 py-0.5 rounded uppercase ${
+                            className={`text-[10px] sm:text-xs font-bold px-1 sm:px-1.5 py-0.5 rounded uppercase ${
                               holidayInfo.is_sunday 
                                 ? 'text-blue-700 bg-blue-200' 
                                 : 'text-orange-700 bg-orange-200'
@@ -553,7 +661,7 @@ export default function MyCalendarPage() {
                             HOL
                           </span>
                         ) : displayLeaveStatus ? (
-                          <span className="text-xs font-bold text-purple-700 bg-purple-200 px-1.5 py-0.5 rounded uppercase">
+                          <span className="text-[10px] sm:text-xs font-bold text-purple-700 bg-purple-200 px-1 sm:px-1.5 py-0.5 rounded uppercase">
                             {displayLeaveStatus}
                           </span>
                         ) : (
@@ -561,7 +669,35 @@ export default function MyCalendarPage() {
                         )}
                       </div>
 
+                      {/* Compact mobile content */}
+                      <div className="sm:hidden text-[10px] leading-tight space-y-0">
+                        {holidayInfo ? (
+                          <>
+                            <div className="font-semibold text-gray-700 truncate">{holidayInfo.name}</div>
+                            {hasAttendance && (
+                              <div className="text-gray-700">
+                                {attendance.fn_status?.toUpperCase() === 'PRESENT' ? 'P' : attendance.fn_status?.slice(0, 2)} /
+                                {attendance.an_status?.toUpperCase() === 'PRESENT' ? 'P' : attendance.an_status?.slice(0, 2)}
+                              </div>
+                            )}
+                          </>
+                        ) : displayLeaveStatus ? (
+                          <div className="font-semibold text-purple-700 truncate">{displayLeaveStatus}</div>
+                        ) : hasAttendance ? (
+                          <>
+                            {attendance.morning_in && <div className={`${lateIn ? 'text-red-700 font-semibold' : 'text-gray-700'} truncate`}>In {attendance.morning_in}</div>}
+                            {attendance.evening_out && <div className={`${earlyOut ? 'text-red-700 font-semibold' : 'text-gray-700'} truncate`}>Out {attendance.evening_out}</div>}
+                            <div className="font-medium text-gray-700 truncate">FN {attendance.fn_status} / AN {attendance.an_status}</div>
+                          </>
+                        ) : isEarnedCol(dateStr) ? (
+                          <div className="font-semibold text-blue-700">Worked</div>
+                        ) : (
+                          <div className="text-gray-500 text-[10px] flex items-center gap-1"><Plus className="w-3 h-3" />Add</div>
+                        )}
+                      </div>
+
                       {/* Leave, Holiday, or Attendance info */}
+                      <div className="hidden sm:block">
                       {holidayInfo ? (
                         <div className="text-center mt-1">
                           <div className={`text-xs font-semibold capitalize ${
@@ -570,8 +706,52 @@ export default function MyCalendarPage() {
                             {holidayInfo.name}
                           </div>
                           {hasAttendance && (
-                            <div className="text-xs text-gray-600 mt-1">
-                              <div className="font-medium">✓ Worked (COL)</div>
+                            <div className="text-sm text-gray-700 space-y-0.5 mt-1">
+                              {/* Show IN/OUT times on holidays */}
+                              {attendance.morning_in && (
+                                <div title={attendance.morning_in} className={`${lateIn ? 'text-red-700 font-semibold' : ''}`}>
+                                  In: {attendance.morning_in}
+                                </div>
+                              )}
+                              {attendance.evening_out && (
+                                <div title={attendance.evening_out} className={`${earlyOut ? 'text-red-700 font-semibold' : ''}`}>
+                                  Out: {attendance.evening_out}
+                                </div>
+                              )}
+                              {/* Show FN/AN status on holidays */}
+                              <div className="text-sm space-y-0.5 mt-1">
+                                {attendance.fn_status && (
+                                  <div className={`font-medium ${
+                                    attendance.fn_status === 'present' ? 'text-green-700' : 
+                                    attendance.fn_status === 'absent' ? 'text-red-700' : 
+                                    !['present', 'absent', 'partial', 'half_day'].includes(attendance.fn_status.toLowerCase()) ? 'text-purple-700' :
+                                    'text-yellow-700'
+                                  }`}>
+                                    FN: {attendance.fn_status === 'CL' ? 'Cas.Leave' :
+                                         attendance.fn_status === 'OD' ? 'On Duty' :
+                                         attendance.fn_status === 'COL' ? 'Comp Off' :
+                                         attendance.fn_status === 'ML' ? 'Med.Leave' :
+                                         attendance.fn_status}
+                                  </div>
+                                )}
+                                {attendance.an_status && (
+                                  <div className={`font-medium ${
+                                    attendance.an_status === 'present' ? 'text-green-700' : 
+                                    attendance.an_status === 'absent' ? 'text-red-700' : 
+                                    !['present', 'absent', 'partial', 'half_day'].includes(attendance.an_status.toLowerCase()) ? 'text-purple-700' :
+                                    'text-yellow-700'
+                                  }`}>
+                                    AN: {attendance.an_status === 'CL' ? 'Cas.Leave' :
+                                         attendance.an_status === 'OD' ? 'On Duty' :
+                                         attendance.an_status === 'COL' ? 'Comp Off' :
+                                         attendance.an_status === 'ML' ? 'Med.Leave' :
+                                         attendance.an_status}
+                                  </div>
+                                )}
+                              </div>
+                              {attendance.has_approved_col_form && (
+                                <div className="font-medium text-blue-700 mt-1">✓ Worked (COL)</div>
+                              )}
                             </div>
                           )}
                         </div>
@@ -597,32 +777,75 @@ export default function MyCalendarPage() {
                           </div>
                         </div>
                       ) : hasAttendance ? (
-                        <div className="text-xs text-gray-700 space-y-0.5">
-                          {attendance.morning_in && (
-                            <div title={attendance.morning_in} className={`${lateIn ? 'text-red-700 font-semibold' : ''}`}>
-                              In: {attendance.morning_in}
-                            </div>
-                          )}
-                          {attendance.evening_out && (
-                            <div title={attendance.evening_out} className={`${earlyOut ? 'text-red-700 font-semibold' : ''}`}>
-                              Out: {attendance.evening_out}
-                            </div>
-                          )}
-                          <div className="capitalize font-medium text-gray-900">
-                            {attendance.status}
+                          <div className="text-sm text-gray-700 space-y-0.5">
+                          {(() => {
+                            // Display times as-is from backend (no swapping)
+                            // Backend stores: morning_in (entry time), evening_out (exit time)
+                            const inTime = attendance.morning_in;
+                            const outTime = attendance.evening_out;
+                            
+                            return (
+                              <>
+                                {inTime && (
+                                  <div title={inTime} className={`${lateIn ? 'text-red-700 font-semibold' : ''}`}>
+                                    In: {inTime}
+                                  </div>
+                                )}
+                                {outTime && (
+                                  <div title={outTime} className={`${earlyOut ? 'text-red-700 font-semibold' : ''}`}>
+                                    Out: {outTime}
+                                  </div>
+                                )}
+                              </>
+                            );
+                          })()}
+                          <div className="text-sm space-y-0.5 mt-1">
+                            {attendance.fn_status && (
+                              <div className={`font-medium ${
+                                attendance.fn_status === 'present' ? 'text-green-700' : 
+                                attendance.fn_status === 'absent' ? 'text-red-700' : 
+                                !['present', 'absent', 'partial', 'half_day'].includes(attendance.fn_status.toLowerCase()) ? 'text-purple-700' :
+                                'text-yellow-700'
+                              }`}>
+                                FN: {attendance.fn_status === 'CL' ? 'Cas.Leave' :
+                                     attendance.fn_status === 'OD' ? 'On Duty' :
+                                     attendance.fn_status === 'COL' ? 'Comp Off' :
+                                     attendance.fn_status === 'ML' ? 'Med.Leave' :
+                                     attendance.fn_status}
+                              </div>
+                            )}
+                            {attendance.an_status && (
+                              <div className={`font-medium ${
+                                attendance.an_status === 'present' ? 'text-green-700' : 
+                                attendance.an_status === 'absent' ? 'text-red-700' : 
+                                !['present', 'absent', 'partial', 'half_day'].includes(attendance.an_status.toLowerCase()) ? 'text-purple-700' :
+                                'text-yellow-700'
+                              }`}>
+                                AN: {attendance.an_status === 'CL' ? 'Cas.Leave' :
+                                     attendance.an_status === 'OD' ? 'On Duty' :
+                                     attendance.an_status === 'COL' ? 'Comp Off' :
+                                     attendance.an_status === 'ML' ? 'Med.Leave' :
+                                     attendance.an_status}
+                              </div>
+                            )}
+                            {isHalfDayLeave && (
+                              <div className="text-sm text-purple-600 font-bold mt-0.5">
+                                HALF DAY
+                              </div>
+                            )}
                           </div>
                           {isEarnedCol(dateStr) && (
                             <div className="text-xs text-blue-700 font-medium mt-1">Worked (COL)</div>
                           )}
-                          {/* Add Late Entry Request Button for Absent Days */}
-                          {attendance.status.toLowerCase() === 'absent' && lateEntryTemplateId && (
+                          {/* Add Late Entry/Request Button for Absent Days */}
+                          {(attendance.fn_status === 'absent' || attendance.an_status === 'absent') && lateEntryTemplateId && (
                             <button
                               onClick={(e) => handleLateEntryClick(e, day)}
                               className="mt-2 w-full text-xs bg-yellow-500 hover:bg-yellow-600 text-white font-semibold py-1.5 px-2 rounded transition-colors flex items-center justify-center gap-1"
-                              title="Request permission for late entry"
+                              title="Request permission or apply leave"
                             >
                               <AlertTriangle className="w-3 h-3" />
-                              Late Entry
+                              Apply
                             </button>
                           )}
                         </div>
@@ -633,10 +856,11 @@ export default function MyCalendarPage() {
                           </div>
                         </div>
                       ) : null}
+                      </div>
 
                       {/* Click to add request hint */}
                       {!holidayInfo && !displayLeaveStatus && !hasAttendance && (
-                        <div className="text-xs text-gray-500 text-center flex items-center justify-center gap-1">
+                        <div className="hidden sm:flex text-xs text-gray-500 text-center items-center justify-center gap-1">
                           <Plus className="w-3 h-3" />
                           Add
                         </div>
