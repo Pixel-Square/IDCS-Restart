@@ -10,6 +10,8 @@ interface DashboardEntryPointsProps {
 interface AttendanceStatus {
   date: string;
   status: 'present' | 'absent' | 'partial' | 'half_day' | 'no_record';
+  fn_status: string;
+  an_status: string;
   morning_in: string | null;
   evening_out: string | null;
   has_record: boolean;
@@ -108,6 +110,11 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
         return 'Unknown';
     }
   };
+
+  const getSessionStatusText = (status?: string) => {
+    if (!status || status === 'no_record') return 'No Record';
+    return status.toUpperCase();
+  };
   
   return (
     <div className="space-y-6">
@@ -146,15 +153,20 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
               ) : attendanceStatus ? (
                 <div className="mt-1">
                   <p className="text-gray-900 font-medium">Status: {getStatusText(attendanceStatus.status)}</p>
+                  <div className="flex flex-wrap gap-2 mt-2 text-xs sm:text-sm">
+                    <span className="inline-flex items-center px-2 py-1 rounded-full bg-blue-100 text-blue-800 font-semibold">
+                      FN: {getSessionStatusText(attendanceStatus.fn_status)}
+                    </span>
+                    <span className="inline-flex items-center px-2 py-1 rounded-full bg-indigo-100 text-indigo-800 font-semibold">
+                      AN: {getSessionStatusText(attendanceStatus.an_status)}
+                    </span>
+                  </div>
                   <div className="flex gap-4 mt-1 text-sm text-gray-600">
                     {attendanceStatus.morning_in && (
                       <span>In: {attendanceStatus.morning_in}</span>
                     )}
                     {attendanceStatus.evening_out && (
                       <span>Out: {attendanceStatus.evening_out}</span>
-                    )}
-                    {!attendanceStatus.has_record && (
-                      <span className="text-red-600">No record found</span>
                     )}
                   </div>
                 </div>
