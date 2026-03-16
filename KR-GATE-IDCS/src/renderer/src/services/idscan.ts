@@ -76,6 +76,21 @@ export async function gatepassCheck(uid: string): Promise<GatepassCheckResult> {
   )
 }
 
+export type LookupAnyResult = {
+  found: boolean
+  uid: string
+  profile_type?: 'student' | 'staff' | null
+  profile?: ScannedStudent | ScannedStaff | null
+}
+
+export async function lookupAny(uid: string): Promise<LookupAnyResult> {
+  return parseJson(
+    await fetchWithAuth(`/api/idscan/lookup-any/?uid=${encodeURIComponent(uid)}`, {
+      method: 'GET',
+    }),
+  )
+}
+
 export async function uploadGatepassOfflineRecords(payload: {
   device_label?: string
   records: Array<{ uid: string; direction: 'OUT' | 'IN'; recorded_at?: string }>

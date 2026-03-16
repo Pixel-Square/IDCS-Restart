@@ -203,6 +203,12 @@ function createWindow() {
           if (!Array.isArray(portList) || portList.length === 0) {
             // eslint-disable-next-line no-console
             console.warn('[serial] no ports found')
+            dialog.showMessageBox(mainWindow!, {
+              type: 'warning',
+              title: 'No USB Devices Found',
+              message: 'No compatible USB serial devices were detected.',
+              detail: 'Please ensure the scanner is plugged in and the USB drivers (CH340 / CP210x) are properly installed.'
+            })
             callback('')
             return
           }
