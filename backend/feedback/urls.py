@@ -11,6 +11,9 @@ from .views import (
     GetResponseStatisticsView,
     GetResponseListView,
     ExportFeedbackResponsesExcelView,
+    CommonFeedbackExportOptionsView,
+    ExportCommonFeedbackResponsesExcelView,
+    ExportYearsView,
     GetStudentSubjectsView,
     GetSubjectsByYearView,
     DeleteFeedbackFormView,
@@ -50,6 +53,13 @@ urlpatterns = [
 
     # API: Export Responses Excel (HOD)
     path('<int:form_id>/export-excel/', ExportFeedbackResponsesExcelView.as_view(), name='feedback-export-excel'),
+
+    # API: IQAC Common Export (filters: department/year)
+    path('common-export/options/', CommonFeedbackExportOptionsView.as_view(), name='feedback-common-export-options'),
+    path('common-export/', ExportCommonFeedbackResponsesExcelView.as_view(), name='feedback-common-export'),
+
+    # API: Export filter years (IQAC analytics)
+    path('export-years/', ExportYearsView.as_view(), name='feedback-export-years'),
     
     # API 9: Get Student Subjects for Subject Feedback
     path('<int:form_id>/subjects/', GetStudentSubjectsView.as_view(), name='feedback-subjects'),

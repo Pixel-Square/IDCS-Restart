@@ -3,14 +3,14 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from django.db import transaction
-from django.db.models import Q, Case, When, Value, IntegerField
+from django.db.models import Q, Case, When, Value, IntegerField, F, ExpressionWrapper
 from django.shortcuts import get_object_or_404
 from django.http import HttpResponse
 from django.utils import timezone
 from io import BytesIO
 from openpyxl import Workbook
 
-from .models import FeedbackForm, FeedbackQuestion, FeedbackResponse
+from .models import FeedbackForm, FeedbackQuestion, FeedbackQuestionOption, FeedbackResponse
 from .serializers import (
     FeedbackFormCreateSerializer,
     FeedbackFormSerializer,
@@ -20,6 +20,108 @@ from .serializers import (
 from accounts.utils import get_user_permissions
 from academics.models import StaffProfile
 from .models import FeedbackFormSubmission
+from academics.models import Department
+
+
+def _user_is_iqac(user) -> bool:
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+
+    role_names = set(
+        user.roles.values_list('name', flat=True)
+    ) if hasattr(user, 'roles') else set()
+    role_names_upper = {str(name).upper() for name in role_names}
+    if 'IQAC' in role_names_upper:
+        return True
+
+    try:
+        from academics.models import RoleAssignment
+        return RoleAssignment.objects.filter(user=user, role__name__iexact='IQAC').exists()
+    except Exception:
+        return False
+
+
+def _user_has_feedback_analytics_view(user) -> bool:
+    try:
+        perms = get_user_permissions(user) or []
+        return 'feedback.analytics_view' in {str(p).lower() for p in perms}
+    except Exception:
+        return False
+
+
+def _user_is_hod(user) -> bool:
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+
+    role_names = set(
+        user.roles.values_list('name', flat=True)
+    ) if hasattr(user, 'roles') else set()
+    role_names_upper = {str(name).upper() for name in role_names}
+    if 'HOD' in role_names_upper:
+        return True
+
+    try:
+        from academics.models import DepartmentRole
+
+        staff_profile = getattr(user, 'staff_profile', None)
+        if staff_profile is None:
+            staff_profile = StaffProfile.objects.filter(user=user).first()
+        if staff_profile is None:
+            return False
+
+        return DepartmentRole.objects.filter(
+            staff=staff_profile,
+            role='HOD',
+            is_active=True,
+            academic_year__is_active=True,
+        ).exists()
+    except Exception:
+        return False
+
+
+def _department_has_is_active_field() -> bool:
+    try:
+        return any(getattr(f, 'name', None) == 'is_active' for f in Department._meta.fields)
+    except Exception:
+        return False
+
+
+def _get_accessible_departments_for_user(user):
+    """Departments visible for export filters.
+
+    Institution-wide access:
+    - IQAC role OR feedback.analytics_view permission.
+
+    Otherwise:
+    - Departments where user is active HOD (DepartmentRole).
+    """
+    institution_access = _user_is_iqac(user) or _user_has_feedback_analytics_view(user)
+
+    dept_qs = Department.objects.all()
+    if _department_has_is_active_field():
+        dept_qs = dept_qs.filter(is_active=True)
+
+    if institution_access:
+        return dept_qs.order_by('name')
+
+    # HOD-only access.
+    try:
+        from academics.models import DepartmentRole
+        staff_profile = getattr(user, 'staff_profile', None)
+        if staff_profile is None:
+            staff_profile = StaffProfile.objects.filter(user=user).first()
+        if staff_profile is None:
+            return dept_qs.none()
+
+        dept_ids = DepartmentRole.objects.filter(
+            staff=staff_profile,
+            role='HOD',
+            is_active=True,
+            academic_year__is_active=True,
+        ).values_list('department_id', flat=True)
+        return dept_qs.filter(id__in=list(dept_ids)).order_by('name')
+    except Exception:
+        return dept_qs.none()
 
 
 def _get_target_sections_for_department(department_id, selected_section_ids=None, years=None, active_ay=None):
@@ -336,7 +438,10 @@ class CreateFeedbackFormView(APIView):
                 else:
                     mutable_data['regulation'] = None
                 
-                serializer = FeedbackFormCreateSerializer(data=mutable_data)
+                serializer = FeedbackFormCreateSerializer(
+                    data=mutable_data,
+                    context={'request': request},
+                )
                 if serializer.is_valid():
                     try:
                         with transaction.atomic():
@@ -596,7 +701,7 @@ class SubmitFeedbackView(APIView):
                 if existing_response:
                     print(f"[FEEDBACK SUBMIT] Duplicate submission detected for subject")
                     return Response({
-                        'detail': 'You have already submitted feedback for this subject.'
+                        'detail': 'Feedback already submitted'
                     }, status=status.HTTP_400_BAD_REQUEST)
             else:
                 # For open feedback: check if user has submitted for this form
@@ -609,7 +714,7 @@ class SubmitFeedbackView(APIView):
                 if existing_response:
                     print(f"[FEEDBACK SUBMIT] Duplicate submission detected")
                     return Response({
-                        'detail': 'You have already submitted feedback for this form.'
+                        'detail': 'Feedback already submitted'
                     }, status=status.HTTP_400_BAD_REQUEST)
             
             # Save responses
@@ -1210,6 +1315,23 @@ class UpdateFeedbackFormView(APIView):
                 'error': 'At least one question is required.'
             }, status=status.HTTP_400_BAD_REQUEST)
 
+        def _user_is_iqac(user) -> bool:
+            role_names = set(
+                user.roles.values_list('name', flat=True)
+            ) if hasattr(user, 'roles') else set()
+            role_names_upper = {str(name).upper() for name in role_names}
+            if 'IQAC' in role_names_upper:
+                return True
+            try:
+                from academics.models import RoleAssignment
+                return RoleAssignment.objects.filter(user=user, role__name__iexact='IQAC').exists()
+            except Exception:
+                return False
+
+        is_iqac_user = _user_is_iqac(request.user)
+
+        allowed_question_types = {'rating', 'text', 'radio', 'rating_radio_comment'}
+
         # Keep update behavior aligned with creation behavior using section->regulation semester context.
         from academics.models import AcademicYear, Section
 
@@ -1294,12 +1416,52 @@ class UpdateFeedbackFormView(APIView):
                         'error': f'Question {idx + 1} cannot be empty.'
                     }, status=status.HTTP_400_BAD_REQUEST)
 
-                allow_rating = q.get('allow_rating', True)
-                allow_comment = q.get('allow_comment', True)
+                question_type = str(q.get('question_type') or 'rating').strip() or 'rating'
+                if question_type not in allowed_question_types:
+                    return Response({
+                        'error': f'Question {idx + 1}: Invalid question_type: {question_type}'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                incoming_options = q.get('options', None)
+
+                if question_type in {'rating_radio_comment', 'radio'} and not is_iqac_user:
+                    return Response({
+                        'error': f'Question {idx + 1}: Own Type questions are allowed only for IQAC.'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+
+                if question_type == 'rating_radio_comment':
+                    # Force both enabled for this type.
+                    allow_rating = True
+                    allow_comment = True
+                elif question_type == 'radio':
+                    # Force comment-only + radio.
+                    allow_rating = False
+                    allow_comment = True
+                elif question_type == 'text':
+                    allow_rating = False
+                    allow_comment = True
+                else:
+                    allow_rating = q.get('allow_rating', True)
+                    allow_comment = q.get('allow_comment', True)
                 if not allow_rating and not allow_comment:
                     return Response({
                         'error': f'Question {idx + 1} must allow rating or comment.'
                     }, status=status.HTTP_400_BAD_REQUEST)
+
+                if question_type in {'rating_radio_comment', 'radio'}:
+                    if incoming_options is None:
+                        return Response({
+                            'error': f'Question {idx + 1}: At least two options are required for Own Type questions.'
+                        }, status=status.HTTP_400_BAD_REQUEST)
+                    if not isinstance(incoming_options, list) or len(incoming_options) < 2:
+                        return Response({
+                            'error': f'Question {idx + 1}: At least two options are required for Own Type questions.'
+                        }, status=status.HTTP_400_BAD_REQUEST)
+                    for opt_idx, opt in enumerate(incoming_options):
+                        text = (opt.get('option_text') if isinstance(opt, dict) else '')
+                        if not text or not str(text).strip():
+                            return Response({
+                                'error': f'Question {idx + 1}: Option {opt_idx + 1} cannot be empty.'
+                            }, status=status.HTTP_400_BAD_REQUEST)
 
                 if allow_rating and allow_comment:
                     answer_type = 'BOTH'
@@ -1326,9 +1488,23 @@ class UpdateFeedbackFormView(APIView):
                         question=question_text,
                         allow_rating=allow_rating,
                         allow_comment=allow_comment,
+                        comment_enabled=allow_comment,
                         answer_type=answer_type,
+                        question_type=question_type,
                         order=q.get('order', idx + 1)
                     )
+
+                    # Replace options for own-type questions.
+                    existing_q = existing_questions[incoming_id]
+                    if question_type in {'rating_radio_comment', 'radio'}:
+                        existing_q.options.all().delete()
+                        for opt in (incoming_options or []):
+                            FeedbackQuestionOption.objects.create(
+                                question_id=incoming_id,
+                                option_text=str(opt.get('option_text', '')).strip(),
+                            )
+                    else:
+                        existing_q.options.all().delete()
                     kept_question_ids.add(incoming_id)
                 else:
                     created = FeedbackQuestion.objects.create(
@@ -1336,9 +1512,17 @@ class UpdateFeedbackFormView(APIView):
                         question=question_text,
                         allow_rating=allow_rating,
                         allow_comment=allow_comment,
+                        comment_enabled=allow_comment,
                         answer_type=answer_type,
+                        question_type=question_type,
                         order=q.get('order', idx + 1)
                     )
+                    if question_type in {'rating_radio_comment', 'radio'}:
+                        for opt in (incoming_options or []):
+                            FeedbackQuestionOption.objects.create(
+                                question=created,
+                                option_text=str(opt.get('option_text', '')).strip(),
+                            )
                     kept_question_ids.add(created.id)
 
             to_delete_ids = [qid for qid in existing_questions.keys() if qid not in kept_question_ids]
@@ -1658,8 +1842,10 @@ class GetResponseListView(APIView):
                     'question_id': response.question.id,
                     'question_text': response.question.question,
                     'answer_type': response.question.answer_type,
+                    'question_type': getattr(response.question, 'question_type', 'rating') or 'rating',
                     'answer_star': response.answer_star,
                     'answer_text': response.answer_text,
+                    'selected_option_text': (getattr(response, 'selected_option_text', None) or '').strip(),
                     'teaching_assignment': teaching_assignment_data
                 })
             
@@ -1792,9 +1978,9 @@ class ExportFeedbackResponsesExcelView(APIView):
         role_names = set(
             request.user.roles.values_list('name', flat=True)
         ) if hasattr(request.user, 'roles') else set()
-        if 'HOD' not in role_names:
+        if not ({'HOD', 'IQAC'} & role_names):
             return Response(
-                {'detail': 'Only HOD users can export feedback responses.'},
+                {'detail': 'Only HOD or IQAC users can export feedback responses.'},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -1900,6 +2086,7 @@ class ExportFeedbackResponsesExcelView(APIView):
             'Question Text',
             'Rating Value',
             'Comment',
+            'Selected Option',
         ]
         worksheet.append(headers)
 
@@ -2045,6 +2232,10 @@ class ExportFeedbackResponsesExcelView(APIView):
 
             rating_value = response.answer_star if response.answer_star is not None else ''
             comment_value = (response.answer_text or '').strip()
+            selected_option_value = (getattr(response, 'selected_option_text', None) or '').strip()
+            if not selected_option_value:
+                # Backward compatibility for older DBs/rows that used legacy `selected_option`.
+                selected_option_value = (getattr(response, 'selected_option', None) or '').strip()
 
             worksheet.append([
                 student_name,
@@ -2057,6 +2248,7 @@ class ExportFeedbackResponsesExcelView(APIView):
                 response.question.question,
                 rating_value,
                 comment_value,
+                selected_option_value,
             ])
 
         output = BytesIO()
@@ -2070,6 +2262,581 @@ class ExportFeedbackResponsesExcelView(APIView):
         )
         response['Content-Disposition'] = f'attachment; filename="{file_name}"'
         return response
+
+
+def _extract_target_years_from_form(form: FeedbackForm):
+    years = set()
+    if getattr(form, 'all_classes', False):
+        years.update([1, 2, 3, 4])
+    if getattr(form, 'year', None):
+        try:
+            years.add(int(form.year))
+        except Exception:
+            pass
+    form_years = getattr(form, 'years', None)
+    if isinstance(form_years, list):
+        for y in form_years:
+            try:
+                years.add(int(y))
+            except Exception:
+                continue
+    return sorted([y for y in years if 1 <= int(y) <= 8])
+
+
+class CommonFeedbackExportOptionsView(APIView):
+    """Return departments and available years for IQAC Common Export modal."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        # Permission rule: allow institution-wide access when IQAC role OR analytics_view.
+        if not (_user_is_iqac(request.user) or _user_has_feedback_analytics_view(request.user)):
+            return Response(
+                {'detail': 'You do not have permission to use common export.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        departments_qs = _get_accessible_departments_for_user(request.user)
+        departments = [
+            {
+                'id': dept.id,
+                'code': getattr(dept, 'code', '') or '',
+                'short_name': getattr(dept, 'short_name', '') or '',
+                'name': getattr(dept, 'name', '') or '',
+            }
+            for dept in departments_qs
+        ]
+
+        return Response(
+            {
+                'departments': departments,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class ExportYearsView(APIView):
+    """Return distinct years available institution-wide or for a department.
+
+    GET /api/feedback/export-years/?department_id=<id>
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        # Permission rule: allow institution-wide access when IQAC role OR analytics_view.
+        if not (_user_is_iqac(request.user) or _user_has_feedback_analytics_view(request.user)):
+            return Response(
+                {'detail': 'You do not have permission to load export years.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        department_param = (request.query_params.get('department_id') or '').strip()
+        department_id = None
+        if department_param:
+            try:
+                department_id = int(department_param)
+            except Exception:
+                return Response({'detail': 'Invalid department_id.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Use active AY start year to derive student year from batch.start_year.
+        active_ay_start = None
+        try:
+            from academics.models import AcademicYear
+
+            active_ay = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.order_by('-id').first()
+            if active_ay:
+                active_ay_start = int(str(active_ay.name).split('-')[0])
+        except Exception:
+            active_ay_start = None
+
+        from academics.models import Section
+
+        section_qs = Section.objects.select_related(
+            'batch',
+            'batch__course__department',
+            'batch__department',
+            'managing_department',
+        ).distinct()
+
+        if department_id:
+            section_qs = section_qs.filter(
+                Q(managing_department_id=department_id)
+                | Q(batch__course__department_id=department_id)
+                | Q(batch__department_id=department_id)
+            )
+
+        years = set()
+        if active_ay_start:
+            for sec in section_qs:
+                batch = getattr(sec, 'batch', None)
+                start_year = getattr(batch, 'start_year', None) if batch else None
+                if start_year is None and batch is not None:
+                    try:
+                        start_year = int(str(getattr(batch, 'name', '')).split('-')[0])
+                    except Exception:
+                        start_year = None
+                if not start_year:
+                    continue
+                try:
+                    derived_year = int(active_ay_start) - int(start_year) + 1
+                except Exception:
+                    continue
+                if 1 <= derived_year <= 8:
+                    years.add(derived_year)
+
+        return Response({'years': sorted(list(years))}, status=status.HTTP_200_OK)
+
+
+class ExportCommonFeedbackResponsesExcelView(APIView):
+    """Export feedback responses to a single Excel sheet with department/year filters (IQAC only)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def _get_active_ay_start_year(self):
+        try:
+            from academics.models import AcademicYear
+
+            active_ay = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.order_by('-id').first()
+            if not active_ay:
+                return None
+            return int(str(active_ay.name).split('-')[0])
+        except Exception:
+            return None
+
+    def _export(self, request, payload=None):
+        # Permission rule: allow institution-wide access when IQAC role OR analytics_view.
+        if not (_user_is_iqac(request.user) or _user_has_feedback_analytics_view(request.user)):
+            return Response(
+                {'detail': 'You do not have permission to use common export.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        is_iqac = _user_is_iqac(request.user)
+        is_hod = (not is_iqac) and _user_is_hod(request.user)
+
+        payload = payload or {}
+
+        # Backward compatible GET support.
+        if not payload:
+            dept_param = (request.query_params.get('department_id') or '').strip()
+            year_param = (request.query_params.get('year') or '').strip()
+            payload = {
+                'all_departments': dept_param.lower() == 'all' or dept_param == '',
+                'department_ids': [int(dept_param)] if (dept_param.isdigit()) else [],
+                'years': [] if (not year_param or year_param.lower() == 'all') else ([int(year_param)] if str(year_param).isdigit() else year_param),
+            }
+
+        all_departments = bool(payload.get('all_departments', False))
+        department_ids = payload.get('department_ids', [])
+        if isinstance(department_ids, str):
+            department_ids = [x.strip() for x in department_ids.split(',') if x.strip()]
+        if not isinstance(department_ids, list):
+            department_ids = []
+
+        normalized_dept_ids: list[int] = []
+        for raw in department_ids:
+            try:
+                normalized_dept_ids.append(int(raw))
+            except Exception:
+                continue
+        # De-dupe while preserving order.
+        normalized_dept_ids = list(dict.fromkeys(normalized_dept_ids))
+
+        years_value = payload.get('years', None)
+        # Backward-compat: accept single 'year' too.
+        if years_value is None and 'year' in payload:
+            years_value = payload.get('year')
+
+        if years_value in ('', 'all', 'ALL', None):
+            years_value = []
+
+        if isinstance(years_value, str):
+            years_value = [x.strip() for x in years_value.split(',') if x.strip()]
+
+        if isinstance(years_value, int):
+            years_value = [years_value]
+
+        if not isinstance(years_value, list):
+            return Response({'detail': 'Invalid years.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        normalized_years: list[int] = []
+        for raw in years_value:
+            if raw in ('', None):
+                continue
+            try:
+                y = int(raw)
+            except Exception:
+                return Response({'detail': 'Invalid years.'}, status=status.HTTP_400_BAD_REQUEST)
+            if 1 <= y <= 8:
+                normalized_years.append(y)
+
+        normalized_years = sorted(list(dict.fromkeys(normalized_years)))
+
+        # HOD override: force department filter regardless of payload.
+        if is_hod:
+            try:
+                from academics.models import DepartmentRole
+
+                staff_profile = getattr(request.user, 'staff_profile', None)
+                if staff_profile is None:
+                    staff_profile = StaffProfile.objects.filter(user=request.user).first()
+                if staff_profile is None:
+                    return Response({'detail': 'Staff profile not found.'}, status=status.HTTP_403_FORBIDDEN)
+
+                hod_dept_ids = list(DepartmentRole.objects.filter(
+                    staff=staff_profile,
+                    role='HOD',
+                    is_active=True,
+                    academic_year__is_active=True,
+                ).values_list('department_id', flat=True))
+                hod_dept_ids = list(dict.fromkeys([int(x) for x in hod_dept_ids if x]))
+                if not hod_dept_ids:
+                    return Response({'detail': 'No HOD department assigned.'}, status=status.HTTP_403_FORBIDDEN)
+
+                all_departments = False
+                normalized_dept_ids = hod_dept_ids
+            except Exception:
+                return Response({'detail': 'Failed to resolve HOD department.'}, status=status.HTTP_403_FORBIDDEN)
+
+        # Validate department selection when not exporting all departments.
+        if not all_departments and len(normalized_dept_ids) == 0:
+            return Response(
+                {'detail': 'Select at least one department or choose All Departments.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Limit to accessible departments for safety.
+        accessible_ids = set(_get_accessible_departments_for_user(request.user).values_list('id', flat=True))
+        if not all_departments:
+            normalized_dept_ids = [d for d in normalized_dept_ids if d in accessible_ids]
+            if not normalized_dept_ids:
+                return Response({'detail': 'No accessible departments selected.'}, status=status.HTTP_403_FORBIDDEN)
+
+        # Determine filter type for naming.
+        if all_departments and normalized_years:
+            filter_type = 'ALL_DEPARTMENTS_YEARS'
+        elif all_departments:
+            filter_type = 'ALL_DEPARTMENTS'
+        elif normalized_years:
+            filter_type = 'DEPARTMENTS_YEARS'
+        else:
+            filter_type = 'DEPARTMENTS'
+
+        # Base forms are student feedback only.
+        forms_qs = FeedbackForm.objects.filter(
+            target_type='STUDENT',
+            department__isnull=False,
+        ).select_related('department')
+
+        if not all_departments:
+            forms_qs = forms_qs.filter(department_id__in=normalized_dept_ids)
+
+        responses_qs = FeedbackResponse.objects.filter(
+            feedback_form__in=forms_qs
+        ).select_related(
+            'feedback_form',
+            'feedback_form__department',
+            'user',
+            'question',
+            'teaching_assignment',
+            'teaching_assignment__section',
+            'teaching_assignment__staff',
+            'teaching_assignment__staff__user',
+            'teaching_assignment__curriculum_row',
+            'teaching_assignment__subject',
+            'teaching_assignment__elective_subject',
+            'user__student_profile__section',
+            'user__student_profile__section__managing_department',
+            'user__student_profile__section__batch__course__department',
+            'user__student_profile__section__batch__department',
+        )
+
+        # Year filtering and ordering use the same derived-year annotation.
+        active_ay_start = self._get_active_ay_start_year()
+        if normalized_years and not active_ay_start:
+            return Response(
+                {'detail': 'Unable to compute year filter (no academic year found).'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if active_ay_start:
+            responses_qs = responses_qs.annotate(
+                derived_year=Case(
+                    When(
+                        user__student_profile__section__batch__start_year__isnull=False,
+                        then=ExpressionWrapper(
+                            Value(int(active_ay_start)) - F('user__student_profile__section__batch__start_year') + Value(1),
+                            output_field=IntegerField(),
+                        ),
+                    ),
+                    default=Value(None),
+                    output_field=IntegerField(),
+                ),
+                order_year=Case(
+                    When(
+                        user__student_profile__section__batch__start_year__isnull=False,
+                        then=ExpressionWrapper(
+                            Value(int(active_ay_start)) - F('user__student_profile__section__batch__start_year') + Value(1),
+                            output_field=IntegerField(),
+                        ),
+                    ),
+                    default=Value(999),
+                    output_field=IntegerField(),
+                ),
+            )
+
+        # Apply multi-year filter (works even when all_departments=true).
+        if normalized_years:
+            responses_qs = responses_qs.filter(derived_year__in=normalized_years)
+
+        # Ordering: Department -> Year -> Section (then stable tie-breakers).
+        if active_ay_start:
+            responses_qs = responses_qs.order_by(
+                'feedback_form__department__name',
+                'order_year',
+                'user__student_profile__section__name',
+                'user__student_profile__reg_no',
+                'feedback_form_id',
+                'user_id',
+                'question_id',
+            )
+        else:
+            responses_qs = responses_qs.order_by(
+                'feedback_form__department__name',
+                'user__student_profile__section__name',
+                'user__student_profile__reg_no',
+                'feedback_form_id',
+                'user_id',
+                'question_id',
+            )
+
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet.title = 'Feedback Export'
+
+        headers = [
+            'Student Name',
+            'Register Number',
+            'Department',
+            'Year / Section',
+            'Subject',
+            'Staff Name',
+            'Question',
+            'Rating',
+            'Comment',
+            'Selected Option (Radio Answer)',
+            'Submitted Date',
+        ]
+        worksheet.append(headers)
+
+        active_ay_start = active_ay_start or self._get_active_ay_start_year()
+
+        # Map (form_id, user_id) -> submitted_at
+        submitted_at_map = {}
+        form_ids = list(forms_qs.values_list('id', flat=True))
+        if form_ids:
+            for row in FeedbackFormSubmission.objects.filter(
+                feedback_form_id__in=form_ids,
+                submission_status='SUBMITTED',
+            ).values('feedback_form_id', 'user_id', 'submitted_at'):
+                submitted_at_map[(row['feedback_form_id'], row['user_id'])] = row.get('submitted_at')
+
+        # Hint teaching assignment for subject forms.
+        user_ta_hints = {}
+
+        def _resolve_subject_display(ta):
+            if ta is None:
+                return ''
+
+            if ta.curriculum_row:
+                code = ta.curriculum_row.course_code or ''
+                name = ta.curriculum_row.course_name or ''
+            elif ta.subject:
+                code = ta.subject.code or ''
+                name = ta.subject.name or ''
+            elif ta.elective_subject:
+                code = ta.elective_subject.course_code or ''
+                name = ta.elective_subject.course_name or ''
+            elif ta.custom_subject:
+                code = ta.custom_subject or ''
+                name = ta.get_custom_subject_display() or ta.custom_subject or ''
+            else:
+                code, name = '', ''
+
+            if code and name:
+                return f'{code} - {name}'
+            return name or code
+
+        staff_name_cache = {}
+
+        def _resolve_staff_names(ta):
+            if ta is None:
+                return ''
+
+            cache_key = (
+                ta.academic_year_id,
+                ta.section_id,
+                ta.curriculum_row_id,
+                ta.subject_id,
+                ta.elective_subject_id,
+                ta.custom_subject,
+            )
+            if cache_key in staff_name_cache:
+                return staff_name_cache[cache_key]
+
+            from academics.models import TeachingAssignment
+
+            assignment_qs = TeachingAssignment.objects.filter(is_active=True).select_related('staff__user')
+
+            if ta.academic_year_id:
+                assignment_qs = assignment_qs.filter(academic_year_id=ta.academic_year_id)
+
+            if ta.curriculum_row_id:
+                assignment_qs = assignment_qs.filter(curriculum_row_id=ta.curriculum_row_id)
+            elif ta.subject_id:
+                assignment_qs = assignment_qs.filter(subject_id=ta.subject_id)
+            elif ta.elective_subject_id:
+                assignment_qs = assignment_qs.filter(elective_subject_id=ta.elective_subject_id)
+            elif ta.custom_subject:
+                assignment_qs = assignment_qs.filter(custom_subject=ta.custom_subject)
+            else:
+                assignment_qs = assignment_qs.filter(id=ta.id)
+
+            if ta.section_id:
+                assignment_qs = assignment_qs.filter(Q(section_id=ta.section_id) | Q(section__isnull=True))
+
+            merged_staff_names = []
+            seen_names = set()
+            for assignment in assignment_qs:
+                staff_user = getattr(getattr(assignment, 'staff', None), 'user', None)
+                if not staff_user:
+                    continue
+                staff_display = staff_user.get_full_name() or staff_user.username
+                if staff_display and staff_display not in seen_names:
+                    seen_names.add(staff_display)
+                    merged_staff_names.append(staff_display)
+
+            if not merged_staff_names and ta.staff and ta.staff.user:
+                fallback_name = ta.staff.user.get_full_name() or ta.staff.user.username
+                if fallback_name:
+                    merged_staff_names.append(fallback_name)
+
+            resolved_staff = ', '.join(merged_staff_names) if merged_staff_names else 'Staff Not Assigned'
+            staff_name_cache[cache_key] = resolved_staff
+            return resolved_staff
+
+        seen_row_keys = set()
+
+        def _subject_dedup_key(ta):
+            if ta is None:
+                return ('NONE', None)
+            if getattr(ta, 'curriculum_row_id', None):
+                return ('CR', ta.curriculum_row_id)
+            if getattr(ta, 'subject_id', None):
+                return ('SUB', ta.subject_id)
+            if getattr(ta, 'elective_subject_id', None):
+                return ('ELEC', ta.elective_subject_id)
+            custom = getattr(ta, 'custom_subject', None)
+            if custom:
+                return ('CUS', str(custom))
+            return ('TA', getattr(ta, 'id', None))
+
+        for response in responses_qs.iterator(chunk_size=2000):
+            user = response.user
+
+            if response.teaching_assignment_id and response.user_id not in user_ta_hints:
+                user_ta_hints[response.user_id] = response.teaching_assignment
+
+            student_name = user.get_full_name() or user.username
+            register_number = user.username
+            department_name = ''
+            year_section = ''
+
+            # Department from the form itself (matches filter semantics).
+            form_dept = getattr(getattr(response, 'feedback_form', None), 'department', None)
+            if form_dept is not None:
+                department_name = getattr(form_dept, 'short_name', None) or getattr(form_dept, 'code', None) or getattr(form_dept, 'name', '')
+
+            student_profile = getattr(user, 'student_profile', None)
+            if student_profile is not None:
+                register_number = getattr(student_profile, 'reg_no', None) or register_number
+                section = getattr(student_profile, 'section', None)
+                if section is not None:
+                    year_label = ''
+                    try:
+                        batch_start_year = int(getattr(getattr(section, 'batch', None), 'start_year', 0) or 0)
+                        if active_ay_start and batch_start_year:
+                            derived_year = active_ay_start - batch_start_year + 1
+                            if 1 <= derived_year <= 8:
+                                year_label = f'Y{derived_year}'
+                    except Exception:
+                        year_label = ''
+
+                    section_label = getattr(section, 'name', '') or ''
+                    year_section = ' / '.join([x for x in [year_label, section_label] if x])
+
+            ta = response.teaching_assignment
+            if ta is None and response.feedback_form.type == 'SUBJECT_FEEDBACK':
+                ta = user_ta_hints.get(user.id)
+
+            subject_display = _resolve_subject_display(ta)
+            staff_name = _resolve_staff_names(ta) if ta is not None else ('' if response.feedback_form.type != 'SUBJECT_FEEDBACK' else 'Staff Not Assigned')
+
+            rating_value = response.answer_star if response.answer_star is not None else ''
+            comment_value = (response.answer_text or '').strip()
+            selected_option_value = (getattr(response, 'selected_option_text', None) or '').strip()
+            if not selected_option_value:
+                selected_option_value = (getattr(response, 'selected_option', None) or '').strip()
+
+            row_key = (
+                response.feedback_form_id,
+                response.user_id,
+                response.question_id,
+                _subject_dedup_key(ta),
+            )
+            if row_key in seen_row_keys:
+                continue
+            seen_row_keys.add(row_key)
+
+            submitted_at = submitted_at_map.get((response.feedback_form_id, response.user_id))
+            if not submitted_at:
+                submitted_at = getattr(response, 'created_at', None)
+            submitted_value = submitted_at.isoformat(sep=' ', timespec='seconds') if submitted_at else ''
+
+            worksheet.append([
+                student_name,
+                register_number,
+                department_name,
+                year_section,
+                subject_display,
+                staff_name,
+                response.question.question,
+                rating_value,
+                comment_value,
+                selected_option_value,
+                submitted_value,
+            ])
+
+        output = BytesIO()
+        workbook.save(output)
+        output.seek(0)
+
+        timestamp = timezone.now().strftime('%Y%m%d_%H%M%S')
+        file_name = f"Feedback_Export_{filter_type}_{timestamp}.xlsx"
+        resp = HttpResponse(
+            output.getvalue(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+        resp['Content-Disposition'] = f'attachment; filename="{file_name}"'
+        return resp
+
+    def get(self, request):
+        return self._export(request, payload=None)
+
+    def post(self, request):
+        payload = request.data if isinstance(request.data, dict) else {}
+        return self._export(request, payload=payload)
 
 
 class GetStudentSubjectsView(APIView):

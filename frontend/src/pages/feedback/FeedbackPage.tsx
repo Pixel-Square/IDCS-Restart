@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MessageSquare, PlusCircle, FileText, Users, Loader2, AlertCircle, X, Trash2, Star, Send, CheckCircle, ChevronDown, ChevronLeft, Pencil, Download } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { MessageSquare, PlusCircle, FileText, Users, Loader2, AlertCircle, X, Trash2, Star, Send, CheckCircle, ChevronDown, ChevronLeft, Pencil, Download, CircleDot } from 'lucide-react';
 import { getCachedMe } from '../../services/auth';
 import fetchWithAuth from '../../services/fetchAuth';
 
@@ -20,6 +21,8 @@ type Question = {
   question: string;
   question_text?: string;
   answer_type?: 'STAR' | 'TEXT' | 'BOTH';  // Legacy field for backward compatibility
+  question_type?: 'rating' | 'text' | 'radio' | 'rating_radio_comment';
+  options?: { id?: number; ui_id?: string; option_text: string }[];
   allow_rating: boolean;
   allow_comment: boolean;
   rating_scale?: string | null;
@@ -147,6 +150,7 @@ type FeedbackForm = {
   class_context_display?: string[];
   active: boolean;
   is_submitted?: boolean;
+  submission_status?: string;
 };
 
 type ResponseStatistics = {
@@ -165,8 +169,10 @@ type ResponseDetail = {
     question_id: number;
     question_text: string;
     answer_type: string;
+    question_type?: string;
     answer_star: number | null;
     answer_text: string | null;
+    selected_option_text?: string | null;
     teaching_assignment?: {
       teaching_assignment_id: number;
       subject_name: string | null;
@@ -196,6 +202,7 @@ type FeedbackResponse = {
   question: number;
   answer_star?: number;
   answer_text?: string;
+  selected_option?: number;
   teaching_assignment_id?: number;  // For subject feedback
 };
 
@@ -303,6 +310,8 @@ const getClassContextLines = (item: {
 };
 
 export default function FeedbackPage() {
+  const navigate = useNavigate();
+
   const resizeTextarea = (textarea: HTMLTextAreaElement) => {
     const MAX_HEIGHT = 240;
     textarea.style.height = 'auto';
@@ -317,12 +326,15 @@ export default function FeedbackPage() {
 
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [formData, setFormData] = useState<FeedbackFormData>(getInitialFormData());
   const [editingFormId, setEditingFormId] = useState<number | null>(null);
   const [newQuestion, setNewQuestion] = useState('');
   const [allowRating, setAllowRating] = useState(true);
   const [allowComment, setAllowComment] = useState(true);
+  const [allowOwnType, setAllowOwnType] = useState(false);
+  const [questionResponseTypeErrors, setQuestionResponseTypeErrors] = useState<Record<string, boolean>>({});
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitSuccess, setSubmitSuccess] = useState(false);
@@ -363,6 +375,8 @@ export default function FeedbackPage() {
   const [selectedSubject, setSelectedSubject] = useState<StudentSubject | null>(null);
   const [currentSubjectResponses, setCurrentSubjectResponses] = useState<Record<number, FeedbackResponse>>({});
   const [commentValidationErrors, setCommentValidationErrors] = useState<Record<number, boolean>>({});
+  const [ratingValidationErrors, setRatingValidationErrors] = useState<Record<number, boolean>>({});
+  const [optionValidationErrors, setOptionValidationErrors] = useState<Record<number, boolean>>({});
 
   // HOD response view states
   const [responseStats, setResponseStats] = useState<Record<number, ResponseStatistics>>({});
@@ -370,6 +384,23 @@ export default function FeedbackPage() {
   const [loadingResponseView, setLoadingResponseView] = useState(false);
   const [responseViewError, setResponseViewError] = useState<string | null>(null);
   const [exportingFormId, setExportingFormId] = useState<number | null>(null);
+
+  const [commonExportOpen, setCommonExportOpen] = useState(false);
+  const [commonExportLoading, setCommonExportLoading] = useState(false);
+  const [commonExportDownloading, setCommonExportDownloading] = useState(false);
+  const [commonExportError, setCommonExportError] = useState<string | null>(null);
+  const [commonExportOptions, setCommonExportOptions] = useState<{
+    departments: { id: number; code: string; short_name: string; name: string }[];
+  } | null>(null);
+  const [commonExportAllDepartments, setCommonExportAllDepartments] = useState(true);
+  const [commonExportSelectedDepartmentIds, setCommonExportSelectedDepartmentIds] = useState<number[]>([]);
+  const [commonExportAllYears, setCommonExportAllYears] = useState(true);
+  const [commonExportSelectedYears, setCommonExportSelectedYears] = useState<number[]>([]);
+  const [commonExportYears, setCommonExportYears] = useState<number[]>([]);
+  const [commonExportYearsLoading, setCommonExportYearsLoading] = useState(false);
+
+  const [commonExportDeptDropdownOpen, setCommonExportDeptDropdownOpen] = useState(false);
+  const [commonExportYearDropdownOpen, setCommonExportYearDropdownOpen] = useState(false);
   
   // Deactivated forms accordion state
   const [showDeactivatedForms, setShowDeactivatedForms] = useState(false);
@@ -378,6 +409,9 @@ export default function FeedbackPage() {
   const departmentDropdownRef = useRef<HTMLDivElement>(null);
   const yearDropdownRef = useRef<HTMLDivElement>(null);
   const sectionDropdownRef = useRef<HTMLDivElement>(null);
+
+  const commonExportDeptDropdownRef = useRef<HTMLDivElement>(null);
+  const commonExportYearDropdownRef = useRef<HTMLDivElement>(null);
 
   // Subjects by year state (for HOD form creation)
   const [subjectsByYear, setSubjectsByYear] = useState<{
@@ -437,8 +471,57 @@ export default function FeedbackPage() {
   const permissions = (user?.permissions || []).map(p => p.toLowerCase());
   const roleNamesUpper = (user?.roles || []).map(r => String(r).toUpperCase());
   const isIQACUser = roleNamesUpper.includes('IQAC');
+  const isStudentUser = String(user?.profile_type || '').toUpperCase() === 'STUDENT' || roleNamesUpper.includes('STUDENT');
   const canCreateFeedback = permissions.includes('feedback.create');
   const canReplyFeedback = permissions.includes('feedback.reply');
+
+  const showToast = (message: string) => {
+    setToastMessage(message);
+    setTimeout(() => setToastMessage(null), 2500);
+  };
+
+  const getQuestionKey = (q: Question, index: number) => String(q.ui_id || q.id || index);
+
+  const isOwnTypeEnabled = (q: Question) => q.question_type === 'radio' || q.question_type === 'rating_radio_comment';
+
+  const deriveNonOwnTypeQuestionType = (q: Question): Question['question_type'] => {
+    if (q.allow_rating) return 'rating';
+    if (q.allow_comment) return 'text';
+    return 'rating';
+  };
+
+  const openFeedbackForm = (form: FeedbackForm) => {
+    const submissionStatus = String(form.submission_status || '').toUpperCase();
+    if (form.is_submitted || submissionStatus === 'SUBMITTED') {
+      if (isStudentUser) {
+        showToast('Feedback already submitted');
+        navigate('/student/feedback');
+      }
+      return;
+    }
+
+    setSelectedForm(form);
+    setCommentValidationErrors({});
+  };
+
+  useEffect(() => {
+    if (!isStudentUser) return;
+    if (!selectedForm) return;
+    const submissionStatus = String(selectedForm.submission_status || '').toUpperCase();
+    if (!selectedForm.is_submitted && submissionStatus !== 'SUBMITTED') return;
+
+    showToast('Feedback already submitted');
+    setSelectedForm(null);
+    setResponses({});
+    setResponseError(null);
+    setStudentSubjects(null);
+    setSelectedSubject(null);
+    setCurrentSubjectResponses({});
+    setCommentValidationErrors({});
+    setRatingValidationErrors({});
+    setOptionValidationErrors({});
+    navigate('/student/feedback');
+  }, [isStudentUser, selectedForm, navigate]);
 
   // Helper function to get available sections based on selected years
   const getAvailableSections = (): ClassOption[] => {
@@ -480,6 +563,13 @@ export default function FeedbackPage() {
       }
       if (sectionDropdownRef.current && !sectionDropdownRef.current.contains(event.target as Node)) {
         setSectionDropdownOpen(false);
+      }
+
+      if (commonExportDeptDropdownRef.current && !commonExportDeptDropdownRef.current.contains(event.target as Node)) {
+        setCommonExportDeptDropdownOpen(false);
+      }
+      if (commonExportYearDropdownRef.current && !commonExportYearDropdownRef.current.contains(event.target as Node)) {
+        setCommonExportYearDropdownOpen(false);
       }
     };
 
@@ -759,6 +849,14 @@ export default function FeedbackPage() {
             question: q.question ?? q.question_text ?? '',
             question_text: q.question_text,
             answer_type: q.answer_type,
+            question_type: q.question_type || 'rating',
+            options: Array.isArray(q.options)
+              ? q.options.map((opt: any) => ({
+                  id: opt.id,
+                  ui_id: `opt-${opt.id || Math.random().toString(16).slice(2)}-${Date.now()}`,
+                  option_text: opt.option_text || '',
+                }))
+              : [],
             allow_rating: typeof q.allow_rating === 'boolean' ? q.allow_rating : Boolean(q.rating_scale),
             allow_comment: typeof q.allow_comment === 'boolean' ? q.allow_comment : Boolean(q.comment_required),
             rating_scale: q.rating_scale ?? null,
@@ -955,6 +1053,199 @@ export default function FeedbackPage() {
     }
   };
 
+  const openCommonExport = async () => {
+    if (!isIQACUser) return;
+    setCommonExportOpen(true);
+    setCommonExportError(null);
+
+    if (commonExportOptions) return;
+    setCommonExportLoading(true);
+    try {
+      const res = await fetchWithAuth('/api/feedback/common-export/options/');
+      if (!res.ok) {
+        let msg = 'Failed to load export options';
+        try {
+          const data = await res.json();
+          msg = data?.detail || msg;
+        } catch {
+          // ignore
+        }
+        throw new Error(msg);
+      }
+      const data = await res.json();
+      setCommonExportOptions(data);
+    } catch (e: any) {
+      setCommonExportError(e?.message || 'Failed to load export options');
+    } finally {
+      setCommonExportLoading(false);
+    }
+  };
+
+  const closeCommonExport = () => {
+    setCommonExportOpen(false);
+    setCommonExportError(null);
+    setCommonExportAllDepartments(true);
+    setCommonExportSelectedDepartmentIds([]);
+    setCommonExportAllYears(true);
+    setCommonExportSelectedYears([]);
+    setCommonExportYears([]);
+    setCommonExportDeptDropdownOpen(false);
+    setCommonExportYearDropdownOpen(false);
+  };
+
+  useEffect(() => {
+    if (!commonExportOpen) return;
+    if (!isIQACUser && !(permissions || []).includes('feedback.analytics_view')) return;
+
+    // Always load years institution-wide (year filtering must work even for All Departments).
+    const controller = new AbortController();
+    const loadYears = async () => {
+      setCommonExportYearsLoading(true);
+      try {
+        const res = await fetchWithAuth('/api/feedback/export-years/', { signal: controller.signal } as any);
+        if (!res.ok) {
+          let msg = 'Failed to load years';
+          try {
+            const data = await res.json();
+            msg = data?.detail || msg;
+          } catch {
+            // ignore
+          }
+          throw new Error(msg);
+        }
+        const data = await res.json();
+        const years = Array.isArray(data?.years) ? data.years : [];
+        setCommonExportYears(years);
+      } catch (e: any) {
+        if (String(e?.name || '') === 'AbortError') return;
+        setCommonExportError(e?.message || 'Failed to load years');
+        setCommonExportYears([]);
+      } finally {
+        setCommonExportYearsLoading(false);
+      }
+    };
+
+    loadYears();
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [commonExportOpen]);
+
+  useEffect(() => {
+    if (!commonExportOpen) return;
+    if (!commonExportAllDepartments) return;
+    const allIds = (commonExportOptions?.departments || []).map((d) => d.id);
+    setCommonExportSelectedDepartmentIds(allIds);
+  }, [commonExportOpen, commonExportAllDepartments, commonExportOptions]);
+
+  useEffect(() => {
+    if (!commonExportOpen) return;
+    if (!commonExportAllYears) return;
+    setCommonExportSelectedYears(commonExportYears);
+  }, [commonExportOpen, commonExportAllYears, commonExportYears]);
+
+  const toggleCommonExportDepartmentId = (deptId: number) => {
+    const allIds = (commonExportOptions?.departments || []).map((d) => d.id);
+    if (commonExportAllDepartments) {
+      setCommonExportAllDepartments(false);
+      setCommonExportSelectedDepartmentIds(allIds.filter((id) => id !== deptId));
+      return;
+    }
+
+    setCommonExportSelectedDepartmentIds((prev) => {
+      if (prev.includes(deptId)) {
+        return prev.filter((id) => id !== deptId);
+      }
+      return [...prev, deptId];
+    });
+  };
+
+  const toggleCommonExportYearValue = (yearValue: number) => {
+    if (commonExportAllYears) {
+      setCommonExportAllYears(false);
+      setCommonExportSelectedYears(commonExportYears.filter((y) => y !== yearValue));
+      return;
+    }
+
+    setCommonExportSelectedYears((prev) => {
+      if (prev.includes(yearValue)) {
+        return prev.filter((y) => y !== yearValue);
+      }
+      return [...prev, yearValue].sort((a, b) => a - b);
+    });
+  };
+
+  const getCommonExportDepartmentSummary = () => {
+    if (commonExportAllDepartments) return 'All Departments Selected';
+    const count = commonExportSelectedDepartmentIds.length;
+    if (count === 0) return 'Select Departments';
+    return `${count} Departments Selected`;
+  };
+
+  const getCommonExportYearSummary = () => {
+    if (commonExportAllYears) return 'All Years Selected';
+    const selected = [...commonExportSelectedYears].sort((a, b) => a - b);
+    if (selected.length === 0) return 'Select Years';
+    return selected.map((y) => 'Year ' + String(y)).join(', ');
+  };
+
+  const handleDownloadCommonExport = async () => {
+    if (!isIQACUser) return;
+    setCommonExportError(null);
+
+    if (!commonExportAllDepartments && commonExportSelectedDepartmentIds.length === 0) {
+      setCommonExportError('Select at least one department or choose All Departments.');
+      return;
+    }
+
+    if (!commonExportAllYears && commonExportSelectedYears.length === 0) {
+      setCommonExportError('Select at least one year or choose All Years.');
+      return;
+    }
+
+    const payload = {
+      all_departments: commonExportAllDepartments,
+      department_ids: commonExportAllDepartments ? [] : commonExportSelectedDepartmentIds,
+      years: commonExportAllYears ? [] : commonExportSelectedYears,
+    };
+
+    setCommonExportDownloading(true);
+    try {
+      const res = await fetchWithAuth('/api/feedback/common-export/', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        let msg = 'Failed to export feedback';
+        try {
+          const data = await res.json();
+          msg = data?.detail || msg;
+        } catch {
+          // ignore
+        }
+        throw new Error(msg);
+      }
+
+      const blob = await res.blob();
+      const contentDisposition = res.headers.get('Content-Disposition') || '';
+      const fileNameMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+      const fileName = fileNameMatch?.[1] || `Feedback_Export_${new Date().toISOString().replace(/[:.]/g, '-')}.xlsx`;
+
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      closeCommonExport();
+    } catch (e: any) {
+      setCommonExportError(e?.message || 'Failed to export feedback');
+    } finally {
+      setCommonExportDownloading(false);
+    }
+  };
+
   // Get department from user profile (for HOD)
   const getDepartmentId = (): number | null => {
     if (user?.profile && user.profile.department_id) {
@@ -966,19 +1257,28 @@ export default function FeedbackPage() {
   const handleAddQuestion = () => {
     if (!newQuestion.trim()) return;
 
-    const isIqacStudentMode = isIQACUser && formData.target_type === 'STUDENT';
-    
-    // Ensure at least one answer method is selected
-    if (!isIqacStudentMode && !allowRating && !allowComment) {
-      alert('Please select at least one answer method (Rating or Comment)');
+    // Ensure at least one response type is selected
+    if (!allowRating && !allowComment && !allowOwnType) {
+      setSubmitError('Select at least one response type.');
       return;
     }
+
+    const ownTypeEnabled = allowOwnType;
+    const questionType: Question['question_type'] = ownTypeEnabled
+      ? (allowRating ? 'rating_radio_comment' : 'radio')
+      : (allowRating ? 'rating' : (allowComment ? 'text' : 'rating'));
+
+    // Keep payload aligned to backend normalization rules.
+    const nextAllowRating = questionType === 'rating_radio_comment' ? true : (questionType === 'radio' ? false : allowRating);
+    const nextAllowComment = ownTypeEnabled ? true : allowComment;
 
     const question: Question = {
       ui_id: `new-${Date.now()}-${formData.questions.length + 1}`,
       question: newQuestion.trim(),
-      allow_rating: isIqacStudentMode ? true : allowRating,
-      allow_comment: isIqacStudentMode ? true : allowComment,
+      question_type: questionType,
+      options: ownTypeEnabled ? ensureMinOwnTypeOptions([]) : [],
+      allow_rating: nextAllowRating,
+      allow_comment: nextAllowComment,
       order: formData.questions.length + 1
     };
 
@@ -991,6 +1291,7 @@ export default function FeedbackPage() {
     // Reset to default: both enabled
     setAllowRating(true);
     setAllowComment(true);
+    setAllowOwnType(false);
   };
 
   const handleRemoveQuestion = (index: number) => {
@@ -1017,27 +1318,135 @@ export default function FeedbackPage() {
     field: 'allow_rating' | 'allow_comment',
     checked: boolean
   ) => {
-    // For IQAC student feedback creation, keep both response modes enabled.
-    if (isIQACUser && formData.target_type === 'STUDENT') {
-      const forcedQuestions = [...formData.questions];
-      forcedQuestions[index] = {
-        ...forcedQuestions[index],
-        allow_rating: true,
-        allow_comment: true,
-      };
-      setFormData({ ...formData, questions: forcedQuestions });
-      return;
-    }
-
     const updatedQuestions = [...formData.questions];
-    const next = { ...updatedQuestions[index], [field]: checked };
+    const current = updatedQuestions[index];
+    let next: Question = { ...current } as Question;
+    const ownTypeEnabled = isOwnTypeEnabled(current);
 
-    // Prevent invalid state where both answer methods are disabled.
-    if (!next.allow_rating && !next.allow_comment) {
-      return;
+    if (field === 'allow_rating') {
+      if (ownTypeEnabled) {
+        // Own Type supports either:
+        // - radio (comment + option)
+        // - rating_radio_comment (rating + comment + option)
+        if (checked) {
+          next.question_type = 'rating_radio_comment';
+          next.allow_rating = true;
+          next.allow_comment = true;
+        } else {
+          next.question_type = 'radio';
+          next.allow_rating = false;
+          next.allow_comment = true;
+        }
+        next.options = ensureMinOwnTypeOptions(next.options);
+      } else {
+        next.allow_rating = checked;
+        next.question_type = deriveNonOwnTypeQuestionType(next);
+        next.options = [];
+      }
+    } else {
+      // allow_comment
+      if (ownTypeEnabled) {
+        if (!checked) {
+          // Backend forces comment ON for Own Type; turning comment off disables Own Type.
+          next = {
+            ...next,
+            allow_comment: false,
+            question_type: deriveNonOwnTypeQuestionType({ ...next, allow_comment: false } as Question),
+            options: [],
+          };
+        } else {
+          next.allow_comment = true;
+        }
+      } else {
+        next.allow_comment = checked;
+        next.question_type = deriveNonOwnTypeQuestionType(next);
+        next.options = [];
+      }
     }
+
+    setQuestionResponseTypeErrors(prev => {
+      const key = getQuestionKey(next, index);
+      if (!prev[key]) return prev;
+      const copy = { ...prev };
+      delete copy[key];
+      return copy;
+    });
 
     updatedQuestions[index] = next;
+    setFormData({ ...formData, questions: updatedQuestions });
+  };
+
+  const ensureMinOwnTypeOptions = (options: { id?: number; ui_id?: string; option_text: string }[] | undefined) => {
+    const next = Array.isArray(options) ? [...options] : [];
+    while (next.length < 2) {
+      next.push({
+        ui_id: `opt-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        option_text: '',
+      });
+    }
+    return next;
+  };
+
+  const handleToggleOwnType = (index: number) => {
+    if (!(isIQACUser && formData.target_type === 'STUDENT')) return;
+
+    const updatedQuestions = [...formData.questions];
+    const q = updatedQuestions[index];
+    const isEnabled = isOwnTypeEnabled(q);
+
+    const next: Question = isEnabled
+      ? {
+          ...q,
+          question_type: deriveNonOwnTypeQuestionType(q),
+          options: [],
+        }
+      : {
+          ...q,
+          question_type: q.allow_rating ? 'rating_radio_comment' : 'radio',
+          allow_rating: q.allow_rating ? true : false,
+          allow_comment: true,
+          options: ensureMinOwnTypeOptions(q.options),
+        };
+
+    setQuestionResponseTypeErrors(prev => {
+      const key = getQuestionKey(next, index);
+      if (!prev[key]) return prev;
+      const copy = { ...prev };
+      delete copy[key];
+      return copy;
+    });
+
+    updatedQuestions[index] = next;
+
+    setFormData({ ...formData, questions: updatedQuestions });
+  };
+
+  const handleAddOption = (questionIndex: number) => {
+    const updatedQuestions = [...formData.questions];
+    const q = updatedQuestions[questionIndex];
+    const nextOptions = [...(q.options || [])];
+    nextOptions.push({
+      ui_id: `opt-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      option_text: '',
+    });
+    updatedQuestions[questionIndex] = { ...q, options: nextOptions };
+    setFormData({ ...formData, questions: updatedQuestions });
+  };
+
+  const handleUpdateOptionText = (questionIndex: number, optionIndex: number, value: string) => {
+    const updatedQuestions = [...formData.questions];
+    const q = updatedQuestions[questionIndex];
+    const nextOptions = [...(q.options || [])];
+    nextOptions[optionIndex] = { ...nextOptions[optionIndex], option_text: value };
+    updatedQuestions[questionIndex] = { ...q, options: nextOptions };
+    setFormData({ ...formData, questions: updatedQuestions });
+  };
+
+  const handleRemoveOption = (questionIndex: number, optionIndex: number) => {
+    const updatedQuestions = [...formData.questions];
+    const q = updatedQuestions[questionIndex];
+    const nextOptions = (q.options || []).filter((_, i) => i !== optionIndex);
+    updatedQuestions[questionIndex] = { ...q, options: nextOptions };
     setFormData({ ...formData, questions: updatedQuestions });
   };
 
@@ -1047,6 +1456,8 @@ export default function FeedbackPage() {
     setNewQuestion('');
     setAllowRating(true);
     setAllowComment(true);
+    setAllowOwnType(false);
+    setQuestionResponseTypeErrors({});
 
     const legacySemesterId = classOptions.semesters.find(
       sem => sem.number === form.semester_number
@@ -1061,6 +1472,14 @@ export default function FeedbackPage() {
         id: q.id,
         ui_id: `saved-${q.id || idx}-${Date.now()}`,
         question: q.question,
+        question_type: (q as any).question_type || 'rating',
+        options: Array.isArray((q as any).options)
+          ? (q as any).options.map((opt: any) => ({
+              id: opt.id,
+              ui_id: `opt-saved-${opt.id || Math.random().toString(16).slice(2)}-${Date.now()}`,
+              option_text: opt.option_text || '',
+            }))
+          : [],
         allow_rating: q.allow_rating,
         allow_comment: q.allow_comment,
         order: q.order || idx + 1,
@@ -1095,17 +1514,37 @@ export default function FeedbackPage() {
       setSubmitError('Please add at least one question');
       return;
     }
+
+    const nextTypeErrors: Record<string, boolean> = {};
     for (let i = 0; i < formData.questions.length; i += 1) {
       const q = formData.questions[i];
       if (!q.question || !q.question.trim()) {
         setSubmitError(`Question ${i + 1} cannot be empty`);
         return;
       }
-      if (!q.allow_rating && !q.allow_comment) {
-        setSubmitError(`Question ${i + 1} must allow rating or comment`);
+      const hasOwnType = isOwnTypeEnabled(q);
+      if (!q.allow_rating && !q.allow_comment && !hasOwnType) {
+        nextTypeErrors[getQuestionKey(q, i)] = true;
+        setQuestionResponseTypeErrors(nextTypeErrors);
+        setSubmitError('Select at least one response type.');
         return;
       }
+
+      if (hasOwnType) {
+        const opts = q.options || [];
+        if (opts.length < 2) {
+          setSubmitError(`Question ${i + 1} must have at least 2 options`);
+          return;
+        }
+        const hasEmpty = opts.some((opt) => !opt.option_text || !opt.option_text.trim());
+        if (hasEmpty) {
+          setSubmitError(`Question ${i + 1} has an empty option`);
+          return;
+        }
+      }
     }
+
+    setQuestionResponseTypeErrors({});
 
     // Validate class selection for student feedback
     if (formData.target_type === 'STUDENT') {
@@ -1153,7 +1592,19 @@ export default function FeedbackPage() {
         all_departments: isIQACUser && allDepartmentsSelected,
         department: formData.department,
         status: formData.status,
-        questions: formData.questions,
+        questions: formData.questions.map((q) => ({
+          id: q.id,
+          question: q.question,
+          allow_rating: q.allow_rating,
+          allow_comment: q.allow_comment,
+          order: q.order,
+          answer_type: q.answer_type,
+          question_type: q.question_type || 'rating',
+          options: (q.options || []).map((opt) => ({
+            id: opt.id,
+            option_text: opt.option_text,
+          })),
+        })),
         year: formData.target_type === 'STUDENT' ? formData.year : null,
         semester: formData.target_type === 'STUDENT' ? formData.semester : null,
         section: formData.target_type === 'STUDENT' ? formData.section : null,
@@ -1223,7 +1674,7 @@ export default function FeedbackPage() {
   };
 
   // Handle response changes
-  const handleResponseChange = (questionId: number, type: 'STAR' | 'TEXT', value: number | string) => {
+  const handleResponseChange = (questionId: number, type: 'STAR' | 'TEXT' | 'OPTION', value: number | string) => {
     // Use currentSubjectResponses when in subject mode, otherwise use responses
     if (selectedSubject) {
       setCurrentSubjectResponses(prev => ({
@@ -1231,7 +1682,11 @@ export default function FeedbackPage() {
         [questionId]: {
           question: questionId,
           ...(prev[questionId] || {}),
-          ...(type === 'STAR' ? { answer_star: value as number } : { answer_text: value as string })
+          ...(type === 'STAR'
+            ? { answer_star: value as number }
+            : type === 'OPTION'
+              ? { selected_option: value as number }
+              : { answer_text: value as string })
         }
       }));
     } else {
@@ -1240,13 +1695,35 @@ export default function FeedbackPage() {
         [questionId]: {
           question: questionId,
           ...(prev[questionId] || {}),
-          ...(type === 'STAR' ? { answer_star: value as number } : { answer_text: value as string })
+          ...(type === 'STAR'
+            ? { answer_star: value as number }
+            : type === 'OPTION'
+              ? { selected_option: value as number }
+              : { answer_text: value as string })
         }
       }));
     }
 
     if (type === 'TEXT' && String(value).trim()) {
       setCommentValidationErrors(prev => {
+        if (!prev[questionId]) return prev;
+        const next = { ...prev };
+        delete next[questionId];
+        return next;
+      });
+    }
+
+    if (type === 'STAR' && Number(value) > 0) {
+      setRatingValidationErrors(prev => {
+        if (!prev[questionId]) return prev;
+        const next = { ...prev };
+        delete next[questionId];
+        return next;
+      });
+    }
+
+    if (type === 'OPTION' && value !== null && value !== undefined) {
+      setOptionValidationErrors(prev => {
         if (!prev[questionId]) return prev;
         const next = { ...prev };
         delete next[questionId];
@@ -1266,17 +1743,42 @@ export default function FeedbackPage() {
       .map((question) => question.id!);
   };
 
+  const getMissingRatingQuestionIds = () => {
+    if (!selectedForm) return [] as number[];
+    const currentResponses = selectedSubject ? currentSubjectResponses : responses;
+    return selectedForm.questions
+      .filter((question) => {
+        if (!question.allow_rating) return false;
+        const rating = currentResponses[question.id!]?.answer_star;
+        return rating === undefined || rating === null;
+      })
+      .map((question) => question.id!);
+  };
+
+  const getMissingOptionQuestionIds = () => {
+    if (!selectedForm) return [] as number[];
+    const currentResponses = selectedSubject ? currentSubjectResponses : responses;
+    return selectedForm.questions
+      .filter((question) => {
+        if (question.question_type !== 'rating_radio_comment' && question.question_type !== 'radio') return false;
+        const selected = currentResponses[question.id!]?.selected_option;
+        return selected === undefined || selected === null;
+      })
+      .map((question) => question.id!);
+  };
+
   const hasAllMandatoryComments = selectedForm ? getMissingCommentQuestionIds().length === 0 : false;
+  const hasAllMandatoryRatings = selectedForm ? getMissingRatingQuestionIds().length === 0 : false;
+  const hasAllMandatoryOptions = selectedForm ? getMissingOptionQuestionIds().length === 0 : false;
 
   // Submit feedback response
   const handleSubmitResponse = async () => {
     if (!selectedForm) return;
 
+    const submittedFormId = selectedForm.id;
+
     // Determine which responses to use based on mode
     const currentResponses = selectedSubject ? currentSubjectResponses : responses;
-
-    // Validate all questions are answered appropriately
-    const validationErrors: string[] = [];
 
     const missingCommentIds = getMissingCommentQuestionIds();
     if (missingCommentIds.length > 0) {
@@ -1288,27 +1790,25 @@ export default function FeedbackPage() {
       setResponseError('Please complete all required fields before submitting');
       return;
     }
-    
-    for (const question of selectedForm.questions) {
-      const response = currentResponses[question.id!];
-      
-      // Check if question requires rating
-      if (question.allow_rating && !question.allow_comment) {
-        // Only rating required
-        if (!response || response.answer_star === undefined) {
-          validationErrors.push(`Question ${question.id}: Rating is required`);
-        }
-      } else if (question.allow_comment && !question.allow_rating) {
-        // Comment already validated above for all questions.
-      } else if (question.allow_rating && question.allow_comment) {
-        // Both allowed - rating is required.
-        if (!response || response.answer_star === undefined) {
-          validationErrors.push(`Question ${question.id}: Rating is required`);
-        }
+
+    const missingRatingIds = getMissingRatingQuestionIds();
+    if (missingRatingIds.length > 0) {
+      const nextErrors: Record<number, boolean> = {};
+      for (const questionId of missingRatingIds) {
+        nextErrors[questionId] = true;
       }
+      setRatingValidationErrors(nextErrors);
+      setResponseError('Please complete all required fields before submitting');
+      return;
     }
-    
-    if (validationErrors.length > 0) {
+
+    const missingOptionIds = getMissingOptionQuestionIds();
+    if (missingOptionIds.length > 0) {
+      const nextErrors: Record<number, boolean> = {};
+      for (const questionId of missingOptionIds) {
+        nextErrors[questionId] = true;
+      }
+      setOptionValidationErrors(nextErrors);
       setResponseError('Please complete all required fields before submitting');
       return;
     }
@@ -1316,6 +1816,8 @@ export default function FeedbackPage() {
     setSubmittingResponse(true);
     setResponseError(null);
     setCommentValidationErrors({});
+    setRatingValidationErrors({});
+    setOptionValidationErrors({});
 
     try {
       // Prepare payload - teaching_assignment_id goes at top level, not in each response
@@ -1372,10 +1874,15 @@ export default function FeedbackPage() {
         setSelectedSubject(null);
         setCurrentSubjectResponses({});
         setCommentValidationErrors({});
+        setRatingValidationErrors({});
+        setOptionValidationErrors({});
         setResponseError(null);
 
         if (submissionStatus === 'SUBMITTED') {
           setResponseSuccess(true);
+          setFeedbackForms(prev => prev.map(f => (
+            f.id === submittedFormId ? { ...f, is_submitted: true, submission_status: 'SUBMITTED' } : f
+          )));
           fetchFeedbackForms();
         }
       } else {
@@ -1384,7 +1891,14 @@ export default function FeedbackPage() {
         setSelectedForm(null);
         setResponses({});
         setCommentValidationErrors({});
+        setRatingValidationErrors({});
+        setOptionValidationErrors({});
         
+        // Update local lock state immediately
+        setFeedbackForms(prev => prev.map(f => (
+          f.id === submittedFormId ? { ...f, is_submitted: true, submission_status: 'SUBMITTED' } : f
+        )));
+
         // Refresh forms list
         fetchFeedbackForms();
 
@@ -1408,6 +1922,8 @@ export default function FeedbackPage() {
     setSelectedSubject(null);
     setCurrentSubjectResponses({});
     setCommentValidationErrors({});
+    setRatingValidationErrors({});
+    setOptionValidationErrors({});
   };
 
   // Handle department switching for HODs with multiple departments
@@ -2122,9 +2638,55 @@ export default function FeedbackPage() {
                         {formData.questions.map((q, index) => (
                           <div key={q.ui_id || q.id || index} className="flex items-start gap-3 p-4 bg-slate-50 rounded-lg border border-slate-200">
                             <div className="flex-1">
-                              <div className="flex items-center gap-2 mb-1">
+                              <div className="flex items-center justify-between gap-2 mb-1">
                                 <span className="text-sm font-medium text-slate-600">Q{index + 1}</span>
+                                <div className="flex items-center gap-4">
+                                  <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                      type="checkbox"
+                                      checked={q.allow_rating}
+                                      onChange={(e) => handleUpdateQuestionType(index, 'allow_rating', e.target.checked)}
+                                      className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-2 focus:ring-indigo-500"
+                                    />
+                                    <span className="text-xs text-slate-700 flex items-center gap-1.5">
+                                      <Star className="w-4 h-4 text-current" aria-hidden="true" />
+                                      Rating
+                                    </span>
+                                  </label>
+                                  <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                      type="checkbox"
+                                      checked={q.allow_comment}
+                                      onChange={(e) => handleUpdateQuestionType(index, 'allow_comment', e.target.checked)}
+                                      className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-2 focus:ring-indigo-500"
+                                    />
+                                    <span className="text-xs text-slate-700 flex items-center gap-1.5">
+                                      <MessageSquare className="w-4 h-4 text-current" aria-hidden="true" />
+                                      Comment
+                                    </span>
+                                  </label>
+
+                                  {(isIQACUser && formData.target_type === 'STUDENT') && (
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                      <input
+                                        type="checkbox"
+                                        checked={isOwnTypeEnabled(q)}
+                                        onChange={() => handleToggleOwnType(index)}
+                                        className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-2 focus:ring-indigo-500"
+                                      />
+                                      <span className="text-xs text-slate-700 flex items-center gap-1.5">
+                                        <CircleDot className="w-4 h-4 text-current" aria-hidden="true" />
+                                        Own Type
+                                      </span>
+                                    </label>
+                                  )}
+                                </div>
                               </div>
+
+                              {questionResponseTypeErrors[getQuestionKey(q, index)] && (
+                                <p className="text-xs text-red-600 mb-2">Select at least one response type.</p>
+                              )}
+
                               <textarea
                                 value={q.question}
                                 onChange={(e) => handleUpdateQuestionText(index, e.target.value)}
@@ -2132,34 +2694,46 @@ export default function FeedbackPage() {
                                 className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-2 resize-none overflow-hidden"
                                 rows={2}
                               />
-                              <div className="flex items-center gap-4">
-                                <label className="flex items-center gap-2 cursor-pointer">
-                                  <input
-                                    type="checkbox"
-                                    checked={q.allow_rating}
-                                    disabled={isIQACUser && formData.target_type === 'STUDENT'}
-                                    onChange={(e) => handleUpdateQuestionType(index, 'allow_rating', e.target.checked)}
-                                    className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-2 focus:ring-indigo-500"
-                                  />
-                                  <span className="text-xs text-slate-700 flex items-center gap-1.5">
-                                    <Star className="w-4 h-4 text-current" aria-hidden="true" />
-                                    Rating
-                                  </span>
-                                </label>
-                                <label className="flex items-center gap-2 cursor-pointer">
-                                  <input
-                                    type="checkbox"
-                                    checked={q.allow_comment}
-                                    disabled={isIQACUser && formData.target_type === 'STUDENT'}
-                                    onChange={(e) => handleUpdateQuestionType(index, 'allow_comment', e.target.checked)}
-                                    className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-2 focus:ring-indigo-500"
-                                  />
-                                  <span className="text-xs text-slate-700 flex items-center gap-1.5">
-                                    <MessageSquare className="w-4 h-4 text-current" aria-hidden="true" />
-                                    Comment
-                                  </span>
-                                </label>
-                              </div>
+
+                              {(isIQACUser && formData.target_type === 'STUDENT' && isOwnTypeEnabled(q)) && (
+                                <div className="mt-3 p-3 bg-white rounded-lg border border-slate-200">
+                                  <div className="flex items-center justify-between mb-2">
+                                    <p className="text-xs font-medium text-slate-700">Options (min 2)</p>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleAddOption(index)}
+                                      className="px-3 py-1 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+                                    >
+                                      Add Option
+                                    </button>
+                                  </div>
+
+                                  <div className="space-y-2">
+                                    {(q.options || []).map((opt, optIdx) => (
+                                      <div key={opt.ui_id || opt.id || optIdx} className="flex items-center gap-2">
+                                        <input
+                                          value={opt.option_text}
+                                          onChange={(e) => handleUpdateOptionText(index, optIdx, e.target.value)}
+                                          placeholder={`Option ${optIdx + 1}`}
+                                          className="flex-1 px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={() => handleRemoveOption(index, optIdx)}
+                                          className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                          title="Remove option"
+                                        >
+                                          <Trash2 className="w-4 h-4" />
+                                        </button>
+                                      </div>
+                                    ))}
+                                  </div>
+
+                                  {(q.options || []).length < 2 && (
+                                    <p className="text-xs text-red-600 mt-2">At least 2 options are required.</p>
+                                  )}
+                                </div>
+                              )}
                             </div>
                             <button
                               type="button"
@@ -2193,7 +2767,6 @@ export default function FeedbackPage() {
                             <input
                               type="checkbox"
                               checked={allowRating}
-                              disabled={isIQACUser && formData.target_type === 'STUDENT'}
                               onChange={(e) => setAllowRating(e.target.checked)}
                               className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-2 focus:ring-indigo-500"
                             />
@@ -2206,8 +2779,13 @@ export default function FeedbackPage() {
                             <input
                               type="checkbox"
                               checked={allowComment}
-                              disabled={isIQACUser && formData.target_type === 'STUDENT'}
-                              onChange={(e) => setAllowComment(e.target.checked)}
+                              onChange={(e) => {
+                                const nextChecked = e.target.checked;
+                                if (!nextChecked && allowOwnType) {
+                                  setAllowOwnType(false);
+                                }
+                                setAllowComment(nextChecked);
+                              }}
                               className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-2 focus:ring-indigo-500"
                             />
                             <span className="text-sm text-slate-700 flex items-center gap-1.5">
@@ -2215,10 +2793,31 @@ export default function FeedbackPage() {
                               Text Comment
                             </span>
                           </label>
+
+                          {(isIQACUser && formData.target_type === 'STUDENT') && (
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={allowOwnType}
+                                onChange={(e) => {
+                                  const nextChecked = e.target.checked;
+                                  setAllowOwnType(nextChecked);
+                                  if (nextChecked) {
+                                    setAllowComment(true);
+                                  }
+                                }}
+                                className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-2 focus:ring-indigo-500"
+                              />
+                              <span className="text-sm text-slate-700 flex items-center gap-1.5">
+                                <CircleDot className="w-4 h-4 text-current" aria-hidden="true" />
+                                Own Type
+                              </span>
+                            </label>
+                          )}
                           <button
                             type="button"
                             onClick={handleAddQuestion}
-                            disabled={!newQuestion.trim() || (!(isIQACUser && formData.target_type === 'STUDENT') && !allowRating && !allowComment)}
+                            disabled={!newQuestion.trim() || (!allowRating && !allowComment && !allowOwnType)}
                             className="ml-auto px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             Add Question
@@ -2285,7 +2884,19 @@ export default function FeedbackPage() {
         {/* HOD: View Created Forms */}
         {canCreateFeedback && !showCreateForm && (
           <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-6 mb-6">
-            <h2 className="text-xl font-semibold text-slate-800 mb-4">Your Feedback Forms</h2>
+            <div className="flex items-center justify-between gap-3 mb-4">
+              <h2 className="text-xl font-semibold text-slate-800">Your Feedback Forms</h2>
+              {isIQACUser && (
+                <button
+                  type="button"
+                  onClick={openCommonExport}
+                  className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors text-sm font-medium flex items-center gap-2"
+                >
+                  <Download className="w-4 h-4" />
+                  Common Export
+                </button>
+              )}
+            </div>
             
             {loadingForms ? (
               <div className="flex items-center justify-center py-12">
@@ -2647,6 +3258,187 @@ export default function FeedbackPage() {
           </div>
         )}
 
+        {/* IQAC Common Export Modal */}
+        {commonExportOpen && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg shadow-xl max-w-lg w-full">
+              <div className="p-5 border-b border-slate-200 flex items-center justify-between">
+                <h3 className="text-lg font-semibold text-slate-800">Common Export</h3>
+                <button
+                  type="button"
+                  onClick={closeCommonExport}
+                  className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+                >
+                  <X className="w-5 h-5 text-slate-600" />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4">
+                {commonExportError && (
+                  <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-800 flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 text-red-600 mt-0.5" />
+                    <span>{commonExportError}</span>
+                  </div>
+                )}
+
+                {commonExportLoading ? (
+                  <div className="flex items-center justify-center py-10">
+                    <Loader2 className="w-6 h-6 text-indigo-600 animate-spin" />
+                  </div>
+                ) : (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-2">Select Departments</label>
+                      <div ref={commonExportDeptDropdownRef} className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setCommonExportDeptDropdownOpen((v) => !v)}
+                          className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 flex items-center justify-between"
+                        >
+                          <span className="text-sm text-slate-700">{getCommonExportDepartmentSummary()}</span>
+                          <ChevronDown className={`w-4 h-4 text-slate-500 transition-transform ${commonExportDeptDropdownOpen ? 'rotate-180' : ''}`} />
+                        </button>
+
+                        {commonExportDeptDropdownOpen && (
+                          <div className="absolute z-50 mt-2 w-full bg-white border border-slate-200 rounded-lg shadow-lg p-3 max-h-60 overflow-auto">
+                            <label className="flex items-center gap-2 text-sm text-slate-700 select-none mb-2">
+                              <input
+                                type="checkbox"
+                                checked={commonExportAllDepartments}
+                                onChange={(e) => {
+                                  const next = e.target.checked;
+                                  if (next) {
+                                    const allIds = (commonExportOptions?.departments || []).map((d) => d.id);
+                                    setCommonExportAllDepartments(true);
+                                    setCommonExportSelectedDepartmentIds(allIds);
+                                  } else {
+                                    setCommonExportAllDepartments(false);
+                                    setCommonExportSelectedDepartmentIds([]);
+                                  }
+                                }}
+                                className="h-4 w-4 accent-indigo-600"
+                              />
+                              <span className="font-medium">All Departments</span>
+                            </label>
+
+                            {(commonExportOptions?.departments || []).length === 0 ? (
+                              <p className="text-sm text-slate-500 px-2 py-1">No departments available.</p>
+                            ) : (
+                              <div className="space-y-2">
+                                {(commonExportOptions?.departments || []).map((d) => {
+                                  const label = d.short_name || d.code || d.name;
+                                  const checked = commonExportSelectedDepartmentIds.includes(d.id) || commonExportAllDepartments;
+                                  return (
+                                    <label
+                                      key={d.id}
+                                      className="flex items-center gap-2 text-sm text-slate-700 px-2 py-1 rounded hover:bg-slate-50 select-none cursor-pointer"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onChange={() => toggleCommonExportDepartmentId(d.id)}
+                                        className="h-4 w-4 accent-indigo-600"
+                                      />
+                                      <span>{label}</span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-2">Select Years</label>
+                      <div ref={commonExportYearDropdownRef} className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setCommonExportYearDropdownOpen((v) => !v)}
+                          className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 flex items-center justify-between"
+                        >
+                          <span className="text-sm text-slate-700">{getCommonExportYearSummary()}</span>
+                          <ChevronDown className={`w-4 h-4 text-slate-500 transition-transform ${commonExportYearDropdownOpen ? 'rotate-180' : ''}`} />
+                        </button>
+
+                        {commonExportYearDropdownOpen && (
+                          <div className="absolute z-50 mt-2 w-full bg-white border border-slate-200 rounded-lg shadow-lg p-3 max-h-60 overflow-auto">
+                            <label className="flex items-center gap-2 text-sm text-slate-700 select-none mb-2">
+                              <input
+                                type="checkbox"
+                                checked={commonExportAllYears}
+                                onChange={(e) => {
+                                  const next = e.target.checked;
+                                  if (next) {
+                                    setCommonExportAllYears(true);
+                                    setCommonExportSelectedYears(commonExportYears);
+                                  } else {
+                                    setCommonExportAllYears(false);
+                                    setCommonExportSelectedYears([]);
+                                  }
+                                }}
+                                className="h-4 w-4 accent-indigo-600"
+                              />
+                              <span className="font-medium">All Years</span>
+                            </label>
+
+                            {commonExportYearsLoading ? (
+                              <p className="text-sm text-slate-500 px-2 py-1">Loading years...</p>
+                            ) : commonExportYears.length === 0 ? (
+                              <p className="text-sm text-slate-500 px-2 py-1">No years available.</p>
+                            ) : (
+                              <div className="space-y-2">
+                                {commonExportYears.map((y) => {
+                                  const checked = commonExportSelectedYears.includes(y) || commonExportAllYears;
+                                  return (
+                                    <label
+                                      key={y}
+                                      className="flex items-center gap-2 text-sm text-slate-700 px-2 py-1 rounded hover:bg-slate-50 select-none cursor-pointer"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onChange={() => toggleCommonExportYearValue(y)}
+                                        className="h-4 w-4 accent-indigo-600"
+                                      />
+                                      <span>Year {y}</span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div className="p-5 border-t border-slate-200 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={closeCommonExport}
+                  disabled={commonExportDownloading}
+                  className="px-5 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadCommonExport}
+                  disabled={commonExportDownloading || commonExportLoading}
+                  className="px-5 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors disabled:opacity-50 flex items-center gap-2"
+                >
+                  {commonExportDownloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                  {commonExportDownloading ? 'Exporting...' : 'Export'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Response List Modal (HOD) */}
         {(selectedResponseView || responseViewError) && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -2811,6 +3603,13 @@ export default function FeedbackPage() {
                                               "{answer.answer_text}"
                                             </p>
                                           )}
+
+                                          {/* Radio selected option (Own Type / Radio questions) */}
+                                          {answer.selected_option_text && answer.selected_option_text.trim() !== '' && (
+                                            <p className="text-[10px] text-slate-700 mt-0.5">
+                                              <span className="font-semibold">Selected Option:</span> {answer.selected_option_text}
+                                            </p>
+                                          )}
                                         </div>
                                       ))}
                                     </div>
@@ -2869,6 +3668,13 @@ export default function FeedbackPage() {
                                     {answer.answer_text && answer.answer_text.trim() !== '' && (
                                       <p className="text-xs text-slate-700 bg-white p-1.5 rounded border border-slate-200 italic leading-snug">
                                         "{answer.answer_text}"
+                                      </p>
+                                    )}
+
+                                    {/* Display radio selected option if provided */}
+                                    {answer.selected_option_text && answer.selected_option_text.trim() !== '' && (
+                                      <p className="text-xs text-slate-700 mt-1">
+                                        <span className="font-semibold">Selected Option:</span> {answer.selected_option_text}
                                       </p>
                                     )}
                                     
@@ -2970,6 +3776,19 @@ export default function FeedbackPage() {
         {canReplyFeedback && !canCreateFeedback && !selectedForm && (
           <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-6">
             <h2 className="text-xl font-semibold text-slate-800 mb-4">Available Feedback Forms</h2>
+
+            {toastMessage && (
+              <div className="mb-4 bg-slate-900 text-white px-4 py-3 rounded-lg flex items-center justify-between">
+                <span className="text-sm">{toastMessage}</span>
+                <button
+                  onClick={() => setToastMessage(null)}
+                  className="p-1 rounded hover:bg-white/10"
+                  aria-label="Close"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
             
             {loadingForms ? (
               <div className="flex items-center justify-center py-12">
@@ -2993,67 +3812,89 @@ export default function FeedbackPage() {
                     className={`p-5 border border-slate-200 rounded-lg transition-all ${
                       form.is_submitted 
                         ? 'opacity-75' 
-                        : 'hover:border-indigo-300 hover:shadow-md cursor-pointer'
+                        : isStudentUser
+                          ? ''
+                          : 'hover:border-indigo-300 hover:shadow-md cursor-pointer'
                     }`}
                     onClick={() => {
-                      if (!form.is_submitted) {
-                        console.log('Opening feedback form:', form);
-                        setSelectedForm(form);
-                        setCommentValidationErrors({});
-                      }
+                      if (isStudentUser) return;
+                      openFeedbackForm(form);
                     }}
                   >
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-2">
-                          <h3 className="text-lg font-semibold text-slate-800">
-                            {form.type === 'SUBJECT_FEEDBACK' ? 'Subject Feedback' : 'Common Feedback'}
-                          </h3>
-                          <span className={`text-xs px-2 py-1 rounded-full ${
-                            form.type === 'SUBJECT_FEEDBACK' 
-                              ? 'bg-green-100 text-green-800' 
-                              : 'bg-blue-100 text-blue-800'
-                          }`}>
-                            {form.type === 'SUBJECT_FEEDBACK' ? 'About Subjects' : 'General'}
-                          </span>
-                          <span className={`text-xs px-2 py-1 rounded-full ${
-                            form.is_submitted ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'
-                          }`}>
-                            {form.is_submitted ? 'Responded' : 'Pending'}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-4 text-sm text-slate-600">
-                          <span className="flex items-start gap-1">
-                            <Users className="w-4 h-4 mt-0.5" />
-                            <span className="leading-tight">
-                              {getClassContextLines(form).map((line, idx) => (
-                                <span key={`${form.id}-reply-ctx-${idx}`} className="block">
-                                  {line}
+                        {isStudentUser ? (
+                          <>
+                            <h3 className="text-lg font-semibold text-slate-800 mb-2">
+                              {form.context_display || form.target_display || (form.type === 'SUBJECT_FEEDBACK' ? 'Subject Feedback' : 'Feedback')}
+                            </h3>
+                            <div className="flex items-center gap-1 text-sm text-slate-600">
+                              <FileText className="w-4 h-4" />
+                              {form.questions.length} questions
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="flex items-center gap-2 mb-2">
+                              <h3 className="text-lg font-semibold text-slate-800">
+                                {form.type === 'SUBJECT_FEEDBACK' ? 'Subject Feedback' : 'Common Feedback'}
+                              </h3>
+                              <span className={`text-xs px-2 py-1 rounded-full ${
+                                form.type === 'SUBJECT_FEEDBACK' 
+                                  ? 'bg-green-100 text-green-800' 
+                                  : 'bg-blue-100 text-blue-800'
+                              }`}>
+                                {form.type === 'SUBJECT_FEEDBACK' ? 'About Subjects' : 'General'}
+                              </span>
+                              <span className={`text-xs px-2 py-1 rounded-full ${
+                                form.is_submitted ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'
+                              }`}>
+                                {form.is_submitted ? 'Responded' : 'Pending'}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-4 text-sm text-slate-600">
+                              <span className="flex items-start gap-1">
+                                <Users className="w-4 h-4 mt-0.5" />
+                                <span className="leading-tight">
+                                  {getClassContextLines(form).map((line, idx) => (
+                                    <span key={`${form.id}-reply-ctx-${idx}`} className="block">
+                                      {line}
+                                    </span>
+                                  ))}
                                 </span>
-                              ))}
-                            </span>
-                          </span>
-                          <span className="flex items-center gap-1">
-                            <FileText className="w-4 h-4" />
-                            {form.questions.length} questions
-                          </span>
-                          <span className="flex items-center gap-1">
-                            <MessageSquare className="w-4 h-4" />
-                            Created by {form.created_by_name}
-                          </span>
-                        </div>
+                              </span>
+                              <span className="flex items-center gap-1">
+                                <FileText className="w-4 h-4" />
+                                {form.questions.length} questions
+                              </span>
+                              <span className="flex items-center gap-1">
+                                <MessageSquare className="w-4 h-4" />
+                                Created by {form.created_by_name}
+                              </span>
+                            </div>
+                          </>
+                        )}
                       </div>
                       {form.is_submitted ? (
-                        <div className="flex items-center gap-2 px-4 py-2 bg-green-50 text-green-700 rounded-lg border border-green-200">
-                          <CheckCircle className="w-5 h-5" />
-                          <span className="font-medium">Responded</span>
-                        </div>
+                        isStudentUser ? (
+                          <button
+                            type="button"
+                            disabled
+                            className="px-4 py-2 bg-slate-200 text-slate-600 rounded-lg cursor-not-allowed"
+                          >
+                            Submitted
+                          </button>
+                        ) : (
+                          <div className="flex items-center gap-2 px-4 py-2 bg-green-50 text-green-700 rounded-lg border border-green-200">
+                            <CheckCircle className="w-5 h-5" />
+                            <span className="font-medium">Responded</span>
+                          </div>
+                        )
                       ) : (
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            setSelectedForm(form);
-                            setCommentValidationErrors({});
+                            openFeedbackForm(form);
                           }}
                           className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
                         >
@@ -3080,6 +3921,8 @@ export default function FeedbackPage() {
                       onClick={() => {
                         setSelectedSubject(null);
                         setCommentValidationErrors({});
+                        setRatingValidationErrors({});
+                        setOptionValidationErrors({});
                       }}
                       className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
                       title="Back to subjects"
@@ -3158,14 +4001,18 @@ export default function FeedbackPage() {
                           {studentSubjects.subjects.map((subject) => (
                             <button
                               key={subject.teaching_assignment_id}
+                              disabled={subject.is_completed}
                               onClick={() => {
+                                if (subject.is_completed) return;
                                 setSelectedSubject(subject);
                                 setCurrentSubjectResponses({});
                                 setCommentValidationErrors({});
+                                setRatingValidationErrors({});
+                                setOptionValidationErrors({});
                               }}
                               className={`p-4 rounded-lg border-2 transition-all text-left ${
                                 subject.is_completed
-                                  ? 'border-green-300 bg-green-50 hover:bg-green-100'
+                                  ? 'border-green-300 bg-green-50 opacity-75 cursor-not-allowed'
                                   : 'border-slate-300 bg-white hover:border-indigo-400 hover:bg-indigo-50'
                               }`}
                             >
@@ -3270,6 +4117,9 @@ export default function FeedbackPage() {
                               );
                             })}
                           </div>
+                          {ratingValidationErrors[question.id!] && (
+                            <p className="text-xs text-red-600 mt-2">Rating is required</p>
+                          )}
                         </div>
                       )}
 
@@ -3293,6 +4143,49 @@ export default function FeedbackPage() {
                           <p className="text-xs text-red-600 mt-2">Comment is required</p>
                         )}
                       </div>
+
+                      {(question.question_type === 'rating_radio_comment' || question.question_type === 'radio') && (
+                        <div>
+                          <p className="text-sm font-medium text-slate-700 mb-2">
+                            Choose one option <span className="text-red-500">*</span>
+                          </p>
+                          <div className="flex flex-wrap gap-3">
+                            {(question.options || []).map((opt) => {
+                              const currentResponses = selectedSubject ? currentSubjectResponses : responses;
+                              const selected = currentResponses[question.id!]?.selected_option;
+                              const checked = opt?.id !== undefined && selected === opt.id;
+                              const radioId = `q-${question.id}-opt-${opt.id}`;
+
+                              return (
+                                <label
+                                  key={opt.ui_id || opt.id}
+                                  htmlFor={radioId}
+                                  className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition-colors w-auto min-w-[90px] ${
+                                    checked ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 hover:border-slate-300'
+                                  }`}
+                                >
+                                  <input
+                                    id={radioId}
+                                    type="radio"
+                                    name={`q-${question.id}-opt`}
+                                    checked={checked}
+                                    onChange={() => {
+                                      if (opt?.id !== undefined) {
+                                        handleResponseChange(question.id!, 'OPTION', opt.id);
+                                      }
+                                    }}
+                                    className="w-4 h-4 text-indigo-600 border-slate-300 focus:ring-2 focus:ring-indigo-500"
+                                  />
+                                  <span className="text-sm text-slate-800">{opt.option_text}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                          {optionValidationErrors[question.id!] && (
+                            <p className="text-xs text-red-600 mt-2">Please select an option</p>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -3302,7 +4195,7 @@ export default function FeedbackPage() {
                   <div className="flex items-center gap-3 pt-4 border-t border-slate-200">
                     <button
                       onClick={handleSubmitResponse}
-                      disabled={submittingResponse || !hasAllMandatoryComments}
+                      disabled={submittingResponse || !hasAllMandatoryComments || !hasAllMandatoryRatings || !hasAllMandatoryOptions}
                       className="flex-1 px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-md font-medium"
                     >
                       {submittingResponse ? (
@@ -3321,6 +4214,8 @@ export default function FeedbackPage() {
                       onClick={selectedSubject ? () => {
                         setSelectedSubject(null);
                         setCommentValidationErrors({});
+                        setRatingValidationErrors({});
+                        setOptionValidationErrors({});
                       } : handleCloseForm}
                       disabled={submittingResponse}
                       className="px-6 py-3 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 transition-colors disabled:opacity-50"

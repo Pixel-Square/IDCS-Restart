@@ -127,6 +127,13 @@ class FeedbackForm(models.Model):
 
 class FeedbackQuestion(models.Model):
     """Questions within a feedback form."""
+
+    QUESTION_TYPE_CHOICES = (
+        ('rating', 'Rating'),
+        ('text', 'Text'),
+        ('radio', 'Radio + Comment'),
+        ('rating_radio_comment', 'Rating + Radio + Comment'),
+    )
     
     ANSWER_TYPE_CHOICES = (
         ('STAR', 'Star Rating'),
@@ -151,6 +158,12 @@ class FeedbackQuestion(models.Model):
     )
     
     # New flexible fields
+    question_type = models.CharField(
+        max_length=50,
+        choices=QUESTION_TYPE_CHOICES,
+        default='rating',
+        help_text='Question rendering/validation type. Defaults to rating for backward compatibility.'
+    )
     allow_rating = models.BooleanField(
         default=True,
         help_text='Allow star rating (1-5) for this question'
@@ -158,6 +171,13 @@ class FeedbackQuestion(models.Model):
     allow_comment = models.BooleanField(
         default=True,
         help_text='Allow text comment for this question'
+    )
+
+    # Legacy/compat field (exists in DB as NOT NULL, no default).
+    # Keep it aligned with allow_comment to prevent insert failures.
+    comment_enabled = models.BooleanField(
+        default=True,
+        help_text='Legacy field. Mirrors allow_comment.'
     )
     
     order = models.PositiveIntegerField(
@@ -175,6 +195,28 @@ class FeedbackQuestion(models.Model):
     
     def __str__(self):
         return f"Q{self.order}: {self.question[:50]}..."
+
+
+class FeedbackQuestionOption(models.Model):
+    """Radio options for own-type questions."""
+
+    question = models.ForeignKey(
+        FeedbackQuestion,
+        on_delete=models.CASCADE,
+        related_name='options',
+        help_text='Question this option belongs to'
+    )
+    option_text = models.CharField(max_length=255, help_text='Option label')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'feedback_question_options'
+        verbose_name = 'Feedback Question Option'
+        verbose_name_plural = 'Feedback Question Options'
+        ordering = ['id']
+
+    def __str__(self):
+        return f"Option({self.question_id}): {self.option_text[:50]}"
 
 
 class FeedbackResponse(models.Model):
@@ -217,6 +259,14 @@ class FeedbackResponse(models.Model):
     answer_text = models.TextField(
         blank=True,
         help_text='Text response, used when answer_type is TEXT'
+    )
+
+    selected_option_text = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        db_column='selected_option_text',
+        help_text='Selected radio option text (for radio / rating_radio_comment questions)'
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

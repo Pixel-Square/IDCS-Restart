@@ -1,7 +1,13 @@
 from rest_framework import serializers
 from django.db import transaction
 from django.db.models import Q
-from .models import FeedbackForm, FeedbackQuestion, FeedbackResponse, FeedbackFormSubmission
+from .models import (
+    FeedbackForm,
+    FeedbackQuestion,
+    FeedbackQuestionOption,
+    FeedbackResponse,
+    FeedbackFormSubmission,
+)
 from academics.models import Department
 from django.contrib.auth import get_user_model
 
@@ -105,15 +111,112 @@ def get_subject_feedback_completion(feedback_form, user):
 
 class FeedbackQuestionSerializer(serializers.ModelSerializer):
     """Serializer for FeedbackQuestion model."""
+
+    class FeedbackQuestionOptionSerializer(serializers.ModelSerializer):
+        class Meta:
+            model = FeedbackQuestionOption
+            fields = ['id', 'option_text']
+
+    options = FeedbackQuestionOptionSerializer(many=True, required=False)
+    question_type = serializers.ChoiceField(
+        choices=FeedbackQuestion.QUESTION_TYPE_CHOICES,
+        required=False,
+    )
     
     class Meta:
         model = FeedbackQuestion
-        fields = ['id', 'question', 'answer_type', 'allow_rating', 'allow_comment', 'order']
+        fields = [
+            'id',
+            'question',
+            'question_type',
+            'answer_type',
+            'allow_rating',
+            'allow_comment',
+            'order',
+            'options',
+        ]
+
+    def _user_is_iqac(self, user) -> bool:
+        if not user or not getattr(user, 'is_authenticated', False):
+            return False
+
+        role_names = set(
+            user.roles.values_list('name', flat=True)
+        ) if hasattr(user, 'roles') else set()
+        role_names_upper = {str(name).upper() for name in role_names}
+        if 'IQAC' in role_names_upper:
+            return True
+
+        try:
+            from academics.models import RoleAssignment
+            return RoleAssignment.objects.filter(user=user, role__name__iexact='IQAC').exists()
+        except Exception:
+            return False
         
     def validate(self, data):
         """Ensure at least one answer method is enabled."""
+        request = self.context.get('request')
+        user = getattr(request, 'user', None) if request else None
+
+        question_type = (data.get('question_type') or 'rating').strip()
+        options = data.get('options', None)
+
         allow_rating = data.get('allow_rating', True)
         allow_comment = data.get('allow_comment', True)
+
+        # Restrict advanced question types to IQAC only.
+        if question_type in {'rating_radio_comment', 'radio'} and not self._user_is_iqac(user):
+            raise serializers.ValidationError({
+                'question_type': 'Own Type questions are allowed only for IQAC.'
+            })
+
+        # Normalize behavior by question type.
+        # - rating: honor allow_rating/allow_comment
+        # - text: comment only
+        # - radio: comment + radio (options required)
+        # - rating_radio_comment: rating + comment + radio (options required)
+        if question_type == 'text':
+            allow_rating = False
+            allow_comment = True
+            data['allow_rating'] = False
+            data['allow_comment'] = True
+
+        if question_type == 'radio':
+            allow_rating = False
+            allow_comment = True
+            data['allow_rating'] = False
+            data['allow_comment'] = True
+
+        # Own type enforces rating + comment and requires >=2 radio options.
+        if question_type == 'rating_radio_comment':
+            allow_rating = True
+            allow_comment = True
+            data['allow_rating'] = True
+            data['allow_comment'] = True
+
+        if question_type in {'radio', 'rating_radio_comment'}:
+            if options is None:
+                raise serializers.ValidationError({
+                    'options': 'At least two options are required for radio questions.'
+                })
+            if not isinstance(options, list) or len(options) < 2:
+                raise serializers.ValidationError({
+                    'options': 'At least two options are required for radio questions.'
+                })
+            normalized = []
+            for idx, opt in enumerate(options):
+                if isinstance(opt, dict):
+                    text = (opt.get('option_text') or '').strip()
+                else:
+                    text = ''
+                if not text:
+                    raise serializers.ValidationError({
+                        'options': f'Option {idx + 1} cannot be empty.'
+                    })
+                normalized.append({'option_text': text})
+            data['options'] = normalized
+
+        data['question_type'] = question_type
         
         # If both are provided, at least one must be True
         if not allow_rating and not allow_comment:
@@ -179,15 +282,24 @@ class FeedbackFormSerializer(serializers.ModelSerializer):
         if is_creator_view:
             return FeedbackQuestionSerializer(questions_qs, many=True).data
 
-        return [
-            {
+        payload = []
+        for q in questions_qs:
+            entry = {
                 'question_id': q.id,
                 'question_text': q.question,
+                'question_type': getattr(q, 'question_type', 'rating') or 'rating',
+                'allow_rating': bool(q.allow_rating),
+                'allow_comment': bool(q.allow_comment),
                 'rating_scale': '1-5' if q.allow_rating else None,
                 'comment_required': bool(q.allow_comment),
             }
-            for q in questions_qs
-        ]
+            if entry['question_type'] in {'rating_radio_comment', 'radio'}:
+                entry['options'] = [
+                    {'id': opt.id, 'option_text': opt.option_text}
+                    for opt in q.options.all().order_by('id')
+                ]
+            payload.append(entry)
+        return payload
 
     def _get_section_display_entries(self, obj):
         """Build unique and ordered section display entries: Dept - Yx - Section A."""
@@ -501,14 +613,68 @@ class FeedbackFormCreateSerializer(serializers.ModelSerializer):
                     # Both enabled by default
                     pass
                 
-                FeedbackQuestion.objects.create(
+                question_type = (question_data.get('question_type') or 'rating').strip()
+                options = question_data.get('options', []) or []
+
+                if question_type not in {'rating', 'text', 'radio', 'rating_radio_comment'}:
+                    raise serializers.ValidationError({
+                        'questions': f'Invalid question_type: {question_type}'
+                    })
+
+                if question_type == 'text':
+                    allow_rating = False
+                    allow_comment = True
+                    answer_type = 'TEXT'
+
+                if question_type == 'radio':
+                    allow_rating = False
+                    allow_comment = True
+                    answer_type = 'TEXT'
+
+                if question_type in {'radio', 'rating_radio_comment'}:
+                    if not isinstance(options, list) or len(options) < 2:
+                        raise serializers.ValidationError({
+                            'questions': 'At least two options are required for radio questions.'
+                        })
+                    for idx_opt, opt in enumerate(options):
+                        text = ''
+                        if isinstance(opt, dict):
+                            text = str(opt.get('option_text', '')).strip()
+                        if not text:
+                            raise serializers.ValidationError({
+                                'questions': f'Option {idx_opt + 1} cannot be empty.'
+                            })
+
+                # Own type always forces both enabled.
+                if question_type == 'rating_radio_comment':
+                    allow_rating = True
+                    allow_comment = True
+                    answer_type = 'BOTH'
+
+                created_question = FeedbackQuestion.objects.create(
                     feedback_form=feedback_form,
                     order=question_data.get('order', idx + 1),
                     question=question_data['question'],
+                    question_type=question_type,
                     answer_type=answer_type,
                     allow_rating=allow_rating,
-                    allow_comment=allow_comment
+                    allow_comment=allow_comment,
+                    comment_enabled=allow_comment,
                 )
+
+                if question_type in {'radio', 'rating_radio_comment'}:
+                    for opt in options:
+                        text = ''
+                        if isinstance(opt, dict):
+                            text = str(opt.get('option_text', '')).strip()
+                        if text:
+                            FeedbackQuestionOption.objects.create(
+                                question=created_question,
+                                option_text=text,
+                            )
+                else:
+                    # Ensure no stray options if provided.
+                    created_question.options.all().delete()
         
         return feedback_form
 
@@ -519,6 +685,7 @@ class FeedbackResponseSerializer(serializers.Serializer):
     question = serializers.IntegerField(required=True)
     answer_star = serializers.IntegerField(required=False, min_value=1, max_value=5)
     answer_text = serializers.CharField(required=False, allow_blank=True)
+    selected_option = serializers.IntegerField(required=False, allow_null=True)
 
 
 class FeedbackSubmissionSerializer(serializers.Serializer):
@@ -559,12 +726,20 @@ class FeedbackSubmissionSerializer(serializers.Serializer):
             })
         
         # Build question dict with allow_rating and allow_comment info
+        question_ids = list(questions.values_list('id', flat=True))
+        options_by_question = {}
+        if question_ids:
+            for row in FeedbackQuestionOption.objects.filter(question_id__in=question_ids).values('id', 'question_id'):
+                options_by_question.setdefault(row['question_id'], set()).add(row['id'])
+
         question_dict = {
             q.id: {
                 'allow_rating': q.allow_rating,
                 'allow_comment': q.allow_comment,
-                'answer_type': q.answer_type  # For backward compatibility
-            } 
+                'answer_type': q.answer_type,  # For backward compatibility
+                'question_type': getattr(q, 'question_type', 'rating') or 'rating',
+                'option_ids': options_by_question.get(q.id, set()),
+            }
             for q in questions
         }
         
@@ -586,10 +761,45 @@ class FeedbackSubmissionSerializer(serializers.Serializer):
             allow_comment = question_info['allow_comment']
             answer_star = response.get('answer_star')
             answer_text = response.get('answer_text')
+            selected_option = response.get('selected_option')
 
             # Comment is mandatory for every question across all feedback forms.
             if not answer_text or not str(answer_text).strip():
                 errors.append('Comment is mandatory for all feedback questions.')
+                continue
+
+            if question_info.get('question_type') == 'rating_radio_comment':
+                # Rating + comment + radio are mandatory.
+                if answer_star is None:
+                    errors.append(f'Question {question_id} requires a star rating (1-5)')
+                    continue
+                if not isinstance(answer_star, int) or answer_star < 1 or answer_star > 5:
+                    errors.append(f'Question {question_id}: Star rating must be between 1 and 5')
+                    continue
+                if selected_option is None:
+                    errors.append(f'Question {question_id} requires selecting one option')
+                    continue
+                try:
+                    selected_option_int = int(selected_option)
+                except Exception:
+                    errors.append(f'Question {question_id}: Invalid selected option')
+                    continue
+                if selected_option_int not in (question_info.get('option_ids') or set()):
+                    errors.append(f'Question {question_id}: Selected option is invalid')
+                continue
+
+            if question_info.get('question_type') == 'radio':
+                # Comment + radio are mandatory; rating is not used.
+                if selected_option is None:
+                    errors.append(f'Question {question_id} requires selecting one option')
+                    continue
+                try:
+                    selected_option_int = int(selected_option)
+                except Exception:
+                    errors.append(f'Question {question_id}: Invalid selected option')
+                    continue
+                if selected_option_int not in (question_info.get('option_ids') or set()):
+                    errors.append(f'Question {question_id}: Selected option is invalid')
                 continue
             
             # Validate based on what's allowed
@@ -632,16 +842,43 @@ class FeedbackSubmissionSerializer(serializers.Serializer):
             except TeachingAssignment.DoesNotExist:
                 pass
         
+        # Resolve option-id -> option-text in one query (keeps export stable even if IDs change).
+        selected_option_ids = []
+        for response_data in responses:
+            opt = response_data.get('selected_option')
+            if opt is None:
+                continue
+            try:
+                selected_option_ids.append(int(opt))
+            except Exception:
+                continue
+
+        option_text_by_id = {}
+        if selected_option_ids:
+            option_text_by_id = dict(
+                FeedbackQuestionOption.objects.filter(id__in=selected_option_ids)
+                .values_list('id', 'option_text')
+            )
+
         with transaction.atomic():
             # Create new responses
             for response_data in responses:
+                selected_option_id = response_data.get('selected_option')
+                selected_option_text = None
+                if selected_option_id is not None:
+                    try:
+                        selected_option_text = option_text_by_id.get(int(selected_option_id))
+                    except Exception:
+                        selected_option_text = None
+
                 FeedbackResponse.objects.create(
                     feedback_form_id=feedback_form_id,
                     user=user,
                     question_id=response_data['question'],
                     answer_star=response_data.get('answer_star'),
                     answer_text=str(response_data.get('answer_text', '')).strip(),
-                    teaching_assignment=teaching_assignment
+                    teaching_assignment=teaching_assignment,
+                    selected_option_text=selected_option_text,
                 )
         
         return FeedbackForm.objects.get(id=feedback_form_id)
