@@ -370,6 +370,44 @@ function buildInternalSchema(classType: string | null, enabledSet: Set<string>):
   return { visible, header, cycles: cyc, labels: lab };
 }
 
+function tcplCoMarks(labSheet: any, co: 1 | 2, maxMarks: number) {
+  if (!labSheet || typeof labSheet !== 'object') return { total: null, attainment: null };
+  const questions: Array<{ key: string; max: number; co?: number | string }> = Array.isArray(labSheet.questions) ? labSheet.questions : [];
+  const rows: Record<string, any> = typeof labSheet.rowsByStudentId === 'object' ? labSheet.rowsByStudentId : {};
+  if (!questions.length || !Object.keys(rows).length) return { total: null, attainment: null };
+
+  const coQuestions = questions.filter((q) => {
+    const qCo = String(q.co || '').trim();
+    if (qCo === String(co)) return true;
+    // Handle legacy '1&2' as both
+    if (qCo === '1&2') return true;
+    return false;
+  });
+
+  if (!coQuestions.length) return { total: null, attainment: null };
+
+  const maxCoTotal = coQuestions.reduce((sum, q) => sum + (Number(q.max) || 0), 0);
+  if (maxCoTotal <= 0) return { total: null, attainment: null };
+
+  const studentTotals: number[] = [];
+  for (const studentId in rows) {
+    const row = rows[studentId];
+    if (!row || typeof row !== 'object') continue;
+    const studentCoTotal = coQuestions.reduce((sum, q) => {
+      const mark = toNumOrNull(row[q.key]);
+      return sum + (mark ?? 0);
+    }, 0);
+    studentTotals.push(studentCoTotal);
+  }
+
+  if (!studentTotals.length) return { total: null, attainment: null };
+
+  const averageCoTotal = studentTotals.reduce((sum, total) => sum + total, 0) / studentTotals.length;
+  const attainment = (averageCoTotal / maxCoTotal) * 100;
+
+  return { total: averageCoTotal, attainment };
+}
+
 export default function InternalMarkCoursePage({ courseId, enabledAssessments, classType: classTypeProp }: Props): JSX.Element {
   const enabledSet = useMemo(() => new Set((enabledAssessments || []).map((x) => String(x || '').trim().toLowerCase()).filter(Boolean)), [enabledAssessments]);
 
@@ -1380,15 +1418,13 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       const readCoPair = (snapshot: any | null, coA: number, coB: number | null) => {
         const sheet = snapshot?.sheet && typeof snapshot.sheet === 'object' ? snapshot.sheet : {};
         const rowsByStudentId = sheet?.rowsByStudentId && typeof sheet.rowsByStudentId === 'object' ? sheet.rowsByStudentId : {};
-        const legacyExpCountA = clamp(Number(sheet?.expCountA ?? 0), 0, 12);
-        const legacyExpCountB = clamp(Number(sheet?.expCountB ?? 0), 0, 12);
-        const legacyCoAEnabled = Boolean(sheet?.coAEnabled);
-        const legacyCoBEnabled = Boolean(sheet?.coBEnabled);
-        const ciaEnabled = Boolean((sheet as any)?.ciaExamEnabled);
-
         const cfgs = sheet?.coConfigs && typeof sheet.coConfigs === 'object' ? (sheet.coConfigs as any) : null;
         const cfgA = cfgs ? cfgs[String(coA)] : null;
         const cfgB = coB != null && cfgs ? cfgs[String(coB)] : null;
+        const legacyExpCountA = clamp(Number(sheet?.expCountA ?? 0), 0, 12);
+        const legacyExpCountB = clamp(Number(sheet?.expCountB ?? 0), 0, 12);
+        const legacyCoAEnabled = Boolean(sheet?.coAEnabled);
+        const legacyCoBEnabled = coB != null ? Boolean(sheet?.coBEnabled !== false) : false;
 
         const coAEnabled = cfgA ? Boolean(cfgA.enabled) : legacyCoAEnabled;
         const coBEnabled = coB != null ? (cfgB ? Boolean(cfgB.enabled) : legacyCoBEnabled) : false;
@@ -1396,9 +1432,14 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         const expCountA = cfgA ? clamp(Number(cfgA.expCount ?? 0), 0, 12) : legacyExpCountA;
         const expCountB = coB != null ? (cfgB ? clamp(Number(cfgB.expCount ?? 0), 0, 12) : legacyExpCountB) : 0;
 
-        const expMaxA = cfgA && Number.isFinite(Number(cfgA.expMax)) ? Number(cfgA.expMax) : Number.isFinite(Number((sheet as any)?.expMaxA)) ? Number((sheet as any).expMaxA) : 25;
-        const expMaxB = coB != null ? (cfgB && Number.isFinite(Number(cfgB.expMax)) ? Number(cfgB.expMax) : Number.isFinite(Number((sheet as any)?.expMaxB)) ? Number((sheet as any).expMaxB) : 25) : 0;
+        const expMaxA = cfgA && Number.isFinite(Number(cfgA.expMax)) ? Number(cfgA.expMax)
+          : Number.isFinite(Number(sheet?.expMaxA)) ? Number(sheet.expMaxA) : 25;
+        const expMaxB = coB != null
+          ? (cfgB && Number.isFinite(Number(cfgB.expMax)) ? Number(cfgB.expMax)
+            : Number.isFinite(Number((sheet as any)?.expMaxB)) ? Number((sheet as any).expMaxB) : 25)
+          : 0;
 
+        const ciaEnabled = Boolean((sheet as any)?.ciaExamEnabled !== false);
         const CO_MAX_A = expMaxA + (ciaEnabled ? HALF : 0);
         const CO_MAX_B = coB != null ? expMaxB + (ciaEnabled ? HALF : 0) : 0;
 
@@ -1428,8 +1469,10 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
           const ciaDivisor = ciaEnabled ? (pairEnabled ? 2 : 1) : 1;
           const ciaShare = ciaEnabled ? (ciaExamNum ?? 0) / ciaDivisor : 0;
           const ciaShareMax = ciaEnabled ? 30 / ciaDivisor : 0;
-          const totalA = Math.max(0, expMaxA) + (coAEnabled ? ciaShareMax : 0);
-          const totalB = Math.max(0, expMaxB) + (pairEnabled ? ciaShareMax : 0);
+          const expTotalA = Math.max(0, expMaxA);
+          const expTotalB = Math.max(0, expMaxB);
+          const totalA = expTotalA + (coAEnabled ? ciaShareMax : 0);
+          const totalB = expTotalB + (pairEnabled ? ciaShareMax : 0);
           const hasAny = avgA != null || avgB != null || ciaExamNum != null;
 
           const a = !hasAny || !coAEnabled ? null : (avgA ?? 0) + ciaShare;
@@ -1465,17 +1508,20 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         const co2Ssa = null;
         const co2Cia = scale(r1.b, c1.CO_MAX_B, wCo2Cia);
         const co2Fa = null;
+
         const co3Ssa = null;
         const co3Cia = scale(r2.a, c2.CO_MAX_A, wCo3Cia);
         const co3Fa = null;
         const co4Ssa = null;
         const co4Cia = scale(r2.b, c2.CO_MAX_B, wCo4Cia);
         const co4Fa = null;
-        const meCo1 = null;
-        const meCo2 = null;
-        const meCo3 = null;
-        const meCo4 = null;
-        const meCo5 = scale(r5.a, m5.CO_MAX_A, wMeCo5);
+
+        const model = getModelCoMarks(s);
+        const meCo1 = scale(model.co1, model.max.co1, wMeCo1);
+        const meCo2 = scale(model.co2, model.max.co2, wMeCo2);
+        const meCo3 = scale(model.co3, model.max.co3, wMeCo3);
+        const meCo4 = scale(model.co4, model.max.co4, wMeCo4);
+        const meCo5 = scale(model.co5, model.max.co5, wMeCo5);
 
         const partsFull = [
           co1Ssa,
@@ -1569,7 +1615,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
           : Number.isFinite(Number(sheet?.expMaxA)) ? Number(sheet.expMaxA) : 25;
         const expMaxB = coB != null
           ? (cfgB && Number.isFinite(Number(cfgB.expMax)) ? Number(cfgB.expMax)
-            : Number.isFinite(Number(sheet?.expMaxB)) ? Number(sheet.expMaxB) : 25)
+            : Number.isFinite(Number((sheet as any)?.expMaxB)) ? Number((sheet as any).expMaxB) : 25)
           : 0;
 
         const ciaEnabled = Boolean((sheet as any)?.ciaExamEnabled !== false);
@@ -1580,8 +1626,11 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
           if (!Array.isArray(raw)) return [] as Array<number | null>;
           return raw.map((x) => (typeof x === 'number' && Number.isFinite(x) ? x : null));
         };
-        const sumMarks = (arr: Array<number | null>) =>
-          (arr || []).reduce((s0, n) => s0 + (typeof n === 'number' && Number.isFinite(n) ? n : 0), 0);
+        const avgMarks = (arr: Array<number | null>) => {
+          const nums = (arr || []).filter((x) => typeof x === 'number' && Number.isFinite(x)) as number[];
+          if (!nums.length) return null;
+          return nums.reduce((s0, n) => s0 + n, 0) / nums.length;
+        };
 
         const get = (sid: number) => {
           const row = rowsByStudentId[String(sid)] || {};
@@ -1592,32 +1641,29 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
 
           const marksA = normalizeMarksArray(rawA).slice(0, coAEnabled ? expCountA : 0);
           const marksB = normalizeMarksArray(rawB).slice(0, coBEnabled ? expCountB : 0);
-          const hasAInput = marksA.some((x) => typeof x === 'number' && Number.isFinite(x));
-          const hasBInput = marksB.some((x) => typeof x === 'number' && Number.isFinite(x));
-          const expObtA = sumMarks(marksA);
-          const expObtB = sumMarks(marksB);
-          const expTotalA = Math.max(0, expCountA) * Math.max(0, expMaxA);
-          const expTotalB = Math.max(0, expCountB) * Math.max(0, expMaxB);
+          const avgA = avgMarks(marksA);
+          const avgB = avgMarks(marksB);
           const ciaExamRaw = (row as any)?.ciaExam;
           const ciaExamNum = typeof ciaExamRaw === 'number' && Number.isFinite(ciaExamRaw) ? ciaExamRaw : null;
           const pairEnabled = coB != null && coBEnabled;
-          const ciaDivisor = ciaEnabled ? (pairEnabled ? 2 : 1) : 1;
-          const ciaShare = ciaEnabled ? (ciaExamNum ?? 0) / ciaDivisor : 0;
-          const ciaShareMax = ciaEnabled ? 30 / ciaDivisor : 0;
-          const totalA = expTotalA + (coAEnabled ? ciaShareMax : 0);
-          const totalB = expTotalB + (pairEnabled ? ciaShareMax : 0);
-          const hasAny = hasAInput || hasBInput || ciaExamNum != null;
+          const expPartA = avgA == null || !expMaxA ? null : clamp((avgA / expMaxA) * 2, 0, 2);
+          const expPartB = avgB == null || !expMaxB ? null : clamp((avgB / expMaxB) * 2, 0, 2);
+          const ciaPart = ciaEnabled && ciaExamNum != null ? clamp((ciaExamNum / 30) * 1.5, 0, 1.5) : null;
 
-          const a = !hasAny || !coAEnabled ? null : expObtA + ciaShare;
-          const b = !hasAny || !pairEnabled ? null : expObtB + ciaShare;
+          const a = !coAEnabled || (expPartA == null && ciaPart == null)
+            ? null
+            : (expPartA ?? 0) + (ciaPart ?? 0);
+          const b = !pairEnabled || (expPartB == null && ciaPart == null)
+            ? null
+            : (expPartB ?? 0) + (ciaPart ?? 0);
 
           return {
-            a: a == null ? null : clamp(a, 0, totalA),
-            b: b == null ? null : clamp(b, 0, totalB),
+            a: a == null ? null : clamp(a, 0, 3.5),
+            b: b == null ? null : clamp(b, 0, 3.5),
           };
         };
 
-        return { get, CO_MAX_A, CO_MAX_B };
+        return { get, CO_MAX_A: 3.5, CO_MAX_B: 3.5 };
       };
 
       const tcplLab1 = ct === 'TCPL' ? readTcplLabPair(publishedTcplLab.lab1, 1, 2) : null;
