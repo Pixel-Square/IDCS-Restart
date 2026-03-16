@@ -4967,12 +4967,14 @@ class StudentMarksView(APIView):
             return Response({'detail': 'Student profile not found for user.'}, status=status.HTTP_403_FORBIDDEN)
 
         from django.db.models import Q
+        from collections import defaultdict
 
         section = sp.get_current_section() or getattr(sp, 'section', None)
         semester = getattr(section, 'semester', None) if section is not None else None
         course = getattr(getattr(section, 'batch', None), 'course', None) if section is not None else None
 
         from .models import Subject
+        from .models import AcademicYear, TeachingAssignment
 
         if semester is None:
             return Response({'student': {'id': sp.id, 'reg_no': sp.reg_no}, 'semester': None, 'courses': []})
@@ -5150,6 +5152,135 @@ class StudentMarksView(APIView):
             except Exception:
                 return None
 
+        def _clamp(n, lo, hi):
+            try:
+                return max(lo, min(hi, n))
+            except Exception:
+                return n
+
+        def _to_float_or_none(v):
+            if v is None:
+                return None
+            if v == '':
+                return None
+            try:
+                n = float(v)
+                return n
+            except Exception:
+                return None
+
+        def _extract_lab_total_for_student(data, student_id):
+            if not data or not isinstance(data, dict):
+                return None
+            sheet = data.get('sheet') if isinstance(data, dict) else None
+            if not sheet or not isinstance(sheet, dict):
+                return None
+            rows = sheet.get('rowsByStudentId')
+            if not rows or not isinstance(rows, dict):
+                return None
+            sid = str(student_id)
+            row = rows.get(sid) or rows.get(student_id)
+            if not row or not isinstance(row, dict):
+                return None
+
+            cia_exam = _to_float_or_none(row.get('ciaExam'))
+            if cia_exam is not None:
+                return _clamp(cia_exam, 0.0, 100.0)
+
+            total = 0.0
+            has_any = False
+            all_arrays = []
+            if isinstance(row.get('marksA'), list):
+                all_arrays.append(row.get('marksA'))
+            if isinstance(row.get('marksB'), list):
+                all_arrays.append(row.get('marksB'))
+            marks_by_co = row.get('marksByCo')
+            if isinstance(marks_by_co, dict):
+                for arr in marks_by_co.values():
+                    if isinstance(arr, list):
+                        all_arrays.append(arr)
+
+            for arr in all_arrays:
+                for v in arr:
+                    n = _to_float_or_none(v)
+                    if n is not None:
+                        total += n
+                        has_any = True
+
+            for field in ('caaExamByCo', 'ciaExamByCo'):
+                byco = row.get(field)
+                if isinstance(byco, dict):
+                    for v in byco.values():
+                        n = _to_float_or_none(v)
+                        if n is not None:
+                            total += n
+                            has_any = True
+
+            if not has_any:
+                return None
+            return _clamp(float(round(total)), 0.0, 100.0)
+
+        def _extract_model_total_for_student(data, student_id):
+            if not data or not isinstance(data, dict):
+                return None
+            sid = str(student_id)
+
+            # Preferred structure (as used in frontend result analysis): { marks: { [sid]: { q1: n, ... } } }
+            marks = data.get('marks')
+            if isinstance(marks, dict):
+                qmarks = marks.get(sid) or marks.get(student_id)
+                if isinstance(qmarks, dict):
+                    total = 0.0
+                    has_any = False
+                    for v in qmarks.values():
+                        n = _to_float_or_none(v)
+                        if n is not None:
+                            total += n
+                            has_any = True
+                    return total if has_any else None
+
+            # Fallback: tolerate a lab-style shape (rowsByStudentId) if deployed that way
+            return _extract_lab_total_for_student(data, student_id)
+
+        # Resolve candidate teaching assignments for the student's current section
+        # (used to scope published sheets / CQI rows).
+        ta_ids_by_code = defaultdict(list)
+        try:
+            ay_active = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.order_by('-id').first()
+        except Exception:
+            ay_active = None
+
+        try:
+            if ay_active is not None and section is not None:
+                tas_qs = (
+                    TeachingAssignment.objects.filter(is_active=True, academic_year=ay_active)
+                    .filter(Q(section=section) | Q(section__isnull=True))
+                    .select_related('subject', 'curriculum_row', 'elective_subject')
+                )
+                for ta in tas_qs:
+                    tcode = None
+                    try:
+                        if getattr(ta, 'subject_id', None):
+                            tcode = getattr(getattr(ta, 'subject', None), 'code', None)
+                        if not tcode and getattr(ta, 'curriculum_row_id', None):
+                            tcode = getattr(getattr(ta, 'curriculum_row', None), 'course_code', None)
+                        if not tcode and getattr(ta, 'elective_subject_id', None):
+                            tcode = getattr(getattr(ta, 'elective_subject', None), 'course_code', None)
+                    except Exception:
+                        tcode = None
+                    tcode = str(tcode or '').strip()
+                    if tcode:
+                        ta_ids_by_code[tcode].append(getattr(ta, 'id', None))
+        except Exception:
+            ta_ids_by_code = defaultdict(list)
+
+        try:
+            from OBE.models import LabPublishedSheet, ModelPublishedSheet, ObeCqiPublished
+        except Exception:
+            LabPublishedSheet = None
+            ModelPublishedSheet = None
+            ObeCqiPublished = None
+
         # Build final enrolled code list:
         # - curriculum rows (core)
         # - elective choices
@@ -5220,12 +5351,10 @@ class StudentMarksView(APIView):
             if not display_name:
                 display_name = code
 
-            if subj is not None:
-                try:
-                    cia1 = Cia1Mark.objects.filter(subject=subj, student=sp).first()
-                except Exception:
-                    cia1 = None
-            else:
+            cia1 = cia2 = ssa1 = ssa2 = rev1 = rev2 = f1 = f2 = None
+            try:
+                cia1 = Cia1Mark.objects.filter(subject=subj, student=sp).first() if subj is not None else None
+            except Exception:
                 cia1 = None
             try:
                 cia2 = Cia2Mark.objects.filter(subject=subj, student=sp).first() if subj is not None else None
@@ -5276,48 +5405,88 @@ class StudentMarksView(APIView):
                 internal_max_cycle1 = internal_max_total / 2.0
                 internal_max_cycle2 = internal_max_total / 2.0
 
+            marks_vals = {
+                'cia1': _num(getattr(cia1, 'mark', None)),
+                'cia2': _num(getattr(cia2, 'mark', None)),
+                'ssa1': _num(getattr(ssa1, 'mark', None)),
+                'ssa2': _num(getattr(ssa2, 'mark', None)),
+                'review1': _num(getattr(rev1, 'mark', None)),
+                'review2': _num(getattr(rev2, 'mark', None)),
+                'formative1': _num(getattr(f1, 'total', None)),
+                'formative2': _num(getattr(f2, 'total', None)),
+                'model': None,
+            }
+
+            # Backfill missing totals from published sheets when the publish flow
+            # does not upsert into the per-student totals tables (notably LAB/TCPL).
+            ta_ids = [x for x in (ta_ids_by_code.get(code) or []) if x]
+            if subj is not None and LabPublishedSheet is not None:
+                try:
+                    for assessment, key in (
+                        ('cia1', 'cia1'),
+                        ('cia2', 'cia2'),
+                        ('formative1', 'formative1'),
+                        ('formative2', 'formative2'),
+                        ('review1', 'review1'),
+                        ('review2', 'review2'),
+                        ('model', 'model'),
+                    ):
+                        if marks_vals.get(key) is not None:
+                            continue
+                        qs = LabPublishedSheet.objects.filter(subject=subj, assessment=assessment)
+                        if ta_ids:
+                            qs = qs.filter(Q(teaching_assignment_id__in=ta_ids) | Q(teaching_assignment__isnull=True))
+                        else:
+                            qs = qs.filter(Q(teaching_assignment__isnull=True))
+                        row = qs.order_by('-updated_at').only('data', 'updated_at').first()
+                        if row:
+                            v = _extract_lab_total_for_student(getattr(row, 'data', None), sp.id)
+                            if v is not None:
+                                marks_vals[key] = float(v)
+                except Exception:
+                    pass
+
+            if subj is not None and marks_vals.get('model') is None and ModelPublishedSheet is not None:
+                try:
+                    qs = ModelPublishedSheet.objects.filter(subject=subj)
+                    if ta_ids:
+                        qs = qs.filter(Q(teaching_assignment_id__in=ta_ids) | Q(teaching_assignment__isnull=True))
+                    else:
+                        qs = qs.filter(Q(teaching_assignment__isnull=True))
+                    row = qs.order_by('-updated_at').only('data', 'updated_at').first()
+                    if row:
+                        v = _extract_model_total_for_student(getattr(row, 'data', None), sp.id)
+                        if v is not None:
+                            marks_vals['model'] = float(v)
+                except Exception:
+                    pass
+
             # best-effort internal marks: sum available internal-like components
-            internal_components = []
-            for m in (
-                f1 and getattr(f1, 'total', None),
-                f2 and getattr(f2, 'total', None),
-                ssa1 and getattr(ssa1, 'mark', None),
-                ssa2 and getattr(ssa2, 'mark', None),
-                rev1 and getattr(rev1, 'mark', None),
-                rev2 and getattr(rev2, 'mark', None),
-            ):
-                if m is not None:
-                    try:
-                        internal_components.append(float(m))
-                    except Exception:
-                        pass
+            internal_components = [
+                marks_vals.get('formative1'),
+                marks_vals.get('formative2'),
+                marks_vals.get('ssa1'),
+                marks_vals.get('ssa2'),
+                marks_vals.get('review1'),
+                marks_vals.get('review2'),
+            ]
+            internal_components = [x for x in internal_components if x is not None]
             internal_computed = sum(internal_components) if internal_components else None
 
-            # cycle-wise internal components
-            internal_cycle1_components = []
-            for m in (
-                f1 and getattr(f1, 'total', None),
-                ssa1 and getattr(ssa1, 'mark', None),
-                rev1 and getattr(rev1, 'mark', None),
-            ):
-                if m is not None:
-                    try:
-                        internal_cycle1_components.append(float(m))
-                    except Exception:
-                        pass
+            internal_cycle1_components = [
+                marks_vals.get('formative1'),
+                marks_vals.get('ssa1'),
+                marks_vals.get('review1'),
+            ]
+            internal_cycle1_components = [x for x in internal_cycle1_components if x is not None]
             internal_cycle1 = sum(internal_cycle1_components) if internal_cycle1_components else None
 
-            internal_cycle2_components = []
-            for m in (
-                f2 and getattr(f2, 'total', None),
-                ssa2 and getattr(ssa2, 'mark', None),
-                rev2 and getattr(rev2, 'mark', None),
-            ):
-                if m is not None:
-                    try:
-                        internal_cycle2_components.append(float(m))
-                    except Exception:
-                        pass
+            internal_cycle2_components = [
+                marks_vals.get('formative2'),
+                marks_vals.get('ssa2'),
+                marks_vals.get('review2'),
+            ]
+            internal_cycle2_components = [x for x in internal_cycle2_components if x is not None]
             internal_cycle2 = sum(internal_cycle2_components) if internal_cycle2_components else None
 
             ct_norm = str(class_type or '').upper()
@@ -5328,6 +5497,21 @@ class StudentMarksView(APIView):
             # CIA max defaults (no authoritative config in DB yet)
             cia_max = 30.0
 
+            # Optional CO attainment values when CQI is published.
+            cos = None
+            if subj is not None and ObeCqiPublished is not None:
+                try:
+                    qs = ObeCqiPublished.objects.filter(subject=subj)
+                    if ta_ids:
+                        qs = qs.filter(teaching_assignment_id__in=ta_ids)
+                    row = qs.order_by('-published_at').only('entries', 'published_at').first()
+                    if row and isinstance(getattr(row, 'entries', None), dict):
+                        ent = row.entries.get(str(sp.id)) or row.entries.get(sp.id)
+                        if isinstance(ent, dict):
+                            cos = {str(k): _num(v) for k, v in ent.items()}
+                except Exception:
+                    cos = None
+
             out_courses.append(
                 {
                     'id': getattr(subj, 'id', None),
@@ -5335,15 +5519,16 @@ class StudentMarksView(APIView):
                     'name': display_name,
                     'class_type': ct_norm or None,
                     'marks': {
-                        'cia1': _num(getattr(cia1, 'mark', None)),
-                        'cia2': _num(getattr(cia2, 'mark', None)),
+                        'cia1': marks_vals.get('cia1'),
+                        'cia2': marks_vals.get('cia2'),
                         'cia_max': cia_max,
-                        'ssa1': _num(getattr(ssa1, 'mark', None)),
-                        'ssa2': _num(getattr(ssa2, 'mark', None)),
-                        'review1': _num(getattr(rev1, 'mark', None)),
-                        'review2': _num(getattr(rev2, 'mark', None)),
-                        'formative1': _num(getattr(f1, 'total', None)),
-                        'formative2': _num(getattr(f2, 'total', None)),
+                        'ssa1': marks_vals.get('ssa1'),
+                        'ssa2': marks_vals.get('ssa2'),
+                        'review1': marks_vals.get('review1'),
+                        'review2': marks_vals.get('review2'),
+                        'formative1': marks_vals.get('formative1'),
+                        'formative2': marks_vals.get('formative2'),
+                        'model': marks_vals.get('model'),
                         'internal': {
                             'computed': internal_computed,
                             'cycle1': internal_cycle1,
@@ -5354,6 +5539,7 @@ class StudentMarksView(APIView):
                             'mapping': mapping,
                         },
                         'has_cqi': has_cqi,
+                        **({'cos': cos} if cos is not None else {}),
                     },
                 }
             )

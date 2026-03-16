@@ -158,6 +158,33 @@ export function isMobileVerifiedCached(): boolean {
   return Boolean(me?.profile?.mobile_verified)
 }
 
+export function hasProfilePhotoCached(): boolean {
+  const me = getCachedMe()
+  const candidates = [
+    String(me?.profile_image ?? '').trim(),
+    String(me?.profile?.profile_image ?? '').trim(),
+    String(me?.profile_image_url ?? '').trim(),
+    String(me?.profile?.profile_image_url ?? '').trim(),
+  ]
+  return candidates.some((v) => Boolean(v))
+}
+
+export async function ensureProfilePhotoPresent(): Promise<boolean> {
+  if (hasProfilePhotoCached()) return true
+  try {
+    const me = await getMe()
+    const candidates = [
+      String((me as any)?.profile_image ?? '').trim(),
+      String((me as any)?.profile?.profile_image ?? '').trim(),
+      String((me as any)?.profile_image_url ?? '').trim(),
+      String((me as any)?.profile?.profile_image_url ?? '').trim(),
+    ]
+    return candidates.some((v) => Boolean(v))
+  } catch {
+    return false
+  }
+}
+
 export async function ensureMobileVerified(): Promise<boolean> {
   if (isMobileVerifiedCached()) return true
   try {

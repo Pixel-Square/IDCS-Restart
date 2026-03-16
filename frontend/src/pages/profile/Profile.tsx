@@ -68,6 +68,21 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
   const [loading, setLoading] = useState(initialUser ? false : true);
   const [error, setError] = useState<string | null>(null);
 
+  const rfidUid = useMemo(() => {
+    const candidateKeys = ['rfid_uid', 'rfid', 'rfidId', 'rfid_id', 'rfid_no', 'rfid_number'];
+    const root = user as any;
+    const nested = (user as any)?.profile as any;
+
+    for (const obj of [root, nested]) {
+      if (!obj || typeof obj !== 'object') continue;
+      for (const k of candidateKeys) {
+        const v = String(obj?.[k] ?? '').trim();
+        if (v) return v;
+      }
+    }
+    return '';
+  }, [user]);
+
   const profileMobile = useMemo(() => normalizeMobileForUi((user as any)?.profile?.mobile_number), [user]);
   const profileMobileVerified = useMemo(() => Boolean((user as any)?.profile?.mobile_verified), [user]);
 
@@ -657,14 +672,14 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
               {(user.profile_type === 'STUDENT' || user.profile_type === 'STAFF') && (
                 <div
                   className={`px-4 py-2 rounded-lg shadow-sm border ${
-                    user.profile?.rfid_uid
+                    rfidUid
                       ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
                       : 'bg-red-50 border-red-200 text-red-700'
                   }`}
                 >
                   <div className="text-xs font-bold uppercase tracking-wider mb-1 opacity-80">ID Card</div>
                   <div className="flex items-center gap-1.5 font-bold text-sm">
-                    {user.profile?.rfid_uid ? (
+                    {rfidUid ? (
                       <>
                         <CheckCircle2 className="w-4 h-4" /> Connected
                       </>

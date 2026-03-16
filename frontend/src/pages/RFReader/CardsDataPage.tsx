@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
-import { Download, Search, FileText, FileSpreadsheet, Trash2, X } from 'lucide-react';
-import { fetchCardsData, CardDataRow, unassignStaffUID, unassignUID } from '../../services/idscan';
+import { Download, Search, FileText, FileSpreadsheet, Trash2, X, Upload } from 'lucide-react';
+import { fetchCardsData, CardDataRow, unassignStaffUID, unassignUID, assignUID, assignStaffUID } from '../../services/idscan';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
@@ -49,6 +49,9 @@ export default function RFReaderCardsDataPage() {
   const [data, setData] = useState<CardDataRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const [importing, setImporting] = useState(false);
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   // Filters
   const [search, setSearch] = useState('');
@@ -104,6 +107,143 @@ export default function RFReaderCardsDataPage() {
     const depts = new Set(data.map((d) => d.department).filter(Boolean));
     return Array.from(depts).sort();
   }, [data]);
+
+  const byRoleAndIdentifier = useMemo(() => {
+    const map = new Map<string, CardDataRow>();
+    for (const row of data) {
+      const role = String(row.role || '').trim().toUpperCase();
+      const identifier = String(row.identifier || '').trim().toUpperCase();
+      if (!role || !identifier) continue;
+      map.set(`${role}::${identifier}`, row);
+    }
+    return map;
+  }, [data]);
+
+  const normalizeHeader = (s: any) => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+  async function handleImportFile(file: File) {
+    try {
+      setImporting(true);
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array' });
+      const sheetName = wb.SheetNames?.[0];
+      if (!sheetName) throw new Error('No sheets found in the Excel file');
+      const ws = wb.Sheets[sheetName];
+      if (!ws) throw new Error('Failed to read Excel sheet');
+
+      const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }) as any;
+      if (!Array.isArray(rows) || rows.length === 0) throw new Error('Excel sheet is empty');
+
+      // Find the header row (expects: Role, Identifier, RFID UID)
+      const headerRowIndex = rows.findIndex((r) => {
+        if (!Array.isArray(r)) return false;
+        const headers = r.map(normalizeHeader);
+        const hasRole = headers.includes('role');
+        const hasIdentifier = headers.includes('identifier') || headers.includes('register number') || headers.includes('reg no') || headers.includes('staff id');
+        const hasUid = headers.includes('rfid uid') || headers.includes('rfid_uid') || headers.includes('uid');
+        return hasRole && hasIdentifier && hasUid;
+      });
+
+      if (headerRowIndex < 0) {
+        throw new Error('Invalid template. Required headers: Role, Identifier, RFID UID');
+      }
+
+      const header = rows[headerRowIndex].map(normalizeHeader);
+      const idxRole = header.indexOf('role');
+      const idxIdentifier = (() => {
+        const candidates = ['identifier', 'register number', 'reg no', 'staff id'];
+        for (const c of candidates) {
+          const i = header.indexOf(c);
+          if (i >= 0) return i;
+        }
+        return -1;
+      })();
+      const idxUid = (() => {
+        const candidates = ['rfid uid', 'rfid_uid', 'uid'];
+        for (const c of candidates) {
+          const i = header.indexOf(c);
+          if (i >= 0) return i;
+        }
+        return -1;
+      })();
+
+      if (idxRole < 0 || idxIdentifier < 0 || idxUid < 0) {
+        throw new Error('Invalid template. Required headers: Role, Identifier, RFID UID');
+      }
+
+      const records = rows.slice(headerRowIndex + 1)
+        .filter((r) => Array.isArray(r) && r.some((x) => String(x ?? '').trim() !== ''))
+        .map((r) => {
+          const role = String(r[idxRole] ?? '').trim().toUpperCase();
+          const identifier = String(r[idxIdentifier] ?? '').trim();
+          const uid = String(r[idxUid] ?? '').trim();
+          return { role, identifier, uid };
+        })
+        .filter((x) => x.role && x.identifier);
+
+      if (records.length === 0) {
+        throw new Error('No valid rows found to import');
+      }
+
+      const errors: string[] = [];
+      let okCount = 0;
+
+      for (const rec of records) {
+        const role = rec.role === 'STUDENT' || rec.role === 'STAFF' ? rec.role : '';
+        const identifierKey = String(rec.identifier || '').trim().toUpperCase();
+        const uid = String(rec.uid || '').trim();
+
+        if (!role) {
+          errors.push(`Invalid role for identifier ${rec.identifier}`);
+          continue;
+        }
+        if (!uid) {
+          // Treat empty UID as "no change" (template can be partially filled)
+          continue;
+        }
+
+        const row = byRoleAndIdentifier.get(`${role}::${identifierKey}`);
+        if (!row) {
+          errors.push(`No match found for ${role} identifier ${rec.identifier}`);
+          continue;
+        }
+
+        try {
+          if (role === 'STUDENT') {
+            await assignUID(row.id, uid);
+          } else {
+            await assignStaffUID(row.id, uid);
+          }
+          okCount += 1;
+        } catch (e: any) {
+          errors.push(`${role} ${rec.identifier}: ${String(e?.message || e || 'Failed')}`);
+        }
+      }
+
+      // Refresh table after import.
+      try {
+        const refreshed = await fetchCardsData();
+        setData(refreshed);
+      } catch {
+        // ignore refresh failures; user can reload
+      }
+
+      const summary = `Import complete. Assigned: ${okCount}. Errors: ${errors.length}.`;
+      if (errors.length) {
+        window.alert(`${summary}\n\n${errors.slice(0, 20).join('\n')}${errors.length > 20 ? `\n...and ${errors.length - 20} more` : ''}`);
+      } else {
+        window.alert(summary);
+      }
+    } finally {
+      setImporting(false);
+      if (importInputRef.current) importInputRef.current.value = '';
+    }
+  }
+
+  function handleImportClick() {
+    if (importing) return;
+    importInputRef.current?.click();
+  }
 
   const filteredData = useMemo(() => {
     return data.filter((row) => {
@@ -295,40 +435,23 @@ export default function RFReaderCardsDataPage() {
   const downloadExcel = () => {
     setDownloading(true);
     try {
-      const collegeName = me?.college?.name || 'IDCS College';
-      
+      // Export a clean import template: Role + Identifier + RFID UID.
+      // Identifier must be Register No (student) or Staff ID (staff).
       const wsData: any[][] = [];
-      // College & App details as top rows
-      wsData.push([collegeName]);
-      wsData.push(['IDCS Cards Data Report']);
-      wsData.push([`Date of Export: ${new Date().toLocaleDateString('en-GB')}`]);
-      wsData.push([]);
-      
-      // Filter Details
-      wsData.push(['Filters Applied']);
-      wsData.push(['Role:', roleFilter, 'Department:', deptFilter, 'Status:', statusFilter]);
-      wsData.push([]);
+      wsData.push(['Role', 'Identifier', 'RFID UID']);
 
-      // Headers
-      wsData.push(['Identifier (Roll/ID)', 'Name', 'Role', 'Department', 'Status', 'RFID UID']);
-      
-      // Data
       filteredData.forEach(row => {
         wsData.push([
-          row.identifier,
-          row.username,
           row.role,
-          row.department || '—',
-          row.status,
-          row.rfid_uid || '—'
+          row.identifier,
+          row.rfid_uid || '',
         ]);
       });
 
       const ws = XLSX.utils.aoa_to_sheet(wsData);
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Cards Data");
-
-      XLSX.writeFile(wb, 'Cards_Data_Report.xlsx');
+      XLSX.utils.book_append_sheet(wb, ws, 'RFID Import Template');
+      XLSX.writeFile(wb, 'RFID_Import_Template.xlsx');
     } catch (e) {
       console.error(e);
       alert('Failed to generate Excel');
@@ -408,13 +531,39 @@ export default function RFReaderCardsDataPage() {
           <p className="mt-1 text-sm text-gray-500">View and export RFID card assignments for all users.</p>
         </div>
         <div className="mt-4 sm:mt-0">
-          <button
-            onClick={() => setDownloadModalOpen(true)}
-            className="inline-flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-semibold hover:bg-indigo-700 transition shadow-sm"
-          >
-            <Download className="w-4 h-4" />
-            Download
-          </button>
+          <div className="flex items-center gap-3">
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".xlsx,.xls"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (!f) return;
+                handleImportFile(f).catch((err: any) => {
+                  window.alert(String(err?.message || err || 'Import failed'));
+                  setImporting(false);
+                });
+              }}
+            />
+            <button
+              onClick={handleImportClick}
+              disabled={importing || downloading}
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-white text-indigo-700 border border-indigo-200 rounded-xl text-sm font-semibold hover:bg-indigo-50 transition shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
+              title="Import RFID UIDs from Excel template"
+            >
+              <Upload className="w-4 h-4" />
+              {importing ? 'Importing…' : 'Import'}
+            </button>
+            <button
+              onClick={() => setDownloadModalOpen(true)}
+              disabled={importing}
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-semibold hover:bg-indigo-700 transition shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              <Download className="w-4 h-4" />
+              Download
+            </button>
+          </div>
         </div>
       </div>
 
