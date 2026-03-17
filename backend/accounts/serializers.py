@@ -247,6 +247,7 @@ class MeSerializer(serializers.Serializer):
                 'student_id': sp.reg_no,  # Alias for consistency
                 'profile_image': profile_image_url,
                 'profile_image_updated': self.get_profile_image_updated(obj),
+                'rfid_uid': getattr(sp, 'rfid_uid', ''),
                 'mobile_number': getattr(sp, 'mobile_number', '') or '',
                 'mobile_verified': bool(getattr(sp, 'mobile_number_verified_at', None)),
                 'section_id': getattr(sec_obj, 'id', None),
@@ -266,6 +267,7 @@ class MeSerializer(serializers.Serializer):
                 'staff_id': st.staff_id,
                 'profile_image': profile_image_url,
                 'profile_image_updated': self.get_profile_image_updated(obj),
+                'rfid_uid': getattr(st, 'rfid_uid', ''),
                 'mobile_number': getattr(st, 'mobile_number', '') or '',
                 'mobile_verified': bool(getattr(st, 'mobile_number_verified_at', None)),
                 'department': {

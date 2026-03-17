@@ -9,6 +9,7 @@ import {
   ApplicationField,
   ForwardedTo,
 } from '../../services/applications'
+import { ensureProfilePhotoPresent } from '../../services/auth'
 
 // ─── Forwarded-to popup ───────────────────────────────────────────────────────
 
@@ -203,6 +204,19 @@ export default function ApplicationFormPage(): JSX.Element {
   const [activeApp, setActiveApp] = useState<{ id: number; state: string; message: string } | null>(null)
 
   useEffect(() => {
+    let mounted = true
+    ;(async () => {
+      const hasPhoto = await ensureProfilePhotoPresent()
+      if (!mounted) return
+      if (!hasPhoto) {
+        alert('Please upload your Profile Photo before applying for applications. Redirecting you to Profile now.')
+        navigate('/profile')
+      }
+    })()
+    return () => { mounted = false }
+  }, [navigate])
+
+  useEffect(() => {
     if (!typeId) return
     let mounted = true
     ;(async () => {
@@ -259,6 +273,13 @@ export default function ApplicationFormPage(): JSX.Element {
     e.preventDefault()
     if (!schema) return
     setError(null)
+
+    const hasPhoto = await ensureProfilePhotoPresent()
+    if (!hasPhoto) {
+      alert('Please upload your Profile Photo before submitting an application. Redirecting you to Profile now.')
+      navigate('/profile')
+      return
+    }
 
     // Client-side required check
     for (const f of schema.fields) {

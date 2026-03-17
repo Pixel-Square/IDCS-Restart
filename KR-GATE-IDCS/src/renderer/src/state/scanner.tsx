@@ -1,16 +1,5 @@
 import React, { createContext, useContext, useMemo, useState } from 'react'
 
-const SERIAL_FILTERS = [
-  { usbVendorId: 0x1a86, usbProductId: 0x7523 },
-  { usbVendorId: 0x1a86, usbProductId: 0x5523 },
-  { usbVendorId: 0x1a86, usbProductId: 0x55d4 },
-  { usbVendorId: 0x10c4, usbProductId: 0xea60 },
-  { usbVendorId: 0x0403, usbProductId: 0x6001 },
-  { usbVendorId: 0x0403, usbProductId: 0x6015 },
-  { usbVendorId: 0x2341, usbProductId: 0x0043 },
-  { usbVendorId: 0x2341, usbProductId: 0x0001 },
-]
-
 const USB_NAMES: Record<string, string> = {
   '1a86:7523': 'CH340 USB-Serial (NodeMCU)',
   '1a86:5523': 'CH341 USB-Serial (NodeMCU)',
@@ -50,18 +39,14 @@ export function ScannerProvider({ children }: { children: React.ReactNode }): JS
 
   const selectPort = async () => {
     if (!serialSupported) return
-    let p: any
     try {
-      try {
-        p = await (navigator as any).serial.requestPort({ filters: SERIAL_FILTERS })
-      } catch (err: any) {
-        if (err?.name === 'NotAllowedError') return
-        p = await (navigator as any).serial.requestPort()
-      }
+      const p = await (navigator as any).serial.requestPort()
       setPort(p)
       setDeviceName(getDeviceName(p))
-    } catch {
-      // ignore; caller shows UI error
+    } catch (err: any) {
+      // User canceled the picker.
+      if (err?.name === 'NotAllowedError') return
+      // Otherwise ignore; caller shows UI error.
     }
   }
 

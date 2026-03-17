@@ -7,6 +7,7 @@ import {
   ApplicationTypeListItem,
   MyApplicationItem,
 } from '../../services/applications'
+import { ensureProfilePhotoPresent } from '../../services/auth'
 
 function statusBadgeClass(state: string): string {
   switch (state?.toUpperCase()) {
@@ -241,7 +242,15 @@ export default function ApplicationsPage(): JSX.Element {
                   {types.map((t) => (
                     <button
                       key={t.id}
-                      onClick={() => navigate(`/applications/new/${t.id}`)}
+                      onClick={async () => {
+                        const hasPhoto = await ensureProfilePhotoPresent()
+                        if (!hasPhoto) {
+                          alert('Please upload your Profile Photo before applying for applications. You will be redirected to Profile now.')
+                          navigate('/profile')
+                          return
+                        }
+                        navigate(`/applications/new/${t.id}`)
+                      }}
                       className="rounded-2xl border border-gray-200 bg-white p-5 text-left hover:border-indigo-300 hover:shadow-sm transition-all group"
                     >
                       <div className="flex items-start justify-between gap-3 mb-1">

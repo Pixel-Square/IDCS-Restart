@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getApiBase } from '../services/apiBase'
-import { gatepassCheck, GatepassCheckResult } from '../services/idscan'
+import { gatepassCheck, GatepassCheckResult, lookupAny } from '../services/idscan'
 import { useConnectivity } from '../state/connectivity'
 import { useScanner } from '../state/scanner'
 import { useAuth } from '../state/auth'
@@ -54,6 +54,30 @@ function setCooldown(uid: string) {
   window.localStorage.setItem(`cooldown_${uid}`, Date.now().toString())
 }
 
+function buildFlashProfile(profile: any, profile_type: string | null): NonNullable<Flash>['profile'] | undefined {
+  if (!profile) return undefined
+  const isStaff = 'staff_id' in profile
+  const idStr = profile.reg_no || profile.staff_id || ''
+  let imageUrl = profile.profile_image_url || null
+  if (imageUrl && !imageUrl.startsWith('http')) {
+    imageUrl = `${getApiBase()}${imageUrl.startsWith('/') ? '' : '/'}${imageUrl}`
+  }
+  const type = profile_type === 'staff' || isStaff ? 'Staff' : 'Student'
+  const department = profile.department || ''
+  const subtitle = type === 'Student'
+    ? `${profile.section || ''}${profile.batch ? ` • ${profile.batch}` : ''}`
+    : profile.designation || ''
+
+  return {
+    name: profile.name || '',
+    idString: idStr,
+    type,
+    imageUrl,
+    department,
+    subtitle
+  }
+}
+
 export default function GateScanPage(): JSX.Element {
   const nav = useNavigate()
   const { me } = useAuth()
@@ -67,7 +91,9 @@ export default function GateScanPage(): JSX.Element {
   const readerRef = useRef<ReadableStreamDefaultReader<string> | null>(null)
   const buffer = useRef('')
   const lastScan = useRef<{ uid: string; time: number }>({ uid: '', time: 0 })
-  const flashTimer = useRef<number | null>(null)
+   const lastFlashRef = useRef<Flash>(null)
+  const profileCacheRef = useRef<Map<string, NonNullable<NonNullable<Flash>['profile']>>>(new Map())
+   const flashTimer = useRef<number | null>(null)
 
   useEffect(() => {
     return () => {
@@ -85,9 +111,22 @@ export default function GateScanPage(): JSX.Element {
   }, [])
 
   const showFlash = useCallback((next: Flash) => {
+     lastFlashRef.current = next
     setFlash(next)
     // Removed flash timer so the flash stays until next scan or manual stop
   }, [])
+
+   const pulseLastFlash = useCallback(() => {
+     const last = lastFlashRef.current
+     if (!last) return
+     if (flashTimer.current) window.clearTimeout(flashTimer.current)
+
+     // Force a brief visual blink even if the scan is de-duplicated.
+     setFlash(null)
+     flashTimer.current = window.setTimeout(() => {
+       setFlash(last)
+     }, 90)
+   }, [])
 
   const stopScan = useCallback(async () => {
     try {
@@ -98,6 +137,8 @@ export default function GateScanPage(): JSX.Element {
     } catch {}
     setScanning(false)
     setFlash(null)
+     lastFlashRef.current = null
+     if (flashTimer.current) window.clearTimeout(flashTimer.current)
   }, [port])
 
   const handleSelect = async () => {
@@ -128,28 +169,10 @@ export default function GateScanPage(): JSX.Element {
         ? `${profile.reg_no || profile.staff_id || ''}${profile.reg_no || profile.staff_id ? ' • ' : ''}${profile.name || ''}`.trim()
         : `UID: ${uid}`
 
-      let flashProfile: NonNullable<Flash>['profile'] = undefined
-      if (profile) {
-        const isStaff = 'staff_id' in profile
-        const idStr = profile.reg_no || profile.staff_id || ''
-        let imageUrl = profile.profile_image_url || null
-        if (imageUrl && !imageUrl.startsWith('http')) {
-          imageUrl = `${getApiBase()}${imageUrl.startsWith('/') ? '' : '/'}${imageUrl}`
-        }
-        const profileType = result.profile_type === 'staff' || isStaff ? 'Staff' : 'Student'
-        const profileDept = profile.department || ''
-        const profileSub = profileType === 'Student'
-          ? `${profile.section || ''}${profile.batch ? ` • ${profile.batch}` : ''}`
-          : profile.designation || ''
+      let flashProfile = buildFlashProfile(profile, result.profile_type ?? null)
 
-        flashProfile = {
-          name: profile.name || '',
-          idString: idStr,
-          type: profileType,
-          imageUrl,
-          department: profileDept,
-          subtitle: profileSub
-        }
+      if (flashProfile) {
+        profileCacheRef.current.set(uid, flashProfile)
       }
 
       const timeline = result.approval_timeline || []
@@ -210,12 +233,32 @@ export default function GateScanPage(): JSX.Element {
     async (uid: string) => {
       const cd = checkCooldown(uid)
       if (!cd.allowed) {
+        let cachedProfile = profileCacheRef.current.get(uid)
+        
+        // If not in cache, and we're online, try a quick lookup so we can still show the card
+        if (!cachedProfile && isOnline) {
+          try {
+            const lookupResult = await lookupAny(uid)
+            if (lookupResult.found && lookupResult.profile) {
+              const built = buildFlashProfile(lookupResult.profile, lookupResult.profile_type ?? null)
+              if (built) {
+                cachedProfile = built
+                profileCacheRef.current.set(uid, built)
+              }
+            }
+          } catch (_) {
+            // ignore network errors on lookup fallback
+          }
+        }
+        
         appendScanLog({ uid, mode: 'ONLINE', title: 'COOLDOWN', subtitle: `Try IN after ${cd.remainingStr}` })
-        setFlash({
+        showFlash({
           kind: 'denied',
           title: 'PLEASE WAIT',
-          subtitle: `Try the IN after ${cd.remainingStr}`,
-          studentLine: `UID: ${uid}`
+          subtitle: 'Cooldown active',
+          detail: `Try again in ${cd.remainingStr}`,
+          studentLine: cachedProfile ? undefined : `UID: ${uid}`,
+          profile: cachedProfile
         })
         return
       }
@@ -288,7 +331,10 @@ export default function GateScanPage(): JSX.Element {
             if (uid.length < 8) continue
 
             const now = Date.now()
-            if (uid === lastScan.current.uid && now - lastScan.current.time < 2000) continue
+            if (uid === lastScan.current.uid && now - lastScan.current.time < 2000) {
+              pulseLastFlash()
+              continue
+            }
             lastScan.current = { uid, time: now }
 
             await processUID(uid)
@@ -324,55 +370,70 @@ export default function GateScanPage(): JSX.Element {
           </button>
         </div>
 
-        <div className="w-full max-w-4xl text-center text-white space-y-4">
+        <div className="w-full text-white space-y-4 px-8 max-w-[1600px] mx-auto">
           {!flash ? (
-            <>
+            <div className="text-center">
               <div className="text-4xl sm:text-5xl font-extrabold tracking-tight">READY</div>
               <div className="text-xl sm:text-2xl font-semibold opacity-90">Place your card</div>
               <div className="text-sm opacity-80">Mode: {isOnline ? 'ONLINE' : 'OFFLINE'}</div>
-            </>
+            </div>
           ) : (
-            <div className="flex flex-col items-center gap-6">
-              <div className="text-7xl sm:text-8xl font-black tracking-tight drop-shadow-lg mb-2">
-                {flash.title}
-              </div>
-
+            <div className="flex flex-col md:flex-row items-center justify-center gap-12 sm:gap-16 w-full animate-in fade-in zoom-in duration-200">
+              
               {flash.profile && (
-                <div className="bg-white/95 backdrop-blur-md text-gray-900 rounded-[2rem] p-8 shadow-2xl flex items-stretch gap-8 min-w-[550px] max-w-4xl text-left transform scale-105 transition-transform duration-200 border-4 border-white/40 relative overflow-hidden">
-                  <img src={logo} alt="IDCS" className="absolute top-4 right-6 w-20 h-20 object-contain opacity-80" />
-                  
-                  {flash.profile.imageUrl ? (
-                    <img src={flash.profile.imageUrl} alt="Profile" className="w-40 h-40 rounded-2xl object-cover border-4 border-gray-100 shadow-md flex-shrink-0 bg-white relative z-10" />
-                  ) : (
-                    <div className="w-40 h-40 rounded-2xl bg-gray-50 border-4 border-gray-100 shadow-md flex items-center justify-center flex-shrink-0 relative z-10">
-                      <svg xmlns="http://www.w3.org/2000/svg" className="w-20 h-20 text-gray-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                    </div>
-                  )}
-                  <div className="flex flex-col justify-center py-1 flex-1 relative z-10">
-                    <div className="flex items-center gap-3 mb-2">
-                       {flash.profile.type && (
-                         <span className="px-3 py-1 bg-indigo-100 text-indigo-800 text-sm font-bold uppercase tracking-wider rounded-lg shrink-0">
-                           {flash.profile.type}
-                         </span>
-                       )}
-                       <span className="text-xl font-bold text-gray-500 truncate">{flash.profile.idString}</span>
-                    </div>
-                    <div className="text-4xl font-black tracking-tight text-gray-800 mb-3 line-clamp-2 pr-12">{flash.profile.name || 'Unknown User'}</div>
-                    {(flash.profile.department || flash.profile.subtitle) && (
-                      <div className="flex flex-col gap-1 text-lg font-semibold text-gray-600">
-                        {flash.profile.department && <div className="truncate">{flash.profile.department}</div>}
-                        {flash.profile.subtitle && <div className="text-gray-500 truncate">{flash.profile.subtitle}</div>}
-                      </div>
+                <div className="flex-shrink-0 relative">
+                  <div className="w-[480px] h-[480px] rounded-[3rem] border-[16px] border-white/20 shadow-2xl flex items-center justify-center overflow-hidden bg-black/10 backdrop-blur-sm transform transition-all">
+                    {flash.profile.imageUrl ? (
+                      <img src={flash.profile.imageUrl} alt="Profile" className="w-full h-full object-cover relative z-10" />
+                    ) : (
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-48 h-48 text-white/50" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
                     )}
                   </div>
                 </div>
               )}
 
-              <div className="space-y-3 mt-8 flex flex-col items-center">
-                {flash.subtitle && <div className="text-3xl sm:text-4xl font-bold opacity-95">{flash.subtitle}</div>}
-                {flash.detail && <div className="text-2xl sm:text-3xl font-bold text-yellow-300 drop-shadow-md">{flash.detail}</div>}
-                {!flash.profile && flash.studentLine && <div className="text-xl opacity-90">{flash.studentLine}</div>}
+              <div className={`flex flex-col flex-1 max-w-5xl text-left ${!flash.profile ? 'items-center text-center' : ''}`}>
+                
+                {flash.profile ? (
+                  <>
+                    <div className="w-full">
+                      <div 
+                        className="font-black tracking-tight drop-shadow-2xl mb-2 sm:mb-4 uppercase text-white break-words"
+                        style={{
+                          fontSize: flash.profile.name && flash.profile.name.length > 20 
+                            ? 'clamp(60px, 6vw, 90px)' 
+                            : 'clamp(80px, 8vw, 130px)',
+                          lineHeight: '1.2'
+                        }}
+                      >
+                         {flash.profile.name || 'Unknown User'}
+                      </div>
+                    </div>
+                    
+                    <div className="flex items-center gap-4 mb-6">
+                       {flash.profile.type && (
+                         <span className="px-4 py-2 bg-white/20 text-white border border-white/40 text-xl font-bold uppercase tracking-widest rounded-xl shadow-md backdrop-blur-md">
+                           {flash.profile.type}
+                         </span>
+                       )}
+                       <span className="text-3xl font-extrabold text-white/90 drop-shadow-sm truncate">
+                         {flash.profile.idString}
+                       </span>
+                    </div>
+                  </>
+                ) : (
+                   flash.studentLine && <div className="text-3xl font-bold opacity-90 mb-4 drop-shadow-md">{flash.studentLine}</div>
+                )}
+                
+                <div className="mt-2 space-y-2">
+                  <div className="text-6xl sm:text-7xl font-black tracking-tight drop-shadow-xl mb-3 sm:mb-4 uppercase text-white/95">
+                    {flash.title}
+                  </div>
+                  {flash.subtitle && <div className="text-3xl font-bold opacity-95 text-white drop-shadow-md">{flash.subtitle}</div>}
+                  {flash.detail && <div className="text-2xl font-black text-yellow-300 drop-shadow-lg mt-2">{flash.detail}</div>}
+                </div>
               </div>
+
             </div>
           )}
         </div>
