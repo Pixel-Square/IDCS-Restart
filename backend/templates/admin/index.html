@@ -8,6 +8,16 @@
     <p class="dashboard-subtitle">{% trans "Welcome to KR DATABASE Administration" %}</p>
   </div>
 
+  <div class="dashboard-tools">
+    <input
+      id="admin-dashboard-search"
+      class="dashboard-search"
+      type="text"
+      placeholder="{% trans 'Search applications or models...' %}"
+      autocomplete="off"
+    />
+  </div>
+
   <!-- Quick Stats -->
   <div class="stats-grid">
     <div class="stat-card">
@@ -31,16 +41,16 @@
   <!-- Apps & Models -->
   <div class="app-section">
     <h2 class="section-title">{% trans "Applications & Models" %}</h2>
-    <div class="app-cards">
+    <div class="app-cards" id="admin-app-cards">
       {% for app in app_list %}
-        <div class="app-card">
+        <div class="app-card" data-app-name="{{ app.name|lower }}">
           <div class="app-card-header">
             {{ app.name }}
           </div>
           <div class="app-card-body">
             <ul class="model-list">
               {% for model in app.models %}
-                <li data-admin-url="{{ model.admin_url }}">
+                <li data-admin-url="{{ model.admin_url }}" data-model-name="{{ model.name|lower }}">
                   <div class="model-item">
                     <div class="model-name">
                       <a href="{{ model.admin_url }}">{{ model.name }}</a>
@@ -63,6 +73,9 @@
         <p>{% trans "No apps registered." %}</p>
       {% endfor %}
     </div>
+    <p id="admin-dashboard-no-results" style="display:none; margin-top:1rem; color:var(--kr-subtle);">
+      {% trans "No matching applications or models." %}
+    </p>
   </div>
 
   <!-- Recent Actions -->
@@ -91,5 +104,5 @@
 
 {% block extrahead %}
   {{ block.super }}
-  <script src="{% static 'js/admin_dashboard.js' %}"></script>
+  <script src="{% static 'js/admin_dashboard.js' %}?v=20260314-1"></script>
 {% endblock %}

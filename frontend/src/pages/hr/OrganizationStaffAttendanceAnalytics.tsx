@@ -14,7 +14,13 @@ interface AnalyticsData {
     total_records: number;
     total_present: number;
     total_absent: number;
-    total_partial: number;
+    staff_present_count: number;
+    staff_absent_count: number;
+    staff_cl_count: number;
+    staff_od_count: number;
+    staff_late_entry_count: number;
+    staff_col_count: number;
+    staff_others_count: number;
   };
   staff_analytics: Array<{
     staff_id: number;
@@ -23,8 +29,12 @@ interface AnalyticsData {
     department: string;
     present: number;
     absent: number;
-    partial: number;
     no_record: number;
+    cl_count: number;
+    od_count: number;
+    late_entry_count: number;
+    col_count: number;
+    others_count: number;
   }>;
 }
 
@@ -57,12 +67,12 @@ export default function OrganizationStaffAttendanceAnalytics() {
   };
 
   const loadAnalytics = async () => {
-    if (!fromDate || !toDate) {
-      setError('Please select both From and To dates');
+    if (!fromDate) {
+      setError('Please select From date');
       return;
     }
 
-    if (new Date(fromDate) > new Date(toDate)) {
+    if (toDate && new Date(fromDate) > new Date(toDate)) {
       setError('From date must be before To date');
       return;
     }
@@ -73,9 +83,10 @@ export default function OrganizationStaffAttendanceAnalytics() {
     try {
       const params = new URLSearchParams({
         from_date: fromDate,
-        to_date: toDate,
         format: 'json',
       });
+
+      if (toDate) params.append('to_date', toDate);
 
       if (departmentId) {
         params.append('department_id', departmentId);
@@ -100,17 +111,18 @@ export default function OrganizationStaffAttendanceAnalytics() {
   };
 
   const downloadCSV = async () => {
-    if (!fromDate || !toDate) {
-      setError('Please select both From and To dates');
+    if (!fromDate) {
+      setError('Please select From date');
       return;
     }
 
     try {
       const params = new URLSearchParams({
         from_date: fromDate,
-        to_date: toDate,
         format: 'csv',
       });
+
+      if (toDate) params.append('to_date', toDate);
 
       if (departmentId) {
         params.append('department_id', departmentId);
@@ -128,7 +140,8 @@ export default function OrganizationStaffAttendanceAnalytics() {
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `organization_attendance_${fromDate}_to_${toDate}.csv`;
+      const filename = toDate ? `organization_attendance_${fromDate}_to_${toDate}.csv` : `organization_attendance_${fromDate}.csv`;
+      link.download = filename;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -139,9 +152,9 @@ export default function OrganizationStaffAttendanceAnalytics() {
   };
 
   const calculateAttendancePercentage = (staff: AnalyticsData['staff_analytics'][0]) => {
-    const totalDays = staff.present + staff.absent + staff.partial;
-    if (totalDays === 0) return 0;
-    return ((staff.present / totalDays) * 100).toFixed(2);
+    const workingDays = analyticsData?.date_range?.working_days || 0;
+    if (workingDays === 0) return '0.00';
+    return ((staff.present / workingDays) * 100).toFixed(2);
   };
 
   return (
@@ -241,7 +254,30 @@ export default function OrganizationStaffAttendanceAnalytics() {
         {analyticsData && (
           <>
             {/* Summary Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+              {/** Determine if this is a single-day view */}
+              {(() => {
+                const isSingleDay = analyticsData.date_range.from_date === analyticsData.date_range.to_date;
+                return (
+                  isSingleDay && (
+                    <>
+                      <div className="bg-white rounded-lg shadow-md p-4 border-l-4 border-green-600">
+                        <p className="text-slate-600 text-sm font-medium">No. of Staff Present</p>
+                        <p className="text-3xl font-bold text-green-600">
+                          {analyticsData.summary.staff_present_count}
+                        </p>
+                      </div>
+
+                      <div className="bg-white rounded-lg shadow-md p-4 border-l-4 border-red-600">
+                        <p className="text-slate-600 text-sm font-medium">No. of Staff Absent</p>
+                        <p className="text-3xl font-bold text-red-600">
+                          {analyticsData.summary.staff_absent_count}
+                        </p>
+                      </div>
+                    </>
+                  )
+                );
+              })()}
               <div className="bg-white rounded-lg shadow-md p-4 border-l-4 border-blue-600">
                 <p className="text-slate-600 text-sm font-medium">Total Staff</p>
                 <p className="text-3xl font-bold text-slate-900">
@@ -249,29 +285,43 @@ export default function OrganizationStaffAttendanceAnalytics() {
                 </p>
               </div>
 
-              <div className="bg-white rounded-lg shadow-md p-4 border-l-4 border-green-600">
-                <p className="text-slate-600 text-sm font-medium">Total Present Days</p>
-                <p className="text-3xl font-bold text-green-600">
-                  {analyticsData.summary.total_present}
+              <div className="bg-white rounded-lg shadow-md p-4 border-l-4 border-purple-600">
+                <p className="text-slate-600 text-sm font-medium">No. of Staff with CL</p>
+                <p className="text-3xl font-bold text-purple-600">
+                  {analyticsData.summary.staff_cl_count}
                 </p>
               </div>
 
-              <div className="bg-white rounded-lg shadow-md p-4 border-l-4 border-red-600">
-                <p className="text-slate-600 text-sm font-medium">Total Absent Days</p>
-                <p className="text-3xl font-bold text-red-600">
-                  {analyticsData.summary.total_absent}
+              <div className="bg-white rounded-lg shadow-md p-4 border-l-4 border-indigo-600">
+                <p className="text-slate-600 text-sm font-medium">No. of Staff with OD</p>
+                <p className="text-3xl font-bold text-indigo-600">
+                  {analyticsData.summary.staff_od_count}
                 </p>
               </div>
 
-              <div className="bg-white rounded-lg shadow-md p-4 border-l-4 border-yellow-600">
-                <p className="text-slate-600 text-sm font-medium">Total Partial Days</p>
-                <p className="text-3xl font-bold text-yellow-600">
-                  {analyticsData.summary.total_partial}
+              <div className="bg-white rounded-lg shadow-md p-4 border-l-4 border-orange-600">
+                <p className="text-slate-600 text-sm font-medium">No. of Staff with Late Entry</p>
+                <p className="text-3xl font-bold text-orange-600">
+                  {analyticsData.summary.staff_late_entry_count}
+                </p>
+              </div>
+
+              <div className="bg-white rounded-lg shadow-md p-4 border-l-4 border-teal-600">
+                <p className="text-slate-600 text-sm font-medium">No. of Staff with COL</p>
+                <p className="text-3xl font-bold text-teal-600">
+                  {analyticsData.summary.staff_col_count}
+                </p>
+              </div>
+
+              <div className="bg-white rounded-lg shadow-md p-4 border-l-4 border-pink-600">
+                <p className="text-slate-600 text-sm font-medium">No. of Staff with Others</p>
+                <p className="text-3xl font-bold text-pink-600">
+                  {analyticsData.summary.staff_others_count}
                 </p>
               </div>
 
               <div className="bg-white rounded-lg shadow-md p-4 border-l-4 border-slate-600">
-                <p className="text-slate-600 text-sm font-medium">Working Days</p>
+                <p className="text-slate-600 text-sm font-medium">Total Working Days (excluding holidays)</p>
                 <p className="text-3xl font-bold text-slate-900">
                   {analyticsData.date_range.working_days}
                 </p>
@@ -316,8 +366,20 @@ export default function OrganizationStaffAttendanceAnalytics() {
                             <th className="px-6 py-3 text-center text-sm font-semibold text-red-700">
                               Absent
                             </th>
-                            <th className="px-6 py-3 text-center text-sm font-semibold text-yellow-700">
-                              Partial
+                            <th className="px-6 py-3 text-center text-sm font-semibold text-purple-700">
+                              CL
+                            </th>
+                            <th className="px-6 py-3 text-center text-sm font-semibold text-indigo-700">
+                              OD
+                            </th>
+                            <th className="px-6 py-3 text-center text-sm font-semibold text-orange-700">
+                              Late Entry
+                            </th>
+                            <th className="px-6 py-3 text-center text-sm font-semibold text-teal-700">
+                              COL
+                            </th>
+                            <th className="px-6 py-3 text-center text-sm font-semibold text-pink-700">
+                              Others
                             </th>
                             <th className="px-6 py-3 text-center text-sm font-semibold text-blue-700">
                               Attendance %
@@ -327,7 +389,7 @@ export default function OrganizationStaffAttendanceAnalytics() {
                   <tbody>
                       {analyticsData.staff_analytics.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="px-6 py-8 text-center text-slate-500">
+                        <td colSpan={11} className="px-6 py-8 text-center text-slate-500">
                           No staff data available for the selected period
                         </td>
                       </tr>
@@ -347,13 +409,25 @@ export default function OrganizationStaffAttendanceAnalytics() {
                             {staff.department}
                           </td>
                           <td className="px-6 py-4 text-center text-sm font-medium text-green-600">
-                            {staff.present}
+                            {staff.present.toFixed(1)}
                           </td>
                           <td className="px-6 py-4 text-center text-sm font-medium text-red-600">
-                            {staff.absent}
+                            {staff.absent.toFixed(1)}
                           </td>
-                          <td className="px-6 py-4 text-center text-sm font-medium text-yellow-600">
-                            {staff.partial}
+                          <td className="px-6 py-4 text-center text-sm font-medium text-purple-600">
+                            {staff.cl_count}
+                          </td>
+                          <td className="px-6 py-4 text-center text-sm font-medium text-indigo-600">
+                            {staff.od_count}
+                          </td>
+                          <td className="px-6 py-4 text-center text-sm font-medium text-orange-600">
+                            {staff.late_entry_count}
+                          </td>
+                          <td className="px-6 py-4 text-center text-sm font-medium text-teal-600">
+                            {staff.col_count}
+                          </td>
+                          <td className="px-6 py-4 text-center text-sm font-medium text-pink-600">
+                            {staff.others_count}
                           </td>
                           <td className="px-6 py-4 text-center text-sm font-medium text-blue-600">
                             {calculateAttendancePercentage(staff)}%

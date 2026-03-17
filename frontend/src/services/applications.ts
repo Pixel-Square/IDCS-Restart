@@ -140,8 +140,13 @@ export type MyApplicationItem = {
   created_at: string
   current_step_role: string | null
   gatepass_scanned_at: string | null
+  gatepass_in_scanned_at?: string | null
   needs_gatepass_scan: boolean
   sla_deadline: string | null
+  time_window_active?: boolean
+  gatepass_window_start?: string | null
+  gatepass_window_end?: string | null
+  gatepass_expired?: boolean
 }
 
 export async function fetchMyApplications(): Promise<MyApplicationItem[]> {
@@ -150,7 +155,12 @@ export async function fetchMyApplications(): Promise<MyApplicationItem[]> {
 
 // ─── Application Detail ───────────────────────────────────────────────────────
 
-export type DynamicFieldValue = { label: string; field_key: string; value: unknown }
+export type DynamicFieldValue = {
+  label: string
+  field_key: string
+  field_type?: 'TEXT' | 'DATE' | 'TIME' | 'DATE IN OUT' | 'DATE OUT IN' | 'BOOLEAN' | 'FILE' | 'NUMBER' | 'SELECT'
+  value: unknown
+}
 
 export type ApprovalHistoryEntry = {
   id: number
@@ -186,10 +196,25 @@ export type ApplicationDetail = {
   sla_hours: number | null
   sla_deadline: string | null
   gatepass_scanned_at: string | null
+  gatepass_in_scanned_at?: string | null
+  time_window_active?: boolean
+  gatepass_window_start?: string | null
+  gatepass_window_end?: string | null
+  gatepass_expired?: boolean
 }
 
 export async function fetchApplicationDetail(id: number): Promise<ApplicationDetail> {
   return parseJson(await fetchWithAuth(`/api/applications/${id}/`))
+}
+
+export async function cancelApplication(id: number): Promise<{ id: number; current_state: string; status: string }> {
+  return parseJson(
+    await fetchWithAuth(`/api/applications/${id}/cancel/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    }),
+  )
 }
 
 // ─── Step Info (for approvers) ────────────────────────────────────────────────

@@ -81,91 +81,114 @@ export default function AttendanceRequests(){
   }
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-      <h2 className="text-xl font-semibold mb-4">
-        {permissionLevel === 'department' ? 'Session Unlock Requests' : 'Unlock Requests (Final Approval)'}
-      </h2>
-      {permissionLevel === 'department' && (
-        <p className="text-sm text-gray-600 mb-4">
-          Review unlock requests from staff in your department. Approved requests will be forwarded to the attendance administrator.
-        </p>
-      )}
-      {loading && <p>Loading...</p>}
-      {!loading && requests.length === 0 && (
-        <p className="text-gray-600">
-          {permissionLevel === 'department' 
-            ? 'No pending HOD approval requests found.' 
-            : 'No requests pending final approval found.'}
-        </p>
-      )}
-      {!loading && requests.length > 0 && (
-        <div className="overflow-x-auto">
-          <table className="min-w-full bg-white border rounded-lg">
-            <thead className="bg-gray-50">
+    <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 overflow-hidden">
+      <div className="mb-6 flex flex-col gap-1">
+        <h2 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-slate-900 to-slate-700">
+          {permissionLevel === 'department' ? 'Session Unlock Requests' : 'Unlock Requests (Final Approval)'}
+        </h2>
+        {permissionLevel === 'department' && (
+          <p className="text-sm font-medium text-slate-500">
+            Review unlock requests from staff in your department. Approved requests will be forwarded to the attendance administrator.
+          </p>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="bg-slate-50 border border-slate-100 rounded-2xl p-10 flex flex-col items-center justify-center text-slate-500">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mb-3"></div>
+          <p className="font-medium text-sm">Loading requests...</p>
+        </div>
+      ) : requests.length === 0 ? (
+        <div className="bg-slate-50 border border-slate-100 rounded-2xl p-8 flex flex-col items-center justify-center text-slate-500">
+          <div className="h-14 w-14 bg-white rounded-full flex items-center justify-center mb-3 shadow-sm border border-slate-100">
+            <svg className="w-7 h-7 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+          </div>
+          <h3 className="text-base font-semibold text-slate-700">All Caught Up!</h3>
+          <p className="text-sm mt-1">
+            {permissionLevel === 'department' 
+              ? 'No pending HOD approval requests found.' 
+              : 'No requests pending final approval found.'}
+          </p>
+        </div>
+      ) : (
+        <div className="overflow-x-auto -mx-6 px-6">
+          <table className="min-w-full divide-y divide-slate-200">
+            <thead className="bg-slate-50 border-y border-slate-200">
               <tr>
-                <th className="px-4 py-2 text-left text-sm font-medium text-gray-700">No.</th>
-                <th className="px-4 py-2 text-left text-sm font-medium text-gray-700">Type</th>
-                <th className="px-4 py-2 text-left text-sm font-medium text-gray-700">Session</th>
-                <th className="px-4 py-2 text-left text-sm font-medium text-gray-700">Requested By</th>
-                <th className="px-4 py-2 text-left text-sm font-medium text-gray-700">Requested At</th>
-                <th className="px-4 py-2 text-left text-sm font-medium text-gray-700">Reason</th>
-                <th className="px-4 py-2 text-left text-sm font-medium text-gray-700">Status</th>
-                <th className="px-4 py-2 text-left text-sm font-medium text-gray-700">Actions</th>
+                <th className="px-5 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">No.</th>
+                <th className="px-5 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Type</th>
+                <th className="px-5 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Session</th>
+                <th className="px-5 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Requested By</th>
+                <th className="px-5 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Requested At</th>
+                <th className="px-5 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Reason</th>
+                <th className="px-5 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Status</th>
+                <th className="px-5 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider w-40">Actions</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="bg-white divide-y divide-slate-100">
               {requests.map((r, idx) => (
-                <tr key={r.id} className="border-t hover:bg-gray-50">
-                  <td className="px-4 py-2">{idx+1}</td>
-                  <td className="px-4 py-2">
-                    <span className={`px-2 py-1 rounded text-sm font-medium ${
+                <tr key={r.id} className="hover:bg-slate-50/70 transition-colors">
+                  <td className="px-5 py-4 text-sm font-medium text-slate-500">{idx+1}</td>
+                  <td className="px-5 py-4">
+                    <span className={`inline-flex px-2.5 py-1 rounded-md text-xs font-semibold ${
                       r.request_type === 'daily' 
-                        ? 'bg-emerald-100 text-emerald-800' 
-                        : 'bg-indigo-100 text-indigo-800'
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/50' 
+                        : 'bg-indigo-50 text-indigo-700 border border-indigo-200/50'
                     }`}>
                       {r.request_type === 'daily' ? 'Daily' : 'Period'}
                     </span>
                   </td>
-                  <td className="px-4 py-2 text-sm">
-                    <div>{r.department || r.session_display?.split(' | ')[0] || 'N/A'}</div>
-                    <div className="text-gray-500 text-xs">{r.session_display || ''}</div>
+                  <td className="px-5 py-4 text-sm">
+                    <div className="font-semibold text-slate-800">{r.department || r.session_display?.split(' | ')[0] || 'N/A'}</div>
+                    <div className="text-slate-500 text-xs mt-0.5">{r.session_display || ''}</div>
                   </td>
-                  <td className="px-4 py-2 text-sm">
-                    <div>{r.requested_by?.name || r.requested_by_display || 'Unknown'}</div>
-                    <div className="text-gray-500 text-xs">{r.requested_by?.staff_id || (r.requested_by && r.requested_by.staff_id) || ''}</div>
+                  <td className="px-5 py-4 text-sm">
+                    <div className="font-semibold text-slate-800">{r.requested_by?.name || r.requested_by_display || 'Unknown'}</div>
+                    <div className="text-slate-500 text-xs mt-0.5 font-medium">{r.requested_by?.staff_id || (r.requested_by && r.requested_by.staff_id) || ''}</div>
                   </td>
-                  <td className="px-4 py-2 text-sm">{r.requested_at ? new Date(r.requested_at).toLocaleString() : ''}</td>
-                  <td className="px-4 py-2 text-sm max-w-xs truncate" title={r.note || r.reason || r.reason_text || ''}>{r.note || r.reason || r.reason_text || '-'}</td>
-                  <td className="px-4 py-2">
-                    <span className={`px-2 py-1 rounded text-sm font-medium ${
+                  <td className="px-5 py-4 text-sm text-slate-600 font-medium">
+                    {r.requested_at ? new Date(r.requested_at).toLocaleString(undefined, {
+                      day: '2-digit', month: 'short', year: 'numeric',
+                      hour: '2-digit', minute: '2-digit'
+                    }) : ''}
+                  </td>
+                  <td className="px-5 py-4 text-sm text-slate-600">
+                    <div className="max-w-[200px] truncate bg-slate-50 px-2 py-1.5 rounded border border-slate-100 font-medium" title={r.note || r.reason || r.reason_text || ''}>
+                      {r.note || r.reason || r.reason_text || '-'}
+                    </div>
+                  </td>
+                  <td className="px-5 py-4">
+                    <span className={`inline-flex px-2.5 py-1 rounded-md text-xs font-semibold ${
                       (r.hod_status === 'PENDING' || r.status === 'PENDING')
-                        ? 'bg-yellow-100 text-yellow-800' 
+                        ? 'bg-amber-50 text-amber-700 border border-amber-200/50' 
                         : r.status === 'HOD_APPROVED'
-                        ? 'bg-blue-100 text-blue-800'
+                        ? 'bg-blue-50 text-blue-700 border border-blue-200/50'
                         : r.status === 'APPROVED'
-                        ? 'bg-green-100 text-green-800'
-                        : 'bg-red-100 text-red-800'
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/50'
+                        : 'bg-rose-50 text-rose-700 border border-rose-200/50'
                     }`}>
                       {r.hod_status || r.status || 'PENDING'}
                     </span>
                   </td>
-                  <td className="px-4 py-2">
+                  <td className="px-5 py-4 text-sm">
                     {(r.hod_status === 'PENDING' || r.status === 'PENDING' || r.status === 'HOD_APPROVED') ? (
                       <div className="flex gap-2">
                         <button 
-                          className="px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700 transition-colors" 
+                          className="px-3 py-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-500 hover:text-white border border-emerald-200 hover:border-emerald-600 text-xs font-semibold rounded-lg shadow-sm transition-all flex items-center justify-center"
                           onClick={()=>handleAction(r.id, 'approve', r.request_type || 'period')}
                         >
                           Approve
                         </button>
                         <button 
-                          className="px-3 py-1 bg-red-600 text-white text-sm rounded hover:bg-red-700 transition-colors" 
+                          className="px-3 py-1.5 bg-rose-50 text-rose-700 hover:bg-rose-500 hover:text-white border border-rose-200 hover:border-rose-600 text-xs font-semibold rounded-lg shadow-sm transition-all flex items-center justify-center"
                           onClick={()=>handleAction(r.id, 'reject', r.request_type || 'period')}
                         >
                           Reject
                         </button>
                       </div>
-                    ) : (<span className="text-gray-500">-</span>)}
+                    ) : (<span className="text-slate-400 font-medium text-xs bg-slate-50 px-2 py-1 rounded border border-slate-100">Processed</span>)}
                   </td>
                 </tr>
               ))}

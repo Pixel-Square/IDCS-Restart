@@ -144,7 +144,24 @@ def validate_roles_for_user(user, roles):
     role_names = {getattr(r, 'name', str(r)).upper() for r in roles}
 
     STUDENT_ALLOWED = {'STUDENT'}
-    STAFF_ALLOWED = {'STAFF', 'FACULTY', 'ADVISOR', 'HOD', 'AHOD', 'MENTOR', 'ADMIN'}
+    # NOTE: Many deployments use additional staff-only roles (SECURITY, HR, IQAC, etc.).
+    # Keep this list permissive for staff profiles while still preventing STUDENT on staff.
+    STAFF_ALLOWED = {
+        'STAFF',
+        'FACULTY',
+        'ADVISOR',
+        'HOD',
+        'AHOD',
+        'MENTOR',
+        'ADMIN',
+        'IQAC',
+        'SECURITY',
+        'LIBRARY',
+        'HR',
+        'HAA',
+        'PRINCIPAL',
+        'PS',
+    }
 
     if profile == 'STUDENT':
         invalid = role_names - STUDENT_ALLOWED
@@ -312,3 +329,42 @@ class UserQuery(models.Model):
     
     def __str__(self):
         return f"{self.user.username} - {self.status} - {self.created_at.strftime('%Y-%m-%d')}"
+
+
+class ProfileImageUpdateRequest(models.Model):
+    """Request to unlock one-time profile image update for a user."""
+
+    STATUS_PENDING = 'PENDING'
+    STATUS_APPROVED = 'APPROVED'
+    STATUS_REJECTED = 'REJECTED'
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_APPROVED, 'Approved'),
+        (STATUS_REJECTED, 'Rejected'),
+    ]
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='profile_image_update_requests',
+    )
+    reason = models.TextField(blank=True, default='')
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    requested_at = models.DateTimeField(auto_now_add=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='reviewed_profile_image_update_requests',
+    )
+    review_note = models.TextField(blank=True, default='')
+
+    class Meta:
+        ordering = ['-requested_at']
+        verbose_name = 'Profile Image Update Request'
+        verbose_name_plural = 'Profile Image Update Requests'
+
+    def __str__(self):
+        return f"{self.user.username} - {self.status}"

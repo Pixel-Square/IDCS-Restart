@@ -9,6 +9,7 @@ import {
   ApplicationField,
   ForwardedTo,
 } from '../../services/applications'
+import { ensureProfilePhotoPresent } from '../../services/auth'
 
 // ─── Forwarded-to popup ───────────────────────────────────────────────────────
 
@@ -137,6 +138,7 @@ function FieldInput({
     case 'DATE IN OUT':
       return renderComposite(['in_time', 'out_time'])
     case 'DATE OUT IN':
+      // User request: Ensure OUT time renders first, reflecting it is the start time.
       return renderComposite(['out_time', 'in_time'])
     case 'NUMBER':
       return (
@@ -202,6 +204,19 @@ export default function ApplicationFormPage(): JSX.Element {
   const [activeApp, setActiveApp] = useState<{ id: number; state: string; message: string } | null>(null)
 
   useEffect(() => {
+    let mounted = true
+    ;(async () => {
+      const hasPhoto = await ensureProfilePhotoPresent()
+      if (!mounted) return
+      if (!hasPhoto) {
+        alert('Please upload your Profile Photo before applying for applications. Redirecting you to Profile now.')
+        navigate('/profile')
+      }
+    })()
+    return () => { mounted = false }
+  }, [navigate])
+
+  useEffect(() => {
     if (!typeId) return
     let mounted = true
     ;(async () => {
@@ -215,9 +230,16 @@ export default function ApplicationFormPage(): JSX.Element {
         const TERMINAL = ['APPROVED', 'REJECTED', 'CANCELLED']
         try {
           const myApps = await fetchMyApplications()
-          const active = myApps.find(
-            (a) => a.application_type_name === s.name && !TERMINAL.includes(a.current_state),
-          )
+          const active = myApps.find((a) => {
+            if (a.application_type_name !== s.name) return false
+            if (TERMINAL.includes(a.current_state)) return false
+            // If gatepass expired, treat as terminal
+            if (a.gatepass_window_end) {
+              const end = new Date(a.gatepass_window_end).getTime()
+              if (Date.now() > end) return false
+            }
+            return true
+          })
           if (active && mounted) {
             setActiveApp({
               id: active.id,
@@ -251,6 +273,13 @@ export default function ApplicationFormPage(): JSX.Element {
     e.preventDefault()
     if (!schema) return
     setError(null)
+
+    const hasPhoto = await ensureProfilePhotoPresent()
+    if (!hasPhoto) {
+      alert('Please upload your Profile Photo before submitting an application. Redirecting you to Profile now.')
+      navigate('/profile')
+      return
+    }
 
     // Client-side required check
     for (const f of schema.fields) {

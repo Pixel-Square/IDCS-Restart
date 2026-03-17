@@ -286,7 +286,7 @@ export default function IDCSScanGatepassPage() {
         {/* Header */}
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Gatepass Scanner</h1>
+            <h1 className="text-2xl font-bold text-gray-900">Gatepass Scanner OLD</h1>
             <p className="text-sm text-gray-500 mt-0.5">Scan RFID card to verify exit permission</p>
           </div>
           {scanning && (

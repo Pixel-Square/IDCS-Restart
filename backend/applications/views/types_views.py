@@ -9,6 +9,7 @@ from applications.serializers.types import (
     ApplicationTypeListSerializer,
     ApplicationTypeSchemaSerializer,
 )
+from applications.services import flow_selection
 
 
 def _get_user_department(user):
@@ -62,11 +63,18 @@ def _user_can_initiate_type(user, app_type: app_models.ApplicationType) -> bool:
     flows = app_models.ApprovalFlow.objects.filter(application_type=app_type, is_active=True)
     flows = flows.filter(steps__isnull=False).distinct()
 
+    # Prefer a flow whose starter role matches the user's effective/last role.
     flow = None
     if dept is not None:
-        flow = flows.filter(department=dept).order_by('-id').first()
+        dept_flow = flow_selection.select_best_initiable_flow(flows.filter(department=dept), user)
+        if dept_flow is not None:
+            flow = dept_flow
+
     if flow is None:
-        flow = flows.filter(department__isnull=True).order_by('-id').first()
+        global_flow = flow_selection.select_best_initiable_flow(flows.filter(department__isnull=True), user)
+        if global_flow is not None:
+            flow = global_flow
+
     if flow is None:
         return False
 

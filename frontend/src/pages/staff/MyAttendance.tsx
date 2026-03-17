@@ -10,6 +10,8 @@ interface AttendanceRecord {
   full_name: string;
   date: string;
   status: 'present' | 'absent' | 'partial' | 'half_day';
+  fn_status: string;
+  an_status: string;
   morning_in: string | null;
   evening_out: string | null;
   notes: string;
@@ -278,6 +280,12 @@ export default function MyAttendancePage() {
                       Status
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      FN
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      AN
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Time In
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -301,6 +309,16 @@ export default function MyAttendancePage() {
                             {record.status}
                           </span>
                         </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(record.fn_status)}`}>
+                          {record.fn_status}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(record.an_status)}`}>
+                          {record.an_status}
+                        </span>
                       </td>
                       <td className={`px-6 py-4 whitespace-nowrap text-sm font-medium ${isTimeInLate(record.morning_in) ? 'bg-red-100 text-red-900' : 'text-gray-900'}`}>
                         {record.morning_in || '—'}

@@ -7,6 +7,7 @@ from django.core.exceptions import PermissionDenied
 from applications import models as app_models
 from applications.services import application_state
 from applications.services import notification_service
+from applications.services import flow_selection
 
 
 def _get_applicant_department(application):
@@ -56,6 +57,22 @@ def _get_flow_for_application(application) -> Optional[app_models.ApprovalFlow]:
 
     Prefer department-specific flow, fallback to global (department is NULL).
     """
+    # If the application already has a current_step, keep the original flow
+    # when it is still active. This prevents existing in-progress applications
+    # from "jumping" to a different flow when multiple flows exist.
+    try:
+        current_step = getattr(application, 'current_step', None)
+        current_flow = getattr(current_step, 'approval_flow', None) if current_step is not None else None
+        if current_flow is not None and getattr(current_flow, 'is_active', False):
+            if getattr(current_flow, 'application_type_id', None) == getattr(application.application_type, 'id', None):
+                try:
+                    if current_flow.steps.exists():
+                        return current_flow
+                except Exception:
+                    return current_flow
+    except Exception:
+        pass
+
     dept = _get_applicant_department(application)
     qs = app_models.ApprovalFlow.objects.filter(application_type=application.application_type, is_active=True)
     # Only consider flows that have at least one step configured.
@@ -63,8 +80,15 @@ def _get_flow_for_application(application) -> Optional[app_models.ApprovalFlow]:
     dept_flow = None
     global_flow = None
 
+    applicant_user = None
+    try:
+        applicant_user = getattr(application, 'applicant_user', None)
+    except Exception:
+        applicant_user = None
+
     if dept is not None:
-        dept_flow = qs_with_steps.filter(department=dept).order_by('-id').first()
+        dept_qs = qs_with_steps.filter(department=dept)
+        dept_flow = flow_selection.select_best_initiable_flow(dept_qs, applicant_user)
         if dept_flow is not None:
             try:
                 if dept_flow.steps.exists():
@@ -72,7 +96,10 @@ def _get_flow_for_application(application) -> Optional[app_models.ApprovalFlow]:
             except Exception:
                 return dept_flow
 
-    global_flow = qs_with_steps.filter(department__isnull=True).order_by('-id').first()
+    global_qs = qs_with_steps.filter(department__isnull=True)
+    global_flow = flow_selection.select_best_initiable_flow(global_qs, applicant_user)
+    if global_flow is None:
+        global_flow = global_qs.order_by('-id').first()
     if global_flow is not None:
         try:
             if global_flow.steps.exists():
@@ -81,6 +108,9 @@ def _get_flow_for_application(application) -> Optional[app_models.ApprovalFlow]:
             return global_flow
 
     # No flow with steps; keep legacy preference order.
+    # Fall back to newest dept/global even if user couldn't initiate.
+    if dept is not None and dept_flow is None:
+        dept_flow = qs_with_steps.filter(department=dept).order_by('-id').first()
     return dept_flow or global_flow
 
 

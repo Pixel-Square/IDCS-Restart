@@ -1,5 +1,9 @@
-from typing import Dict
+from typing import Dict, Optional
+
+from datetime import time
+
 from django.utils import timezone
+from django.utils.dateparse import parse_date
 from rest_framework import serializers
 
 from applications import models as app_models
@@ -8,12 +12,182 @@ from applications.services import application_state
 from applications.serializers.approval import ApprovalActionSerializer
 
 
+def _parse_clock_time(value) -> Optional[time]:
+    from datetime import datetime as _dt
+
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    for fmt in ("%H:%M", "%H:%M:%S"):
+        try:
+            return _dt.strptime(raw, fmt).time()
+        except ValueError:
+            continue
+    for fmt in ("%I:%M %p", "%I:%M:%S %p"):
+        try:
+            return _dt.strptime(raw.upper(), fmt).time()
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_any_date(value) -> Optional[timezone.datetime.date]:
+    from datetime import datetime as _dt
+
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+
+    d = parse_date(raw)
+    if d:
+        return d
+
+    # Common UI/export formats
+    for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%d.%m.%Y"):
+        try:
+            return _dt.strptime(raw, fmt).date()
+        except ValueError:
+            continue
+
+    return None
+
+
+def _extract_time_window(app: app_models.Application):
+    """Extract a (start, end) aware datetime window from application fields.
+
+    Supports:
+    1) Composite fields:
+       - DATE IN OUT  -> {date, in_time, out_time}
+       - DATE OUT IN  -> {date, out_time, in_time}
+    2) Separate fields (best-effort):
+       - One DATE field + two TIME fields (keys/labels containing 'in'/'out' preferred)
+
+    Overnight windows are supported (end <= start -> end + 1 day).
+    """
+    from datetime import datetime, timedelta
+
+    rows = list(app.data.select_related("field").all())
+    rows_sorted = sorted(
+        rows,
+        key=lambda r: (getattr(r.field, "order", 0), getattr(r.field, "field_key", "")),
+    )
+
+    # 1) Composite field types
+    for row in rows_sorted:
+        ftype = str(getattr(row.field, "field_type", "") or "").upper()
+        if ftype not in ("DATE IN OUT", "DATE OUT IN"):
+            continue
+
+        payload = row.value if isinstance(row.value, dict) else {}
+        day = _parse_any_date(str(payload.get("date") or "").strip())
+        if not day:
+            continue
+
+        if ftype == "DATE IN OUT":
+            start_key, end_key = "in_time", "out_time"
+        else:
+            start_key, end_key = "out_time", "in_time"
+
+        start_t = _parse_clock_time(payload.get(start_key))
+        end_t = _parse_clock_time(payload.get(end_key))
+        if not start_t or not end_t:
+            continue
+
+        tz = timezone.get_current_timezone()
+        start_dt = timezone.make_aware(datetime.combine(day, start_t), tz)
+        end_dt = timezone.make_aware(datetime.combine(day, end_t), tz)
+        if end_dt <= start_dt:
+            end_dt = end_dt + timedelta(days=1)
+
+        return {"start": start_dt, "end": end_dt}
+
+    # 2) Separate DATE + TIME fields
+    date_day = None
+    for row in rows_sorted:
+        ftype = str(getattr(row.field, "field_type", "") or "").upper()
+        if ftype != "DATE":
+            continue
+        val = row.value
+        if isinstance(val, dict) and "date" in val:
+            raw = str(val.get("date") or "").strip()
+        else:
+            raw = str(val or "").strip()
+        date_day = _parse_any_date(raw)
+        if date_day:
+            break
+
+    if not date_day:
+        return None
+
+    time_rows = []
+    for row in rows_sorted:
+        ftype = str(getattr(row.field, "field_type", "") or "").upper()
+        if ftype != "TIME":
+            continue
+        t = _parse_clock_time(row.value)
+        if not t:
+            continue
+        key = str(getattr(row.field, "field_key", "") or "").lower()
+        label = str(getattr(row.field, "label", "") or "").lower()
+        role = None
+        if "in" in key or "in" in label:
+            role = "in"
+        if "out" in key or "out" in label:
+            role = "out" if role is None else role
+        time_rows.append((role, t))
+
+    if len(time_rows) < 2:
+        return None
+
+    in_t = next((t for role, t in time_rows if role == "in"), None)
+    out_t = next((t for role, t in time_rows if role == "out"), None)
+    if not in_t or not out_t:
+        # fallback: earliest as start, latest as end
+        times_only = [t for _, t in time_rows]
+        in_t = min(times_only)
+        out_t = max(times_only)
+
+    tz = timezone.get_current_timezone()
+    start_dt = timezone.make_aware(datetime.combine(date_day, in_t), tz)
+    end_dt = timezone.make_aware(datetime.combine(date_day, out_t), tz)
+    if end_dt <= start_dt:
+        end_dt = end_dt + timedelta(days=1)
+    return {"start": start_dt, "end": end_dt}
+
+
 def _display_name(user) -> str | None:
     """Return the best display name for a user: full name, else username."""
     if user is None:
         return None
     full = f"{getattr(user, 'first_name', '') or ''} {getattr(user, 'last_name', '') or ''}".strip()
     return full if full else getattr(user, 'username', None)
+
+
+def _is_gatepass_application(app: app_models.Application) -> bool:
+    """Gatepass = (final step is SECURITY) AND (has composite DATE IN OUT / DATE OUT IN field)."""
+    try:
+        flow = approval_engine._get_flow_for_application(app)
+    except Exception:
+        flow = None
+    if not flow:
+        return False
+
+    try:
+        final = flow.steps.filter(is_final=True).select_related('role').first()
+        if not (final and final.role and str(final.role.name or '').upper() == 'SECURITY'):
+            return False
+    except Exception:
+        return False
+
+    try:
+        for row in app.data.select_related('field').all():
+            ftype = str(getattr(row.field, 'field_type', '') or '').upper()
+            if ftype in ('DATE IN OUT', 'DATE OUT IN'):
+                return True
+    except Exception:
+        return False
+
+    return False
 
 
 class ApplicationCreateSerializer(serializers.Serializer):
@@ -102,10 +276,31 @@ class ApplicationListSerializer(serializers.ModelSerializer):
     current_step_role = serializers.SerializerMethodField()
     needs_gatepass_scan = serializers.SerializerMethodField()
     sla_deadline = serializers.SerializerMethodField()
+    time_window_active = serializers.SerializerMethodField()
+    gatepass_window_start = serializers.SerializerMethodField()
+    gatepass_window_end = serializers.SerializerMethodField()
+    gatepass_expired = serializers.SerializerMethodField()
 
     class Meta:
         model = app_models.Application
-        fields = ('id', 'application_type_name', 'application_type_code', 'current_state', 'status', 'submitted_at', 'created_at', 'current_step_role', 'gatepass_scanned_at', 'needs_gatepass_scan', 'sla_deadline')
+        fields = (
+            'id',
+            'application_type_name',
+            'application_type_code',
+            'current_state',
+            'status',
+            'submitted_at',
+            'created_at',
+            'current_step_role',
+            'gatepass_scanned_at',
+            'gatepass_in_scanned_at',
+            'needs_gatepass_scan',
+            'sla_deadline',
+            'time_window_active',
+            'gatepass_window_start',
+            'gatepass_window_end',
+            'gatepass_expired',
+        )
 
     def get_application_type_name(self, obj):
         return obj.application_type.name if obj.application_type else None
@@ -134,11 +329,29 @@ class ApplicationListSerializer(serializers.ModelSerializer):
             return False
 
     def get_sla_deadline(self, obj):
-        """ISO deadline string: submitted_at + flow.sla_hours, or None."""
+        """ISO deadline string for UI countdown.
+
+        Priority:
+        1) Composite DATE IN OUT / DATE OUT IN end datetime (if present)
+        2) submitted_at + flow.sla_hours (fallback)
+        """
+        if obj.current_state in ("REJECTED", "CANCELLED"):
+            return None
+
+        # Gatepass-only SLA: derive from selected duration window (never from admin SLA).
+        if _is_gatepass_application(obj):
+            window = _extract_time_window(obj)
+            if window is not None:
+                # Always return window end as deadline (shows time until exit deadline)
+                return window['end'].isoformat()
+            # For gatepass, don't fall back to admin SLA
+            return None
+
         if not obj.submitted_at:
             return None
-        if obj.current_state in ('APPROVED', 'REJECTED', 'CANCELLED'):
-            return None  # Already resolved — no countdown needed
+        if obj.current_state == "APPROVED":
+            return None  # Resolved unless a composite window exists
+
         try:
             flow = approval_engine._get_flow_for_application(obj)
         except Exception:
@@ -146,8 +359,51 @@ class ApplicationListSerializer(serializers.ModelSerializer):
         if not flow or not flow.sla_hours:
             return None
         from datetime import timedelta
+
         deadline = obj.submitted_at + timedelta(hours=flow.sla_hours)
         return deadline.isoformat()
+
+    def get_gatepass_window_end(self, obj):
+        """ISO datetime string for the gate window end, if present."""
+        if not _is_gatepass_application(obj):
+            return None
+        window = _extract_time_window(obj)
+        return window['end'].isoformat() if window is not None else None
+
+    def get_time_window_active(self, obj):
+        if not _is_gatepass_application(obj):
+            return False
+        window = _extract_time_window(obj)
+        if window is None:
+            return False
+        now = timezone.now()
+        return window['start'] <= now <= window['end']
+
+    def get_gatepass_window_start(self, obj):
+        """ISO datetime string for the gate window start, if present."""
+        if not _is_gatepass_application(obj):
+            return None
+        window = _extract_time_window(obj)
+        return window['start'].isoformat() if window is not None else None
+
+    def get_gatepass_expired(self, obj):
+        """True if the selected duration window ended and not scanned yet.
+
+        This can apply even while an application is still pending review.
+        """
+        state = str(obj.current_state or '').upper()
+        if state in ('REJECTED', 'CANCELLED', 'DRAFT'):
+            return False
+        if not _is_gatepass_application(obj):
+            return False
+        if obj.gatepass_scanned_at:
+            return False
+        window = _extract_time_window(obj)
+        if window is None:
+            return False
+        return timezone.now() > window['end']
+
+
 class ApplicationDetailSerializer(serializers.ModelSerializer):
     application_type = serializers.SerializerMethodField()
     dynamic_fields = serializers.SerializerMethodField()
@@ -156,12 +412,17 @@ class ApplicationDetailSerializer(serializers.ModelSerializer):
     approval_timeline = serializers.SerializerMethodField()
     sla_hours = serializers.SerializerMethodField()
     sla_deadline = serializers.SerializerMethodField()
+    time_window_active = serializers.SerializerMethodField()
+    gatepass_window_start = serializers.SerializerMethodField()
+    gatepass_window_end = serializers.SerializerMethodField()
+    gatepass_expired = serializers.SerializerMethodField()
 
     class Meta:
         model = app_models.Application
         fields = ('id', 'application_type', 'current_state', 'status', 'created_at', 'submitted_at',
                   'dynamic_fields', 'current_step', 'approval_history', 'approval_timeline',
-                  'sla_hours', 'sla_deadline', 'gatepass_scanned_at')
+                  'sla_hours', 'sla_deadline', 'gatepass_scanned_at', 'gatepass_in_scanned_at',
+                  'time_window_active', 'gatepass_window_start', 'gatepass_window_end', 'gatepass_expired')
 
     def get_application_type(self, obj):
         return obj.application_type.name if obj.application_type else None
@@ -174,6 +435,7 @@ class ApplicationDetailSerializer(serializers.ModelSerializer):
             data.append({
                 'label': ad.field.label,
                 'field_key': ad.field.field_key,
+                'field_type': ad.field.field_type,
                 'value': ad.value,
             })
         return data
@@ -191,15 +453,67 @@ class ApplicationDetailSerializer(serializers.ModelSerializer):
         return flow.sla_hours if flow else None
 
     def get_sla_deadline(self, obj):
-        """ISO deadline string: submitted_at + flow.sla_hours, or None."""
+        """ISO deadline string for UI countdown.
+
+        Gatepass (SECURITY-final + DATE IN/OUT field): use selected duration window end only (never admin SLA).
+        Others: use flow SLA (submitted_at + flow.sla_hours).
+        """
+        state = str(obj.current_state or '').upper()
+        if state in ('REJECTED', 'CANCELLED', 'DRAFT'):
+            return None
+
+        if _is_gatepass_application(obj):
+            window = _extract_time_window(obj)
+            if window is None:
+                return None
+            # Always return window end as deadline (shows time until exit deadline)
+            return window['end'].isoformat()
+
         if not obj.submitted_at:
+            return None
+        if state == 'APPROVED':
             return None
         flow = approval_engine._get_flow_for_application(obj)
         if not flow or not flow.sla_hours:
             return None
         from datetime import timedelta
+
         deadline = obj.submitted_at + timedelta(hours=flow.sla_hours)
         return deadline.isoformat()
+
+    def get_gatepass_window_end(self, obj):
+        if not _is_gatepass_application(obj):
+            return None
+        window = _extract_time_window(obj)
+        return window['end'].isoformat() if window is not None else None
+
+    def get_gatepass_window_start(self, obj):
+        if not _is_gatepass_application(obj):
+            return None
+        window = _extract_time_window(obj)
+        return window['start'].isoformat() if window is not None else None
+
+    def get_time_window_active(self, obj):
+        if not _is_gatepass_application(obj):
+            return False
+        window = _extract_time_window(obj)
+        if window is None:
+            return False
+        now = timezone.now()
+        return window['start'] <= now <= window['end']
+
+    def get_gatepass_expired(self, obj):
+        state = str(obj.current_state or '').upper()
+        if state in ('REJECTED', 'CANCELLED', 'DRAFT'):
+            return False
+        if not _is_gatepass_application(obj):
+            return False
+        if obj.gatepass_scanned_at:
+            return False
+        window = _extract_time_window(obj)
+        if window is None:
+            return False
+        return timezone.now() > window['end']
 
     def get_approval_timeline(self, obj):
         """Return all flow steps merged with completed actions.

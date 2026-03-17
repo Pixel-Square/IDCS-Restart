@@ -1,5 +1,5 @@
 import axios, { AxiosHeaders } from 'axios'
-import { getApiBase } from './apiBase'
+import { getApiBase, getApiBaseCandidates } from './apiBase'
 
 const BASE = `${getApiBase()}/api/accounts/`
 
@@ -13,18 +13,38 @@ if (import.meta.env.DEV) {
 // automatic access-token refresh on 401 responses.
 // Default request timeout (ms) for API calls — configurable via VITE_API_TIMEOUT.
 // Keep this reasonably high so login doesn't show '(canceled)' on slightly slow backends.
-const DEFAULT_API_TIMEOUT = Number(import.meta.env.VITE_API_TIMEOUT) || 20000
+const DEFAULT_API_TIMEOUT = Number(import.meta.env.VITE_API_TIMEOUT) || 45000
 export const apiClient = axios.create({ baseURL: BASE, timeout: DEFAULT_API_TIMEOUT })
+const LOGIN_API_TIMEOUT = Math.max(
+  Number(import.meta.env.VITE_LOGIN_TIMEOUT) || 60000,
+  DEFAULT_API_TIMEOUT,
+)
+const REFRESH_API_TIMEOUT = Math.max(
+  Number(import.meta.env.VITE_REFRESH_TIMEOUT) || 45000,
+  DEFAULT_API_TIMEOUT,
+)
 
 let isRefreshing = false
-let refreshSubscribers: Array<(token: string) => void> = []
+let refreshSubscribers: Array<{
+  resolve: (token: string) => void
+  reject: (error: unknown) => void
+}> = []
 
-function subscribeTokenRefresh(cb: (token: string) => void) {
-  refreshSubscribers.push(cb)
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function onRefreshed(token: string) {
-  refreshSubscribers.forEach(cb => cb(token))
+function subscribeTokenRefresh(resolve: (token: string) => void, reject: (error: unknown) => void) {
+  refreshSubscribers.push({ resolve, reject })
+}
+
+function onRefreshSuccess(token: string) {
+  refreshSubscribers.forEach(({ resolve }) => resolve(token))
+  refreshSubscribers = []
+}
+
+function onRefreshFailure(error: unknown) {
+  refreshSubscribers.forEach(({ reject }) => reject(error))
   refreshSubscribers = []
 }
 
@@ -32,11 +52,50 @@ async function refreshToken(): Promise<string> {
   const refresh = localStorage.getItem('refresh')
   if (!refresh) throw new Error('no refresh token')
 
-  const res = await axios.post(`${BASE}token/refresh/`, { refresh })
-  const { access, refresh: newRefresh } = res.data
-  if (access) localStorage.setItem('access', access)
-  if (newRefresh) localStorage.setItem('refresh', newRefresh)
-  return access
+  const refreshUrls = Array.from(
+    new Set(
+      getApiBaseCandidates().map((base) => `${base}/api/accounts/token/refresh/`),
+    ),
+  )
+
+  let lastError: unknown = null
+
+  for (const refreshUrl of refreshUrls) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await axios.post(
+          refreshUrl,
+          { refresh },
+          { timeout: REFRESH_API_TIMEOUT },
+        )
+        const { access, refresh: newRefresh } = res.data
+        if (access) localStorage.setItem('access', access)
+        if (newRefresh) localStorage.setItem('refresh', newRefresh)
+        return access
+      } catch (error: any) {
+        lastError = error
+
+        const status = Number(error?.response?.status || 0)
+        if (status === 400 || status === 401) {
+          throw error
+        }
+
+        const isTimeout =
+          String(error?.code || '') === 'ECONNABORTED' ||
+          String(error?.message || '').toLowerCase().includes('timeout')
+        const isNetwork = !error?.response
+        const isServerError = status >= 500
+        const shouldRetry = attempt === 0 && (isTimeout || isNetwork || isServerError)
+
+        if (shouldRetry) {
+          await sleep(350)
+          continue
+        }
+      }
+    }
+  }
+
+  throw lastError || new Error('token refresh failed')
 }
 
 // Response interceptor: on 401, attempt refresh and retry original request.
@@ -49,25 +108,26 @@ apiClient.interceptors.response.use(
 
       if (isRefreshing) {
         // queue the request until refresh finishes
-        return new Promise(resolve => {
+        return new Promise((resolve, reject) => {
           subscribeTokenRefresh((token: string) => {
             const headers = (originalRequest.headers ?? {}) as Record<string, string>
             headers['Authorization'] = `Bearer ${token}`
             originalRequest.headers = new AxiosHeaders(headers)
             resolve(apiClient(originalRequest))
-          })
+          }, reject)
         })
       }
 
       isRefreshing = true
       try {
         const newAccess = await refreshToken()
-        onRefreshed(newAccess)
+        onRefreshSuccess(newAccess)
         const headers = (originalRequest.headers ?? {}) as Record<string, string>
         headers['Authorization'] = `Bearer ${newAccess}`
         originalRequest.headers = new AxiosHeaders(headers)
         return apiClient(originalRequest)
       } catch (refreshErr) {
+        onRefreshFailure(refreshErr)
         // refresh failed -> logout silently
         // Only log in development mode
         if (import.meta.env.DEV) {
@@ -92,7 +152,27 @@ apiClient.interceptors.response.use(
 )
 
 export async function login(identifier: string, password: string){
-  const res = await apiClient.post('token/', { identifier, password })
+  // Clear any stale cached profile/role state before establishing a new session.
+  // (Fixes cases where old HOD roles linger for IQAC users.)
+  try {
+    localStorage.removeItem('roles')
+    localStorage.removeItem('permissions')
+    localStorage.removeItem('me')
+    localStorage.removeItem('role')
+  } catch {
+    // ignore
+  }
+
+  let res
+  try {
+    res = await apiClient.post('token/', { identifier, password }, { timeout: LOGIN_API_TIMEOUT })
+  } catch (err: any) {
+    const isTimeout =
+      String(err?.code || '') === 'ECONNABORTED' ||
+      String(err?.message || '').toLowerCase().includes('timeout')
+    if (!isTimeout) throw err
+    res = await apiClient.post('token/', { identifier, password }, { timeout: LOGIN_API_TIMEOUT })
+  }
   const { access, refresh } = res.data
   localStorage.setItem('access', access)
   localStorage.setItem('refresh', refresh)
@@ -104,6 +184,18 @@ export async function login(identifier: string, password: string){
     // ignore - caller will handle missing profile
   }
   return res.data
+}
+
+export function derivePrimaryRole(roles: unknown): string {
+  const list = Array.isArray(roles) ? roles : []
+  const normalized = list
+    .map((r: any) => (typeof r === 'string' ? r : r?.name))
+    .map((r: any) => String(r || '').trim().toUpperCase())
+    .filter(Boolean)
+
+  // Prefer IQAC when present so multi-role users default correctly.
+  if (normalized.includes('IQAC')) return 'IQAC'
+  return normalized[0] || ''
 }
 
 export function logout(){
@@ -132,11 +224,16 @@ export async function getMe(){
   }
   const res = await apiClient.get('me/')
   const me = res.data
+  const primaryRole = derivePrimaryRole(me?.roles)
+  if (primaryRole) {
+    me.role = primaryRole
+  }
   try{
     // persist roles and permissions for easy access by UI
     localStorage.setItem('roles', JSON.stringify(me.roles || []))
     localStorage.setItem('permissions', JSON.stringify(me.permissions || []))
     localStorage.setItem('me', JSON.stringify(me || null))
+    if (primaryRole) localStorage.setItem('role', primaryRole)
   }catch(e){
     // ignore storage errors
   }
@@ -156,6 +253,33 @@ export function getCachedMe(): any | null {
 export function isMobileVerifiedCached(): boolean {
   const me = getCachedMe()
   return Boolean(me?.profile?.mobile_verified)
+}
+
+export function hasProfilePhotoCached(): boolean {
+  const me = getCachedMe()
+  const candidates = [
+    String(me?.profile_image ?? '').trim(),
+    String(me?.profile?.profile_image ?? '').trim(),
+    String(me?.profile_image_url ?? '').trim(),
+    String(me?.profile?.profile_image_url ?? '').trim(),
+  ]
+  return candidates.some((v) => Boolean(v))
+}
+
+export async function ensureProfilePhotoPresent(): Promise<boolean> {
+  if (hasProfilePhotoCached()) return true
+  try {
+    const me = await getMe()
+    const candidates = [
+      String((me as any)?.profile_image ?? '').trim(),
+      String((me as any)?.profile?.profile_image ?? '').trim(),
+      String((me as any)?.profile_image_url ?? '').trim(),
+      String((me as any)?.profile?.profile_image_url ?? '').trim(),
+    ]
+    return candidates.some((v) => Boolean(v))
+  } catch {
+    return false
+  }
 }
 
 export async function ensureMobileVerified(): Promise<boolean> {

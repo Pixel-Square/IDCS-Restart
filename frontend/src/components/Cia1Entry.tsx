@@ -32,6 +32,7 @@ import * as XLSX from 'xlsx';
 import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
 import { useMarkEntryEditRequestsEnabled } from '../utils/requestControl';
 import { normalizeRegisterNo, registerNoKeys } from '../utils/excelImport';
+import { getApiBase } from '../services/apiBase';
 
 type Student = {
   id: number;
@@ -1553,8 +1554,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       if (teachingAssignmentId) qs.set('teaching_assignment_id', String(teachingAssignmentId));
       // Ensure backend can generate QP-specific template even when curriculum lookup is missing.
       if (qpTypeKey) qs.set('question_paper_type', String(qpTypeKey));
-      const DEFAULT_API_BASE = 'https://db.krgi.co.in';
-      const runtimeApiBase = (import.meta as any).env?.VITE_API_BASE || (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://localhost:8000' : DEFAULT_API_BASE);
+      const runtimeApiBase = getApiBase();
       const url = `${runtimeApiBase}/api/obe/cia-export-template/${encodeURIComponent(assessmentKey)}/${encodeURIComponent(subjectId)}${qs.toString() ? `?${qs.toString()}` : ''}`;
       const res = await fetchWithAuth(url, { method: 'GET' });
       if (!res.ok) {

@@ -4,6 +4,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.views import APIView
@@ -17,6 +18,7 @@ from applications.serializers import (
     ApplicationDetailSerializer,
     ApprovalActionSerializer,
 )
+from applications.serializers.application import _extract_time_window, _is_gatepass_application
 from applications.services import approval_engine
 from applications.services import approver_resolver
 from applications.services import access_control
@@ -26,9 +28,34 @@ from applications.serializers.approval import ApplicationApprovalHistorySerializ
 User = get_user_model()
 
 
-def _get_role_assignees(role):
-    """Return displayable info for all active users holding `role`."""
-    assignees = User.objects.filter(roles=role, is_active=True).order_by('username')
+def _resolve_application_department(application: app_models.Application):
+    if application is None:
+        return None
+
+    staff = getattr(application, 'staff_profile', None)
+    if staff is not None and getattr(staff, 'department', None) is not None:
+        return staff.department
+
+    student = getattr(application, 'student_profile', None)
+    try:
+        if student is not None and student.section is not None:
+            return student.section.batch.course.department
+    except Exception:
+        return None
+
+    return None
+
+
+def _get_role_assignees(role, department=None):
+    """Return displayable info for all active users holding `role`.
+
+    When department is provided, restrict to users whose StaffProfile belongs
+    to that department.
+    """
+    assignees = User.objects.filter(roles=role, is_active=True)
+    if department is not None:
+        assignees = assignees.filter(staff_profile__department=department)
+    assignees = assignees.order_by('username')
     result = []
     for u in assignees:
         name = (f"{getattr(u, 'first_name', '')} {getattr(u, 'last_name', '')}".strip()
@@ -68,6 +95,11 @@ def _get_step_assignees(application: app_models.Application, step: app_models.Ap
             payload['staff_id'] = staff_id
         return [payload]
 
+    role_code = (getattr(step.role, 'name', '') or '').strip().upper()
+    if role_code in ('HOD', 'AHOD'):
+        dept = _resolve_application_department(application)
+        return _get_role_assignees(step.role, department=dept)
+
     return _get_role_assignees(step.role)
 
 
@@ -98,7 +130,16 @@ class MyApplicationsView(APIView):
     permission_classes = (IsAuthenticated,)
 
     def get(self, request, *args, **kwargs):
-        qs = app_models.Application.objects.filter(applicant_user=request.user).order_by('-created_at')
+        qs = (
+            app_models.Application.objects
+            .filter(
+                Q(applicant_user=request.user)
+                | Q(student_profile__user=request.user)
+                | Q(staff_profile__user=request.user)
+            )
+            .distinct()
+            .order_by('-created_at')
+        )
         serializer = ApplicationListSerializer(qs, many=True)
         return Response(serializer.data)
 
@@ -162,6 +203,32 @@ class ApplicationRejectView(APIView):
                 return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response({'id': updated.id, 'status': updated.status})
+
+
+class ApplicationCancelView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request, id: int, *args, **kwargs):
+        application = get_object_or_404(app_models.Application, pk=id)
+
+        # Only applicant can cancel (enforced again in service)
+        if application.applicant_user_id != request.user.id:
+            return Response({'detail': 'Not authorized to cancel this application'}, status=status.HTTP_403_FORBIDDEN)
+
+        # Only allow cancelling active/running applications
+        if application.current_state in (
+            app_models.Application.ApplicationState.APPROVED,
+            app_models.Application.ApplicationState.REJECTED,
+            app_models.Application.ApplicationState.CANCELLED,
+        ):
+            return Response({'detail': 'Application cannot be cancelled in its current state.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            updated = app_state_svc.cancel_application(application, request.user)
+        except Exception as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({'id': updated.id, 'current_state': updated.current_state, 'status': updated.status})
 
 
 class ApplicationApprovalHistoryView(APIView):
@@ -245,10 +312,19 @@ class CreateAndSubmitView(APIView):
             if _recent and _recent.final_decision_at:
                 _cooldown_until = _recent.final_decision_at + timedelta(hours=_pre_flow.sla_hours)
                 _now = timezone.now()
-                if _now < _cooldown_until:
+                
+                # Check for gatepass expiry exception
+                _is_expired_gp = False
+                if _is_gatepass_application(_recent):
+                    _win = _extract_time_window(_recent)
+                    if _win and _now > _win['end']:
+                        _is_expired_gp = True
+
+                if _now < _cooldown_until and not _is_expired_gp:
                     _remaining = _cooldown_until - _now
                     _hrs = int(_remaining.total_seconds() // 3600)
                     _mins = int((_remaining.total_seconds() % 3600) // 60)
+
                     return Response({
                         'detail': (
                             f'Cannot submit another \'{app_type.name}\' for {_hrs}h {_mins}m '
@@ -271,18 +347,27 @@ class CreateAndSubmitView(APIView):
             application_type=app_type,
         ).exclude(current_state__in=_TERMINAL_STATES).order_by('-created_at').first()
         if _active_app:
-            return Response(
-                {
-                    'detail': (
-                        f'You already have a pending {app_type.name} application '
-                        f'(#{_active_app.pk}) that is currently {_active_app.get_current_state_display()}. '
-                        f'You can only submit a new one after it is fully approved or rejected.'
-                    ),
-                    'active_application_id': _active_app.pk,
-                    'active_application_state': _active_app.current_state,
-                },
-                status=status.HTTP_409_CONFLICT,
-            )
+            # If the "active" application is a GATEPASS that has exceeded its window, treat it as expired (terminal).
+            _is_expired_active = False
+            if _is_gatepass_application(_active_app):
+                _win = _extract_time_window(_active_app)
+                # Check valid window end against now
+                if _win and timezone.now() > _win['end']:
+                    _is_expired_active = True
+
+            if not _is_expired_active:
+                return Response(
+                    {
+                        'detail': (
+                            f'You already have a pending {app_type.name} application '
+                            f'(#{_active_app.pk}) that is currently {_active_app.get_current_state_display()}. '
+                            f'You can only submit a new one after it is fully approved or rejected.'
+                        ),
+                        'active_application_id': _active_app.pk,
+                        'active_application_state': _active_app.current_state,
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
 
         with transaction.atomic():
             # Attach applicant profile so department selection + authority resolvers

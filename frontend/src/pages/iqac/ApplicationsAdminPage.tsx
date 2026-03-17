@@ -101,6 +101,7 @@ function getDefaultMetaForFieldType(fieldType: string): string {
       }
     },
     'DATE OUT IN': {
+      // NOTE: OUT time implies start of window. Order: Date, Out, In.
       subfields: {
         date: { type: 'date', label: 'Date' },
         out_time: { type: 'time', label: 'Out Time' },

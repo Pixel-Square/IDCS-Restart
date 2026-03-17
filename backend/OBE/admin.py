@@ -1,4 +1,6 @@
+from django.apps import apps
 from django.contrib import admin
+from django.contrib.admin.sites import AlreadyRegistered
 from django.urls import reverse
 from django.utils.html import format_html
 from django.utils.http import urlencode
@@ -76,3 +78,64 @@ class CdapRevisionAdmin(admin.ModelAdmin):
 class CdapActiveLearningAnalysisMappingAdmin(admin.ModelAdmin):
     list_display = ('id', 'updated_at')
     readonly_fields = ('updated_at',)
+
+
+# Register any remaining OBE models that don't have explicit admin classes above.
+obe_app_config = next((cfg for cfg in apps.get_app_configs() if cfg.name == 'OBE'), None)
+
+
+def _build_default_admin(model):
+    field_names = {f.name for f in model._meta.fields}
+
+    list_display_candidates = [
+        'id',
+        'assessment',
+        'subject',
+        'subject_code',
+        'section_name',
+        'student',
+        'staff_user',
+        'mark',
+        'status',
+        'updated_at',
+        'created_at',
+    ]
+    list_display = tuple(name for name in list_display_candidates if name in field_names) or ('id',)
+
+    list_filter_candidates = ['assessment', 'status', 'is_published', 'created_at', 'updated_at']
+    list_filter = tuple(name for name in list_filter_candidates if name in field_names)
+
+    search_fields = []
+    if 'subject_code' in field_names:
+        search_fields.append('subject_code')
+    if 'section_name' in field_names:
+        search_fields.append('section_name')
+    if 'status' in field_names:
+        search_fields.append('status')
+    if 'assessment' in field_names:
+        search_fields.append('assessment')
+    if 'subject' in field_names:
+        search_fields.extend(['subject__code', 'subject__name'])
+    if 'student' in field_names:
+        search_fields.extend(['student__reg_no', 'student__user__username'])
+    if 'staff_user' in field_names:
+        search_fields.append('staff_user__username')
+
+    readonly_fields = tuple(name for name in ('created_at', 'updated_at') if name in field_names)
+
+    attrs = {
+        'list_display': list_display,
+        'list_filter': list_filter,
+        'search_fields': tuple(search_fields),
+        'readonly_fields': readonly_fields,
+    }
+    return type(f'{model.__name__}AutoAdmin', (admin.ModelAdmin,), attrs)
+
+
+if obe_app_config:
+    for model in obe_app_config.get_models():
+        if model not in admin.site._registry:
+            try:
+                admin.site.register(model, _build_default_admin(model))
+            except AlreadyRegistered:
+                pass

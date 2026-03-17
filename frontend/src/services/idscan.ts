@@ -72,10 +72,17 @@ export type GatepassCheckResult = {
   allowed: boolean
   message: string
   reason?: 'unknown_uid' | 'already_scanned' | 'not_approved' | 'not_fully_approved' | 'no_gatepass' | 'outside_gate_window'
+  window_status?: 'before_start' | 'after_end' | null
+  gatepass_window_start?: string | null
+  gatepass_window_end?: string | null
+  late_return?: boolean
   application_id?: number
   application_type?: string
   scanned_at?: string
   student?: ScannedStudent
+  staff?: ScannedStaff
+  profile_type?: 'student' | 'staff' | null
+  profile?: ScannedStudent | ScannedStaff | null
   approval_timeline?: GatepassTimelineStep[]
 }
 
@@ -94,6 +101,23 @@ export type ScannedStaff = {
 
 export async function searchStaff(q: string): Promise<ScannedStaff[]> {
   return parseJson(await fetchWithAuth(`/api/idscan/search-staff/?q=${encodeURIComponent(q)}`))
+}
+
+export type CardDataRow = {
+  id: number
+  role: 'STUDENT' | 'STAFF'
+  identifier: string
+  username: string
+  name?: string
+  department: string | null
+  profile_image_url?: string | null
+  rfid_uid: string | null
+  status: 'Connected' | 'Not Connected'
+}
+
+export async function fetchCardsData(): Promise<CardDataRow[]> {
+  const res = await parseJson<{ results: CardDataRow[] }>(await fetchWithAuth(`/api/idscan/cards-data/`))
+  return res.results
 }
 
 export async function assignStaffUID(
@@ -138,4 +162,175 @@ export type LookupAnyResult =
 
 export async function lookupAny(uid: string): Promise<LookupAnyResult> {
   return parseJson(await fetchWithAuth(`/api/idscan/lookup-any/?uid=${encodeURIComponent(uid)}`))
+}
+
+// ── HR: Gatepass Logs ─────────────────────────────────────────────────────
+
+export type GatepassLogRow = {
+  application_id: number
+  user_username: string | null
+  user_name: string | null
+  user_role: 'STUDENT' | 'STAFF' | null
+  department_name: string | null
+  gate_username: string | null
+  mode: 'ONLINE' | 'OFFLINE' | string
+  status: string
+  reason: string | null
+  out_status: 'EXITED' | 'NOT_EXITED'
+  in_status: 'ON_TIME' | 'LATE' | 'NOT_RETURNED'
+  out_at?: string | null
+  in_at?: string | null
+}
+
+export type FetchGatepassLogsParams = {
+  role?: 'STUDENT' | 'STAFF' | ''
+  department_id?: number | ''
+  status?: string
+  out?: 'EXITED' | 'NOT_EXITED' | ''
+  in?: 'ON_TIME' | 'LATE' | 'NOT_RETURNED' | ''
+  q?: string
+  limit?: number
+}
+
+export async function fetchGatepassLogs(
+  params: FetchGatepassLogsParams = {},
+): Promise<GatepassLogRow[]> {
+  const qp = new URLSearchParams()
+  if (params.role) qp.set('role', params.role)
+  if (params.department_id) qp.set('department_id', String(params.department_id))
+  if (params.status) qp.set('status', String(params.status))
+  if (params.out) qp.set('out', params.out)
+  if (params.in) qp.set('in', params.in)
+  if (params.q) qp.set('q', String(params.q))
+  if (params.limit) qp.set('limit', String(params.limit))
+
+  const query = qp.toString()
+  const res = await parseJson<{ results: GatepassLogRow[] }>(
+    await fetchWithAuth(`/api/idscan/gatepass-logs/${query ? `?${query}` : ''}`),
+  )
+  return Array.isArray(res?.results) ? res.results : []
+}
+
+// ── HR: Offline Gatepass Records ──────────────────────────────────────────
+
+export type GatepassOfflineSecurityUser = {
+  id: number
+  username: string | null
+  name: string | null
+  department: string | null
+}
+
+export async function fetchGatepassOfflineSecurityUsers(): Promise<GatepassOfflineSecurityUser[]> {
+  const res = await parseJson<{ results: GatepassOfflineSecurityUser[] }>(
+    await fetchWithAuth('/api/idscan/gatepass-offline/security-users/'),
+  )
+  return Array.isArray(res?.results) ? res.results : []
+}
+
+export type GatepassOfflineRecordRow = {
+  id: number
+  uid: string
+  direction: 'OUT' | 'IN'
+  recorded_at: string | null
+  device_label: string
+  user_role: 'STUDENT' | 'STAFF' | null
+  user_username: string | null
+  user_name: string | null
+  department_id: number | null
+  department_name: string | null
+  pull_error: string
+}
+
+export type FetchGatepassOfflineRecordsParams = {
+  role?: 'STUDENT' | 'STAFF' | ''
+  department_id?: number | ''
+  direction?: 'OUT' | 'IN' | ''
+  q?: string
+  limit?: number
+}
+
+export async function fetchGatepassOfflineRecords(
+  params: FetchGatepassOfflineRecordsParams = {},
+): Promise<GatepassOfflineRecordRow[]> {
+  const qp = new URLSearchParams()
+  if (params.role) qp.set('role', params.role)
+  if (params.department_id) qp.set('department_id', String(params.department_id))
+  if (params.direction) qp.set('direction', params.direction)
+  if (params.q) qp.set('q', String(params.q))
+  if (params.limit) qp.set('limit', String(params.limit))
+  const query = qp.toString()
+
+  const res = await parseJson<{ results: GatepassOfflineRecordRow[] }>(
+    await fetchWithAuth(`/api/idscan/gatepass-offline/${query ? `?${query}` : ''}`),
+  )
+  return Array.isArray(res?.results) ? res.results : []
+}
+
+export async function pullGatepassOfflineRecord(
+  id: number,
+  securityUserId: number,
+): Promise<{ success: boolean; message?: string; application_id?: number }>{
+  return parseJson(
+    await fetchWithAuth(`/api/idscan/gatepass-offline/${id}/pull/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ security_user_id: securityUserId }),
+    }),
+  )
+}
+
+export async function ignoreGatepassOfflineRecord(id: number): Promise<{ success: boolean }>{
+  return parseJson(
+    await fetchWithAuth(`/api/idscan/gatepass-offline/${id}/ignore/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    }),
+  )
+}
+
+export async function pullAllGatepassOfflineRecords(payload: {
+  security_user_id: number
+  role?: 'STUDENT' | 'STAFF' | ''
+  department_id?: number | ''
+  direction?: 'OUT' | 'IN' | ''
+  q?: string
+  limit?: number
+}): Promise<{ pulled: number; failed: number }>{
+  return parseJson(
+    await fetchWithAuth('/api/idscan/gatepass-offline/pull-all/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  )
+}
+
+export async function ignoreAllGatepassOfflineRecords(payload: {
+  role?: 'STUDENT' | 'STAFF' | ''
+  department_id?: number | ''
+  direction?: 'OUT' | 'IN' | ''
+  q?: string
+  limit?: number
+}): Promise<{ ignored: number }>{
+  return parseJson(
+    await fetchWithAuth('/api/idscan/gatepass-offline/ignore-all/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  )
+}
+
+export async function uploadGatepassOfflineRecords(payload: {
+  device_label?: string
+  records: Array<{ uid: string; direction: 'OUT' | 'IN'; recorded_at?: string }>
+}): Promise<{ created: number; skipped: number }>{
+  return parseJson(
+    await fetchWithAuth('/api/idscan/gatepass-offline/upload/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  )
 }

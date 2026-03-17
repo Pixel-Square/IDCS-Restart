@@ -15,6 +15,9 @@ SECURITY_PERMISSIONS = [
     ('idcsscan.lookup', 'Look up a student by RFID UID'),
     ('idcsscan.assign', 'Assign an RFID UID to a student'),
     ('idcsscan.unassign', 'Remove an RFID UID from a student'),
+    ('idcsscan.manage_gate', 'Manage gates (create/update/activate) for gate scanning'),
+    ('idcsscan.manage_security_users', 'Create and edit SECURITY staff user accounts'),
+    ('idcsscan.pull_offline_data', 'Export/pull scan logs for offline reconciliation'),
 ]
 
 

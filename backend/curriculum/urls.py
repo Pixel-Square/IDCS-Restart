@@ -8,6 +8,7 @@ from .views import (
     MasterImportView,
     DepartmentGroupViewSet,
     CurriculumDepartmentsView,
+    CurriculumPendingCountView,
 )
 from .elective_import_views import (
     ElectiveChoiceTemplateDownloadView,
@@ -28,5 +29,6 @@ urlpatterns = [
     path('elective-choices/import/', ElectiveChoiceBulkImportView.as_view(), name='elective-choices-import'),
     path('elective-choices/', ElectiveChoicesView.as_view(), name='elective-choices'),
     path('departments/', CurriculumDepartmentsView.as_view(), name='curriculum-departments'),
+    path('pending-count/', CurriculumPendingCountView.as_view(), name='curriculum-pending-count'),
     path('', include(router.urls)),
 ]

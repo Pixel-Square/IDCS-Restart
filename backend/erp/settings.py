@@ -21,10 +21,20 @@ try:
 except Exception:
     pass
 
-SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'dev-secret')
+_django_secret_key = os.getenv('DJANGO_SECRET_KEY', '')
+if not _django_secret_key:
+    if os.getenv('DEBUG', '0') == '1':
+        _django_secret_key = 'dev-secret-do-not-use-in-production'
+    else:
+        raise RuntimeError(
+            'DJANGO_SECRET_KEY environment variable is not set. '
+            'Add it to backend/.env before starting the server.'
+        )
+SECRET_KEY = _django_secret_key
 
 DEBUG = os.getenv('DEBUG', '0') == '1'
 RUNNING_RUNSERVER = 'runserver' in sys.argv
+ALLOW_SQLITE_FALLBACK = os.getenv('ALLOW_SQLITE_FALLBACK', '1' if DEBUG else '0') == '1'
 
 ALLOWED_HOSTS = (
     ['*'] if DEBUG else [
@@ -141,6 +151,11 @@ if DB_NAME:
         }
     }
 else:
+    if not ALLOW_SQLITE_FALLBACK:
+        raise RuntimeError(
+            'SQLite fallback is disabled in this environment. '
+            'Set DB_NAME (PostgreSQL) or ALLOW_SQLITE_FALLBACK=1 explicitly.'
+        )
     # Fall back to SQLite for local development
     DATABASES = {
         'default': {
@@ -169,11 +184,21 @@ if BI_DB_NAME:
         },
     }
 
-# Django cache config using Redis (used by sessions, caching, etc.)
+# Django cache config using Redis (shared across all gunicorn workers).
+# django-redis is installed; locmem is NEVER shared between workers so sessions
+# always miss and hit the DB — use Redis to fix that.
+_REDIS_URL = os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/1')
 CACHES = {
     'default': {
-        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-        'LOCATION': 'unique-snowflake',
+        'BACKEND': 'django_redis.cache.RedisCache',
+        'LOCATION': _REDIS_URL,
+        'OPTIONS': {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+            'SOCKET_CONNECT_TIMEOUT': 5,
+            'SOCKET_TIMEOUT': 5,
+            'IGNORE_EXCEPTIONS': True,  # degrade gracefully if Redis blips
+        },
+        'TIMEOUT': 300,  # 5 minutes default TTL
     }
 }
 
@@ -184,7 +209,7 @@ SESSION_CACHE_ALIAS = 'default'
 AUTH_PASSWORD_VALIDATORS = []
 
 LANGUAGE_CODE = 'en-us'
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'Asia/Kolkata'
 USE_I18N = True
 USE_TZ = True
 
@@ -204,9 +229,10 @@ STATICFILES_DIRS = [
 if DEBUG:
     STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.StaticFilesStorage'
 else:
-    # Temporarily using StaticFilesStorage to debug 500 error
-    STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.StaticFilesStorage'
-    # STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.ManifestStaticFilesStorage'
+    STATICFILES_STORAGE = os.getenv(
+        'STATICFILES_STORAGE',
+        'django.contrib.staticfiles.storage.ManifestStaticFilesStorage',
+    )
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
@@ -270,12 +296,33 @@ TWILIO_SERVICE_SID = os.getenv('TWILIO_SERVICE_SID', '')
 
 # Restrict CORS to explicit origins when credentials (cookies/auth) are used.
 # Wildcard '*' is invalid with `Access-Control-Allow-Credentials: true`.
-CORS_ALLOW_ALL_ORIGINS = False
-CORS_ALLOWED_ORIGINS = [
+# In local development, allow all origins to avoid brittle localhost/port mismatches.
+CORS_ALLOW_ALL_ORIGINS = DEBUG
+
+def _split_env_csv(name: str) -> list[str]:
+    return [v.strip() for v in str(os.getenv(name, '') or '').split(',') if v.strip()]
+
+
+_PROD_WEB_ORIGINS = [
+    # Electron desktop app (packaged) uses a custom scheme origin.
+    # This must be explicitly allowed or requests will fail with generic
+    # "Failed to fetch" errors due to CORS.
+    'app://-',
+    # Some Electron configurations / file:// flows can use Origin: null.
+    'null',
     'https://idcs.krgi.co.in',
     'https://db.krgi.co.in',
     'https://cloud.krgi.co.in',
-    # Local dev origins (common ports) so frontend at localhost can call API
+]
+
+# CSRF trusted origins must be absolute http(s) origins in Django 4+.
+_PROD_CSRF_ORIGINS = [
+    'https://idcs.krgi.co.in',
+    'https://db.krgi.co.in',
+    'https://cloud.krgi.co.in',
+]
+
+_DEFAULT_DEBUG_ORIGINS = [
     'http://localhost',
     'http://localhost:3000',
     'http://localhost:5173',
@@ -298,24 +345,28 @@ CORS_ALLOWED_ORIGINS = [
     'http://127.0.0.1:5175',
     'http://127.0.0.1:5176',
     'http://127.0.0.1:5177',
-    # Production/front-end hosts
-    'https://idcs.krgi.co.in',
-    'https://db.krgi.co.in',
-    'https://cloud.krgi.co.in',
-    # Local LAN frontend host (when served on :80)
-    'http://192.168.40.253',
-    'http://192.168.40.253:80',
-    'http://192.168.40.253:81',
-    'http://192.168.40.253:5173',
-    'http://192.168.40.253:4173',
 ]
+
+CORS_ALLOWED_ORIGINS = _split_env_csv('CORS_ALLOWED_ORIGINS') or list(_PROD_WEB_ORIGINS)
+
+if DEBUG:
+    CORS_ALLOWED_ORIGINS += _DEFAULT_DEBUG_ORIGINS
+    CORS_ALLOWED_ORIGINS += _split_env_csv('CORS_DEV_EXTRA_ORIGINS')
+
+# Always keep production origins allowed unless explicitly overridden at deploy level.
+for _origin in _PROD_WEB_ORIGINS:
+    if _origin not in CORS_ALLOWED_ORIGINS:
+        CORS_ALLOWED_ORIGINS.append(_origin)
+
+# De-duplicate while preserving order.
+CORS_ALLOWED_ORIGINS = list(dict.fromkeys(CORS_ALLOWED_ORIGINS))
+
 # Allow browser to include credentials (cookies or HTTP auth) in cross-origin requests
 CORS_ALLOW_CREDENTIALS = True
 
 # Allow configuring CSRF trusted origins via environment variable
 # Provide comma-separated origins including scheme, e.g. 'https://db.zynix.us'
-csrf_env = os.getenv('CSRF_TRUSTED_ORIGINS', '')
-CSRF_TRUSTED_ORIGINS = [h.strip() for h in csrf_env.split(',') if h.strip()]
+CSRF_TRUSTED_ORIGINS = _split_env_csv('CSRF_TRUSTED_ORIGINS') or list(_PROD_CSRF_ORIGINS)
 # In DEBUG add localhost aliases for convenience
 if DEBUG:
     CSRF_TRUSTED_ORIGINS += [
@@ -326,6 +377,7 @@ if DEBUG:
         'http://localhost:83',
         'http://127.0.0.1:83',
     ]
+    CSRF_TRUSTED_ORIGINS += _split_env_csv('CSRF_DEV_EXTRA_ORIGINS')
 # Always allow the production dashboard hostname if not already present
 if 'https://db.krgi.co.in' not in CSRF_TRUSTED_ORIGINS:
     CSRF_TRUSTED_ORIGINS.append('https://db.krgi.co.in')
@@ -334,6 +386,25 @@ if 'https://idcs.krgi.co.in' not in CSRF_TRUSTED_ORIGINS:
     CSRF_TRUSTED_ORIGINS.append('https://idcs.krgi.co.in')
 if 'https://cloud.krgi.co.in' not in CSRF_TRUSTED_ORIGINS:
     CSRF_TRUSTED_ORIGINS.append('https://cloud.krgi.co.in')
+
+CSRF_TRUSTED_ORIGINS = list(dict.fromkeys(CSRF_TRUSTED_ORIGINS))
+
+# --- Production security hardening ---
+# Keep these settings env-driven so local development remains frictionless,
+# while production defaults become secure-by-default.
+DATA_ENCRYPTION_KEY = os.getenv('DATA_ENCRYPTION_KEY', '')
+
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+SECURE_SSL_REDIRECT = os.getenv('SECURE_SSL_REDIRECT', '0' if DEBUG else '1') == '1'
+SESSION_COOKIE_SECURE = os.getenv('SESSION_COOKIE_SECURE', '0' if DEBUG else '1') == '1'
+CSRF_COOKIE_SECURE = os.getenv('CSRF_COOKIE_SECURE', '0' if DEBUG else '1') == '1'
+
+SECURE_HSTS_SECONDS = int(os.getenv('SECURE_HSTS_SECONDS', '0' if DEBUG else '31536000'))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = os.getenv('SECURE_HSTS_INCLUDE_SUBDOMAINS', '0' if DEBUG else '1') == '1'
+SECURE_HSTS_PRELOAD = os.getenv('SECURE_HSTS_PRELOAD', '0' if DEBUG else '1') == '1'
+
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = os.getenv('SECURE_REFERRER_POLICY', 'strict-origin-when-cross-origin')
 
 # Optional: restrict which account may publish marks via the web UI/backend.
 # Set to a username or email (string). If empty/None publishing remains unrestricted
@@ -355,7 +426,7 @@ OBE_WHATSAPP_API_URL_FALLBACK = os.getenv('OBE_WHATSAPP_API_URL_FALLBACK', '')
 OBE_WHATSAPP_GATEWAY_BASE_URL = os.getenv('OBE_WHATSAPP_GATEWAY_BASE_URL', '')
 # Optional secondary base URL for the IQAC Settings QR/Status page.
 OBE_WHATSAPP_GATEWAY_BASE_URL_FALLBACK = os.getenv('OBE_WHATSAPP_GATEWAY_BASE_URL_FALLBACK', '')
-OBE_WHATSAPP_API_KEY = os.getenv('OBE_WHATSAPP_API_KEY', 'IQAC_SECRET_123')
+OBE_WHATSAPP_API_KEY = os.getenv('OBE_WHATSAPP_API_KEY', '')
 OBE_WHATSAPP_TIMEOUT_SECONDS = float(os.getenv('OBE_WHATSAPP_TIMEOUT_SECONDS', '8'))
 OBE_WHATSAPP_DEFAULT_COUNTRY_CODE = os.getenv('OBE_WHATSAPP_DEFAULT_COUNTRY_CODE', '91')
 OBE_WHATSAPP_ALLOW_NON_LOCAL_URL = os.getenv('OBE_WHATSAPP_ALLOW_NON_LOCAL_URL', '0') == '1'
@@ -371,7 +442,7 @@ EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', 'django.core.mail.backends.smtp.Email
 EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
 EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', 'rohit08sk@gmail.com')
-EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', 'inilmwzhzuhzajvc')
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
 EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', '1') == '1'
 EMAIL_USE_SSL = os.getenv('EMAIL_USE_SSL', '0') == '1'
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'rohit08sk@gmail.com')

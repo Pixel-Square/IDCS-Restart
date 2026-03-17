@@ -127,6 +127,13 @@ class FeedbackForm(models.Model):
 
 class FeedbackQuestion(models.Model):
     """Questions within a feedback form."""
+
+    QUESTION_TYPE_CHOICES = (
+        ('rating', 'Rating'),
+        ('text', 'Text'),
+        ('radio', 'Radio + Comment'),
+        ('rating_radio_comment', 'Rating + Radio + Comment'),
+    )
     
     ANSWER_TYPE_CHOICES = (
         ('STAR', 'Star Rating'),
@@ -151,6 +158,12 @@ class FeedbackQuestion(models.Model):
     )
     
     # New flexible fields
+    question_type = models.CharField(
+        max_length=50,
+        choices=QUESTION_TYPE_CHOICES,
+        default='rating',
+        help_text='Question rendering/validation type. Defaults to rating for backward compatibility.'
+    )
     allow_rating = models.BooleanField(
         default=True,
         help_text='Allow star rating (1-5) for this question'
@@ -158,6 +171,13 @@ class FeedbackQuestion(models.Model):
     allow_comment = models.BooleanField(
         default=True,
         help_text='Allow text comment for this question'
+    )
+
+    # Legacy/compat field (exists in DB as NOT NULL, no default).
+    # Keep it aligned with allow_comment to prevent insert failures.
+    comment_enabled = models.BooleanField(
+        default=True,
+        help_text='Legacy field. Mirrors allow_comment.'
     )
     
     order = models.PositiveIntegerField(
@@ -175,6 +195,28 @@ class FeedbackQuestion(models.Model):
     
     def __str__(self):
         return f"Q{self.order}: {self.question[:50]}..."
+
+
+class FeedbackQuestionOption(models.Model):
+    """Radio options for own-type questions."""
+
+    question = models.ForeignKey(
+        FeedbackQuestion,
+        on_delete=models.CASCADE,
+        related_name='options',
+        help_text='Question this option belongs to'
+    )
+    option_text = models.CharField(max_length=255, help_text='Option label')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'feedback_question_options'
+        verbose_name = 'Feedback Question Option'
+        verbose_name_plural = 'Feedback Question Options'
+        ordering = ['id']
+
+    def __str__(self):
+        return f"Option({self.question_id}): {self.option_text[:50]}"
 
 
 class FeedbackResponse(models.Model):
@@ -218,6 +260,14 @@ class FeedbackResponse(models.Model):
         blank=True,
         help_text='Text response, used when answer_type is TEXT'
     )
+
+    selected_option_text = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        db_column='selected_option_text',
+        help_text='Selected radio option text (for radio / rating_radio_comment questions)'
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -234,3 +284,39 @@ class FeedbackResponse(models.Model):
         if self.teaching_assignment:
             return f"Response by {self.user.username} to Q{self.question.id} for {self.teaching_assignment}"
         return f"Response by {self.user.username} to Q{self.question.id}"
+
+
+class FeedbackFormSubmission(models.Model):
+    """Tracks per-user completion status for a feedback form."""
+
+    STATUS_CHOICES = (
+        ('PENDING', 'Pending'),
+        ('SUBMITTED', 'Submitted'),
+    )
+
+    feedback_form = models.ForeignKey(
+        FeedbackForm,
+        on_delete=models.CASCADE,
+        related_name='submission_statuses',
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='feedback_form_submissions',
+    )
+    submission_status = models.CharField(
+        max_length=10,
+        choices=STATUS_CHOICES,
+        default='PENDING',
+    )
+    total_subjects = models.PositiveIntegerField(default=0)
+    responded_subjects = models.PositiveIntegerField(default=0)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'feedback_form_submissions'
+        unique_together = ('feedback_form', 'user')
+
+    def __str__(self):
+        return f"Form #{self.feedback_form_id} / {self.user.username} - {self.submission_status}"

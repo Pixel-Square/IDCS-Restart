@@ -52,23 +52,36 @@ export type DeptRow = {
   is_elective?: boolean;
 };
 
+export type CurriculumPendingDepartmentCount = {
+  departmentId: number;
+  department: string;
+  count: number;
+};
+
+export type CurriculumPendingCountResponse = {
+  totalPending: number;
+  departmentCounts: CurriculumPendingDepartmentCount[];
+};
 import fetchWithAuth from './fetchAuth';
+import { getApiBase } from './apiBase';
+
+const API_BASE = getApiBase();
 
 export async function fetchBatchYears(): Promise<BatchYear[]> {
-  const res = await fetchWithAuth(`/api/academics/batch-years/`);
+  const res = await fetchWithAuth('/api/academics/batch-years/');
   if (!res.ok) throw new Error('Failed to fetch batch years');
   const data = await res.json();
   return Array.isArray(data) ? data : (data.results || []);
 }
 
 export async function fetchMasters(): Promise<Master[]> {
-  const res = await fetchWithAuth(`/api/curriculum/master/`);
+  const res = await fetchWithAuth('/api/curriculum/master/');
   if (!res.ok) throw new Error('Failed to fetch masters');
   return res.json();
 }
 
 export async function createMaster(payload: Partial<Master>) {
-  const res = await fetchWithAuth(`/api/curriculum/master/`, {
+  const res = await fetchWithAuth('/api/curriculum/master/', {
     method: 'POST',
     body: JSON.stringify(payload),
   });
@@ -100,7 +113,7 @@ export async function updateMaster(id: number, payload: Partial<Master>) {
 }
 
 export async function fetchDeptRows(): Promise<DeptRow[]> {
-  const res = await fetchWithAuth(`/api/curriculum/department/`);
+  const res = await fetchWithAuth('/api/curriculum/department/');
   if (!res.ok) throw new Error('Failed to fetch dept rows');
   return res.json();
 }
@@ -109,6 +122,60 @@ export async function fetchDeptRow(id: number): Promise<DeptRow> {
   const res = await fetchWithAuth(`/api/curriculum/department/${encodeURIComponent(String(id))}/`);
   if (!res.ok) throw new Error('Failed to fetch dept row');
   return res.json();
+}
+
+export async function fetchCurriculumPendingCount(): Promise<CurriculumPendingCountResponse> {
+  const aggregateFromRows = (rows: DeptRow[]): CurriculumPendingCountResponse => {
+    const byDept = new Map<number, { department: string; count: number }>();
+
+    for (const row of rows || []) {
+      if (Boolean((row as any)?.is_elective)) continue;
+      const statusRaw = String((row as any)?.approval_status ?? (row as any)?.status ?? '').toUpperCase().trim();
+      if (statusRaw !== 'PENDING') continue;
+
+      const deptId = Number((row as any)?.department?.id || 0);
+      if (!deptId) continue;
+      const deptLabel =
+        String((row as any)?.department?.short_name || (row as any)?.department?.code || (row as any)?.department?.name || '').trim() ||
+        `Dept ${deptId}`;
+
+      const prev = byDept.get(deptId);
+      if (prev) {
+        prev.count += 1;
+      } else {
+        byDept.set(deptId, { department: deptLabel, count: 1 });
+      }
+    }
+
+    const departmentCounts = Array.from(byDept.entries())
+      .map(([departmentId, value]) => ({ departmentId, department: value.department, count: value.count }))
+      .sort((a, b) => a.department.localeCompare(b.department));
+
+    const totalPending = departmentCounts.reduce((sum, d) => sum + d.count, 0);
+    return { totalPending, departmentCounts };
+  };
+
+  try {
+    const res = await fetchWithAuth('/api/curriculum/pending-count/');
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        totalPending: Number(data?.totalPending || 0),
+        departmentCounts: Array.isArray(data?.departmentCounts)
+          ? data.departmentCounts.map((item: any) => ({
+              departmentId: Number(item?.departmentId || item?.department_id || 0),
+              department: String(item?.department || item?.department_name || ''),
+              count: Number(item?.count || 0),
+            }))
+          : [],
+      };
+    }
+  } catch {
+    // Fall through to rows-based aggregation.
+  }
+
+  const rows = await fetchDeptRows();
+  return aggregateFromRows(rows);
 }
 
 export async function fetchElectives(params?: { department_id?: number; regulation?: string; semester?: number }) {
@@ -126,7 +193,7 @@ export async function fetchElectives(params?: { department_id?: number; regulati
 }
 
 export async function createElective(payload: Partial<DeptRow> & { parent: number; semester_id?: number; department_id?: number }) {
-  const res = await fetchWithAuth(`/api/curriculum/elective/`, {
+  const res = await fetchWithAuth('/api/curriculum/elective/', {
     method: 'POST',
     body: JSON.stringify(payload),
   });
@@ -208,7 +275,7 @@ export async function propagateDeptRow(
       editable: row.editable,
     };
     try {
-      const res = await fetchWithAuth(`/api/curriculum/department/`, {
+      const res = await fetchWithAuth('/api/curriculum/department/', {
         method: 'POST',
         body: JSON.stringify(payload),
       });

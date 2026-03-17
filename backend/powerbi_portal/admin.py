@@ -56,3 +56,17 @@ class PowerBIExportLogAdmin(admin.ModelAdmin):
     list_filter = ('view_name', 'created_at')
     search_fields = ('view_name', 'user__username', 'user__email', 'ip_address')
     readonly_fields = ('created_at',)
+
+
+# Register any remaining powerbi_portal models without explicit admin classes above.
+from django.apps import apps as django_apps
+from django.contrib.admin.sites import AlreadyRegistered
+
+_powerbi_portal_app_config = next((cfg for cfg in django_apps.get_app_configs() if cfg.name == 'powerbi_portal'), None)
+if _powerbi_portal_app_config:
+    for _model in _powerbi_portal_app_config.get_models():
+        if _model not in admin.site._registry:
+            try:
+                admin.site.register(_model)
+            except AlreadyRegistered:
+                pass

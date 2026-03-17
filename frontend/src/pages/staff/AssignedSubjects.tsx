@@ -58,6 +58,9 @@ export default function AssignedSubjectsPage() {
   const [currentUserStaffId, setCurrentUserStaffId] = useState<number | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [editSearchQuery, setEditSearchQuery] = useState('')
+  const [departments, setDepartments] = useState<any[]>([])
+  const [pickerSelectedDept, setPickerSelectedDept] = useState<number | null>(null)
+  const [editPickerSelectedDept, setEditPickerSelectedDept] = useState<number | null>(null)
 
   // Fix scroll container height to allow all students to be visible
   React.useEffect(() => {
@@ -95,13 +98,53 @@ export default function AssignedSubjectsPage() {
     setStaffLoading(true)
     try {
       const staff = await fetchDepartmentStaff()
+      console.log('Loaded staff:', staff)
       setStaffList(staff)
+      
+      // Extract unique departments from staff list
+      const deptMap = new Map<number, any>()
+      staff.forEach((s: any) => {
+        console.log('Processing staff:', s.staff_id, 'department:', s.department)
+        
+        // Check multiple possible department field names
+        let department = s.department || s.department_data || s.dept
+        
+        if (department) {
+          const dept = department
+          // Handle both object and primitive department references
+          const deptId = typeof dept === 'object' ? dept.id : dept
+          if (deptId && !deptMap.has(deptId)) {
+            const deptData = typeof dept === 'object' ? dept : { id: deptId }
+            console.log('Adding department:', deptId, deptData)
+            deptMap.set(deptId, deptData)
+          }
+        }
+      })
+      
+      // Sort departments by name or code
+      const depts = Array.from(deptMap.values()).sort((a, b) => {
+        const nameA = a.name || a.code || `Dept ${a.id}`
+        const nameB = b.name || b.code || `Dept ${b.id}`
+        return nameA.localeCompare(nameB)
+      })
+      console.log('Final departments list:', depts)
+      setDepartments(depts)
     } catch (e: any) {
       console.error('Failed to load staff list:', e)
       // Don't show error to user, just log it
     } finally {
       setStaffLoading(false)
     }
+  }
+
+  // Filter staff by selected department
+  const getFilteredStaffList = (selectedDept: number | null) => {
+    if (!selectedDept) {
+      return staffList
+    }
+    return staffList.filter(staff => 
+      staff.department && staff.department.id === selectedDept
+    )
   }
 
   async function loadCurrentUser() {
@@ -1041,6 +1084,25 @@ export default function AssignedSubjectsPage() {
             </div>
             
             <div className="p-6 overflow-y-auto flex-1">
+              {/* Department Filter */}
+              <div className="mb-6">
+                <label className="block text-sm font-semibold text-gray-900 mb-2">
+                  Filter by Department
+                </label>
+                <select
+                  value={pickerSelectedDept || ''}
+                  onChange={(e) => setPickerSelectedDept(e.target.value ? Number(e.target.value) : null)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">All Departments</option>
+                  {departments.map(dept => (
+                    <option key={dept.id} value={dept.id}>
+                      {dept.name || dept.code || `Dept ${dept.id}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              
               {/* Staff Assignment */}
               <div className="mb-6">
                 <label className="block text-sm font-semibold text-gray-900 mb-2">
@@ -1052,7 +1114,7 @@ export default function AssignedSubjectsPage() {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
                   <option value="">Current Staff (Default)</option>
-                  {staffList.map(staff => (
+                  {getFilteredStaffList(pickerSelectedDept).map(staff => (
                     <option key={staff.id} value={staff.id}>
                       {staff.name} ({staff.staff_id})
                     </option>

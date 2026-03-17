@@ -25,6 +25,9 @@ backend/staticfiles/
 .env.prod
 backend/.env
 
+# Local TLS artifacts generated during certbot runs
+.letsencrypt/
+
 # Test files (temporary diagnostic and test scripts)
 backend/test_*.py
 backend/check_*.py
@@ -98,3 +101,6 @@ __pypackages__/
 # OS
 .DS_Store
 Thumbs.db
+
+
+check.txt

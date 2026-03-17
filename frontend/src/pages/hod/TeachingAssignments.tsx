@@ -84,6 +84,17 @@ export default function TeachingAssignmentsPage(){
     return electiveStaff || []
   }
 
+  // Filter staff by selected department for dept-core subjects dropdown
+  const getFilteredStaffForDeptCore = () => {
+    if (!selectedDept) {
+      return staff || []
+    }
+    // Filter staff to only those from the selected department
+    return (staff || []).filter(s => {
+      return s.department && s.department.id === selectedDept
+    })
+  }
+
   // permissions (used to decide which staff endpoint to call)
   const perms = (() => { try { return JSON.parse(localStorage.getItem('permissions') || '[]') as string[] } catch { return [] } })()
   const canAssignTeaching = perms.includes('academics.assign_teaching')
@@ -128,9 +139,9 @@ export default function TeachingAssignmentsPage(){
   const getDeptCoreParents = () => {
     return electiveParents.filter(p => {
       if (!(p as any).is_dept_core) return false;
-      if (!p.department) return false;
-      const deptMatch = !selectedDept || !p.department || p.department.id === selectedDept;
-      return deptMatch;
+      // Show ALL dept-core subjects regardless of filter
+      // Only filter is applied to staff dropdown, not subjects
+      return true;
     });
   }
 
@@ -1022,7 +1033,7 @@ export default function TeachingAssignmentsPage(){
                                         className="w-full p-2 border border-gray-300 rounded-lg bg-white text-gray-700 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                                       >
                                         <option value="">-- select staff --</option>
-                                        {staff.map(st => (
+                                        {getFilteredStaffForDeptCore().map(st => (
                                           <option key={st.id} value={st.id}>
                                             {st.staff_id} - {getStaffDisplayName(st)}
                                           </option>
@@ -1238,7 +1249,7 @@ export default function TeachingAssignmentsPage(){
                                       className="w-full px-3 py-1.5 border border-gray-300 rounded-lg bg-white text-gray-700 text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
                                     >
                                       <option value="">-- select staff --</option>
-                                      {(deptCoreStaff.length > 0 ? deptCoreStaff : staff).map(st => (
+                                      {getFilteredStaffForDeptCore().map(st => (
                                         <option key={st.id} value={st.id}>{st.staff_id} - {getStaffDisplayName(st)}</option>
                                       ))}
                                     </select>

@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from .models import AttendanceRecord, UploadLog, HalfDayRequest, Holiday, AttendanceSettings
+from academics.models import Department
 
 
 class AttendanceRecordSerializer(serializers.ModelSerializer):
@@ -11,7 +12,7 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
         model = AttendanceRecord
         fields = [
             'id', 'user', 'user_name', 'full_name', 'staff_id', 'date',
-            'morning_in', 'evening_out', 'status', 'notes',
+            'morning_in', 'evening_out', 'status', 'fn_status', 'an_status', 'notes',
             'uploaded_by', 'uploaded_at', 'source_file'
         ]
         read_only_fields = ['uploaded_by', 'uploaded_at']
@@ -123,24 +124,48 @@ class HalfDayRequestReviewSerializer(serializers.ModelSerializer):
 class HolidaySerializer(serializers.ModelSerializer):
     """Serializer for Holiday model"""
     created_by_name = serializers.CharField(source='created_by.username', read_only=True)
-    
+    department_ids = serializers.PrimaryKeyRelatedField(source='departments', many=True, read_only=True)
+    departments_info = serializers.SerializerMethodField()
+
+    def get_departments_info(self, obj):
+        return [
+            {'id': d.id, 'name': d.name, 'code': d.code, 'short_name': getattr(d, 'short_name', '')}
+            for d in obj.departments.all()
+        ]
+
     class Meta:
         model = Holiday
-        fields = ['id', 'date', 'name', 'notes', 'is_sunday', 'is_removable', 'created_by', 'created_by_name', 'created_at']
+        fields = ['id', 'date', 'name', 'notes', 'is_sunday', 'is_removable',
+                  'created_by', 'created_by_name', 'created_at',
+                  'department_ids', 'departments_info']
         read_only_fields = ['created_by', 'created_at', 'is_sunday']
 
 
 class HolidayCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating holidays"""
-    
+    department_ids = serializers.PrimaryKeyRelatedField(
+        source='departments',
+        many=True,
+        required=False,
+        allow_empty=True,
+        queryset=Department.objects.all(),
+    )
+
     class Meta:
         model = Holiday
-        fields = ['date', 'name', 'notes']
-    
+        fields = ['date', 'name', 'notes', 'department_ids']
+
     def validate_date(self, value):
         """Ensure the date is not in the past (optional validation)"""
         # Allow past dates for historical data
         return value
+
+    def create(self, validated_data):
+        departments = validated_data.pop('departments', [])
+        holiday = Holiday.objects.create(**validated_data)
+        if departments:
+            holiday.departments.set(departments)
+        return holiday
 
 
 class AttendanceSettingsSerializer(serializers.ModelSerializer):
@@ -150,7 +175,7 @@ class AttendanceSettingsSerializer(serializers.ModelSerializer):
     class Meta:
         model = AttendanceSettings
         fields = [
-            'id', 'attendance_in_time_limit', 'attendance_out_time_limit',
+            'id', 'attendance_in_time_limit', 'attendance_out_time_limit', 'mid_time_split',
             'apply_time_based_absence', 'updated_by', 'updated_by_name',
             'created_at', 'updated_at'
         ]

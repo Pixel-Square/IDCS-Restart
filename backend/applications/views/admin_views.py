@@ -441,14 +441,6 @@ class ApplicationsAdminFlowListCreateView(IQACOnlyAPIView):
             sla_hours=request.data.get('sla_hours') or None,
         )
 
-        # Enforce a single active flow per (application_type, department).
-        if flow.is_active:
-            app_models.ApprovalFlow.objects.filter(
-                application_type=app_type,
-                department=department,
-                is_active=True,
-            ).exclude(pk=flow.pk).update(is_active=False)
-
         if isinstance(override_role_ids, list):
             flow.override_roles.set(Role.objects.filter(id__in=override_role_ids))
         flow = app_models.ApprovalFlow.objects.prefetch_related('override_roles', 'steps__role', 'steps__escalate_to_role').select_related('department').get(pk=flow.pk)
@@ -480,14 +472,6 @@ class ApplicationsAdminFlowDetailView(IQACOnlyAPIView):
         if flow.is_active != next_is_active:
             flow.is_active = next_is_active
             flow.save(update_fields=['is_active'])
-
-        # Enforce a single active flow per (application_type, department).
-        if flow.is_active:
-            app_models.ApprovalFlow.objects.filter(
-                application_type=flow.application_type,
-                department=flow.department,
-                is_active=True,
-            ).exclude(pk=flow.pk).update(is_active=False)
 
         flow = app_models.ApprovalFlow.objects.prefetch_related('override_roles', 'steps__role', 'steps__escalate_to_role').select_related('department').get(pk=flow.pk)
         return Response(_flow_payload(flow))

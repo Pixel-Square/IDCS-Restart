@@ -7,6 +7,7 @@ import { useSidebar } from './SidebarContext';
 import { fetchPendingPublishRequestCount } from '../../services/obe';
 import { ApplicationsNavResponse, fetchApplicationsNav } from '../../services/applications';
 import { useAttendanceNotificationCount } from '../../hooks/useAttendanceNotificationCount';
+import { fetchCurriculumPendingCount } from '../../services/curriculum';
 
   const ICON_MAP: Record<string, any> = {
   profile: User,
@@ -44,12 +45,15 @@ import { useAttendanceNotificationCount } from '../../hooks/useAttendanceNotific
   pbas_manager: Layout,
   settings: Settings,
   hr_request_templates: FileText,
+  hr_manage_gate: Shield,
   staff_requests_approvals: Bell,
+  requests_hub: Bell,
   applications_admin: Layout,
   applications_inbox: ClipboardList,
   applications_home: Layout,
   idscan_test: ScanLine,
   idscan_gatepass: Shield,
+  idscan_gatescan: Shield,
   rf_reader: Grid,
   feedback: MessageCircle,
 };
@@ -62,11 +66,13 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   const [pendingObeReqCount, setPendingObeReqCount] = useState<number>(0);
   const [pendingSwapReqCount, setPendingSwapReqCount] = useState<number>(0);
   const [pendingAttendanceReqCount, setPendingAttendanceReqCount] = useState<number>(0);
+  const [pendingCurriculumCount, setPendingCurriculumCount] = useState<number>(0);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [applicationsNav, setApplicationsNav] = useState<ApplicationsNavResponse | null>(null);
 
   const permsForHook = (data?.permissions || []).map((p) => String(p || '').toLowerCase());
   const rolesForHook = (data?.roles || []).map((r) => String(r || '').toUpperCase());
+  const isIqacForBadge = rolesForHook.includes('IQAC');
   const isHodOrIqac = rolesForHook.includes('HOD') || rolesForHook.includes('IQAC');
   const { count: attendanceNotifCount } = useAttendanceNotificationCount(isHodOrIqac);
 
@@ -181,6 +187,31 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
       mounted = false;
     };
   }, [data]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const fetchPendingCount = async () => {
+      if (!isIqacForBadge) {
+        setPendingCurriculumCount(0);
+        return;
+      }
+      try {
+        const resp = await fetchCurriculumPendingCount();
+        if (!mounted) return;
+        setPendingCurriculumCount(Number(resp.totalPending || 0));
+      } catch {
+        // badge is best-effort
+      }
+    };
+
+    fetchPendingCount();
+    const interval = window.setInterval(fetchPendingCount, 30_000);
+    return () => {
+      mounted = false;
+      window.clearInterval(interval);
+    };
+  }, [isIqacForBadge]);
   // auto-expand RFReader when on /iqac/rf-reader routes
   useEffect(() => {
     if (loc.pathname.startsWith('/iqac/rf-reader')) {
@@ -357,10 +388,13 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.length = 0;
     if (profileItem) items.push(profileItem);
     items.push({ key: 'idscan_assign_cards', label: 'Assign Cards', to: '/idscan/assign-cards' });
+    items.push({ key: 'idscan_cards_data', label: 'Cards Data', to: '/idscan/cards-data' });
   } else if (isSecurity && !items.some((i) => i.key === 'idscan_test')) {
     items.push({ key: 'idscan_test',     label: 'RFID Scanner Test', to: '/idscan/test' });
     items.push({ key: 'idscan_assign_cards', label: 'RFID Card Assignment', to: '/idscan/assign-cards' });
+    items.push({ key: 'idscan_cards_data', label: 'Cards Data', to: '/idscan/cards-data' });
     items.push({ key: 'idscan_gatepass', label: 'Gatepass Scanner',   to: '/idscan/gatepass' });
+    items.push({ key: 'idscan_gatescan', label: 'GateScan', to: '/idscan/gatescan' });
   }
   if (!isSecurity && applicationsNav?.show_applications && !items.some((item) => item.key === 'applications_home')) {
     items.push({ key: 'applications_home', label: 'My Applications', to: '/applications' });
@@ -394,16 +428,30 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'hr_request_templates', label: 'HR: Request Templates', to: '/hr/request-templates' });
   }
 
+  if ((rolesUpper.includes('HR') || rolesUpper.includes('SECURITY')) && !items.some(item => item.key === 'hr_manage_gate')) {
+    items.push({ key: 'hr_manage_gate', label: 'HR: Manage Gate', to: '/hr/manage-gate' });
+  }
+
+  if (rolesUpper.includes('HR') && !items.some(item => item.key === 'hr_gatepass_logs')) {
+    items.push({ key: 'hr_gatepass_logs', label: 'HR: GatePass Logs', to: '/hr/gatepass-logs' });
+  }
+
   if (rolesUpper.includes('HR') && !items.some(item => item.key === 'hr_staff_attendance_analytics')) {
     items.push({ key: 'hr_staff_attendance_analytics', label: 'HR: Staff Attendance Analytics', to: '/hr/staff-attendance-analytics' });
   }
   
   // Staff Requests system
   // Note: 'My Requests' moved into My Calendar; keep direct link removed to avoid duplication
-  const approverRoles = ['HOD', 'AHOD', 'HR', 'HAA', 'IQAC', 'PS', 'PRINCIPAL'];
-  const isApprover = approverRoles.some(r => rolesUpper.includes(r));
-  if ((permsLower.includes('staff_requests.approve_requests') || isApprover) && !items.some(item => item.key === 'staff_requests_approvals')) {
+  // PERMISSION-BASED ONLY: Only show request approvals to users with explicit staff_requests.approve_requests permission
+  const hasApprovePermission = permsLower.includes('staff_requests.approve_requests');
+  
+  if (hasApprovePermission && !items.some(item => item.key === 'staff_requests_approvals')) {
     items.push({ key: 'staff_requests_approvals', label: 'Pending Approvals', to: '/staff-requests/pending-approvals' });
+  }
+
+  // Requests Hub: ONLY for users with staff_requests.approve_requests permission
+  if (hasApprovePermission && !items.some(item => item.key === 'requests_hub')) {
+    items.push({ key: 'requests_hub', label: 'Requests', to: '/requests' });
   }
 
   // Add Token Raise for all users at the end (no permission check needed)
@@ -471,6 +519,9 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                       ) : null}
                       {i.key === 'attendance_analytics' && attendanceNotifCount > 0 ? (
                         <span className="ml-2 inline-flex items-center justify-center px-2 py-0.5 text-xs font-medium rounded-full bg-red-600 text-white">{attendanceNotifCount > 99 ? '99+' : attendanceNotifCount}</span>
+                      ) : null}
+                      {i.key === 'department_curriculum' && isIqac && pendingCurriculumCount > 0 ? (
+                        <span className="ml-2 inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 text-[11px] font-semibold rounded-full bg-red-600 text-white">{pendingCurriculumCount > 99 ? '99+' : pendingCurriculumCount}</span>
                       ) : null}
                     </span>
                   </Link>

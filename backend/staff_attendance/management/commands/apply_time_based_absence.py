@@ -55,6 +55,7 @@ class Command(BaseCommand):
         
         self.stdout.write(self.style.SUCCESS(f'Using time limits:'))
         self.stdout.write(f'  - In time limit: {settings.attendance_in_time_limit}')
+        self.stdout.write(f'  - Mid time split: {settings.mid_time_split}')
         self.stdout.write(f'  - Out time limit: {settings.attendance_out_time_limit}')
         self.stdout.write('')
 
@@ -110,20 +111,17 @@ class Command(BaseCommand):
         details = []
         
         for record in records:
-            should_be_absent = False
-            reason = []
+            old_status = record.status
+            old_fn_status = record.fn_status
+            old_an_status = record.an_status
             
-            # Check late arrival
-            if record.morning_in and record.morning_in > settings.attendance_in_time_limit:
-                should_be_absent = True
-                reason.append(f"Late arrival: {record.morning_in} > {settings.attendance_in_time_limit}")
+            # Apply the update_status logic which handles FN/AN split
+            record.update_status()
             
-            # Check early departure
-            if record.evening_out and record.evening_out < settings.attendance_out_time_limit:
-                should_be_absent = True
-                reason.append(f"Early departure: {record.evening_out} < {settings.attendance_out_time_limit}")
-            
-            if should_be_absent:
+            # Check if anything changed
+            if (record.status != old_status or 
+                record.fn_status != old_fn_status or 
+                record.an_status != old_an_status):
                 updated_count += 1
                 staff_id_display = 'N/A'
                 try:
@@ -136,17 +134,20 @@ class Command(BaseCommand):
                     'staff_id': staff_id_display,
                     'username': record.user.username,
                     'date': record.date,
-                    'old_status': record.status,
+                    'old_status': old_status,
+                    'new_status': record.status,
+                    'old_fn_status': old_fn_status,
+                    'new_fn_status': record.fn_status,
+                    'old_an_status': old_an_status,
+                    'new_an_status': record.an_status,
                     'morning_in': record.morning_in,
-                    'evening_out': record.evening_out,
-                    'reasons': reason
+                    'evening_out': record.evening_out
                 }
                 details.append(detail)
                 
-                # Update status if not dry-run
+                # Save if not dry-run
                 if not options['dry_run']:
-                    record.status = 'absent'
-                    record.save(update_fields=['status'])
+                    record.save(update_fields=['status', 'fn_status', 'an_status'])
         
         # Report results
         self.stdout.write('\n' + '='*80)
@@ -162,9 +163,10 @@ class Command(BaseCommand):
             for detail in details:
                 self.stdout.write(f"\n  Staff: {detail['username']} (ID: {detail['staff_id']})")
                 self.stdout.write(f"  Date: {detail['date']}")
-                self.stdout.write(f"  Status: {detail['old_status']} → absent")
+                self.stdout.write(f"  Status: {detail['old_status']} → {detail['new_status']}")
+                self.stdout.write(f"  FN Status: {detail['old_fn_status']} → {detail['new_fn_status']}")
+                self.stdout.write(f"  AN Status: {detail['old_an_status']} → {detail['new_an_status']}")
                 self.stdout.write(f"  Times: In={detail['morning_in']}, Out={detail['evening_out']}")
-                self.stdout.write(f"  Reasons: {', '.join(detail['reasons'])}")
         
         self.stdout.write('')
         if options['dry_run']:

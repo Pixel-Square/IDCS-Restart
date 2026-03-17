@@ -10,6 +10,8 @@ interface DashboardEntryPointsProps {
 interface AttendanceStatus {
   date: string;
   status: 'present' | 'absent' | 'partial' | 'half_day' | 'no_record';
+  fn_status: string;
+  an_status: string;
   morning_in: string | null;
   evening_out: string | null;
   has_record: boolean;
@@ -19,6 +21,35 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
   const username = user?.username || 'User';
   const [attendanceStatus, setAttendanceStatus] = useState<AttendanceStatus | null>(null);
   const [loadingAttendance, setLoadingAttendance] = useState(false);
+  const [avatarCandidateIndex, setAvatarCandidateIndex] = useState(0);
+
+  const avatarUrlCandidates = React.useMemo(() => {
+    const rootValue = String((user as any)?.profile_image || '').trim();
+    const nestedValue = String((user as any)?.profile?.profile_image || '').trim();
+    const raw = rootValue || nestedValue;
+    if (!raw) return [] as string[];
+
+    const normalized = raw.replace(/\\+/g, '/');
+    if (normalized.startsWith('http://') || normalized.startsWith('https://') || normalized.startsWith('blob:') || normalized.startsWith('data:')) {
+      return [normalized];
+    }
+
+    if (normalized.startsWith('/')) {
+      const direct = normalized;
+      const apiBaseUrl = `${getApiBase()}${normalized}`;
+      return direct === apiBaseUrl ? [direct] : [direct, apiBaseUrl];
+    }
+
+    const direct = `/media/${normalized}`;
+    const apiBaseUrl = `${getApiBase()}/media/${normalized}`;
+    return direct === apiBaseUrl ? [direct] : [direct, apiBaseUrl];
+  }, [user]);
+
+  useEffect(() => {
+    setAvatarCandidateIndex(0);
+  }, [avatarUrlCandidates]);
+
+  const currentAvatarUrl = avatarUrlCandidates[avatarCandidateIndex] || '';
   
   // Get designation based on profile type
   const getDesignation = () => {
@@ -108,14 +139,28 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
         return 'Unknown';
     }
   };
+
+  const getSessionStatusText = (status?: string) => {
+    if (!status || status === 'no_record') return 'No Record';
+    return status.toUpperCase();
+  };
   
   return (
     <div className="space-y-6">
       {/* Welcome Card */}
       <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-6 sm:p-8 shadow-md">
         <div className="flex items-center gap-4">
-          <div className="w-14 h-14 bg-blue-600 rounded-full flex items-center justify-center flex-shrink-0">
-            <User className="w-7 h-7 text-white" />
+          <div className="w-14 h-14 bg-blue-600 rounded-full flex items-center justify-center flex-shrink-0 overflow-hidden">
+            {currentAvatarUrl ? (
+              <img
+                src={currentAvatarUrl}
+                alt="Profile"
+                className="w-full h-full object-cover"
+                onError={() => setAvatarCandidateIndex((prev) => prev + 1)}
+              />
+            ) : (
+              <User className="w-7 h-7 text-white" />
+            )}
           </div>
           <div>
             <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Welcome, {username}</h1>
@@ -146,15 +191,20 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
               ) : attendanceStatus ? (
                 <div className="mt-1">
                   <p className="text-gray-900 font-medium">Status: {getStatusText(attendanceStatus.status)}</p>
+                  <div className="flex flex-wrap gap-2 mt-2 text-xs sm:text-sm">
+                    <span className="inline-flex items-center px-2 py-1 rounded-full bg-blue-100 text-blue-800 font-semibold">
+                      FN: {getSessionStatusText(attendanceStatus.fn_status)}
+                    </span>
+                    <span className="inline-flex items-center px-2 py-1 rounded-full bg-indigo-100 text-indigo-800 font-semibold">
+                      AN: {getSessionStatusText(attendanceStatus.an_status)}
+                    </span>
+                  </div>
                   <div className="flex gap-4 mt-1 text-sm text-gray-600">
                     {attendanceStatus.morning_in && (
                       <span>In: {attendanceStatus.morning_in}</span>
                     )}
                     {attendanceStatus.evening_out && (
                       <span>Out: {attendanceStatus.evening_out}</span>
-                    )}
-                    {!attendanceStatus.has_record && (
-                      <span className="text-red-600">No record found</span>
                     )}
                   </div>
                 </div>

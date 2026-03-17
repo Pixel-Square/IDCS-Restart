@@ -1616,3 +1616,17 @@ class SpecialCourseAssessmentEditRequestAdmin(admin.ModelAdmin):
             return None
 
     course_code.short_description = 'Course Code'
+
+
+# Register any remaining academics models without explicit admin classes above.
+from django.apps import apps as django_apps
+from django.contrib.admin.sites import AlreadyRegistered
+
+_academics_app_config = next((cfg for cfg in django_apps.get_app_configs() if cfg.name == 'academics'), None)
+if _academics_app_config:
+    for _model in _academics_app_config.get_models():
+        if _model not in admin.site._registry:
+            try:
+                admin.site.register(_model)
+            except AlreadyRegistered:
+                pass

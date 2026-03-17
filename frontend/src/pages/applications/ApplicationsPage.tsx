@@ -3,14 +3,17 @@ import { useNavigate } from 'react-router-dom'
 import {
   fetchApplicationTypes,
   fetchMyApplications,
+  cancelApplication,
   ApplicationTypeListItem,
   MyApplicationItem,
 } from '../../services/applications'
+import { ensureProfilePhotoPresent } from '../../services/auth'
 
 function statusBadgeClass(state: string): string {
   switch (state?.toUpperCase()) {
     case 'APPROVED': return 'bg-green-100 text-green-700'
     case 'REJECTED': return 'bg-red-100 text-red-700'
+    case 'CANCELLED': return 'bg-red-50 text-red-700'
     case 'IN_REVIEW':
     case 'SUBMITTED': return 'bg-blue-100 text-blue-700'
     case 'DRAFT': return 'bg-gray-100 text-gray-600'
@@ -24,6 +27,7 @@ function statusLabel(state: string): string {
     case 'SUBMITTED': return 'Pending'
     case 'APPROVED': return 'Approved'
     case 'REJECTED': return 'Rejected'
+    case 'CANCELLED': return 'Self Cancelled'
     case 'DRAFT': return 'Draft'
     default: return state || '—'
   }
@@ -52,26 +56,109 @@ function useCountdown(deadline: string | null): string | null {
   return display
 }
 
-function SlaCountdown({ deadline }: { deadline: string | null }): JSX.Element {
+function SlaCountdown({ deadline, endAt }: { deadline: string | null; endAt?: string | null }): JSX.Element {
   const display = useCountdown(deadline)
-  if (!display) return <span className="text-gray-400 text-xs">—</span>
+  const endLabel = endAt ? new Date(endAt).toLocaleString() : null
+  if (!display) {
+    return (
+      <div className="flex flex-col gap-1">
+        <span className="text-gray-400 text-xs">—</span>
+        {endLabel && (
+          <span className="text-[11px] text-gray-500">Ends: {endLabel}</span>
+        )}
+      </div>
+    )
+  }
   const isExpired = display === 'Expired'
   const diff = deadline ? new Date(deadline).getTime() - Date.now() : 0
   const isUrgent = !isExpired && diff < 3600000 // < 1 hour
   return (
-    <span className={`inline-flex items-center gap-1 font-mono text-xs font-semibold px-2 py-0.5 rounded-full ${
-      isExpired ? 'bg-red-100 text-red-600' :
-      isUrgent  ? 'bg-amber-100 text-amber-700' :
-                  'bg-indigo-50 text-indigo-700'
-    }`}>
-      {!isExpired && (
-        <svg className="w-3 h-3 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-          <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
-        </svg>
+    <div className="flex flex-col gap-1">
+      <span className={`inline-flex items-center gap-1 font-mono text-xs font-semibold px-2 py-0.5 rounded-full ${
+        isExpired ? 'bg-red-100 text-red-600' :
+        isUrgent  ? 'bg-amber-100 text-amber-700' :
+                    'bg-indigo-50 text-indigo-700'
+      }`}>
+        {!isExpired && (
+          <svg className="w-3 h-3 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
+          </svg>
+        )}
+        {display}
+      </span>
+      {endLabel && (
+        <span className="text-[11px] text-gray-500">Ends: {endLabel}</span>
       )}
-      {display}
-    </span>
+    </div>
   )
+}
+
+function AppTimer({ app }: { app: MyApplicationItem }): JSX.Element {
+  const [now, setNow] = useState(Date.now())
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [])
+
+  // 1. Gatepass Window Logic (whenever a gatepass window exists)
+  // We must respect the configured *start* time (Out for DATE OUT IN).
+  if (app.needs_gatepass_scan && app.gatepass_window_start && app.gatepass_window_end) {
+    const start = new Date(app.gatepass_window_start).getTime()
+    const end = new Date(app.gatepass_window_end).getTime()
+
+    if (app.gatepass_scanned_at) {
+      return (
+        <div className="flex flex-col gap-1">
+          <span className="text-gray-400 text-xs">—</span>
+        </div>
+      )
+    }
+
+    if (now < start) {
+      // WAITING
+      return (
+        <div className="flex flex-col gap-1">
+          <span className="inline-flex items-center gap-1 font-mono text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 w-fit">
+            Waiting
+          </span>
+          <span className="text-[11px] text-gray-500">Starts: {new Date(start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+        </div>
+      )
+    } else if (now >= start && now <= end) {
+      // ACTIVE - Show Countdown to END
+      const diff = end - now
+      const h = Math.floor(diff / 3600000)
+      const m = Math.floor((diff % 3600000) / 60000)
+      const s = Math.floor((diff % 60000) / 1000)
+      const timerStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+
+      return (
+        <div className="flex flex-col gap-1">
+          <span className="inline-flex items-center gap-1 font-mono text-xs font-semibold px-2 py-0.5 rounded-full bg-green-100 text-green-700 w-fit">
+            <svg className="w-3 h-3 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
+            </svg>
+            {timerStr}
+          </span>
+          <span className="text-[11px] text-gray-500">Ends: {new Date(end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+        </div>
+      )
+    } else {
+      // EXPIRED
+      return (
+        <div className="flex flex-col gap-1">
+          <span className="inline-flex items-center gap-1 font-mono text-xs font-semibold px-2 py-0.5 rounded-full bg-red-100 text-red-600 w-fit">
+            Expired
+          </span>
+          <span className="text-[11px] text-gray-500">Ended: {new Date(end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+        </div>
+      )
+    }
+  }
+
+  // 2. Fallback: SLA Countdown (for In-Review/Draft/etc)
+  return <SlaCountdown deadline={app.sla_deadline ?? null} endAt={app.gatepass_window_end ?? null} />
 }
 
 export default function ApplicationsPage(): JSX.Element {
@@ -82,19 +169,42 @@ export default function ApplicationsPage(): JSX.Element {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  const onCancel = useCallback(async (appId: number) => {
+    const ok = window.confirm('Cancel this application? This will mark it as Self Cancelled.')
+    if (!ok) return
+    try {
+      await cancelApplication(appId)
+      setMyApps((prev) => prev.map((a) => (a.id === appId ? { ...a, current_state: 'CANCELLED', status: 'CANCELLED' } : a)))
+    } catch (e: any) {
+      setError(e?.message || 'Failed to cancel application.')
+    }
+  }, [])
+
   useEffect(() => {
     let mounted = true
     ;(async () => {
       setLoading(true)
       setError(null)
       try {
-        const [typesRes, myRes] = await Promise.all([
+        const [typesRes, myRes] = await Promise.allSettled([
           fetchApplicationTypes(),
-          fetchMyApplications().catch(() => [] as MyApplicationItem[]),
+          fetchMyApplications(),
         ])
         if (!mounted) return
-        setTypes(typesRes)
-        setMyApps(myRes)
+
+        if (typesRes.status === 'fulfilled') {
+          setTypes(typesRes.value)
+        } else {
+          setTypes([])
+          setError(typesRes.reason?.message || 'Failed to load application types.')
+        }
+
+        if (myRes.status === 'fulfilled') {
+          setMyApps(myRes.value)
+        } else {
+          setMyApps([])
+          setError((prev) => prev || myRes.reason?.message || 'Failed to load your applications.')
+        }
       } catch (e: any) {
         if (mounted) setError(e?.message || 'Failed to load applications.')
       } finally {
@@ -132,10 +242,25 @@ export default function ApplicationsPage(): JSX.Element {
                   {types.map((t) => (
                     <button
                       key={t.id}
-                      onClick={() => navigate(`/applications/new/${t.id}`)}
+                      onClick={async () => {
+                        const hasPhoto = await ensureProfilePhotoPresent()
+                        if (!hasPhoto) {
+                          alert('Please upload your Profile Photo before applying for applications. You will be redirected to Profile now.')
+                          navigate('/profile')
+                          return
+                        }
+                        navigate(`/applications/new/${t.id}`)
+                      }}
                       className="rounded-2xl border border-gray-200 bg-white p-5 text-left hover:border-indigo-300 hover:shadow-sm transition-all group"
                     >
-                      <div className="text-sm font-semibold text-gray-900 group-hover:text-indigo-700 mb-1">{t.name}</div>
+                      <div className="flex items-start justify-between gap-3 mb-1">
+                        <div className="text-sm font-semibold text-gray-900 group-hover:text-indigo-700">{t.name}</div>
+                        {!!t.code && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold font-mono bg-indigo-50 text-indigo-700 border border-indigo-100 whitespace-nowrap">
+                            {t.code}
+                          </span>
+                        )}
+                      </div>
                       {t.description && (
                         <div className="text-xs text-gray-500 line-clamp-2">{t.description}</div>
                       )}
@@ -172,23 +297,73 @@ export default function ApplicationsPage(): JSX.Element {
                               #{app.id} — {app.application_type_name}
                             </td>
                             <td className="px-5 py-3">
-                              {app.needs_gatepass_scan ? (
-                                <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
-                                  NOT LEAVED
-                                </span>
-                              ) : app.gatepass_scanned_at ? (
-                                <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
-                                  Exited
-                                </span>
-                              ) : (
-                                <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${statusBadgeClass(app.current_state)}`}>
-                                  {statusLabel(app.current_state)}
-                                </span>
-                              )}
+                              {(() => {
+                                const state = app.current_state?.toUpperCase()
+                                const windowStart = app.gatepass_window_start ? new Date(app.gatepass_window_start).getTime() : null
+                                const windowEnd = app.gatepass_window_end ? new Date(app.gatepass_window_end).getTime() : null
+                                const now = Date.now()
+                                const fallbackActive = windowStart !== null && windowEnd !== null && now >= windowStart && now <= windowEnd
+                                const isWindowActive = (app.time_window_active ?? fallbackActive) === true
+
+                                if (state === 'CANCELLED') {
+                                  return (
+                                    <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${statusBadgeClass(app.current_state)}`}>
+                                      {statusLabel(app.current_state)}
+                                    </span>
+                                  )
+                                }
+
+                                if (app.gatepass_scanned_at) {
+                                  return (
+                                    <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                                      Exited
+                                    </span>
+                                  )
+                                }
+
+                                if (app.gatepass_expired ?? false) {
+                                  return (
+                                    <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                                      EXPIRED
+                                    </span>
+                                  )
+                                }
+
+                                if (state === 'APPROVED' && windowStart && now < windowStart) {
+                                  return (
+                                    <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
+                                      WAITING
+                                    </span>
+                                  )
+                                }
+
+                                if (isWindowActive && state === 'APPROVED') {
+                                  return (
+                                    <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                                      ACTIVE
+                                    </span>
+                                  )
+                                }
+
+                                if (app.needs_gatepass_scan) {
+                                  // Window not active yet: show normal state (e.g. Approved)
+                                  return (
+                                    <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${statusBadgeClass(app.current_state)}`}>
+                                      {statusLabel(app.current_state)}
+                                    </span>
+                                  )
+                                }
+
+                                return (
+                                  <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${statusBadgeClass(app.current_state)}`}>
+                                    {statusLabel(app.current_state)}
+                                  </span>
+                                )
+                              })()}
                             </td>
                             <td className="px-5 py-3 text-gray-600">{app.current_step_role || '—'}</td>
                             <td className="px-5 py-3">
-                              <SlaCountdown deadline={app.sla_deadline ?? null} />
+                              <AppTimer app={app} />
                             </td>
                             <td className="px-5 py-3 text-gray-500">
                               {app.submitted_at ? new Date(app.submitted_at).toLocaleDateString() : '—'}
@@ -200,6 +375,16 @@ export default function ApplicationsPage(): JSX.Element {
                               >
                                 View
                               </button>
+                              {app.current_state?.toUpperCase() !== 'APPROVED' &&
+                               app.current_state?.toUpperCase() !== 'REJECTED' &&
+                               app.current_state?.toUpperCase() !== 'CANCELLED' && (
+                                <button
+                                  onClick={() => onCancel(app.id)}
+                                  className="ml-3 text-xs text-red-600 hover:underline font-medium"
+                                >
+                                  Cancel
+                                </button>
+                              )}
                             </td>
                           </tr>
                         ))}

@@ -8,6 +8,7 @@ import {
   type ScannedStaff,
   type ScannedStudent,
 } from '../../services/idscan'
+import { getApiBase } from '../../services/apiBase'
 
 const SERIAL_FILTERS = [
   { usbVendorId: 0x1a86, usbProductId: 0x7523 }, // CH340
@@ -44,7 +45,10 @@ function Row({ label, value, mono }: { label: string; value: string; mono?: bool
 }
 
 function StudentCard({ student, uid, onClose }: { student: ScannedStudent; uid: string; onClose: () => void }) {
-  const profileImageUrl = student.profile_image_url
+  let profileImageUrl = student.profile_image_url
+  if (profileImageUrl && !profileImageUrl.startsWith('http')) {
+    profileImageUrl = `${getApiBase()}${profileImageUrl.startsWith('/') ? '' : '/'}${profileImageUrl}`
+  }
   const initials = student.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
   
   return (
@@ -125,7 +129,10 @@ function StudentCard({ student, uid, onClose }: { student: ScannedStudent; uid: 
 }
 
 function StaffCard({ staff, uid, onClose }: { staff: ScannedStaff; uid: string; onClose: () => void }) {
-  const profileImageUrl = staff.profile_image_url
+  let profileImageUrl = staff.profile_image_url
+  if (profileImageUrl && !profileImageUrl.startsWith('http')) {
+    profileImageUrl = `${getApiBase()}${profileImageUrl.startsWith('/') ? '' : '/'}${profileImageUrl}`
+  }
   const initials = staff.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
   
   return (
@@ -458,7 +465,7 @@ export default function RFReaderAssignCardsPage() {
       <div className="max-w-4xl mx-auto px-4 py-6 space-y-5">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">RFID Card Assignment</h1>
+            <h1 className="text-2xl font-bold text-gray-900">RFID Card Assignments</h1>
             <p className="text-sm text-gray-500 mt-0.5">Scan a card. If it’s new, assign it to Student/Staff using one search box.</p>
           </div>
           {scanning && (

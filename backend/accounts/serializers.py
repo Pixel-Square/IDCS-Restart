@@ -8,6 +8,64 @@ from typing import Optional
 User = get_user_model()
 
 
+def _compute_effective_role_names(user) -> list[str]:
+    """Return a stable, de-duplicated list of effective role names.
+
+    Includes:
+    - `accounts.Role` via `user.roles` (ManyToMany)
+    - `academics.DepartmentRole` (HOD/AHOD)
+    - `academics.RoleAssignment` (e.g. IQAC)
+    """
+    roles: list[str] = []
+
+    try:
+        roles.extend([str(r.name).strip().upper() for r in user.roles.all()])
+    except Exception:
+        pass
+
+    existing = {r for r in roles if r}
+
+    # DepartmentRole-based roles
+    try:
+        staff_profile = getattr(user, 'staff_profile', None)
+        if staff_profile is not None:
+            from academics.models import DepartmentRole
+
+            dept_roles = DepartmentRole.objects.filter(
+                staff=staff_profile, is_active=True
+            ).values_list('role', flat=True)
+            for r in dept_roles:
+                ru = str(r or '').strip().upper()
+                if ru and ru not in existing:
+                    roles.append(ru)
+                    existing.add(ru)
+    except Exception:
+        pass
+
+    # RoleAssignment-based roles
+    try:
+        from academics.models import RoleAssignment
+
+        ra_roles = RoleAssignment.objects.filter(
+            staff__user=user, is_active=True
+        ).values_list('role__name', flat=True)
+        for r in ra_roles:
+            ru = str(r or '').strip().upper()
+            if ru and ru not in existing:
+                roles.append(ru)
+                existing.add(ru)
+    except Exception:
+        pass
+
+    # Keep a consistent ordering: IQAC first if present, then alphabetical.
+    # This avoids clients picking roles[0] and getting HOD.
+    unique_sorted = sorted({r for r in roles if r})
+    if 'IQAC' in unique_sorted:
+        unique_sorted.remove('IQAC')
+        return ['IQAC', *unique_sorted]
+    return unique_sorted
+
+
 class PermissionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Permission
@@ -55,6 +113,9 @@ class RegisterSerializer(serializers.ModelSerializer):
 
 
 class MeSerializer(serializers.Serializer):
+    # Compatibility aliases for clients that expect {user_id, name, roles}
+    user_id = serializers.IntegerField(source='id', read_only=True)
+    name = serializers.SerializerMethodField()
     id = serializers.IntegerField(read_only=True)
     username = serializers.CharField(read_only=True)
     email = serializers.EmailField(read_only=True)
@@ -89,41 +150,15 @@ class MeSerializer(serializers.Serializer):
         return self.get_name_email_edited(obj)
 
     def get_roles(self, obj):
-        roles = [r.name for r in obj.roles.all()]
+        return _compute_effective_role_names(obj)
 
-        # Add DepartmentRole-based roles (HOD/AHOD) as effective roles.
-        try:
-            staff_profile = getattr(obj, 'staff_profile', None)
-            if staff_profile is not None:
-                from academics.models import DepartmentRole
-
-                dept_roles = DepartmentRole.objects.filter(staff=staff_profile, is_active=True).values_list('role', flat=True)
-                existing = {str(r).upper() for r in roles}
-                for r in dept_roles:
-                    ru = str(r).upper()
-                    if ru and ru not in existing:
-                        roles.append(ru)
-                        existing.add(ru)
-        except Exception:
-            pass
-
-        # Add RoleAssignment-based roles (e.g. IQAC, HAA) that are stored
-        # separately from the User.roles ManyToMany.
-        try:
-            from academics.models import RoleAssignment
-            existing = {str(r).upper() for r in roles}
-            ra_roles = RoleAssignment.objects.filter(
-                staff__user=obj, is_active=True
-            ).values_list('role__name', flat=True)
-            for r in ra_roles:
-                ru = str(r or '').strip().upper()
-                if ru and ru not in existing:
-                    roles.append(ru)
-                    existing.add(ru)
-        except Exception:
-            pass
-
-        return roles
+    def get_name(self, obj):
+        first = str(getattr(obj, 'first_name', '') or '').strip()
+        last = str(getattr(obj, 'last_name', '') or '').strip()
+        full = f'{first} {last}'.strip()
+        if full:
+            return full
+        return str(getattr(obj, 'username', '') or '').strip()
 
     def get_is_iqac_main(self, obj):
         """True only for the single IQAC main account (username 000000)."""
@@ -212,6 +247,7 @@ class MeSerializer(serializers.Serializer):
                 'student_id': sp.reg_no,  # Alias for consistency
                 'profile_image': profile_image_url,
                 'profile_image_updated': self.get_profile_image_updated(obj),
+                'rfid_uid': getattr(sp, 'rfid_uid', ''),
                 'mobile_number': getattr(sp, 'mobile_number', '') or '',
                 'mobile_verified': bool(getattr(sp, 'mobile_number_verified_at', None)),
                 'section_id': getattr(sec_obj, 'id', None),
@@ -231,6 +267,7 @@ class MeSerializer(serializers.Serializer):
                 'staff_id': st.staff_id,
                 'profile_image': profile_image_url,
                 'profile_image_updated': self.get_profile_image_updated(obj),
+                'rfid_uid': getattr(st, 'rfid_uid', ''),
                 'mobile_number': getattr(st, 'mobile_number', '') or '',
                 'mobile_verified': bool(getattr(st, 'mobile_number_verified_at', None)),
                 'department': {
@@ -469,11 +506,14 @@ class IdentifierTokenObtainPairSerializer(serializers.Serializer):
 
         # add roles claim to tokens for convenience
         try:
-            refresh['roles'] = [r.name for r in user.roles.all()]
+            refresh['roles'] = _compute_effective_role_names(user)
         except Exception:
             refresh['roles'] = []
 
         return {
             'refresh': str(refresh),
             'access': str(refresh.access_token),
+            'user_id': int(user.id),
+            'name': (f"{getattr(user, 'first_name', '')} {getattr(user, 'last_name', '')}").strip() or str(getattr(user, 'username', '') or '').strip(),
+            'roles': _compute_effective_role_names(user),
         }

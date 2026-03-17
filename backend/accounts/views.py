@@ -24,8 +24,10 @@ import os
 import uuid
 
 from .models import MobileOtp, NotificationTemplate, UserQuery, Role
+from .models import ProfileImageUpdateRequest
 from .services.sms import send_sms, send_whatsapp, verify_otp
 from .permissions_api import HasPermissionCode
+from .utils import get_user_permissions
 
 log = logging.getLogger(__name__)
 
@@ -553,6 +555,168 @@ class ProfileUpdateView(APIView):
         # Return updated user data
         serializer = MeSerializer(user)
         return Response({'ok': True, 'user': serializer.data}, status=status.HTTP_200_OK)
+
+
+def _can_approve_profile_image_unlock(user) -> bool:
+    try:
+        if not user or not getattr(user, 'is_authenticated', False):
+            return False
+        if bool(getattr(user, 'is_superuser', False)):
+            return True
+        perms = get_user_permissions(user)
+        return 'accounts.profile_image_unlock_approve' in perms
+    except Exception:
+        return False
+
+
+def _profile_image_request_payload(req: ProfileImageUpdateRequest):
+    u = getattr(req, 'user', None)
+    reviewer = getattr(req, 'reviewed_by', None)
+    return {
+        'id': req.id,
+        'status': req.status,
+        'reason': req.reason or '',
+        'review_note': req.review_note or '',
+        'requested_at': req.requested_at.isoformat() if req.requested_at else None,
+        'reviewed_at': req.reviewed_at.isoformat() if req.reviewed_at else None,
+        'reviewed_by': {
+            'id': getattr(reviewer, 'id', None),
+            'username': getattr(reviewer, 'username', None),
+        } if reviewer else None,
+        'user': {
+            'id': getattr(u, 'id', None),
+            'username': getattr(u, 'username', None),
+            'email': getattr(u, 'email', None),
+            'first_name': getattr(u, 'first_name', ''),
+            'last_name': getattr(u, 'last_name', ''),
+            'profile_image_updated': bool(getattr(u, 'profile_image_updated', False)),
+        } if u else None,
+    }
+
+
+class ProfileImageUpdateRequestView(APIView):
+    """Create/view profile image unlock requests for one-time image update."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request):
+        latest = (
+            ProfileImageUpdateRequest.objects.filter(user=request.user)
+            .select_related('user', 'reviewed_by')
+            .order_by('-requested_at')
+            .first()
+        )
+
+        has_pending = False
+        if latest and latest.status == ProfileImageUpdateRequest.STATUS_PENDING:
+            has_pending = True
+
+        can_request = bool(getattr(request.user, 'profile_image_updated', False)) and not has_pending
+
+        return Response(
+            {
+                'latest': _profile_image_request_payload(latest) if latest else None,
+                'can_request': can_request,
+                'has_pending': has_pending,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def post(self, request):
+        user = request.user
+        reason = str((request.data or {}).get('reason') or '').strip()
+
+        if not bool(getattr(user, 'profile_image_updated', False)):
+            return Response(
+                {'detail': 'Your profile image is not locked. You can update it directly.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        pending = ProfileImageUpdateRequest.objects.filter(
+            user=user,
+            status=ProfileImageUpdateRequest.STATUS_PENDING,
+        ).first()
+        if pending:
+            return Response(
+                {
+                    'detail': 'You already have a pending profile image update request.',
+                    'request': _profile_image_request_payload(pending),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        req = ProfileImageUpdateRequest.objects.create(
+            user=user,
+            reason=reason,
+            status=ProfileImageUpdateRequest.STATUS_PENDING,
+        )
+        return Response(
+            {
+                'ok': True,
+                'request': _profile_image_request_payload(req),
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class ProfileImageUpdateRequestReviewView(APIView):
+    """Approver endpoint for profile image unlock requests."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request):
+        if not _can_approve_profile_image_unlock(request.user):
+            return Response({'detail': 'Not allowed.'}, status=status.HTTP_403_FORBIDDEN)
+
+        qs = (
+            ProfileImageUpdateRequest.objects.filter(status=ProfileImageUpdateRequest.STATUS_PENDING)
+            .select_related('user', 'reviewed_by')
+            .order_by('requested_at')
+        )
+        return Response(
+            {
+                'results': [_profile_image_request_payload(r) for r in qs],
+                'count': qs.count(),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def patch(self, request, request_id: int):
+        if not _can_approve_profile_image_unlock(request.user):
+            return Response({'detail': 'Not allowed.'}, status=status.HTTP_403_FORBIDDEN)
+
+        action = str((request.data or {}).get('action') or '').strip().lower()
+        review_note = str((request.data or {}).get('review_note') or '').strip()
+        if action not in {'approve', 'reject'}:
+            return Response({'detail': 'action must be either approve or reject.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        req = (
+            ProfileImageUpdateRequest.objects.select_related('user', 'reviewed_by')
+            .filter(pk=request_id)
+            .first()
+        )
+        if not req:
+            return Response({'detail': 'Request not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if req.status != ProfileImageUpdateRequest.STATUS_PENDING:
+            return Response({'detail': 'Request is already reviewed.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        req.status = (
+            ProfileImageUpdateRequest.STATUS_APPROVED
+            if action == 'approve'
+            else ProfileImageUpdateRequest.STATUS_REJECTED
+        )
+        req.reviewed_by = request.user
+        req.reviewed_at = timezone.now()
+        req.review_note = review_note
+        req.save(update_fields=['status', 'reviewed_by', 'reviewed_at', 'review_note'])
+
+        if req.status == ProfileImageUpdateRequest.STATUS_APPROVED:
+            target_user = req.user
+            target_user.profile_image_updated = False
+            target_user.save(update_fields=['profile_image_updated'])
+
+        return Response({'ok': True, 'request': _profile_image_request_payload(req)}, status=status.HTTP_200_OK)
 
 
 def _user_is_iqac(user) -> bool:

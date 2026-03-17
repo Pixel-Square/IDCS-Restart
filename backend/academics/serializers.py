@@ -351,7 +351,16 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
             st = getattr(obj, 'staff', None)
             if not st:
                 return None
-            return {'id': st.id, 'user': getattr(getattr(st, 'user', None), 'username', None), 'staff_id': getattr(st, 'staff_id', None)}
+            user = getattr(st, 'user', None)
+            return {
+                'id': st.id, 
+                'user': {
+                    'username': getattr(user, 'username', None),
+                    'first_name': getattr(user, 'first_name', None),
+                    'last_name': getattr(user, 'last_name', None),
+                } if user else None,
+                'staff_id': getattr(st, 'staff_id', None)
+            }
         except Exception:
             return None
 
@@ -1133,12 +1142,14 @@ class StaffProfileSerializer(serializers.ModelSerializer):
         
         if not username:
             raise serializers.ValidationError({'username': 'Username is required for new staff.'})
+        if not password:
+            raise serializers.ValidationError({'password': 'Password is required for new staff.'})
         
         # Create user
         try:
             user = User.objects.create_user(
                 username=username,
-                password=password or 'changeme123',
+                password=password,
                 first_name=first_name,
                 last_name=last_name,
                 email=email

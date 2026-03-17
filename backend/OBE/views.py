@@ -37,6 +37,10 @@ def mark_entry_tabs(request, subject_id):
 
     from .models import Cia1Mark
 
+    ta_id = _parse_int(request.GET.get('teaching_assignment_id') or request.POST.get('teaching_assignment_id'))
+    ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
+    strict_scope = _strict_assignment_scope(subject_code=subject.code, teaching_assignment=ta)
+
     errors: list[str] = []
 
     if request.method == 'POST' and tab == 'cia1':
@@ -47,7 +51,7 @@ def mark_entry_tabs(request, subject_id):
 
                 if raw == '':
                     # Blank => clear stored mark
-                    Cia1Mark.objects.filter(subject=subject, student=s).delete()
+                    _delete_scoped_mark(Cia1Mark, subject=subject, student=s, teaching_assignment=ta)
                     continue
 
                 try:
@@ -56,19 +60,26 @@ def mark_entry_tabs(request, subject_id):
                     errors.append(f'Invalid mark for {s.reg_no}: {raw}')
                     continue
 
-                Cia1Mark.objects.update_or_create(
+                _upsert_scoped_mark(
+                    Cia1Mark,
                     subject=subject,
                     student=s,
-                    defaults={'mark': mark},
+                    teaching_assignment=ta,
+                    mark_defaults={'mark': mark},
                 )
 
         if not errors:
             return redirect(f"{request.path}?tab=cia1&saved=1")
 
     try:
+        rows = _filter_marks_queryset_for_teaching_assignment(
+            Cia1Mark.objects.filter(subject=subject, student__in=students),
+            ta,
+            strict_scope=strict_scope,
+        )
         marks = {
             m.student_id: m.mark
-            for m in Cia1Mark.objects.filter(subject=subject, student__in=students)
+            for m in rows
         }
     except OperationalError:
         marks = {}
@@ -220,13 +231,43 @@ def _get_teaching_assignment_student_ids(ta) -> list[int]:
     return ids
 
 
-def _filter_marks_queryset_for_teaching_assignment(qs, ta):
+def _filter_marks_queryset_for_teaching_assignment(qs, ta, *, strict_scope: bool = False):
+    model = getattr(qs, 'model', None)
+    has_ta_field = bool(model) and any(getattr(f, 'name', '') == 'teaching_assignment' for f in model._meta.get_fields())
+
+    if has_ta_field:
+        if ta is not None:
+            scoped_qs = qs.filter(teaching_assignment=ta)
+            if scoped_qs.exists():
+                return scoped_qs
+            if strict_scope:
+                return qs.none()
+            return qs.filter(teaching_assignment__isnull=True)
+        return qs.filter(teaching_assignment__isnull=True)
+
     if ta is None:
         return qs
+
     student_ids = _get_teaching_assignment_student_ids(ta)
     if not student_ids:
         return qs.none()
     return qs.filter(student_id__in=student_ids)
+
+
+def _upsert_scoped_mark(model, *, subject, student, mark_defaults: dict, teaching_assignment=None):
+    has_ta_field = any(getattr(f, 'name', '') == 'teaching_assignment' for f in model._meta.get_fields())
+    lookup = {'subject': subject, 'student': student}
+    if has_ta_field:
+        lookup['teaching_assignment'] = teaching_assignment
+    return model.objects.update_or_create(**lookup, defaults=mark_defaults)
+
+
+def _delete_scoped_mark(model, *, subject, student, teaching_assignment=None):
+    has_ta_field = any(getattr(f, 'name', '') == 'teaching_assignment' for f in model._meta.get_fields())
+    filters = {'subject': subject, 'student': student}
+    if has_ta_field:
+        filters['teaching_assignment'] = teaching_assignment
+    return model.objects.filter(**filters).delete()
 
 
 def _get_scoped_obe_json_row(model, *, subject, teaching_assignment=None, strict_scope: bool = False, assessment: str | None = None):
@@ -1722,9 +1763,9 @@ def iqac_reset_assessment(request, assessment: str, subject_id: str):
         # Published
         try:
             if assessment_key == 'ssa1':
-                deleted['published'] += int(Ssa1Mark.objects.filter(subject=subject, student_id__in=student_ids).delete()[0] or 0)
+                deleted['published'] += int(_filter_marks_queryset_for_teaching_assignment(Ssa1Mark.objects.filter(subject=subject, student_id__in=student_ids), ta, strict_scope=strict_scope).delete()[0] or 0)
             elif assessment_key == 'review1':
-                deleted['published'] += int(Review1Mark.objects.filter(subject=subject, student_id__in=student_ids).delete()[0] or 0)
+                deleted['published'] += int(_filter_marks_queryset_for_teaching_assignment(Review1Mark.objects.filter(subject=subject, student_id__in=student_ids), ta, strict_scope=strict_scope).delete()[0] or 0)
                 deleted['published'] += _delete_scoped_obe_json_rows(
                     LabPublishedSheet,
                     subject=subject,
@@ -1733,9 +1774,9 @@ def iqac_reset_assessment(request, assessment: str, subject_id: str):
                     assessment='review1',
                 )
             elif assessment_key == 'ssa2':
-                deleted['published'] += int(Ssa2Mark.objects.filter(subject=subject, student_id__in=student_ids).delete()[0] or 0)
+                deleted['published'] += int(_filter_marks_queryset_for_teaching_assignment(Ssa2Mark.objects.filter(subject=subject, student_id__in=student_ids), ta, strict_scope=strict_scope).delete()[0] or 0)
             elif assessment_key == 'review2':
-                deleted['published'] += int(Review2Mark.objects.filter(subject=subject, student_id__in=student_ids).delete()[0] or 0)
+                deleted['published'] += int(_filter_marks_queryset_for_teaching_assignment(Review2Mark.objects.filter(subject=subject, student_id__in=student_ids), ta, strict_scope=strict_scope).delete()[0] or 0)
                 deleted['published'] += _delete_scoped_obe_json_rows(
                     LabPublishedSheet,
                     subject=subject,
@@ -1744,7 +1785,7 @@ def iqac_reset_assessment(request, assessment: str, subject_id: str):
                     assessment='review2',
                 )
             elif assessment_key == 'formative1':
-                deleted['published'] += int(Formative1Mark.objects.filter(subject=subject, student_id__in=student_ids).delete()[0] or 0)
+                deleted['published'] += int(_filter_marks_queryset_for_teaching_assignment(Formative1Mark.objects.filter(subject=subject, student_id__in=student_ids), ta, strict_scope=strict_scope).delete()[0] or 0)
                 deleted['published'] += _delete_scoped_obe_json_rows(
                     LabPublishedSheet,
                     subject=subject,
@@ -1753,7 +1794,7 @@ def iqac_reset_assessment(request, assessment: str, subject_id: str):
                     assessment='formative1',
                 )
             elif assessment_key == 'formative2':
-                deleted['published'] += int(Formative2Mark.objects.filter(subject=subject, student_id__in=student_ids).delete()[0] or 0)
+                deleted['published'] += int(_filter_marks_queryset_for_teaching_assignment(Formative2Mark.objects.filter(subject=subject, student_id__in=student_ids), ta, strict_scope=strict_scope).delete()[0] or 0)
                 deleted['published'] += _delete_scoped_obe_json_rows(
                     LabPublishedSheet,
                     subject=subject,
@@ -1768,7 +1809,7 @@ def iqac_reset_assessment(request, assessment: str, subject_id: str):
                     teaching_assignment=ta,
                     strict_scope=strict_scope,
                 )
-                deleted['published'] += int(Cia1Mark.objects.filter(subject=subject, student_id__in=student_ids).delete()[0] or 0)
+                deleted['published'] += int(_filter_marks_queryset_for_teaching_assignment(Cia1Mark.objects.filter(subject=subject, student_id__in=student_ids), ta, strict_scope=strict_scope).delete()[0] or 0)
                 deleted['published'] += _delete_scoped_obe_json_rows(
                     LabPublishedSheet,
                     subject=subject,
@@ -1783,7 +1824,7 @@ def iqac_reset_assessment(request, assessment: str, subject_id: str):
                     teaching_assignment=ta,
                     strict_scope=strict_scope,
                 )
-                deleted['published'] += int(Cia2Mark.objects.filter(subject=subject, student_id__in=student_ids).delete()[0] or 0)
+                deleted['published'] += int(_filter_marks_queryset_for_teaching_assignment(Cia2Mark.objects.filter(subject=subject, student_id__in=student_ids), ta, strict_scope=strict_scope).delete()[0] or 0)
                 deleted['published'] += _delete_scoped_obe_json_rows(
                     LabPublishedSheet,
                     subject=subject,
@@ -2306,9 +2347,15 @@ def _auto_publish_from_draft_if_due(request, *, subject, assessment_key: str, te
                     if raw_total not in (None, '',) and mark is None:
                         continue
                     if mark is None:
-                        model.objects.filter(subject=subject, student=student).delete()
+                        _delete_scoped_mark(model, subject=subject, student=student, teaching_assignment=ta)
                     else:
-                        model.objects.update_or_create(subject=subject, student=student, defaults={'mark': mark})
+                        _upsert_scoped_mark(
+                            model,
+                            subject=subject,
+                            student=student,
+                            teaching_assignment=ta,
+                            mark_defaults={'mark': mark},
+                        )
 
         elif assessment_key in {'review1', 'review2'}:
             model = Review1Mark if assessment_key == 'review1' else Review2Mark
@@ -2329,9 +2376,15 @@ def _auto_publish_from_draft_if_due(request, *, subject, assessment_key: str, te
                     if raw_total not in (None, '',) and mark is None:
                         continue
                     if mark is None:
-                        model.objects.filter(subject=subject, student=student).delete()
+                        _delete_scoped_mark(model, subject=subject, student=student, teaching_assignment=ta)
                     else:
-                        model.objects.update_or_create(subject=subject, student=student, defaults={'mark': mark})
+                        _upsert_scoped_mark(
+                            model,
+                            subject=subject,
+                            student=student,
+                            teaching_assignment=ta,
+                            mark_defaults={'mark': mark},
+                        )
 
         elif assessment_key in {'formative1', 'formative2'}:
             rows_by = payload.get('rowsByStudentId', {})
@@ -2352,13 +2405,15 @@ def _auto_publish_from_draft_if_due(request, *, subject, assessment_key: str, te
                     att1 = _coerce_decimal_or_none((item or {}).get('att1'))
                     att2 = _coerce_decimal_or_none((item or {}).get('att2'))
                     if skill1 is None or skill2 is None or att1 is None or att2 is None:
-                        model.objects.filter(subject=subject, student=student).delete()
+                        _delete_scoped_mark(model, subject=subject, student=student, teaching_assignment=ta)
                         continue
                     total = skill1 + skill2 + att1 + att2
-                    model.objects.update_or_create(
+                    _upsert_scoped_mark(
+                        model,
                         subject=subject,
                         student=student,
-                        defaults={'skill1': skill1, 'skill2': skill2, 'att1': att1, 'att2': att2, 'total': total},
+                        teaching_assignment=ta,
+                        mark_defaults={'skill1': skill1, 'skill2': skill2, 'att1': att1, 'att2': att2, 'total': total},
                     )
 
         elif assessment_key in {'cia1', 'cia2'}:
@@ -2405,7 +2460,13 @@ def _auto_publish_from_draft_if_due(request, *, subject, assessment_key: str, te
                                 continue
                             total += dec
                         total_dec = total
-                    mark_model.objects.update_or_create(subject=subject, student=student, defaults={'mark': total_dec})
+                    _upsert_scoped_mark(
+                        mark_model,
+                        subject=subject,
+                        student=student,
+                        teaching_assignment=ta,
+                        mark_defaults={'mark': total_dec},
+                    )
 
         elif assessment_key == 'model':
             _upsert_scoped_obe_json_row(
@@ -2885,7 +2946,12 @@ def ssa1_published(request, subject_id: str):
     from .models import Ssa1Mark
     try:
         ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
-        rows = _filter_marks_queryset_for_teaching_assignment(Ssa1Mark.objects.filter(subject=subject), ta)
+        strict_scope = _strict_assignment_scope(subject_code=subject.code, teaching_assignment=ta)
+        rows = _filter_marks_queryset_for_teaching_assignment(
+            Ssa1Mark.objects.filter(subject=subject),
+            ta,
+            strict_scope=strict_scope,
+        )
         marks = {str(r.student_id): (str(r.mark) if r.mark is not None else None) for r in rows}
     except OperationalError:
         marks = {}
@@ -2930,6 +2996,8 @@ def ssa1_publish(request, subject_id: str):
 
     from .models import Ssa1Mark
 
+    ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
+
     errors: list[str] = []
     with transaction.atomic():
         for item in rows:
@@ -2947,9 +3015,15 @@ def ssa1_publish(request, subject_id: str):
                 continue
 
             if mark is None:
-                Ssa1Mark.objects.filter(subject=subject, student=student).delete()
+                _delete_scoped_mark(Ssa1Mark, subject=subject, student=student, teaching_assignment=ta)
             else:
-                Ssa1Mark.objects.update_or_create(subject=subject, student=student, defaults={'mark': mark})
+                _upsert_scoped_mark(
+                    Ssa1Mark,
+                    subject=subject,
+                    student=student,
+                    teaching_assignment=ta,
+                    mark_defaults={'mark': mark},
+                )
 
     if errors:
         return Response({'detail': 'Validation error.', 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
@@ -2985,7 +3059,12 @@ def review1_published(request, subject_id: str):
     from .models import Review1Mark
     try:
         ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
-        rows = _filter_marks_queryset_for_teaching_assignment(Review1Mark.objects.filter(subject=subject), ta)
+        strict_scope = _strict_assignment_scope(subject_code=subject.code, teaching_assignment=ta)
+        rows = _filter_marks_queryset_for_teaching_assignment(
+            Review1Mark.objects.filter(subject=subject),
+            ta,
+            strict_scope=strict_scope,
+        )
         marks = {str(r.student_id): (str(r.mark) if r.mark is not None else None) for r in rows}
     except OperationalError:
         marks = {}
@@ -3030,6 +3109,8 @@ def review1_publish(request, subject_id: str):
 
     from .models import Review1Mark
 
+    ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
+
     errors: list[str] = []
     with transaction.atomic():
         for item in rows:
@@ -3047,9 +3128,15 @@ def review1_publish(request, subject_id: str):
                 continue
 
             if mark is None:
-                Review1Mark.objects.filter(subject=subject, student=student).delete()
+                _delete_scoped_mark(Review1Mark, subject=subject, student=student, teaching_assignment=ta)
             else:
-                Review1Mark.objects.update_or_create(subject=subject, student=student, defaults={'mark': mark})
+                _upsert_scoped_mark(
+                    Review1Mark,
+                    subject=subject,
+                    student=student,
+                    teaching_assignment=ta,
+                    mark_defaults={'mark': mark},
+                )
 
     if errors:
         return Response({'detail': 'Validation error.', 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
@@ -3085,7 +3172,12 @@ def ssa2_published(request, subject_id: str):
     from .models import Ssa2Mark
     try:
         ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
-        rows = _filter_marks_queryset_for_teaching_assignment(Ssa2Mark.objects.filter(subject=subject), ta)
+        strict_scope = _strict_assignment_scope(subject_code=subject.code, teaching_assignment=ta)
+        rows = _filter_marks_queryset_for_teaching_assignment(
+            Ssa2Mark.objects.filter(subject=subject),
+            ta,
+            strict_scope=strict_scope,
+        )
         marks = {str(r.student_id): (str(r.mark) if r.mark is not None else None) for r in rows}
     except OperationalError:
         marks = {}
@@ -3130,6 +3222,8 @@ def ssa2_publish(request, subject_id: str):
 
     from .models import Ssa2Mark
 
+    ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
+
     errors: list[str] = []
     with transaction.atomic():
         for item in rows:
@@ -3147,9 +3241,15 @@ def ssa2_publish(request, subject_id: str):
                 continue
 
             if mark is None:
-                Ssa2Mark.objects.filter(subject=subject, student=student).delete()
+                _delete_scoped_mark(Ssa2Mark, subject=subject, student=student, teaching_assignment=ta)
             else:
-                Ssa2Mark.objects.update_or_create(subject=subject, student=student, defaults={'mark': mark})
+                _upsert_scoped_mark(
+                    Ssa2Mark,
+                    subject=subject,
+                    student=student,
+                    teaching_assignment=ta,
+                    mark_defaults={'mark': mark},
+                )
 
     if errors:
         return Response({'detail': 'Validation error.', 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
@@ -3185,7 +3285,12 @@ def review2_published(request, subject_id: str):
     from .models import Review2Mark
     try:
         ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
-        rows = _filter_marks_queryset_for_teaching_assignment(Review2Mark.objects.filter(subject=subject), ta)
+        strict_scope = _strict_assignment_scope(subject_code=subject.code, teaching_assignment=ta)
+        rows = _filter_marks_queryset_for_teaching_assignment(
+            Review2Mark.objects.filter(subject=subject),
+            ta,
+            strict_scope=strict_scope,
+        )
         marks = {str(r.student_id): (str(r.mark) if r.mark is not None else None) for r in rows}
     except OperationalError:
         marks = {}
@@ -3230,6 +3335,8 @@ def review2_publish(request, subject_id: str):
 
     from .models import Review2Mark
 
+    ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
+
     errors: list[str] = []
     with transaction.atomic():
         for item in rows:
@@ -3247,9 +3354,15 @@ def review2_publish(request, subject_id: str):
                 continue
 
             if mark is None:
-                Review2Mark.objects.filter(subject=subject, student=student).delete()
+                _delete_scoped_mark(Review2Mark, subject=subject, student=student, teaching_assignment=ta)
             else:
-                Review2Mark.objects.update_or_create(subject=subject, student=student, defaults={'mark': mark})
+                _upsert_scoped_mark(
+                    Review2Mark,
+                    subject=subject,
+                    student=student,
+                    teaching_assignment=ta,
+                    mark_defaults={'mark': mark},
+                )
 
     if errors:
         return Response({'detail': 'Validation error.', 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
@@ -3285,7 +3398,12 @@ def formative1_published(request, subject_id: str):
     from .models import Formative1Mark
     try:
         ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
-        rows = _filter_marks_queryset_for_teaching_assignment(Formative1Mark.objects.filter(subject=subject), ta)
+        strict_scope = _strict_assignment_scope(subject_code=subject.code, teaching_assignment=ta)
+        rows = _filter_marks_queryset_for_teaching_assignment(
+            Formative1Mark.objects.filter(subject=subject),
+            ta,
+            strict_scope=strict_scope,
+        )
         marks = {
             str(r.student_id): {
                 'skill1': str(r.skill1) if r.skill1 is not None else None,
@@ -3339,6 +3457,8 @@ def formative1_publish(request, subject_id: str):
 
     from .models import Formative1Mark
 
+    ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
+
     errors: list[str] = []
     with transaction.atomic():
         for sid_str, item in rows_by.items():
@@ -3357,15 +3477,17 @@ def formative1_publish(request, subject_id: str):
 
             # If any is missing, treat as no published mark.
             if skill1 is None or skill2 is None or att1 is None or att2 is None:
-                Formative1Mark.objects.filter(subject=subject, student=student).delete()
+                _delete_scoped_mark(Formative1Mark, subject=subject, student=student, teaching_assignment=ta)
                 continue
 
             total = skill1 + skill2 + att1 + att2
 
-            Formative1Mark.objects.update_or_create(
+            _upsert_scoped_mark(
+                Formative1Mark,
                 subject=subject,
                 student=student,
-                defaults={'skill1': skill1, 'skill2': skill2, 'att1': att1, 'att2': att2, 'total': total},
+                teaching_assignment=ta,
+                mark_defaults={'skill1': skill1, 'skill2': skill2, 'att1': att1, 'att2': att2, 'total': total},
             )
 
     if errors:
@@ -3401,7 +3523,12 @@ def formative2_published(request, subject_id: str):
     from .models import Formative2Mark
     try:
         ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
-        rows = _filter_marks_queryset_for_teaching_assignment(Formative2Mark.objects.filter(subject=subject), ta)
+        strict_scope = _strict_assignment_scope(subject_code=subject.code, teaching_assignment=ta)
+        rows = _filter_marks_queryset_for_teaching_assignment(
+            Formative2Mark.objects.filter(subject=subject),
+            ta,
+            strict_scope=strict_scope,
+        )
         marks = {
             str(r.student_id): {
                 'skill1': str(r.skill1) if r.skill1 is not None else None,
@@ -3455,6 +3582,8 @@ def formative2_publish(request, subject_id: str):
 
     from .models import Formative2Mark
 
+    ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
+
     errors: list[str] = []
     with transaction.atomic():
         for sid_str, item in rows_by.items():
@@ -3473,15 +3602,17 @@ def formative2_publish(request, subject_id: str):
 
             # If any is missing, treat as no published mark.
             if skill1 is None or skill2 is None or att1 is None or att2 is None:
-                Formative2Mark.objects.filter(subject=subject, student=student).delete()
+                _delete_scoped_mark(Formative2Mark, subject=subject, student=student, teaching_assignment=ta)
                 continue
 
             total = skill1 + skill2 + att1 + att2
 
-            Formative2Mark.objects.update_or_create(
+            _upsert_scoped_mark(
+                Formative2Mark,
                 subject=subject,
                 student=student,
-                defaults={'skill1': skill1, 'skill2': skill2, 'att1': att1, 'att2': att2, 'total': total},
+                teaching_assignment=ta,
+                mark_defaults={'skill1': skill1, 'skill2': skill2, 'att1': att1, 'att2': att2, 'total': total},
             )
 
     if errors:
@@ -3607,10 +3738,12 @@ def cia1_publish_sheet(request, subject_id: str):
                     total += dec
                 total_dec = total
 
-            Cia1Mark.objects.update_or_create(
+            _upsert_scoped_mark(
+                Cia1Mark,
                 subject=subject,
                 student=student,
-                defaults={'mark': total_dec},
+                teaching_assignment=ta,
+                mark_defaults={'mark': total_dec},
             )
 
     try:
@@ -3820,10 +3953,12 @@ def cia2_publish_sheet(request, subject_id: str):
                     total += dec
                 total_dec = total
 
-            Cia2Mark.objects.update_or_create(
+            _upsert_scoped_mark(
+                Cia2Mark,
                 subject=subject,
                 student=student,
-                defaults={'mark': total_dec},
+                teaching_assignment=ta,
+                mark_defaults={'mark': total_dec},
             )
 
     try:
@@ -4341,21 +4476,21 @@ def obe_progress_overview(request):
             student_ids = [s.id for s in students]
 
             if assessment_key == 'ssa1':
-                rows_filled = Ssa1Mark.objects.filter(subject=subject, student_id__in=student_ids, mark__isnull=False).count()
+                rows_filled = _filter_marks_queryset_for_teaching_assignment(Ssa1Mark.objects.filter(subject=subject, student_id__in=student_ids, mark__isnull=False), ta, strict_scope=_strict_assignment_scope(subject_code=getattr(subject, 'code', ''), teaching_assignment=ta)).count()
             elif assessment_key == 'ssa2':
-                rows_filled = Ssa2Mark.objects.filter(subject=subject, student_id__in=student_ids, mark__isnull=False).count()
+                rows_filled = _filter_marks_queryset_for_teaching_assignment(Ssa2Mark.objects.filter(subject=subject, student_id__in=student_ids, mark__isnull=False), ta, strict_scope=_strict_assignment_scope(subject_code=getattr(subject, 'code', ''), teaching_assignment=ta)).count()
             elif assessment_key == 'review1':
-                rows_filled = Review1Mark.objects.filter(subject=subject, student_id__in=student_ids, mark__isnull=False).count()
+                rows_filled = _filter_marks_queryset_for_teaching_assignment(Review1Mark.objects.filter(subject=subject, student_id__in=student_ids, mark__isnull=False), ta, strict_scope=_strict_assignment_scope(subject_code=getattr(subject, 'code', ''), teaching_assignment=ta)).count()
             elif assessment_key == 'review2':
-                rows_filled = Review2Mark.objects.filter(subject=subject, student_id__in=student_ids, mark__isnull=False).count()
+                rows_filled = _filter_marks_queryset_for_teaching_assignment(Review2Mark.objects.filter(subject=subject, student_id__in=student_ids, mark__isnull=False), ta, strict_scope=_strict_assignment_scope(subject_code=getattr(subject, 'code', ''), teaching_assignment=ta)).count()
             elif assessment_key == 'formative1':
-                rows_filled = Formative1Mark.objects.filter(subject=subject, student_id__in=student_ids).exclude(total__isnull=True).count()
+                rows_filled = _filter_marks_queryset_for_teaching_assignment(Formative1Mark.objects.filter(subject=subject, student_id__in=student_ids).exclude(total__isnull=True), ta, strict_scope=_strict_assignment_scope(subject_code=getattr(subject, 'code', ''), teaching_assignment=ta)).count()
             elif assessment_key == 'formative2':
-                rows_filled = Formative2Mark.objects.filter(subject=subject, student_id__in=student_ids).exclude(total__isnull=True).count()
+                rows_filled = _filter_marks_queryset_for_teaching_assignment(Formative2Mark.objects.filter(subject=subject, student_id__in=student_ids).exclude(total__isnull=True), ta, strict_scope=_strict_assignment_scope(subject_code=getattr(subject, 'code', ''), teaching_assignment=ta)).count()
             elif assessment_key == 'cia1':
-                rows_filled = Cia1Mark.objects.filter(subject=subject, student_id__in=student_ids, mark__isnull=False).count()
+                rows_filled = _filter_marks_queryset_for_teaching_assignment(Cia1Mark.objects.filter(subject=subject, student_id__in=student_ids, mark__isnull=False), ta, strict_scope=_strict_assignment_scope(subject_code=getattr(subject, 'code', ''), teaching_assignment=ta)).count()
             elif assessment_key == 'cia2':
-                rows_filled = Cia2Mark.objects.filter(subject=subject, student_id__in=student_ids, mark__isnull=False).count()
+                rows_filled = _filter_marks_queryset_for_teaching_assignment(Cia2Mark.objects.filter(subject=subject, student_id__in=student_ids, mark__isnull=False), ta, strict_scope=_strict_assignment_scope(subject_code=getattr(subject, 'code', ''), teaching_assignment=ta)).count()
             elif assessment_key == 'model':
                 # MODEL snapshot: treat presence of a published sheet as fully filled
                 try:
@@ -4896,6 +5031,9 @@ def cia1_marks(request, subject_id):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+    ta = selected_ta or _resolve_staff_teaching_assignment(request, subject_code=(subject.code if subject is not None else str(subject_id)), teaching_assignment_id=ta_id)
+    strict_scope = _strict_assignment_scope(subject_code=(subject.code if subject is not None else str(subject_id)), teaching_assignment=ta)
+
     from .models import Cia1Mark
 
     # If the DB hasn't been migrated yet, avoid returning Django's HTML 500 page.
@@ -4951,7 +5089,7 @@ def cia1_marks(request, subject_id):
                     raw = marks_map.get(s.id)
 
                     if raw is None or (isinstance(raw, str) and raw.strip() == ''):
-                        Cia1Mark.objects.filter(subject=subject, student=s).delete()
+                        _delete_scoped_mark(Cia1Mark, subject=subject, student=s, teaching_assignment=ta)
                         continue
 
                     try:
@@ -4960,10 +5098,12 @@ def cia1_marks(request, subject_id):
                         errors.append(f'Invalid mark for {s.reg_no}: {raw}')
                         continue
 
-                    Cia1Mark.objects.update_or_create(
+                    _upsert_scoped_mark(
+                        Cia1Mark,
                         subject=subject,
                         student=s,
-                        defaults={'mark': mark},
+                        teaching_assignment=ta,
+                        mark_defaults={'mark': mark},
                     )
         except OperationalError:
             return Response(
@@ -4981,9 +5121,14 @@ def cia1_marks(request, subject_id):
             return Response({'detail': 'Validation error.', 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
+        rows = _filter_marks_queryset_for_teaching_assignment(
+            Cia1Mark.objects.filter(subject=subject, student__in=students),
+            ta,
+            strict_scope=strict_scope,
+        )
         existing = {
             m.student_id: (str(m.mark) if m.mark is not None else None)
-            for m in Cia1Mark.objects.filter(subject=subject, student__in=students)
+            for m in rows
         }
     except OperationalError:
         existing = {}
@@ -5172,6 +5317,9 @@ def cia2_marks(request, subject_id):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+    ta = selected_ta or _resolve_staff_teaching_assignment(request, subject_code=(subject.code if subject is not None else str(subject_id)), teaching_assignment_id=ta_id)
+    strict_scope = _strict_assignment_scope(subject_code=(subject.code if subject is not None else str(subject_id)), teaching_assignment=ta)
+
     from .models import Cia2Mark
 
     # If the DB hasn't been migrated yet, avoid returning Django's HTML 500 page.
@@ -5226,7 +5374,7 @@ def cia2_marks(request, subject_id):
                     raw = marks_map.get(s.id)
 
                     if raw is None or (isinstance(raw, str) and raw.strip() == ''):
-                        Cia2Mark.objects.filter(subject=subject, student=s).delete()
+                        _delete_scoped_mark(Cia2Mark, subject=subject, student=s, teaching_assignment=ta)
                         continue
 
                     try:
@@ -5235,10 +5383,12 @@ def cia2_marks(request, subject_id):
                         errors.append(f'Invalid mark for {s.reg_no}: {raw}')
                         continue
 
-                    Cia2Mark.objects.update_or_create(
+                    _upsert_scoped_mark(
+                        Cia2Mark,
                         subject=subject,
                         student=s,
-                        defaults={'mark': mark},
+                        teaching_assignment=ta,
+                        mark_defaults={'mark': mark},
                     )
         except OperationalError:
             return Response(
@@ -5256,9 +5406,14 @@ def cia2_marks(request, subject_id):
             return Response({'detail': 'Validation error.', 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
+        rows = _filter_marks_queryset_for_teaching_assignment(
+            Cia2Mark.objects.filter(subject=subject, student__in=students),
+            ta,
+            strict_scope=strict_scope,
+        )
         existing = {
             m.student_id: (str(m.mark) if m.mark is not None else None)
-            for m in Cia2Mark.objects.filter(subject=subject, student__in=students)
+            for m in rows
         }
     except OperationalError:
         existing = {}

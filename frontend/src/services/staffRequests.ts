@@ -161,3 +161,9 @@ export async function processAbsences(data: {
   const res = await apiClient.post(`${BASE_URL}/requests/process_absences/`, data);
   return res.data;
 }
+
+export async function getLateEntryStats(month?: string): Promise<import('../types/staffRequests').LateEntryStats> {
+  const params = month ? `?month=${month}` : '';
+  const res = await apiClient.get(`${BASE_URL}/requests/late_entry_stats/${params}`);
+  return res.data;
+}

@@ -46,6 +46,38 @@
   }
   #rfid-status.ok  { color: #28a745; }
   #rfid-status.err { color: #dc3545; }
+  #rfid-controls {
+    display: flex;
+    gap: .75rem;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-top: .75rem;
+  }
+  #rfid-mode {
+    min-width: 220px;
+    padding: .4rem .6rem;
+    font-size: .9rem;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    background: #fff;
+  }
+  .rfid-btn {
+    padding: .45rem .75rem;
+    font-size: .9rem;
+    border-radius: 4px;
+    border: 1px solid #ced4da;
+    background: #fff;
+    cursor: pointer;
+  }
+  .rfid-btn.primary {
+    background: #447e9b;
+    border-color: #447e9b;
+    color: #fff;
+  }
+  .rfid-btn:disabled {
+    opacity: .55;
+    cursor: not-allowed;
+  }
   .rfid-pulse {
     display: inline-block;
     width: 10px; height: 10px;
@@ -64,8 +96,26 @@
     <span class="rfid-pulse"></span>
     {% trans "RF Card Login" %}
   </h3>
-  <label for="rfid-scan-input" style="font-size:.85rem;color:#555;display:block;margin-bottom:.35rem;">
-    {% trans "Tap or scan your RFID card below to login instantly" %}
+  <label for="rfid-mode" style="font-size:.85rem;color:#555;display:block;margin-bottom:.35rem;">
+    {% trans "Choose scanner type" %}
+  </label>
+  <select id="rfid-mode" aria-label="{% trans 'Scanner type' %}">
+    <option value="">{% trans "Select USB or Port" %}</option>
+    <option value="usb">{% trans "USB (Keyboard Scanner)" %}</option>
+    <option value="port">{% trans "Port (USB Serial / COM)" %}</option>
+  </select>
+
+  <div id="rfid-controls" aria-live="polite">
+    <button id="rfid-select-port" class="rfid-btn" type="button" disabled>
+      {% trans "Select port" %}
+    </button>
+    <button id="rfid-start-scan" class="rfid-btn primary" type="button" disabled>
+      {% trans "Start scan" %}
+    </button>
+  </div>
+
+  <label for="rfid-scan-input" style="font-size:.85rem;color:#555;display:block;margin:.75rem 0 .35rem;">
+    {% trans "Scan UID" %}
   </label>
   <input
     id="rfid-scan-input"
@@ -73,6 +123,7 @@
     autocomplete="off"
     placeholder="{% trans 'Scan card here…' %}"
     inputmode="none"
+    disabled
   />
   <div id="rfid-status"></div>
 </div>
@@ -81,6 +132,9 @@
 (function () {
   var input    = document.getElementById('rfid-scan-input');
   var statusEl = document.getElementById('rfid-status');
+  var modeEl   = document.getElementById('rfid-mode');
+  var btnSelectPort = document.getElementById('rfid-select-port');
+  var btnStartScan  = document.getElementById('rfid-start-scan');
 
   // RFID scanners type each character < ~30 ms apart then send Enter.
   // We buffer characters and flush when Enter is received or after a pause.
@@ -89,12 +143,89 @@
   var SCAN_DEBOUNCE_MS = 80;   // max gap between chars for scanner input
   var MIN_UID_LEN = 4;
 
+  var scanMode = '';
+  var scanningActive = false;
+  var serialPort = null;
+  var serialReader = null;
+
+  function resetInput() {
+    buffer = '';
+    lastKeyTime = 0;
+    input.value = '';
+    input.classList.remove('success', 'error');
+  }
+
   function setStatus(msg, type) {
     statusEl.textContent = msg;
     statusEl.className = type || '';
   }
 
+  function updateControls() {
+    // Default
+    scanningActive = false;
+    resetInput();
+
+    if (!scanMode) {
+      input.disabled = true;
+      btnSelectPort.disabled = true;
+      btnStartScan.disabled = true;
+      setStatus('{% trans "Select USB or Port to continue." %}', '');
+      return;
+    }
+
+    if (scanMode === 'usb') {
+      input.disabled = true;
+      btnSelectPort.disabled = true;
+      btnStartScan.disabled = false;
+      setStatus('{% trans "Click Start scan, then tap/scan your card." %}', '');
+      return;
+    }
+
+    if (scanMode === 'port') {
+      input.disabled = true;
+      var canUseSerial = !!(navigator && navigator.serial);
+      btnSelectPort.disabled = !canUseSerial;
+      btnStartScan.disabled = !canUseSerial || !serialPort;
+
+      if (!canUseSerial) {
+        setStatus('{% trans "Serial port is not supported in this browser." %}', 'err');
+      } else if (!serialPort) {
+        setStatus('{% trans "Select a serial port, then press Start scan." %}', '');
+      } else {
+        setStatus('{% trans "Port selected. Press Start scan, then scan." %}', '');
+      }
+    }
+  }
+
+  function normalizeUID(uid) {
+    return String(uid || '').trim().toUpperCase().replace(/[^0-9A-Z]/g, '');
+  }
+
+  function stopSerialReader() {
+    try {
+      if (serialReader) {
+        serialReader.cancel();
+        serialReader.releaseLock();
+      }
+    } catch (e) {}
+    serialReader = null;
+  }
+
+  function closeSerialPort() {
+    stopSerialReader();
+    try {
+      if (serialPort && serialPort.readable) {
+        // best effort
+      }
+      if (serialPort) {
+        serialPort.close();
+      }
+    } catch (e) {}
+    serialPort = null;
+  }
+
   function submitUID(uid) {
+    uid = normalizeUID(uid);
     if (!uid || uid.length < MIN_UID_LEN) return;
 
     input.disabled = true;
@@ -129,26 +260,29 @@
       } else {
         input.classList.add('error');
         setStatus(r.data.error || '{% trans "Card not recognised." %}', 'err');
-        input.disabled = false;
-        input.value = '';
-        buffer = '';
+        input.disabled = true;
+        resetInput();
+        scanningActive = false;
+        btnStartScan.disabled = (scanMode === 'port' && !serialPort) || !scanMode;
       }
     })
     .catch(function () {
       input.classList.add('error');
       setStatus('{% trans "Network error. Please try again." %}', 'err');
-      input.disabled = false;
-      input.value = '';
-      buffer = '';
+      input.disabled = true;
+      resetInput();
+      scanningActive = false;
+      btnStartScan.disabled = (scanMode === 'port' && !serialPort) || !scanMode;
     });
   }
 
   input.addEventListener('keydown', function (e) {
+    if (!scanningActive || scanMode !== 'usb') return;
     var now = Date.now();
 
     if (e.key === 'Enter') {
       e.preventDefault();
-      var uid = buffer.trim().toUpperCase();
+      var uid = normalizeUID(buffer);
       buffer = '';
       input.value = '';
       if (uid.length >= MIN_UID_LEN) submitUID(uid);
@@ -158,9 +292,7 @@
     if (e.key.length === 1) {
       if (now - lastKeyTime > 500 && buffer.length > 0) {
         // Long pause — user is typing manually; reset
-        buffer = '';
-        input.value = '';
-        input.classList.remove('success', 'error');
+        resetInput();
         statusEl.textContent = '';
       }
       buffer += e.key;
@@ -168,20 +300,134 @@
     }
   });
 
+  btnSelectPort.addEventListener('click', function () {
+    if (!navigator || !navigator.serial) {
+      setStatus('{% trans "Serial port is not supported in this browser." %}', 'err');
+      return;
+    }
+    // Close any previous selection
+    closeSerialPort();
+    setStatus('{% trans "Choose the serial port device…" %}', '');
+
+    navigator.serial.requestPort({})
+      .then(function (p) {
+        serialPort = p;
+        btnStartScan.disabled = false;
+        setStatus('{% trans "Port selected. Press Start scan." %}', 'ok');
+      })
+      .catch(function () {
+        serialPort = null;
+        btnStartScan.disabled = true;
+        setStatus('{% trans "Port selection cancelled." %}', '');
+      });
+  });
+
+  function startUSBScan() {
+    scanningActive = true;
+    resetInput();
+    input.disabled = false;
+    input.focus();
+    setStatus('{% trans "Scanning…" %} {% trans "(USB)" %}', 'ok');
+  }
+
+  function readSerialOnce() {
+    // Read until \n or \r, then submit the UID.
+    if (!serialPort) {
+      setStatus('{% trans "No port selected." %}', 'err');
+      return Promise.reject();
+    }
+
+    return serialPort.open({ baudRate: 115200 })
+      .then(function () {
+        if (!serialPort.readable) throw new Error('not readable');
+
+        // Convert bytes to text
+        var textDecoder = new TextDecoderStream();
+        serialPort.readable.pipeTo(textDecoder.writable);
+        var reader = textDecoder.readable.getReader();
+        serialReader = reader;
+
+        var acc = '';
+        function loop() {
+          return reader.read().then(function (res) {
+            if (res.done) return;
+            acc += res.value || '';
+
+            // Split on newline / carriage return
+            var m = acc.match(/^[^\r\n]*[\r\n]/);
+            if (m) {
+              var line = m[0].replace(/[\r\n]/g, '');
+              stopSerialReader();
+              try { serialPort.close(); } catch (e) {}
+              submitUID(line);
+              return;
+            }
+
+            // Prevent unbounded growth
+            if (acc.length > 256) acc = acc.slice(-256);
+            return loop();
+          });
+        }
+
+        return loop();
+      })
+      .catch(function () {
+        closeSerialPort();
+        setStatus('{% trans "Failed to read from port." %}', 'err');
+        btnStartScan.disabled = true;
+      });
+  }
+
+  btnStartScan.addEventListener('click', function () {
+    if (!scanMode) return;
+    input.classList.remove('success', 'error');
+
+    if (scanMode === 'usb') {
+      startUSBScan();
+      return;
+    }
+
+    if (scanMode === 'port') {
+      if (!navigator || !navigator.serial) {
+        setStatus('{% trans "Serial port is not supported in this browser." %}', 'err');
+        return;
+      }
+      if (!serialPort) {
+        setStatus('{% trans "Please select a port first." %}', 'err');
+        return;
+      }
+      scanningActive = true;
+      resetInput();
+      input.disabled = true;
+      setStatus('{% trans "Scanning…" %} {% trans "(Port)" %}', 'ok');
+      readSerialOnce();
+    }
+  });
+
+  modeEl.addEventListener('change', function () {
+    scanMode = modeEl.value || '';
+    scanningActive = false;
+    resetInput();
+    input.disabled = true;
+
+    // If switching away from port mode, clean up.
+    if (scanMode !== 'port') {
+      closeSerialPort();
+    }
+    updateControls();
+  });
+
   // Auto-focus the RFID input after the page loads, but only if
   // the username field is already filled (i.e. someone not typing a password)
   window.addEventListener('DOMContentLoaded', function () {
-    var usernameInput = document.getElementById('id_username');
-    if (!usernameInput || !usernameInput.value) {
-      // Leave focus on username so normal login still works by default
-    } else {
-      input.focus();
-    }
+    updateControls();
   });
 
   // Allow clicking the card widget to focus it
   document.getElementById('rfid-login-section').addEventListener('click', function () {
-    input.focus();
+    if (scanMode === 'usb' && scanningActive && !input.disabled) {
+      input.focus();
+    }
   });
 })();
 </script>

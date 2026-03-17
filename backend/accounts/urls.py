@@ -19,6 +19,8 @@ from .views import (
     WhatsAppGatewayRestartView,
     WhatsAppGatewaySendTestView,
     WhatsAppGatewayClearSessionView,
+    ProfileImageUpdateRequestView,
+    ProfileImageUpdateRequestReviewView,
 )
 from rest_framework_simplejwt.views import TokenRefreshView
 from .api.dashboard import DashboardView
@@ -32,6 +34,9 @@ urlpatterns = [
     path('mobile/remove/', MobileRemoveView.as_view(), name='mobile_remove'),
     path('change-password/', ChangePasswordView.as_view(), name='change_password'),
     path('profile/update/', ProfileUpdateView.as_view(), name='profile_update'),
+    path('profile-image-update-requests/', ProfileImageUpdateRequestView.as_view(), name='profile_image_update_requests'),
+    path('profile-image-update-requests/review/', ProfileImageUpdateRequestReviewView.as_view(), name='profile_image_update_requests_review_list'),
+    path('profile-image-update-requests/<int:request_id>/review/', ProfileImageUpdateRequestReviewView.as_view(), name='profile_image_update_request_review'),
     path('token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('dashboard/', DashboardView.as_view(), name='dashboard'),

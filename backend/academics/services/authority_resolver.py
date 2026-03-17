@@ -22,6 +22,83 @@ from academics.models import StaffProfile
 from applications.models import ApprovalFlow, ApprovalStep
 
 
+def _get_student_department(student: StudentProfile):
+    dept = None
+    sec = getattr(student, 'section', None)
+    if sec and getattr(sec, 'batch', None) and getattr(sec.batch, 'course', None):
+        dept = sec.batch.course.department
+    if not dept:
+        dept = getattr(student, 'home_department', None)
+    return dept
+
+
+def _get_application_department(application_instance):
+    """Return the applicant's department for an application.
+
+    Works for both student applications and staff applications.
+    """
+    if application_instance is None:
+        return None
+
+    student = getattr(application_instance, 'student_profile', None)
+    if student is None:
+        try:
+            applicant_user = getattr(application_instance, 'applicant_user', None)
+            student = getattr(applicant_user, 'student_profile', None) if applicant_user is not None else None
+        except Exception:
+            student = None
+
+    if student is not None:
+        dept = _get_student_department(student)
+        if dept is not None:
+            return dept
+
+    staff_profile = getattr(application_instance, 'staff_profile', None)
+    if staff_profile is None:
+        try:
+            applicant_user = getattr(application_instance, 'applicant_user', None)
+            staff_profile = getattr(applicant_user, 'staff_profile', None) if applicant_user is not None else None
+        except Exception:
+            staff_profile = None
+
+    if staff_profile is not None:
+        return getattr(staff_profile, 'department', None)
+
+    return None
+
+
+def get_department_hod_by_department(dept, academic_year: AcademicYear) -> Optional[StaffProfile]:
+    if not dept or academic_year is None:
+        return None
+
+    hod = (
+        DepartmentRole.objects
+        .filter(department=dept, role='HOD', academic_year=academic_year, is_active=True)
+        .select_related('staff__user', 'staff__department')
+        .first()
+    )
+    if not hod:
+        return None
+    staff = hod.staff
+    return staff if is_staff_available(staff) else None
+
+
+def get_department_ahod_by_department(dept, academic_year: AcademicYear) -> Optional[StaffProfile]:
+    if not dept or academic_year is None:
+        return None
+
+    ahods = (
+        DepartmentRole.objects
+        .filter(department=dept, role='AHOD', academic_year=academic_year, is_active=True)
+        .select_related('staff__user', 'staff__department')
+        .order_by('id')
+    )
+    for a in ahods:
+        if is_staff_available(a.staff):
+            return a.staff
+    return None
+
+
 def is_staff_available(staff: StaffProfile, when=None) -> bool:
     """Stub availability check for a staff member.
 
@@ -86,27 +163,8 @@ def get_department_hod(student: StudentProfile, academic_year: AcademicYear) -> 
 
     If multiple HOD entries exist only the first active one is returned.
     """
-    dept = None
-    sec = getattr(student, 'section', None)
-    if sec and getattr(sec, 'batch', None) and getattr(sec.batch, 'course', None):
-        dept = sec.batch.course.department
-
-    if not dept:
-        dept = getattr(student, 'home_department', None)
-
-    if not dept:
-        return None
-
-    hod = (
-        DepartmentRole.objects
-        .filter(department=dept, role='HOD', academic_year=academic_year, is_active=True)
-        .select_related('staff__user', 'staff__department')
-        .first()
-    )
-    if not hod:
-        return None
-    staff = hod.staff
-    return staff if is_staff_available(staff) else None
+    dept = _get_student_department(student) if student is not None else None
+    return get_department_hod_by_department(dept, academic_year)
 
 
 def get_department_ahod(student: StudentProfile, academic_year: AcademicYear) -> Optional[StaffProfile]:
@@ -115,27 +173,8 @@ def get_department_ahod(student: StudentProfile, academic_year: AcademicYear) ->
     If multiple AHODs are present the first available is returned. Returns
     None when none found or available.
     """
-    dept = None
-    sec = getattr(student, 'section', None)
-    if sec and getattr(sec, 'batch', None) and getattr(sec.batch, 'course', None):
-        dept = sec.batch.course.department
-
-    if not dept:
-        dept = getattr(student, 'home_department', None)
-
-    if not dept:
-        return None
-
-    ahods = (
-        DepartmentRole.objects
-        .filter(department=dept, role='AHOD', academic_year=academic_year, is_active=True)
-        .select_related('staff__user', 'staff__department')
-        .order_by('id')
-    )
-    for a in ahods:
-        if is_staff_available(a.staff):
-            return a.staff
-    return None
+    dept = _get_student_department(student) if student is not None else None
+    return get_department_ahod_by_department(dept, academic_year)
 
 
 def _get_flow_for_application(application):
@@ -202,10 +241,9 @@ def resolve_approver(role_code: str, application_instance) -> Optional[StaffProf
 
     role_key = role_code.strip().upper()
 
-    # Try to resolve academic year: prefer any academic year linked on application
-    academic_year = None
-    # application may have no explicit academic_year; try to infer from mappings
-    # Prefer year from student's active mapping when possible
+    # pick current active academic year if exists in DB
+    academic_year = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.order_by('-id').first()
+
     student = getattr(application_instance, 'student_profile', None)
     if student is None:
         # Backward-compatible fallback: older Application rows may not have
@@ -216,15 +254,10 @@ def resolve_approver(role_code: str, application_instance) -> Optional[StaffProf
         except Exception:
             student = None
 
-    if student is None:
-        # If only staff_profile present, we cannot resolve student-based authorities
-        return None
-
-    # pick current active academic year if exists in DB
-    academic_year = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.order_by('-id').first()
-
     # Role-specific resolution
     if role_key == 'MENTOR':
+        if student is None:
+            return None
         mentor = get_student_mentor(student)
         if mentor:
             return mentor
@@ -233,17 +266,21 @@ def resolve_approver(role_code: str, application_instance) -> Optional[StaffProf
         return advisor
 
     if role_key == 'ADVISOR':
+        if student is None:
+            return None
         return get_section_advisor(student, academic_year)
 
     if role_key == 'HOD':
-        hod = get_department_hod(student, academic_year)
+        dept = _get_application_department(application_instance)
+        hod = get_department_hod_by_department(dept, academic_year)
         if hod:
             return hod
         # fallback to AHOD
-        return get_department_ahod(student, academic_year)
+        return get_department_ahod_by_department(dept, academic_year)
 
     if role_key == 'AHOD':
-        return get_department_ahod(student, academic_year)
+        dept = _get_application_department(application_instance)
+        return get_department_ahod_by_department(dept, academic_year)
 
     # Generic: for other roles (PS, IQAC_HEAD etc.) there is no academic mapper
     # Return None so callers can resolve via flow.override_roles or other config.

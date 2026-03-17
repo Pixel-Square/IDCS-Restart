@@ -3,6 +3,7 @@ from applications.views.inbox_views import ApproverInboxView, PastApprovalsView
 from applications.views.application_views import (
     ApplicationApprovalHistoryView,
     ApplicationDetailView,
+    ApplicationCancelView,
     MyApplicationsView,
     CreateAndSubmitView,
     ApplicationActionView,
@@ -38,6 +39,7 @@ urlpatterns = [
     path('create-and-submit/', CreateAndSubmitView.as_view(), name='application-create-submit'),
     path('my/', MyApplicationsView.as_view(), name='my-applications'),
     path('<int:id>/', ApplicationDetailView.as_view(), name='application-detail'),
+    path('<int:id>/cancel/', ApplicationCancelView.as_view(), name='application-cancel'),
     path('<int:id>/history/', ApplicationApprovalHistoryView.as_view(), name='application-approval-history'),
     path('<int:id>/step-info/', ApplicationStepInfoView.as_view(), name='application-step-info'),
     path('<int:id>/action/', ApplicationActionView.as_view(), name='application-action'),

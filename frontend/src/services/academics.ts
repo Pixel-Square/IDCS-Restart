@@ -34,3 +34,15 @@ export async function fetchAttendanceNotificationCount(): Promise<{ count: numbe
   if (!res.ok) return { count: 0, role: 'none' };
   return res.json();
 }
+
+export type DepartmentRow = { id: number; code?: string | null; name?: string | null; short_name?: string | null }
+
+export async function fetchDepartments(): Promise<DepartmentRow[]> {
+  const res = await fetchWithAuth(`${API_BASE}/api/academics/departments/`)
+  if (!res.ok) throw new Error('Failed to fetch departments')
+  const data = await res.json()
+  const results = (data as any)?.results
+  if (Array.isArray(results)) return results as DepartmentRow[]
+  if (Array.isArray(data)) return data as DepartmentRow[]
+  return []
+}
