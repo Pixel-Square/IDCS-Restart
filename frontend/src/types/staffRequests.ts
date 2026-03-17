@@ -24,12 +24,13 @@ export interface ApprovalStep {
 export interface LeavePolicy {
   action?: 'deduct' | 'earn' | 'neutral';
   allotment_per_role?: Record<string, number>; // For deduct and neutral: initial balance allocation
-  from_date?: string; // REQUIRED for deduct/neutral: Start date for reset period (YYYY-MM-DD)
-  to_date?: string; // REQUIRED for deduct/neutral: End date for reset period (YYYY-MM-DD)
+  from_date?: string; // Start date for reset period (YYYY-MM-DD) - deprecated for neutral forms
+  to_date?: string; // End date for reset period (YYYY-MM-DD) - deprecated for neutral forms
   split_date?: string; // OPTIONAL: Mid-period split date (YYYY-MM-DD) - splits allotment into two equal halves
   overdraft_name?: string; // LOP field name (Loss of Pay)
   lop_non_reset?: boolean; // If true, LOP never resets (recommended)
-  reset_duration?: 'yearly' | 'monthly'; // Deprecated: old reset period for deduct action
+  reset_period?: 'monthly' | 'half_yearly' | 'yearly'; // Reset frequency for neutral/deduct actions
+  reset_duration?: 'yearly' | 'monthly' | 'half_yearly'; // Alternative name for reset_period
   attendance_status?: string;
   // LOP Logic: LOP = Absent days - Approved deduct days for those absent dates
   // Absent 4 days = LOP:4, approve leave for 2 = LOP:2

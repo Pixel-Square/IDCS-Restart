@@ -5,6 +5,7 @@ from rest_framework.permissions import IsAuthenticated
 from django.db import transaction
 from django.db.models import Q, Prefetch
 from django.utils import timezone
+from django.contrib.auth import get_user_model
 
 from .models import RequestTemplate, ApprovalStep, StaffRequest, ApprovalLog, StaffLeaveBalance
 from .serializers import (
@@ -239,7 +240,6 @@ class RequestTemplateViewSet(viewsets.ModelViewSet):
                         {'error': f'Step with id {step_id} not found'},
                         status=status.HTTP_400_BAD_REQUEST
                     )
-        
         # Return updated template
         serializer = self.get_serializer(template)
         return Response(serializer.data)
@@ -430,6 +430,15 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         
         template = serializer.validated_data.get('template')
         form_data = serializer.validated_data.get('form_data', {})
+
+        # Special rules for Late Entry Permission (normal + SPL):
+        # - 10 mins is allowed only for FN, never for AN.
+        # - 10 mins can be auto-approved only when actual morning_in is within
+        #   department in-time limit + 10 minutes (and after the in-time limit).
+        # - 1 hr follows regular approval workflow (no auto-approve).
+        late_entry_validation_error = self._validate_late_entry_rules(request.user, template, form_data)
+        if late_entry_validation_error:
+            return Response({'error': late_entry_validation_error}, status=status.HTTP_400_BAD_REQUEST)
         
         # Check if user can apply with this template
         if not can_user_apply_with_template(request.user, template):
@@ -508,10 +517,173 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         
         # Create the request with current user as applicant
         staff_request = serializer.save(applicant=request.user)
+
+        # Auto-approve 10 mins FN late entry only when biometric in-time confirms eligibility.
+        if self._should_auto_approve_late_entry(request.user, template, form_data):
+            with transaction.atomic():
+                # Mark approved immediately (no manual approver step)
+                staff_request.mark_approved()
+
+                # Keep an audit log row to make the auto-approval explicit in history.
+                ApprovalLog.objects.create(
+                    request=staff_request,
+                    approver=request.user,
+                    step_order=staff_request.current_step,
+                    action='approved',
+                    comments='Auto-approved: 10 mins late entry within allowed cutoff window.'
+                )
+
+                # Apply balance/attendance side effects exactly like final approval.
+                try:
+                    self._process_leave_balance(staff_request)
+                except Exception:
+                    pass
+                try:
+                    self._process_attendance_action(staff_request)
+                except Exception:
+                    pass
         
         # Return detailed response
         response_serializer = StaffRequestDetailSerializer(staff_request)
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+    def _is_late_entry_template(self, template):
+        name = (getattr(template, 'name', '') or '').strip().lower()
+        return name in ['late entry permission', 'late entry permission - spl']
+
+    def _normalize_late_duration(self, duration_value):
+        token = str(duration_value or '').strip().lower().replace(' ', '')
+        if token in ['10', '10min', '10mins', '10minute', '10minutes']:
+            return '10 mins'
+        if token in ['60', '1hr', '1hour', '60min', '60mins']:
+            return '1 hr'
+        return str(duration_value or '').strip()
+
+    def _normalize_shift(self, shift_value):
+        token = str(shift_value or '').strip().upper()
+        return token
+
+    def _get_request_effective_date(self, form_data):
+        from datetime import datetime
+
+        for key in ['date', 'from_date', 'start_date', 'fromDate', 'startDate']:
+            value = form_data.get(key)
+            if not value:
+                continue
+            try:
+                if isinstance(value, str):
+                    return datetime.strptime(value, '%Y-%m-%d').date()
+                return value
+            except Exception:
+                continue
+        return None
+
+    def _get_user_in_time_limit(self, user):
+        """Resolve in-time limit using department-specific settings first, then global."""
+        from datetime import time
+        from staff_attendance.models import AttendanceSettings, DepartmentAttendanceSettings
+
+        # Default fallback
+        default_limit = time(hour=8, minute=45)
+
+        try:
+            dept = None
+            if hasattr(user, 'staff_profile'):
+                if hasattr(user.staff_profile, 'get_current_department'):
+                    dept = user.staff_profile.get_current_department()
+                if not dept:
+                    dept = user.staff_profile.department
+
+            if dept:
+                dept_cfg = DepartmentAttendanceSettings.objects.filter(
+                    departments=dept,
+                    enabled=True
+                ).first()
+                if dept_cfg and dept_cfg.attendance_in_time_limit:
+                    return dept_cfg.attendance_in_time_limit
+        except Exception:
+            pass
+
+        global_cfg = AttendanceSettings.objects.first()
+        if global_cfg and global_cfg.attendance_in_time_limit:
+            return global_cfg.attendance_in_time_limit
+
+        return default_limit
+
+    def _validate_late_entry_rules(self, user, template, form_data):
+        """Return an error message string when late-entry rules are violated; else None."""
+        from datetime import datetime, timedelta
+        from staff_attendance.models import AttendanceRecord
+
+        if not self._is_late_entry_template(template):
+            return None
+
+        duration = self._normalize_late_duration(form_data.get('late_duration'))
+        shift = self._normalize_shift(form_data.get('shift', form_data.get('from_noon')))
+        request_date = self._get_request_effective_date(form_data)
+
+        if duration == '10 mins' and shift == 'AN':
+            return '10 mins permission is not allowed for AN shift. For AN, apply 1 hr permission.'
+
+        if duration != '10 mins':
+            return None
+
+        if shift != 'FN':
+            return '10 mins auto-approval is available only for FN shift.'
+
+        if not request_date:
+            return 'Date is required for 10 mins late entry validation.'
+
+        attendance = AttendanceRecord.objects.filter(user=user, date=request_date).first()
+        if not attendance or not attendance.morning_in:
+            return 'Cannot validate 10 mins permission: morning in-time is not available for the selected date.'
+
+        in_limit = self._get_user_in_time_limit(user)
+        morning_in = attendance.morning_in
+
+        limit_dt = datetime.combine(request_date, in_limit)
+        morning_dt = datetime.combine(request_date, morning_in)
+        max_dt = limit_dt + timedelta(minutes=10)
+
+        # Must be truly late and within +10 min window
+        if not (morning_dt > limit_dt and morning_dt <= max_dt):
+            return (
+                f'10 mins permission not allowed: in-time {morning_in.strftime("%H:%M")} '
+                f'is outside the allowed window ({in_limit.strftime("%H:%M")} to {max_dt.strftime("%H:%M")}). '
+                'Apply 1 hr permission instead.'
+            )
+
+        return None
+
+    def _should_auto_approve_late_entry(self, user, template, form_data):
+        if not self._is_late_entry_template(template):
+            return False
+        duration = self._normalize_late_duration(form_data.get('late_duration'))
+        shift = self._normalize_shift(form_data.get('shift', form_data.get('from_noon')))
+        # Validation already guarantees the window check for this combination.
+        return duration == '10 mins' and shift == 'FN'
+
+    def destroy(self, request, *args, **kwargs):
+        """
+        Allow applicant to delete only pending requests.
+        Approved/rejected requests are immutable and cannot be deleted.
+        """
+        staff_request = self.get_object()
+
+        if staff_request.applicant != request.user:
+            return Response(
+                {'error': 'You can only delete your own requests'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if staff_request.status != 'pending':
+            return Response(
+                {'error': f'Only pending requests can be deleted. Current status: {staff_request.status}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        staff_request.delete()
+        return Response({'message': 'Pending request deleted successfully'}, status=status.HTTP_200_OK)
     
     @action(detail=False, methods=['get'])
     def pending_approvals(self, request):
@@ -694,42 +866,14 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             logger.warning(f'[LeaveBalance] Skipping - days <= 0')
             return
         
+        # For non-earn approvals that cover absent sessions, reduce LOP by covered units
+        # (FN/AN each count as 0.5, full-day as 1.0).
+        if action in ['deduct', 'neutral']:
+            self._reduce_lop_for_covered_absences(staff_request, leave_policy, form_data)
+
         # Apply action
         if action == 'deduct':
             overdraft_name = leave_policy.get('overdraft_name', 'LOP')
-            
-            # NEW LOP LOGIC: Check if this approval covers absent dates
-            # LOP = Total absent days - Approved deduct form days for those absent dates
-            request_dates = self._extract_dates_from_form_data(form_data)
-            
-            if request_dates:
-                # Import AttendanceRecord model
-                from staff_attendance.models import AttendanceRecord
-                
-                # Check which request dates were marked absent
-                absent_dates_count = AttendanceRecord.objects.filter(
-                    user=staff_request.applicant,
-                    date__in=request_dates,
-                    status='absent'
-                ).count()
-                
-                logger.info(f'[LOP] Request covers {len(request_dates)} dates, {absent_dates_count} were absent')
-                
-                # If this deduct form covers absent dates, reduce LOP
-                if absent_dates_count > 0:
-                    lop_balance, created = StaffLeaveBalance.objects.get_or_create(
-                        staff=staff_request.applicant,
-                        leave_type=overdraft_name,
-                        defaults={'balance': 0.0}
-                    )
-                    
-                    # Reduce LOP by the number of absent dates being covered
-                    # (These absent dates are now "explained" by approved leave)
-                    old_lop = lop_balance.balance
-                    lop_balance.balance = max(0, lop_balance.balance - absent_dates_count)
-                    lop_balance.save()
-                    
-                    logger.info(f'[LOP] Reduced LOP for {absent_dates_count} covered absent dates: {old_lop} -> {lop_balance.balance}')
             
             # Handle regular balance deduction (if allotment configured)
             allotment = leave_policy.get('allotment_per_role', {})
@@ -973,6 +1117,222 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         if attendance_status:
             date_list = self._get_date_list_from_form_data(form_data)
             self._sync_attendance(staff_request.applicant, date_list, attendance_status)
+
+    def _reduce_lop_for_covered_absences(self, staff_request, leave_policy, form_data):
+        """
+        Reduce LOP when an approved non-earn request compensates absent sessions.
+
+        Session math:
+        - absent FN only => 0.5
+        - absent AN only => 0.5
+        - absent FN+AN => 1.0
+        - request coverage applies similarly based on from_noon/to_noon/shift fields.
+        """
+        import logging
+        from .models import StaffLeaveBalance
+
+        logger = logging.getLogger(__name__)
+        overdraft_name = leave_policy.get('overdraft_name', 'LOP')
+
+        requested_units_by_date = self._extract_requested_units_by_date(form_data)
+        if not requested_units_by_date:
+            return
+
+        covered_absent_units = self._calculate_covered_absent_units(
+            staff_request.applicant,
+            requested_units_by_date
+        )
+
+        if covered_absent_units <= 0:
+            return
+
+        lop_balance, _ = StaffLeaveBalance.objects.get_or_create(
+            staff=staff_request.applicant,
+            leave_type=overdraft_name,
+            defaults={'balance': 0.0}
+        )
+
+        old_lop = float(lop_balance.balance or 0.0)
+        lop_balance.balance = max(0.0, old_lop - covered_absent_units)
+        lop_balance.save()
+
+        logger.info(
+            '[LOP] Reduced %s by %.2f covered absent units: %.2f -> %.2f',
+            overdraft_name,
+            covered_absent_units,
+            old_lop,
+            lop_balance.balance,
+        )
+
+    def _calculate_covered_absent_units(self, user, requested_units_by_date):
+        """
+        Return how many requested units overlap with absent attendance units.
+        Coverage per date is min(requested_units, absent_units_on_that_date).
+        """
+        from staff_attendance.models import AttendanceRecord
+
+        request_dates = list(requested_units_by_date.keys())
+        if not request_dates:
+            return 0.0
+
+        attendance_map = {
+            rec.date: rec
+            for rec in AttendanceRecord.objects.filter(user=user, date__in=request_dates)
+        }
+
+        total = 0.0
+        for request_date, requested_units in requested_units_by_date.items():
+            rec = attendance_map.get(request_date)
+            absent_units = self._attendance_absent_units(rec)
+            total += min(float(requested_units or 0.0), absent_units)
+
+        return round(total, 2)
+
+    def _attendance_absent_units(self, attendance_record):
+        """
+        Convert attendance record into absent units using FN/AN granularity.
+        """
+        if not attendance_record:
+            return 0.0
+
+        fn_status = (attendance_record.fn_status or '').strip().lower()
+        an_status = (attendance_record.an_status or '').strip().lower()
+
+        if fn_status or an_status:
+            units = 0.0
+            if fn_status == 'absent':
+                units += 0.5
+            if an_status == 'absent':
+                units += 0.5
+            return units
+
+        return 1.0 if (attendance_record.status or '').strip().lower() == 'absent' else 0.0
+
+    def _extract_requested_units_by_date(self, form_data):
+        """
+        Build per-date requested leave units from form_data.
+        Holiday dates and Sundays are excluded so CL/OD/etc. are not auto-applied
+        to non-working dates.
+        """
+        from datetime import datetime, timedelta
+
+        start_date = None
+        end_date = None
+
+        for start_key in ['start_date', 'from_date', 'startDate', 'fromDate', 'from']:
+            if start_key in form_data:
+                start_date = form_data[start_key]
+                break
+
+        for end_key in ['end_date', 'to_date', 'endDate', 'toDate', 'to']:
+            if end_key in form_data and form_data[end_key]:
+                end_date = form_data[end_key]
+                break
+
+        if not start_date and 'date' in form_data:
+            start_date = form_data['date']
+        if not end_date and 'date' in form_data:
+            end_date = form_data['date']
+
+        if not start_date:
+            return {}
+
+        try:
+            if isinstance(start_date, str):
+                if not start_date.strip():
+                    return {}
+                start = datetime.fromisoformat(start_date.replace('Z', '+00:00')).date()
+            else:
+                start = start_date
+
+            if isinstance(end_date, str):
+                if not end_date.strip():
+                    end = start
+                else:
+                    end = datetime.fromisoformat(end_date.replace('Z', '+00:00')).date()
+            else:
+                end = end_date or start
+
+            if end < start:
+                end = start
+        except (ValueError, AttributeError, TypeError):
+            return {}
+
+        from_noon = self._normalize_shift_value(
+            form_data.get('from_noon', form_data.get('from_shift', form_data.get('shift', '')))
+        )
+        to_noon = self._normalize_shift_value(
+            form_data.get('to_noon', form_data.get('to_shift', form_data.get('shift', '')))
+        )
+
+        if start == end:
+            if start.weekday() == 6 or self._is_holiday_for_user(start, getattr(self, 'request', None).user if getattr(self, 'request', None) else None):
+                return {}
+            return {start: self._single_day_units(from_noon, to_noon)}
+
+        units = {}
+        current = start
+        while current <= end:
+            # Never auto-apply leave coverage on holidays/Sundays.
+            if current.weekday() == 6 or self._is_holiday_for_user(current, getattr(self, 'request', None).user if getattr(self, 'request', None) else None):
+                current += timedelta(days=1)
+                continue
+
+            day_units = 1.0
+            if current == start and from_noon == 'AN':
+                day_units = 0.5
+            if current == end and to_noon == 'FN':
+                day_units = 0.5
+            units[current] = day_units
+            current += timedelta(days=1)
+
+        return units
+
+    def _is_holiday_for_user(self, target_date, user):
+        """
+        Department-aware holiday check.
+        College-wide holidays (no departments) apply to everyone.
+        """
+        from staff_attendance.models import Holiday
+
+        holidays = Holiday.objects.filter(date=target_date).prefetch_related('departments')
+        if not holidays.exists():
+            return False
+
+        user_dept_id = None
+        try:
+            if user and hasattr(user, 'staff_profile'):
+                dept = user.staff_profile.get_current_department()
+                if dept:
+                    user_dept_id = dept.id
+        except Exception:
+            user_dept_id = None
+
+        for holiday in holidays:
+            dept_ids = list(holiday.departments.values_list('id', flat=True))
+            if not dept_ids:
+                return True
+            if user_dept_id is not None and user_dept_id in dept_ids:
+                return True
+
+        return False
+
+    def _normalize_shift_value(self, value):
+        token = str(value or '').strip().upper()
+        if token == 'FULL DAY':
+            token = 'FULL'
+        return token
+
+    def _single_day_units(self, from_noon, to_noon):
+        if from_noon in ['FN', 'AN'] and to_noon in ['FN', 'AN']:
+            return 0.5 if from_noon == to_noon else 1.0
+        if from_noon in ['FN', 'AN'] and not to_noon:
+            return 0.5
+        if to_noon in ['FN', 'AN'] and not from_noon:
+            return 0.5
+        if from_noon == 'FULL' or to_noon == 'FULL':
+            return 1.0
+        return 1.0
     
     def _calculate_days_from_form_data(self, form_data):
         """
@@ -1096,7 +1456,7 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             except (ValueError, AttributeError):
                 pass
         
-        # Single date - check if it's a holiday/Sunday
+        # Single date - support half-day markers even when only from_date is provided
         if start_date:
             try:
                 if isinstance(start_date, str):
@@ -1113,6 +1473,27 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                 # If it's a holiday/Sunday, return 0 days (no leave deduction)
                 if is_holiday or is_sunday:
                     return 0.0
+
+                # Normalize single-day shift markers
+                fn = str(form_data.get('from_noon', form_data.get('from_shift', form_data.get('shift', '')))).strip().upper()
+                tn = str(form_data.get('to_noon', form_data.get('to_shift', ''))).strip().upper()
+                if fn == 'FULL DAY':
+                    fn = 'FULL'
+                if tn == 'FULL DAY':
+                    tn = 'FULL'
+
+                # Single-day half-day handling:
+                # FN only or AN only => 0.5
+                # FN+AN (different sessions) or FULL => 1.0
+                if fn in ['FN', 'AN'] and tn in ['FN', 'AN']:
+                    return 0.5 if fn == tn else 1.0
+                if fn in ['FN', 'AN'] and not tn:
+                    return 0.5
+                if tn in ['FN', 'AN'] and not fn:
+                    return 0.5
+                if fn == 'FULL' or tn == 'FULL':
+                    return 1.0
+
                 return 1.0
             except (ValueError, AttributeError):
                 return 1.0
@@ -1280,10 +1661,20 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             logger.info('[AttendanceSync] No dates to sync')
             return
 
+        # Never apply leave attendance statuses on holidays/Sundays.
+        filtered_dates = [
+            dt for dt in date_list
+            if dt.weekday() != 6 and not self._is_holiday_for_user(dt, user)
+        ]
+
+        if not filtered_dates:
+            logger.info('[AttendanceSync] All dates skipped (holidays/Sundays)')
+            return
+
         try:
             from staff_attendance.models import AttendanceRecord
 
-            for dt in date_list:
+            for dt in filtered_dates:
                 # Use update_or_create to set attendance status for the date
                 AttendanceRecord.objects.update_or_create(
                     user=user,
@@ -1296,7 +1687,11 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                     }
                 )
 
-            logger.info(f'[AttendanceSync] Synced {len(date_list)} dates for user {getattr(user, "username", user)} -> {attendance_status}')
+            logger.info(
+                f'[AttendanceSync] Synced {len(filtered_dates)} dates '
+                f'(skipped {len(date_list) - len(filtered_dates)} holidays/Sundays) '
+                f'for user {getattr(user, "username", user)} -> {attendance_status}'
+            )
 
         except Exception as e:
             logger.exception(f'[AttendanceSync] Failed to sync attendance: {e}')
@@ -1427,18 +1822,12 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                 # Import Holiday model to check for holidays
                 from staff_attendance.models import Holiday
                 
-                # Check if this is a COL earn template (Compensatory Off Leave)
-                # OR a permission template that changes attendance status (like Late Entry)
-                # For these templates, we should NOT skip holidays - treat them as working days
+                # Check if this is a COL earn template (Compensatory Off Leave).
+                # Only COL earn forms are allowed to write attendance on holidays.
                 is_col_earn = (
                     leave_policy and 
                     leave_policy.get('action') == 'earn' and 
                     ('compensatory' in template.name.lower() or 'col' in template.name.lower())
-                )
-                
-                is_permission_form = (
-                    attendance_action and 
-                    attendance_action.get('change_status') == True
                 )
                 
                 # Get all holidays in this date range
@@ -1460,17 +1849,16 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                     is_sunday = current_date.weekday() == 6
                     is_holiday = current_date in holidays_in_range
                     
-                    # For COL earn forms or permission forms, don't skip holidays
-                    # For other forms (regular leave), skip holidays and Sundays
-                    if (is_holiday or is_sunday) and not (is_col_earn or is_permission_form):
+                    # Skip holidays/Sundays for every form except COL earn.
+                    if (is_holiday or is_sunday) and not is_col_earn:
                         # Skip creating attendance record for holidays and Sundays
                         skipped_holidays += 1
                         logger.info(f'[AttendanceAction] Skipping {current_date} (Holiday/Sunday)')
                         current_date += timedelta(days=1)
                         continue
                     
-                    if (is_col_earn or is_permission_form) and (is_holiday or is_sunday):
-                        logger.info(f'[AttendanceAction] Processing {current_date} on holiday (COL earn or permission form)')
+                    if is_col_earn and (is_holiday or is_sunday):
+                        logger.info(f'[AttendanceAction] Processing {current_date} on holiday (COL earn)')
                     
                     # Determine which shift to update for this date
                     # Normalize shift values: 'Full day' -> 'FULL'
@@ -1565,32 +1953,25 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                 # Import Holiday model to check for holidays
                 from staff_attendance.models import Holiday
                 
-                # Check if this is a COL earn template (Compensatory Off Leave)
-                # OR a permission template that changes attendance status (like Late Entry)
-                # For these templates, we should NOT skip holidays - treat them as working days
+                # Check if this is a COL earn template (Compensatory Off Leave).
+                # Only COL earn forms are allowed to write attendance on holidays.
                 is_col_earn = (
                     leave_policy and 
                     leave_policy.get('action') == 'earn' and 
                     ('compensatory' in template.name.lower() or 'col' in template.name.lower())
                 )
                 
-                is_permission_form = (
-                    attendance_action and 
-                    attendance_action.get('change_status') == True
-                )
-                
                 # Check if single date is a holiday or Sunday
                 is_sunday = single_date.weekday() == 6
                 is_holiday = Holiday.objects.filter(date=single_date).exists()
                 
-                # For COL earn forms or permission forms, don't skip holidays
-                # For other forms (regular leave), skip holidays and Sundays
-                if (is_holiday or is_sunday) and not (is_col_earn or is_permission_form):
+                # Skip holidays/Sundays for every form except COL earn.
+                if (is_holiday or is_sunday) and not is_col_earn:
                     # Skip creating attendance record for holidays and Sundays
                     logger.info(f'[AttendanceAction] Skipping {single_date} (Holiday/Sunday) - no attendance record created')
                 else:
-                    if (is_col_earn or is_permission_form) and (is_holiday or is_sunday):
-                        logger.info(f'[AttendanceAction] Processing {single_date} on holiday (COL earn or permission form)')
+                    if is_col_earn and (is_holiday or is_sunday):
+                        logger.info(f'[AttendanceAction] Processing {single_date} on holiday (COL earn)')
                     
                     # For COL on holidays with half-day (FN/AN), only save the requested session
                     is_holiday_col_half_day = (is_col_earn and (is_holiday or is_sunday) and 
@@ -1663,12 +2044,9 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             elif from_date:
                 logger.info(f'[AttendanceAction] Case 3: Single date {from_date}, from_noon={from_noon}')
                 
-                # Import Holiday model to check if this is a holiday
-                from staff_attendance.models import Holiday
-                
-                # Check if from_date is a holiday or Sunday
+                # Check if from_date is a holiday or Sunday (department-aware)
                 is_sunday = from_date.weekday() == 6
-                is_holiday = Holiday.objects.filter(date=from_date).exists()
+                is_holiday = self._is_holiday_for_user(from_date, staff_request.applicant)
                 
                 # Check if this is a COL earn form
                 is_col_earn = (
@@ -1676,6 +2054,13 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                     leave_policy.get('action') == 'earn' and 
                     ('compensatory' in template.name.lower() or 'col' in template.name.lower())
                 )
+
+                # For every form except COL earn, never create attendance records on holidays/Sundays.
+                if (is_holiday or is_sunday) and not is_col_earn:
+                    logger.info(
+                        f'[AttendanceAction] Skipping {from_date} (Holiday/Sunday) for leave form {template.name}'
+                    )
+                    return
                 
                 # Normalize from_noon to determine if it's half-day
                 normalized_from_noon = None
@@ -1970,16 +2355,26 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                 if can_user_apply_with_template(request.user, template)
             ]
             
-            # Create a set of template names that user can apply for
+            # Create sets of template names and overdraft names relevant to the user
             applicable_template_names = {template.name for template in templates}
+            applicable_overdraft_names = set()
+            for template in templates:
+                policy = template.leave_policy or {}
+                overdraft_name = policy.get('overdraft_name')
+                if overdraft_name:
+                    applicable_overdraft_names.add(overdraft_name)
             
-            # Get all persisted balances for the user, but only for applicable templates
+            # Get all persisted balances for the user, and include:
+            # 1) balances matching applicable templates
+            # 2) balances matching applicable overdraft names (e.g., LOP)
             balances_qs = StaffLeaveBalance.objects.filter(staff=user)
             
             balance_data = []
             for balance_obj in balances_qs:
-                # Only include balances for templates the user can apply for
-                if balance_obj.leave_type in applicable_template_names:
+                if (
+                    balance_obj.leave_type in applicable_template_names
+                    or balance_obj.leave_type in applicable_overdraft_names
+                ):
                     balance_data.append({
                         'leave_type': balance_obj.leave_type,
                         'balance': balance_obj.balance,
@@ -2144,6 +2539,185 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             'total': ten_mins + one_hr,
         })
 
+    @action(detail=False, methods=['get'], url_path='balances/by_user')
+    def balances_by_user(self, request):
+        """
+        HR/Admin: view balances for any staff user.
+        Returns all applicable leave types for the user's role, including ones not yet in DB.
+        GET /api/staff-requests/requests/balances/by_user/?user_id=<id>
+        """
+        from .permissions import IsAdminOrHR
+
+        if not IsAdminOrHR().has_permission(request, self):
+            return Response({'error': 'Only HR/Admin can access this endpoint'}, status=status.HTTP_403_FORBIDDEN)
+
+        user_id = request.query_params.get('user_id')
+        if not user_id:
+            return Response({'error': 'user_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        User = get_user_model()
+        try:
+            target_user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Get user's primary role
+        user_role = self._get_primary_role(target_user)
+        
+        # Get all active request templates
+        templates = RequestTemplate.objects.filter(is_active=True).exclude(leave_policy={})
+        
+        # Filter templates that this user's role can access
+        applicable_templates = []
+        for template in templates:
+            allowed_roles = template.allowed_roles or []
+            if user_role in allowed_roles or 'ALL' in allowed_roles:
+                applicable_templates.append(template.name)
+        
+        # Get existing balances from DB
+        existing_balances = {
+            b.leave_type: b.balance
+            for b in StaffLeaveBalance.objects.filter(staff=target_user)
+        }
+        
+        # Build complete balance list: existing + missing leave types with 0 balance
+        balance_data = []
+        seen = set()
+        
+        # First add existing balances
+        for leave_type, balance in sorted(existing_balances.items()):
+            balance_data.append({
+                'leave_type': leave_type,
+                'balance': balance,
+            })
+            seen.add(leave_type)
+        
+        # Then add missing applicable templates with 0 balance
+        for template_name in sorted(applicable_templates):
+            if template_name not in seen:
+                balance_data.append({
+                    'leave_type': template_name,
+                    'balance': 0.0,
+                })
+                seen.add(template_name)
+        
+        # Always include LOP as an editable field (even if not in templates)
+        if 'LOP' not in seen:
+            balance_data.append({
+                'leave_type': 'LOP',
+                'balance': existing_balances.get('LOP', 0.0),
+            })
+            seen.add('LOP')
+
+        return Response({
+            'user': {
+                'id': target_user.id,
+                'username': target_user.username,
+                'full_name': target_user.get_full_name() or target_user.username,
+                'role': user_role,
+            },
+            'balances': balance_data,
+        })
+
+    @action(detail=False, methods=['get'], url_path='balances/staff_search')
+    def balances_staff_search(self, request):
+        """
+        HR/Admin: search staff users for balance editing UI.
+        GET /api/staff-requests/requests/balances/staff_search/?q=<name_or_username>
+        """
+        from .permissions import IsAdminOrHR
+
+        if not IsAdminOrHR().has_permission(request, self):
+            return Response({'error': 'Only HR/Admin can access this endpoint'}, status=status.HTTP_403_FORBIDDEN)
+
+        q = (request.query_params.get('q') or '').strip()
+        User = get_user_model()
+
+        users_qs = User.objects.filter(is_active=True).select_related('staff_profile', 'staff_profile__department')
+        if q:
+            users_qs = users_qs.filter(
+                Q(username__icontains=q) |
+                Q(first_name__icontains=q) |
+                Q(last_name__icontains=q) |
+                Q(staff_profile__staff_id__icontains=q)
+            )
+
+        users_qs = users_qs.order_by('first_name', 'username')[:100]
+
+        data = []
+        for u in users_qs:
+            profile = getattr(u, 'staff_profile', None)
+            dept = getattr(profile, 'department', None) if profile else None
+            data.append({
+                'id': u.id,
+                'username': u.username,
+                'full_name': u.get_full_name() or u.username,
+                'staff_id': getattr(profile, 'staff_id', None),
+                'department': {
+                    'id': dept.id,
+                    'name': dept.name,
+                    'code': dept.code,
+                } if dept else None,
+            })
+
+        return Response({'results': data, 'count': len(data)})
+
+    @action(detail=False, methods=['post'], url_path='balances/set')
+    def set_balance(self, request):
+        """
+        HR/Admin: set any leave balance value for any staff.
+        POST /api/staff-requests/requests/balances/set/
+        Body: {"user_id": 12, "leave_type": "Casual Leave", "balance": 8.5}
+        """
+        from .permissions import IsAdminOrHR
+
+        if not IsAdminOrHR().has_permission(request, self):
+            return Response({'error': 'Only HR/Admin can update balances'}, status=status.HTTP_403_FORBIDDEN)
+
+        user_id = request.data.get('user_id')
+        leave_type = request.data.get('leave_type')
+        balance = request.data.get('balance')
+
+        if user_id is None or not leave_type or balance is None:
+            return Response(
+                {'error': 'user_id, leave_type, and balance are required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            balance_value = float(balance)
+        except (TypeError, ValueError):
+            return Response({'error': 'balance must be a number'}, status=status.HTTP_400_BAD_REQUEST)
+
+        User = get_user_model()
+        try:
+            target_user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        with transaction.atomic():
+            balance_obj, _ = StaffLeaveBalance.objects.get_or_create(
+                staff=target_user,
+                leave_type=str(leave_type).strip(),
+                defaults={'balance': 0.0}
+            )
+            balance_obj.balance = balance_value
+            balance_obj.save(update_fields=['balance', 'updated_at'])
+
+        return Response({
+            'message': 'Balance updated successfully',
+            'user': {
+                'id': target_user.id,
+                'username': target_user.username,
+                'full_name': target_user.get_full_name() or target_user.username,
+            },
+            'balance': {
+                'leave_type': balance_obj.leave_type,
+                'balance': balance_obj.balance,
+                'updated_at': balance_obj.updated_at.isoformat() if balance_obj.updated_at else None,
+            }
+        })
+
     @action(detail=False, methods=['get'])
     def col_claimable_info(self, request):
         """
@@ -2306,8 +2880,8 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         leave_type = leave_template.name
         overdraft_name = leave_policy.get('overdraft_name', 'LOP')
         
-        # Calculate total absence days
-        total_days = len(absence_dates)
+        # Calculate total absence units (supports half-day entries)
+        total_days = self._calculate_absence_units(absence_dates)
         
         logger.info(f'[ProcessAbsences] User: {target_user.username}, Days: {total_days}, Dates: {absence_dates}')
         
@@ -2419,11 +2993,61 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         } for b in final_balances]
         
         return Response({
-            'message': f'Processed {total_days} absence days for {target_user.get_full_name() or target_user.username}',
+            'message': f'Processed {total_days} absence units for {target_user.get_full_name() or target_user.username}',
             'processed_days': total_days,
             'absence_dates': absence_dates,
             'balances': balance_data
         })
+
+    def _calculate_absence_units(self, absence_dates):
+        """
+        Calculate absence units from payload.
+
+        Supported item formats in absence_dates:
+        - "YYYY-MM-DD" => 1.0
+        - "YYYY-MM-DD:FN" or "YYYY-MM-DD:AN" => 0.5
+        - "YYYY-MM-DD:FULL" => 1.0
+        - {"date": "YYYY-MM-DD", "shift": "FN"|"AN"|"FULL"} => 0.5/1.0
+        - {"units": 0.5} => 0.5
+        - numeric value => that unit count
+        """
+        total = 0.0
+
+        for item in absence_dates or []:
+            if isinstance(item, (int, float)):
+                total += float(item)
+                continue
+
+            if isinstance(item, dict):
+                units = item.get('units', item.get('day_units', item.get('value')))
+                if units is not None:
+                    try:
+                        total += float(units)
+                        continue
+                    except (TypeError, ValueError):
+                        pass
+
+                shift = str(item.get('shift', item.get('session', item.get('from_noon', '')))).strip().upper()
+                if shift == 'FULL DAY':
+                    shift = 'FULL'
+                total += 0.5 if shift in ['FN', 'AN'] else 1.0
+                continue
+
+            if isinstance(item, str):
+                token = item.strip()
+                if not token:
+                    continue
+
+                if ':' in token or '|' in token:
+                    separator = ':' if ':' in token else '|'
+                    shift_token = token.split(separator)[-1].strip().upper()
+                    if shift_token == 'FULL DAY':
+                        shift_token = 'FULL'
+                    total += 0.5 if shift_token in ['FN', 'AN'] else 1.0
+                else:
+                    total += 1.0
+
+        return round(total, 2)
 
 
 class ApprovalStepViewSet(viewsets.ModelViewSet):

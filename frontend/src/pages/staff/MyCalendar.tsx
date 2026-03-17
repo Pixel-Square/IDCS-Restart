@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Calendar, ChevronLeft, ChevronRight, CheckCircle, XCircle, AlertCircle, Clock, Plus, AlertTriangle } from 'lucide-react';
+import { Calendar, ChevronLeft, ChevronRight, CheckCircle, XCircle, AlertCircle, Clock, Plus, AlertTriangle, Trash2 } from 'lucide-react';
 import { apiClient } from '../../services/auth';
 import { getApiBase } from '../../services/apiBase';
-import { getMyRequests, getColClaimableInfo, getActiveTemplates } from '../../services/staffRequests';
+import { getMyRequests, getColClaimableInfo, getActiveTemplates, deleteMyPendingRequest } from '../../services/staffRequests';
 import NewRequestModal from '../staff-requests/NewRequestModal';
 import LeaveBalanceBadges from '../../components/LeaveBalanceBadges';
 import type { StaffRequest } from '../../types/staffRequests';
@@ -10,9 +10,9 @@ import type { StaffRequest } from '../../types/staffRequests';
 interface AttendanceRecord {
   id: number;
   date: string;
-  status: string;  // Any status: 'present', 'absent', 'partial', 'OD', 'CL', 'ML', 'COL', etc.
-  fn_status: string;
-  an_status: string;
+  status: string | null;  // Any status: 'present', 'absent', 'partial', 'OD', 'CL', 'ML', 'COL', etc.
+  fn_status: string | null;
+  an_status: string | null;
   morning_in: string | null;
   evening_out: string | null;
   has_approved_col_form: boolean;
@@ -105,6 +105,19 @@ export default function MyCalendarPage() {
     }
   };
 
+  const handleDeletePendingRequest = async (requestId: number) => {
+    const ok = window.confirm('Delete this pending request? This action cannot be undone.');
+    if (!ok) return;
+
+    try {
+      await deleteMyPendingRequest(requestId);
+      await fetchMyRequests();
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || 'Failed to delete request';
+      alert(msg);
+    }
+  };
+
   const fetchMonthlyAttendance = async () => {
     try {
       setLoading(true);
@@ -170,8 +183,11 @@ export default function MyCalendarPage() {
     }
   };
 
-  const getStatusIcon = (status: string) => {
-    const s = status.toLowerCase();
+  const lower = (value?: string | null) => (value || '').toLowerCase();
+  const isCoreStatus = (value?: string | null) => ['present', 'absent', 'partial', 'half_day'].includes(lower(value));
+
+  const getStatusIcon = (status?: string | null) => {
+    const s = lower(status);
     if (s === 'present') {
       return <CheckCircle className="w-4 h-4 text-green-600" />;
     } else if (s === 'partial' || s === 'half_day') {
@@ -183,8 +199,8 @@ export default function MyCalendarPage() {
     }
   };
 
-  const getStatusBgColor = (status: string) => {
-    const s = status.toLowerCase();
+  const getStatusBgColor = (status?: string | null) => {
+    const s = lower(status);
     if (s === 'present') {
       return 'bg-green-50 border-green-200';
     } else if (s === 'partial' || s === 'half_day') {
@@ -625,8 +641,8 @@ export default function MyCalendarPage() {
                 
                 // Check if this is a half-day leave (one session has leave status, other is present/absent)
                 const isHalfDayLeave = attendance && attendance.status === 'half_day' && (
-                  !['present', 'absent', 'partial', 'half_day'].includes(attendance.fn_status.toLowerCase()) ||
-                  !['present', 'absent', 'partial', 'half_day'].includes(attendance.an_status.toLowerCase())
+                  !isCoreStatus(attendance.fn_status) ||
+                  !isCoreStatus(attendance.an_status)
                 );
 
                 return (
@@ -724,7 +740,7 @@ export default function MyCalendarPage() {
                                   <div className={`font-medium ${
                                     attendance.fn_status === 'present' ? 'text-green-700' : 
                                     attendance.fn_status === 'absent' ? 'text-red-700' : 
-                                    !['present', 'absent', 'partial', 'half_day'].includes(attendance.fn_status.toLowerCase()) ? 'text-purple-700' :
+                                    !isCoreStatus(attendance.fn_status) ? 'text-purple-700' :
                                     'text-yellow-700'
                                   }`}>
                                     FN: {attendance.fn_status === 'CL' ? 'Cas.Leave' :
@@ -738,7 +754,7 @@ export default function MyCalendarPage() {
                                   <div className={`font-medium ${
                                     attendance.an_status === 'present' ? 'text-green-700' : 
                                     attendance.an_status === 'absent' ? 'text-red-700' : 
-                                    !['present', 'absent', 'partial', 'half_day'].includes(attendance.an_status.toLowerCase()) ? 'text-purple-700' :
+                                    !isCoreStatus(attendance.an_status) ? 'text-purple-700' :
                                     'text-yellow-700'
                                   }`}>
                                     AN: {attendance.an_status === 'CL' ? 'Cas.Leave' :
@@ -804,7 +820,7 @@ export default function MyCalendarPage() {
                               <div className={`font-medium ${
                                 attendance.fn_status === 'present' ? 'text-green-700' : 
                                 attendance.fn_status === 'absent' ? 'text-red-700' : 
-                                !['present', 'absent', 'partial', 'half_day'].includes(attendance.fn_status.toLowerCase()) ? 'text-purple-700' :
+                                !isCoreStatus(attendance.fn_status) ? 'text-purple-700' :
                                 'text-yellow-700'
                               }`}>
                                 FN: {attendance.fn_status === 'CL' ? 'Cas.Leave' :
@@ -818,7 +834,7 @@ export default function MyCalendarPage() {
                               <div className={`font-medium ${
                                 attendance.an_status === 'present' ? 'text-green-700' : 
                                 attendance.an_status === 'absent' ? 'text-red-700' : 
-                                !['present', 'absent', 'partial', 'half_day'].includes(attendance.an_status.toLowerCase()) ? 'text-purple-700' :
+                                !isCoreStatus(attendance.an_status) ? 'text-purple-700' :
                                 'text-yellow-700'
                               }`}>
                                 AN: {attendance.an_status === 'CL' ? 'Cas.Leave' :
@@ -898,17 +914,30 @@ export default function MyCalendarPage() {
                         Submitted: {new Date(request.created_at).toLocaleDateString('en-IN')}
                       </p>
                     </div>
-                    <span
-                      className={`px-3 py-1 text-xs font-medium rounded-full ${
-                        request.status === 'approved'
-                          ? 'bg-green-100 text-green-800'
-                          : request.status === 'rejected'
-                          ? 'bg-red-100 text-red-800'
-                          : 'bg-yellow-100 text-yellow-800'
-                      }`}
-                    >
-                      {request.status.charAt(0).toUpperCase() + request.status.slice(1)}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`px-3 py-1 text-xs font-medium rounded-full ${
+                          request.status === 'approved'
+                            ? 'bg-green-100 text-green-800'
+                            : request.status === 'rejected'
+                            ? 'bg-red-100 text-red-800'
+                            : 'bg-yellow-100 text-yellow-800'
+                        }`}
+                      >
+                        {request.status.charAt(0).toUpperCase() + request.status.slice(1)}
+                      </span>
+                      {request.status === 'pending' && (
+                        <button
+                          type="button"
+                          onClick={() => handleDeletePendingRequest(request.id)}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md border border-red-300 text-red-700 hover:bg-red-50"
+                          title="Delete pending request"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          Delete
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   {/* Progress bar */}

@@ -54,6 +54,11 @@ class AttendanceRecord(models.Model):
         FN/AN Split Logic:
         - FN (Forenoon): Based on morning_in time vs in_time_limit (default 08:45)
         - AN (Afternoon): Based on morning_in vs mid_split (1 PM) and evening_out vs out_time_limit
+        
+        Priority for time limits:
+        1. Department-specific settings (if user belongs to a department with configured settings)
+        2. Global AttendanceSettings
+        3. Defaults (08:45, 17:00, 13:00)
         """
         # Define statuses that can be auto-updated from biometric data
         BIOMETRIC_STATUSES = ['present', 'absent', 'partial', 'half_day']
@@ -69,14 +74,38 @@ class AttendanceRecord(models.Model):
             return session_status in BIOMETRIC_STATUSES or (session_status is None and has_biometric)
         
         try:
-            settings = AttendanceSettings.objects.first()
+            # Get time limits: try department-specific first, then global
+            in_limit = '08:45:00'
+            out_limit = '17:00:00'
+            mid_split = '13:00:00'
+            apply_absence = True
             
-            if settings and settings.apply_time_based_absence:
-                in_limit = settings.attendance_in_time_limit  # Default: 08:45
-                out_limit = settings.attendance_out_time_limit  # Default: 17:00
-                mid_split = settings.mid_time_split  # Default: 13:00 (1 PM)
-                
-                # === Calculate FN status ===
+            # Try to get department-specific settings for this user
+            department_settings = None
+            if hasattr(self.user, 'staff_profile') and self.user.staff_profile.department:
+                # Find an enabled DepartmentAttendanceSettings for user's department
+                department_settings = DepartmentAttendanceSettings.objects.filter(
+                    departments=self.user.staff_profile.department,
+                    enabled=True
+                ).first()
+            
+            if department_settings:
+                # Use department-specific settings
+                in_limit = department_settings.attendance_in_time_limit
+                out_limit = department_settings.attendance_out_time_limit
+                mid_split = department_settings.mid_time_split
+                apply_absence = department_settings.apply_time_based_absence
+            else:
+                # Fall back to global settings
+                global_settings = AttendanceSettings.objects.first()
+                if global_settings:
+                    in_limit = global_settings.attendance_in_time_limit
+                    out_limit = global_settings.attendance_out_time_limit
+                    mid_split = global_settings.mid_time_split
+                    apply_absence = global_settings.apply_time_based_absence
+            
+            if apply_absence:
+
                 if _needs_biometric_calc(self.fn_status):
                     if self.morning_in:
                         # FN: Present if came before/at the in_time_limit
@@ -327,3 +356,66 @@ class AttendanceSettings(models.Model):
     
     def __str__(self):
         return f"Attendance Settings (Updated: {self.updated_at.strftime('%Y-%m-%d %H:%M')})"
+
+
+class DepartmentAttendanceSettings(models.Model):
+    """Department-specific attendance time limits (e.g., Type 1 for CSE/Mech, Type 2 for EEE/ECE)"""
+    name = models.CharField(
+        max_length=100,
+        unique=True,
+        help_text="Configuration name (e.g., 'Type 1', 'Engineering Depts', 'CSE/Mech')"
+    )
+    description = models.TextField(
+        blank=True,
+        help_text="Description of which departments use these settings"
+    )
+    attendance_in_time_limit = models.TimeField(
+        default='08:45:00',
+        help_text="If morning_in is after this time, mark FN as absent"
+    )
+    attendance_out_time_limit = models.TimeField(
+        default='17:00:00',
+        help_text="If evening_out is before this time, mark AN as absent"
+    )
+    mid_time_split = models.TimeField(
+        default='13:00:00',
+        help_text="Time that splits FN (Forenoon) and AN (Afternoon) sessions"
+    )
+    apply_time_based_absence = models.BooleanField(
+        default=True,
+        help_text="Enable time-based absence marking for these departments"
+    )
+    # Departments assigned to this configuration
+    departments = models.ManyToManyField(
+        'academics.Department',
+        related_name='attendance_settings',
+        help_text="Departments using this time limit configuration"
+    )
+    enabled = models.BooleanField(
+        default=True,
+        help_text="Enable/disable this configuration"
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='created_dept_attendance_settings'
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='updated_dept_attendance_settings'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'staff_attendance_dept_settings'
+        verbose_name = 'Department Attendance Settings'
+        verbose_name_plural = 'Department Attendance Settings'
+        ordering = ['name']
+    
+    def __str__(self):
+        dept_count = self.departments.count()
+        return f"{self.name} ({dept_count} dept{'s' if dept_count != 1 else ''})"

@@ -3,6 +3,7 @@ import io
 import re
 import traceback as tb_module
 from datetime import datetime, date as date_type, timedelta
+from django.core.management import call_command
 from django.db import transaction
 from django.utils import timezone
 from django.db.models import Q
@@ -13,8 +14,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import PermissionDenied
 from accounts.models import User
-from .models import AttendanceRecord, UploadLog, HalfDayRequest, Holiday, AttendanceSettings
-from .serializers import AttendanceRecordSerializer, UploadLogSerializer, CSVUploadSerializer, HalfDayRequestSerializer, HalfDayRequestCreateSerializer, HalfDayRequestReviewSerializer, HolidaySerializer, HolidayCreateSerializer, AttendanceSettingsSerializer
+from .models import AttendanceRecord, UploadLog, HalfDayRequest, Holiday, AttendanceSettings, DepartmentAttendanceSettings
+from .serializers import AttendanceRecordSerializer, UploadLogSerializer, CSVUploadSerializer, HalfDayRequestSerializer, HalfDayRequestCreateSerializer, HalfDayRequestReviewSerializer, HolidaySerializer, HolidayCreateSerializer, AttendanceSettingsSerializer, DepartmentAttendanceSettingsSerializer
 from .permissions import StaffAttendanceViewPermission, StaffAttendanceUploadPermission
 
 
@@ -873,10 +874,14 @@ class CSVUploadViewSet(viewsets.ViewSet):
                 if is_half_day_claim and shift_claimed in ['FN', 'AN']:
                     if shift_claimed == 'FN':
                         record.fn_status = 'present'
-                        record.an_status = 'absent'
+                        # For half-day COL claims, keep the non-claimed session as no-record
+                        # when there is no real attendance evidence for that session.
+                        if record.an_status in [None, 'absent']:
+                            record.an_status = None
                     else:
                         record.an_status = 'present'
-                        record.fn_status = 'absent'
+                        if record.fn_status in [None, 'absent']:
+                            record.fn_status = None
                 else:
                     record.fn_status = 'present'
                     record.an_status = 'present'
@@ -1223,6 +1228,7 @@ class CSVUploadViewSet(viewsets.ViewSet):
 
             # ---- ACTUAL SAVE --------------------------------------------
             source_file = csv_file.name
+            users_to_sync_lop = set()
 
             with transaction.atomic():
                 try:
@@ -1298,6 +1304,8 @@ class CSVUploadViewSet(viewsets.ViewSet):
                     user = self._resolve_user(user_id, errors)
                     if user is None:
                         continue
+
+                    users_to_sync_lop.add(user.username)
 
                     row_saved = False
 
@@ -1383,6 +1391,22 @@ class CSVUploadViewSet(viewsets.ViewSet):
                                 if self._upsert_record(user, yest_date, y_in, y_out,
                                                        'yesterday', overwrite_existing, source_file):
                                     row_saved = True
+                            elif yest_date.weekday() != 6:  # Not a Sunday
+                                # No yesterday scan on a working day -> mark absent if no record exists.
+                                # This fixes cases where D(yesterday) is blank and the date is skipped entirely.
+                                existing = AttendanceRecord.objects.filter(user=user, date=yest_date).first()
+                                if not existing:
+                                    AttendanceRecord.objects.create(
+                                        user=user,
+                                        date=yest_date,
+                                        morning_in=None,
+                                        evening_out=None,
+                                        fn_status='absent',
+                                        an_status='absent',
+                                        status='absent',
+                                        notes='Marked absent - no scan record found (yesterday column)'
+                                    )
+                                    row_saved = True
 
                     # 3. BACKFILL: D1 … D(today-2)  — only save if not yet in DB
                     for d in backfill_days:
@@ -1451,6 +1475,14 @@ class CSVUploadViewSet(viewsets.ViewSet):
                 upload_log.error_count = len(errors)
                 upload_log.errors = errors
                 upload_log.save()
+
+            # Recalculate LOP right after upload so absent entries are reflected immediately.
+            for username in users_to_sync_lop:
+                try:
+                    call_command('sync_absent_to_lop', user=username)
+                except Exception:
+                    # Do not fail upload if LOP sync fails for a user.
+                    pass
 
             return Response({
                 'success': True,
@@ -2090,14 +2122,79 @@ class AttendanceSettingsViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def current(self, request):
-        """Get current attendance settings (create if doesn't exist) - Available to all staff"""
-        settings, created = AttendanceSettings.objects.get_or_create(
-            id=1,
-            defaults={
-                'attendance_in_time_limit': '08:45:00',
-                'attendance_out_time_limit': '17:45:00',
-                'apply_time_based_absence': True,
-                'updated_by': request.user
-            }
-        )
-        return Response(AttendanceSettingsSerializer(settings).data)
+        """Get current attendance settings for the user's department or global.
+        Returns department-specific settings if available, otherwise global settings.
+        Available to all staff."""
+        result = {}
+        
+        # Try to get department-specific settings
+        dept_settings = None
+        if hasattr(request.user, 'staff_profile') and request.user.staff_profile.department:
+            from .models import DepartmentAttendanceSettings
+            dept_settings = DepartmentAttendanceSettings.objects.filter(
+                departments=request.user.staff_profile.department,
+                enabled=True
+            ).first()
+        
+        if dept_settings:
+            # Return department-specific settings with a flag
+            from .serializers import DepartmentAttendanceSettingsSerializer
+            result = DepartmentAttendanceSettingsSerializer(dept_settings).data
+            result['is_department_specific'] = True
+        else:
+            # Fall back to global settings
+            settings, created = AttendanceSettings.objects.get_or_create(
+                id=1,
+                defaults={
+                    'attendance_in_time_limit': '08:45:00',
+                    'attendance_out_time_limit': '17:45:00',
+                    'apply_time_based_absence': True,
+                    'updated_by': request.user
+                }
+            )
+            from .serializers import AttendanceSettingsSerializer
+            result = AttendanceSettingsSerializer(settings).data
+            result['is_department_specific'] = False
+        
+        return Response(result)
+
+
+class DepartmentAttendanceSettingsViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing department-specific attendance time settings (PS only)"""
+    queryset = DepartmentAttendanceSettings.objects.all()
+    serializer_class = DepartmentAttendanceSettingsSerializer
+    permission_classes = [StaffAttendanceUploadPermission]  # Only PS can manage
+    filterset_fields = ['enabled', 'departments']
+    search_fields = ['name', 'description']
+    ordering_fields = ['name', 'created_at', 'updated_at']
+    
+    def perform_create(self, serializer):
+        """Save with the current user as creator"""
+        serializer.save(created_by=self.request.user, updated_by=self.request.user)
+    
+    def perform_update(self, serializer):
+        """Update with the current user"""
+        serializer.save(updated_by=self.request.user)
+    
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    def for_my_department(self, request):
+        """Get settings for the current user's department"""
+        if not hasattr(request.user, 'staff_profile') or not request.user.staff_profile.department:
+            return Response(
+                {'error': 'User does not have a department assigned'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        settings = DepartmentAttendanceSettings.objects.filter(
+            departments=request.user.staff_profile.department,
+            enabled=True
+        ).first()
+        
+        if settings:
+            return Response(DepartmentAttendanceSettingsSerializer(settings).data)
+        else:
+            return Response(
+                {'message': 'No department-specific settings found. Using global defaults.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+

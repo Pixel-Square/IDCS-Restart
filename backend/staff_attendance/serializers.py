@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import AttendanceRecord, UploadLog, HalfDayRequest, Holiday, AttendanceSettings
+from .models import AttendanceRecord, UploadLog, HalfDayRequest, Holiday, AttendanceSettings, DepartmentAttendanceSettings
 from academics.models import Department
 
 
@@ -180,3 +180,32 @@ class AttendanceSettingsSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at'
         ]
         read_only_fields = ['updated_by', 'created_at', 'updated_at']
+
+
+class DepartmentAttendanceSettingsSerializer(serializers.ModelSerializer):
+    """Serializer for Department-Specific Attendance Settings"""
+    departments_info = serializers.SerializerMethodField()
+    created_by_name = serializers.CharField(source='created_by.username', read_only=True)
+    updated_by_name = serializers.CharField(source='updated_by.username', read_only=True)
+    
+    class Meta:
+        model = DepartmentAttendanceSettings
+        fields = [
+            'id', 'name', 'description', 'departments', 'departments_info',
+            'attendance_in_time_limit', 'attendance_out_time_limit', 'mid_time_split',
+            'apply_time_based_absence', 'enabled',
+            'created_by', 'created_by_name', 'updated_by', 'updated_by_name',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['created_by', 'created_by_name', 'updated_by', 'updated_by_name', 'created_at', 'updated_at']
+    
+    def get_departments_info(self, obj):
+        """Return department details"""
+        return [
+            {
+                'id': dept.id,
+                'name': dept.name,
+                'code': dept.code
+            }
+            for dept in obj.departments.all()
+        ]

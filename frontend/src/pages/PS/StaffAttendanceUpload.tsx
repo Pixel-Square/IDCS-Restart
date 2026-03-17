@@ -99,10 +99,25 @@ const StaffAttendanceUpload: React.FC = () => {
   const [applyTimeLimits, setApplyTimeLimits] = useState(true);
   const [loadingSettings, setLoadingSettings] = useState(false);
 
+  // Department-specific settings states
+  const [deptSettings, setDeptSettings] = useState<any[]>([]);
+  const [loadingDeptSettings, setLoadingDeptSettings] = useState(false);
+  const [showDeptSettingsForm, setShowDeptSettingsForm] = useState(false);
+  const [editingDeptSetting, setEditingDeptSetting] = useState<any>(null);
+  const [deptSettingName, setDeptSettingName] = useState('');
+  const [deptSettingDesc, setDeptSettingDesc] = useState('');
+  const [deptSettingInTime, setDeptSettingInTime] = useState('08:45');
+  const [deptSettingOutTime, setDeptSettingOutTime] = useState('17:00');
+  const [deptSettingMidTime, setDeptSettingMidTime] = useState('13:00');
+  const [deptSettingEnabled, setDeptSettingEnabled] = useState(true);
+  const [deptSettingSelectedDepts, setDeptSettingSelectedDepts] = useState<number[]>([]);
+  const [savingDeptSetting, setSavingDeptSetting] = useState(false);
+
   // Fetch holidays on component mount
   useEffect(() => {
     fetchHolidays();
     fetchAttendanceSettings();
+    fetchDepartmentSettings();
     fetchDepartments();
   }, []);
 
@@ -226,6 +241,102 @@ const StaffAttendanceUpload: React.FC = () => {
     } catch (err: any) {
       console.error('Failed to fetch attendance settings:', err);
     }
+  };
+
+  const fetchDepartmentSettings = async () => {
+    try {
+      setLoadingDeptSettings(true);
+      const response = await apiClient.get(`${getApiBase()}/api/staff-attendance/department-settings/`);
+      setDeptSettings(response.data);
+    } catch (err: any) {
+      console.error('Failed to fetch department settings:', err);
+    } finally {
+      setLoadingDeptSettings(false);
+    }
+  };
+
+  const handleSaveDeptSetting = async () => {
+    if (!deptSettingName.trim()) {
+      alert('Please enter a configuration name');
+      return;
+    }
+
+    setSavingDeptSetting(true);
+    try {
+      const payload = {
+        name: deptSettingName,
+        description: deptSettingDesc,
+        attendance_in_time_limit: `${deptSettingInTime}:00`,
+        attendance_out_time_limit: `${deptSettingOutTime}:00`,
+        mid_time_split: `${deptSettingMidTime}:00`,
+        apply_time_based_absence: deptSettingEnabled,
+        departments: deptSettingSelectedDepts,
+        enabled: deptSettingEnabled
+      };
+
+      if (editingDeptSetting) {
+        // Update existing
+        await apiClient.patch(
+          `${getApiBase()}/api/staff-attendance/department-settings/${editingDeptSetting.id}/`,
+          payload
+        );
+        alert('Department configuration updated successfully!');
+      } else {
+        // Create new
+        await apiClient.post(
+          `${getApiBase()}/api/staff-attendance/department-settings/`,
+          payload
+        );
+        alert('Department configuration created successfully!');
+      }
+
+      // Reset form and refresh
+      setShowDeptSettingsForm(false);
+      resetDeptSettingForm();
+      fetchDepartmentSettings();
+    } catch (err: any) {
+      const errorMsg = err.response?.data?.error || err.response?.data?.name?.[0] || 'Failed to save configuration';
+      alert(errorMsg);
+    } finally {
+      setSavingDeptSetting(false);
+    }
+  };
+
+  const handleEditDeptSetting = (setting: any) => {
+    setEditingDeptSetting(setting);
+    setDeptSettingName(setting.name);
+    setDeptSettingDesc(setting.description);
+    setDeptSettingInTime(setting.attendance_in_time_limit.substring(0, 5));
+    setDeptSettingOutTime(setting.attendance_out_time_limit.substring(0, 5));
+    setDeptSettingMidTime(setting.mid_time_split.substring(0, 5));
+    setDeptSettingEnabled(setting.enabled);
+    setDeptSettingSelectedDepts(setting.departments || []);
+    setShowDeptSettingsForm(true);
+  };
+
+  const handleDeleteDeptSetting = async (id: number) => {
+    if (!confirm('Are you sure you want to delete this configuration?')) {
+      return;
+    }
+
+    try {
+      await apiClient.delete(`${getApiBase()}/api/staff-attendance/department-settings/${id}/`);
+      alert('Configuration deleted successfully!');
+      fetchDepartmentSettings();
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to delete configuration');
+    }
+  };
+
+  const resetDeptSettingForm = () => {
+    setEditingDeptSetting(null);
+    setDeptSettingName('');
+    setDeptSettingDesc('');
+    setDeptSettingInTime('08:45');
+    setDeptSettingOutTime('17:00');
+    setDeptSettingMidTime('13:00');
+    setDeptSettingEnabled(true);
+    setDeptSettingSelectedDepts([]);
   };
 
   const handleSaveSettings = async () => {
@@ -765,15 +876,263 @@ const StaffAttendanceUpload: React.FC = () => {
         </div>
       </div>
 
+      {/* Department-Specific Attendance Time Settings */}
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 mb-6">
+        <div className="px-6 py-4 border-b border-gray-200 bg-gradient-to-r from-purple-50 to-blue-50">
+          <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+            <Clock className="h-5 w-5 text-purple-600" />
+            Department-Specific Time Limits
+          </h2>
+          <p className="text-sm text-gray-600 mt-1">
+            Create configurations for different department groups (e.g., Type 1 for CSE/Mech, Type 2 for EEE/ECE)
+          </p>
+        </div>
+        
+        <div className="p-6 space-y-4">
+          {/* Add Button */}
+          <div className="flex justify-end">
+            <button
+              onClick={() => {
+                resetDeptSettingForm();
+                setShowDeptSettingsForm(!showDeptSettingsForm);
+              }}
+              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-purple-600 hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500"
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              New Configuration
+            </button>
+          </div>
+
+          {/* Add/Edit Form */}
+          {showDeptSettingsForm && (
+            <div className="bg-purple-50 border border-purple-200 rounded-lg p-4 space-y-4">
+              <h3 className="font-semibold text-gray-900">
+                {editingDeptSetting ? 'Edit Configuration' : 'Create New Configuration'}
+              </h3>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Configuration Name <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={deptSettingName}
+                    onChange={(e) => setDeptSettingName(e.target.value)}
+                    placeholder="e.g., Type 1, Engineering Depts"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Description
+                  </label>
+                  <input
+                    type="text"
+                    value={deptSettingDesc}
+                    onChange={(e) => setDeptSettingDesc(e.target.value)}
+                    placeholder="e.g., CSE and Mechanical departments"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    In Time Limit
+                  </label>
+                  <input
+                    type="time"
+                    value={deptSettingInTime}
+                    onChange={(e) => setDeptSettingInTime(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Out Time Limit
+                  </label>
+                  <input
+                    type="time"
+                    value={deptSettingOutTime}
+                    onChange={(e) => setDeptSettingOutTime(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Noon Split (FN/AN)
+                  </label>
+                  <input
+                    type="time"
+                    value={deptSettingMidTime}
+                    onChange={(e) => setDeptSettingMidTime(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Assign Departments
+                </label>
+                {allDepartments.length === 0 ? (
+                  <p className="text-xs text-gray-400">Loading departments...</p>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 max-h-48 overflow-y-auto border border-gray-300 rounded-md p-3 bg-white">
+                    {allDepartments.map((dept) => (
+                      <label key={dept.id} className="flex items-center gap-2 cursor-pointer text-sm">
+                        <input
+                          type="checkbox"
+                          checked={deptSettingSelectedDepts.includes(dept.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setDeptSettingSelectedDepts(prev => [...prev, dept.id]);
+                            } else {
+                              setDeptSettingSelectedDepts(prev => prev.filter(id => id !== dept.id));
+                            }
+                          }}
+                          className="h-4 w-4 text-purple-600 border-gray-300 rounded"
+                        />
+                        <span className="text-gray-700">{dept.short_name || dept.code}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+                {deptSettingSelectedDepts.length > 0 && (
+                  <p className="text-xs text-purple-700 mt-1">
+                    Configuration will apply to {deptSettingSelectedDepts.length} selected department{deptSettingSelectedDepts.length > 1 ? 's' : ''}.
+                  </p>
+                )}
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <input
+                  id="dept-enabled"
+                  type="checkbox"
+                  checked={deptSettingEnabled}
+                  onChange={(e) => setDeptSettingEnabled(e.target.checked)}
+                  className="h-4 w-4 text-purple-600 border-gray-300 rounded"
+                />
+                <label htmlFor="dept-enabled" className="text-sm font-medium text-gray-700">
+                  Enabled
+                </label>
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  onClick={handleSaveDeptSetting}
+                  disabled={savingDeptSetting || !deptSettingName.trim()}
+                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                >
+                  <CheckCircle className="h-4 w-4 mr-2" />
+                  {savingDeptSetting ? 'Saving...' : 'Save Configuration'}
+                </button>
+                <button
+                  onClick={() => {
+                    setShowDeptSettingsForm(false);
+                    resetDeptSettingForm();
+                  }}
+                  className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Configurations List */}
+          {loadingDeptSettings ? (
+            <div className="text-center py-8">
+              <Clock className="animate-spin h-8 w-8 text-gray-400 mx-auto mb-2" />
+              <p className="text-gray-500">Loading configurations...</p>
+            </div>
+          ) : deptSettings.length === 0 ? (
+            <div className="text-center py-8 bg-gray-50 rounded-lg border border-dashed border-gray-300">
+              <Clock className="h-12 w-12 text-gray-400 mx-auto mb-2" />
+              <p className="text-gray-500">No configurations yet</p>
+              <p className="text-sm text-gray-400 mt-1">Click "New Configuration" to create department-specific time limits</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {deptSettings.map((setting) => (
+                <div
+                  key={setting.id}
+                  className={`border rounded-lg p-4 ${setting.enabled ? 'bg-white border-purple-200' : 'bg-gray-50 border-gray-200 opacity-60'}`}
+                >
+                  <div className="flex items-start justify-between mb-2">
+                    <div>
+                      <h4 className="font-semibold text-gray-900">{setting.name}</h4>
+                      {!setting.enabled && (
+                        <span className="text-xs bg-gray-200 text-gray-700 px-2 py-0.5 rounded inline-block mt-1">
+                          Disabled
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => handleEditDeptSetting(setting)}
+                        className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                        title="Edit"
+                      >
+                        <FileText className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteDeptSetting(setting.id)}
+                        className="p-1.5 text-red-600 hover:bg-red-50 rounded transition-colors"
+                        title="Delete"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {setting.description && (
+                    <p className="text-xs text-gray-600 mb-2">{setting.description}</p>
+                  )}
+
+                  <div className="text-xs space-y-1 mb-3 bg-gray-50 p-2 rounded">
+                    <div><span className="font-medium">In:</span> {setting.attendance_in_time_limit.substring(0, 5)}</div>
+                    <div><span className="font-medium">Out:</span> {setting.attendance_out_time_limit.substring(0, 5)}</div>
+                    <div><span className="font-medium">Noon:</span> {setting.mid_time_split.substring(0, 5)}</div>
+                  </div>
+
+                  {setting.departments_info && setting.departments_info.length > 0 ? (
+                    <div className="flex flex-wrap gap-1">
+                      {setting.departments_info.map(d => (
+                        <span
+                          key={d.id}
+                          className="inline-block bg-purple-100 text-purple-800 text-xs px-2 py-0.5 rounded"
+                        >
+                          {d.short_name || d.code}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-amber-700 bg-amber-50 px-2 py-1 rounded">
+                      No departments assigned
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Attendance Time Settings Section */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 mb-6">
         <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
           <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
             <Clock className="h-5 w-5 text-blue-600" />
-            Attendance Time Limits
+            Global Fallback Time Limits
           </h2>
           <p className="text-sm text-gray-600 mt-1">
-            Configure time-based absence rules for attendance processing
+            Default time limits used when staff's department has no specific configuration
           </p>
         </div>
         
@@ -838,8 +1197,9 @@ const StaffAttendanceUpload: React.FC = () => {
           
           <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-md">
             <p className="text-sm text-amber-800">
-              <strong>Important:</strong> Time-based absence rules are applied during CSV upload processing.
-              Existing attendance records are not affected. Default values are 8:45 AM for in time and 5:45 PM for out time.
+              <strong>How it works:</strong> When staff are marked as absent during CSV upload, these global time limits are used 
+              <strong> only if</strong> their department doesn't have a specific configuration. Departments with specific 
+              Type configurations will use those limits instead.
             </p>
           </div>
         </div>

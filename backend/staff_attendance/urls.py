@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import AttendanceRecordViewSet, UploadLogViewSet, CSVUploadViewSet, HalfDayRequestViewSet, HolidayViewSet, AttendanceSettingsViewSet
+from .views import AttendanceRecordViewSet, UploadLogViewSet, CSVUploadViewSet, HalfDayRequestViewSet, HolidayViewSet, AttendanceSettingsViewSet, DepartmentAttendanceSettingsViewSet
 
 router = DefaultRouter()
 router.register(r'records', AttendanceRecordViewSet, basename='attendance-record')
@@ -9,6 +9,7 @@ router.register(r'csv-upload', CSVUploadViewSet, basename='csv-upload')
 router.register(r'half-day-requests', HalfDayRequestViewSet, basename='half-day-request')
 router.register(r'holidays', HolidayViewSet, basename='holiday')
 router.register(r'settings', AttendanceSettingsViewSet, basename='attendance-settings')
+router.register(r'department-settings', DepartmentAttendanceSettingsViewSet, basename='department-attendance-settings')
 
 urlpatterns = [
     path('', include(router.urls)),

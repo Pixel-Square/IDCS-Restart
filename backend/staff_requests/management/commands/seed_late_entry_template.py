@@ -71,6 +71,8 @@ class Command(BaseCommand):
                 'allowed_roles': ['STAFF', 'FACULTY', 'HOD', 'ASSISTANT', 'CLERK'],
                 'leave_policy': {
                     'action': 'neutral',  # No leave balance deduction
+                    'reset_period': 'monthly',  # Reset frequency: 'monthly', 'half_yearly', or 'yearly'
+                    # Balances will automatically reset at this frequency for all staff
                 },
                 'attendance_action': {
                     'change_status': True,
