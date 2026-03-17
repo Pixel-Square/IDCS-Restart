@@ -4,6 +4,7 @@ template_api/models.py
 EventPosterAttachment — stores Canva-exported poster files linked to a frontend event ID.
 The file is downloaded from Canva's CDN by the backend proxy view and saved to MEDIA_ROOT.
 """
+from django.conf import settings
 from django.db import models
 
 
@@ -93,3 +94,52 @@ class EventPosterAttachment(models.Model):
 
     def __str__(self) -> str:
         return f'Poster {self.format.upper()} for event {self.event_id}'
+
+
+class BrandingEventLog(models.Model):
+    class Status(models.TextChoices):
+        INFO = 'info', 'Info'
+        SUCCESS = 'success', 'Success'
+        WARNING = 'warning', 'Warning'
+        ERROR = 'error', 'Error'
+
+    event_type = models.CharField(max_length=128, db_index=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.INFO, db_index=True)
+    message = models.TextField(blank=True)
+
+    request_path = models.CharField(max_length=512, blank=True, db_index=True)
+    request_method = models.CharField(max_length=16, blank=True, db_index=True)
+    ip_address = models.CharField(max_length=64, blank=True)
+    user_agent = models.CharField(max_length=512, blank=True)
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='branding_event_logs',
+    )
+
+    event_id = models.CharField(max_length=128, blank=True, db_index=True)
+    reference_id = models.CharField(max_length=256, blank=True, db_index=True)
+
+    request_data = models.JSONField(null=True, blank=True)
+    response_data = models.JSONField(null=True, blank=True)
+    metadata = models.JSONField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['event_type', '-created_at']),
+            models.Index(fields=['status', '-created_at']),
+            models.Index(fields=['event_id', '-created_at']),
+            models.Index(fields=['reference_id', '-created_at']),
+        ]
+        verbose_name = 'Branding Event Log'
+        verbose_name_plural = 'Branding Event Logs'
+
+    def __str__(self) -> str:
+        label = self.event_id or self.reference_id or 'n/a'
+        return f'[{self.status}] {self.event_type} ({label})'

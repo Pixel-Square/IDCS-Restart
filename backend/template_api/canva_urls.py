@@ -15,6 +15,9 @@ urlpatterns = [
     path('oauth/callback',     canva_views.oauth_callback,     name='canva-oauth-callback'),
     # 3. Frontend polls this to get the access_token stored in session
     path('oauth/connection',   canva_views.connection_status,  name='canva-oauth-connection'),
+    path('proposal-docs/generate', canva_views.proposal_doc_generate, name='canva-proposal-doc-generate'),
+    path('proposal-docs/<str:doc_id>/<str:filename>', canva_views.proposal_doc_download, name='canva-proposal-doc-download'),
+    path('department-options', canva_views.department_options, name='canva-department-options'),
     # 4. HOD pages check this to see if a service token is available
     path('service_status',     canva_views.service_status,     name='canva-service-status'),
 

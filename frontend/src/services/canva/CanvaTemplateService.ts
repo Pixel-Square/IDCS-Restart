@@ -10,6 +10,7 @@
  */
 
 import { getConnection } from './CanvaAuthService';
+import fetchWithAuth from '../fetchAuth';
 import {
   saveCanvaTemplate,
   deleteCanvaTemplate,
@@ -55,7 +56,7 @@ export async function listUserDesigns(query = ''): Promise<CanvaDesignItem[]> {
   const params = new URLSearchParams({ access_token: conn.accessToken });
   if (query) params.set('query', query);
 
-  const res = await fetch(`/api/canva/designs?${params.toString()}`);
+  const res = await fetchWithAuth(`/api/canva/designs?${params.toString()}`, { method: 'GET' });
   if (!res.ok) {
     const e = await res.json().catch(() => ({})) as Record<string, string>;
     throw new Error(e.detail ?? `Failed to list designs (${res.status})`);
@@ -73,7 +74,7 @@ export async function listUserBrandTemplates(query = ''): Promise<CanvaBrandTemp
   if (conn?.accessToken) params.set('access_token', conn.accessToken);
   if (query) params.set('query', query);
 
-  const res = await fetch(`/api/canva/brand-templates?${params.toString()}`);
+  const res = await fetchWithAuth(`/api/canva/brand-templates?${params.toString()}`, { method: 'GET' });
   if (!res.ok) {
     const e = await res.json().catch(() => ({})) as Record<string, string>;
     throw new Error(e.detail ?? `Failed to list brand templates (${res.status})`);
@@ -89,7 +90,10 @@ export async function getBrandTemplateDataset(brandTemplateId: string): Promise<
   const params = new URLSearchParams();
   if (conn?.accessToken) params.set('access_token', conn.accessToken);
 
-  const res = await fetch(`/api/canva/brand-templates/${encodeURIComponent(brandTemplateId)}/dataset?${params.toString()}`);
+  const res = await fetchWithAuth(
+    `/api/canva/brand-templates/${encodeURIComponent(brandTemplateId)}/dataset?${params.toString()}`,
+    { method: 'GET' },
+  );
   if (!res.ok) {
     const e = await res.json().catch(() => ({})) as Record<string, string>;
     throw new Error(e.detail ?? `Failed to load brand template dataset (${res.status})`);
@@ -103,7 +107,7 @@ export async function getBrandTemplateDataset(brandTemplateId: string): Promise<
 
 /** Fetch all saved IDCS templates from the backend DB and refresh localStorage cache. */
 export async function fetchTemplatesFromBackend(): Promise<CanvaTemplate[]> {
-  const res = await fetch('/api/canva/templates');
+  const res = await fetchWithAuth('/api/canva/templates', { method: 'GET' });
   if (!res.ok) throw new Error(`Failed to load templates (${res.status})`);
 
   const data = await res.json() as {
@@ -149,9 +153,8 @@ export async function saveAsTemplate(
   savedBy: string,
 ): Promise<CanvaTemplate> {
   // 1. Save to backend DB
-  const res = await fetch('/api/canva/templates', {
+  const res = await fetchWithAuth('/api/canva/templates', {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({
       name:              design.title || 'Untitled Template',
       canva_design_id:   design.id,
@@ -184,14 +187,14 @@ export async function saveAsTemplate(
 export async function deleteTemplate(templateId: string): Promise<void> {
   // Find the backend integer ID by looking up from templates list
   try {
-    const res = await fetch('/api/canva/templates');
+    const res = await fetchWithAuth('/api/canva/templates', { method: 'GET' });
     if (res.ok) {
       const tpl = getAllCanvaTemplates().find((t) => t.id === templateId);
       if (tpl) {
         const data = await res.json() as { templates: Array<{ id: number; canvaTemplateId: string }> };
         const backendEntry = data.templates.find((t) => t.canvaTemplateId === tpl.canvaTemplateId);
         if (backendEntry) {
-          await fetch(`/api/canva/templates/${backendEntry.id}`, { method: 'DELETE' });
+          await fetchWithAuth(`/api/canva/templates/${backendEntry.id}`, { method: 'DELETE' });
         }
       }
     }

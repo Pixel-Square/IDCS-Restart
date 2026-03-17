@@ -1,10 +1,30 @@
 import React, { useState, useEffect } from 'react';
-import { User, BookOpen, GraduationCap, Calendar, Clock, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import { User, BookOpen, GraduationCap, Calendar, Clock, CheckCircle, XCircle, AlertCircle, Bell, ArrowRight } from 'lucide-react';
 import { apiClient } from '../../services/auth';
 import { getApiBase } from '../../services/apiBase';
+import { useNavigate } from 'react-router-dom';
 
 interface DashboardEntryPointsProps {
   user?: { username: string; profile_type?: string; profile?: any } | null;
+}
+
+interface Announcement {
+  id: string;
+  title: string;
+  content: string;
+  source: 'hod' | 'iqac';
+  created_by_name: string;
+  created_at: string;
+  is_read: boolean;
+  course_count: number;
+}
+
+interface AttendanceStatus {
+  date: string;
+  status: 'present' | 'absent' | 'partial' | 'half_day' | 'no_record';
+  morning_in: string | null;
+  evening_out: string | null;
+  has_record: boolean;
 }
 
 interface AttendanceStatus {
@@ -16,9 +36,12 @@ interface AttendanceStatus {
 }
 
 export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps) {
+  const navigate = useNavigate();
   const username = user?.username || 'User';
   const [attendanceStatus, setAttendanceStatus] = useState<AttendanceStatus | null>(null);
   const [loadingAttendance, setLoadingAttendance] = useState(false);
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [loadingAnnouncements, setLoadingAnnouncements] = useState(true);
   
   // Get designation based on profile type
   const getDesignation = () => {
@@ -40,11 +63,12 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
   const designation = getDesignation();
   const isStaff = user?.profile_type?.toUpperCase() === 'STAFF';
 
-  // Fetch today's attendance status for staff
+  // Fetch today's attendance status for staff and announcements
   useEffect(() => {
     if (isStaff) {
       fetchTodayAttendance();
     }
+    fetchRecentAnnouncements();
   }, [isStaff]);
 
   const fetchTodayAttendance = async () => {
@@ -108,6 +132,36 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
         return 'Unknown';
     }
   };
+
+  const fetchRecentAnnouncements = async () => {
+    try {
+      setLoadingAnnouncements(true);
+      const url = `${getApiBase()}/api/announcements/announcements/?page_size=3`;
+      const response = await apiClient.get(url);
+      const data = response.data.results || response.data;
+      setAnnouncements(data.slice(0, 3));
+    } catch (error) {
+      console.error('Failed to fetch announcements:', error);
+    } finally {
+      setLoadingAnnouncements(false);
+    }
+  };
+
+  const unreadCount = announcements.filter((ann) => !ann.is_read).length;
+
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffHours < 1) return 'Just now';
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays < 7) return `${diffDays}d ago`;
+
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
   
   return (
     <div className="space-y-6">
@@ -165,6 +219,81 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
           </div>
         </div>
       )}
+
+      {/* Announcements Section */}
+      <div className="bg-white rounded-xl p-6 shadow-md border border-gray-200">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
+              <Bell className="w-5 h-5 text-blue-600" />
+            </div>
+            <h3 className="text-lg font-semibold text-gray-900">Announcements</h3>
+            {unreadCount > 0 && (
+              <span className="ml-2 inline-flex items-center justify-center px-3 py-1 text-xs font-bold leading-none text-white bg-red-600 rounded-full">
+                {unreadCount}
+              </span>
+            )}
+          </div>
+          <button
+            onClick={() => navigate('/announcements')}
+            className="text-blue-600 hover:text-blue-700 font-medium text-sm flex items-center gap-1"
+          >
+            View All
+            <ArrowRight className="w-4 h-4" />
+          </button>
+        </div>
+
+        {loadingAnnouncements ? (
+          <div className="text-center py-6 text-gray-500">
+            <Clock className="w-5 h-5 animate-spin mx-auto mb-2" />
+            Loading announcements...
+          </div>
+        ) : announcements.length === 0 ? (
+          <div className="text-center py-6 text-gray-500">
+            <p>No announcements at this time</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {announcements.map((announcement) => (
+              <div
+                key={announcement.id}
+                className={`p-4 rounded-lg border-l-4 transition-all ${
+                  announcement.is_read
+                    ? 'bg-gray-50 border-l-gray-300'
+                    : 'bg-blue-50 border-l-blue-600'
+                }`}
+                style={{
+                  cursor: 'pointer',
+                }}
+              >
+                <div className="flex items-start gap-3">
+                  <div className={`flex-shrink-0 w-2 h-2 rounded-full mt-2 ${
+                    announcement.is_read ? 'bg-gray-400' : 'bg-blue-600'
+                  }`}></div>
+                  <div className="flex-1 min-w-0">
+                    <h4 className="font-semibold text-gray-900 truncate">{announcement.title}</h4>
+                    <p className="text-sm text-gray-600 mt-1 line-clamp-2">{announcement.content}</p>
+                    <div className="flex items-center gap-2 mt-2 text-xs text-gray-500">
+                      <span className={`px-2 py-0.5 rounded text-white text-xs font-medium ${
+                        announcement.source === 'hod' ? 'bg-purple-600' : 'bg-blue-600'
+                      }`}>
+                        {announcement.source.toUpperCase()}
+                      </span>
+                      <span>{formatDate(announcement.created_at)}</span>
+                      <span>by {announcement.created_by_name}</span>
+                    </div>
+                  </div>
+                  {!announcement.is_read && (
+                    <div className="flex-shrink-0">
+                      <div className="w-2 h-2 bg-blue-600 rounded-full"></div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Quick Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">

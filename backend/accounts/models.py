@@ -138,7 +138,7 @@ def validate_roles_for_user(user, roles):
     role_names = {getattr(r, 'name', str(r)).upper() for r in roles}
 
     STUDENT_ALLOWED = {'STUDENT'}
-    STAFF_ALLOWED = {'STAFF', 'FACULTY', 'ADVISOR', 'HOD', 'AHOD', 'MENTOR', 'ADMIN'}
+    STAFF_ALLOWED = {'STAFF', 'FACULTY', 'ADVISOR', 'HOD', 'AHOD', 'MENTOR', 'ADMIN', 'BRANDING', 'HAA'}
 
     if profile == 'STUDENT':
         invalid = role_names - STUDENT_ALLOWED
@@ -306,3 +306,25 @@ class UserQuery(models.Model):
     
     def __str__(self):
         return f"{self.user.username} - {self.status} - {self.created_at.strftime('%Y-%m-%d')}"
+
+
+class UserNotification(models.Model):
+    """Per-user notification for approval workflow events, etc."""
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='notifications',
+    )
+    title = models.CharField(max_length=256)
+    message = models.TextField(blank=True)
+    link = models.CharField(max_length=512, blank=True)
+    read = models.BooleanField(default=False)
+    data = models.JSONField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.user.username}: {self.title} ({'read' if self.read else 'unread'})"

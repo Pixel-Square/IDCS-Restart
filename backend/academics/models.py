@@ -657,6 +657,23 @@ class StaffProfile(models.Model):
     mobile_number = models.CharField(max_length=32, blank=True, default='')
     mobile_number_verified_at = models.DateTimeField(null=True, blank=True)
 
+
+# ─────────────────────────────────────────────────────────────
+# Placeholder for StudentCourseEnrollment model (FIX IMPORT ERROR)
+# ─────────────────────────────────────────────────────────────
+class StudentCourseEnrollment(models.Model):
+    student = models.ForeignKey('StudentProfile', on_delete=models.CASCADE)
+    course = models.ForeignKey('Course', on_delete=models.CASCADE)
+    enrolled_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('student', 'course')
+        verbose_name = 'Student Course Enrollment'
+        verbose_name_plural = 'Student Course Enrollments'
+
+    def __str__(self):
+        return f"{self.student} enrolled in {self.course}"
+
     def __str__(self):
         return f"Staff {self.staff_id} ({self.user.username})"
 

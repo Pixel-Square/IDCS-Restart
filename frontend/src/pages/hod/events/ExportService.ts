@@ -28,6 +28,17 @@ export async function exportAsPNG(el: HTMLElement, filename = 'poster.png'): Pro
   a.click();
 }
 
+/**
+ * Capture a DOM element as a PNG data-URL (no download).
+ * Useful for persisting poster previews in the DB.
+ */
+export async function captureAsPNGDataUrl(el: HTMLElement): Promise<string> {
+  const h2c = await import('html2canvas').catch(() => null);
+  if (!h2c) return '';
+  const canvas = await h2c.default(el, { useCORS: true, scale: 2, logging: false });
+  return canvas.toDataURL('image/png');
+}
+
 // ── PDF ──────────────────────────────────────────────────────────────────────
 
 /**

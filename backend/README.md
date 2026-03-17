@@ -25,6 +25,14 @@ API endpoints:
 - `POST /api/accounts/register/` -> create user
 - `GET  /api/accounts/me/` -> get current user (requires Bearer token)
 
+Branding role (RBAC):
+
+- Seed the `BRANDING` role and `branding.access` permission:
+
+```bash
+python manage.py seed_branding_role
+```
+
 SMS / OTP (mobile verification):
 
 - Default: SMS is logged (no real send).

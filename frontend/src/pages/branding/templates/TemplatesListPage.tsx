@@ -74,8 +74,6 @@ function CanvaAppBanner() {
 
 function getBrandingUser(): string {
   try {
-    const raw = localStorage.getItem('branding_user');
-    if (raw) return JSON.parse(raw)?.username ?? 'branding';
     const me = localStorage.getItem('me');
     if (me) return JSON.parse(me)?.username ?? 'branding';
   } catch { /* ignore */ }

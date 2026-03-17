@@ -4,3 +4,4 @@ from django.apps import AppConfig
 class TemplateApiConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
     name = 'template_api'
+    verbose_name = 'Branding'

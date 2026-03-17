@@ -44,20 +44,6 @@ export default function Login() {
     setError(null);
     setLoading(true);
 
-    // ── Branding hardcoded credentials (temporary) ──────────────────────────
-    if (identifier.trim() === "000001" && password === "123") {
-      localStorage.setItem("branding_auth", "true");
-      localStorage.setItem("branding_user", JSON.stringify({
-        username: "000001",
-        fullName: "Branding Officer",
-        email: "branding@idcscollege.edu.in",
-      }));
-      setLoading(false);
-      nav("/branding");
-      return;
-    }
-    // ────────────────────────────────────────────────────────────────────────
-
     try {
       await login(identifier, password);
       // Redirect to dashboard after successful login

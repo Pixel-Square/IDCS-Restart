@@ -72,3 +72,127 @@ class HodColor(models.Model):
 
     def __str__(self) -> str:
         return f"{self.hod_id}: {self.color}"
+
+
+# ── Event Proposal Approval Workflow ─────────────────────────────────────────
+
+class EventProposal(models.Model):
+    """
+    Multi-stage event proposal flowing through:
+    Staff → Branding → HOD → HAA → Approved (notifications sent).
+    """
+
+    class Status(models.TextChoices):
+        DRAFT                  = 'draft',                  'Draft'
+        FORWARDED_TO_BRANDING  = 'forwarded_to_branding',  'Forwarded to Branding'
+        FORWARDED_TO_HOD       = 'forwarded_to_hod',       'Forwarded to HOD'
+        HOD_APPROVED           = 'hod_approved',           'HOD Approved'
+        FORWARDED_TO_HAA       = 'forwarded_to_haa',       'Forwarded to HAA'
+        HAA_APPROVED           = 'haa_approved',           'HAA Approved'
+        REJECTED               = 'rejected',               'Rejected'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # ── Event details ────────────────────────────────────────────────────────
+    title = models.CharField(max_length=512)
+    department = models.ForeignKey(
+        'academics.Department', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='event_proposals',
+    )
+    department_name = models.CharField(max_length=256, blank=True)
+    event_type = models.CharField(max_length=128, blank=True)
+    start_date = models.DateField()
+    end_date = models.DateField(null=True, blank=True)
+    venue = models.CharField(max_length=512, blank=True)
+    mode = models.CharField(max_length=64, blank=True)
+    expert_category = models.CharField(max_length=8, blank=True)
+    is_repeated = models.BooleanField(default=False)
+    participants = models.CharField(max_length=512, blank=True)
+
+    # Coordinators
+    coordinator_name = models.CharField(max_length=256, blank=True)
+    co_coordinator_name = models.CharField(max_length=256, blank=True)
+
+    # Chief guest
+    chief_guest_name = models.CharField(max_length=256, blank=True)
+    chief_guest_designation = models.CharField(max_length=256, blank=True)
+    chief_guest_affiliation = models.CharField(max_length=256, blank=True)
+
+    # Full form data kept as JSON for DOCX generation
+    proposal_data = models.JSONField(default=dict, blank=True)
+
+    # ── Generated assets ─────────────────────────────────────────────────────
+    poster_url = models.TextField(blank=True)
+    poster_data_url = models.TextField(blank=True)
+    proposal_doc_url = models.TextField(blank=True)
+    proposal_doc_name = models.CharField(max_length=256, blank=True)
+    canva_design_id = models.CharField(max_length=256, blank=True)
+    canva_edit_url = models.TextField(blank=True)
+
+    # ── Workflow ─────────────────────────────────────────────────────────────
+    status = models.CharField(
+        max_length=32, choices=Status.choices, default=Status.DRAFT,
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='event_proposals',
+    )
+    created_by_name = models.CharField(max_length=256, blank=True)
+
+    # Branding review
+    branding_reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='+',
+    )
+    branding_reviewed_by_name = models.CharField(max_length=256, blank=True)
+    branding_reviewed_at = models.DateTimeField(null=True, blank=True)
+    branding_note = models.TextField(blank=True)
+
+    # HOD approval
+    hod_approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='+',
+    )
+    hod_approved_by_name = models.CharField(max_length=256, blank=True)
+    hod_approved_at = models.DateTimeField(null=True, blank=True)
+    hod_note = models.TextField(blank=True)
+
+    # HAA approval
+    haa_approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='+',
+    )
+    haa_approved_by_name = models.CharField(max_length=256, blank=True)
+    haa_approved_at = models.DateTimeField(null=True, blank=True)
+    haa_note = models.TextField(blank=True)
+
+    # Rejection
+    rejection_reason = models.TextField(blank=True)
+    rejected_by = models.ForeignKey(
+        'accounts.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='rejected_proposals',
+    )
+    rejected_at = models.DateTimeField(null=True, blank=True)
+
+    # Path to the final poster file in default storage, set after branding review.
+    final_poster_path = models.CharField(max_length=255, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    # JSON blob for any extra unstructured data from the form
+    extra_data = models.JSONField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['status']),
+            models.Index(fields=['department']),
+            models.Index(fields=['created_by']),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.title} [{self.get_status_display()}]"

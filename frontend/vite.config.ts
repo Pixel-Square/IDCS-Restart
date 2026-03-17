@@ -24,7 +24,12 @@ export default defineConfig({
   server: {
     host: true,
     allowedHosts: ['idcs.krgi.co.in', "idcs.zynix.us"],
-    port: Number(process.env.PORT || process.env.VITE_DEV_PORT || 80),
+    // Avoid privileged ports (<1024) which require root on Linux.
+    // Keep this aligned with backend CANVA_REDIRECT_URI dev config.
+    // NOTE: Do NOT read process.env.PORT here. Some environments export PORT=80
+    // (or similar) which makes Vite attempt to bind a privileged port and fail.
+    // For local dev, we run Vite on 3001 and put Nginx on :80 in front.
+    port: Number(process.env.VITE_DEV_PORT || 3001),
     // Dev convenience: when the frontend is served by Vite (often :80) and the
     // Django API is on a different port (often :8000), proxy `/api/...` so
     // same-origin API calls don't 404 with HTML.

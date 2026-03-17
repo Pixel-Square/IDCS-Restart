@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
 import useDashboard from '../../hooks/useDashboard';
-import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText, ScanLine, Shield } from 'lucide-react';
+import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText, ScanLine, Shield, ChevronDown, ChevronRight } from 'lucide-react';
 import { useSidebar } from './SidebarContext';
 import { fetchPendingPublishRequestCount } from '../../services/obe';
 import { ApplicationsNavResponse, fetchApplicationsNav } from '../../services/applications';
@@ -50,6 +50,12 @@ import { ApplicationsNavResponse, fetchApplicationsNav } from '../../services/ap
   idscan_test: ScanLine,
   idscan_gatepass: Shield,
   rf_reader: Grid,
+  create_event: PartyPopper,
+  my_proposals: FileText,
+  hod_event_approvals: ClipboardList,
+  hod_event_management: PartyPopper,
+  haa_event_approvals: ClipboardList,
+  haa_event_management: PartyPopper,
 };
 
 export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string }) {
@@ -141,6 +147,28 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     }
   }, [loc.pathname]);
 
+  // auto-expand HOD Event Management group when on any event route
+  useEffect(() => {
+    if (
+      loc.pathname.startsWith('/events/create-event') ||
+      loc.pathname.startsWith('/events/my-proposals') ||
+      loc.pathname.startsWith('/hod/event-approvals')
+    ) {
+      setExpanded((p) => ({ ...p, hod_event_management: true }));
+    }
+  }, [loc.pathname]);
+
+  // auto-expand HAA Event Management group when on any HAA event route
+  useEffect(() => {
+    if (
+      loc.pathname.startsWith('/events/create-event') ||
+      loc.pathname.startsWith('/events/my-proposals') ||
+      loc.pathname.startsWith('/haa/event-approvals')
+    ) {
+      setExpanded((p) => ({ ...p, haa_event_management: true }));
+    }
+  }, [loc.pathname]);
+
   // auto-expand Academic Controller when on /iqac/academic-controller routes
   useEffect(() => {
     if (loc.pathname.startsWith('/iqac/academic-controller')) {
@@ -213,7 +241,31 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   const canHodObeRequests = Boolean((entry as any)?.hod_obe_requests) || rolesUpper.includes('HOD');
   if (canHodObeRequests) items.push({ key: 'hod_obe_requests', label: 'HOD: OBE Requests', to: '/hod/obe-requests' });
   if (rolesUpper.includes('HOD') || rolesUpper.includes('ADVISOR')) items.push({ key: 'hod_result_analysis', label: 'Result Analysis', to: '/hod/result-analysis' });
-  if (rolesUpper.includes('HOD')) items.push({ key: 'hod_events', label: 'Event Management', to: '/hod/events' });
+
+  // ── Event Proposal Workflow ───────────────────────────────────────────
+  const isHod = rolesUpper.includes('HOD');
+  const isHaa = rolesUpper.includes('HAA');
+  const hasCreateProposal = permsLower.includes('events.create_proposal');
+  const hasHodApprove = permsLower.includes('events.hod_approve');
+  const hasHaaApprove = permsLower.includes('events.haa_approve');
+
+  if (isHod && (hasCreateProposal || hasHodApprove)) {
+    // HOD: group all three under a collapsible "Event Management"
+    items.push({ key: 'hod_event_management', label: 'Event Management', to: '#' });
+  } else if (isHaa && (hasCreateProposal || hasHaaApprove)) {
+    // HAA: group Create Event + My Proposals + HAA Event Approvals under "Event Management"
+    items.push({ key: 'haa_event_management', label: 'Event Management', to: '#' });
+  } else {
+    // Regular staff: show individually
+    if (hasCreateProposal && !items.some(i => i.key === 'create_event')) {
+      items.push({ key: 'create_event', label: 'Create Event', to: '/events/create-event' });
+      items.push({ key: 'my_proposals', label: 'My Proposals', to: '/events/my-proposals' });
+    }
+    // Non-HAA users with haa_approve (edge case)
+    if (hasHaaApprove && !items.some(i => i.key === 'haa_event_approvals')) {
+      items.push({ key: 'haa_event_approvals', label: 'HAA: Event Approvals', to: '/haa/event-approvals' });
+    }
+  }
 
   if ((isIqac || isIqacMain) && !items.some((item) => item.key === 'iqac_event_approvals')) {
     items.push({ key: 'iqac_event_approvals', label: 'Event Approvals', to: '/iqac/event-approvals' });
@@ -407,13 +459,42 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
             {/* Dynamic Menu Items */}
             {items.map(i => {
               const Icon = ICON_MAP[i.key] || User;
-              const active = loc.pathname.startsWith(i.to);
+              const active = i.to !== '#' && loc.pathname.startsWith(i.to);
+              const isHodGroup = i.key === 'hod_event_management';
+              const isHaaGroup = i.key === 'haa_event_management';
+              const isGroup = isHodGroup || isHaaGroup;
+              const groupActive =
+                (isHodGroup && (
+                  loc.pathname.startsWith('/events/create-event') ||
+                  loc.pathname.startsWith('/events/my-proposals') ||
+                  loc.pathname.startsWith('/hod/event-approvals')
+                )) ||
+                (isHaaGroup && (
+                  loc.pathname.startsWith('/events/create-event') ||
+                  loc.pathname.startsWith('/events/my-proposals') ||
+                  loc.pathname.startsWith('/haa/event-approvals')
+                ));
+              const groupOpen = isHodGroup
+                ? Boolean(expanded.hod_event_management)
+                : isHaaGroup
+                  ? Boolean(expanded.haa_event_management)
+                  : false;
               return (
                 <li key={i.key} className="relative">
                   <Link
                     to={i.to}
-                    className={`flex items-center gap-3 px-3 py-3 rounded-lg transition-all duration-200 ${active ? 'bg-blue-600 text-white shadow-md' : 'text-gray-700 hover:bg-blue-50 hover:text-blue-600'} ${collapsed ? 'lg:justify-center lg:px-2' : ''}`}
-                    onClick={() => {
+                    className={`flex items-center gap-3 px-3 py-3 rounded-lg transition-all duration-200 ${active || groupActive ? 'bg-blue-600 text-white shadow-md' : 'text-gray-700 hover:bg-blue-50 hover:text-blue-600'} ${collapsed ? 'lg:justify-center lg:px-2' : ''}`}
+                    onClick={(e) => {
+                      if (isHodGroup) {
+                        e.preventDefault();
+                        setExpanded((p) => ({ ...p, hod_event_management: !p.hod_event_management }));
+                        return;
+                      }
+                      if (isHaaGroup) {
+                        e.preventDefault();
+                        setExpanded((p) => ({ ...p, haa_event_management: !p.haa_event_management }));
+                        return;
+                      }
                       // preserve mobile toggle behaviour
                       if (window.innerWidth < 1024) toggle();
                       // toggle submenu expansion for specific groups
@@ -423,7 +504,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                     }}
                   >
                     <Icon className={`flex-shrink-0 ${collapsed ? 'lg:w-5 lg:h-5' : 'w-6 h-6'}`} />
-                    <span className={`font-medium text-base ${collapsed ? 'lg:hidden' : ''}`}>
+                    <span className={`flex-1 font-medium text-base ${collapsed ? 'lg:hidden' : ''}`}>
                       {i.label}
                       {i.key === 'obe_requests' && pendingObeReqCount > 0 ? (
                         <span className="ml-2 inline-flex items-center justify-center px-2 py-0.5 text-xs font-medium rounded-full bg-red-600 text-white">{pendingObeReqCount}</span>
@@ -432,7 +513,66 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                         <span className="ml-2 inline-flex items-center justify-center px-2 py-0.5 text-xs font-medium rounded-full bg-orange-600 text-white">{pendingSwapReqCount}</span>
                       ) : null}
                     </span>
+                    {isGroup && !collapsed && (
+                      groupOpen
+                        ? <ChevronDown className="w-4 h-4 flex-shrink-0" />
+                        : <ChevronRight className="w-4 h-4 flex-shrink-0" />
+                    )}
                   </Link>
+
+                    {/* Submenu for HAA Event Management group */}
+                    {i.key === 'haa_event_management' && groupOpen && !collapsed && (
+                      <ul className="pl-8 mt-1 space-y-1">
+                        {permsLower.includes('events.create_proposal') && (
+                          <li>
+                            <Link to="/events/create-event" className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/events/create-event') ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`} onClick={() => { if (window.innerWidth < 1024) toggle(); }}>
+                              <PartyPopper className="w-4 h-4" /> <span>Create Event</span>
+                            </Link>
+                          </li>
+                        )}
+                        {permsLower.includes('events.create_proposal') && (
+                          <li>
+                            <Link to="/events/my-proposals" className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/events/my-proposals') ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`} onClick={() => { if (window.innerWidth < 1024) toggle(); }}>
+                              <FileText className="w-4 h-4" /> <span>My Proposals</span>
+                            </Link>
+                          </li>
+                        )}
+                        {permsLower.includes('events.haa_approve') && (
+                          <li>
+                            <Link to="/haa/event-approvals" className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/haa/event-approvals') ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`} onClick={() => { if (window.innerWidth < 1024) toggle(); }}>
+                              <ClipboardList className="w-4 h-4" /> <span>Event Approvals</span>
+                            </Link>
+                          </li>
+                        )}
+                      </ul>
+                    )}
+
+                    {/* Submenu for HOD Event Management group */}
+                    {i.key === 'hod_event_management' && groupOpen && !collapsed && (
+                      <ul className="pl-8 mt-1 space-y-1">
+                        {permsLower.includes('events.create_proposal') && (
+                          <li>
+                            <Link to="/events/create-event" className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/events/create-event') ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`} onClick={() => { if (window.innerWidth < 1024) toggle(); }}>
+                              <PartyPopper className="w-4 h-4" /> <span>Create Event</span>
+                            </Link>
+                          </li>
+                        )}
+                        {permsLower.includes('events.create_proposal') && (
+                          <li>
+                            <Link to="/events/my-proposals" className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/events/my-proposals') ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`} onClick={() => { if (window.innerWidth < 1024) toggle(); }}>
+                              <FileText className="w-4 h-4" /> <span>My Proposals</span>
+                            </Link>
+                          </li>
+                        )}
+                        {permsLower.includes('events.hod_approve') && (
+                          <li>
+                            <Link to="/hod/event-approvals" className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/hod/event-approvals') ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`} onClick={() => { if (window.innerWidth < 1024) toggle(); }}>
+                              <ClipboardList className="w-4 h-4" /> <span>Event Approvals</span>
+                            </Link>
+                          </li>
+                        )}
+                      </ul>
+                    )}
 
                     {/* Submenu for Academic: show OBE Master and Due Dates.
                       Hidden when sidebar is collapsed and for IQAC role

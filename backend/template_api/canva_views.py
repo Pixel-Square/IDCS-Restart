@@ -22,18 +22,28 @@ import secrets
 import time
 import os
 from urllib.parse import urlencode, unquote, urlparse
+from functools import wraps
+import hmac
 
 import requests
 from django.conf import settings
+from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
-from django.http import JsonResponse
+from django.http import FileResponse, Http404, JsonResponse, HttpResponse
 from django.shortcuts import redirect as dj_redirect
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from .models import EventPosterAttachment, CanvaTemplate, CanvaServiceToken, CanvaOAuthState
+from rest_framework_simplejwt.authentication import JWTAuthentication
+
+from accounts.utils import get_user_permissions
+
+from .models import EventPosterAttachment, CanvaTemplate, CanvaServiceToken, CanvaOAuthState, BrandingEventLog
+from .services.event_proposal_docx import generate_event_proposal_docx
 from django.utils import timezone
 from datetime import timedelta
+from urllib.parse import urlsplit, urlunsplit
+from pathlib import Path
 
 
 def _get_service_token() -> str:
@@ -51,6 +61,18 @@ logger = logging.getLogger(__name__)
 CANVA_TOKEN_URL = 'https://api.canva.com/rest/v1/oauth/token'
 CANVA_REVOKE_URL = 'https://api.canva.com/rest/v1/oauth/revoke'
 CANVA_API_BASE = 'https://api.canva.com/rest/v1'
+_LOG_MAX_STRING = 4000
+_LOG_MAX_LIST_ITEMS = 50
+_LOG_SENSITIVE_KEYS = {
+    'secret',
+    'token',
+    'access_token',
+    'refresh_token',
+    'authorization',
+    'api_key',
+    'password',
+    'client_secret',
+}
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -60,10 +82,234 @@ def _get_credentials():
     return client_id, client_secret
 
 
+def _truncate_for_log(value, limit: int = _LOG_MAX_STRING):
+    text = str(value)
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}… [truncated {len(text) - limit} chars]"
+
+
+def _sanitize_for_log(value, depth: int = 0):
+    if depth > 6:
+        return '…[max-depth]'
+
+    if isinstance(value, dict):
+        sanitized = {}
+        for key, item in value.items():
+            key_text = str(key)
+            key_norm = key_text.strip().lower()
+            if key_norm in _LOG_SENSITIVE_KEYS or any(sk in key_norm for sk in _LOG_SENSITIVE_KEYS):
+                sanitized[key_text] = '***redacted***'
+            else:
+                sanitized[key_text] = _sanitize_for_log(item, depth + 1)
+        return sanitized
+
+    if isinstance(value, (list, tuple, set)):
+        items = list(value)
+        sanitized_items = [_sanitize_for_log(item, depth + 1) for item in items[:_LOG_MAX_LIST_ITEMS]]
+        if len(items) > _LOG_MAX_LIST_ITEMS:
+            sanitized_items.append(f'…[{len(items) - _LOG_MAX_LIST_ITEMS} more items]')
+        return sanitized_items
+
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        if isinstance(value, str):
+            return _truncate_for_log(value)
+        return value
+
+    try:
+        return _truncate_for_log(json.dumps(value, default=str))
+    except Exception:
+        return _truncate_for_log(repr(value))
+
+
+def _get_request_ip(request) -> str:
+    forwarded_for = str(request.META.get('HTTP_X_FORWARDED_FOR', '') or '').strip()
+    if forwarded_for:
+        return forwarded_for.split(',')[0].strip()
+    return str(request.META.get('REMOTE_ADDR', '') or '').strip()
+
+
+def _log_branding_event(
+    request,
+    event_type: str,
+    status: str = BrandingEventLog.Status.INFO,
+    message: str = '',
+    *,
+    user=None,
+    event_id: str = '',
+    reference_id: str = '',
+    request_data=None,
+    response_data=None,
+    metadata=None,
+):
+    try:
+        actor = user
+        if actor is None:
+            actor = getattr(request, 'user', None)
+            if actor is not None and not getattr(actor, 'is_authenticated', False):
+                actor = None
+
+        BrandingEventLog.objects.create(
+            event_type=str(event_type or 'unknown')[:128],
+            status=status,
+            message=_truncate_for_log(message, 2000),
+            request_path=str(getattr(request, 'path', '') or '')[:512],
+            request_method=str(getattr(request, 'method', '') or '')[:16],
+            ip_address=_get_request_ip(request)[:64],
+            user_agent=_truncate_for_log(request.META.get('HTTP_USER_AGENT', ''), 512),
+            user=actor,
+            event_id=str(event_id or '')[:128],
+            reference_id=str(reference_id or '')[:256],
+            request_data=_sanitize_for_log(request_data) if request_data is not None else None,
+            response_data=_sanitize_for_log(response_data) if response_data is not None else None,
+            metadata=_sanitize_for_log(metadata) if metadata is not None else None,
+        )
+    except Exception as exc:
+        logger.warning('Failed to persist BrandingEventLog: %s', exc)
+
+
 def _canva_headers(access_token: str) -> dict:
     return {
         'Authorization': f'Bearer {access_token}',
         'Content-Type': 'application/json',
+    }
+
+
+def _extract_brand_template_fields(item: dict) -> dict:
+    """Normalize Canva brand-template payload shape to local DB fields."""
+    if not isinstance(item, dict):
+        return {
+            'canva_design_id': '',
+            'name': '',
+            'thumbnail_url': '',
+            'edit_url': '',
+        }
+
+    thumb = item.get('thumbnail') or {}
+    canva_id = str(item.get('id') or item.get('template_id') or item.get('design_id') or '').strip()
+    name = str(item.get('title') or item.get('name') or f'Canva Template {canva_id}' or '').strip()
+    thumbnail_url = str(
+        item.get('thumbnail_url')
+        or thumb.get('url')
+        or thumb.get('uri')
+        or ''
+    ).strip()
+
+    edit_url = str(item.get('edit_url') or '').strip()
+    if not edit_url and canva_id:
+        edit_url = f'https://www.canva.com/design/{canva_id}/edit'
+
+    return {
+        'canva_design_id': canva_id,
+        'name': name,
+        'thumbnail_url': thumbnail_url,
+        'edit_url': edit_url,
+    }
+
+
+def _fetch_canva_brand_templates(access_token: str, *, dataset: str = 'non_empty', query: str = '') -> tuple[list[dict], str]:
+    """Fetch all Canva brand templates (paginated). Returns (items, error_message)."""
+    if not access_token:
+        return [], 'missing_access_token'
+
+    all_items: list[dict] = []
+    continuation = ''
+    loops = 0
+
+    while loops < 10:
+        loops += 1
+        params = {
+            'limit': '100',
+            'ownership': 'any',
+            'sort_by': 'modified_descending',
+            'dataset': dataset or 'non_empty',
+        }
+        if query:
+            params['query'] = query
+        if continuation:
+            params['continuation'] = continuation
+
+        resp = requests.get(
+            f'{CANVA_API_BASE}/brand-templates',
+            headers=_canva_headers(access_token),
+            params=params,
+            timeout=20,
+        )
+        if not resp.ok:
+            logger.error('Canva list brand templates failed: %s', resp.text)
+            return [], f'canva_api_error_{resp.status_code}'
+
+        payload = resp.json()
+        items = payload.get('items', [])
+        if isinstance(items, list):
+            all_items.extend(items)
+
+        continuation = str(payload.get('continuation') or '').strip()
+        if not continuation:
+            break
+
+    return all_items, ''
+
+
+def _sync_brand_templates_to_db(canva_items: list[dict]) -> dict:
+    """Upsert Canva brand templates into DB and return sync stats."""
+    created = 0
+    updated = 0
+    skipped = 0
+    synced_ids: set[str] = set()
+
+    for raw_item in canva_items:
+        normalized = _extract_brand_template_fields(raw_item)
+        canva_design_id = normalized['canva_design_id']
+        if not canva_design_id:
+            skipped += 1
+            continue
+
+        synced_ids.add(canva_design_id)
+
+        obj = CanvaTemplate.objects.filter(canva_design_id=canva_design_id).order_by('-saved_at').first()
+        if obj is None:
+            CanvaTemplate.objects.create(
+                name=normalized['name'] or f'Canva Template {canva_design_id}',
+                canva_design_id=canva_design_id,
+                thumbnail_url=normalized['thumbnail_url'],
+                is_brand_template=True,
+                edit_url=normalized['edit_url'],
+                saved_by='canva_sync',
+            )
+            created += 1
+            continue
+
+        dirty = False
+        if obj.name != normalized['name'] and normalized['name']:
+            obj.name = normalized['name']
+            dirty = True
+        if obj.thumbnail_url != normalized['thumbnail_url']:
+            obj.thumbnail_url = normalized['thumbnail_url']
+            dirty = True
+        if obj.edit_url != normalized['edit_url'] and normalized['edit_url']:
+            obj.edit_url = normalized['edit_url']
+            dirty = True
+        if not obj.is_brand_template:
+            obj.is_brand_template = True
+            dirty = True
+        if obj.saved_by != 'canva_sync':
+            obj.saved_by = 'canva_sync'
+            dirty = True
+
+        if dirty:
+            obj.save(update_fields=['name', 'thumbnail_url', 'edit_url', 'is_brand_template', 'saved_by'])
+            updated += 1
+
+    # Keep only currently linked Canva templates in the canva_sync bucket
+    if synced_ids:
+        CanvaTemplate.objects.filter(saved_by='canva_sync').exclude(canva_design_id__in=synced_ids).delete()
+
+    return {
+        'created': created,
+        'updated': updated,
+        'skipped': skipped,
+        'total_live': len(canva_items),
     }
 
 
@@ -122,6 +368,257 @@ def _error(msg: str, status: int = 400) -> JsonResponse:
     return JsonResponse({'detail': msg}, status=status)
 
 
+def _jwt_authenticate_request(request):
+    """Authenticate request using JWT (Authorization: Bearer <token>).
+
+    These endpoints are plain Django views (not DRF APIViews), so we explicitly
+    run JWT auth when needed.
+    """
+    try:
+        res = JWTAuthentication().authenticate(request)
+    except Exception:
+        res = None
+
+    if not res:
+        return None
+
+    user, token = res
+    try:
+        request.user = user
+        request.auth = token
+    except Exception:
+        pass
+    return user
+
+
+def _has_branding_access(user) -> bool:
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+    if getattr(user, 'is_superuser', False):
+        return True
+    try:
+        perms = get_user_permissions(user)
+        return 'branding.access' in {str(p or '').strip() for p in perms}
+    except Exception:
+        return False
+
+
+def _validate_n8n_secret(secret: str) -> bool:
+    expected = str(getattr(settings, 'N8N_WEBHOOK_SECRET', '') or '').strip()
+    incoming = str(secret or '').strip()
+    if not expected:
+        return False
+    return hmac.compare_digest(incoming, expected)
+
+
+def branding_required(view_func):
+    """Require authenticated user with branding.access permission."""
+
+    @wraps(view_func)
+    def _wrapped(request, *args, **kwargs):
+        user = getattr(request, 'user', None)
+        if not user or not getattr(user, 'is_authenticated', False):
+            user = _jwt_authenticate_request(request)
+
+        if not user or not getattr(user, 'is_authenticated', False):
+            _log_branding_event(
+                request,
+                event_type='branding.auth.required',
+                status=BrandingEventLog.Status.WARNING,
+                message='Authentication required for branding endpoint.',
+            )
+            return _error('Authentication credentials were not provided.', 401)
+
+        if not _has_branding_access(user):
+            _log_branding_event(
+                request,
+                event_type='branding.auth.denied',
+                status=BrandingEventLog.Status.WARNING,
+                message='User does not have branding.access permission.',
+                user=user,
+                metadata={'username': getattr(user, 'username', '')},
+            )
+            return _error('You do not have permission to access Branding.', 403)
+
+        _log_branding_event(
+            request,
+            event_type='branding.auth.granted',
+            status=BrandingEventLog.Status.SUCCESS,
+            message='Branding access granted.',
+            user=user,
+        )
+
+        return view_func(request, *args, **kwargs)
+
+    return _wrapped
+
+
+def internal_or_branding_required(view_func):
+    """Allow either BRANDING user OR valid n8n shared-secret in JSON body."""
+
+    @wraps(view_func)
+    def _wrapped(request, *args, **kwargs):
+        user = getattr(request, 'user', None)
+        if user and getattr(user, 'is_authenticated', False) and _has_branding_access(user):
+            _log_branding_event(
+                request,
+                event_type='branding.internal-access.granted-user',
+                status=BrandingEventLog.Status.SUCCESS,
+                message='Branding user access granted.',
+                user=user,
+            )
+            return view_func(request, *args, **kwargs)
+
+        # try JWT auth for browser callers
+        if not user or not getattr(user, 'is_authenticated', False):
+            user = _jwt_authenticate_request(request)
+            if user and _has_branding_access(user):
+                _log_branding_event(
+                    request,
+                    event_type='branding.internal-access.granted-jwt',
+                    status=BrandingEventLog.Status.SUCCESS,
+                    message='Branding JWT access granted.',
+                    user=user,
+                )
+                return view_func(request, *args, **kwargs)
+
+        # n8n callers: require shared secret in body
+        body = _json_body(request)
+        if _validate_n8n_secret(body.get('secret', '')):
+            _log_branding_event(
+                request,
+                event_type='branding.internal-access.granted-n8n',
+                status=BrandingEventLog.Status.SUCCESS,
+                message='Internal n8n secret accepted.',
+                request_data=body,
+            )
+            return view_func(request, *args, **kwargs)
+
+        # unauthenticated / invalid secret
+        _log_branding_event(
+            request,
+            event_type='branding.internal-access.denied',
+            status=BrandingEventLog.Status.WARNING,
+            message='Forbidden request: missing branding access and invalid n8n secret.',
+            user=user if getattr(user, 'is_authenticated', False) else None,
+            request_data=body,
+        )
+        return _error('Forbidden.', 403)
+
+    return _wrapped
+
+
+def authenticated_required(view_func):
+    """Require an authenticated user (JWT bearer or session user).
+
+    Use this for normal staff-facing endpoints that should not be public, but
+    also should not be limited to the BRANDING role.
+    """
+
+    @wraps(view_func)
+    def _wrapped(request, *args, **kwargs):
+        user = getattr(request, 'user', None)
+        if not user or not getattr(user, 'is_authenticated', False):
+            user = _jwt_authenticate_request(request)
+
+        if not user or not getattr(user, 'is_authenticated', False):
+            _log_branding_event(
+                request,
+                event_type='branding.authenticated.denied',
+                status=BrandingEventLog.Status.WARNING,
+                message='Authentication required.',
+            )
+            return _error('Authentication credentials were not provided.', 401)
+
+        _log_branding_event(
+            request,
+            event_type='branding.authenticated.granted',
+            status=BrandingEventLog.Status.SUCCESS,
+            message='Authenticated request accepted.',
+            user=user,
+        )
+
+        return view_func(request, *args, **kwargs)
+
+    return _wrapped
+
+
+@require_http_methods(['GET'])
+def proposal_doc_download(request, doc_id: str, filename: str):
+    """Serve a generated event-proposal DOCX.
+
+    Accepts auth either as:
+      • Authorization: Bearer <token>   header (API clients / fetchWithAuth)
+      • ?token=<access_token>           query param (browser direct URL opens)
+    """
+    # ── Auth ─────────────────────────────────────────────────────────────────
+    user = getattr(request, 'user', None)
+    if not user or not getattr(user, 'is_authenticated', False):
+        user = _jwt_authenticate_request(request)
+
+    # Try query-param token as fallback
+    if not user or not getattr(user, 'is_authenticated', False):
+        qs_token = request.GET.get('token', '').strip()
+        if qs_token:
+            from rest_framework_simplejwt.authentication import JWTAuthentication
+            from django.http import HttpRequest as _Req
+            fake_req = _Req()
+            fake_req.META['HTTP_AUTHORIZATION'] = f'Bearer {qs_token}'
+            try:
+                res = JWTAuthentication().authenticate(fake_req)
+                if res:
+                    user, _ = res
+            except Exception:
+                pass
+
+    if not user or not getattr(user, 'is_authenticated', False):
+        return _error('Authentication credentials were not provided.', 401)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    expected_filename = 'event-proposal-format.docx'
+    if filename != expected_filename:
+        raise Http404('Proposal document not found.')
+
+    storage_path = f'proposal-docs/{doc_id}/{expected_filename}'
+    if not default_storage.exists(storage_path):
+        raise Http404('Proposal document not found.')
+
+    try:
+        fh = default_storage.open(storage_path, 'rb')
+    except FileNotFoundError:
+        raise Http404('Proposal document not found.')
+
+    response = FileResponse(
+        fh,
+        as_attachment=True,
+        filename='Event Proposal Format.docx',
+        content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    )
+    response['Cache-Control'] = 'no-store'
+    return response
+
+
+@csrf_exempt
+@require_http_methods(['POST'])
+@authenticated_required
+def proposal_doc_generate(request):
+    body = _json_body(request)
+    proposal_data = body.get('proposal_data', {})
+    if not isinstance(proposal_data, dict) or not proposal_data:
+        return _error('proposal_data is required.')
+
+    try:
+        proposal_doc = generate_event_proposal_docx(request, proposal_data)
+    except Exception as exc:
+        logger.warning('Event proposal DOCX generation failed: %s', exc)
+        return _error('Event proposal DOCX could not be generated.', 500)
+
+    return JsonResponse({
+        'url': proposal_doc.get('url', ''),
+        'name': proposal_doc.get('name', 'Event Proposal Format.docx'),
+    })
+
+
 def _get_request_access_token(request, body: dict | None = None) -> str:
     body = body or {}
     return request.GET.get('access_token', '') or body.get('access_token', '') or _get_service_token()
@@ -142,6 +639,23 @@ def _canva_error(response: requests.Response, default_message: str) -> JsonRespo
     if message:
         return _error(f'{default_message}: {message}', response.status_code)
     return _error(f'{default_message} ({response.status_code})', response.status_code)
+
+
+@require_http_methods(['GET'])
+@authenticated_required
+def department_options(request):
+    from academics.models import Department
+
+    items = [
+        {
+            'id': d.id,
+            'code': d.code,
+            'name': d.name,
+            'short_name': d.short_name,
+        }
+        for d in Department.objects.all().order_by('code', 'name')
+    ]
+    return JsonResponse({'results': items})
 
 
 # ── Server-side OAuth (PKCE, backend-handled – same flow as ecommerce starter kit) ──
@@ -165,6 +679,7 @@ _SESSION_KEYS = [
 
 
 @require_http_methods(['GET'])
+@branding_required
 def oauth_authorize(request):
     """
     GET /api/canva/oauth/authorize?origin=<frontend-origin>
@@ -193,8 +708,19 @@ def oauth_authorize(request):
 
     # redirect_uri: Canva sends the browser here after authorisation.
     # Must be registered in the Canva Developer Portal.
-    redirect_uri = getattr(settings, 'CANVA_REDIRECT_URI', None) or \
-                   f'{origin}/api/canva/oauth/callback'
+    redirect_uri = (getattr(settings, 'CANVA_REDIRECT_URI', '') or '').strip()
+    if not redirect_uri:
+        redirect_uri = f'{origin}/api/canva/oauth/callback'
+
+    # Dev hardening: treat localhost and 127.0.0.1 consistently.
+    # Canva redirect URLs must match *exactly*.
+    try:
+        parts = urlsplit(redirect_uri)
+        if parts.hostname == 'localhost':
+            netloc = parts.netloc.replace('localhost', '127.0.0.1', 1)
+            redirect_uri = urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+    except Exception:
+        pass
 
     # Purge stale states older than 10 minutes
     CanvaOAuthState.objects.filter(
@@ -211,7 +737,7 @@ def oauth_authorize(request):
         origin=origin,
     )
 
-    params = urlencode({
+    authorize_url = f'{CANVA_AUTH_URL}?{urlencode({
         'response_type':         'code',
         'client_id':             client_id,
         'redirect_uri':          redirect_uri,
@@ -219,8 +745,14 @@ def oauth_authorize(request):
         'code_challenge':        challenge,
         'code_challenge_method': 'S256',
         'state':                 state,
-    })
-    return dj_redirect(f'{CANVA_AUTH_URL}?{params}')
+    })}'
+
+    # When called via fetchWithAuth(), return the computed URL so the frontend
+    # can do a top-level navigation (window.location.href) to Canva.
+    if str(request.GET.get('format', '') or '').lower() in {'json', '1', 'true'}:
+        return JsonResponse({'authorize_url': authorize_url})
+
+    return dj_redirect(authorize_url)
 
 
 @require_http_methods(['GET'])
@@ -315,6 +847,7 @@ def oauth_callback(request):
 
 @csrf_exempt
 @require_http_methods(['GET', 'DELETE'])
+@branding_required
 def connection_status(request):
     """
     GET    /api/canva/oauth/connection  → returns current session connection info
@@ -337,7 +870,7 @@ def connection_status(request):
             except Exception:
                 pass
         for key in ['canva_access_token', 'canva_refresh_token',
-                    'canva_expires_at', 'canva_user_id', 'canva_display_name']:
+                'canva_expires_at', 'canva_user_id', 'canva_display_name']:
             request.session.pop(key, None)
         request.session.modified = True
         CanvaServiceToken.objects.all().delete()  # clear DB service token too
@@ -407,6 +940,7 @@ def connection_status(request):
 
 @csrf_exempt
 @require_http_methods(['GET', 'POST'])
+@authenticated_required
 def templates_api(request):
     """
     GET  /api/canva/templates → list saved IDCS Canva Brand Templates only
@@ -415,7 +949,29 @@ def templates_api(request):
                                                        edit_url, saved_by }
     """
     if request.method == 'GET':
-        items = CanvaTemplate.objects.filter(is_brand_template=True).order_by('-saved_at')
+        token = _get_request_access_token(request)
+        if token:
+            live_items, sync_error = _fetch_canva_brand_templates(token, dataset='non_empty')
+            if not sync_error:
+                sync_stats = _sync_brand_templates_to_db(live_items)
+                _log_branding_event(
+                    request,
+                    event_type='branding.templates.sync',
+                    status=BrandingEventLog.Status.SUCCESS,
+                    message='Canva brand templates synced into DB.',
+                    metadata=sync_stats,
+                )
+            else:
+                _log_branding_event(
+                    request,
+                    event_type='branding.templates.sync-failed',
+                    status=BrandingEventLog.Status.WARNING,
+                    message='Unable to sync templates from Canva; serving DB snapshot.',
+                    metadata={'error': sync_error},
+                )
+
+        # Only Canva-linked templates (not manually saved custom records)
+        items = CanvaTemplate.objects.filter(is_brand_template=True, saved_by='canva_sync').order_by('-saved_at')
         return JsonResponse({
             'templates': [
                 {
@@ -431,6 +987,10 @@ def templates_api(request):
                 for t in items
             ]
         })
+
+    # POST is BRANDING-only (mutating shared library)
+    if not _has_branding_access(getattr(request, 'user', None)):
+        return _error('You do not have permission to modify templates.', 403)
 
     body = _json_body(request)
     name            = body.get('name', '').strip()
@@ -453,6 +1013,7 @@ def templates_api(request):
 
 @csrf_exempt
 @require_http_methods(['DELETE'])
+@branding_required
 def template_detail_api(request, template_id: int):
     """DELETE /api/canva/templates/<id>"""
     try:
@@ -465,6 +1026,7 @@ def template_detail_api(request, template_id: int):
 # ── Service-account status (for HOD pages) ───────────────────────────────────
 
 @require_http_methods(['GET'])
+@authenticated_required
 def service_status(request):
     """
     GET /api/canva/service_status
@@ -485,6 +1047,7 @@ def service_status(request):
 
 @csrf_exempt
 @require_http_methods(['POST'])
+@branding_required
 def oauth_token(request):
     """
     Exchange an authorisation code for Canva OAuth tokens.
@@ -531,6 +1094,7 @@ def oauth_token(request):
 
 @csrf_exempt
 @require_http_methods(['POST'])
+@branding_required
 def oauth_revoke(request):
     """Revoke a Canva access token."""
     client_id, client_secret = _get_credentials()
@@ -554,43 +1118,77 @@ def oauth_revoke(request):
 # ── Designs ───────────────────────────────────────────────────────────────────
 
 @require_http_methods(['GET'])
+@authenticated_required
 def brand_templates(request):
     """
     GET /api/canva/brand-templates?query=...&dataset=non_empty
          → list the user's Canva Brand Templates with autofill datasets.
     """
     access_token = _get_request_access_token(request)
+    service_token = _get_service_token()
     query = request.GET.get('query', '').strip()
     continuation = request.GET.get('continuation', '').strip()
 
-    if not access_token:
-        # Canva not configured — return empty list so the UI degrades gracefully
-        return JsonResponse({'items': []}, status=200)
+    dataset = request.GET.get('dataset', 'non_empty')
+    sync_error = ''
+    sync_stats = None
 
-    params = {
-        'limit': request.GET.get('limit', '100'),
-        'ownership': request.GET.get('ownership', 'any'),
-        'sort_by': request.GET.get('sort_by', 'modified_descending'),
-        'dataset': request.GET.get('dataset', 'non_empty'),
-    }
+    # Try caller token first; if stale/invalid, retry with service token.
+    token_candidates = [tok for tok in [access_token, service_token] if tok]
+    seen_tokens: set[str] = set()
+    for token in token_candidates:
+        if token in seen_tokens:
+            continue
+        seen_tokens.add(token)
+
+        live_items, current_error = _fetch_canva_brand_templates(token, dataset=dataset, query=query)
+        if current_error:
+            sync_error = current_error
+            continue
+
+        sync_stats = _sync_brand_templates_to_db(live_items)
+        _log_branding_event(
+            request,
+            event_type='branding.brand-templates.sync',
+            status=BrandingEventLog.Status.SUCCESS,
+            message='Brand templates fetched from Canva and synced to DB.',
+            metadata=sync_stats,
+        )
+        sync_error = ''
+        break
+
+    if sync_error:
+        # Do not fail user UI when Canva token is stale. Serve cached DB snapshot.
+        _log_branding_event(
+            request,
+            event_type='branding.brand-templates.sync-fallback',
+            status=BrandingEventLog.Status.WARNING,
+            message='Canva sync failed; serving cached template snapshot.',
+            metadata={'error': sync_error},
+        )
+
+    # Serve DB-backed, Canva-linked view only
+    db_items = CanvaTemplate.objects.filter(is_brand_template=True, saved_by='canva_sync')
     if query:
-        params['query'] = query
-    if continuation:
-        params['continuation'] = continuation
+        db_items = db_items.filter(name__icontains=query)
+    db_items = db_items.order_by('-saved_at')
 
-    resp = requests.get(
-        f'{CANVA_API_BASE}/brand-templates',
-        headers=_canva_headers(access_token),
-        params=params,
-        timeout=20,
-    )
-    if not resp.ok:
-        logger.error('Canva list brand templates failed: %s', resp.text)
-        return _canva_error(resp, 'Failed to list brand templates')
-    return JsonResponse(resp.json())
+    out_items = [
+        {
+            'id': t.canva_design_id,
+            'title': t.name,
+            'thumbnail': {'url': t.thumbnail_url} if t.thumbnail_url else {},
+            'edit_url': t.edit_url,
+            'source': 'idcs_db_synced',
+        }
+        for t in db_items
+    ]
+
+    return JsonResponse({'items': out_items, 'continuation': ''})
 
 
 @require_http_methods(['GET'])
+@authenticated_required
 def brand_template_dataset(request, brand_template_id: str):
     """
     GET /api/canva/brand-templates/<brand_template_id>/dataset
@@ -612,6 +1210,7 @@ def brand_template_dataset(request, brand_template_id: str):
 
 @csrf_exempt
 @require_http_methods(['GET', 'POST'])
+@authenticated_required
 def designs(request):
     """
     GET  /api/canva/designs?access_token=...&query=...
@@ -671,6 +1270,7 @@ def designs(request):
 
 @csrf_exempt
 @require_http_methods(['POST'])
+@authenticated_required
 def autofills_submit(request):
     """
     POST /api/canva/autofills
@@ -701,6 +1301,7 @@ def autofills_submit(request):
 
 
 @require_http_methods(['GET'])
+@authenticated_required
 def autofills_poll(request, job_id: str):
     """
     GET /api/canva/autofills/<job_id>?access_token=...
@@ -726,15 +1327,20 @@ def thumbnail_proxy(request):
     """
     GET /api/canva/thumbnail-proxy/?url=<encoded_thumbnail_url>
 
-    Fetches the given URL server-side (using the requests library) and returns
-    the image bytes encoded as a data-URL JSON:
+    Fetches the given URL server-side (using the requests library).
+
+    Default response mode returns data-URL JSON:
 
         { "dataUrl": "data:image/png;base64,..." }
 
+    If query param raw=1 is provided, returns the image bytes directly so the
+    endpoint can be used in <img src="..."> tags.
+
     This completely avoids CORS restrictions: Canva CDN images cannot be fetched
     directly from the browser's origin, but the backend has no such restriction.
-    The endpoint is intentionally unauthenticated because the URLs are already
-    short-lived signed CDN tokens that only Canva knows how to generate.
+    The endpoint is intentionally unauthenticated because this is commonly used
+    via <img src="/api/canva/thumbnail-proxy/?url=..."> where attaching JWT
+    headers is not practical. It still enforces a limited allowlist of hosts.
     """
     url = request.GET.get('url', '').strip()
     if not url:
@@ -754,8 +1360,20 @@ def thumbnail_proxy(request):
         if not url.startswith('data:'):
             return _error('URL host not allowed.', 403)
 
+    raw_mode = str(request.GET.get('raw', '')).strip() in {'1', 'true', 'yes'}
+
     if url.startswith('data:'):
         # Already a data-URL — return as-is
+        if raw_mode:
+            try:
+                header, b64 = url.split(',', 1)
+                content_type = header.split(';')[0].replace('data:', '') or 'image/png'
+                content = base64.b64decode(b64)
+                response = HttpResponse(content, content_type=content_type)
+                response['Cache-Control'] = 'public, max-age=3600'
+                return response
+            except Exception:
+                return _error('Invalid data URL.', 400)
         return JsonResponse({'dataUrl': url})
 
     try:
@@ -778,11 +1396,17 @@ def thumbnail_proxy(request):
     if not content_type.startswith('image/'):
         content_type = 'image/png'
 
+    if raw_mode:
+        response = HttpResponse(resp.content, content_type=content_type)
+        response['Cache-Control'] = 'public, max-age=3600'
+        return response
+
     img_b64 = base64.b64encode(resp.content).decode('ascii')
     return JsonResponse({'dataUrl': f'data:{content_type};base64,{img_b64}'})
 
 
 @require_http_methods(['GET'])
+@authenticated_required
 def design_info(request, design_id: str):
     """
     GET /api/canva/designs/<design_id>/info
@@ -820,6 +1444,7 @@ def design_info(request, design_id: str):
 
 @csrf_exempt
 @require_http_methods(['POST'])
+@authenticated_required
 def exports_submit(request):
     """
     POST /api/canva/exports
@@ -853,6 +1478,7 @@ def exports_submit(request):
 
 
 @require_http_methods(['GET'])
+@authenticated_required
 def exports_poll(request, job_id: str):
     """
     GET /api/canva/exports/<job_id>?access_token=...
@@ -1155,6 +1781,7 @@ def _run_generate_poster(brand_template_id: str, fields: dict, fmt: str, access_
 
 @csrf_exempt
 @require_http_methods(['POST'])
+@internal_or_branding_required
 def generate_poster(request):
     """
     POST /api/canva/generate-poster
@@ -1179,20 +1806,78 @@ def generate_poster(request):
     brand_template_id = body.get('brand_template_id', '').strip()
     fields            = body.get('fields', {})
     fmt               = body.get('format', 'png').lower()
+    event_id          = str(body.get('event_id', '') or '').strip()
+
+    _log_branding_event(
+        request,
+        event_type='branding.generate-poster.request',
+        status=BrandingEventLog.Status.INFO,
+        message='Generate poster request received.',
+        event_id=event_id,
+        reference_id=brand_template_id,
+        request_data={'brand_template_id': brand_template_id, 'format': fmt, 'fields': fields},
+    )
 
     if not brand_template_id:
+        _log_branding_event(
+            request,
+            event_type='branding.generate-poster.validation-error',
+            status=BrandingEventLog.Status.WARNING,
+            message='brand_template_id is required.',
+            event_id=event_id,
+            request_data=body,
+        )
         return _error('brand_template_id is required.')
     if not fields:
+        _log_branding_event(
+            request,
+            event_type='branding.generate-poster.validation-error',
+            status=BrandingEventLog.Status.WARNING,
+            message='fields is required.',
+            event_id=event_id,
+            request_data=body,
+        )
         return _error('fields is required.')
 
     access_token = _get_service_token()
     if not access_token:
+        _log_branding_event(
+            request,
+            event_type='branding.generate-poster.token-missing',
+            status=BrandingEventLog.Status.ERROR,
+            message='No Canva service token available.',
+            event_id=event_id,
+            reference_id=brand_template_id,
+        )
         return _error('No Canva service token available. Ask the Branding admin to connect Canva.', 503)
 
     result = _run_generate_poster(brand_template_id, fields, fmt, access_token)
 
     if result.get('error') and not result.get('design_id'):
+        _log_branding_event(
+            request,
+            event_type='branding.generate-poster.failed',
+            status=BrandingEventLog.Status.ERROR,
+            message='Poster generation failed before design creation.',
+            event_id=event_id,
+            reference_id=brand_template_id,
+            response_data=result,
+        )
         return _error(result['error'], 500)
+
+    _log_branding_event(
+        request,
+        event_type='branding.generate-poster.completed',
+        status=BrandingEventLog.Status.SUCCESS,
+        message='Poster generation completed.',
+        event_id=event_id,
+        reference_id=result.get('design_id', '') or brand_template_id,
+        response_data={
+            'design_id': result.get('design_id', ''),
+            'export_url': result.get('export_url', ''),
+            'warning': result.get('error', ''),
+        },
+    )
 
     return JsonResponse({
         'design_id':  result['design_id'],
@@ -1206,6 +1891,7 @@ def generate_poster(request):
 
 @csrf_exempt
 @require_http_methods(['POST'])
+@authenticated_required
 def upload_media(request):
     """
     POST /api/canva/upload-media
@@ -1217,6 +1903,12 @@ def upload_media(request):
     """
     uploaded = request.FILES.get('file')
     if not uploaded:
+        _log_branding_event(
+            request,
+            event_type='branding.upload-media.validation-error',
+            status=BrandingEventLog.Status.WARNING,
+            message='No file attached in upload-media request.',
+        )
         return _error('No file attached. Use multipart form with field name "file".')
 
     import uuid
@@ -1230,11 +1922,20 @@ def upload_media(request):
     from django.core.files.base import ContentFile as CF
     saved_path = default_storage.save(filename, CF(uploaded.read()))
     file_url = request.build_absolute_uri(dj_settings.MEDIA_URL + saved_path)
+    _log_branding_event(
+        request,
+        event_type='branding.upload-media.saved',
+        status=BrandingEventLog.Status.SUCCESS,
+        message='Media file uploaded for poster workflow.',
+        request_data={'original_name': uploaded.name, 'size': getattr(uploaded, 'size', None)},
+        response_data={'url': file_url, 'path': saved_path},
+    )
     return JsonResponse({'url': file_url, 'path': saved_path})
 
 
 @csrf_exempt
 @require_http_methods(['POST'])
+@internal_or_branding_required
 def poster_callback(request):
     """Accept n8n poster callbacks for the synchronous poster-maker flow."""
     body = _json_body(request)
@@ -1243,6 +1944,14 @@ def poster_callback(request):
         body.get('design_id', ''),
         body.get('poster_url', ''),
     )
+    _log_branding_event(
+        request,
+        event_type='branding.poster-callback.received',
+        status=BrandingEventLog.Status.SUCCESS,
+        message='Poster callback received from n8n/direct caller.',
+        reference_id=str(body.get('design_id', '') or ''),
+        request_data=body,
+    )
     return JsonResponse({'ok': True})
 
 
@@ -1250,6 +1959,7 @@ def poster_callback(request):
 
 @csrf_exempt
 @require_http_methods(['POST'])
+@authenticated_required
 def poster_maker(request):
     """
     POST /api/canva/poster-maker
@@ -1268,6 +1978,13 @@ def poster_maker(request):
       4. Returns { design_id, export_url, dataUrl, canva_edit_url, warning }
     """
     content_type = request.content_type or ''
+    _log_branding_event(
+        request,
+        event_type='branding.poster-maker.request',
+        status=BrandingEventLog.Status.INFO,
+        message='Poster maker request received.',
+        metadata={'content_type': content_type},
+    )
 
     # ── Parse input ────────────────────────────────────────────────────────
     if 'multipart' in content_type or 'form-data' in content_type:
@@ -1275,6 +1992,7 @@ def poster_maker(request):
         fmt               = request.POST.get('format', 'png').lower()
         event_data_raw    = request.POST.get('event_data', '{}')
         explicit_fields_raw = request.POST.get('fields', '{}')
+        proposal_data_raw = request.POST.get('proposal_data', '{}')
         try:
             event_data = json.loads(event_data_raw)
         except Exception:
@@ -1283,6 +2001,10 @@ def poster_maker(request):
             explicit_fields = json.loads(explicit_fields_raw)
         except Exception:
             explicit_fields = {}
+        try:
+            proposal_data = json.loads(proposal_data_raw)
+        except Exception:
+            proposal_data = {}
 
         # Save uploaded images to media
         image_urls = {}
@@ -1316,8 +2038,16 @@ def poster_maker(request):
         event_data        = body.get('event_data', {})
         image_urls        = body.get('image_urls', {})
         explicit_fields   = body.get('fields', {})
+        proposal_data     = body.get('proposal_data', {})
 
     if not brand_template_id:
+        _log_branding_event(
+            request,
+            event_type='branding.poster-maker.validation-error',
+            status=BrandingEventLog.Status.WARNING,
+            message='brand_template_id is required.',
+            request_data={'format': fmt},
+        )
         return _error('brand_template_id is required.')
     if fmt not in ('png', 'pdf'):
         fmt = 'png'
@@ -1391,7 +2121,41 @@ def poster_maker(request):
                 fields[canva_key] = {'type': 'image', 'url': url}
 
     if not fields:
+        _log_branding_event(
+            request,
+            event_type='branding.poster-maker.validation-error',
+            status=BrandingEventLog.Status.WARNING,
+            message='No event data provided to build Canva fields.',
+            reference_id=brand_template_id,
+        )
         return _error('No event data provided.')
+
+    proposal_data = proposal_data if isinstance(proposal_data, dict) else {}
+    if not proposal_data:
+        proposal_data = {
+            'from_name': event_data.get('from_name', ''),
+            'organizer_department': event_data.get('organizer_department', ''),
+            'event_title': event_data.get('event_name', '') or event_data.get('title', ''),
+            'event_type': event_data.get('event_type', ''),
+            'participants': event_data.get('participants', ''),
+            'coordinator': event_data.get('committee_member_1_name', ''),
+            'co_coordinator': event_data.get('committee_member_2_name', ''),
+            'resource_person': event_data.get('chief_guest_name', ''),
+            'designation': event_data.get('chief_guest_position', ''),
+            'resource_person_affiliation': event_data.get('chief_guest_company', ''),
+            'start_day': event_data.get('start_day', ''),
+            'end_day': event_data.get('end_day', ''),
+            'start_month': event_data.get('start_month', ''),
+            'year': event_data.get('year', ''),
+        }
+
+    proposal_doc = {}
+    proposal_warning = ''
+    try:
+        proposal_doc = generate_event_proposal_docx(request, proposal_data)
+    except Exception as exc:
+        logger.warning('Event proposal DOCX generation failed: %s', exc)
+        proposal_warning = 'Event proposal DOCX could not be generated.'
 
     # ── Try n8n webhook first; fall back to direct Canva call ─────────────
     n8n_url = getattr(settings, 'N8N_BRANDING_WEBHOOK_URL', '').strip()
@@ -1412,34 +2176,101 @@ def poster_maker(request):
             if n8n_resp.ok:
                 data = n8n_resp.json()
                 if data.get('ok'):
+                    _log_branding_event(
+                        request,
+                        event_type='branding.poster-maker.completed-n8n',
+                        status=BrandingEventLog.Status.SUCCESS,
+                        message='Poster maker completed via n8n.',
+                        event_id=str(event_data.get('event_id', '') or ''),
+                        reference_id=str(data.get('design_id', '') or brand_template_id),
+                        request_data={'brand_template_id': brand_template_id, 'format': fmt},
+                        response_data={
+                            'design_id': data.get('design_id', ''),
+                            'poster_url': data.get('poster_url', ''),
+                            'warning': proposal_warning,
+                        },
+                    )
                     return JsonResponse({
                         'design_id':     data.get('design_id', ''),
                         'export_url':    data.get('poster_url', ''),
                         'dataUrl':       data.get('dataUrl', ''),
                         'canva_edit_url': f"https://www.canva.com/design/{data.get('design_id', '')}/edit" if data.get('design_id') else '',
+                        'proposal_docx_url': proposal_doc.get('url', ''),
+                        'proposal_docx_name': proposal_doc.get('name', ''),
+                        'warning': proposal_warning,
                         'via_n8n':       True,
                     })
                 else:
                     logger.warning('n8n returned error: %s', data.get('error'))
+                    _log_branding_event(
+                        request,
+                        event_type='branding.poster-maker.n8n-error',
+                        status=BrandingEventLog.Status.WARNING,
+                        message='n8n returned non-ok response; falling back to direct Canva.',
+                        event_id=str(event_data.get('event_id', '') or ''),
+                        reference_id=brand_template_id,
+                        response_data=data,
+                    )
         except Exception as exc:
             logger.warning('n8n call failed (%s) — falling back to direct Canva', exc)
+            _log_branding_event(
+                request,
+                event_type='branding.poster-maker.n8n-failed',
+                status=BrandingEventLog.Status.WARNING,
+                message='n8n call failed; falling back to direct Canva.',
+                event_id=str(event_data.get('event_id', '') or ''),
+                reference_id=brand_template_id,
+                metadata={'exception': str(exc)},
+            )
 
     # ── Direct Canva path ─────────────────────────────────────────────────
     access_token = _get_service_token()
     if not access_token:
+        _log_branding_event(
+            request,
+            event_type='branding.poster-maker.token-missing',
+            status=BrandingEventLog.Status.ERROR,
+            message='No Canva service token available.',
+            event_id=str(event_data.get('event_id', '') or ''),
+            reference_id=brand_template_id,
+        )
         return _error('No Canva service token. Ask the Branding admin to connect Canva first.', 503)
 
     result = _run_generate_poster(brand_template_id, fields, fmt, access_token)
 
     if result.get('error') and not result.get('design_id'):
+        _log_branding_event(
+            request,
+            event_type='branding.poster-maker.failed-direct',
+            status=BrandingEventLog.Status.ERROR,
+            message='Direct Canva flow failed before design creation.',
+            event_id=str(event_data.get('event_id', '') or ''),
+            reference_id=brand_template_id,
+            response_data=result,
+        )
         return _error(result['error'], 500)
 
     design_id = result.get('design_id', '')
+    _log_branding_event(
+        request,
+        event_type='branding.poster-maker.completed-direct',
+        status=BrandingEventLog.Status.SUCCESS,
+        message='Poster maker completed via direct Canva path.',
+        event_id=str(event_data.get('event_id', '') or ''),
+        reference_id=design_id or brand_template_id,
+        response_data={
+            'design_id': design_id,
+            'export_url': result.get('export_url', ''),
+            'warning': '; '.join(part for part in [result.get('error', ''), proposal_warning] if part),
+        },
+    )
     return JsonResponse({
         'design_id':      design_id,
         'export_url':     result.get('export_url', ''),
         'dataUrl':        result.get('dataUrl', ''),
         'canva_edit_url': f'https://www.canva.com/design/{design_id}/edit' if design_id else '',
-        'warning':        result.get('error', ''),
+        'proposal_docx_url': proposal_doc.get('url', ''),
+        'proposal_docx_name': proposal_doc.get('name', ''),
+        'warning':        '; '.join(part for part in [result.get('error', ''), proposal_warning] if part),
         'via_n8n':        False,
     })

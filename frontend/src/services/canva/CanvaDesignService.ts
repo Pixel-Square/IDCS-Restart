@@ -11,6 +11,7 @@
  */
 
 import { getConnection } from './CanvaAuthService';
+import fetchWithAuth from '../fetchAuth';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -82,9 +83,8 @@ function buildAutofillFields(data: AutofillData): Record<string, unknown> {
 export async function createDesignFromTemplate(
   canvaTemplateId: string,
 ): Promise<NewDesignResult> {
-  const res = await fetch('/api/canva/designs', {
+  const res = await fetchWithAuth('/api/canva/designs', {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({
       access_token: getAccessToken(),   // empty → backend uses service token
       template_id:  canvaTemplateId,
@@ -118,9 +118,8 @@ export async function submitAutofill(
     throw new Error('No autofill data provided.');
   }
 
-  const res = await fetch('/api/canva/autofills', {
+  const res = await fetchWithAuth('/api/canva/autofills', {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({
       access_token:       getAccessToken(),   // empty → backend uses service token
       brand_template_id:  brandTemplateId,
@@ -140,7 +139,7 @@ export async function submitAutofill(
 /** Poll the autofill job status once. */
 export async function pollAutofill(jobId: string): Promise<CanvaJobResult> {
   const tok = getAccessToken();
-  const res = await fetch(`/api/canva/autofills/${jobId}?access_token=${encodeURIComponent(tok)}`);
+  const res = await fetchWithAuth(`/api/canva/autofills/${jobId}?access_token=${encodeURIComponent(tok)}`, { method: 'GET' });
   if (!res.ok) throw new Error(`Autofill poll failed (${res.status})`);
 
   const data = await res.json() as {

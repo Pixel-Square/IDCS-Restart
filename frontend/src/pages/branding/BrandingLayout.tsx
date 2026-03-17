@@ -1,26 +1,30 @@
 import React, { useState } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { Menu } from 'lucide-react';
+import ProtectedRoute from '../../components/ProtectedRoute';
 import BrandingSidebar from './BrandingSidebar';
 import BrandingProfilePage from './BrandingProfilePage';
-import BrandingCreatePage from './BrandingCreatePage';
-import BrandingEventApprovalPage from './BrandingEventApprovalPage';
 import BrandingRecentsPage from './BrandingRecentsPage';
+import BrandingListPostersPage from './BrandingListPostersPage';
+import PosterMakerPage from '../events/PosterMakerPage';
 import TemplatesListPage from './templates/TemplatesListPage';
 import TemplateEditorPage from './templates/TemplateEditorPage';
 import CanvaOAuthCallbackPage from './templates/CanvaOAuthCallbackPage';
-import PosterMakerPage from '../events/PosterMakerPage';
 
 /**
  * Top-level layout for the Branding role.
  * Completely isolated from the main IDCS layout — no Navbar, no DashboardSidebar.
  */
-export default function BrandingLayout() {
+interface Props {
+  user: any;
+}
+
+export default function BrandingLayout({ user }: Props) {
   const [collapsed, setCollapsed] = useState(false);
 
   return (
     <div className="min-h-screen bg-gray-50 flex">
-      <BrandingSidebar collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />
+      <BrandingSidebar user={user} collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />
 
       {/* Main content */}
       <div
@@ -56,14 +60,31 @@ export default function BrandingLayout() {
           <Routes>
             <Route index element={<Navigate to="profile" replace />} />
             <Route path="profile"        element={<BrandingProfilePage />}       />
-            <Route path="create"         element={<BrandingCreatePage />}        />
-            <Route path="event-approval" element={<BrandingEventApprovalPage />} />
+            <Route path="create"         element={<Navigate to="/branding/poster-maker" replace />} />
             <Route path="recents"          element={<BrandingRecentsPage />}       />
-            <Route path="poster-maker"     element={<PosterMakerPage embedded />}   />
             <Route path="templates"        element={<TemplatesListPage />}          />
             <Route path="templates/editor" element={<TemplateEditorPage />}         />
-            {/* Canva OAuth callback — must be inside BrandingLayout for the /branding/* guard */}
-            <Route path="oauth-callback"   element={<CanvaOAuthCallbackPage />}        />
+            <Route path="oauth-callback"   element={<CanvaOAuthCallbackPage />}     />
+            <Route path="poster-maker"     element={<PosterMakerPage embedded />}   />
+            <Route
+              path="list-posters"
+              element={<ProtectedRoute user={user} requiredPermissions={["branding.list_posters"]} element={<BrandingListPostersPage />} />}
+            />
+
+            {/* Event Approval UI removed: show a 404-style screen for legacy URLs */}
+            <Route
+              path="event-approval/*"
+              element={(
+                <div className="min-h-[60vh] flex items-center justify-center">
+                  <div className="text-center">
+                    <div className="text-sm font-semibold text-gray-500">404</div>
+                    <h2 className="text-2xl font-bold text-gray-800 mt-2">Page not found</h2>
+                    <p className="text-sm text-gray-600 mt-2">This page is no longer available.</p>
+                  </div>
+                </div>
+              )}
+            />
+
             <Route path="*"                element={<Navigate to="profile" replace />} />
           </Routes>
         </main>

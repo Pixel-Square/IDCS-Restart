@@ -1,31 +1,59 @@
 import React, { useState } from 'react';
-import { User, Mail, Phone, MapPin, Building2, Edit2, Save, X } from 'lucide-react';
+import { User, Mail, Phone, MapPin, Building2, Briefcase, School, Key, Edit2, Save, X } from 'lucide-react';
 
 interface BrandingUser {
   username: string;
   fullName: string;
+  staffId: string;
   email: string;
   phone: string;
   department: string;
   location: string;
+  designation: string;
+  collegeCode: string;
+  collegeName: string;
+  collegeShortName: string;
+  collegeAddress: string;
   role: string;
   bio: string;
 }
 
 const DEFAULT_USER: BrandingUser = {
-  username: '000001',
+  username: 'Branding',
   fullName: 'Branding Officer',
-  email: 'branding@idcscollege.edu.in',
+  staffId: '000000',
+  email: 'branding@krct.ac.in',
   phone: '+91 98765 43210',
   department: 'Marketing & Branding',
-  location: 'IDCS College, Chennai',
+  location: 'KRCT College, Samayapuram, Trichy',
+  designation: 'Branding Officer',
+  collegeCode: '3701',
+  collegeName: 'K Ramakrishnan College of Technology (Autonomous)',
+  collegeShortName: 'KRCT',
+  collegeAddress: 'Samayapuram, Trichy - 621112, Tamil Nadu, India',
   role: 'Branding',
   bio: 'Responsible for managing the college brand identity, event posters, announcements, and digital media content.',
 };
 
 export default function BrandingProfilePage() {
-  const stored = localStorage.getItem('branding_user');
-  const initial: BrandingUser = stored ? { ...DEFAULT_USER, ...JSON.parse(stored) } : DEFAULT_USER;
+  const stored = localStorage.getItem('branding_profile') || localStorage.getItem('me') || '';
+  let storedObj: any = null;
+  try { storedObj = stored ? JSON.parse(stored) : null; } catch { storedObj = null; }
+
+  const fromMe: Partial<BrandingUser> = storedObj && storedObj.username ? {
+    username: String(storedObj.username || DEFAULT_USER.username),
+    email: String(storedObj.email || DEFAULT_USER.email),
+    staffId: String(storedObj?.profile?.staff_id || storedObj?.staff_id || DEFAULT_USER.staffId),
+    phone: String(storedObj?.profile?.mobile_number || storedObj?.mobile_number || DEFAULT_USER.phone),
+    department: String(storedObj?.profile?.department?.short_name || storedObj?.profile?.department?.code || DEFAULT_USER.department),
+    designation: String(storedObj?.profile?.designation || DEFAULT_USER.designation),
+    fullName: String(
+      storedObj?.profile?.full_name || storedObj?.profile?.fullName || storedObj?.full_name || storedObj?.fullName || DEFAULT_USER.fullName,
+    ),
+    role: String(Array.isArray(storedObj?.roles) && storedObj.roles.length ? storedObj.roles[0] : (storedObj?.role || DEFAULT_USER.role)),
+  } : {};
+
+  const initial: BrandingUser = storedObj ? { ...DEFAULT_USER, ...fromMe, ...storedObj } : { ...DEFAULT_USER, ...fromMe };
 
   const [user, setUser] = useState<BrandingUser>(initial);
   const [editing, setEditing] = useState(false);
@@ -33,7 +61,7 @@ export default function BrandingProfilePage() {
 
   function handleSave() {
     setUser(draft);
-    localStorage.setItem('branding_user', JSON.stringify(draft));
+    localStorage.setItem('branding_profile', JSON.stringify(draft));
     setEditing(false);
   }
 
@@ -45,14 +73,14 @@ export default function BrandingProfilePage() {
   function field(label: string, key: keyof BrandingUser, icon: React.ElementType, multiline = false) {
     const Icon = icon;
     return (
-      <div key={key} className="flex flex-col gap-1">
-        <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
-          <Icon className="w-3.5 h-3.5" /> {label}
+      <div key={key}>
+        <label className="text-sm font-semibold text-gray-500 mb-1 flex items-center gap-1.5">
+          <Icon className="w-4 h-4" /> {label}
         </label>
         {editing ? (
           multiline ? (
             <textarea
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none"
+              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
               rows={3}
               value={draft[key]}
               onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
@@ -60,76 +88,126 @@ export default function BrandingProfilePage() {
           ) : (
             <input
               type="text"
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               value={draft[key]}
               onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
             />
           )
         ) : (
-          <p className="text-gray-800 text-sm py-1">{user[key]}</p>
+          <p className="text-gray-900 font-medium text-sm">{user[key] || '—'}</p>
         )}
       </div>
     );
   }
 
+  const initials = (user.fullName || user.username || 'BR').slice(0, 2).toUpperCase();
+
   return (
-    <div className="max-w-2xl mx-auto">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Profile</h1>
-        <p className="text-gray-500 text-sm mt-1">View and manage your Branding account details.</p>
+    <div className="max-w-7xl mx-auto px-2 sm:px-4 lg:px-6 pb-8">
+      <div className="bg-white rounded-xl p-5 shadow-md mb-6 border border-gray-100">
+        <div className="flex items-start gap-4">
+          <div className="w-16 h-16 rounded-full bg-blue-600 text-white flex items-center justify-center text-2xl font-bold">
+            {initials}
+          </div>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-4xl font-bold text-gray-900 leading-none mb-2">{user.username || 'Branding'}</h2>
+            <p className="text-gray-600 text-xl">{user.email || '—'}</p>
+          </div>
+          <div className="bg-white border border-gray-200 rounded-lg px-4 py-2 text-right shadow-sm">
+            <div className="text-xs text-gray-500 mb-1">Profile Type</div>
+            <div className="text-2xl font-bold text-gray-900">STAFF</div>
+          </div>
+        </div>
       </div>
 
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-        {/* Avatar banner */}
-        <div className="h-24 bg-gradient-to-r from-purple-600 to-indigo-600" />
-        <div className="px-6 pb-6">
-          <div className="flex items-end justify-between -mt-10 mb-6">
-            <div className="w-20 h-20 rounded-2xl bg-white shadow-lg border-4 border-white flex items-center justify-center">
-              <User className="w-10 h-10 text-purple-600" />
-            </div>
-            {!editing ? (
-              <button
-                onClick={() => { setDraft(user); setEditing(true); }}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-600 text-white text-sm font-medium hover:bg-purple-700 transition-colors"
-              >
-                <Edit2 className="w-4 h-4" /> Edit Profile
-              </button>
-            ) : (
-              <div className="flex gap-2">
-                <button
-                  onClick={handleCancel}
-                  className="flex items-center gap-2 px-4 py-2 rounded-xl border border-gray-300 text-gray-600 text-sm font-medium hover:bg-gray-50 transition-colors"
-                >
-                  <X className="w-4 h-4" /> Cancel
-                </button>
-                <button
-                  onClick={handleSave}
-                  className="flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-600 text-white text-sm font-medium hover:bg-purple-700 transition-colors"
-                >
-                  <Save className="w-4 h-4" /> Save
-                </button>
-              </div>
-            )}
+      <div>
+        <h3 className="text-3xl font-bold text-gray-900 mb-4">Details</h3>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div className="bg-white rounded-lg p-5 shadow-md border border-gray-100">
+            {field('Staff ID', 'staffId', User)}
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-            {field('Full Name',   'fullName',   User)}
-            {field('Username',    'username',   User)}
-            {field('Email',       'email',      Mail)}
-            {field('Phone',       'phone',      Phone)}
-            {field('Department',  'department', Building2)}
-            {field('Location',    'location',   MapPin)}
-            <div className="sm:col-span-2">
-              {field('Bio',       'bio',        Edit2, true)}
+          <div className="bg-white rounded-lg p-5 shadow-md border border-gray-100">
+            {field('Username & Name', 'username', User)}
+            <div className="mt-3">
+              {field('Name', 'fullName', User)}
+            </div>
+            <div className="mt-3">
+              {!editing ? (
+                <button
+                  onClick={() => { setDraft(user); setEditing(true); }}
+                  className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700"
+                >
+                  <Edit2 className="w-3 h-3" /> Edit
+                </button>
+              ) : (
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleSave}
+                    className="flex items-center gap-1 px-2 py-1 bg-green-600 text-white rounded text-xs hover:bg-green-700"
+                  >
+                    <Save className="w-3 h-3" /> Save
+                  </button>
+                  <button
+                    onClick={handleCancel}
+                    className="flex items-center gap-1 px-2 py-1 bg-gray-200 text-gray-700 rounded text-xs hover:bg-gray-300"
+                  >
+                    <X className="w-3 h-3" /> Cancel
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Role badge */}
-          <div className="mt-5 pt-5 border-t border-gray-100 flex items-center gap-2">
-            <span className="text-xs text-gray-500">Role:</span>
-            <span className="text-xs font-semibold bg-purple-100 text-purple-700 px-3 py-1 rounded-full">
-              {user.role}
-            </span>
+          <div className="bg-white rounded-lg p-5 shadow-md border border-gray-100">
+            {field('Email', 'email', Mail)}
+          </div>
+
+          <div className="bg-white rounded-lg p-5 shadow-md border border-gray-100">
+            {field('Roles', 'role', User)}
+          </div>
+
+          <div className="bg-white rounded-lg p-5 shadow-md border border-gray-100">
+            {field('Department', 'department', Building2)}
+          </div>
+
+          <div className="bg-white rounded-lg p-5 shadow-md border border-gray-100">
+            {field('Designation', 'designation', Briefcase)}
+          </div>
+
+          <div className="bg-white rounded-lg p-5 shadow-md border border-gray-100 lg:col-span-3">
+            <div className="text-sm font-semibold text-gray-500 mb-2 flex items-center gap-1.5">
+              <School className="w-4 h-4" /> College
+            </div>
+            <div className="space-y-1 text-sm">
+              <div><span className="font-semibold text-gray-500 w-24 inline-block">Code:</span> <span className="text-gray-900 font-medium">{user.collegeCode || '—'}</span></div>
+              <div><span className="font-semibold text-gray-500 w-24 inline-block">Name:</span> <span className="text-gray-900 font-medium">{user.collegeName || '—'}</span></div>
+              <div><span className="font-semibold text-gray-500 w-24 inline-block">Short Name:</span> <span className="text-gray-900 font-medium">{user.collegeShortName || '—'}</span></div>
+              <div><span className="font-semibold text-gray-500 w-24 inline-block">Address:</span> <span className="text-gray-900 font-medium">{user.collegeAddress || '—'}</span></div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-lg p-5 shadow-md border border-gray-100 lg:col-span-2">
+            {field('Mobile Number', 'phone', Phone)}
+            <div className="mt-2 text-xs text-gray-500">Current number</div>
+          </div>
+
+          <div className="bg-white rounded-lg p-5 shadow-md border border-gray-100">
+            <div className="text-sm font-semibold text-gray-500 mb-2 flex items-center gap-1.5">
+              <Key className="w-4 h-4" /> Password
+            </div>
+            <div className="text-gray-900 font-medium mb-3">••••••••</div>
+            <button className="bg-indigo-600 text-white px-4 py-2 rounded-md text-sm hover:bg-indigo-700 transition-colors">
+              Change Password
+            </button>
+          </div>
+
+          <div className="bg-white rounded-lg p-5 shadow-md border border-gray-100 lg:col-span-3">
+            {field('Location', 'location', MapPin)}
+            <div className="mt-3">
+              {field('Bio', 'bio', Edit2, true)}
+            </div>
           </div>
         </div>
       </div>

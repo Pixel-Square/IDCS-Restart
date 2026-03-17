@@ -16,6 +16,7 @@ import LivePosterCanvas                       from './LivePosterCanvas';
 import { exportAsPDF, exportAsPNG, exportAsDoc } from './ExportService';
 import { createEvent, submitEventToIqac, updateEvent, type CollegeEvent } from '../../../store/eventStore';
 import { getAllTemplates, type BrandingTemplate } from '../../../store/templateStore';
+import fetchWithAuth from '../../../services/fetchAuth';
 
 // ─── form defaults ────────────────────────────────────────────────────────────
 
@@ -39,7 +40,7 @@ const EMPTY_FORM: EventFormState = {
 // ─── identity helper ──────────────────────────────────────────────────────────
 
 function getCreatorIdentity(): { username: string; displayName: string } {
-  for (const key of ['me', 'branding_user', 'user']) {
+  for (const key of ['me', 'user']) {
     try {
       const raw = localStorage.getItem(key);
       if (!raw) continue;
@@ -99,7 +100,7 @@ export default function HodEventCreatePage() {
   // ── fetch saved Canva templates from DB on mount ────────────────────────────
   useEffect(() => {
     setDbLoading(true);
-    fetch('/api/canva/templates')
+    fetchWithAuth('/api/canva/templates', { method: 'GET' })
       .then((r) => r.ok ? r.json() : Promise.reject(r.status))
       .then((d) => setDbTemplates((d.templates ?? []) as DbCanvaTemplate[]))
       .catch(() => { /* non-fatal */ })
@@ -119,7 +120,7 @@ export default function HodEventCreatePage() {
     setCanvaImgUrl(null);
     setImgError(null);
 
-    fetch(`/api/canva/thumbnail-proxy/?url=${encodeURIComponent(previewUrl)}`)
+    fetchWithAuth(`/api/canva/thumbnail-proxy/?url=${encodeURIComponent(previewUrl)}`, { method: 'GET' })
       .then((r) => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
       .then((d: { dataUrl: string }) => {
         if (!d.dataUrl) throw new Error('Empty response');

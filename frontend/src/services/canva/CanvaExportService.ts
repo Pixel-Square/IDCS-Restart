@@ -6,6 +6,7 @@
  */
 
 import { getConnection } from './CanvaAuthService';
+import fetchWithAuth from '../fetchAuth';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -45,9 +46,8 @@ export async function submitExport(
 ): Promise<ExportJob> {
   const conn = requireConnection();
 
-  const res = await fetch('/api/canva/exports', {
+  const res = await fetchWithAuth('/api/canva/exports', {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({
       access_token: conn.accessToken,
       design_id:    designId,
@@ -68,8 +68,9 @@ export async function submitExport(
 export async function pollExport(jobId: string): Promise<ExportJob> {
   const conn = requireConnection();
 
-  const res = await fetch(
+  const res = await fetchWithAuth(
     `/api/canva/exports/${jobId}?access_token=${encodeURIComponent(conn.accessToken)}`,
+    { method: 'GET' },
   );
   if (!res.ok) throw new Error(`Export poll failed (${res.status})`);
 
@@ -117,9 +118,8 @@ export async function storeExportedPoster(
   exportUrls: string[],
   format: ExportFormat,
 ): Promise<StoredPoster> {
-  const res = await fetch(`/api/canva/events/${eventId}/poster`, {
+  const res = await fetchWithAuth(`/api/canva/events/${eventId}/poster`, {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({
       canva_design_id: canvaDesignId,
       export_urls:     exportUrls,

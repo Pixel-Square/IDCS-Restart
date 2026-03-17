@@ -44,12 +44,12 @@ import StudentAttendancePage from './pages/student/Attendance';
 import StudentAcademics from './pages/student/Academics';
 import MentorAssign from './pages/advisor/MentorAssign';
 import NotificationsPage from './pages/Notifications';
+import AnnouncementsPage from './pages/announcements/AnnouncementsPage';
 import QueriesPage from './pages/queries/QueriesPage';
 import StaffsPage from './pages/StaffsPage';
 import AcademicCalendarRedirect from './pages/academicCalendar/AcademicCalendarRedirect';
 import AcademicCalendarPage from './pages/academicCalendar/AcademicCalendarPage';
 import BrandingLayout from './pages/branding/BrandingLayout';
-import BrandingProtectedRoute from './components/routing/BrandingProtectedRoute';
 import HodResultAnalysisPage from './pages/hod/HodResultAnalysisPage';
 import HodEventsListPage from './pages/hod/events/HodEventsListPage';
 import HodEventCreatePage from './pages/hod/events/HodEventCreatePage';
@@ -76,6 +76,8 @@ import IDCSScanGatepassPage from './pages/IDCSScan/GatepassPage';
 import RFReaderCreateGatePage from './pages/RFReader/CreateGatePage';
 import RFReaderTestStudentsPage from './pages/RFReader/TestStudentsPage';
 import RFReaderAddStudentsRFPage from './pages/RFReader/AddStudentsRFPage';
+import MyProposalsPage from './pages/events/MyProposalsPage';
+import ProposalApprovalPage from './pages/events/ProposalApprovalPage';
 
 type RoleObj = { name: string };
 type Me = {
@@ -93,16 +95,14 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const { collapsed } = useSidebar();
 
-  // ── Branding role: local-only session, not backed by the API ────────────
-  const isBrandingUser = localStorage.getItem('branding_auth') === 'true';
-  // ────────────────────────────────────────────────────────────────────────
+  const isBrandingUser = Boolean(
+    user && (
+      (Array.isArray(user.roles) && user.roles.some((r) => String(r || '').toUpperCase() === 'BRANDING')) ||
+      (Array.isArray(user.permissions) && user.permissions.some((p) => String(p || '').toLowerCase() === 'branding.access'))
+    )
+  );
 
   useEffect(() => {
-    // Skip API fetch for Branding sessions — they authenticate locally.
-    if (isBrandingUser) {
-      setLoading(false);
-      return;
-    }
     // Check if user has an access token before attempting to fetch profile
     const token = localStorage.getItem('access')
     if (!token) {
@@ -155,12 +155,12 @@ export default function App() {
   }
 
   // ── Branding role: isolated layout, no Navbar / DashboardSidebar ────────
-  if (isBrandingUser) {
+  if (user && isBrandingUser) {
     return (
       <Routes>
         <Route
           path="/branding/*"
-          element={<BrandingProtectedRoute element={<BrandingLayout />} />}
+          element={<ProtectedRoute user={user} requiredPermissions={["branding.access"]} element={<BrandingLayout user={user} />} />}
         />
         {/* Any other path → redirect into branding dashboard */}
         <Route path="*" element={<Navigate to="/branding" replace />} />
@@ -209,6 +209,7 @@ export default function App() {
                 />
                 <Route path="/queries" element={<QueriesPage />} />
                 <Route path="/notifications" element={<NotificationsPage />} />
+                <Route path="/announcements" element={<AnnouncementsPage user={user} />} />
                 <Route
                   path="/ps/staff-attendance/upload"
                   element={<ProtectedRoute user={user} requiredRoles={['PS']} element={<StaffAttendanceUpload />} />}
@@ -274,6 +275,23 @@ export default function App() {
                 <Route
                   path="/poster-maker"
                   element={<ProtectedRoute user={user} requiredRoles={["HOD", "IQAC", "STAFF"]} element={<PosterMakerPage />} />}
+                />
+                {/* ── Event Proposal Workflow Routes ─────────────────────────────── */}
+                <Route
+                  path="/events/create-event"
+                  element={<ProtectedRoute user={user} requiredPermissions={["events.create_proposal"]} element={<PosterMakerPage staffMode />} />}
+                />
+                <Route
+                  path="/events/my-proposals"
+                  element={<ProtectedRoute user={user} requiredPermissions={["events.create_proposal"]} element={<MyProposalsPage />} />}
+                />
+                <Route
+                  path="/hod/event-approvals"
+                  element={<ProtectedRoute user={user} requiredPermissions={["events.hod_approve"]} element={<ProposalApprovalPage role="hod" />} />}
+                />
+                <Route
+                  path="/haa/event-approvals"
+                  element={<ProtectedRoute user={user} requiredPermissions={["events.haa_approve"]} element={<ProposalApprovalPage role="haa" />} />}
                 />
                 <Route
                   path="/hod/staff-attendance"
