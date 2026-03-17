@@ -1313,6 +1313,7 @@ class DailyAttendanceUnlockRequest(models.Model):
     requested_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='daily_attendance_unlock_requests')
     requested_at = models.DateTimeField(auto_now_add=True)
     note = models.TextField(blank=True, help_text='Staff request reason')
+    bulk_group_id = models.UUIDField(null=True, blank=True, db_index=True, help_text='Groups multiple session requests submitted together as a single bulk request')
     
     # HOD approval stage
     hod_status = models.CharField(max_length=16, choices=STATUS_CHOICES, default='PENDING')

@@ -6,6 +6,7 @@ import fetchWithAuth from '../../services/fetchAuth'
 export const ATTENDANCE_REQUEST_PROCESSED_EVENT = 'attendance-request-processed'
 
 export default function AttendanceRequests(){
+  const [deletingAll, setDeletingAll] = useState(false)
   const [loading, setLoading] = useState(false)
   const [requests, setRequests] = useState<any[]>([])
   const [permissionLevel, setPermissionLevel] = useState<string | null>(null)
@@ -20,6 +21,26 @@ export default function AttendanceRequests(){
       const data = await res.json().catch(()=>null)
       setPermissionLevel(data?.permission_level || null)
     }catch(e){ console.error('Failed to load permission level', e) }
+  }
+
+  async function handleDeleteAll() {
+    if (!window.confirm('Delete ALL unlock requests permanently? This cannot be undone.')) return
+    setDeletingAll(true)
+    try {
+      const res = await fetchWithAuth('/api/academics/unified-unlock-requests/', { method: 'DELETE' })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.detail || 'Failed to delete')
+      }
+      const data = await res.json().catch(() => ({}))
+      alert(`Deleted ${data.total_deleted ?? 0} request(s).`)
+      await loadRequests()
+      window.dispatchEvent(new CustomEvent(ATTENDANCE_REQUEST_PROCESSED_EVENT))
+    } catch (e) {
+      alert('Error: ' + (e instanceof Error ? e.message : String(e)))
+    } finally {
+      setDeletingAll(false)
+    }
   }
 
   async function loadRequests(){
@@ -37,14 +58,20 @@ export default function AttendanceRequests(){
     finally{ setLoading(false) }
   }
 
-  async function handleAction(id:number, action:'approve'|'reject', requestType: string = 'period'){
+  async function handleAction(id:number, action:'approve'|'reject', requestType: string = 'period', bulkGroupId?: string | null){
     const isHOD = permissionLevel === 'department'
+    const sessionDesc = bulkGroupId ? 'this bulk request (all sessions in group)' : 'this request and unlock the session'
     const actionText = isHOD 
       ? `${action} this request as HOD` 
-      : `${action} this request and unlock the session`
+      : `${action} ${sessionDesc}`
     if(!window.confirm(`Are you sure you want to ${actionText}?`)) return
     try{
-      const body = { id, action, request_type: requestType, note: '' }
+      const body: any = { action, request_type: requestType, note: '' }
+      if (bulkGroupId) {
+        body.bulk_group_id = bulkGroupId
+      } else {
+        body.id = id
+      }
       const endpoint = isHOD 
         ? '/api/academics/hod-unlock-requests/'
         : '/api/academics/unified-unlock-requests/'
@@ -82,14 +109,32 @@ export default function AttendanceRequests(){
 
   return (
     <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 overflow-hidden">
-      <div className="mb-6 flex flex-col gap-1">
-        <h2 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-slate-900 to-slate-700">
-          {permissionLevel === 'department' ? 'Session Unlock Requests' : 'Unlock Requests (Final Approval)'}
-        </h2>
-        {permissionLevel === 'department' && (
-          <p className="text-sm font-medium text-slate-500">
-            Review unlock requests from staff in your department. Approved requests will be forwarded to the attendance administrator.
-          </p>
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <div className="flex flex-col gap-1">
+          <h2 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-slate-900 to-slate-700">
+            {permissionLevel === 'department' ? 'Session Unlock Requests' : 'Unlock Requests (Final Approval)'}
+          </h2>
+          {permissionLevel === 'department' && (
+            <p className="text-sm font-medium text-slate-500">
+              Review unlock requests from staff in your department. Approved requests will be forwarded to the attendance administrator.
+            </p>
+          )}
+        </div>
+        {permissionLevel !== 'department' && requests.length > 0 && (
+          <button
+            onClick={handleDeleteAll}
+            disabled={deletingAll}
+            className="shrink-0 flex items-center gap-2 px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold transition-colors"
+          >
+            {deletingAll ? (
+              <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+            )}
+            Delete All
+          </button>
         )}
       </div>
 
@@ -133,16 +178,24 @@ export default function AttendanceRequests(){
                   <td className="px-5 py-4 text-sm font-medium text-slate-500">{idx+1}</td>
                   <td className="px-5 py-4">
                     <span className={`inline-flex px-2.5 py-1 rounded-md text-xs font-semibold ${
-                      r.request_type === 'daily' 
+                      r.request_type === 'daily_bulk'
+                        ? 'bg-purple-50 text-purple-700 border border-purple-200/50'
+                        : r.request_type === 'daily' 
                         ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/50' 
                         : 'bg-indigo-50 text-indigo-700 border border-indigo-200/50'
                     }`}>
-                      {r.request_type === 'daily' ? 'Daily' : 'Period'}
+                      {r.request_type === 'daily_bulk' ? `Daily Bulk (${r.session_count})` : r.request_type === 'daily' ? 'Daily' : 'Period'}
                     </span>
                   </td>
                   <td className="px-5 py-4 text-sm">
                     <div className="font-semibold text-slate-800">{r.department || r.session_display?.split(' | ')[0] || 'N/A'}</div>
-                    <div className="text-slate-500 text-xs mt-0.5">{r.session_display || ''}</div>
+                    {r.request_type === 'daily_bulk' ? (
+                      <>
+                        <div className="text-slate-500 text-xs mt-0.5">{r.session_count} sessions &nbsp;·&nbsp; {r.date_range}</div>
+                      </>
+                    ) : (
+                      <div className="text-slate-500 text-xs mt-0.5">{r.session_display || ''}</div>
+                    )}
                   </td>
                   <td className="px-5 py-4 text-sm">
                     <div className="font-semibold text-slate-800">{r.requested_by?.name || r.requested_by_display || 'Unknown'}</div>
@@ -177,13 +230,13 @@ export default function AttendanceRequests(){
                       <div className="flex gap-2">
                         <button 
                           className="px-3 py-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-500 hover:text-white border border-emerald-200 hover:border-emerald-600 text-xs font-semibold rounded-lg shadow-sm transition-all flex items-center justify-center"
-                          onClick={()=>handleAction(r.id, 'approve', r.request_type || 'period')}
+                          onClick={()=>handleAction(r.id, 'approve', r.request_type || 'period', r.bulk_group_id)}
                         >
                           Approve
                         </button>
                         <button 
                           className="px-3 py-1.5 bg-rose-50 text-rose-700 hover:bg-rose-500 hover:text-white border border-rose-200 hover:border-rose-600 text-xs font-semibold rounded-lg shadow-sm transition-all flex items-center justify-center"
-                          onClick={()=>handleAction(r.id, 'reject', r.request_type || 'period')}
+                          onClick={()=>handleAction(r.id, 'reject', r.request_type || 'period', r.bulk_group_id)}
                         >
                           Reject
                         </button>

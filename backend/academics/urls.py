@@ -41,7 +41,7 @@ from .views import (
     StaffDepartmentRoleRemoveView,
     BatchListView,
 )
-from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView, ClassAttendanceReportView, TodayPeriodAttendanceView, PeriodAttendanceReportView, OverallSectionView, MyClassStudentsView, DailyAttendanceView, DailyAttendanceLockView, DailyAttendanceUnlockView, MyClassAttendanceAnalyticsView, DailyAttendanceSessionDetailView, SectionStudentAttendanceDayView, DailyAttendanceRevertAssignmentView, DailyAttendanceUnlockRequestView, PeriodAttendanceUnlockRequestView, HODUnlockRequestsView, PeriodAttendanceSwapView, PeriodAttendanceRevertAssignmentView, AttendanceAssignmentRequestView, AttendanceAssignmentRequestActionView, AttendanceNotificationCountView
+from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView, ClassAttendanceReportView, TodayPeriodAttendanceView, PeriodAttendanceReportView, OverallSectionView, MyClassStudentsView, DailyAttendanceView, DailyAttendanceLockView, DailyAttendanceUnlockView, MyClassAttendanceAnalyticsView, DailyAttendanceSessionDetailView, SectionStudentAttendanceDayView, DailyAttendanceRevertAssignmentView, DailyAttendanceUnlockRequestView, PeriodAttendanceUnlockRequestView, HODUnlockRequestsView, PeriodAttendanceSwapView, PeriodAttendanceRevertAssignmentView, AttendanceAssignmentRequestView, AttendanceAssignmentRequestActionView, AttendanceNotificationCountView, BulkAttendanceSectionsView, BulkAttendanceDownloadView, BulkAttendanceImportView, BulkAttendanceLockedSessionsView, BulkDailyAttendanceUnlockRequestView
 from .views import UnifiedUnlockRequestsView, DepartmentStudentsView, AllStudentsView, MentorMyMenteesView
 from .views import BulkAssignSecondarySectionView, RemoveSecondarySectionView
 from .student_import_views import StudentImportTemplateDownloadView, StudentBulkImportView
@@ -144,4 +144,11 @@ urlpatterns = [
     path('attendance-assignment-requests/', AttendanceAssignmentRequestView.as_view()),
     path('attendance-assignment-requests/<int:pk>/<str:action>/', AttendanceAssignmentRequestActionView.as_view()),
     path('analytics/attendance-notification-count/', AttendanceNotificationCountView.as_view()),
+
+    # Daily bulk attendance (Excel)
+    path('bulk-attendance/sections/', BulkAttendanceSectionsView.as_view()),
+    path('bulk-attendance/download/', BulkAttendanceDownloadView.as_view()),
+    path('bulk-attendance/locked-sessions/', BulkAttendanceLockedSessionsView.as_view()),
+    path('bulk-attendance/import/', BulkAttendanceImportView.as_view()),
+    path('bulk-attendance/unlock-request/', BulkDailyAttendanceUnlockRequestView.as_view()),
 ]

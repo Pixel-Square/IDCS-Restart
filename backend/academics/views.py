@@ -4020,149 +4020,233 @@ class AttendanceUnlockRequestViewSet(viewsets.ModelViewSet):
 
 
 class UnifiedUnlockRequestsView(APIView):
-    """Unified view that returns both period attendance and daily attendance unlock requests."""
+    """Unified view that returns both period attendance and daily attendance unlock requests.
+    Daily bulk requests (same bulk_group_id) are collapsed into a single grouped row."""
     permission_classes = (IsAuthenticated,)
-    
+
     def get(self, request):
         from .models import DailyAttendanceUnlockRequest
         from .serializers import DailyAttendanceUnlockRequestSerializer
-        
+
         user = request.user
         perms = get_user_permissions(user)
-        
-        # Determine if user can view all requests or only their own
+
         can_view_all = 'analytics.view_all_analytics' in perms or user.is_superuser
         staff_profile = getattr(user, 'staff_profile', None)
-        
-        # Get period attendance unlock requests
+
+        # ── Period requests ───────────────────────────────────────────────────
         if can_view_all:
-            # Admin: get all HOD_APPROVED requests (final approval stage)
             period_requests = AttendanceUnlockRequest.objects.select_related(
                 'session__section', 'requested_by', 'reviewed_by', 'hod_reviewed_by'
             ).filter(hod_status='HOD_APPROVED').order_by('-requested_at')
         elif staff_profile:
-            # Staff: get only their requests
             period_requests = AttendanceUnlockRequest.objects.select_related(
                 'session__section', 'requested_by', 'reviewed_by', 'hod_reviewed_by'
             ).filter(requested_by=staff_profile).order_by('-requested_at')
         else:
             period_requests = AttendanceUnlockRequest.objects.none()
-        
-        # Get daily attendance unlock requests
+
+        period_serializer = AttendanceUnlockRequestSerializer(period_requests, many=True, context={'request': request})
+        period_data = list(period_serializer.data)
+        for item in period_data:
+            item['request_type'] = 'period'
+
+        # ── Daily requests (grouped by bulk_group_id) ─────────────────────────
         if can_view_all:
-            # Admin: get all pending daily requests (PENDING or HOD_APPROVED) — daily attendance
-            # does not require a mandatory HOD step, so admin sees requests at any pending stage
-            daily_requests = DailyAttendanceUnlockRequest.objects.select_related(
+            daily_qs = DailyAttendanceUnlockRequest.objects.select_related(
                 'session__section', 'requested_by', 'reviewed_by', 'hod_reviewed_by'
             ).filter(status__in=['PENDING', 'HOD_APPROVED']).order_by('-requested_at')
         elif staff_profile:
-            # Staff: get only their requests
-            daily_requests = DailyAttendanceUnlockRequest.objects.select_related(
+            daily_qs = DailyAttendanceUnlockRequest.objects.select_related(
                 'session__section', 'requested_by', 'reviewed_by', 'hod_reviewed_by'
             ).filter(requested_by=staff_profile).order_by('-requested_at')
         else:
-            daily_requests = DailyAttendanceUnlockRequest.objects.none()
-        
-        # Serialize period requests
-        period_serializer = AttendanceUnlockRequestSerializer(period_requests, many=True, context={'request': request})
-        period_data = period_serializer.data
-        for item in period_data:
-            item['request_type'] = 'period'
-        
-        # Serialize daily requests
-        daily_serializer = DailyAttendanceUnlockRequestSerializer(daily_requests, many=True, context={'request': request})
-        daily_data = daily_serializer.data
-        for item in daily_data:
-            item['request_type'] = 'daily'
-        
-        # Combine both types
-        combined_data = list(period_data) + list(daily_data)
-        # Sort by requested_at descending
+            daily_qs = DailyAttendanceUnlockRequest.objects.none()
+
+        # Collapse bulk groups into a single representative row
+        daily_data = []
+        seen_groups = set()
+        for req in daily_qs:
+            if req.bulk_group_id:
+                gid = str(req.bulk_group_id)
+                if gid in seen_groups:
+                    continue
+                seen_groups.add(gid)
+                # Fetch all sibling requests in this group
+                siblings = list(DailyAttendanceUnlockRequest.objects.filter(
+                    bulk_group_id=req.bulk_group_id
+                ).select_related('session__section', 'requested_by').order_by('session__date'))
+                section = req.session.section if req.session else None
+                dates = [str(s.session.date) for s in siblings if s.session]
+                daily_data.append({
+                    'id': req.id,
+                    'bulk_group_id': gid,
+                    'request_type': 'daily_bulk',
+                    'session_count': len(siblings),
+                    'dates': dates,
+                    'date_range': f"{dates[0]} → {dates[-1]}" if dates else '',
+                    'department': str(getattr(getattr(section, 'batch', None), 'course', None) and
+                                      getattr(section.batch.course, 'department', None) and
+                                      section.batch.course.department.name or ''),
+                    'section_name': str(section) if section else '',
+                    'session_display': f"{str(section)} | {len(siblings)} sessions ({dates[0]} → {dates[-1]})" if dates else str(section),
+                    'requested_by': {
+                        'name': req.requested_by.user.get_full_name() if req.requested_by and req.requested_by.user else '',
+                        'staff_id': str(req.requested_by.staff_id) if req.requested_by else '',
+                    },
+                    'requested_at': req.requested_at.isoformat() if req.requested_at else '',
+                    'note': req.note or '',
+                    'status': req.status,
+                    'hod_status': req.hod_status,
+                })
+            else:
+                # Individual (non-bulk) daily request
+                daily_data.append({
+                    'id': req.id,
+                    'bulk_group_id': None,
+                    'request_type': 'daily',
+                    'session_count': 1,
+                    'dates': [str(req.session.date)] if req.session else [],
+                    'department': '',
+                    'section_name': str(req.session.section) if req.session else '',
+                    'session_display': f"{str(req.session.section) if req.session else ''} | Daily Attendance @ {req.session.date if req.session else ''}",
+                    'requested_by': {
+                        'name': req.requested_by.user.get_full_name() if req.requested_by and req.requested_by.user else '',
+                        'staff_id': str(req.requested_by.staff_id) if req.requested_by else '',
+                    },
+                    'requested_at': req.requested_at.isoformat() if req.requested_at else '',
+                    'note': req.note or '',
+                    'status': req.status,
+                    'hod_status': req.hod_status,
+                })
+
+        combined_data = period_data + daily_data
         combined_data.sort(key=lambda x: x.get('requested_at', ''), reverse=True)
-        
+
         return Response({
             'results': combined_data,
             'total_period_requests': len(period_data),
             'total_daily_requests': len(daily_data),
-            'total_requests': len(combined_data)
+            'total_requests': len(combined_data),
         })
-    
+
     def patch(self, request):
-        """Handle approval/rejection for both types of unlock requests."""
+        """Handle approval/rejection for unlock requests. Daily bulk groups are acted on atomically."""
         user = request.user
         perms = get_user_permissions(user)
-        
+
         if not ('analytics.view_all_analytics' in perms or user.is_superuser):
             return Response({'detail': 'Permission denied'}, status=403)
-        
+
         request_id = request.data.get('id')
-        request_type = request.data.get('request_type', 'period')  # 'period' or 'daily'
+        request_type = request.data.get('request_type', 'period')  # 'period', 'daily', 'daily_bulk'
+        bulk_group_id = request.data.get('bulk_group_id')
         action = request.data.get('action')  # 'approve' or 'reject'
         final_note = request.data.get('note', '')
-        
-        if not all([request_id, action]):
-            return Response({'detail': 'Missing required fields: id, action'}, status=400)
-        
+
+        if not action:
+            return Response({'detail': 'Missing required field: action'}, status=400)
         if action not in ['approve', 'reject']:
             return Response({'detail': 'Invalid action. Must be approve or reject'}, status=400)
-        
+
+        staff_profile = getattr(user, 'staff_profile', None)
+
         try:
             if request_type == 'period':
+                if not request_id:
+                    return Response({'detail': 'Missing required field: id'}, status=400)
                 unlock_req = AttendanceUnlockRequest.objects.select_related('session').get(id=request_id)
-            else:
-                from .models import DailyAttendanceUnlockRequest
-                unlock_req = DailyAttendanceUnlockRequest.objects.select_related('session').get(id=request_id)
-                
-            # For period requests, HOD must have approved first.
-            # For daily requests, admin can approve directly (HOD step is optional).
-            if request_type == 'period' and unlock_req.status != 'HOD_APPROVED':
-                return Response({
-                    'detail': f'Request must be approved by HOD first. Current status: {unlock_req.status}'
-                }, status=400)
-            if request_type == 'daily' and unlock_req.status not in ['PENDING', 'HOD_APPROVED']:
-                return Response({
-                    'detail': f'Request has already been finalized. Current status: {unlock_req.status}'
-                }, status=400)
-            
-            staff_profile = getattr(user, 'staff_profile', None)
-            
-            if action == 'approve':
-                unlock_req.status = 'APPROVED'
-                unlock_req.reviewed_by = staff_profile
-                unlock_req.reviewed_at = timezone.now()
-                unlock_req.final_note = final_note
-                unlock_req.save()
-                
-                # Unlock the session
-                session = unlock_req.session
-                session.is_locked = False 
-                session.save(update_fields=['is_locked'])
-                
-                response_message = f'{request_type.title()} attendance session unlocked successfully'
-            else:  # reject
-                unlock_req.status = 'REJECTED'
-                unlock_req.reviewed_by = staff_profile
-                unlock_req.reviewed_at = timezone.now()
-                unlock_req.final_note = final_note
-                unlock_req.save()
-                
-                response_message = f'{request_type.title()} unlock request rejected'
-
-            if request_type == 'daily':
-                from .serializers import DailyAttendanceUnlockRequestSerializer
-                serializer = DailyAttendanceUnlockRequestSerializer(unlock_req, context={'request': request})
-            else:
+                if unlock_req.status != 'HOD_APPROVED':
+                    return Response({
+                        'detail': f'Request must be HOD-approved first. Current status: {unlock_req.status}'
+                    }, status=400)
+                if action == 'approve':
+                    unlock_req.status = 'APPROVED'
+                    unlock_req.reviewed_by = staff_profile
+                    unlock_req.reviewed_at = timezone.now()
+                    unlock_req.final_note = final_note
+                    unlock_req.save()
+                    unlock_req.session.is_locked = False
+                    unlock_req.session.save(update_fields=['is_locked'])
+                    msg = 'Period attendance session unlocked successfully'
+                else:
+                    unlock_req.status = 'REJECTED'
+                    unlock_req.reviewed_by = staff_profile
+                    unlock_req.reviewed_at = timezone.now()
+                    unlock_req.final_note = final_note
+                    unlock_req.save()
+                    msg = 'Period unlock request rejected'
                 serializer = AttendanceUnlockRequestSerializer(unlock_req, context={'request': request})
-            return Response({
-                'success': True,
-                'message': response_message,
-                'request': serializer.data
-            })
-            
-        except (AttendanceUnlockRequest.DoesNotExist, DailyAttendanceUnlockRequest.DoesNotExist):
+                return Response({'success': True, 'message': msg, 'request': serializer.data})
+
+            else:  # daily or daily_bulk
+                from .models import DailyAttendanceUnlockRequest, DailyAttendanceRecord
+                from django.db import transaction
+
+                # Resolve which records to act on
+                if bulk_group_id:
+                    reqs = list(DailyAttendanceUnlockRequest.objects.select_related('session').filter(
+                        bulk_group_id=bulk_group_id,
+                        status__in=['PENDING', 'HOD_APPROVED'],
+                    ))
+                    if not reqs:
+                        return Response({'detail': 'No pending requests found for this group'}, status=404)
+                elif request_id:
+                    req = DailyAttendanceUnlockRequest.objects.select_related('session').get(id=request_id)
+                    if req.status not in ['PENDING', 'HOD_APPROVED']:
+                        return Response({'detail': f'Request already finalised: {req.status}'}, status=400)
+                    reqs = [req]
+                else:
+                    return Response({'detail': 'Provide id or bulk_group_id'}, status=400)
+
+                with transaction.atomic():
+                    for req in reqs:
+                        if action == 'approve':
+                            req.status = 'APPROVED'
+                            req.reviewed_by = staff_profile
+                            req.reviewed_at = timezone.now()
+                            req.final_note = final_note
+                            req.save()
+                            req.session.is_locked = False
+                            req.session.save(update_fields=['is_locked'])
+                            DailyAttendanceRecord.objects.filter(session=req.session).delete()
+                        else:
+                            req.status = 'REJECTED'
+                            req.reviewed_by = staff_profile
+                            req.reviewed_at = timezone.now()
+                            req.final_note = final_note
+                            req.save()
+
+                count = len(reqs)
+                if action == 'approve':
+                    msg = f'Daily attendance unlocked and reset for {count} session{"s" if count > 1 else ""}'
+                else:
+                    msg = f'Daily unlock request rejected for {count} session{"s" if count > 1 else ""}'
+                return Response({'success': True, 'message': msg})
+
+        except AttendanceUnlockRequest.DoesNotExist:
             return Response({'detail': 'Request not found'}, status=404)
         except Exception as e:
             return Response({'detail': str(e)}, status=500)
+
+    def delete(self, request):
+        """Bulk-delete all unlock requests visible to IQAC/admin."""
+        user = request.user
+        perms = get_user_permissions(user)
+
+        if not ('analytics.view_all_analytics' in perms or user.is_superuser):
+            return Response({'detail': 'Permission denied'}, status=403)
+
+        from .models import DailyAttendanceUnlockRequest
+
+        deleted_period, _ = AttendanceUnlockRequest.objects.all().delete()
+        deleted_daily, _ = DailyAttendanceUnlockRequest.objects.all().delete()
+
+        return Response({
+            'deleted_period_requests': deleted_period,
+            'deleted_daily_requests': deleted_daily,
+            'total_deleted': deleted_period + deleted_daily,
+        })
 
 
 class StaffPeriodsView(APIView):

@@ -1,8 +1,12 @@
 import logging
+import datetime
+from io import BytesIO
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import PermissionDenied
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+from django.http import HttpResponse
 
 logger = logging.getLogger(__name__)
 from django.db.models import Count, Q, Avg, F
@@ -1302,6 +1306,651 @@ class MyClassStudentsView(APIView):
         })
 
 
+def _parse_daily_bulk_date(value):
+    if isinstance(value, datetime.datetime):
+        return value.date()
+    if isinstance(value, datetime.date):
+        return value
+    text = str(value or '').strip()
+    if not text:
+        return None
+    for fmt in ('%Y-%m-%d', '%d-%m-%Y', '%d/%m/%Y', '%d.%m.%Y'):
+        try:
+            return datetime.datetime.strptime(text, fmt).date()
+        except Exception:
+            continue
+    try:
+        return datetime.date.fromisoformat(text)
+    except Exception:
+        return None
+
+
+def _normalize_daily_bulk_status(value):
+    text = str(value or '').strip().upper()
+    if not text:
+        return None
+    mapping = {
+        'P': 'P',
+        'PRESENT': 'P',
+        'A': 'A',
+        'ABSENT': 'A',
+        'OD': 'OD',
+        'ON DUTY': 'OD',
+        'ONDUTY': 'OD',
+        'LEAVE': 'LEAVE',
+        'L': 'LEAVE',
+    }
+    return mapping.get(text, '__INVALID__')
+
+
+def _excel_status_from_code(status_code):
+    mapping = {
+        'P': 'Present',
+        'A': 'Absent',
+        'OD': 'OD',
+        'LEAVE': 'Leave',
+        'L': 'Leave',
+    }
+    return mapping.get((status_code or '').upper(), 'Present')
+
+
+def _daily_bulk_access_context(user, staff_profile):
+    from .models import SectionAdvisor, DailyAttendanceSession, DepartmentRole, TeachingAssignment
+
+    perms = get_user_permissions(user)
+    can_view_all = 'analytics.view_all_analytics' in perms or user.is_superuser
+    can_view_department = 'analytics.view_department_analytics' in perms or can_view_all
+
+    advisor_section_ids = set(SectionAdvisor.objects.filter(
+        advisor=staff_profile,
+        is_active=True,
+    ).values_list('section_id', flat=True))
+
+    assigned_section_ids = set(DailyAttendanceSession.objects.filter(
+        assigned_to=staff_profile,
+    ).values_list('section_id', flat=True).distinct())
+
+    department_ids = set()
+    if can_view_department:
+        department_ids |= set(DepartmentRole.objects.filter(
+            staff=staff_profile,
+            is_active=True,
+        ).values_list('department_id', flat=True))
+        department_ids |= set(TeachingAssignment.objects.filter(
+            staff=staff_profile,
+            is_active=True,
+        ).values_list('section__batch__course__department_id', flat=True))
+        department_ids = set([d for d in department_ids if d])
+
+    return {
+        'can_view_all': can_view_all,
+        'can_view_department': can_view_department,
+        'advisor_section_ids': advisor_section_ids,
+        'assigned_section_ids': assigned_section_ids,
+        'department_ids': department_ids,
+    }
+
+
+def _can_access_daily_bulk_section(user, staff_profile, section, start_date=None, end_date=None):
+    from .models import DailyAttendanceSession
+
+    ctx = _daily_bulk_access_context(user, staff_profile)
+    if ctx['can_view_all']:
+        return True
+    if section.id in ctx['advisor_section_ids']:
+        return True
+
+    if ctx['can_view_department'] and section.batch and section.batch.course:
+        if section.batch.course.department_id in ctx['department_ids']:
+            return True
+
+    assigned_qs = DailyAttendanceSession.objects.filter(
+        section=section,
+        assigned_to=staff_profile,
+    )
+    if start_date:
+        assigned_qs = assigned_qs.filter(date__gte=start_date)
+    if end_date:
+        assigned_qs = assigned_qs.filter(date__lte=end_date)
+    if assigned_qs.exists():
+        return True
+
+    return section.id in ctx['assigned_section_ids']
+
+
+class BulkAttendanceSectionsView(APIView):
+    """List daily-attendance sections accessible for bulk Excel operations."""
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        user = request.user
+        staff_profile = getattr(user, 'staff_profile', None)
+        if not staff_profile:
+            raise PermissionDenied('Staff profile required')
+
+        from .models import Section
+
+        ctx = _daily_bulk_access_context(user, staff_profile)
+        if ctx['can_view_all']:
+            qs = Section.objects.all()
+        else:
+            section_ids = set(ctx['advisor_section_ids']) | set(ctx['assigned_section_ids'])
+            if ctx['can_view_department'] and ctx['department_ids']:
+                dept_ids = list(ctx['department_ids'])
+                dept_sections = Section.objects.filter(
+                    batch__course__department_id__in=dept_ids
+                ).values_list('id', flat=True)
+                section_ids |= set(dept_sections)
+            if not section_ids:
+                return Response([])
+            qs = Section.objects.filter(id__in=list(section_ids))
+
+        sections = qs.select_related('batch', 'batch__course__department').order_by(
+            'batch__course__department__short_name', 'batch__name', 'name'
+        )
+
+        data = []
+        for s in sections:
+            dept = getattr(getattr(getattr(s, 'batch', None), 'course', None), 'department', None)
+            data.append({
+                'section_id': s.id,
+                'section_name': s.name,
+                'batch_name': s.batch.name if s.batch else '',
+                'department_name': dept.name if dept else '',
+                'department_short_name': (dept.short_name or dept.code or dept.name) if dept else '',
+            })
+        return Response(data)
+
+
+class BulkAttendanceDownloadView(APIView):
+    """Download daily attendance Excel template for a section and date range."""
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        user = request.user
+        staff_profile = getattr(user, 'staff_profile', None)
+        if not staff_profile:
+            raise PermissionDenied('Staff profile required')
+
+        section_id = request.query_params.get('section_id')
+        start_date = _parse_daily_bulk_date(request.query_params.get('start_date'))
+        end_date = _parse_daily_bulk_date(request.query_params.get('end_date'))
+
+        if not section_id:
+            return Response({'error': 'section_id is required'}, status=400)
+        if not start_date or not end_date:
+            return Response({'error': 'Valid start_date and end_date are required'}, status=400)
+        if end_date < start_date:
+            return Response({'error': 'end_date must be greater than or equal to start_date'}, status=400)
+
+        try:
+            section_id_int = int(section_id)
+        except Exception:
+            return Response({'error': 'Invalid section_id'}, status=400)
+
+        from .models import Section, StudentProfile, DailyAttendanceRecord
+
+        try:
+            section = Section.objects.select_related('batch', 'batch__course__department').get(id=section_id_int)
+        except Section.DoesNotExist:
+            return Response({'error': 'Section not found'}, status=404)
+
+        if not _can_access_daily_bulk_section(user, staff_profile, section, start_date, end_date):
+            raise PermissionDenied('You do not have access to this section for bulk attendance')
+
+        try:
+            from openpyxl import Workbook
+            from openpyxl.worksheet.datavalidation import DataValidation
+            from openpyxl.utils import get_column_letter
+        except ImportError:
+            return Response({'error': 'Excel support not available. Please install openpyxl.'}, status=500)
+
+        students = list(
+            StudentProfile.objects.filter(section=section)
+            .exclude(status__in=['INACTIVE', 'DEBAR'])
+            .select_related('user')
+            .order_by('reg_no')
+        )
+
+        days = []
+        cur = start_date
+        while cur <= end_date:
+            days.append(cur)
+            cur += datetime.timedelta(days=1)
+
+        # Apply excluded_dates filter
+        excluded_dates_raw = request.query_params.get('excluded_dates', '')
+        if excluded_dates_raw:
+            excluded_set = set()
+            for d in excluded_dates_raw.split(','):
+                parsed = _parse_daily_bulk_date(d.strip())
+                if parsed:
+                    excluded_set.add(parsed)
+            days = [d for d in days if d not in excluded_set]
+
+        if not days:
+            return Response({'error': 'No dates remaining after exclusions'}, status=400)
+
+        existing = DailyAttendanceRecord.objects.filter(
+            session__section=section,
+            session__date__gte=start_date,
+            session__date__lte=end_date,
+            student_id__in=[s.id for s in students],
+        ).values('student_id', 'session__date', 'status')
+        status_map = {
+            (row['student_id'], row['session__date']): _excel_status_from_code(row['status'])
+            for row in existing
+        }
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = 'Daily Attendance'
+
+        headers = ['Register Number', 'Name'] + [d.strftime('%Y-%m-%d') for d in days]
+        ws.append(headers)
+
+        for student in students:
+            if student.user:
+                name = student.user.get_full_name().strip() or student.user.username
+            else:
+                name = student.reg_no
+            row = [student.reg_no, name]
+            for d in days:
+                row.append(status_map.get((student.id, d), 'Present'))
+            ws.append(row)
+
+        lists_ws = wb.create_sheet('_Lists')
+        lists_ws.sheet_state = 'hidden'
+        for idx, label in enumerate(['Present', 'Absent', 'OD', 'Leave'], start=1):
+            lists_ws.cell(row=idx, column=1, value=label)
+
+        if days:
+            dv = DataValidation(type='list', formula1='=_Lists!$A$1:$A$4', allow_blank=False)
+            ws.add_data_validation(dv)
+            start_col = 3
+            end_col = 2 + len(days)
+            end_row = max(2, len(students) + 1)
+            dv.add(f"{get_column_letter(start_col)}2:{get_column_letter(end_col)}{end_row}")
+
+        ws.freeze_panes = 'C2'
+        ws.column_dimensions['A'].width = 22
+        ws.column_dimensions['B'].width = 32
+        for i in range(3, 3 + len(days)):
+            ws.column_dimensions[get_column_letter(i)].width = 14
+
+        out = BytesIO()
+        wb.save(out)
+        out.seek(0)
+
+        filename = f"daily_attendance_{section.name}_{start_date.isoformat()}_{end_date.isoformat()}.xlsx"
+        response = HttpResponse(
+            out.getvalue(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+
+
+class BulkAttendanceLockedSessionsView(APIView):
+    """List locked daily attendance sessions for a section (optionally in date range)."""
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        user = request.user
+        staff_profile = getattr(user, 'staff_profile', None)
+        if not staff_profile:
+            raise PermissionDenied('Staff profile required')
+
+        section_id = request.query_params.get('section_id')
+        start_date = _parse_daily_bulk_date(request.query_params.get('start_date'))
+        end_date = _parse_daily_bulk_date(request.query_params.get('end_date'))
+
+        if not section_id:
+            return Response({'error': 'section_id is required'}, status=400)
+
+        if request.query_params.get('start_date') and not start_date:
+            return Response({'error': 'Invalid start_date'}, status=400)
+        if request.query_params.get('end_date') and not end_date:
+            return Response({'error': 'Invalid end_date'}, status=400)
+        if start_date and end_date and end_date < start_date:
+            return Response({'error': 'end_date must be greater than or equal to start_date'}, status=400)
+
+        try:
+            section_id_int = int(section_id)
+        except Exception:
+            return Response({'error': 'Invalid section_id'}, status=400)
+
+        from .models import Section, DailyAttendanceSession, DailyAttendanceUnlockRequest
+
+        try:
+            section = Section.objects.select_related('batch', 'batch__course__department').get(id=section_id_int)
+        except Section.DoesNotExist:
+            return Response({'error': 'Section not found'}, status=404)
+
+        if not _can_access_daily_bulk_section(user, staff_profile, section, start_date, end_date):
+            raise PermissionDenied('You do not have access to this section for bulk attendance')
+
+        sessions_qs = DailyAttendanceSession.objects.filter(section=section, is_locked=True)
+        if start_date:
+            sessions_qs = sessions_qs.filter(date__gte=start_date)
+        if end_date:
+            sessions_qs = sessions_qs.filter(date__lte=end_date)
+
+        sessions = list(sessions_qs.order_by('date').only('id', 'date'))
+        session_ids = [s.id for s in sessions]
+
+        latest_requests = {}
+        if session_ids:
+            for unlock_request in DailyAttendanceUnlockRequest.objects.filter(
+                session_id__in=session_ids
+            ).order_by('session_id', '-requested_at'):
+                if unlock_request.session_id not in latest_requests:
+                    latest_requests[unlock_request.session_id] = unlock_request
+
+        results = []
+        for sess in sessions:
+            unlock_request = latest_requests.get(sess.id)
+            results.append({
+                'session_id': sess.id,
+                'section_id': section.id,
+                'section_name': str(section),
+                'date': sess.date.isoformat(),
+                'unlock_request_id': unlock_request.id if unlock_request else None,
+                'unlock_request_status': unlock_request.status if unlock_request else None,
+                'unlock_request_hod_status': unlock_request.hod_status if unlock_request else None,
+            })
+
+        return Response({'results': results, 'count': len(results)})
+
+
+class BulkAttendanceImportView(APIView):
+    """Import daily attendance from Excel or JSON preview data for a section."""
+    permission_classes = (IsAuthenticated,)
+    parser_classes = (MultiPartParser, FormParser, JSONParser)
+
+    def post(self, request):
+        user = request.user
+        staff_profile = getattr(user, 'staff_profile', None)
+        if not staff_profile:
+            raise PermissionDenied('Staff profile required')
+
+        # Accept JSON body (from preview) or multipart file upload
+        json_attendance = request.data.get('attendance') if isinstance(request.data.get('attendance'), list) else None
+        uploaded = request.FILES.get('file')
+        section_id = request.data.get('section_id')
+        lock_session_raw = request.data.get('lock_session', False)
+        if isinstance(lock_session_raw, bool):
+            lock_session = lock_session_raw
+        else:
+            lock_session = str(lock_session_raw).strip().lower() in ('1', 'true', 'yes', 'y')
+
+        if not section_id:
+            return Response({'error': 'section_id is required'}, status=400)
+        if json_attendance is None and not uploaded:
+            return Response({'error': 'Either file or attendance JSON is required'}, status=400)
+
+        try:
+            section_id_int = int(section_id)
+        except Exception:
+            return Response({'error': 'Invalid section_id'}, status=400)
+
+        from django.db import transaction
+        from .models import Section, StudentProfile, DailyAttendanceSession, DailyAttendanceRecord
+
+        try:
+            section = Section.objects.select_related('batch', 'batch__course__department').get(id=section_id_int)
+        except Section.DoesNotExist:
+            return Response({'error': 'Section not found'}, status=404)
+
+        if not _can_access_daily_bulk_section(user, staff_profile, section):
+            raise PermissionDenied('You do not have access to this section for bulk attendance import')
+
+        from django.db import transaction
+        from .models import Section, StudentProfile, DailyAttendanceSession, DailyAttendanceRecord
+
+        students = list(
+            StudentProfile.objects.filter(section=section)
+            .exclude(status__in=['INACTIVE', 'DEBAR'])
+            .select_related('user')
+        )
+        students_by_reg = {str(s.reg_no).strip().upper(): s for s in students if s.reg_no}
+
+        # ── Build rows_data from JSON (preview path) or Excel (file path) ──────────
+        # rows_data is a list of dicts: {reg_no, dates: {date_str: status}, remarks: {date_str: remark}}
+        rows_data = []
+        errors = []
+
+        if json_attendance is not None:
+            # JSON path: sent from the frontend preview
+            for entry in json_attendance:
+                reg_no_raw = entry.get('reg_no', '')
+                dates_map = entry.get('dates', {})    # {date_str: status}
+                remarks_map = entry.get('remarks', {})  # {date_str: remark}
+                rows_data.append({
+                    'reg_no': str(reg_no_raw).strip(),
+                    'dates': dates_map,
+                    'remarks': remarks_map,
+                })
+        else:
+            # Excel file path
+            try:
+                from openpyxl import load_workbook
+            except ImportError:
+                return Response({'error': 'Excel support not available. Please install openpyxl.'}, status=500)
+
+            try:
+                wb = load_workbook(uploaded, data_only=True)
+                ws = wb.active
+            except Exception as exc:
+                return Response({'error': f'Invalid Excel file: {exc}'}, status=400)
+
+            max_row = ws.max_row or 0
+            max_col = ws.max_column or 0
+            if max_row < 2 or max_col < 3:
+                return Response({'error': 'Excel file must contain header row and at least one date column (starting column C)'}, status=400)
+
+            headers = [ws.cell(row=1, column=c).value for c in range(1, max_col + 1)]
+            # Format: col A = Register Number, col B = Name, col C onward = dates
+            date_columns = []
+            for col in range(3, max_col + 1):
+                parsed_date = _parse_daily_bulk_date(headers[col - 1])
+                if parsed_date:
+                    date_columns.append((col, parsed_date))
+
+            if not date_columns:
+                return Response({'error': 'No valid date columns found from column C onward'}, status=400)
+
+            for row in range(2, max_row + 1):
+                reg_no_raw = ws.cell(row=row, column=1).value
+                if reg_no_raw is None or str(reg_no_raw).strip() == '':
+                    continue
+                # Excel may auto-cast integer reg-nos to float
+                if isinstance(reg_no_raw, float) and reg_no_raw == int(reg_no_raw):
+                    reg_no_raw = int(reg_no_raw)
+                dates_map = {}
+                for col, att_date in date_columns:
+                    raw_status = ws.cell(row=row, column=col).value
+                    dates_map[att_date.isoformat()] = raw_status
+                rows_data.append({'reg_no': str(reg_no_raw).strip(), 'dates': dates_map, 'remarks': {}})
+
+        # ── Shared save loop ────────────────────────────────────────────────────────
+        created_count = 0
+        updated_count = 0
+        locked_count = 0
+        period_records_updated = 0
+        processed_session_ids = set()
+        skipped_locked_sessions = {}
+        session_meta = {}
+        period_overrides = {}
+
+        with transaction.atomic():
+            for entry in rows_data:
+                reg_no_val = entry['reg_no']
+                if not reg_no_val:
+                    continue
+
+                student = students_by_reg.get(reg_no_val.upper())
+                if student is None:
+                    if len(errors) < 200:
+                        errors.append(f'Student not found in section: {reg_no_val}')
+                    continue
+
+                dates_map = entry.get('dates', {})
+                remarks_map = entry.get('remarks', {})
+
+                for date_str, raw_status in dates_map.items():
+                    norm_status = _normalize_daily_bulk_status(raw_status)
+                    if norm_status is None:
+                        continue
+                    if norm_status == '__INVALID__':
+                        if len(errors) < 200:
+                            errors.append(f"{reg_no_val}, {date_str}: invalid status '{raw_status}'")
+                        continue
+
+                    att_date = _parse_daily_bulk_date(date_str)
+                    if att_date is None:
+                        if len(errors) < 200:
+                            errors.append(f'{reg_no_val}: could not parse date "{date_str}"')
+                        continue
+
+                    session, _ = DailyAttendanceSession.objects.get_or_create(
+                        section=section,
+                        date=att_date,
+                        defaults={'created_by': staff_profile},
+                    )
+
+                    if session.assigned_to and session.assigned_to != staff_profile and not user.is_superuser:
+                        if len(errors) < 200:
+                            errors.append(f'{reg_no_val}, {date_str}: session assigned to another staff; skipped')
+                        continue
+
+                    if session.is_locked:
+                        skipped_locked_sessions[session.id] = {
+                            'session_id': session.id,
+                            'section_id': section.id,
+                            'section_name': str(section),
+                            'date': att_date.isoformat(),
+                        }
+                        continue
+
+                    processed_session_ids.add(session.id)
+                    session_meta[session.id] = {
+                        'section_id': section.id,
+                        'date': att_date,
+                    }
+
+                    period_status = None
+                    if norm_status in ('OD', 'LEAVE'):
+                        period_status = norm_status
+                    elif norm_status == 'LATE':
+                        period_status = 'P'
+                    if period_status:
+                        session_overrides = period_overrides.setdefault(session.id, {})
+                        session_overrides[student.id] = period_status
+
+                    remark = str(remarks_map.get(date_str, '') or '').strip()
+
+                    record, created = DailyAttendanceRecord.objects.get_or_create(
+                        session=session,
+                        student=student,
+                        defaults={
+                            'status': norm_status,
+                            'marked_by': staff_profile,
+                            'remarks': remark or None,
+                        },
+                    )
+                    if created:
+                        created_count += 1
+                        continue
+
+                    changed = record.status != norm_status or record.marked_by_id != staff_profile.id
+                    if remark:
+                        changed = changed or (record.remarks or '') != remark
+                    if changed:
+                        record.status = norm_status
+                        record.marked_by = staff_profile
+                        if remark:
+                            record.remarks = remark
+                        record.save(update_fields=['status', 'marked_by', 'marked_at', 'remarks'])
+                        updated_count += 1
+
+            if period_overrides:
+                from .models import PeriodAttendanceSession, PeriodAttendanceRecord
+
+                for session_id, student_statuses in period_overrides.items():
+                    meta = session_meta.get(session_id)
+                    if not meta:
+                        continue
+                    period_sessions = PeriodAttendanceSession.objects.filter(
+                        section_id=meta['section_id'],
+                        date=meta['date'],
+                    )
+                    for student_id, period_status in student_statuses.items():
+                        period_records_updated += PeriodAttendanceRecord.objects.filter(
+                            session__in=period_sessions,
+                            student_id=student_id,
+                        ).update(status=period_status)
+
+            if lock_session and processed_session_ids:
+                locked_count = DailyAttendanceSession.objects.filter(
+                    id__in=list(processed_session_ids),
+                    is_locked=False,
+                ).update(is_locked=True)
+
+        latest_request_session_ids = set(skipped_locked_sessions.keys())
+        if lock_session and processed_session_ids:
+            latest_request_session_ids.update(processed_session_ids)
+
+        latest_requests = {}
+        if latest_request_session_ids:
+            from .models import DailyAttendanceUnlockRequest
+
+            for unlock_request in DailyAttendanceUnlockRequest.objects.filter(
+                session_id__in=list(latest_request_session_ids)
+            ).order_by('session_id', '-requested_at'):
+                if unlock_request.session_id not in latest_requests:
+                    latest_requests[unlock_request.session_id] = unlock_request
+
+        locked_session_list = []
+        if lock_session and processed_session_ids:
+            for session_id in sorted(processed_session_ids, key=lambda item: session_meta[item]['date']):
+                meta = session_meta[session_id]
+                unlock_request = latest_requests.get(session_id)
+                locked_session_list.append({
+                    'session_id': session_id,
+                    'section_id': meta['section_id'],
+                    'section_name': str(section),
+                    'date': meta['date'].isoformat(),
+                    'unlock_request_id': unlock_request.id if unlock_request else None,
+                    'unlock_request_status': unlock_request.status if unlock_request else None,
+                    'unlock_request_hod_status': unlock_request.hod_status if unlock_request else None,
+                })
+
+        if skipped_locked_sessions:
+            skipped_locked_session_list = []
+            for session_id, session_info in sorted(skipped_locked_sessions.items(), key=lambda item: item[1]['date']):
+                unlock_request = latest_requests.get(session_id)
+                skipped_locked_session_list.append({
+                    **session_info,
+                    'unlock_request_id': unlock_request.id if unlock_request else None,
+                    'unlock_request_status': unlock_request.status if unlock_request else None,
+                    'unlock_request_hod_status': unlock_request.hod_status if unlock_request else None,
+                })
+            errors.append(f'Skipped {len(skipped_locked_session_list)} locked sessions.')
+        else:
+            skipped_locked_session_list = []
+
+        return Response({
+            'created': created_count,
+            'updated': updated_count,
+            'locked': locked_count,
+            'period_records_updated': period_records_updated,
+            'locked_sessions': locked_session_list,
+            'skipped_locked_sessions': skipped_locked_session_list,
+            'errors': errors,
+        })
+
+
 class MyClassAttendanceAnalyticsView(APIView):
     """
     Get period attendance analytics for advisor's assigned sections.
@@ -2143,6 +2792,90 @@ class DailyAttendanceUnlockRequestView(APIView):
             'status': unlock_request.status,
             'hod_status': unlock_request.hod_status,
             'session_id': session.id
+        })
+
+
+class BulkDailyAttendanceUnlockRequestView(APIView):
+    """
+    POST /api/academics/bulk-attendance/unlock-request/
+    Submit a single grouped unlock request for multiple daily attendance sessions at once.
+    Body: { session_ids: [1, 2, ...], note: '' }
+    Creates individual DailyAttendanceUnlockRequest records atomically and returns a
+    unified summary so the frontend only needs one HTTP round-trip.
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request):
+        from django.db import transaction
+        from .models import DailyAttendanceSession, DailyAttendanceUnlockRequest, SectionAdvisor
+
+        user = request.user
+        staff_profile = getattr(user, 'staff_profile', None)
+        if not staff_profile:
+            raise PermissionDenied('Staff profile required')
+
+        session_ids = request.data.get('session_ids', [])
+        note = str(request.data.get('note', '') or '')
+
+        if not session_ids or not isinstance(session_ids, list):
+            return Response({'error': 'session_ids must be a non-empty list'}, status=400)
+
+        import uuid
+        bulk_group_id = uuid.uuid4()
+
+        sessions = list(
+            DailyAttendanceSession.objects.select_related('section', 'assigned_to')
+            .filter(id__in=session_ids)
+        )
+        found_ids = {s.id for s in sessions}
+        missing_ids = [sid for sid in session_ids if sid not in found_ids]
+
+        created_requests = []
+        already_pending = []
+        skipped_ids = list(missing_ids)  # not found
+
+        with transaction.atomic():
+            for session in sessions:
+                # Permission: advisor, assigned, creator, or superuser
+                is_advisor = SectionAdvisor.objects.filter(
+                    advisor=staff_profile, section=session.section, is_active=True
+                ).exists()
+                is_assigned = session.assigned_to == staff_profile if session.assigned_to else False
+                if not (is_advisor or is_assigned or session.created_by == staff_profile or user.is_superuser):
+                    skipped_ids.append(session.id)
+                    continue
+
+                existing = DailyAttendanceUnlockRequest.objects.filter(
+                    session=session, status__in=['PENDING', 'HOD_APPROVED']
+                ).first()
+                if existing:
+                    already_pending.append({
+                        'session_id': session.id,
+                        'unlock_request_id': existing.id,
+                        'unlock_request_status': existing.status,
+                        'unlock_request_hod_status': existing.hod_status,
+                    })
+                    continue
+
+                req = DailyAttendanceUnlockRequest.objects.create(
+                    session=session,
+                    requested_by=staff_profile,
+                    note=note,
+                    bulk_group_id=bulk_group_id,
+                )
+                created_requests.append({
+                    'session_id': session.id,
+                    'unlock_request_id': req.id,
+                    'unlock_request_status': req.status,
+                    'unlock_request_hod_status': req.hod_status,
+                })
+
+        return Response({
+            'created': created_requests,
+            'already_pending': already_pending,
+            'skipped_ids': skipped_ids,
+            'total_created': len(created_requests),
+            'total_already_pending': len(already_pending),
         })
 
 

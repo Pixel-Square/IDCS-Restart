@@ -1,11 +1,44 @@
 import React, { useEffect, useRef, useState } from 'react'
+import * as XLSX from 'xlsx'
 import fetchWithAuth from '../../services/fetchAuth'
 import AttendanceAssignmentRequestsModal from '../../components/AttendanceAssignmentRequestsModal'
-import { Calendar, Clock, Users, CheckCircle2, XCircle, Loader2, Save, X, ChevronDown, AlertCircle, Lock, Unlock, GraduationCap, Check, ArrowLeftRight, Bell } from 'lucide-react'
+import { Calendar, Clock, Users, CheckCircle2, XCircle, Loader2, Save, X, ChevronDown, AlertCircle, Lock, Unlock, GraduationCap, Check, ArrowLeftRight, Bell, Download, Upload, FileSpreadsheet, Eye } from 'lucide-react'
 import HalfDayRequestsApproval from './HalfDayRequestsApproval'
 import AttendanceRequests from './AttendanceRequests'
 
-type ViewMode = 'period' | 'daily'
+type ViewMode = 'period' | 'daily' | 'bulk'
+
+type BulkPreviewRow = {
+  reg_no: string
+  name: string
+  statuses: Record<string, string>
+  remarks: Record<string, string>
+}
+
+type BulkPreviewData = {
+  dates: string[]
+  rows: BulkPreviewRow[]
+}
+
+type BulkLockedSession = {
+  session_id: number
+  section_id: number
+  section_name: string
+  date: string
+  unlock_request_id?: number | null
+  unlock_request_status?: string | null
+  unlock_request_hod_status?: string | null
+}
+
+type BulkExcelResult = {
+  created: number
+  updated: number
+  locked: number
+  period_records_updated?: number
+  locked_sessions?: BulkLockedSession[]
+  skipped_locked_sessions?: BulkLockedSession[]
+  errors: string[]
+}
 
 type PeriodItem = {
   id: number
@@ -115,6 +148,25 @@ export default function PeriodAttendance(){
   const [savingDateRange, setSavingDateRange] = useState(false)
   const [selectedStudentsForDateRange, setSelectedStudentsForDateRange] = useState<Set<number>>(new Set())
 
+  // Bulk Excel attendance state
+  const [bulkExcelSections, setBulkExcelSections] = useState<any[]>([])
+  const [bulkExcelSectionsLoading, setBulkExcelSectionsLoading] = useState(false)
+  const [bulkExcelSection, setBulkExcelSection] = useState<any>(null)
+  const [bulkExcelStartDate, setBulkExcelStartDate] = useState<string>('')
+  const [bulkExcelEndDate, setBulkExcelEndDate] = useState<string>(new Date().toISOString().slice(0, 10))
+  const [bulkExcelDownloading, setBulkExcelDownloading] = useState(false)
+  const bulkExcelFileRef = useRef<HTMLInputElement>(null)
+  const [bulkExcelPendingFile, setBulkExcelPendingFile] = useState<File | null>(null)
+  const [bulkExcelImporting, setBulkExcelImporting] = useState(false)
+  const [bulkExcelResult, setBulkExcelResult] = useState<BulkExcelResult | null>(null)
+  const [bulkUnlockRequesting, setBulkUnlockRequesting] = useState(false)
+  const [bulkLockedSessionsInRange, setBulkLockedSessionsInRange] = useState<BulkLockedSession[]>([])
+  const [bulkExcelExcludedDates, setBulkExcelExcludedDates] = useState<Set<string>>(new Set())
+
+  // Preview state (after Excel is parsed client-side)
+  const [bulkPreviewData, setBulkPreviewData] = useState<BulkPreviewData | null>(null)
+  const [bulkPreviewDate, setBulkPreviewDate] = useState<string>('')
+
   // Staff attendance check state
   const [staffAttendanceStatus, setStaffAttendanceStatus] = useState<{
     can_mark_attendance: boolean
@@ -142,8 +194,20 @@ export default function PeriodAttendance(){
   const userPerms = (() => {
     try { return JSON.parse(localStorage.getItem('permissions') || '[]') as string[] } catch { return [] }
   })()
+  const userRoles = (() => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem('roles') || '[]') as Array<string | { name?: string }>
+      return parsed.map(role => {
+        if (typeof role === 'string') return role.toUpperCase().trim()
+        return String(role?.name || '').toUpperCase().trim()
+      }).filter(Boolean)
+    } catch {
+      return [] as string[]
+    }
+  })()
   const hasMarkAttendancePermission = Array.isArray(userPerms) && (userPerms.includes('academics.mark_attendance') || userPerms.includes('MARK_ATTENDANCE'))
   const hasClassAdvisorPermission = myClassSections && myClassSections.length > 0
+  const canViewUnlockApprovalSection = userRoles.includes('HOD') || userRoles.includes('AHOD') || userRoles.includes('IQAC')
   
   // Check if user has sections assigned via swap
   const hasAssignedSections = myClassSections && myClassSections.some((section: any) => section.is_assigned_via_swap)
@@ -1517,6 +1581,279 @@ export default function PeriodAttendance(){
     }
   }
 
+  // Bulk Excel: load sections
+  async function loadBulkExcelSections() {
+    setBulkExcelSectionsLoading(true)
+    try {
+      const res = await fetchWithAuth('/api/academics/bulk-attendance/sections/')
+      if (res.ok) {
+        const data = await res.json()
+        setBulkExcelSections(data)
+        if (data.length === 1) setBulkExcelSection(data[0])
+      }
+    } catch (e) {
+      console.error('Error loading bulk sections:', e)
+    } finally {
+      setBulkExcelSectionsLoading(false)
+    }
+  }
+
+  async function handleBulkExcelDownload() {
+    if (!bulkExcelSection || !bulkExcelStartDate || !bulkExcelEndDate) {
+      alert('Please select a section and date range')
+      return
+    }
+    setBulkExcelDownloading(true)
+    try {
+      const params = new URLSearchParams({
+        section_id: bulkExcelSection.section_id,
+        start_date: bulkExcelStartDate,
+        end_date: bulkExcelEndDate,
+      })
+      if (bulkExcelExcludedDates.size > 0) {
+        params.set('excluded_dates', [...bulkExcelExcludedDates].join(','))
+      }
+      const res = await fetchWithAuth(`/api/academics/bulk-attendance/download/?${params}`)
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Download failed' }))
+        alert(err.error || 'Download failed')
+        return
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `attendance_${bulkExcelSection.section_name}_${bulkExcelStartDate}_${bulkExcelEndDate}.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      alert('Download error: ' + String(e))
+    } finally {
+      setBulkExcelDownloading(false)
+    }
+  }
+
+  function handleBulkExcelFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] ?? null
+    if (!file) return
+    setBulkExcelPendingFile(file)
+    setBulkExcelResult(null)
+
+    const reader = new FileReader()
+    reader.onload = evt => {
+      try {
+        const data = evt.target?.result as ArrayBuffer
+        const wb = XLSX.read(data, { type: 'array' })
+        const ws = wb.Sheets[wb.SheetNames[0]]
+        const allRows = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1, defval: '' }) as any[][]
+
+        if (allRows.length < 2) {
+          alert('Excel file has no data rows')
+          return
+        }
+
+        const headers = allRows[0] as any[]
+        // col A = Register Number, col B = Name, col C onwards = dates
+        const dates: string[] = headers.slice(2).map(h => String(h || '').trim()).filter(Boolean)
+
+        const previewRows: BulkPreviewRow[] = []
+        for (let i = 1; i < allRows.length; i++) {
+          const row = allRows[i]
+          let regNoRaw: any = row[0]
+          // Excel may cast integer reg-nos to float
+          if (typeof regNoRaw === 'number') {
+            regNoRaw = Number.isInteger(regNoRaw) ? String(regNoRaw) : String(Math.round(regNoRaw))
+          }
+          const regNo = String(regNoRaw || '').trim()
+          if (!regNo) continue
+
+          const name = String(row[1] || '').trim()
+          const statuses: Record<string, string> = {}
+          const remarks: Record<string, string> = {}
+          dates.forEach((date, idx) => {
+            statuses[date] = String(row[2 + idx] || '').trim()
+            remarks[date] = ''
+          })
+          previewRows.push({ reg_no: regNo, name, statuses, remarks })
+        }
+
+        setBulkPreviewData({ dates, rows: previewRows })
+        setBulkPreviewDate(dates[0] || '')
+      } catch (err) {
+        alert('Failed to parse Excel: ' + String(err))
+      }
+    }
+    reader.readAsArrayBuffer(file)
+    // reset so same file can be re-selected
+    e.target.value = ''
+  }
+
+  async function handleBulkExcelImport(lockSession: boolean) {
+    if (!bulkPreviewData || !bulkExcelSection) return
+    setBulkExcelImporting(true)
+    setBulkExcelResult(null)
+    try {
+      const attendance = bulkPreviewData.rows.map(row => ({
+        reg_no: row.reg_no,
+        dates: row.statuses,
+        remarks: row.remarks,
+      }))
+      const res = await fetchWithAuth('/api/academics/bulk-attendance/import/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          section_id: bulkExcelSection.section_id,
+          lock_session: lockSession,
+          attendance,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        alert(data.error || 'Import failed')
+        return
+      }
+      setBulkExcelResult(data)
+      setBulkPreviewData(null)
+      setBulkExcelPendingFile(null)
+    } catch (e) {
+      alert('Import error: ' + String(e))
+    } finally {
+      setBulkExcelImporting(false)
+    }
+  }
+
+  async function loadBulkLockedSessionsInRange() {
+    if (!bulkExcelSection) {
+      setBulkLockedSessionsInRange([])
+      return
+    }
+    try {
+      const params = new URLSearchParams({ section_id: String(bulkExcelSection.section_id) })
+      if (bulkExcelStartDate) params.set('start_date', bulkExcelStartDate)
+      if (bulkExcelEndDate) params.set('end_date', bulkExcelEndDate)
+      const res = await fetchWithAuth(`/api/academics/bulk-attendance/locked-sessions/?${params.toString()}`)
+      if (!res.ok) {
+        setBulkLockedSessionsInRange([])
+        return
+      }
+      const data = await res.json().catch(() => ({}))
+      setBulkLockedSessionsInRange(Array.isArray(data?.results) ? data.results : [])
+    } catch {
+      setBulkLockedSessionsInRange([])
+    }
+  }
+
+  function getBulkRequestSessions(result: BulkExcelResult | null) {
+    if (!result) return [] as BulkLockedSession[]
+    const sessionsById = new Map<number, BulkLockedSession>()
+    for (const session of result.locked_sessions || []) sessionsById.set(session.session_id, session)
+    for (const session of result.skipped_locked_sessions || []) sessionsById.set(session.session_id, session)
+    return Array.from(sessionsById.values()).sort((a, b) => a.date.localeCompare(b.date))
+  }
+
+  function getBulkRequestableSessions(result: BulkExcelResult | null) {
+    return getBulkRequestSessions(result).filter(session => !isBulkSessionRequestPending(session))
+  }
+
+  function getCurrentBulkRequestSessions() {
+    if (bulkExcelResult) return getBulkRequestSessions(bulkExcelResult)
+    return [...bulkLockedSessionsInRange].sort((a, b) => a.date.localeCompare(b.date))
+  }
+
+  function getCurrentBulkRequestableSessions() {
+    return getCurrentBulkRequestSessions().filter(session => !isBulkSessionRequestPending(session))
+  }
+
+  function hasCurrentBulkPendingRequests() {
+    return getCurrentBulkRequestSessions().some(session => isBulkSessionRequestPending(session))
+  }
+
+  function isBulkSessionRequestPending(session: BulkLockedSession) {
+    const status = String(session.unlock_request_status || '').toUpperCase()
+    return status === 'PENDING' || status === 'HOD_APPROVED'
+  }
+
+  async function handleBulkLockedSessionRequests() {
+    const requestableSessions = getCurrentBulkRequestableSessions()
+    if (!requestableSessions.length) return
+
+    setBulkUnlockRequesting(true)
+    try {
+      // Single request for all sessions at once
+      const res = await fetchWithAuth('/api/academics/bulk-attendance/unlock-request/', {
+        method: 'POST',
+        body: JSON.stringify({
+          session_ids: requestableSessions.map(s => s.session_id),
+          note: '',
+        }),
+      })
+
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        alert('Failed to submit unlock request: ' + String(data.error || data.detail || 'Unknown error'))
+        return
+      }
+
+      // Merge returned statuses back into state
+      const updatesBySession = new Map<number, Partial<BulkLockedSession>>()
+      for (const item of [...(data.created || []), ...(data.already_pending || [])]) {
+        updatesBySession.set(item.session_id, {
+          unlock_request_id: item.unlock_request_id,
+          unlock_request_status: item.unlock_request_status,
+          unlock_request_hod_status: item.unlock_request_hod_status,
+        })
+      }
+
+      setBulkExcelResult(prev => {
+        if (!prev) return prev
+        return {
+          ...prev,
+          locked_sessions: (prev.locked_sessions || []).map(session => {
+            const update = updatesBySession.get(session.session_id)
+            return update ? { ...session, ...update } : session
+          }),
+          skipped_locked_sessions: (prev.skipped_locked_sessions || []).map(session => {
+            const update = updatesBySession.get(session.session_id)
+            return update ? { ...session, ...update } : session
+          }),
+        }
+      })
+
+      setBulkLockedSessionsInRange(prev =>
+        prev.map(session => {
+          const update = updatesBySession.get(session.session_id)
+          return update ? { ...session, ...update } : session
+        })
+      )
+
+      const created = data.total_created ?? 0
+      const pending = data.total_already_pending ?? 0
+      if (created > 0) {
+        alert('Unlock request sent to IQAC.')
+      } else if (pending > 0) {
+        alert('Unlock request already pending approval.')
+      } else {
+        alert('Unlock request submitted.')
+      }
+    } finally {
+      setBulkUnlockRequesting(false)
+    }
+  }
+
+  async function handleBulkUnlockAndReset() {
+    await handleBulkLockedSessionRequests()
+  }
+
+  useEffect(() => {
+    if (viewMode !== 'bulk') return
+    if (!bulkExcelSection) {
+      setBulkLockedSessionsInRange([])
+      return
+    }
+    if (bulkExcelResult) return
+    loadBulkLockedSessionsInRange()
+  }, [viewMode, bulkExcelSection, bulkExcelStartDate, bulkExcelEndDate, bulkExcelResult])
+
   return (
     <div className="min-h-screen p-4 md:p-6 bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
       {/* Header */}
@@ -1653,6 +1990,22 @@ export default function PeriodAttendance(){
               Period Wise
             </button>
           )}
+          {(canAccessDailyAttendance || hasMarkAttendancePermission) && (
+            <button
+              onClick={() => {
+                setViewMode('bulk')
+                if (bulkExcelSections.length === 0) loadBulkExcelSections()
+              }}
+              className={`px-4 py-3 font-medium text-sm flex items-center gap-2 border-b-2 transition-colors ${
+                viewMode === 'bulk'
+                  ? 'border-indigo-600 text-indigo-600'
+                  : 'border-transparent text-gray-600 hover:text-gray-900 hover:border-gray-300'
+              }`}
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              Bulk / Excel
+            </button>
+          )}
         </div>
       </div>
 
@@ -1762,6 +2115,451 @@ export default function PeriodAttendance(){
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk / Excel Attendance */}
+      {viewMode === 'bulk' && (
+        <div className="space-y-6">
+          {/* Controls card */}
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200">
+            <div className="px-6 py-4 border-b border-slate-200 bg-gradient-to-r from-violet-50 to-indigo-50">
+              <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
+                <FileSpreadsheet className="w-5 h-5 text-violet-600" />
+                Bulk / Excel Attendance
+              </h2>
+              <p className="text-sm text-slate-500 mt-0.5">Download an Excel sheet with your class, fill in attendance, then import it back.</p>
+            </div>
+            <div className="p-6 space-y-5">
+              {/* Section selector */}
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Section</label>
+                {bulkExcelSectionsLoading ? (
+                  <div className="flex items-center gap-2 text-slate-500 text-sm"><Loader2 className="w-4 h-4 animate-spin" />Loading sections…</div>
+                ) : (
+                  <select
+                    value={bulkExcelSection?.section_id ?? ''}
+                    onChange={e => {
+                      const sec = bulkExcelSections.find(s => String(s.section_id) === e.target.value)
+                      setBulkExcelSection(sec ?? null)
+                      setBulkExcelResult(null)
+                      setBulkExcelExcludedDates(new Set())
+                    }}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  >
+                    <option value="">-- Select section --</option>
+                    {bulkExcelSections.map(s => (
+                      <option key={s.section_id} value={s.section_id}>
+                        {[s.department_short_name, s.batch_name, s.section_name].filter(Boolean).join(' · ')}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              {/* Date range */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Start Date</label>
+                  <input
+                    type="date"
+                    value={bulkExcelStartDate}
+                    onChange={e => { setBulkExcelStartDate(e.target.value); setBulkExcelResult(null); setBulkExcelExcludedDates(new Set()) }}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">End Date</label>
+                  <input
+                    type="date"
+                    value={bulkExcelEndDate}
+                    onChange={e => { setBulkExcelEndDate(e.target.value); setBulkExcelResult(null); setBulkExcelExcludedDates(new Set()) }}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  />
+                </div>
+              </div>
+
+              {/* Date exclusion calendar */}
+              {bulkExcelSection && bulkExcelStartDate && bulkExcelEndDate && (() => {
+                const startD = new Date(bulkExcelStartDate + 'T00:00:00')
+                const endD = new Date(bulkExcelEndDate + 'T00:00:00')
+                if (isNaN(startD.getTime()) || isNaN(endD.getTime()) || endD < startD) return null
+
+                // Build list of months
+                const months: { year: number; month: number }[] = []
+                const mCur = new Date(startD.getFullYear(), startD.getMonth(), 1)
+                const mEnd = new Date(endD.getFullYear(), endD.getMonth(), 1)
+                while (mCur <= mEnd) {
+                  months.push({ year: mCur.getFullYear(), month: mCur.getMonth() })
+                  mCur.setMonth(mCur.getMonth() + 1)
+                }
+
+                // Total days in range
+                let totalDays = 0
+                const tempC = new Date(startD)
+                while (tempC <= endD) { totalDays++; tempC.setDate(tempC.getDate() + 1) }
+                const selectedCount = totalDays - bulkExcelExcludedDates.size
+
+                const dayLabels = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']
+
+                return (
+                  <div className="border border-slate-200 rounded-xl bg-slate-50 p-4">
+                    <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-slate-700">Select Working Days</span>
+                        <span className="text-xs text-slate-500 bg-white border border-slate-200 px-2 py-0.5 rounded-full">
+                          {selectedCount} / {totalDays} days selected
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = new Set(bulkExcelExcludedDates)
+                            const c = new Date(startD)
+                            while (c <= endD) {
+                              const day = c.getDay()
+                              if (day === 0 || day === 6) next.add(c.toISOString().slice(0, 10))
+                              c.setDate(c.getDate() + 1)
+                            }
+                            setBulkExcelExcludedDates(next)
+                          }}
+                          className="text-xs px-2.5 py-1 bg-white border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-100 transition-colors"
+                        >
+                          Skip Weekends
+                        </button>
+                        {bulkExcelExcludedDates.size > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setBulkExcelExcludedDates(new Set())}
+                            className="text-xs px-2.5 py-1 bg-white border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-100 transition-colors"
+                          >
+                            Reset
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-5">
+                      {months.map(({ year, month }) => {
+                        const monthName = new Date(year, month, 1).toLocaleString('default', { month: 'long' })
+                        const firstDayOfWeek = new Date(year, month, 1).getDay()
+                        const daysInMonth = new Date(year, month + 1, 0).getDate()
+                        return (
+                          <div key={`${year}-${month}`} className="min-w-[196px]">
+                            <div className="text-xs font-semibold text-slate-600 mb-1.5 text-center">{monthName} {year}</div>
+                            <div className="grid grid-cols-7 gap-0.5">
+                              {dayLabels.map(dl => (
+                                <div key={dl} className="text-center text-[10px] font-medium text-slate-400 py-0.5 w-7">{dl}</div>
+                              ))}
+                              {Array.from({ length: firstDayOfWeek }).map((_, i) => (
+                                <div key={`empty-${i}`} className="w-7 h-7" />
+                              ))}
+                              {Array.from({ length: daysInMonth }).map((_, i) => {
+                                const d = i + 1
+                                const ds = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+                                const dt = new Date(ds + 'T00:00:00')
+                                const inRange = dt >= startD && dt <= endD
+                                const isExcluded = bulkExcelExcludedDates.has(ds)
+                                const isWeekend = dt.getDay() === 0 || dt.getDay() === 6
+                                if (!inRange) {
+                                  return (
+                                    <div key={ds} className="w-7 h-7 flex items-center justify-center text-[11px] text-slate-200">
+                                      {d}
+                                    </div>
+                                  )
+                                }
+                                return (
+                                  <button
+                                    key={ds}
+                                    type="button"
+                                    title={`${ds} — click to ${isExcluded ? 'include' : 'exclude'}`}
+                                    onClick={() =>
+                                      setBulkExcelExcludedDates(prev => {
+                                        const next = new Set(prev)
+                                        if (next.has(ds)) next.delete(ds); else next.add(ds)
+                                        return next
+                                      })
+                                    }
+                                    className={`w-7 h-7 rounded text-[11px] font-medium transition-colors flex items-center justify-center mx-auto ${
+                                      isExcluded
+                                        ? 'bg-red-100 text-red-400 line-through'
+                                        : isWeekend
+                                        ? 'bg-amber-50 text-amber-700 hover:bg-red-100 hover:text-red-500'
+                                        : 'bg-indigo-50 text-indigo-700 hover:bg-red-100 hover:text-red-500'
+                                    }`}
+                                  >
+                                    {d}
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              })()}
+
+              {/* Actions */}
+              <div className="flex flex-wrap gap-3 pt-1">
+                <button
+                  onClick={handleBulkExcelDownload}
+                  disabled={bulkExcelDownloading || !bulkExcelSection || !bulkExcelStartDate || !bulkExcelEndDate}
+                  className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors"
+                >
+                  {bulkExcelDownloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                  Download Excel
+                </button>
+
+                <label className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
+                  (!bulkExcelSection || !bulkExcelStartDate || !bulkExcelEndDate || !!bulkExcelResult)
+                    ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                    : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                }`}>
+                  {bulkExcelImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                  Import Excel
+                  <input
+                    ref={bulkExcelFileRef}
+                    type="file"
+                    accept=".xlsx,.xls"
+                    className="hidden"
+                    disabled={!bulkExcelSection || !bulkExcelStartDate || !bulkExcelEndDate || bulkExcelImporting || !!bulkExcelResult}
+                    onChange={handleBulkExcelFileChange}
+                  />
+                </label>
+
+                {getCurrentBulkRequestSessions().length > 0 && (
+                  <button
+                    onClick={handleBulkUnlockAndReset}
+                    disabled={bulkUnlockRequesting || getCurrentBulkRequestableSessions().length === 0}
+                    className="flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors"
+                  >
+                    {bulkUnlockRequesting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Unlock className="w-4 h-4" />}
+                    {getCurrentBulkRequestableSessions().length === 0 && hasCurrentBulkPendingRequests()
+                      ? 'Pending Approval'
+                      : 'Unlock + Reset'}
+                  </button>
+                )}
+
+              </div>
+            </div>
+          </div>
+
+          {/* Import result */}
+          {bulkExcelResult && (
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+              <h3 className="font-semibold text-slate-900 mb-3 flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 text-green-600" />
+                Import Complete
+              </h3>
+              <div className="grid grid-cols-3 gap-4 mb-4">
+                <div className="bg-green-50 rounded-lg p-3 text-center">
+                  <div className="text-2xl font-bold text-green-700">{bulkExcelResult.created}</div>
+                  <div className="text-xs text-green-600 mt-0.5">Records Created</div>
+                </div>
+                <div className="bg-blue-50 rounded-lg p-3 text-center">
+                  <div className="text-2xl font-bold text-blue-700">{bulkExcelResult.updated}</div>
+                  <div className="text-xs text-blue-600 mt-0.5">Records Updated</div>
+                </div>
+                <div className="bg-amber-50 rounded-lg p-3 text-center">
+                  <div className="text-2xl font-bold text-amber-700">{bulkExcelResult.locked}</div>
+                  <div className="text-xs text-amber-600 mt-0.5">Sessions Locked</div>
+                </div>
+              </div>
+              {typeof bulkExcelResult.period_records_updated === 'number' && bulkExcelResult.period_records_updated > 0 && (
+                <div className="mb-4 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-700">
+                  Synced {bulkExcelResult.period_records_updated} period attendance record{bulkExcelResult.period_records_updated === 1 ? '' : 's'} from the imported daily statuses.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Confirm Import Modal */}
+      {/* Bulk Excel Preview Modal */}
+      {bulkPreviewData && bulkExcelSection && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl flex flex-col" style={{ maxHeight: '90vh' }}>
+
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between flex-shrink-0 bg-gradient-to-r from-violet-50 to-indigo-50 rounded-t-xl">
+              <div className="flex items-center gap-3">
+                <div className="bg-gradient-to-br from-violet-500 to-indigo-600 p-2 rounded-lg shadow">
+                  <Eye className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-900">
+                    Daily Attendance — {[bulkExcelSection.department_short_name, bulkExcelSection.batch_name, bulkExcelSection.section_name].filter(Boolean).join(' · ')}
+                  </h2>
+                  <p className="text-sm text-slate-500">{bulkPreviewData.rows.length} students · Review before saving</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleBulkExcelImport(false)}
+                  disabled={bulkExcelImporting}
+                  className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors"
+                >
+                  {bulkExcelImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  Save Attendance
+                </button>
+                <button
+                  onClick={() => handleBulkExcelImport(true)}
+                  disabled={bulkExcelImporting}
+                  className="flex items-center gap-2 px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors"
+                >
+                  <Lock className="w-4 h-4" />
+                  Save + Lock
+                </button>
+                <button
+                  onClick={() => { setBulkPreviewData(null); setBulkExcelPendingFile(null) }}
+                  className="p-2 text-slate-400 hover:text-slate-600 transition-colors rounded-lg hover:bg-slate-100"
+                  title="Cancel"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Date tabs (only shown when multiple dates) */}
+            {bulkPreviewData.dates.length > 1 && (
+              <div className="px-6 py-3 border-b border-slate-200 flex gap-2 overflow-x-auto flex-shrink-0 bg-slate-50">
+                {bulkPreviewData.dates.map(date => (
+                  <button
+                    key={date}
+                    onClick={() => setBulkPreviewDate(date)}
+                    className={`px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
+                      bulkPreviewDate === date
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    {date}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Mark All Present bar */}
+            <div className="px-6 py-3 border-b border-slate-100 flex-shrink-0">
+              <button
+                onClick={() => {
+                  if (!bulkPreviewDate) return
+                  setBulkPreviewData(prev => {
+                    if (!prev) return prev
+                    return {
+                      ...prev,
+                      rows: prev.rows.map(r => ({
+                        ...r,
+                        statuses: { ...r.statuses, [bulkPreviewDate]: 'Present' },
+                      })),
+                    }
+                  })
+                }}
+                className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors"
+              >
+                <Check className="w-4 h-4" />
+                Mark All Present
+              </button>
+            </div>
+
+            {/* Student table */}
+            <div className="overflow-y-auto flex-1">
+              <table className="w-full">
+                <thead className="bg-slate-50 sticky top-0 z-10">
+                  <tr>
+                    <th className="text-left px-6 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide w-2/5">Student</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide w-1/4">Status</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Remarks</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {bulkPreviewData.rows.map((row, idx) => {
+                    const currentStatus = bulkPreviewDate ? (row.statuses[bulkPreviewDate] || '') : ''
+                    const currentRemark = bulkPreviewDate ? (row.remarks[bulkPreviewDate] || '') : ''
+                    const statusColor =
+                      currentStatus === 'Present' ? 'border-green-300 bg-green-50 text-green-800' :
+                      currentStatus === 'Absent'  ? 'border-red-300 bg-red-50 text-red-800' :
+                      currentStatus === 'OD'      ? 'border-blue-300 bg-blue-50 text-blue-800' :
+                      currentStatus === 'Leave'   ? 'border-amber-300 bg-amber-50 text-amber-800' :
+                      'border-slate-300'
+                    return (
+                      <tr key={row.reg_no} className={idx % 2 === 0 ? 'bg-white hover:bg-slate-50' : 'bg-slate-50/40 hover:bg-slate-50'}>
+                        <td className="px-6 py-3">
+                          <div className="font-semibold text-slate-900 text-sm">{row.name || row.reg_no}</div>
+                          <div className="text-xs text-slate-400 mt-0.5">{row.reg_no}</div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <select
+                            value={currentStatus}
+                            onChange={e => {
+                              if (!bulkPreviewDate) return
+                              const val = e.target.value
+                              setBulkPreviewData(prev => {
+                                if (!prev) return prev
+                                const newRows = [...prev.rows]
+                                newRows[idx] = { ...newRows[idx], statuses: { ...newRows[idx].statuses, [bulkPreviewDate]: val } }
+                                return { ...prev, rows: newRows }
+                              })
+                            }}
+                            className={`w-full border rounded-lg px-2 py-1.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-indigo-400 cursor-pointer ${statusColor}`}
+                          >
+                            <option value="">— Select —</option>
+                            <option value="Present">Present</option>
+                            <option value="Absent">Absent</option>
+                            <option value="OD">OD</option>
+                            <option value="Leave">Leave</option>
+                          </select>
+                        </td>
+                        <td className="px-4 py-3">
+                          <input
+                            type="text"
+                            value={currentRemark}
+                            onChange={e => {
+                              if (!bulkPreviewDate) return
+                              const val = e.target.value
+                              setBulkPreviewData(prev => {
+                                if (!prev) return prev
+                                const newRows = [...prev.rows]
+                                newRows[idx] = { ...newRows[idx], remarks: { ...newRows[idx].remarks, [bulkPreviewDate]: val } }
+                                return { ...prev, rows: newRows }
+                              })
+                            }}
+                            className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                            placeholder="Optional remark"
+                          />
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Footer count */}
+            <div className="px-6 py-3 border-t border-slate-200 flex-shrink-0 bg-slate-50 rounded-b-xl text-xs text-slate-500">
+              {bulkPreviewDate && (() => {
+                const present = bulkPreviewData.rows.filter(r => r.statuses[bulkPreviewDate] === 'Present').length
+                const absent  = bulkPreviewData.rows.filter(r => r.statuses[bulkPreviewDate] === 'Absent').length
+                const od      = bulkPreviewData.rows.filter(r => r.statuses[bulkPreviewDate] === 'OD').length
+                const leave   = bulkPreviewData.rows.filter(r => r.statuses[bulkPreviewDate] === 'Leave').length
+                const unmarked = bulkPreviewData.rows.filter(r => !r.statuses[bulkPreviewDate]).length
+                return (
+                  <span>
+                    {bulkPreviewDate} &nbsp;·&nbsp;
+                    <span className="text-green-700 font-medium">{present} Present</span> &nbsp;·&nbsp;
+                    <span className="text-red-700 font-medium">{absent} Absent</span> &nbsp;·&nbsp;
+                    <span className="text-blue-700 font-medium">{od} OD</span> &nbsp;·&nbsp;
+                    <span className="text-amber-700 font-medium">{leave} Leave</span>
+                    {unmarked > 0 && <span className="text-slate-400"> &nbsp;·&nbsp; {unmarked} unmarked</span>}
+                  </span>
+                )
+              })()}
             </div>
           </div>
         </div>
@@ -1950,9 +2748,11 @@ export default function PeriodAttendance(){
       <div className="mb-6">
         <HalfDayRequestsApproval />
       </div>
-      <div className="mb-6">
-        <AttendanceRequests />
-      </div>
+      {canViewUnlockApprovalSection && (
+        <div className="mb-6">
+          <AttendanceRequests />
+        </div>
+      )}
 
       {/* Daily Attendance Marking Panel */}
       {dailyMode && selectedSection && (
