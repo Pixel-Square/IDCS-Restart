@@ -104,8 +104,9 @@ export default function PeriodAttendance(){
   const [aggStudents, setAggStudents] = useState<Student[]>([])
   const [aggLoading, setAggLoading] = useState(false)
   const [bulkDateSelected, setBulkDateSelected] = useState<Record<string,boolean>>({})
-  const [bulkSelected, setBulkSelected] = useState<Record<number,boolean>>({})
+  const [bulkAttendanceGrid, setBulkAttendanceGrid] = useState<Record<string, Record<number, 'P' | 'A'>>>({})
   const [markedSessions, setMarkedSessions] = useState<Record<string, Set<string>>>({})
+  const [bulkMarkedSessionsLoading, setBulkMarkedSessionsLoading] = useState(false)
 
   // Consecutive period detection
   const [consecutiveModal, setConsecutiveModal] = useState(false)
@@ -892,66 +893,88 @@ export default function PeriodAttendance(){
         const dayNum = d.day
         for (const a of (d.assignments||[])) flat.push({ ...a, _day: dayNum })
       }
-      
-      // Load existing attendance sessions for the current month
-      await loadMarkedSessions(bulkMonth, flat)
-      
+
       setBulkAssignments(flat)
       setBulkModalOpen(true)
-      setSelectedAssignments({}); setBulkDateSelected({}); setBulkSelected({})
+      setSelectedAssignments({}); setBulkDateSelected({}); setBulkAttendanceGrid({})
+
+      // Load existing marked dates in background (do not block modal open)
+      void loadMarkedSessions(bulkMonth, flat)
     }catch(e){ console.error('openBulkModal', e); alert('Failed to open bulk modal') }
   }
 
   // Load existing attendance sessions for filtering
   async function loadMarkedSessions(month: string, assignments: any[]) {
+    setBulkMarkedSessionsLoading(true)
     try {
-      const [y, m] = month.split('-').map(x => parseInt(x))
-      const startDate = new Date(y, m - 1, 1).toISOString().slice(0, 10)
-      const endDate = new Date(y, m, 0).toISOString().slice(0, 10)
-      
-      // Fetch all attendance sessions for the month
-      const res = await fetchWithAuth(`/api/academics/period-attendance/?date_after=${startDate}&date_before=${endDate}`)
+      if (!assignments || assignments.length === 0) {
+        setMarkedSessions({})
+        return
+      }
+
+      // Build O(1) mapping from weekday+period+section -> assignment keys
+      const compositeToAssignmentKeys = new Map<string, string[]>()
+      const assignmentFilters: Array<{ section_id: number; period_id: number; day: number }> = []
+      const seenFilters = new Set<string>()
+      for (const a of assignments) {
+        const periodId = Number(a.period_id || a.period?.id)
+        const sectionId = Number(a.section_id || a.section?.id)
+        const day = Number(a._day)
+        if (!Number.isFinite(periodId) || !Number.isFinite(sectionId) || !Number.isFinite(day)) continue
+        const assignmentKey = a.id ? String(a.id) : `${day}_${periodId}_${sectionId}`
+        const composite = `${day}_${periodId}_${sectionId}`
+        if (!compositeToAssignmentKeys.has(composite)) compositeToAssignmentKeys.set(composite, [])
+        compositeToAssignmentKeys.get(composite)!.push(assignmentKey)
+
+        const filterKey = `${sectionId}_${periodId}_${day}`
+        if (!seenFilters.has(filterKey)) {
+          seenFilters.add(filterKey)
+          assignmentFilters.push({ section_id: sectionId, period_id: periodId, day })
+        }
+      }
+
+      const res = await fetchWithAuth('/api/academics/period-attendance/marked-keys/', {
+        method: 'POST',
+        body: JSON.stringify({ month, assignments: assignmentFilters }),
+      })
       if (!res.ok) {
         console.warn('Failed to load existing sessions')
         setMarkedSessions({})
         return
       }
-      
+
       const data = await res.json()
       const sessions = data.results || []
-      
+
       // Build a map: assignment_key -> Set of marked dates
       const marked: Record<string, Set<string>> = {}
-      
+
       for (const session of sessions) {
         const sessionDate = session.date
-        const sectionId = session.section?.id || session.section_id
-        const periodId = session.period?.id || session.period_id
-        
+        const sectionId = session.section_id
+        const periodId = session.period_id
+
         if (!sessionDate || !sectionId || !periodId) continue
-        
-        // Find matching assignment to get the day
+
         const dt = new Date(sessionDate)
         const dayOfWeek = dt.getDay() === 0 ? 7 : dt.getDay()
-        
-        const matchingAssignment = assignments.find(a => 
-          a._day === dayOfWeek && 
-          (a.period_id === periodId || a.period?.id === periodId) && 
-          (a.section_id === sectionId || a.section?.id === sectionId)
-        )
-        
-        if (matchingAssignment) {
-          const key = matchingAssignment.id ? String(matchingAssignment.id) : `${matchingAssignment._day}_${periodId}_${sectionId}`
+
+        const composite = `${dayOfWeek}_${periodId}_${sectionId}`
+        const assignmentKeys = compositeToAssignmentKeys.get(composite)
+        if (!assignmentKeys || assignmentKeys.length === 0) continue
+
+        for (const key of assignmentKeys) {
           if (!marked[key]) marked[key] = new Set()
           marked[key].add(sessionDate)
         }
       }
-      
+
       setMarkedSessions(marked)
-      console.log('Loaded marked sessions:', marked)
     } catch (e) {
       console.error('Error loading marked sessions:', e)
       setMarkedSessions({})
+    } finally {
+      setBulkMarkedSessionsLoading(false)
     }
   }
 
@@ -981,7 +1004,16 @@ export default function PeriodAttendance(){
         const all: Student[] = []
         for (const sres of settled){ if (sres.status !== 'fulfilled') continue; const data = sres.value || {}; const list = data.results || data.students || []; for (const st of list){ if (!st || !st.id) continue; if (!all.find(x=> x.id === st.id)) all.push({ id: st.id, reg_no: st.reg_no || st.regno || String(st.id), username: st.username || st.name || '' }) } }
         setAggStudents(all)
-        setBulkSelected(prev=> { const copy = { ...prev }; for (const s of all) if (copy[s.id] === undefined) copy[s.id] = false; return copy })
+        setBulkAttendanceGrid(prev => {
+          const next: Record<string, Record<number, 'P' | 'A'>> = {}
+          for (const [date, stuMap] of Object.entries(prev)) {
+            next[date] = { ...stuMap }
+            const validIds = new Set(all.map((s: any) => s.id))
+            for (const s of all) { if (!(s.id in next[date])) next[date][s.id] = 'P' }
+            for (const sid in next[date]) { if (!validIds.has(Number(sid))) delete next[date][Number(sid)] }
+          }
+          return next
+        })
       }catch(e){ console.error('loadAgg', e); setAggStudents([]) }
       finally{ setAggLoading(false) }
     }
@@ -1645,7 +1677,7 @@ export default function PeriodAttendance(){
         const data = evt.target?.result as ArrayBuffer
         const wb = XLSX.read(data, { type: 'array' })
         const ws = wb.Sheets[wb.SheetNames[0]]
-        const allRows = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1, defval: '' }) as any[][]
+        const allRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }) as any[][]
 
         if (allRows.length < 2) {
           alert('Excel file has no data rows')
@@ -2695,14 +2727,6 @@ export default function PeriodAttendance(){
                 </div>
               )}
               
-              <div className="col-span-full mt-2">
-                <button 
-                  onClick={openBulkModal}
-                  className="w-full px-4 py-3 border-2 border-dashed border-indigo-300 text-indigo-600 rounded-lg font-medium hover:bg-indigo-50 transition-colors"
-                >
-                  Bulk Mark (All Assignments)
-                </button>
-              </div>
             </div>
           )}
         </div>
@@ -2739,6 +2763,30 @@ export default function PeriodAttendance(){
           </div>
         )}
       </div>
+      )}
+
+      {/* Period-wise Bulk Attendance */}
+      {viewMode === 'period' && (
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-6">
+          <div className="px-6 py-4 border-b border-slate-200 bg-indigo-50">
+            <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
+              <FileSpreadsheet className="w-5 h-5 text-indigo-600" />
+              Period-wise Bulk Attendance
+            </h2>
+            <p className="text-sm text-slate-600 mt-1">
+              Mark attendance for multiple assignments and dates in one action.
+            </p>
+          </div>
+          <div className="px-6 py-5">
+            <button
+              onClick={openBulkModal}
+              className="inline-flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium transition-colors"
+            >
+              <Save className="w-4 h-4" />
+              Open Period-wise Bulk Mark
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Request sections: history, access requests, unlock requests (moved below Assigned Periods) */}
@@ -3610,36 +3658,40 @@ export default function PeriodAttendance(){
             </div>
 
             <div className="p-6 space-y-6">
-              {/* Month Selector */}
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-2 flex items-center gap-2">
                   <Calendar className="w-4 h-4 text-indigo-600" />
                   Select Month:
                 </label>
-                <input 
-                  type="month" 
-                  value={bulkMonth} 
-                  onChange={e=> setBulkMonth(e.target.value)}
+                <input
+                  type="month"
+                  value={bulkMonth}
+                  onChange={e => setBulkMonth(e.target.value)}
                   className="px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
                 />
               </div>
 
-              {/* Assignments */}
               <div>
                 <label className="block text-sm font-semibold text-slate-900 mb-3">Assignments</label>
+                {bulkMarkedSessionsLoading && (
+                  <div className="text-xs text-slate-500 mb-2 flex items-center gap-2">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    Loading already-marked dates...
+                  </div>
+                )}
                 <div className="border border-slate-200 rounded-lg p-4 max-h-60 overflow-y-auto bg-slate-50">
                   <label className="flex items-center gap-2 mb-3 text-sm font-medium text-slate-700">
-                    <input 
-                      type="checkbox" 
-                      checked={Object.keys(selectedAssignments).length>0 && Object.values(selectedAssignments).every(Boolean)} 
-                      onChange={(e)=>{ 
+                    <input
+                      type="checkbox"
+                      checked={Object.keys(selectedAssignments).length > 0 && Object.values(selectedAssignments).every(Boolean)}
+                      onChange={(e) => {
                         const checked = e.target.checked
-                        const next: Record<string,boolean> = {}
-                        for(const a of bulkAssignments){ 
-                          const key = a.id? String(a.id) : `${a._day}_${a.period_id}_${a.section_id}`
-                          next[key] = checked 
-                        } 
-                        setSelectedAssignments(next) 
+                        const next: Record<string, boolean> = {}
+                        for (const a of bulkAssignments) {
+                          const key = a.id ? String(a.id) : `${a._day}_${a.period_id}_${a.section_id}`
+                          next[key] = checked
+                        }
+                        setSelectedAssignments(next)
                       }}
                       className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
                     />
@@ -3648,12 +3700,9 @@ export default function PeriodAttendance(){
                   <div className="space-y-2">
                     {(() => {
                       const filteredAssignments = bulkAssignments.filter(a => {
-                        // Filter out assignments that are completely marked for the month
                         const key = a.id ? String(a.id) : `${a._day}_${a.period_id}_${a.section_id}`
                         const markedDates = markedSessions[key]
-                        if (!markedDates) return true // Show if no dates marked
-                        
-                        // Calculate total possible dates for this assignment in the month
+                        if (!markedDates) return true
                         try {
                           const [y, m] = bulkMonth.split('-').map(x => parseInt(x))
                           const lastDay = new Date(y, m, 0).getDate()
@@ -3663,13 +3712,12 @@ export default function PeriodAttendance(){
                             const dayOfWeek = dt.getDay() === 0 ? 7 : dt.getDay()
                             if (dayOfWeek === a._day) possibleDates++
                           }
-                          // Hide if all possible dates are marked
                           return markedDates.size < possibleDates
                         } catch {
                           return true
                         }
                       })
-                      
+
                       if (filteredAssignments.length === 0) {
                         return (
                           <div className="text-center py-8 text-slate-600">
@@ -3678,24 +3726,24 @@ export default function PeriodAttendance(){
                           </div>
                         )
                       }
-                      
-                      return filteredAssignments.map(a=>{
+
+                      return filteredAssignments.map(a => {
                         const key = a.id ? String(a.id) : `${a._day}_${a.period_id}_${a.section_id}`
                         const markedDates = markedSessions[key]
                         const markedCount = markedDates ? markedDates.size : 0
-                        
+
                         return (
                           <label key={key} className="flex items-start gap-3 p-2 hover:bg-white rounded-lg transition-colors cursor-pointer">
-                            <input 
-                              type="checkbox" 
-                              checked={!!selectedAssignments[key]} 
-                              onChange={()=> setSelectedAssignments(prev=> ({ ...prev, [key]: !prev[key] }))}
+                            <input
+                              type="checkbox"
+                              checked={!!selectedAssignments[key]}
+                              onChange={() => setSelectedAssignments(prev => ({ ...prev, [key]: !prev[key] }))}
                               className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 mt-0.5"
                             />
                             <div className="flex-1 text-sm">
                               <div className="font-medium text-slate-900">
-                                {a.label || `Period ${a.period_index}`} — {['Mon','Tue','Wed','Thu','Fri','Sat'][a._day-1] || `Day ${a._day}`} 
-                                {a.start_time ? ` ${a.start_time}${a.end_time? ' - '+a.end_time : ''}` : ''}
+                                {a.label || `Period ${a.period_index}`} — {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][a._day - 1] || `Day ${a._day}`}
+                                {a.start_time ? ` ${a.start_time}${a.end_time ? ' - ' + a.end_time : ''}` : ''}
                               </div>
                               <div className="text-xs text-slate-600 mt-0.5">
                                 {a.section_name || a.section?.name || (a.section_id ? `Section ${a.section_id}` : '')} — {a.subject_display || a.subject_text || ''}
@@ -3712,40 +3760,34 @@ export default function PeriodAttendance(){
                 </div>
               </div>
 
-              {/* Dates */}
               <div>
                 <label className="block text-sm font-semibold text-slate-900 mb-3">Dates (month view for selected assignments)</label>
                 <div className="flex flex-wrap gap-2">
                   {(() => {
-                    try{
-                      const [y,m] = bulkMonth.split('-').map(x=> parseInt(x))
-                      const last = new Date(y,m,0)
+                    try {
+                      const [y, m] = bulkMonth.split('-').map(x => parseInt(x))
+                      const last = new Date(y, m, 0)
                       const weekdays = new Set<number>()
-                      for(const a of bulkAssignments){ 
+                      for (const a of bulkAssignments) {
                         const key = a.id ? String(a.id) : `${a._day}_${a.period_id}_${a.section_id}`
-                        if (selectedAssignments[key]) weekdays.add(a._day) 
+                        if (selectedAssignments[key]) weekdays.add(a._day)
                       }
                       const dates: string[] = []
-                      for(let d=1; d<= last.getDate(); d++){ 
-                        const dt = new Date(y,m-1,d)
+                      for (let d = 1; d <= last.getDate(); d++) {
+                        const dt = new Date(y, m - 1, d)
                         const isow = dt.getDay() === 0 ? 7 : dt.getDay()
-                        if (weekdays.size>0 && weekdays.has(isow)) dates.push(dt.toISOString().slice(0,10)) 
+                        if (weekdays.size > 0 && weekdays.has(isow)) dates.push(dt.toISOString().slice(0, 10))
                       }
-                      
-                      // Get selected assignment keys
+
                       const selectedKeys = Object.keys(selectedAssignments).filter(k => selectedAssignments[k])
-                      
-                      // Filter dates: only show if at least one selected assignment doesn't have attendance for that date
                       const availableDates = dates.filter(dd => {
                         if (selectedKeys.length === 0) return true
-                        
-                        // Show date if ANY selected assignment doesn't have attendance on this date
                         return selectedKeys.some(key => {
                           const markedDates = markedSessions[key]
                           return !markedDates || !markedDates.has(dd)
                         })
                       })
-                      
+
                       if (availableDates.length === 0 && selectedKeys.length > 0) {
                         return (
                           <div className="text-center py-4 text-slate-600">
@@ -3754,20 +3796,32 @@ export default function PeriodAttendance(){
                           </div>
                         )
                       }
-                      
-                      return availableDates.map(dd=> {
-                        // Count how many selected assignments already have attendance on this date
+
+                      return availableDates.map(dd => {
                         const alreadyMarkedCount = selectedKeys.filter(key => {
                           const markedDates = markedSessions[key]
                           return markedDates && markedDates.has(dd)
                         }).length
-                        
+
                         return (
                           <label key={dd} className="inline-flex items-center gap-2 px-3 py-1.5 border border-slate-300 rounded-lg text-sm hover:bg-slate-100 cursor-pointer transition-colors">
-                            <input 
-                              type="checkbox" 
-                              checked={!!bulkDateSelected[dd]} 
-                              onChange={()=> setBulkDateSelected(prev=> ({ ...prev, [dd]: !prev[dd] }))}
+                            <input
+                              type="checkbox"
+                              checked={!!bulkDateSelected[dd]}
+                              onChange={() => {
+                                const checking = !bulkDateSelected[dd]
+                                setBulkDateSelected(prev => ({ ...prev, [dd]: !prev[dd] }))
+                                if (checking) {
+                                  setBulkAttendanceGrid(prev => {
+                                    if (prev[dd]) return prev
+                                    const next = { ...prev, [dd]: {} as Record<number, 'P' | 'A'> }
+                                    for (const s of aggStudents) next[dd][s.id] = 'P'
+                                    return next
+                                  })
+                                } else {
+                                  setBulkAttendanceGrid(prev => { const next = { ...prev }; delete next[dd]; return next })
+                                }
+                              }}
                               className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
                             />
                             <span>
@@ -3779,54 +3833,145 @@ export default function PeriodAttendance(){
                           </label>
                         )
                       })
-                    }catch(e){ return <div /> }
+                    } catch {
+                      return <div />
+                    }
                   })()}
                 </div>
               </div>
 
-              {/* Students */}
               <div>
-                <label className="block text-sm font-semibold text-slate-900 mb-3">
-                  Students (derived from selected assignments)
-                  <span className="ml-2 text-sm text-slate-600">({aggStudents.length} student{aggStudents.length !== 1 ? 's' : ''})</span>
-                </label>
-                <div className="border border-slate-200 rounded-lg p-4 max-h-64 overflow-y-auto bg-slate-50">
-                  {aggLoading && (
-                    <div className="flex items-center justify-center py-8 text-slate-600">
-                      <Loader2 className="w-6 h-6 animate-spin mr-2" />
-                      Loading students...
-                    </div>
-                  )}
-                  {!aggLoading && aggStudents.length === 0 && (
-                    <div className="text-center py-8 text-slate-600">No students for selected assignments</div>
-                  )}
-                  {!aggLoading && aggStudents.length > 0 && (
-                    <div className="space-y-1">
-                      {aggStudents.map(s=> (
-                        <label key={s.id} className="flex items-center gap-2 p-2 hover:bg-white rounded-lg transition-colors cursor-pointer">
-                          <input 
-                            type="checkbox" 
-                            checked={!!bulkSelected[s.id]} 
-                            onChange={_=> setBulkSelected(prev=> ({ ...prev, [s.id]: !prev[s.id] }))}
-                            className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
-                          />
-                          <span className="text-sm text-slate-900">{s.reg_no} — {s.username}</span>
+                {(() => {
+                  const checkedDates = Object.keys(bulkDateSelected).filter(d => bulkDateSelected[d]).sort()
+                  if (checkedDates.length === 0) {
+                    return (
+                      <>
+                        <label className="block text-sm font-semibold text-slate-900 mb-2">
+                          Students
+                          <span className="ml-2 text-sm font-normal text-slate-600">({aggStudents.length} student{aggStudents.length !== 1 ? 's' : ''})</span>
                         </label>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                        {aggLoading ? (
+                          <div className="flex items-center justify-center py-6 text-slate-600">
+                            <Loader2 className="w-5 h-5 animate-spin mr-2" />Loading students...
+                          </div>
+                        ) : aggStudents.length === 0 ? (
+                          <div className="text-center py-6 text-slate-500 text-sm">No students for selected assignments</div>
+                        ) : (
+                          <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
+                            Tick one or more dates above to mark individual attendance (P / A) per student.
+                            <span className="ml-1 text-amber-600 font-medium">({aggStudents.length} student{aggStudents.length !== 1 ? 's' : ''} ready)</span>
+                          </div>
+                        )}
+                      </>
+                    )
+                  }
+
+                  return (
+                    <>
+                      <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                        <label className="text-sm font-semibold text-slate-900">
+                          Attendance Grid
+                          <span className="ml-2 text-sm font-normal text-slate-600">
+                            {aggStudents.length} student{aggStudents.length !== 1 ? 's' : ''} x {checkedDates.length} date{checkedDates.length !== 1 ? 's' : ''}
+                          </span>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setBulkAttendanceGrid(prev => {
+                            const next = { ...prev }
+                            for (const d of checkedDates) {
+                              next[d] = {}
+                              for (const s of aggStudents) next[d][s.id] = 'P'
+                            }
+                            return next
+                          })}
+                          className="text-xs px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium transition-colors flex items-center gap-1"
+                        >
+                          <CheckCircle2 className="w-3 h-3" />
+                          Mark All Present
+                        </button>
+                      </div>
+                      {aggLoading ? (
+                        <div className="flex items-center justify-center py-6 text-slate-600">
+                          <Loader2 className="w-5 h-5 animate-spin mr-2" />Loading students...
+                        </div>
+                      ) : aggStudents.length === 0 ? (
+                        <div className="text-center py-6 text-slate-500 text-sm">No students for selected assignments</div>
+                      ) : (
+                        <div className="border border-slate-200 rounded-lg overflow-auto max-h-72">
+                          <table className="min-w-full text-sm border-collapse">
+                            <thead className="sticky top-0 z-20">
+                              <tr className="bg-slate-100">
+                                <th className="text-left px-3 py-2 font-medium text-slate-700 whitespace-nowrap sticky left-0 bg-slate-100 z-30 min-w-[190px] border-b border-slate-200">Student</th>
+                                {checkedDates.map(d => {
+                                  const allP = aggStudents.every(s => (bulkAttendanceGrid[d]?.[s.id] ?? 'P') === 'P')
+                                  const dt = new Date(d + 'T00:00:00')
+                                  const label = dt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
+                                  return (
+                                    <th key={d} className="px-1 py-1 text-center font-medium text-slate-700 min-w-[68px] border-b border-slate-200">
+                                      <div className="text-xs mb-0.5">{label}</div>
+                                      <button
+                                        type="button"
+                                        title={`Toggle all -> ${allP ? 'A' : 'P'} for ${d}`}
+                                        onClick={() => setBulkAttendanceGrid(prev => {
+                                          const next = { ...prev, [d]: { ...(prev[d] || {}) } }
+                                          const newSt = allP ? 'A' : 'P'
+                                          for (const s of aggStudents) next[d][s.id] = newSt as 'P' | 'A'
+                                          return next
+                                        })}
+                                        className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${allP ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' : 'bg-red-100 text-red-600 hover:bg-red-200'}`}
+                                      >
+                                        {allP ? 'All P' : 'All A'}
+                                      </button>
+                                    </th>
+                                  )
+                                })}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {aggStudents.map((s, idx) => (
+                                <tr key={s.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/70'}>
+                                  <td className={`px-3 py-1.5 whitespace-nowrap sticky left-0 z-10 text-xs border-b border-slate-100 ${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'}`}>
+                                    <span className="font-mono text-slate-400">{s.reg_no}</span>
+                                    <span className="ml-1.5 text-slate-800 font-medium">{s.username}</span>
+                                  </td>
+                                  {checkedDates.map(d => {
+                                    const st = bulkAttendanceGrid[d]?.[s.id] ?? 'P'
+                                    return (
+                                      <td key={d} className="px-1 py-1.5 text-center border-b border-slate-100">
+                                        <button
+                                          type="button"
+                                          onClick={() => setBulkAttendanceGrid(prev => ({
+                                            ...prev,
+                                            [d]: { ...(prev[d] || {}), [s.id]: st === 'P' ? 'A' : 'P' }
+                                          }))}
+                                          className={`w-9 h-7 rounded text-xs font-bold transition-colors ${st === 'P' ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' : 'bg-red-100 text-red-600 hover:bg-red-200'}`}
+                                        >
+                                          {st}
+                                        </button>
+                                      </td>
+                                    )
+                                  })}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </>
+                  )
+                })()}
               </div>
             </div>
 
-            {/* Modal Footer */}
-            <div className="sticky bottom-0 bg-white border-t border-slate-200 px-6 py-4 flex gap-3 rounded-b-xl">
-              <button 
-                onClick={async ()=>{
-                  const selectedDates = Object.keys(bulkDateSelected).filter(d=> bulkDateSelected[d])
-                  if (!selectedDates.length){ alert('Select at least one date'); return }
-                  const assignments_payload: any[] = []
-                  for(const a of bulkAssignments){ 
+            <div className="sticky bottom-0 bg-white border-t border-slate-200 px-6 py-4 flex flex-wrap gap-3 rounded-b-xl">
+              <button
+                onClick={async () => {
+                  const checkedDates = Object.keys(bulkDateSelected).filter(d => bulkDateSelected[d])
+                  if (!checkedDates.length) { alert('Select at least one date'); return }
+
+                  const assignmentsMap = new Map<string, { section_id: number; period_id: number }>()
+                  for (const a of bulkAssignments) {
                     const key = a.id ? String(a.id) : `${a._day}_${a.period_id}_${a.section?.id || a.section_id}`
                     if (!selectedAssignments[key]) continue
                     const raw_section = a.section_id || (a.section && (a.section.id || a.section.pk)) || a.section?.pk || a.section?.id
@@ -3834,30 +3979,82 @@ export default function PeriodAttendance(){
                     const section_id = Number(raw_section)
                     const period_id = Number(raw_period)
                     if (!Number.isFinite(section_id) || !Number.isFinite(period_id)) continue
-                    assignments_payload.push({ section_id, period_id }) 
+                    assignmentsMap.set(`${section_id}_${period_id}`, { section_id, period_id })
                   }
-                  const student_ids = Object.keys(bulkSelected).filter(k=> bulkSelected[Number(k)]).map(k=> Number(k))
-                  if (!assignments_payload.length){ alert('No assignments selected'); return }
-                  if (!student_ids.length){ alert('No students selected'); return }
-                  try{
-                    const res = await fetchWithAuth('/api/academics/period-attendance/bulk-mark/', { method: 'POST', body: JSON.stringify({ assignments: assignments_payload, dates: selectedDates, student_ids }) })
-                    if (!res.ok) { 
+                  const assignments_payload = Array.from(assignmentsMap.values())
+                  if (!assignments_payload.length) { alert('No assignments selected'); return }
+                  if (!aggStudents.length) { alert('No students found for selected assignments'); return }
+
+                  const date_records = checkedDates.map(date => ({
+                    date,
+                    records: aggStudents.map(s => ({ student_id: s.id, status: bulkAttendanceGrid[date]?.[s.id] ?? 'P' }))
+                  }))
+
+                  try {
+                    const res = await fetchWithAuth('/api/academics/period-attendance/bulk-mark-statuses/', {
+                      method: 'POST',
+                      body: JSON.stringify({ assignments: assignments_payload, date_records })
+                    })
+                    if (!res.ok) {
                       let txt = 'Failed'
-                      try{ const j = await res.json(); txt = JSON.stringify(j) }catch(_){ try{ txt = await res.text() }catch(_){}} 
-                      alert('Failed: '+txt)
-                      return 
+                      try { const j = await res.json(); txt = JSON.stringify(j) } catch (_) { try { txt = await res.text() } catch (_) {} }
+                      alert('Failed: ' + txt)
+                      return
                     }
                     alert('Bulk attendance saved')
                     setBulkModalOpen(false)
-                  }catch(e){ console.error('bulk save', e); alert('Failed to save bulk attendance') }
+                  } catch (e) {
+                    console.error('bulk save', e)
+                    alert('Failed to save bulk attendance')
+                  }
                 }}
                 className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
               >
                 <Save className="w-4 h-4" />
                 Save Bulk
               </button>
-              <button 
-                onClick={()=> setBulkModalOpen(false)}
+
+              <button
+                onClick={async () => {
+                  const checkedDates = Object.keys(bulkDateSelected).filter(d => bulkDateSelected[d])
+                  if (!checkedDates.length) { alert('Select at least one date first'); return }
+                  const allAssignmentsMap = new Map<string, { section_id: number; period_id: number }>()
+                  for (const a of bulkAssignments) {
+                    const raw_section = a.section_id || (a.section && (a.section.id || a.section.pk)) || a.section?.pk || a.section?.id
+                    const raw_period = a.period_id || (a.period && (a.period.id || a.period_id)) || a.period?.id || a.period_id
+                    const section_id = Number(raw_section)
+                    const period_id = Number(raw_period)
+                    if (!Number.isFinite(section_id) || !Number.isFinite(period_id)) continue
+                    allAssignmentsMap.set(`${section_id}_${period_id}`, { section_id, period_id })
+                  }
+                  const all_assignments = Array.from(allAssignmentsMap.values())
+                  if (!all_assignments.length) { alert('No assignments available'); return }
+                  try {
+                    const res = await fetchWithAuth('/api/academics/period-attendance/bulk-mark-range/', {
+                      method: 'POST',
+                      body: JSON.stringify({ assignments: all_assignments, dates: checkedDates, status: 'P', student_ids: [] })
+                    })
+                    if (!res.ok) {
+                      let txt = 'Failed'
+                      try { const j = await res.json(); txt = JSON.stringify(j) } catch (_) { try { txt = await res.text() } catch (_) {} }
+                      alert('Failed: ' + txt)
+                      return
+                    }
+                    alert('All assignments marked present')
+                    setBulkModalOpen(false)
+                  } catch (e) {
+                    console.error('all assignments present', e)
+                    alert('Failed to save')
+                  }
+                }}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                All Assignments Present
+              </button>
+
+              <button
+                onClick={() => setBulkModalOpen(false)}
                 className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg font-medium transition-colors"
               >
                 Close
@@ -3941,74 +4138,6 @@ export default function PeriodAttendance(){
           </div>
         )
       })()}
-
-      {/* Staff Swap Modal */}
-      {swapModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full max-h-[80vh] flex flex-col">
-            <div className="px-6 py-4 border-b border-slate-200 bg-gradient-to-r from-indigo-50 to-purple-50 flex items-center justify-between rounded-t-xl">
-              <div className="flex items-center gap-3">
-                <Users className="w-5 h-5 text-indigo-600" />
-                <h3 className="text-lg font-semibold text-slate-900">Select Staff Member</h3>
-              </div>
-              <button
-                onClick={() => setSwapModalOpen(false)}
-                className="p-1 hover:bg-slate-200 rounded-lg transition-colors"
-              >
-                <X className="w-5 h-5 text-slate-600" />
-              </button>
-            </div>
-            
-            <div className="p-6 overflow-y-auto flex-1">
-              {loadingStaff ? (
-                <div className="flex flex-col items-center justify-center py-8">
-                  <Loader2 className="w-8 h-8 animate-spin text-indigo-600 mb-3" />
-                  <p className="text-sm text-slate-600">Loading staff from your department...</p>
-                </div>
-              ) : departmentStaff.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-8 text-center">
-                  <div className="bg-slate-100 p-4 rounded-full mb-4">
-                    <Users className="w-12 h-12 text-slate-400" />
-                  </div>
-                  <h4 className="text-lg font-medium text-slate-900 mb-1">No Staff Found</h4>
-                  <p className="text-slate-600 text-sm">No other staff from your department are available</p>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  <p className="text-sm text-slate-600 mb-4">
-                    Select a staff member to assign attendance taking for this class:
-                  </p>
-                  {departmentStaff.map((staff: any) => (
-                    <button
-                      key={staff.id}
-                      onClick={() => handleSwapStaff(staff)}
-                      className="w-full p-4 border border-slate-200 rounded-lg hover:bg-indigo-50 hover:border-indigo-300 transition-colors text-left"
-                    >
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="font-medium text-slate-900">{staff.name}</p>
-                          <p className="text-sm text-slate-600">{staff.designation || 'Staff'}</p>
-                          <p className="text-xs text-slate-500 mt-1">ID: {staff.staff_id}</p>
-                        </div>
-                        <ArrowLeftRight className="w-5 h-5 text-indigo-600" />
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 rounded-b-xl">
-              <button
-                onClick={() => setSwapModalOpen(false)}
-                className="w-full px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-sm font-medium transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Half-Day Request Modal */}
       {showHalfDayRequestModal && (
