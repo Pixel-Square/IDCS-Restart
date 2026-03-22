@@ -29,12 +29,22 @@ class User(AbstractUser):
     All students, staff, HODs, admins are users.
     Their actual capabilities are decided by roles + permissions.
     """
+    email = models.EmailField(
+        'email address',
+        unique=True,
+        blank=False,
+        help_text='Required. Used as the unique login identifier.',
+    )
+
     username = models.CharField(
         max_length=150,
         unique=False,
         help_text='150 characters or fewer. Letters, numbers, spaces, and @/./+/-/_ characters.',
         validators=[UsernameValidator()],
     )
+
+    USERNAME_FIELD = 'email'
+    REQUIRED_FIELDS = ['username']
     
     roles = models.ManyToManyField(
         'Role',

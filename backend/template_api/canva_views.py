@@ -772,7 +772,7 @@ def oauth_authorize(request):
         origin=origin,
     )
 
-    authorize_url = f'{CANVA_AUTH_URL}?{urlencode({
+    params = {
         'response_type':         'code',
         'client_id':             client_id,
         'redirect_uri':          redirect_uri,
@@ -780,7 +780,8 @@ def oauth_authorize(request):
         'code_challenge':        challenge,
         'code_challenge_method': 'S256',
         'state':                 state,
-    })}'
+    }
+    authorize_url = f'{CANVA_AUTH_URL}?{urlencode(params)}'
 
     # When called via fetchWithAuth(), return the computed URL so the frontend
     # can do a top-level navigation (window.location.href) to Canva.
