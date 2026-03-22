@@ -469,15 +469,16 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
     setLoadingPublished(true);
     setPublishedError(null);
     try {
+      const taId = selectedTaId ?? undefined;
       if (isLabCourse) {
-        const cia1Res = await fetchPublishedLabSheet('cia1', courseId);
+        const cia1Res = await fetchPublishedLabSheet('cia1', courseId, taId);
         setPublished({ ssa: {}, f1: {}, cia: null });
         setPublishedLab({ cia1: (cia1Res as any)?.data ?? null });
       } else {
         const [ssaRes, f1Res, ciaRes] = await Promise.all([
-          fetchPublishedSsa1(courseId),
-          fetchPublishedFormative1(courseId),
-          fetchPublishedCia1Sheet(courseId),
+          fetchPublishedSsa1(courseId, taId),
+          fetchPublishedFormative1(courseId, taId),
+          fetchPublishedCia1Sheet(courseId, taId),
         ]);
         setPublished({
           ssa: (ssaRes as any)?.marks && typeof (ssaRes as any).marks === 'object' ? (ssaRes as any).marks : {},
@@ -499,7 +500,7 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
     if (!courseId) return;
     loadPublished();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [courseId, isLabCourse]);
+  }, [courseId, isLabCourse, selectedTaId]);
 
   useEffect(() => {
     const handler = (ev: Event) => {

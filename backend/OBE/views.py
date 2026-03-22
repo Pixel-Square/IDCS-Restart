@@ -5,7 +5,7 @@ import re
 from django.contrib.auth.decorators import login_required
 from django.db import transaction, connection
 from django.db.models import Q
-from django.db.utils import OperationalError
+from django.db.utils import OperationalError, ProgrammingError
 from django.http import HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.core.exceptions import FieldError
@@ -269,13 +269,114 @@ def _filter_marks_queryset_for_teaching_assignment(qs, ta, *, strict_scope: bool
             return qs.filter(teaching_assignment__isnull=True)
         return qs.filter(teaching_assignment__isnull=True)
 
+    # If the model expects teaching-assignment scoping but the DB column is missing,
+    # the marks stored in the table are effectively unscoped. We *can* try to
+    # approximate scoping by filtering by the TA roster, but that roster can be
+    # incomplete or unavailable. To avoid hiding published marks, fall back to
+    # unscoped rows when roster scoping yields no results.
+    if has_ta_field and not has_ta_db_column:
+        if ta is None:
+            return qs
+
+        student_ids = _get_teaching_assignment_student_ids(ta)
+        if not student_ids:
+            return qs
+
+        try:
+            scoped = qs.filter(student_id__in=student_ids)
+            return scoped if scoped.exists() else qs
+        except Exception:
+            return qs
+
     if ta is None:
         return qs
 
     student_ids = _get_teaching_assignment_student_ids(ta)
+    # If we cannot resolve the roster for the teaching assignment (common for
+    # partially seeded data), avoid hiding published marks entirely. In DBs
+    # that lack `teaching_assignment_id`, marks cannot be scoped reliably
+    # anyway; prefer returning unscoped rows over an empty result.
     if not student_ids:
-        return qs.none()
+        return qs
     return qs.filter(student_id__in=student_ids)
+
+
+def _safe_marks_map_for_subject(model, *, subject, ta, strict_scope: bool = False) -> dict[str, str | None]:
+    """Return {student_id: mark_str_or_none} without selecting missing TA columns.
+
+    On partially migrated DBs, the Django model may include a `teaching_assignment`
+    FK while the DB column `teaching_assignment_id` is absent. Fetching model
+    instances would then raise ProgrammingError because Django selects all model
+    columns by default.
+    """
+    has_ta_field = any(getattr(f, 'name', '') == 'teaching_assignment' for f in model._meta.get_fields())
+    has_ta_db_column = False
+    if has_ta_field:
+        try:
+            has_ta_db_column = _db_table_has_column(model._meta.db_table, 'teaching_assignment_id')
+        except Exception:
+            has_ta_db_column = False
+
+    qs = model.objects.filter(subject=subject)
+
+    # Normal path: DB supports TA scoping.
+    if has_ta_field and has_ta_db_column:
+        qs = _filter_marks_queryset_for_teaching_assignment(qs, ta, strict_scope=strict_scope)
+        pairs = qs.values_list('student_id', 'mark')
+        return {str(sid): (str(mark) if mark is not None else None) for sid, mark in pairs}
+
+    # Missing TA column: never reference teaching_assignment in SQL.
+    # Try roster-based scoping; if it yields nothing, fall back to unscoped marks.
+    if has_ta_field and not has_ta_db_column and ta is not None:
+        student_ids = _get_teaching_assignment_student_ids(ta)
+        if student_ids:
+            try:
+                scoped = qs.filter(student_id__in=student_ids)
+                scoped_pairs = list(scoped.values_list('student_id', 'mark'))
+                if scoped_pairs:
+                    return {str(sid): (str(mark) if mark is not None else None) for sid, mark in scoped_pairs}
+            except Exception:
+                pass
+
+    pairs = qs.values_list('student_id', 'mark')
+    return {str(sid): (str(mark) if mark is not None else None) for sid, mark in pairs}
+
+
+def _safe_formative_marks_map(model, *, subject, ta, strict_scope: bool = False) -> dict[str, dict[str, str | None]]:
+    """Return formative marks without selecting missing TA columns."""
+    has_ta_field = any(getattr(f, 'name', '') == 'teaching_assignment' for f in model._meta.get_fields())
+    has_ta_db_column = False
+    if has_ta_field:
+        try:
+            has_ta_db_column = _db_table_has_column(model._meta.db_table, 'teaching_assignment_id')
+        except Exception:
+            has_ta_db_column = False
+
+    qs = model.objects.filter(subject=subject)
+    if has_ta_field and has_ta_db_column:
+        qs = _filter_marks_queryset_for_teaching_assignment(qs, ta, strict_scope=strict_scope)
+    elif has_ta_field and not has_ta_db_column and ta is not None:
+        student_ids = _get_teaching_assignment_student_ids(ta)
+        if student_ids:
+            try:
+                scoped = qs.filter(student_id__in=student_ids)
+                # If scoping yields rows, use them; otherwise fall back unscoped.
+                if scoped.exists():
+                    qs = scoped
+            except Exception:
+                pass
+
+    cols = ['student_id', 'skill1', 'skill2', 'att1', 'att2', 'total']
+    out: dict[str, dict[str, str | None]] = {}
+    for sid, skill1, skill2, att1, att2, total in qs.values_list(*cols):
+        out[str(sid)] = {
+            'skill1': str(skill1) if skill1 is not None else None,
+            'skill2': str(skill2) if skill2 is not None else None,
+            'att1': str(att1) if att1 is not None else None,
+            'att2': str(att2) if att2 is not None else None,
+            'total': str(total) if total is not None else None,
+        }
+    return out
 
 
 def _upsert_scoped_mark(model, *, subject, student, mark_defaults: dict, teaching_assignment=None):
@@ -286,6 +387,78 @@ def _upsert_scoped_mark(model, *, subject, student, mark_defaults: dict, teachin
             has_ta_db_column = _db_table_has_column(model._meta.db_table, 'teaching_assignment_id')
         except Exception:
             has_ta_db_column = False
+
+    # If the Django model has `teaching_assignment` but the DB is missing the column
+    # (partially migrated production DB), ORM queries will fail because Django will
+    # try to SELECT/INSERT the non-existent column. Fall back to raw SQL that only
+    # touches columns that exist.
+    if has_ta_field and not has_ta_db_column:
+        table = model._meta.db_table
+        subj_id = getattr(subject, 'id', subject)
+        stud_id = getattr(student, 'id', student)
+
+        # Keep only columns that exist in the DB table.
+        to_set: dict[str, object] = {}
+        for k, v in (mark_defaults or {}).items():
+            try:
+                if _db_table_has_column(table, str(k)):
+                    to_set[str(k)] = v
+            except Exception:
+                # Assume column exists; if it doesn't, the SQL will error and be
+                # caught by the caller's transaction.
+                to_set[str(k)] = v
+
+        # Some mark tables have NOT NULL timestamps; ORM would fill these.
+        # Ensure they are set in raw SQL mode.
+        now = timezone.now()
+        try:
+            if _db_table_has_column(table, 'updated_at') and 'updated_at' not in to_set:
+                to_set['updated_at'] = now
+        except Exception:
+            pass
+
+        if not to_set:
+            return (None, False)
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f'SELECT id FROM "{table}" WHERE subject_id = %s AND student_id = %s LIMIT 1',
+                [subj_id, stud_id],
+            )
+            row = cursor.fetchone()
+            if row:
+                row_id = row[0]
+                set_cols = list(to_set.keys())
+                set_clause = ', '.join([f'"{c}" = %s' for c in set_cols])
+                params = [to_set[c] for c in set_cols] + [row_id]
+                cursor.execute(
+                    f'UPDATE "{table}" SET {set_clause} WHERE id = %s',
+                    params,
+                )
+                return (None, False)
+
+            ins_to_set = dict(to_set)
+            try:
+                if _db_table_has_column(table, 'created_at') and 'created_at' not in ins_to_set:
+                    ins_to_set['created_at'] = now
+            except Exception:
+                pass
+            try:
+                if _db_table_has_column(table, 'updated_at') and 'updated_at' not in ins_to_set:
+                    ins_to_set['updated_at'] = now
+            except Exception:
+                pass
+
+            ins_cols = ['subject_id', 'student_id'] + list(ins_to_set.keys())
+            placeholders = ', '.join(['%s'] * len(ins_cols))
+            ins_clause = ', '.join([f'"{c}"' for c in ins_cols])
+            params = [subj_id, stud_id] + [ins_to_set[c] for c in ins_to_set.keys()]
+            cursor.execute(
+                f'INSERT INTO "{table}" ({ins_clause}) VALUES ({placeholders})',
+                params,
+            )
+        return (None, True)
+
     lookup = {'subject': subject, 'student': student}
     if has_ta_field and has_ta_db_column:
         lookup['teaching_assignment'] = teaching_assignment
@@ -300,6 +473,21 @@ def _delete_scoped_mark(model, *, subject, student, teaching_assignment=None):
             has_ta_db_column = _db_table_has_column(model._meta.db_table, 'teaching_assignment_id')
         except Exception:
             has_ta_db_column = False
+
+    # Same schema-mismatch fallback as _upsert_scoped_mark.
+    if has_ta_field and not has_ta_db_column:
+        table = model._meta.db_table
+        subj_id = getattr(subject, 'id', subject)
+        stud_id = getattr(student, 'id', student)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f'DELETE FROM "{table}" WHERE subject_id = %s AND student_id = %s',
+                [subj_id, stud_id],
+            )
+            deleted = int(getattr(cursor, 'rowcount', 0) or 0)
+        # ORM delete returns (count, details).
+        return (deleted, {})
+
     filters = {'subject': subject, 'student': student}
     if has_ta_field and has_ta_db_column:
         filters['teaching_assignment'] = teaching_assignment
@@ -938,7 +1126,28 @@ def _get_mark_table_lock_if_exists(*, staff_user, subject_code: str, assessment:
     from .models import ObeMarkTableLock
 
     if teaching_assignment is not None:
-        return ObeMarkTableLock.objects.filter(teaching_assignment=teaching_assignment, assessment=str(assessment).lower()).first()
+        lock = ObeMarkTableLock.objects.filter(teaching_assignment=teaching_assignment, assessment=str(assessment).lower()).first()
+        if lock is not None:
+            return lock
+
+        # If the lock was created without a TA (e.g., UI published without passing
+        # teaching_assignment_id), fall back to any matching unscoped lock.
+        # Do NOT restrict by staff_user here: published state should be visible to
+        # HOD/IQAC/master viewers too.
+        try:
+            fallback = (
+                ObeMarkTableLock.objects.filter(
+                    teaching_assignment__isnull=True,
+                    subject_code=str(subject_code),
+                    assessment=str(assessment).lower(),
+                )
+                .order_by('-updated_at')
+                .first()
+            )
+            if fallback is not None:
+                return fallback
+        except Exception:
+            pass
 
     qs = ObeMarkTableLock.objects.filter(
         teaching_assignment__isnull=True,
@@ -2983,13 +3192,8 @@ def ssa1_published(request, subject_id: str):
     try:
         ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
         strict_scope = _strict_assignment_scope(subject_code=subject.code, teaching_assignment=ta)
-        rows = _filter_marks_queryset_for_teaching_assignment(
-            Ssa1Mark.objects.filter(subject=subject),
-            ta,
-            strict_scope=strict_scope,
-        )
-        marks = {str(r.student_id): (str(r.mark) if r.mark is not None else None) for r in rows}
-    except OperationalError:
+        marks = _safe_marks_map_for_subject(Ssa1Mark, subject=subject, ta=ta, strict_scope=strict_scope)
+    except (OperationalError, ProgrammingError):
         marks = {}
     return Response({'subject': {'code': subject.code, 'name': subject.name}, 'marks': marks})
 
@@ -3096,13 +3300,8 @@ def review1_published(request, subject_id: str):
     try:
         ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
         strict_scope = _strict_assignment_scope(subject_code=subject.code, teaching_assignment=ta)
-        rows = _filter_marks_queryset_for_teaching_assignment(
-            Review1Mark.objects.filter(subject=subject),
-            ta,
-            strict_scope=strict_scope,
-        )
-        marks = {str(r.student_id): (str(r.mark) if r.mark is not None else None) for r in rows}
-    except OperationalError:
+        marks = _safe_marks_map_for_subject(Review1Mark, subject=subject, ta=ta, strict_scope=strict_scope)
+    except (OperationalError, ProgrammingError):
         marks = {}
     return Response({'subject': {'code': subject.code, 'name': subject.name}, 'marks': marks})
 
@@ -3209,13 +3408,8 @@ def ssa2_published(request, subject_id: str):
     try:
         ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
         strict_scope = _strict_assignment_scope(subject_code=subject.code, teaching_assignment=ta)
-        rows = _filter_marks_queryset_for_teaching_assignment(
-            Ssa2Mark.objects.filter(subject=subject),
-            ta,
-            strict_scope=strict_scope,
-        )
-        marks = {str(r.student_id): (str(r.mark) if r.mark is not None else None) for r in rows}
-    except OperationalError:
+        marks = _safe_marks_map_for_subject(Ssa2Mark, subject=subject, ta=ta, strict_scope=strict_scope)
+    except (OperationalError, ProgrammingError):
         marks = {}
     return Response({'subject': {'code': subject.code, 'name': subject.name}, 'marks': marks})
 
@@ -3322,13 +3516,8 @@ def review2_published(request, subject_id: str):
     try:
         ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
         strict_scope = _strict_assignment_scope(subject_code=subject.code, teaching_assignment=ta)
-        rows = _filter_marks_queryset_for_teaching_assignment(
-            Review2Mark.objects.filter(subject=subject),
-            ta,
-            strict_scope=strict_scope,
-        )
-        marks = {str(r.student_id): (str(r.mark) if r.mark is not None else None) for r in rows}
-    except OperationalError:
+        marks = _safe_marks_map_for_subject(Review2Mark, subject=subject, ta=ta, strict_scope=strict_scope)
+    except (OperationalError, ProgrammingError):
         marks = {}
     return Response({'subject': {'code': subject.code, 'name': subject.name}, 'marks': marks})
 
@@ -3435,22 +3624,8 @@ def formative1_published(request, subject_id: str):
     try:
         ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
         strict_scope = _strict_assignment_scope(subject_code=subject.code, teaching_assignment=ta)
-        rows = _filter_marks_queryset_for_teaching_assignment(
-            Formative1Mark.objects.filter(subject=subject),
-            ta,
-            strict_scope=strict_scope,
-        )
-        marks = {
-            str(r.student_id): {
-                'skill1': str(r.skill1) if r.skill1 is not None else None,
-                'skill2': str(r.skill2) if r.skill2 is not None else None,
-                'att1': str(r.att1) if r.att1 is not None else None,
-                'att2': str(r.att2) if r.att2 is not None else None,
-                'total': str(r.total) if r.total is not None else None,
-            }
-            for r in rows
-        }
-    except OperationalError:
+        marks = _safe_formative_marks_map(Formative1Mark, subject=subject, ta=ta, strict_scope=strict_scope)
+    except (OperationalError, ProgrammingError):
         marks = {}
     return Response({'subject': {'code': subject.code, 'name': subject.name}, 'marks': marks})
 
@@ -3560,22 +3735,8 @@ def formative2_published(request, subject_id: str):
     try:
         ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
         strict_scope = _strict_assignment_scope(subject_code=subject.code, teaching_assignment=ta)
-        rows = _filter_marks_queryset_for_teaching_assignment(
-            Formative2Mark.objects.filter(subject=subject),
-            ta,
-            strict_scope=strict_scope,
-        )
-        marks = {
-            str(r.student_id): {
-                'skill1': str(r.skill1) if r.skill1 is not None else None,
-                'skill2': str(r.skill2) if r.skill2 is not None else None,
-                'att1': str(r.att1) if r.att1 is not None else None,
-                'att2': str(r.att2) if r.att2 is not None else None,
-                'total': str(r.total) if r.total is not None else None,
-            }
-            for r in rows
-        }
-    except OperationalError:
+        marks = _safe_formative_marks_map(Formative2Mark, subject=subject, ta=ta, strict_scope=strict_scope)
+    except (OperationalError, ProgrammingError):
         marks = {}
     return Response({'subject': {'code': subject.code, 'name': subject.name}, 'marks': marks})
 

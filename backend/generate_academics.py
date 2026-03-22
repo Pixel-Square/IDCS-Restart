@@ -1,4 +1,6 @@
-﻿import React, { useEffect, useState } from 'react';
+import re
+
+code = """import React, { useEffect, useState } from 'react';
 import fetchWithAuth from '../../services/fetchAuth';
 import { AlertCircle, Target, Award, BookOpen } from 'lucide-react';
 
@@ -6,7 +8,6 @@ export default function StudentAcademics() {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<any | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<'cycle1' | 'cycle2' | 'model'>('cycle1');
 
   useEffect(() => {
     let mounted = true;
@@ -39,18 +40,10 @@ export default function StudentAcademics() {
   const semesterNumber = data?.semester?.number ?? null;
 
   const fmt = (v: any) => {
-    if (v === null || v === undefined || v === '') return '—';
+    if (v === null || v === undefined || v === '') return '�';
     const n = Number(v);
     if (Number.isFinite(n)) return String(n);
     return String(v);
-  };
-
-  const sumNums = (...vals: any[]) => {
-    const nums = vals
-      .map((v) => (v === null || v === undefined || v === '' ? null : Number(v)))
-      .filter((n) => Number.isFinite(n)) as number[];
-    if (!nums.length) return null;
-    return nums.reduce((a, b) => a + b, 0);
   };
 
   const renderAssessmentWithCOs = (label: string, mainValue: any, biData: any, biPrefix: string, cqiPrefix: string | null) => {
@@ -84,13 +77,13 @@ export default function StudentAcademics() {
             <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-2 ml-1">CO Breakdown</div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
               {coMarks.map((m: any) => (
-                <div key={m.co} title={m.cqi ? 'CQI Needs Action' : ''} className={`flex flex-col rounded-lg p-2 border ${m.cqi ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-100'}`}>
+                <div key={m.co} className={`flex flex-col rounded-lg p-2 border ${m.cqi ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-100'}`}>
                   <div className="flex justify-between items-center mb-1 gap-1">
                     <span className="text-xs font-bold text-gray-600">{m.co}</span>
                     <span className="text-sm font-black text-gray-900">{fmt(m.val)}</span>
                   </div>
                   {m.cqi && (
-                    <div className="flex items-center justify-center gap-1 mt-0.5 text-[9px] font-bold text-red-600 bg-red-100 py-0.5 px-1 rounded w-full">
+                    <div className="flex items-center justify-center gap-1 mt-0.5 text-[9px] font-bold text-red-600 bg-red-100/50 py-0.5 px-1.5 rounded w-full">
                       <AlertCircle size={10} strokeWidth={3} />
                       CQI ATTAINED
                     </div>
@@ -105,7 +98,7 @@ export default function StudentAcademics() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4 md:p-6 lg:p-8 font-inter">
+    <div className="min-h-screen bg-gray-100/50 p-4 md:p-6 lg:p-8 font-inter">
       <div className="max-w-7xl mx-auto w-full">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
           <div>
@@ -114,32 +107,8 @@ export default function StudentAcademics() {
               Academic Progress
             </h1>
             <p className="text-sm text-gray-500 mt-2 font-medium">
-              {semesterNumber ? `Semester ${semesterNumber} · ` : ''}Detailed breakdown of internal continuous assessments and CQI status.
+              {semesterNumber ? `Semester ${semesterNumber}  ` : ''}Detailed breakdown of internal continuous assessments and CQI status.
             </p>
-          </div>
-
-          <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1 shadow-sm">
-            <button
-              type="button"
-              onClick={() => setActiveView('cycle1')}
-              className={`px-3 py-1.5 rounded-md text-sm font-semibold transition-colors ${activeView === 'cycle1' ? 'bg-slate-900 text-white' : 'text-gray-700 hover:bg-gray-50'}`}
-            >
-              Cycle 1
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveView('cycle2')}
-              className={`px-3 py-1.5 rounded-md text-sm font-semibold transition-colors ${activeView === 'cycle2' ? 'bg-slate-900 text-white' : 'text-gray-700 hover:bg-gray-50'}`}
-            >
-              Cycle 2
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveView('model')}
-              className={`px-3 py-1.5 rounded-md text-sm font-semibold transition-colors ${activeView === 'model' ? 'bg-slate-900 text-white' : 'text-gray-700 hover:bg-gray-50'}`}
-            >
-              Model
-            </button>
           </div>
         </div>
 
@@ -164,13 +133,6 @@ export default function StudentAcademics() {
               const m = c.marks || {};
               const bi = m.bi || {};
               const ct = String(c.class_type || '').toUpperCase();
-              const internal = m.internal || {};
-              const internalNoModel = sumNums(
-                internal.cycle1_total ?? internal.cycle1,
-                internal.cycle2_total ?? internal.cycle2
-              );
-              const totalInternal = internal.total ?? sumNums(internalNoModel, m.model ?? m.model_exam);
-              const internalMax = internal.max_total;
 
               // Collect the assessments based on class type
               let c1Items: any[] = [];
@@ -230,84 +192,58 @@ export default function StudentAcademics() {
               return (
                 <div key={c.id || c.code} className="bg-white rounded-2xl shadow-sm hover:shadow-md transition-shadow duration-300 border border-gray-200 overflow-hidden flex flex-col">
                   {/* Card Header */}
-                  <div className="bg-slate-900 text-white p-5 border-b border-slate-800">
+                  <div className="bg-indigo-900 text-white p-5 border-b-4 border-indigo-500">
                     <div className="flex justify-between items-start gap-4">
                       <div>
-                        <div className="inline-flex items-center px-2.5 py-1 rounded-md text-[10px] font-bold bg-white/10 text-white tracking-widest uppercase mb-3 border border-white/10">
+                        <div className="inline-flex items-center px-2.5 py-1 rounded-md text-[10px] font-bold bg-indigo-800 text-indigo-100 tracking-widest uppercase mb-3">
                           {c.code || 'CODE'}
                         </div>
                         <h2 className="text-lg font-bold leading-tight line-clamp-2">{c.name || 'Course Name'}</h2>
                       </div>
-                      <div className="bg-white/10 p-2 rounded-xl flex items-center justify-center border border-white/10">
-                        <Award className="text-white/80" size={24} />
+                      <div className="bg-indigo-800/50 p-2 rounded-xl flex items-center justify-center border border-indigo-700">
+                        <Award className="text-indigo-300" size={24} />
                       </div>
                     </div>
                   </div>
 
                   {/* Body */}
-                  <div className="p-5 flex-grow">
-                    <div className="flex flex-wrap items-center gap-2 mb-4">
-                      <div className="px-3 py-1.5 rounded-lg bg-gray-50 border border-gray-200">
-                        <span className="text-[11px] uppercase tracking-wider text-gray-500 font-bold mr-2">Internal</span>
-                        <span className="text-sm font-extrabold text-gray-900">{fmt(internalNoModel)}</span>
+                  <div className="p-5 flex-grow grid grid-cols-1 md:grid-cols-2 gap-5 xl:gap-8">
+                    {/* Cycle 1 Area */}
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 mb-3 pb-2 border-b border-gray-200">
+                        <div className="w-2 h-2 rounded-full bg-blue-500"></div>
+                        <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest">Cycle 1</h3>
                       </div>
-                      <div className="px-3 py-1.5 rounded-lg bg-gray-50 border border-gray-200">
-                        <span className="text-[11px] uppercase tracking-wider text-gray-500 font-bold mr-2">Total</span>
-                        <span className="text-sm font-extrabold text-gray-900">
-                          {fmt(totalInternal)}{internalMax != null && internalMax !== '' ? ` / ${fmt(internalMax)}` : ''}
-                        </span>
-                      </div>
+                      {c1Items.map((item, idx) => (
+                        <React.Fragment key={idx}>
+                          {renderAssessmentWithCOs(item.label, item.val, bi, item.prefix, item.cqiPrefix)}
+                        </React.Fragment>
+                      ))}
                     </div>
 
-                    {activeView === 'cycle1' ? (
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2 mb-3 pb-2 border-b border-gray-200">
-                          <div className="w-2 h-2 rounded-full bg-blue-600"></div>
-                          <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest">Cycle 1</h3>
-                        </div>
-                        {c1Items.some((it) => it.val != null && it.val !== '') ? (
-                          c1Items.map((item, idx) => (
-                            <React.Fragment key={idx}>
-                              {renderAssessmentWithCOs(item.label, item.val, bi, item.prefix, item.cqiPrefix)}
-                            </React.Fragment>
-                          ))
-                        ) : (
-                          <div className="text-sm text-gray-500 bg-gray-50 border border-gray-200 rounded-lg p-4">No Cycle 1 marks available yet.</div>
-                        )}
+                    {/* Cycle 2 Area */}
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 mb-3 pb-2 border-b border-gray-200">
+                        <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
+                        <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest">Cycle 2</h3>
                       </div>
-                    ) : activeView === 'cycle2' ? (
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2 mb-3 pb-2 border-b border-gray-200">
-                          <div className="w-2 h-2 rounded-full bg-emerald-600"></div>
-                          <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest">Cycle 2</h3>
+                      {c2Items.map((item, idx) => (
+                        <React.Fragment key={idx}>
+                          {renderAssessmentWithCOs(item.label, item.val, bi, item.prefix, item.cqiPrefix)}
+                        </React.Fragment>
+                      ))}
+
+                      {/* Model Area - Rendered under cycle 2 for layout balance if present */}
+                      {modelItems.map((item, idx) => item.val != null && item.val !== '' && (
+                        <div className="mt-6 pt-4 border-t-2 border-dashed border-gray-100" key={`model-${idx}`}>
+                            <div className="flex items-center gap-2 mb-3">
+                              <div className="w-2 h-2 rounded-full bg-purple-500"></div>
+                              <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest">Model</h3>
+                            </div>
+                            {renderAssessmentWithCOs(item.label, item.val, bi, item.prefix, null)}
                         </div>
-                        {c2Items.some((it) => it.val != null && it.val !== '') ? (
-                          c2Items.map((item, idx) => (
-                            <React.Fragment key={idx}>
-                              {renderAssessmentWithCOs(item.label, item.val, bi, item.prefix, item.cqiPrefix)}
-                            </React.Fragment>
-                          ))
-                        ) : (
-                          <div className="text-sm text-gray-500 bg-gray-50 border border-gray-200 rounded-lg p-4">No Cycle 2 marks available yet.</div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2 mb-3 pb-2 border-b border-gray-200">
-                          <div className="w-2 h-2 rounded-full bg-slate-600"></div>
-                          <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest">Model</h3>
-                        </div>
-                        {modelItems.some((it) => it.val != null && it.val !== '') ? (
-                          modelItems.map((item, idx) => (
-                            <React.Fragment key={`model-${idx}`}>
-                              {renderAssessmentWithCOs(item.label, item.val, bi, item.prefix, null)}
-                            </React.Fragment>
-                          ))
-                        ) : (
-                          <div className="text-sm text-gray-500 bg-gray-50 border border-gray-200 rounded-lg p-4">No model marks available yet.</div>
-                        )}
-                      </div>
-                    )}
+                      ))}
+                    </div>
                   </div>
                 </div>
               );
@@ -318,3 +254,8 @@ export default function StudentAcademics() {
     </div>
   );
 }
+"""
+
+with open('g:/IDCS-NEW/IDCS-Restart/frontend/src/pages/student/Academics.tsx', 'w', encoding='utf-8') as f:
+    f.write(code)
+print("Updated Academics.tsx successfully!")

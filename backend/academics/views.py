@@ -5538,6 +5538,17 @@ class StudentMarksView(APIView):
             internal_cycle2_components = [x for x in internal_cycle2_components if x is not None]
             internal_cycle2 = sum(internal_cycle2_components) if internal_cycle2_components else None
 
+            # Totals aligned to how users talk about "Cycle" / "Total":
+            # - cycle totals include CIA
+            # - overall total includes CIA + model
+            c1_total_parts = [x for x in [internal_cycle1, marks_vals.get('cia1')] if x is not None]
+            c2_total_parts = [x for x in [internal_cycle2, marks_vals.get('cia2')] if x is not None]
+            internal_cycle1_total = sum(c1_total_parts) if c1_total_parts else None
+            internal_cycle2_total = sum(c2_total_parts) if c2_total_parts else None
+
+            all_total_parts = [x for x in [internal_cycle1_total, internal_cycle2_total, marks_vals.get('model')] if x is not None]
+            internal_total = sum(all_total_parts) if all_total_parts else None
+
             ct_norm = str(class_type or '').upper()
             # In this codebase, class_type values include THEORY/LAB/TCPR/TCPL/PRACTICAL/PROJECT/SPECIAL.
             # CQI is configured globally by IQAC; show it for all academic class types except AUDIT.
@@ -5582,6 +5593,9 @@ class StudentMarksView(APIView):
                             'computed': internal_computed,
                             'cycle1': internal_cycle1,
                             'cycle2': internal_cycle2,
+                            'cycle1_total': internal_cycle1_total,
+                            'cycle2_total': internal_cycle2_total,
+                            'total': internal_total,
                             'max_total': internal_max_total,
                             'max_cycle1': internal_max_cycle1,
                             'max_cycle2': internal_max_cycle2,

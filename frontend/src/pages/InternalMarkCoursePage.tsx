@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   fetchClassTypeWeights,
   fetchDraft,
+  fetchMarkTableLockStatus,
   fetchIqacCqiConfig,
   fetchIqacQpPattern,
   fetchMyTeachingAssignments,
@@ -455,6 +456,8 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
   const [loadingData, setLoadingData] = useState(false);
   const [dataError, setDataError] = useState<string | null>(null);
 
+  const [reloadCounter, setReloadCounter] = useState(0);
+
   const [cqiPublished, setCqiPublished] = useState<CqiPublishedSnapshot | null>(null);
   const [cqiGlobalCfg, setCqiGlobalCfg] = useState<{ divider: number; multiplier: number } | null>(null);
 
@@ -506,6 +509,22 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       mounted = false;
     };
   }, []);
+
+  // Reload published snapshots when a publish happens elsewhere in the UI.
+  useEffect(() => {
+    const handler = (ev: Event) => {
+      try {
+        const detail = (ev as any)?.detail || {};
+        const subjectId = detail.subjectId;
+        if (!subjectId || String(subjectId) !== String(courseId)) return;
+        setReloadCounter((x) => x + 1);
+      } catch {
+        // ignore
+      }
+    };
+    window.addEventListener('obe:published', handler as any);
+    return () => window.removeEventListener('obe:published', handler as any);
+  }, [courseId]);
 
   useEffect(() => {
     let mounted = true;
@@ -812,11 +831,53 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         let tcplLab2Res: any = null;
         let modelRes: any = null;
 
+        // If an assessment is already published (lock exists + is_published), prefer
+        // the published snapshot over any stale draft that might still be present.
+        const lockByAssessment: Record<string, { is_published: boolean } | null> = {};
+        try {
+          const needLocks: Array<string> = [];
+          if (allow('ssa1')) needLocks.push('ssa1');
+          if (allow('ssa2')) needLocks.push('ssa2');
+          if (allow('formative1')) needLocks.push('formative1');
+          if (allow('formative2')) needLocks.push('formative2');
+          if (allow('cia1')) needLocks.push('cia1');
+          if (allow('cia2')) needLocks.push('cia2');
+          needLocks.push('model');
+          if (isTcpr || isProject) {
+            needLocks.push('review1');
+            needLocks.push('review2');
+          }
+
+          const lockResults = await Promise.all(
+            needLocks.map(async (a) => {
+              try {
+                const res: any = await fetchMarkTableLockStatus(a as any, courseId, taId);
+                return [a, res] as const;
+              } catch {
+                return [a, null] as const;
+              }
+            }),
+          );
+          for (const [a, res] of lockResults) {
+            lockByAssessment[a] = res;
+          }
+        } catch {
+          // ignore lock errors; fallback to existing draft-first behavior
+        }
+
+        const preferPublished = (assessment: string) => Boolean(lockByAssessment[assessment]?.is_published);
+
         if (isLabLike) {
           // LAB / PRACTICAL uses lab-style sheets for CIA1/CIA2/MODEL
-          try { const d = await fetchDraft('cia1', courseId, taId); if (d?.draft) labCia1Res = { data: (d.draft as any).data ?? d.draft }; } catch {}
-          try { const d = await fetchDraft('cia2', courseId, taId); if (d?.draft) labCia2Res = { data: (d.draft as any).data ?? d.draft }; } catch {}
-          try { const d = await fetchDraft('model', courseId, taId); if (d?.draft) labModelRes = { data: (d.draft as any).data ?? d.draft }; } catch {}
+          if (!preferPublished('cia1')) {
+            try { const d = await fetchDraft('cia1', courseId, taId); if (d?.draft) labCia1Res = { data: (d.draft as any).data ?? d.draft }; } catch {}
+          }
+          if (!preferPublished('cia2')) {
+            try { const d = await fetchDraft('cia2', courseId, taId); if (d?.draft) labCia2Res = { data: (d.draft as any).data ?? d.draft }; } catch {}
+          }
+          if (!preferPublished('model')) {
+            try { const d = await fetchDraft('model', courseId, taId); if (d?.draft) labModelRes = { data: (d.draft as any).data ?? d.draft }; } catch {}
+          }
           if (!labCia1Res?.data) {
             try { labCia1Res = await fetchPublishedLabSheet('cia1', courseId, taId); } catch { labCia1Res = null; }
           }
@@ -841,16 +902,20 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
 
         // Prefer entered/draft marks (staff view), fallback to published.
         if (allow('ssa1')) {
-          try {
-            const d = await fetchDraft('ssa1', courseId, taId);
-            if (d?.draft && (d.draft as any).marks) ssa1Res = { marks: (d.draft as any).marks };
-          } catch {}
+          if (!preferPublished('ssa1')) {
+            try {
+              const d = await fetchDraft('ssa1', courseId, taId);
+              if (d?.draft && (d.draft as any).marks) ssa1Res = { marks: (d.draft as any).marks };
+            } catch {}
+          }
         }
         if (allow('ssa2')) {
-          try {
-            const d = await fetchDraft('ssa2', courseId, taId);
-            if (d?.draft && (d.draft as any).marks) ssa2Res = { marks: (d.draft as any).marks };
-          } catch {}
+          if (!preferPublished('ssa2')) {
+            try {
+              const d = await fetchDraft('ssa2', courseId, taId);
+              if (d?.draft && (d.draft as any).marks) ssa2Res = { marks: (d.draft as any).marks };
+            } catch {}
+          }
         }
 
         if (allow('ssa1') && !ssa1Res?.marks) {
@@ -861,13 +926,17 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         }
 
         if (isTcpr || isProject) {
-          try { const d = await fetchDraft('review1', courseId, taId); if (d?.draft && (d.draft as any).marks) review1Res = { marks: (d.draft as any).marks }; } catch {}
-          try { const d = await fetchDraft('review2', courseId, taId); if (d?.draft && (d.draft as any).marks) review2Res = { marks: (d.draft as any).marks }; } catch {}
+          if (!preferPublished('review1')) {
+            try { const d = await fetchDraft('review1', courseId, taId); if (d?.draft && (d.draft as any).marks) review1Res = { marks: (d.draft as any).marks }; } catch {}
+          }
+          if (!preferPublished('review2')) {
+            try { const d = await fetchDraft('review2', courseId, taId); if (d?.draft && (d.draft as any).marks) review2Res = { marks: (d.draft as any).marks }; } catch {}
+          }
           if (!review1Res?.marks) {
-            try { review1Res = await fetchPublishedReview1(courseId); } catch { review1Res = null; }
+            try { review1Res = await fetchPublishedReview1(courseId, taId); } catch { review1Res = null; }
           }
           if (!review2Res?.marks) {
-            try { review2Res = await fetchPublishedReview2(courseId); } catch { review2Res = null; }
+            try { review2Res = await fetchPublishedReview2(courseId, taId); } catch { review2Res = null; }
           }
           if (!mounted) return;
           setPublishedReview({ r1: review1Res?.marks || {}, r2: review2Res?.marks || {} });
@@ -887,13 +956,17 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
           setPublishedTcplLab({ lab1: (tcplLab1Res as any)?.data ?? null, lab2: (tcplLab2Res as any)?.data ?? null });
         } else {
           if (!isTcpr && !isProject && allow('formative1')) {
-            try { const d = await fetchDraft('formative1', courseId, taId); if (d?.draft && (d.draft as any).marks) f1Res = { marks: (d.draft as any).marks }; } catch {}
+            if (!preferPublished('formative1')) {
+              try { const d = await fetchDraft('formative1', courseId, taId); if (d?.draft && (d.draft as any).marks) f1Res = { marks: (d.draft as any).marks }; } catch {}
+            }
             if (!f1Res?.marks) {
               try { f1Res = await fetchPublishedFormative('formative1', courseId, taId); } catch { f1Res = null; }
             }
           }
           if (!isTcpr && !isProject && allow('formative2')) {
-            try { const d = await fetchDraft('formative2', courseId, taId); if (d?.draft && (d.draft as any).marks) f2Res = { marks: (d.draft as any).marks }; } catch {}
+            if (!preferPublished('formative2')) {
+              try { const d = await fetchDraft('formative2', courseId, taId); if (d?.draft && (d.draft as any).marks) f2Res = { marks: (d.draft as any).marks }; } catch {}
+            }
             if (!f2Res?.marks) {
               try { f2Res = await fetchPublishedFormative('formative2', courseId, taId); } catch { f2Res = null; }
             }
@@ -901,19 +974,25 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         }
 
         if (allow('cia1')) {
-          try { const d = await fetchDraft('cia1', courseId, taId); if (d?.draft) cia1Res = { data: (d.draft as any).data ?? d.draft }; } catch {}
+          if (!preferPublished('cia1')) {
+            try { const d = await fetchDraft('cia1', courseId, taId); if (d?.draft) cia1Res = { data: (d.draft as any).data ?? d.draft }; } catch {}
+          }
           if (!cia1Res?.data) {
             try { cia1Res = await fetchPublishedCiaSheet('cia1', courseId, taId); } catch { cia1Res = null; }
           }
         }
         if (allow('cia2')) {
-          try { const d = await fetchDraft('cia2', courseId, taId); if (d?.draft) cia2Res = { data: (d.draft as any).data ?? d.draft }; } catch {}
+          if (!preferPublished('cia2')) {
+            try { const d = await fetchDraft('cia2', courseId, taId); if (d?.draft) cia2Res = { data: (d.draft as any).data ?? d.draft }; } catch {}
+          }
           if (!cia2Res?.data) {
             try { cia2Res = await fetchPublishedCiaSheet('cia2', courseId, taId); } catch { cia2Res = null; }
           }
         }
 
-        try { const d = await fetchDraft('model', courseId, taId); if (d?.draft) modelRes = { data: (d.draft as any).data ?? d.draft }; } catch {}
+        if (!preferPublished('model')) {
+          try { const d = await fetchDraft('model', courseId, taId); if (d?.draft) modelRes = { data: (d.draft as any).data ?? d.draft }; } catch {}
+        }
         if (!modelRes?.data) {
           try { modelRes = await fetchPublishedModelSheet(courseId, taId); } catch { modelRes = null; }
         }
@@ -956,7 +1035,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
 
     load();
     return () => { mounted = false; };
-  }, [courseId, effectiveClassType, enabledSet, selectedTaId]);
+  }, [courseId, effectiveClassType, enabledSet, selectedTaId, reloadCounter]);
 
   const schema = useMemo(() => buildInternalSchema(effectiveClassType, enabledSet), [effectiveClassType, enabledSet]);
 
