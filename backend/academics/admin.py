@@ -45,7 +45,12 @@ from django.db import transaction
 from django.http import HttpResponse
 from django.utils import timezone
 
-import openpyxl
+
+def _get_openpyxl():
+    # Import lazily to keep Django startup fast; this module is loaded at boot via admin autodiscovery.
+    import openpyxl
+
+    return openpyxl
 
 try:
     from curriculum.models import SPECIAL_ASSESSMENT_CHOICES
@@ -339,7 +344,7 @@ class StudentProfileAdmin(admin.ModelAdmin):
             User = get_user_model()
             wb = None
             try:
-                wb = openpyxl.load_workbook(uploaded)
+                wb = _get_openpyxl().load_workbook(uploaded)
             except Exception as e:
                 messages.error(request, f'Failed to read Excel file: {e}')
                 return redirect(request.path)
@@ -586,7 +591,7 @@ class StudentProfileAdmin(admin.ModelAdmin):
 
     def download_template(self, request):
         # generate a simple Excel template with headers and a sample row
-        wb = openpyxl.Workbook()
+        wb = _get_openpyxl().Workbook()
         ws = wb.active
         ws.title = 'import'
         headers = ['reg_no', 'username', 'email', 'first_name', 'last_name', 'batch', 'section', 'password']
@@ -729,7 +734,7 @@ class StaffProfileAdmin(admin.ModelAdmin):
             User = get_user_model()
             wb = None
             try:
-                wb = openpyxl.load_workbook(uploaded)
+                wb = _get_openpyxl().load_workbook(uploaded)
             except Exception as e:
                 messages.error(request, f'Failed to read Excel file: {e}')
                 return redirect(request.path)
@@ -912,7 +917,7 @@ class StaffProfileAdmin(admin.ModelAdmin):
         return render(request, 'admin/academics/import_staff.html', context)
 
     def download_template_staff(self, request):
-        wb = openpyxl.Workbook()
+        wb = _get_openpyxl().Workbook()
         ws = wb.active
         ws.title = 'import'
         headers = ['staff_id', 'username', 'email', 'first_name', 'last_name', 'department', 'designation', 'role', 'password']

@@ -8,7 +8,12 @@ from django.http import HttpRequest, HttpResponse
 from django.shortcuts import redirect, render
 from django.urls import path
 
-from openpyxl import load_workbook
+
+def _load_workbook(*args, **kwargs):
+    # Import lazily because admin modules are imported during Django startup.
+    from openpyxl import load_workbook
+
+    return load_workbook(*args, **kwargs)
 
 from .models import College
 
@@ -73,7 +78,7 @@ class CollegeAdmin(admin.ModelAdmin):
 
                 try:
                     content = f.read()
-                    wb = load_workbook(filename=BytesIO(content), read_only=True, data_only=True)
+                    wb = _load_workbook(filename=BytesIO(content), read_only=True, data_only=True)
                     ws = wb.active
                 except Exception:
                     messages.error(request, 'Failed to read Excel file. Ensure it is a valid .xlsx file.')
