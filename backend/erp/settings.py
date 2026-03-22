@@ -82,6 +82,7 @@ INSTALLED_APPS = [
 ]
 # Staff requests dynamic forms & workflow engine
 INSTALLED_APPS.append('staff_requests')
+INSTALLED_APPS.append('staff_salary')
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',

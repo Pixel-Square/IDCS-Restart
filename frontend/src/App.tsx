@@ -69,6 +69,9 @@ import RequestTemplatesPage from './pages/hr/RequestTemplatesPage';
 import OrganizationStaffAttendanceAnalytics from './pages/hr/OrganizationStaffAttendanceAnalytics';
 import ManageGatePage from './pages/hr/ManageGatePage';
 import GatePassLogsPage from './pages/hr/GatePassLogsPage';
+import StaffValidationPage from './pages/hr/StaffValidationPage';
+import StaffSalaryPage from './pages/hr/StaffSalaryPage';
+import SalaryPage from './pages/staff/SalaryPage';
 import MyRequestsPage from './pages/staff-requests/MyRequestsPage';
 import PendingApprovalsPage from './pages/staff-requests/PendingApprovalsPage';
 import ApplicationsAdminPage from './pages/iqac/ApplicationsAdminPage';
@@ -508,6 +511,10 @@ export default function App() {
                   path="/staff/my-attendance"
                   element={<ProtectedRoute user={user} requiredProfile={'STAFF'} element={<MyAttendance />} />}
                 />
+                <Route
+                  path="/staff/salary"
+                  element={<ProtectedRoute user={user} requiredProfile={'STAFF'} element={<SalaryPage />} />}
+                />
                 
                 {/* HR Routes */}
                 <Route
@@ -525,6 +532,14 @@ export default function App() {
                 <Route
                   path="/hr/gatepass-logs"
                   element={<ProtectedRoute user={user} requiredRoles={['HR']} element={<GatePassLogsPage />} />}
+                />
+                <Route
+                  path="/hr/staff-validation"
+                  element={<ProtectedRoute user={user} requiredRoles={['HR']} requiredPermissions={['staff_requests.manage_templates']} element={<StaffValidationPage />} />}
+                />
+                <Route
+                  path="/hr/staff-salary"
+                  element={<ProtectedRoute user={user} requiredRoles={['HR']} requiredPermissions={['staff_requests.manage_templates']} element={<StaffSalaryPage />} />}
                 />
                 
                 {/* Staff Requests Routes */}

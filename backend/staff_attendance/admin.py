@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import AttendanceRecord, UploadLog, Holiday, AttendanceSettings
+from .models import AttendanceRecord, UploadLog, Holiday, AttendanceSettings, DepartmentAttendanceSettings
 
 
 @admin.register(AttendanceRecord)
@@ -76,6 +76,41 @@ class AttendanceSettingsAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         # Prevent deletion of settings
         return False
+
+
+@admin.register(DepartmentAttendanceSettings)
+class DepartmentAttendanceSettingsAdmin(admin.ModelAdmin):
+    list_display = ['name', 'get_departments', 'attendance_in_time_limit', 'attendance_out_time_limit', 'mid_time_split', 'enabled', 'updated_by', 'updated_at']
+    list_filter = ['enabled', 'updated_at', 'departments']
+    search_fields = ['name', 'description']
+    filter_horizontal = ['departments']
+    readonly_fields = ['created_at', 'updated_at']
+    
+    fieldsets = (
+        ('Configuration', {
+            'fields': ('name', 'description', 'departments')
+        }),
+        ('Time Limits', {
+            'fields': ('attendance_in_time_limit', 'attendance_out_time_limit', 'mid_time_split')
+        }),
+        ('Settings', {
+            'fields': ('apply_time_based_absence', 'enabled')
+        }),
+        ('Audit', {
+            'fields': ('created_by', 'updated_by', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def get_departments(self, obj):
+        return ', '.join([d.code for d in obj.departments.all()]) or 'None'
+    get_departments.short_description = 'Departments'
+    
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.created_by = request.user
+        obj.updated_by = request.user
+        super().save_model(request, obj, form, change)
 
 
 # Register any remaining staff_attendance models without explicit admin classes above.

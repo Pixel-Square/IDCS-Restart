@@ -6,6 +6,7 @@ from django.db import migrations
 def load_default_templates(apps, schema_editor):
     """
     Load 10 default request templates (5 normal + 5 SPL) with all configurations.
+    Clears old templates and recreates with fresh 10.
     
     This includes:
     - Form schemas
@@ -16,38 +17,39 @@ def load_default_templates(apps, schema_editor):
     """
     RequestTemplate = apps.get_model('staff_requests', 'RequestTemplate')
     ApprovalStep = apps.get_model('staff_requests', 'ApprovalStep')
-    
+
     # Delete old templates and recreate with fresh 10
     print('Clearing old templates...')
     RequestTemplate.objects.all().delete()
     print('✓ Cleared old templates')
-    
+
     # Common form schemas
     # Insert `others_category` before `reason` so fresh installs include the dropdown
     leave_form_schema = [
-        {"name": "others_category", "type": "select", "label": "Category", "required": False, "options": ["General", "Personal", "Other"], "placeholder": "Select category"},
-        {"name": "reason", "type": "text", "label": "Reason", "required": True},
-        {"name": "from_date", "type": "date", "label": "From Date", "required": True, "help_text": "Start date of leave/request"},
+        {"name": "others_category", "type": "select", "label": "Category", "required": False, "options": ["General", "Personal", "Other"], "placeholder": "Select category", "help_text": "Optional: Categorize your leave request"},
+        {"name": "reason", "type": "text", "label": "Reason", "required": True, "help_text": "Provide reason for leave request"},
+        {"name": "from_date", "type": "date", "label": "From Date", "required": True, "help_text": "Start date of leave/request. Holidays and Sundays will be excluded from the count."},
         {"name": "from_noon", "type": "select", "label": "From Noon", "options": ["Full day", "FN", "AN"], "required": True, "help_text": "Select FN (morning) or AN (afternoon) for start date"},
-        {"name": "to_date", "type": "date", "label": "To Date", "required": False, "help_text": "End date (optional, leave empty for same day)"},
+        {"name": "to_date", "type": "date", "label": "To Date", "required": False, "help_text": "End date (optional, leave empty for same day). Holidays and Sundays will be excluded."},
         {"name": "to_noon", "type": "select", "label": "To Noon", "options": ["Full day", "FN", "AN"], "required": False, "help_text": "Select FN or AN for end date (optional)"}
     ]
     
     # Late entry now uses shift + late_duration instead of an explicit time field
+    # Auto-approval logic: 10 mins FN is auto-approved if morning_in is within (dept_cutoff, dept_cutoff+10min]
     late_entry_form_schema = [
-        {"name": "reason", "type": "text", "label": "Reason", "required": True},
-        {"name": "from_date", "type": "date", "label": "Date", "required": True},
-        {"name": "shift", "type": "select", "label": "Shift", "required": True, "options": ["FN", "AN"]},
-        {"name": "late_duration", "type": "select", "label": "Late Duration", "required": True, "options": ["10 mins", "1 hr"]}
+        {"name": "reason", "type": "text", "label": "Reason", "required": True, "help_text": "Reason for late entry"},
+        {"name": "from_date", "type": "date", "label": "Date", "required": True, "help_text": "Date of late entry"},
+        {"name": "shift", "type": "select", "label": "Shift", "required": True, "options": ["FN", "AN"], "help_text": "FN (morning) or AN (afternoon) shift"},
+        {"name": "late_duration", "type": "select", "label": "Late Duration", "required": True, "options": ["10 mins", "1 hr"], "help_text": "10 mins (auto-approved for FN only if in-time is within cutoff+10min window) or 1 hr (normal approval)"}
     ]
     
     od_form_schema = [
-        {"name": "type", "type": "select", "label": "OD Type", "options": ["ODB - Basic", "ODR - Research", "ODP - Professional", "ODO - Out Reach"], "required": True},
-        {"name": "reason", "type": "text", "label": "Reason", "required": True},
-        {"name": "from_date", "type": "date", "label": "From Date", "required": True},
-        {"name": "from_noon", "type": "select", "label": "From Noon", "options": ["Full Day ", "FN ", "AN"], "required": True},
-        {"name": "to_date", "type": "date", "label": "To Date", "required": False},
-        {"name": "to_noon", "type": "select", "label": "To Noon", "options": ["Full Day ", "FN ", "AN"], "required": False}
+        {"name": "type", "type": "select", "label": "OD Type", "options": ["ODB - Basic", "ODR - Research", "ODP - Professional", "ODO - Out Reach"], "required": True, "help_text": "Select the type of official duty"},
+        {"name": "reason", "type": "text", "label": "Reason", "required": True, "help_text": "Provide details of official duty"},
+        {"name": "from_date", "type": "date", "label": "From Date", "required": True, "help_text": "Start date of official duty. Holidays and Sundays will be excluded."},
+        {"name": "from_noon", "type": "select", "label": "From Noon", "options": ["Full Day ", "FN ", "AN"], "required": True, "help_text": "Select FN (morning) or AN (afternoon) for start date"},
+        {"name": "to_date", "type": "date", "label": "To Date", "required": False, "help_text": "End date (optional, leave empty for same day). Holidays and Sundays will be excluded."},
+        {"name": "to_noon", "type": "select", "label": "To Noon", "options": ["Full Day ", "FN ", "AN"], "required": False, "help_text": "Select FN or AN for end date (optional)"}
     ]
     
     # Role definitions
@@ -112,7 +114,10 @@ def load_default_templates(apps, schema_editor):
             "form_schema": late_entry_form_schema,
             "allowed_roles": COMMON_ROLES,
             "ledger_policy": {},
-            "leave_policy": {"action": "neutral"},
+            "leave_policy": {
+                "action": "neutral",
+                "reset_period": "monthly"
+            },
             "attendance_action": {
                 "change_status": True,
                 "from_status": "absent",
@@ -210,7 +215,10 @@ def load_default_templates(apps, schema_editor):
             "form_schema": late_entry_form_schema,
             "allowed_roles": SPL_ROLES,
             "ledger_policy": {},
-            "leave_policy": {"action": "neutral"},
+            "leave_policy": {
+                "action": "neutral",
+                "reset_period": "monthly"
+            },
             "attendance_action": {
                 "change_status": True,
                 "from_status": "absent",
@@ -255,12 +263,24 @@ def load_default_templates(apps, schema_editor):
     ]
     
     # Create templates and approval steps
-    print('Creating 10 default templates...')
+    print('Creating/updating 10 default templates...')
     for config in templates_config:
         approval_steps = config.pop('approval_steps')
+        template_name = config['name']
         
-        template = RequestTemplate.objects.create(**config)
-        print(f'  ✓ Created: {template.name}')
+        # Use update_or_create to update existing templates or create new ones
+        template, created = RequestTemplate.objects.update_or_create(
+            name=template_name,
+            defaults=config
+        )
+        
+        if created:
+            print(f'  ✓ Created: {template.name}')
+        else:
+            print(f'  ✓ Updated: {template.name}')
+        
+        # Delete existing approval steps and create new ones
+        ApprovalStep.objects.filter(template=template).delete()
         
         # Create approval steps
         for step_order, approver_role in enumerate(approval_steps, start=1):
@@ -270,7 +290,7 @@ def load_default_templates(apps, schema_editor):
                 approver_role=approver_role
             )
     
-    print('✓ Successfully created 10 default templates (5 normal + 5 SPL)')
+    print('✓ Successfully created/updated 10 default templates (5 normal + 5 SPL)')
 
 
 class Migration(migrations.Migration):

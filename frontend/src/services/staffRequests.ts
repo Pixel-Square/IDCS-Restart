@@ -86,6 +86,10 @@ export async function createRequest(data: StaffRequestCreate): Promise<StaffRequ
   return res.data;
 }
 
+export async function deleteMyPendingRequest(id: number): Promise<void> {
+  await apiClient.delete(`${BASE_URL}/requests/${id}/`);
+}
+
 export async function getApprovalHistory(id: number) {
   const res = await apiClient.get(`${BASE_URL}/requests/${id}/approval_history/`);
   return res.data;
@@ -147,6 +151,29 @@ export async function getLeaveBalances(): Promise<LeaveBalancesResponse> {
   return res.data;
 }
 
+export async function searchStaffForBalanceEdit(query: string): Promise<any> {
+  const res = await apiClient.get(`${BASE_URL}/requests/balances/staff_search/`, {
+    params: { q: query }
+  });
+  return res.data;
+}
+
+export async function getBalancesByUser(userId: number): Promise<any> {
+  const res = await apiClient.get(`${BASE_URL}/requests/balances/by_user/`, {
+    params: { user_id: userId }
+  });
+  return res.data;
+}
+
+export async function setBalanceForUser(userId: number, leaveType: string, balance: number): Promise<any> {
+  const res = await apiClient.post(`${BASE_URL}/requests/balances/set/`, {
+    user_id: userId,
+    leave_type: leaveType,
+    balance,
+  });
+  return res.data;
+}
+
 export async function getColClaimableInfo(): Promise<any> {
   const res = await apiClient.get(`${BASE_URL}/requests/col_claimable_info/`);
   return res.data;
@@ -165,5 +192,42 @@ export async function processAbsences(data: {
 export async function getLateEntryStats(month?: string): Promise<import('../types/staffRequests').LateEntryStats> {
   const params = month ? `?month=${month}` : '';
   const res = await apiClient.get(`${BASE_URL}/requests/late_entry_stats/${params}`);
+  return res.data;
+}
+
+// ==================== HR Staff Validation ====================
+
+export async function getStaffValidationOverview(params: {
+  from_date: string;
+  to_date?: string;
+  department_id?: string;
+}): Promise<any> {
+  const res = await apiClient.get(`${BASE_URL}/requests/staff_validation_overview/`, { params });
+  return res.data;
+}
+
+export async function getStaffValidationCalendar(params: {
+  staff_user_id: number;
+  from_date: string;
+  to_date?: string;
+}): Promise<any> {
+  const res = await apiClient.get(`${BASE_URL}/requests/staff_validation_calendar/`, { params });
+  return res.data;
+}
+
+export async function getHrTemplatesForStaff(params: {
+  staff_user_id: number;
+  date: string;
+}): Promise<{ templates: RequestTemplate[]; message?: string; is_holiday?: boolean; is_absent?: boolean }> {
+  const res = await apiClient.get(`${BASE_URL}/requests/hr_templates_for_staff/`, { params });
+  return res.data;
+}
+
+export async function hrApplyRequest(data: {
+  staff_user_id: number;
+  template_id: number;
+  form_data: Record<string, any>;
+}): Promise<any> {
+  const res = await apiClient.post(`${BASE_URL}/requests/hr_apply_request/`, data);
   return res.data;
 }

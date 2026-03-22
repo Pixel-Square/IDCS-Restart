@@ -80,3 +80,24 @@ class StaffAttendanceViewPermission(permissions.BasePermission):
             return True
         
         return False
+
+
+class StaffAttendanceConfigPermission(permissions.BasePermission):
+    """Permission for attendance configuration management by HR/PS/Admin."""
+
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+
+        if request.user.is_superuser:
+            return True
+
+        has_admin_perm = request.user.has_perm('staff_attendance.upload_csv')
+        if hasattr(request.user, 'user_roles'):
+            role_names = set(
+                request.user.user_roles.values_list('role__name', flat=True)
+            )
+            if role_names.intersection({'HR', 'PS', 'ADMIN'}):
+                return True
+
+        return bool(has_admin_perm)

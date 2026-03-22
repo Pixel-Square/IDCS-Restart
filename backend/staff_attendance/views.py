@@ -1,8 +1,10 @@
 import csv
 import io
+import calendar
 import re
 import traceback as tb_module
 from datetime import datetime, date as date_type, timedelta
+from django.core.management import call_command
 from django.db import transaction
 from django.utils import timezone
 from django.db.models import Q
@@ -13,9 +15,9 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import PermissionDenied
 from accounts.models import User
-from .models import AttendanceRecord, UploadLog, HalfDayRequest, Holiday, AttendanceSettings
-from .serializers import AttendanceRecordSerializer, UploadLogSerializer, CSVUploadSerializer, HalfDayRequestSerializer, HalfDayRequestCreateSerializer, HalfDayRequestReviewSerializer, HolidaySerializer, HolidayCreateSerializer, AttendanceSettingsSerializer
-from .permissions import StaffAttendanceViewPermission, StaffAttendanceUploadPermission
+from .models import AttendanceRecord, UploadLog, HalfDayRequest, Holiday, AttendanceSettings, DepartmentAttendanceSettings, SpecialDepartmentDateAttendanceLimit
+from .serializers import AttendanceRecordSerializer, UploadLogSerializer, CSVUploadSerializer, HalfDayRequestSerializer, HalfDayRequestCreateSerializer, HalfDayRequestReviewSerializer, HolidaySerializer, HolidayCreateSerializer, AttendanceSettingsSerializer, DepartmentAttendanceSettingsSerializer, SpecialDepartmentDateAttendanceLimitSerializer
+from .permissions import StaffAttendanceViewPermission, StaffAttendanceUploadPermission, StaffAttendanceConfigPermission
 
 
 class AttendanceRecordViewSet(viewsets.ModelViewSet):
@@ -280,11 +282,51 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        # Get date range parameters
+        # Get date range parameters / template type
+        report_type = str(request.query_params.get('report_type') or '1').strip()
+        month_str = str(request.query_params.get('month') or '').strip()
         from_date_str = request.query_params.get('from_date')
         to_date_str = request.query_params.get('to_date')
         department_id = request.query_params.get('department_id')
         export_format = request.query_params.get('format', 'json')
+
+        if report_type in ['2', '3', '4', '5']:
+            if not month_str:
+                if from_date_str:
+                    try:
+                        parsed = datetime.strptime(from_date_str, '%Y-%m-%d').date()
+                        month_str = f"{parsed.year}-{parsed.month:02d}"
+                    except ValueError:
+                        return Response(
+                            {'error': 'month is required for report_type 2/3/4 (format: YYYY-MM)'},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                else:
+                    return Response(
+                        {'error': 'month is required for report_type 2/3/4 (format: YYYY-MM)'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+            try:
+                year, month = [int(x) for x in month_str.split('-', 1)]
+                last_day = calendar.monthrange(year, month)[1]
+                month_start = date_type(year, month, 1)
+                month_end = date_type(year, month, last_day)
+            except Exception:
+                return Response(
+                    {'error': 'Invalid month format. Use YYYY-MM'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            payload = self._build_staff_monthly_matrix_report(
+                month_start=month_start,
+                month_end=month_end,
+                department_id=department_id,
+                report_type=report_type,
+            )
+            if export_format == 'csv':
+                return self._export_staff_monthly_matrix_csv(payload)
+            return Response(payload)
 
         # `from_date` is required; `to_date` is optional. If only `from_date` provided,
         # analytics will show data for that single date.
@@ -553,6 +595,259 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                 },
                 'staff_analytics': analytics_list,
             })
+
+    def _build_staff_monthly_matrix_report(self, month_start, month_end, department_id=None, report_type='2'):
+        from staff_requests.models import StaffLeaveBalance
+
+        staff_users = User.objects.filter(
+            staff_profile__isnull=False
+        ).select_related('staff_profile', 'staff_profile__department')
+
+        if department_id:
+            staff_users = staff_users.filter(staff_profile__department_id=department_id)
+
+        staff_users = list(staff_users.order_by('staff_profile__department__name', 'first_name', 'username'))
+        staff_ids = [u.id for u in staff_users]
+
+        lop_balance_map = {
+            row['staff_id']: float(row['balance'] or 0.0)
+            for row in StaffLeaveBalance.objects.filter(
+                staff_id__in=staff_ids,
+                leave_type__iexact='LOP'
+            ).values('staff_id', 'balance')
+        }
+
+        records = AttendanceRecord.objects.filter(
+            user_id__in=staff_ids,
+            date__gte=month_start,
+            date__lte=month_end,
+        ).select_related('user', 'user__staff_profile', 'user__staff_profile__department')
+
+        record_map = {(r.user_id, r.date): r for r in records}
+
+        holidays = Holiday.objects.filter(date__gte=month_start, date__lte=month_end).prefetch_related('departments')
+        global_holidays = set()
+        dept_holidays = {}
+        for h in holidays:
+            dept_ids = list(h.departments.values_list('id', flat=True))
+            if not dept_ids:
+                global_holidays.add(h.date)
+            else:
+                for did in dept_ids:
+                    dept_holidays.setdefault(did, set()).add(h.date)
+
+        day_count = (month_end - month_start).days + 1
+        day_dates = [month_start + timedelta(days=i) for i in range(day_count)]
+        day_columns = [f"D{d.day}" for d in day_dates]
+
+        def _to_code(status_value):
+            s = str(status_value or '').strip()
+            if not s:
+                return ''
+            low = s.lower()
+            if low in ['present', 'p']:
+                return 'P'
+            if low in ['absent', 'a']:
+                return 'A'
+            return s.upper()
+
+        def _is_biometric_code(code):
+            return code in {'', 'P', 'A'}
+
+        def _is_holiday_for_staff(the_date, dept_id):
+            if the_date in global_holidays:
+                return True
+            if dept_id and the_date in dept_holidays.get(dept_id, set()):
+                return True
+            return False
+
+        def _duration_hrs(record):
+            if not record or not record.morning_in or not record.evening_out:
+                return ''
+            in_dt = datetime.combine(record.date, record.morning_in)
+            out_dt = datetime.combine(record.date, record.evening_out)
+            if out_dt < in_dt:
+                return ''
+            diff = out_dt - in_dt
+            total_minutes = int(diff.total_seconds() // 60)
+            return f"{total_minutes // 60}:{total_minutes % 60:02d}"
+
+        def _in_out_text(record):
+            if not record or not record.morning_in or not record.evening_out:
+                return ''
+            return f"{record.morning_in.strftime('%I:%M %p')} - {record.evening_out.strftime('%I:%M %p')}"
+
+        def _form_code_display(fn_code, an_code, overall_code=''):
+            fn_form = not _is_biometric_code(fn_code)
+            an_form = not _is_biometric_code(an_code)
+            if fn_form and an_form:
+                if fn_code == an_code:
+                    return fn_code
+                return f"FN:{fn_code} AN:{an_code}"
+            if fn_form:
+                return f"FN:{fn_code}"
+            if an_form:
+                return f"AN:{an_code}"
+            if overall_code and not _is_biometric_code(overall_code):
+                return overall_code
+            return ''
+
+        def _session_status_text(fn_code, an_code, overall_code=''):
+            """Always return explicit FN/AN status text when attendance status exists."""
+            if fn_code or an_code:
+                return f"FN:{fn_code or '-'} AN:{an_code or '-'}"
+            if overall_code:
+                return f"FN:{overall_code} AN:{overall_code}"
+            return ''
+
+        rows = []
+        for user_obj in staff_users:
+            profile = getattr(user_obj, 'staff_profile', None)
+            dept = getattr(profile, 'department', None)
+            dept_id = getattr(dept, 'id', None)
+            staff_code = getattr(profile, 'staff_id', None) or str(user_obj.id)
+            staff_name = f"{user_obj.first_name} {user_obj.last_name}".strip() or user_obj.username
+
+            row = {
+                'staff_user_id': user_obj.id,
+                'staff_id': staff_code,
+                'staff_name': staff_name,
+                'department': getattr(dept, 'name', 'N/A') if dept else 'N/A',
+                'days': max(0.0, float(day_count) - float(lop_balance_map.get(user_obj.id, 0.0))),
+                'values': {}
+            }
+
+            for day_dt in day_dates:
+                key = f"D{day_dt.day}"
+                is_holiday = _is_holiday_for_staff(day_dt, dept_id)
+                is_sunday = day_dt.weekday() == 6
+
+                rec = record_map.get((user_obj.id, day_dt))
+                if not rec:
+                    row['values'][key] = {'value': 'H' if is_holiday else '-', 'is_holiday': is_holiday}
+                    continue
+
+                fn_code = _to_code(rec.fn_status)
+                an_code = _to_code(rec.an_status)
+                overall_code = _to_code(rec.status)
+                form_display = _form_code_display(fn_code, an_code, overall_code)
+                if form_display and report_type not in ['2', '3', '4', '5']:
+                    row['values'][key] = {'value': form_display, 'is_holiday': is_holiday}
+                    continue
+
+                if report_type == '3':
+                    in_out = _in_out_text(rec)
+                    status_text = _session_status_text(fn_code, an_code, overall_code)
+                    if in_out and status_text:
+                        value = f"{status_text}\n({in_out})"
+                    elif status_text:
+                        value = status_text
+                    else:
+                        value = f"({in_out})" if in_out else ('H' if is_holiday else '-')
+                    row['values'][key] = {'value': value, 'is_holiday': is_holiday}
+                    continue
+
+                if report_type == '4':
+                    dur = _duration_hrs(rec)
+                    in_out = _in_out_text(rec)
+                    status_text = _session_status_text(fn_code, an_code, overall_code)
+                    if dur and in_out and status_text:
+                        value = f"{status_text}\n{dur}\n({in_out})"
+                    elif dur and status_text:
+                        value = f"{status_text}\n{dur}"
+                    elif in_out and status_text:
+                        value = f"{status_text}\n({in_out})"
+                    elif status_text:
+                        value = status_text
+                    elif dur and in_out:
+                        value = f"{dur}\n({in_out})"
+                    elif dur:
+                        value = dur
+                    elif in_out:
+                        value = f"({in_out})"
+                    else:
+                        value = 'H' if is_holiday else '-'
+                    row['values'][key] = {'value': value, 'is_holiday': is_holiday}
+                    continue
+
+                if report_type == '5':
+                    # Weighted attendance: 0=present, 0.5=half-day, 1=absent
+                    is_fn_absence = fn_code and fn_code.upper() in ['A', 'OD', 'CL', 'COL', 'LATE', 'OTHERS', 'LE']
+                    is_an_absence = an_code and an_code.upper() in ['A', 'OD', 'CL', 'COL', 'LATE', 'OTHERS', 'LE']
+                    
+                    if is_fn_absence and is_an_absence:
+                        value = '1'  # Full day absent
+                    elif is_fn_absence or is_an_absence:
+                        value = '0.5'  # Half day absent
+                    else:
+                        value = '0'  # Present
+                    row['values'][key] = {'value': value, 'is_holiday': is_holiday}
+                    continue
+
+                dur = _duration_hrs(rec)
+                status_text = _session_status_text(fn_code, an_code, overall_code)
+                if dur and status_text:
+                    value = f"{status_text}\n{dur}"
+                elif status_text:
+                    value = status_text
+                elif dur:
+                    value = dur
+                else:
+                    value = 'H' if is_holiday else '-'
+                row['values'][key] = {'value': value, 'is_holiday': is_holiday}
+
+            rows.append(row)
+
+        columns = ['staff_id', 'staff_name']
+        if report_type in ['2', '4', '5']:
+            columns.append('days')
+        columns.extend(day_columns)
+
+        return {
+            'report_type': report_type,
+            'month': month_start.strftime('%Y-%m'),
+            'date_range': {
+                'from_date': month_start.isoformat(),
+                'to_date': month_end.isoformat(),
+                'working_days': day_count,
+            },
+            'columns': columns,
+            'day_columns': day_columns,
+            'staff_rows': rows,
+            'total_staff': len(rows),
+        }
+
+    def _export_staff_monthly_matrix_csv(self, payload):
+        output = io.StringIO()
+        writer = csv.writer(output)
+
+        month = payload.get('month')
+        report_type = payload.get('report_type')
+        writer.writerow(['Organization Staff Attendance Analytics'])
+        writer.writerow(['Report Type', f"Type {report_type}"])
+        writer.writerow(['Month', month])
+        writer.writerow([])
+
+        header = ['Staff ID', 'Staff Name']
+        if report_type in ['2', '4', '5']:
+            header.append('Days')
+        header.extend(payload.get('day_columns') or [])
+        writer.writerow(header)
+
+        for row in payload.get('staff_rows') or []:
+            csv_row = [row.get('staff_id', ''), row.get('staff_name', '')]
+            if report_type in ['2', '4', '5']:
+                csv_row.append(row.get('days', 0))
+            values = row.get('values') or {}
+            for dcol in payload.get('day_columns') or []:
+                cell = values.get(dcol) or {}
+                csv_row.append(cell.get('value', '-'))
+            writer.writerow(csv_row)
+
+        response = Response(output.getvalue(), content_type='text/csv')
+        filename = f"organization_staff_attendance_type_{report_type}_{month}.csv"
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
 
     @action(detail=False, methods=['get'])
     def available_departments(self, request):
@@ -873,10 +1168,14 @@ class CSVUploadViewSet(viewsets.ViewSet):
                 if is_half_day_claim and shift_claimed in ['FN', 'AN']:
                     if shift_claimed == 'FN':
                         record.fn_status = 'present'
-                        record.an_status = 'absent'
+                        # For half-day COL claims, keep the non-claimed session as no-record
+                        # when there is no real attendance evidence for that session.
+                        if record.an_status in [None, 'absent']:
+                            record.an_status = None
                     else:
                         record.an_status = 'present'
-                        record.fn_status = 'absent'
+                        if record.fn_status in [None, 'absent']:
+                            record.fn_status = None
                 else:
                     record.fn_status = 'present'
                     record.an_status = 'present'
@@ -1223,6 +1522,7 @@ class CSVUploadViewSet(viewsets.ViewSet):
 
             # ---- ACTUAL SAVE --------------------------------------------
             source_file = csv_file.name
+            users_to_sync_lop = set()
 
             with transaction.atomic():
                 try:
@@ -1298,6 +1598,8 @@ class CSVUploadViewSet(viewsets.ViewSet):
                     user = self._resolve_user(user_id, errors)
                     if user is None:
                         continue
+
+                    users_to_sync_lop.add(user.username)
 
                     row_saved = False
 
@@ -1383,6 +1685,22 @@ class CSVUploadViewSet(viewsets.ViewSet):
                                 if self._upsert_record(user, yest_date, y_in, y_out,
                                                        'yesterday', overwrite_existing, source_file):
                                     row_saved = True
+                            elif yest_date.weekday() != 6:  # Not a Sunday
+                                # No yesterday scan on a working day -> mark absent if no record exists.
+                                # This fixes cases where D(yesterday) is blank and the date is skipped entirely.
+                                existing = AttendanceRecord.objects.filter(user=user, date=yest_date).first()
+                                if not existing:
+                                    AttendanceRecord.objects.create(
+                                        user=user,
+                                        date=yest_date,
+                                        morning_in=None,
+                                        evening_out=None,
+                                        fn_status='absent',
+                                        an_status='absent',
+                                        status='absent',
+                                        notes='Marked absent - no scan record found (yesterday column)'
+                                    )
+                                    row_saved = True
 
                     # 3. BACKFILL: D1 … D(today-2)  — only save if not yet in DB
                     for d in backfill_days:
@@ -1451,6 +1769,14 @@ class CSVUploadViewSet(viewsets.ViewSet):
                 upload_log.error_count = len(errors)
                 upload_log.errors = errors
                 upload_log.save()
+
+            # Recalculate LOP right after upload so absent entries are reflected immediately.
+            for username in users_to_sync_lop:
+                try:
+                    call_command('sync_absent_to_lop', user=username)
+                except Exception:
+                    # Do not fail upload if LOP sync fails for a user.
+                    pass
 
             return Response({
                 'success': True,
@@ -2078,7 +2404,7 @@ class AttendanceSettingsViewSet(viewsets.ModelViewSet):
     """ViewSet for managing attendance time settings"""
     queryset = AttendanceSettings.objects.all()
     serializer_class = AttendanceSettingsSerializer
-    permission_classes = [StaffAttendanceUploadPermission]  # Only PS can manage settings
+    permission_classes = [StaffAttendanceConfigPermission]  # HR/PS/Admin can manage settings
     
     def perform_create(self, serializer):
         """Save settings with the current user"""
@@ -2090,14 +2416,141 @@ class AttendanceSettingsViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def current(self, request):
-        """Get current attendance settings (create if doesn't exist) - Available to all staff"""
-        settings, created = AttendanceSettings.objects.get_or_create(
-            id=1,
-            defaults={
-                'attendance_in_time_limit': '08:45:00',
-                'attendance_out_time_limit': '17:45:00',
-                'apply_time_based_absence': True,
-                'updated_by': request.user
-            }
-        )
-        return Response(AttendanceSettingsSerializer(settings).data)
+        """Get current attendance settings for the user's department or global.
+        Returns department-specific settings if available, otherwise global settings.
+        Available to all staff."""
+        result = {}
+        
+        # Try to get department-specific settings
+        dept_settings = None
+        if hasattr(request.user, 'staff_profile') and request.user.staff_profile.department:
+            from .models import DepartmentAttendanceSettings
+            dept_settings = DepartmentAttendanceSettings.objects.filter(
+                departments=request.user.staff_profile.department,
+                enabled=True
+            ).first()
+        
+        if dept_settings:
+            # Return department-specific settings with a flag
+            from .serializers import DepartmentAttendanceSettingsSerializer
+            result = DepartmentAttendanceSettingsSerializer(dept_settings).data
+            result['is_department_specific'] = True
+        else:
+            # Fall back to global settings
+            settings, created = AttendanceSettings.objects.get_or_create(
+                id=1,
+                defaults={
+                    'attendance_in_time_limit': '08:45:00',
+                    'attendance_out_time_limit': '17:45:00',
+                    'apply_time_based_absence': True,
+                    'updated_by': request.user
+                }
+            )
+            from .serializers import AttendanceSettingsSerializer
+            result = AttendanceSettingsSerializer(settings).data
+            result['is_department_specific'] = False
+        
+        return Response(result)
+
+
+class DepartmentAttendanceSettingsViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing department-specific attendance time settings (PS only)"""
+    queryset = DepartmentAttendanceSettings.objects.all()
+    serializer_class = DepartmentAttendanceSettingsSerializer
+    permission_classes = [StaffAttendanceConfigPermission]  # HR/PS/Admin can manage
+    filterset_fields = ['enabled', 'departments']
+    search_fields = ['name', 'description']
+    ordering_fields = ['name', 'created_at', 'updated_at']
+    
+    def perform_create(self, serializer):
+        """Save with the current user as creator"""
+        serializer.save(created_by=self.request.user, updated_by=self.request.user)
+    
+    def perform_update(self, serializer):
+        """Update with the current user"""
+        serializer.save(updated_by=self.request.user)
+    
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    def for_my_department(self, request):
+        """Get settings for the current user's department"""
+        if not hasattr(request.user, 'staff_profile') or not request.user.staff_profile.department:
+            return Response(
+                {'error': 'User does not have a department assigned'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        settings = DepartmentAttendanceSettings.objects.filter(
+            departments=request.user.staff_profile.department,
+            enabled=True
+        ).first()
+        
+        if settings:
+            return Response(DepartmentAttendanceSettingsSerializer(settings).data)
+        else:
+            return Response(
+                {'message': 'No department-specific settings found. Using global defaults.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+
+class SpecialDepartmentDateAttendanceLimitViewSet(viewsets.ModelViewSet):
+    """HR/PS special date-range attendance limits by department."""
+    queryset = SpecialDepartmentDateAttendanceLimit.objects.all().prefetch_related('departments')
+    serializer_class = SpecialDepartmentDateAttendanceLimitSerializer
+    permission_classes = [StaffAttendanceConfigPermission]
+    filterset_fields = ['enabled', 'departments', 'from_date', 'to_date']
+    search_fields = ['name', 'description']
+    ordering_fields = ['from_date', 'to_date', 'created_at', 'updated_at']
+
+    def _reprocess_records_for_limit(self, instance):
+        """Recalculate attendance for already-saved rows covered by this limit."""
+        start_date = instance.from_date
+        end_date = instance.to_date or instance.from_date
+        dept_ids = list(instance.departments.values_list('id', flat=True))
+        if not dept_ids:
+            return 0
+
+        records = AttendanceRecord.objects.filter(
+            date__gte=start_date,
+            date__lte=end_date,
+        ).select_related('user', 'user__staff_profile', 'user__staff_profile__department')
+
+        processed = 0
+        for record in records:
+            dept_id = None
+            profile = getattr(record.user, 'staff_profile', None)
+            if profile:
+                try:
+                    if hasattr(profile, 'get_current_department'):
+                        current_dept = profile.get_current_department()
+                        if current_dept:
+                            dept_id = getattr(current_dept, 'id', None)
+                except Exception:
+                    dept_id = None
+
+                if dept_id is None:
+                    fallback_dept = getattr(profile, 'department', None)
+                    dept_id = getattr(fallback_dept, 'id', None) if fallback_dept else None
+
+            if dept_id not in dept_ids:
+                continue
+
+            record.update_status()
+            record.save(update_fields=['fn_status', 'an_status', 'status'])
+            processed += 1
+        return processed
+
+    def perform_create(self, serializer):
+        instance = serializer.save(created_by=self.request.user, updated_by=self.request.user)
+        self._reprocess_records_for_limit(instance)
+
+    def perform_update(self, serializer):
+        instance = serializer.save(updated_by=self.request.user)
+        self._reprocess_records_for_limit(instance)
+
+    @action(detail=True, methods=['post'])
+    def reapply(self, request, pk=None):
+        instance = self.get_object()
+        processed = self._reprocess_records_for_limit(instance)
+        return Response({'success': True, 'reprocessed_records': processed})
+

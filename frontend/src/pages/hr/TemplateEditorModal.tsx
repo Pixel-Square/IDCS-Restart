@@ -621,45 +621,25 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
                               Reset Period <span className="text-red-500">*</span>
                             </label>
                             <p className="text-xs text-gray-500 mb-2">
-                              Define the date range for balance reset (e.g., Academic Year: June 1 - May 31).
+                              Define when the balance should reset for all staff.
                             </p>
-                            <div className="grid grid-cols-2 gap-3">
-                              <div>
-                                <label className="block text-xs text-gray-600 mb-1">From Date</label>
-                                <input
-                                  type="date"
-                                  value={leavePolicy.from_date || ''}
-                                  onChange={(e) => handleLeavePolicyChange({ from_date: e.target.value })}
-                                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                                />
-                              </div>
-                              <div>
-                                <label className="block text-xs text-gray-600 mb-1">To Date</label>
-                                <input
-                                  type="date"
-                                  value={leavePolicy.to_date || ''}
-                                  onChange={(e) => handleLeavePolicyChange({ to_date: e.target.value })}
-                                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                                />
-                              </div>
-                            </div>
-                          </div>
-
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
-                              Split Date (Optional)
-                            </label>
-                            <p className="text-xs text-gray-500 mb-2">
-                              Split the annual allocation into two equal periods.
-                            </p>
-                            <input
-                              type="date"
-                              value={leavePolicy.split_date || ''}
-                              onChange={(e) => handleLeavePolicyChange({ split_date: e.target.value })}
+                            <select
+                              value={leavePolicy.reset_period || ''}
+                              onChange={(e) => handleLeavePolicyChange({ reset_period: e.target.value as 'monthly' | 'half_yearly' | 'yearly' })}
                               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                              min={leavePolicy.from_date || ''}
-                              max={leavePolicy.to_date || ''}
-                            />
+                              required
+                            >
+                              <option value="">-- Select Reset Frequency --</option>
+                              <option value="monthly">Monthly</option>
+                              <option value="half_yearly">Half Yearly (Every 6 months)</option>
+                              <option value="yearly">Yearly</option>
+                            </select>
+                            <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">
+                              <strong>Reset Behavior:</strong> Balances will automatically reset at the frequency you select.
+                              <br />• <strong>Monthly:</strong> Reset on 1st of each month
+                              <br />• <strong>Half Yearly:</strong> Reset every 6 months
+                              <br />• <strong>Yearly:</strong> Reset annually
+                            </div>
                           </div>
 
                           <div>
