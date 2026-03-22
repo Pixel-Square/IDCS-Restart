@@ -13,6 +13,7 @@ import logging
 from django.http import Http404
 from django.utils import timezone
 from datetime import timedelta
+import decimal
 
 from .permissions import IsHODOfDepartment
 
@@ -5351,7 +5352,23 @@ class StudentMarksView(APIView):
         except Exception:
             subject_by_code = {}
 
+
+        bi_data_by_subj = {}
+        try:
+            from django.db import connection
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT * FROM bi_obe_student_subject_wide WHERE student_id = %s", [sp.id])
+                cols = [col[0] for col in cursor.description]
+                for row in cursor.fetchall():
+                    d = dict(zip(cols, row))
+                    sid = d.get('subject_id')
+                    if sid:
+                        bi_data_by_subj[sid] = d
+        except Exception:
+            pass
+
         out_courses = []
+
         for code in sorted(list(codes_set)):
             subj = subject_by_code.get(code)
             # curriculum row metadata (class_type, internal max)
@@ -5572,6 +5589,7 @@ class StudentMarksView(APIView):
                         },
                         'has_cqi': has_cqi,
                         **({'cos': cos} if cos is not None else {}),
+                        'bi': {k: (float(v) if isinstance(v, decimal.Decimal) else v) for k, v in bi_data_by_subj.get(getattr(subj, 'id', None), {}).items() if v is not None} if getattr(subj, 'id', None) else {},
                     },
                 }
             )
