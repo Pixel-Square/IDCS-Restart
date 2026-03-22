@@ -32,11 +32,8 @@ import { ModalPortal } from './ModalPortal';
 import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
 import { useMarkEntryEditRequestsEnabled } from '../utils/requestControl';
 import { normalizeRegisterNo, registerNoKeys } from '../utils/excelImport';
-<<<<<<< HEAD
 import { clearLocalDraftCache } from '../utils/obeDraftCache';
-=======
 import { getApiBase } from '../services/apiBase';
->>>>>>> 3b582c30c626f1af97739db7229424129dd6b6ba
 
 const API_BASE = getApiBase();
 
@@ -723,6 +720,19 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
       const draft: F1DraftPayload = { sheet: nextSheet, partBtl, markManagerLocked: nextSheet.markManagerLocked, markManagerSnapshot: nextSheet.markManagerSnapshot, markManagerApprovalUntil: nextSheet.markManagerApprovalUntil } as any;
       setSheet(nextSheet);
       setMarkManagerModal(null);
+      try {
+        if (key)
+          lsSet(key, {
+            termLabel: nextSheet.termLabel,
+            batchLabel: nextSheet.batchLabel,
+            rowsByStudentId: nextSheet.rowsByStudentId,
+            markManagerLocked: nextSheet.markManagerLocked,
+            markManagerSnapshot: nextSheet.markManagerSnapshot,
+            markManagerApprovalUntil: nextSheet.markManagerApprovalUntil,
+          });
+      } catch {
+        // ignore
+      }
       await saveDraft(assessmentKey, String(subjectId), draft, teachingAssignmentId);
       setSavedAt(new Date().toLocaleString());
       try {
@@ -832,7 +842,15 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
         const payload: F1DraftPayload = { sheet, partBtl } as any;
         await saveDraft(assessmentKey, subjectId, payload, teachingAssignmentId);
         try {
-          if (key) lsSet(key, { termLabel: sheet.termLabel, batchLabel: sheet.batchLabel, rowsByStudentId: sheet.rowsByStudentId });
+          if (key)
+            lsSet(key, {
+              termLabel: sheet.termLabel,
+              batchLabel: sheet.batchLabel,
+              rowsByStudentId: sheet.rowsByStudentId,
+              markManagerLocked: sheet.markManagerLocked,
+              markManagerSnapshot: sheet.markManagerSnapshot,
+              markManagerApprovalUntil: sheet.markManagerApprovalUntil,
+            });
         } catch {}
         if (!cancelled) setSavedAt(new Date().toLocaleString());
       } catch {
@@ -870,7 +888,15 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
           });
           // Persist server draft into localStorage so later roster merges use it
           try {
-            if (key) lsSet(key, { termLabel: String(draftSheet.termLabel || masterTermLabel || 'KRCT AY25-26'), batchLabel: String(subjectId), rowsByStudentId: rows || {} });
+            if (key)
+              lsSet(key, {
+                termLabel: String(draftSheet.termLabel || masterTermLabel || 'KRCT AY25-26'),
+                batchLabel: String(subjectId),
+                rowsByStudentId: rows || {},
+                markManagerLocked: typeof draftSheet.markManagerLocked === 'boolean' ? draftSheet.markManagerLocked : Boolean(draftSheet.markManagerSnapshot),
+                markManagerSnapshot: draftSheet.markManagerSnapshot ?? null,
+                markManagerApprovalUntil: draftSheet.markManagerApprovalUntil ?? null,
+              });
           } catch {
             // ignore localStorage errors
           }
@@ -1066,6 +1092,10 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
             };
           }
 
+          const storedMmSnapshot = stored && typeof stored === 'object' ? (stored as any).markManagerSnapshot : null;
+          const storedMmLocked = stored && typeof stored === 'object' ? (stored as any).markManagerLocked : undefined;
+          const storedMmApprovalUntil = stored && typeof stored === 'object' ? (stored as any).markManagerApprovalUntil : undefined;
+
           const nextTermLabel =
             masterCfg?.termLabel ? String(masterCfg.termLabel) : String(prev?.termLabel || (stored as any)?.termLabel || masterTermLabel || 'KRCT AY25-26');
 
@@ -1074,6 +1104,15 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
             termLabel: nextTermLabel,
             batchLabel: String(subjectId || ''),
             rowsByStudentId: merged,
+            // If roster loads before server draft, keep a locally persisted Mark Manager snapshot.
+            markManagerSnapshot: prev?.markManagerSnapshot ?? storedMmSnapshot ?? null,
+            markManagerLocked:
+              typeof (prev as any)?.markManagerLocked === 'boolean'
+                ? (prev as any).markManagerLocked
+                : typeof storedMmLocked === 'boolean'
+                  ? storedMmLocked
+                  : Boolean(storedMmSnapshot),
+            markManagerApprovalUntil: (prev as any)?.markManagerApprovalUntil ?? storedMmApprovalUntil ?? null,
           };
         });
       } catch (e: any) {

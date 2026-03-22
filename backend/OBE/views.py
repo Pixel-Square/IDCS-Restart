@@ -3,7 +3,7 @@ import logging
 import re
 
 from django.contrib.auth.decorators import login_required
-from django.db import transaction
+from django.db import transaction, connection
 from django.db.models import Q
 from django.db.utils import OperationalError
 from django.http import HttpResponseForbidden
@@ -231,11 +231,35 @@ def _get_teaching_assignment_student_ids(ta) -> list[int]:
     return ids
 
 
+_DB_COLUMN_EXISTS_CACHE: dict[tuple[str, str], bool] = {}
+
+
+def _db_table_has_column(db_table: str, column_name: str) -> bool:
+    key = (db_table, column_name)
+    cached = _DB_COLUMN_EXISTS_CACHE.get(key)
+    if cached is not None:
+        return cached
+    try:
+        with connection.cursor() as cursor:
+            desc = connection.introspection.get_table_description(cursor, db_table)
+        present = any(getattr(c, 'name', None) == column_name for c in desc)
+    except Exception:
+        present = False
+    _DB_COLUMN_EXISTS_CACHE[key] = present
+    return present
+
+
 def _filter_marks_queryset_for_teaching_assignment(qs, ta, *, strict_scope: bool = False):
     model = getattr(qs, 'model', None)
     has_ta_field = bool(model) and any(getattr(f, 'name', '') == 'teaching_assignment' for f in model._meta.get_fields())
+    has_ta_db_column = False
+    if has_ta_field and model is not None:
+        try:
+            has_ta_db_column = _db_table_has_column(model._meta.db_table, 'teaching_assignment_id')
+        except Exception:
+            has_ta_db_column = False
 
-    if has_ta_field:
+    if has_ta_field and has_ta_db_column:
         if ta is not None:
             scoped_qs = qs.filter(teaching_assignment=ta)
             if scoped_qs.exists():
@@ -256,16 +280,28 @@ def _filter_marks_queryset_for_teaching_assignment(qs, ta, *, strict_scope: bool
 
 def _upsert_scoped_mark(model, *, subject, student, mark_defaults: dict, teaching_assignment=None):
     has_ta_field = any(getattr(f, 'name', '') == 'teaching_assignment' for f in model._meta.get_fields())
-    lookup = {'subject': subject, 'student': student}
+    has_ta_db_column = False
     if has_ta_field:
+        try:
+            has_ta_db_column = _db_table_has_column(model._meta.db_table, 'teaching_assignment_id')
+        except Exception:
+            has_ta_db_column = False
+    lookup = {'subject': subject, 'student': student}
+    if has_ta_field and has_ta_db_column:
         lookup['teaching_assignment'] = teaching_assignment
     return model.objects.update_or_create(**lookup, defaults=mark_defaults)
 
 
 def _delete_scoped_mark(model, *, subject, student, teaching_assignment=None):
     has_ta_field = any(getattr(f, 'name', '') == 'teaching_assignment' for f in model._meta.get_fields())
-    filters = {'subject': subject, 'student': student}
+    has_ta_db_column = False
     if has_ta_field:
+        try:
+            has_ta_db_column = _db_table_has_column(model._meta.db_table, 'teaching_assignment_id')
+        except Exception:
+            has_ta_db_column = False
+    filters = {'subject': subject, 'student': student}
+    if has_ta_field and has_ta_db_column:
         filters['teaching_assignment'] = teaching_assignment
     return model.objects.filter(**filters).delete()
 

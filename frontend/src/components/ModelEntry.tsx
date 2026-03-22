@@ -15,6 +15,7 @@ import { ModalPortal } from './ModalPortal';
 import AssessmentContainer from './containers/AssessmentContainer';
 import { useMarkEntryEditRequestsEnabled } from '../utils/requestControl';
 import { normalizeRegisterNo, registerNoKeys } from '../utils/excelImport';
+import { clearLocalDraftCache } from '../utils/obeDraftCache';
 
 type Props = {
   subjectId: string;
@@ -142,6 +143,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   const [savingDraft, setSavingDraft] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [resettingMarks, setResettingMarks] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [savedBy, setSavedBy] = useState<string | null>(null);
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
@@ -584,6 +586,52 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
       setActionError(e?.message || 'Draft save failed');
     } finally {
       setSavingDraft(false);
+    }
+  };
+
+  const resetAllMarks = async () => {
+    if (!subjectId) return;
+    // Only show this action while publish window is open (per requirement).
+    if (!publishAllowed || globalLocked) return;
+    if (tableBlocked || publishedEditLocked) return;
+    const ok = window.confirm('Reset Model marks for all students? This clears the saved draft.');
+    if (!ok) return;
+
+    setResettingMarks(true);
+    setActionError(null);
+    try {
+      // Clear local caches first so we don't rehydrate old values.
+      clearLocalDraftCache(String(subjectId), 'model', teachingAssignmentId ?? null);
+
+      const clearedTheory: TcplSheetState = {};
+      const clearedTcpl: TcplSheetState = {};
+      const emptyTheoryQ = Object.fromEntries(theoryQuestions.map((q) => [q.key, '' as CellNumber]));
+      const emptyTcplQ = Object.fromEntries(tcplQuestions.map((q) => [q.key, '' as CellNumber]));
+
+      for (const s of students) {
+        const sid = String(s.id);
+        clearedTheory[sid] = { absent: false, absentKind: undefined, q: { ...emptyTheoryQ } };
+        clearedTcpl[sid] = { absent: false, absentKind: undefined, lab: '', q: { ...emptyTcplQ } };
+      }
+
+      setTheorySheet(clearedTheory);
+      setTcplSheet(clearedTcpl);
+
+      await OBE.saveDraft(
+        'model',
+        String(subjectId),
+        {
+          ...buildPayload(),
+          theorySheet: clearedTheory,
+          tcplSheet: clearedTcpl,
+        } as any,
+        teachingAssignmentId,
+      );
+      setSavedAt(new Date().toLocaleString());
+    } catch (e: any) {
+      setActionError(e?.message || 'Failed to reset marks');
+    } finally {
+      setResettingMarks(false);
     }
   };
 
@@ -1518,6 +1566,16 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
               title={publishedEditLocked ? 'Published sheets are locked (IQAC must open editing).' : undefined}
             >
               {savingDraft ? 'Saving…' : 'Save Draft'}
+            </button>
+          ) : null}
+          {!isPublished && publishAllowed && !globalLocked ? (
+            <button
+              onClick={resetAllMarks}
+              className="obe-btn obe-btn-danger"
+              disabled={resettingMarks || students.length === 0 || tableBlocked || publishedEditLocked}
+              title="Clears the saved draft marks"
+            >
+              {resettingMarks ? 'Resetting…' : 'Reset Marks'}
             </button>
           ) : null}
           <button

@@ -343,6 +343,7 @@ export default function CQIEntry({
   const [readOnly, setReadOnly] = useState(false);
   const [autoSaveEnabled, setAutoSaveEnabled] = useState(true);
   const [dirty, setDirty] = useState(false);
+  const [resettingMarks, setResettingMarks] = useState(false);
 
   // Load published snapshot (if present) and lock editing.
   useEffect(() => {
@@ -1015,7 +1016,15 @@ export default function CQIEntry({
         const labModel = isLabLike ? readLabAssessmentByCo((labModelRes as any)?.data ?? null, { fallbackCiaEnabled: true, profile: 'strict-lab' }) : null;
 
         const cia1Data = (cia1Res as any).data;
-        const cia1Questions = Array.isArray(cia1Data?.questions) ? cia1Data.questions : [];
+        const cia1QuestionsRaw = Array.isArray(cia1Data?.questions) ? cia1Data.questions : [];
+        const cia1Questions = Array.isArray(cia1QuestionsRaw)
+          ? cia1QuestionsRaw.map((q: any) => {
+              const k = String(q?.key || '').trim();
+              const key = k.toLowerCase();
+              const override = key ? (cia1CoByKey[key] ?? cia1CoByKey[k] ?? null) : null;
+              return override != null ? { ...q, co: override } : q;
+            })
+          : [];
         const cia1HeaderMax = cia1Questions.reduce(
           (acc: { co1: number; co2: number }, q: any, idxQ: number) => {
             const qMax = Number(q?.max || 0);
@@ -1030,7 +1039,15 @@ export default function CQIEntry({
         );
 
         const cia2Data = (cia2Res as any).data;
-        const cia2Questions = Array.isArray(cia2Data?.questions) ? cia2Data.questions : [];
+        const cia2QuestionsRaw = Array.isArray(cia2Data?.questions) ? cia2Data.questions : [];
+        const cia2Questions = Array.isArray(cia2QuestionsRaw)
+          ? cia2QuestionsRaw.map((q: any) => {
+              const k = String(q?.key || '').trim();
+              const key = k.toLowerCase();
+              const override = key ? (cia2CoByKey[key] ?? cia2CoByKey[k] ?? null) : null;
+              return override != null ? { ...q, co: override } : q;
+            })
+          : [];
         const cia2HeaderMax = cia2Questions.reduce(
           (acc: { co3: number; co4: number }, q: any, idxQ: number) => {
             const qMax = Number(q?.max || 0);
@@ -1082,17 +1099,6 @@ export default function CQIEntry({
                 if (cia1Data) {
                   const cia1ById = cia1Data.rowsByStudentId || {};
                   const cia1Row = cia1ById[String(student.id)] || {};
-<<<<<<< HEAD
-                  const questionsRaw = cia1Data.questions || [];
-                  const questions = Array.isArray(questionsRaw)
-                    ? questionsRaw.map((q: any) => {
-                        const key = String(q?.key || '').trim().toLowerCase();
-                        const override = key ? (cia1CoByKey[key] ?? cia1CoByKey[String(q?.key || '').trim()] ?? null) : null;
-                        return override != null ? { ...q, co: override } : q;
-                      })
-                    : [];
-=======
->>>>>>> 3b582c30c626f1af97739db7229424129dd6b6ba
                   const qObj = (cia1Row as any)?.q && typeof (cia1Row as any).q === 'object' ? (cia1Row as any).q : (cia1Row as any);
 
                   let anyCiaForCo = false;
@@ -1169,17 +1175,6 @@ export default function CQIEntry({
                 if (cia2Data) {
                   const cia2ById = cia2Data.rowsByStudentId || {};
                   const cia2Row = cia2ById[String(student.id)] || {};
-<<<<<<< HEAD
-                  const questionsRaw = cia2Data.questions || [];
-                  const questions = Array.isArray(questionsRaw)
-                    ? questionsRaw.map((q: any) => {
-                        const key = String(q?.key || '').trim().toLowerCase();
-                        const override = key ? (cia2CoByKey[key] ?? cia2CoByKey[String(q?.key || '').trim()] ?? null) : null;
-                        return override != null ? { ...q, co: override } : q;
-                      })
-                    : [];
-=======
->>>>>>> 3b582c30c626f1af97739db7229424129dd6b6ba
                   const qObj = (cia2Row as any)?.q && typeof (cia2Row as any).q === 'object' ? (cia2Row as any).q : (cia2Row as any);
 
                   let anyCiaForCo = false;
@@ -1510,6 +1505,51 @@ export default function CQIEntry({
           >
             Save Draft
           </button>
+
+          {!readOnly ? (
+            <button
+              type="button"
+              onClick={async () => {
+                if (!subjectId || !teachingAssignmentId) return alert('Missing subject/teaching assignment');
+                if (readOnly) return;
+                const ok = confirm('Reset CQI marks for all students? This clears the saved draft.');
+                if (!ok) return;
+                setResettingMarks(true);
+                try {
+                  // Clear UI state immediately.
+                  setCqiEntries({});
+                  setCqiErrors({});
+                  setDirty(false);
+
+                  // Save empty draft to server.
+                  const qp = teachingAssignmentId ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
+                  const res = await fetchWithAuth(`/api/obe/cqi-draft/${encodeURIComponent(String(subjectId))}${qp}`, {
+                    method: 'PUT',
+                    body: JSON.stringify({ entries: {} }),
+                  }).catch(() => null);
+
+                  if (res && res.ok) {
+                    const j = await res.json().catch(() => null);
+                    setDraftLog(j || { updated_at: new Date().toISOString(), updated_by: null });
+                    alert('CQI draft reset');
+                  } else {
+                    const txt = res ? await res.text().catch(() => '') : '';
+                    alert(txt || 'Failed to reset draft');
+                  }
+                } catch (e: any) {
+                  alert('Failed to reset draft: ' + String(e?.message || e));
+                } finally {
+                  setResettingMarks(false);
+                }
+              }}
+              className="obe-btn obe-btn-danger"
+              style={{ minWidth: 120 }}
+              disabled={resettingMarks || readOnly}
+              title="Clears the saved draft marks"
+            >
+              {resettingMarks ? 'Resetting…' : 'Reset Marks'}
+            </button>
+          ) : null}
 
           <button
             type="button"

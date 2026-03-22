@@ -32,6 +32,7 @@ import * as XLSX from 'xlsx';
 import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
 import { useMarkEntryEditRequestsEnabled } from '../utils/requestControl';
 import { normalizeRegisterNo, registerNoKeys } from '../utils/excelImport';
+import { clearLocalDraftCache } from '../utils/obeDraftCache';
 import { getApiBase } from '../services/apiBase';
 
 type Student = {
@@ -406,6 +407,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   const [students, setStudents] = useState<Student[]>([]);
   const [serverTotals, setServerTotals] = useState<Record<number, number | null>>({});
   const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [resettingMarks, setResettingMarks] = useState(false);
   const draftLoadedRef = useRef(false);
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
 
@@ -1467,6 +1469,59 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
     }
   };
 
+  const resetAllMarks = async () => {
+    if (!subjectId) return;
+    // Only show this action while publish window is open (per requirement).
+    if (!publishAllowed || globalLocked) return;
+    if (tableBlocked || publishedEditLocked) return;
+    const ok = window.confirm(`Reset ${assessmentLabel} marks for all students? This clears the saved draft.`);
+    if (!ok) return;
+
+    setResettingMarks(true);
+    setError(null);
+    try {
+      // Clear local caches first so we don't rehydrate old values.
+      clearLocalDraftCache(String(subjectId), String(assessmentKey), teachingAssignmentId ?? null);
+
+      const clearedRows: Record<string, Cia1RowState> = {};
+      for (const s of students) {
+        const sid = String(s.id);
+        const prevReg = sheetRef.current?.rowsByStudentId?.[sid]?.reg_no;
+        clearedRows[sid] = {
+          studentId: s.id,
+          absent: false,
+          absentKind: undefined,
+          reg_no: String(s.reg_no || prevReg || ''),
+          q: Object.fromEntries(questions.map((q) => [q.key, ''])) as Record<string, number | ''>,
+        };
+      }
+
+      const nextSheet: Cia1Sheet = {
+        ...sheetRef.current,
+        termLabel: String(sheetRef.current?.termLabel || masterCfg?.termLabel || 'KRCT AY25-26'),
+        batchLabel: String(subjectId),
+        rowsByStudentId: clearedRows,
+      };
+      setSheet(nextSheet);
+
+      const draft: Cia1DraftPayload = {
+        termLabel: nextSheet.termLabel,
+        batchLabel: String(subjectId),
+        questionBtl: nextSheet.questionBtl,
+        rowsByStudentId: nextSheet.rowsByStudentId,
+        markManagerLocked: nextSheet.markManagerLocked,
+        markManagerSnapshot: nextSheet.markManagerSnapshot,
+        markManagerApprovalUntil: nextSheet.markManagerApprovalUntil,
+      };
+      await saveDraft(assessmentKey, String(subjectId), draft, teachingAssignmentId);
+      setSavedAt(new Date().toLocaleString());
+    } catch (e: any) {
+      setError(e?.message || 'Failed to reset marks');
+    } finally {
+      setResettingMarks(false);
+    }
+  };
+
   const publish = async () => {
     if (!subjectId) return;
     if (globalLocked) {
@@ -2121,6 +2176,16 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
           {!publishedEditLocked ? (
             <button onClick={saveDraftToDb} className="obe-btn obe-btn-success" disabled={saving || students.length === 0 || tableBlocked || globalLocked}>
               {saving ? 'Saving…' : 'Save Draft'}
+            </button>
+          ) : null}
+          {!isPublished && publishAllowed && !globalLocked ? (
+            <button
+              onClick={resetAllMarks}
+              className="obe-btn obe-btn-danger"
+              disabled={resettingMarks || students.length === 0 || tableBlocked || publishedEditLocked}
+              title="Clears the saved draft marks"
+            >
+              {resettingMarks ? 'Resetting…' : 'Reset Marks'}
             </button>
           ) : null}
           <button
