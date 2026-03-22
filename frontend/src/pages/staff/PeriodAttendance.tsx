@@ -1,11 +1,44 @@
 import React, { useEffect, useRef, useState } from 'react'
+import * as XLSX from 'xlsx'
 import fetchWithAuth from '../../services/fetchAuth'
 import AttendanceAssignmentRequestsModal from '../../components/AttendanceAssignmentRequestsModal'
-import { Calendar, Clock, Users, CheckCircle2, XCircle, Loader2, Save, X, ChevronDown, AlertCircle, Lock, Unlock, GraduationCap, Check, ArrowLeftRight, Bell } from 'lucide-react'
+import { Calendar, Clock, Users, CheckCircle2, XCircle, Loader2, Save, X, ChevronDown, AlertCircle, Lock, Unlock, GraduationCap, Check, ArrowLeftRight, Bell, Download, Upload, FileSpreadsheet, Eye } from 'lucide-react'
 import HalfDayRequestsApproval from './HalfDayRequestsApproval'
 import AttendanceRequests from './AttendanceRequests'
 
-type ViewMode = 'period' | 'daily'
+type ViewMode = 'period' | 'daily' | 'bulk'
+
+type BulkPreviewRow = {
+  reg_no: string
+  name: string
+  statuses: Record<string, string>
+  remarks: Record<string, string>
+}
+
+type BulkPreviewData = {
+  dates: string[]
+  rows: BulkPreviewRow[]
+}
+
+type BulkLockedSession = {
+  session_id: number
+  section_id: number
+  section_name: string
+  date: string
+  unlock_request_id?: number | null
+  unlock_request_status?: string | null
+  unlock_request_hod_status?: string | null
+}
+
+type BulkExcelResult = {
+  created: number
+  updated: number
+  locked: number
+  period_records_updated?: number
+  locked_sessions?: BulkLockedSession[]
+  skipped_locked_sessions?: BulkLockedSession[]
+  errors: string[]
+}
 
 type PeriodItem = {
   id: number
@@ -71,8 +104,9 @@ export default function PeriodAttendance(){
   const [aggStudents, setAggStudents] = useState<Student[]>([])
   const [aggLoading, setAggLoading] = useState(false)
   const [bulkDateSelected, setBulkDateSelected] = useState<Record<string,boolean>>({})
-  const [bulkSelected, setBulkSelected] = useState<Record<number,boolean>>({})
+  const [bulkAttendanceGrid, setBulkAttendanceGrid] = useState<Record<string, Record<number, 'P' | 'A'>>>({})
   const [markedSessions, setMarkedSessions] = useState<Record<string, Set<string>>>({})
+  const [bulkMarkedSessionsLoading, setBulkMarkedSessionsLoading] = useState(false)
 
   // Consecutive period detection
   const [consecutiveModal, setConsecutiveModal] = useState(false)
@@ -115,6 +149,25 @@ export default function PeriodAttendance(){
   const [savingDateRange, setSavingDateRange] = useState(false)
   const [selectedStudentsForDateRange, setSelectedStudentsForDateRange] = useState<Set<number>>(new Set())
 
+  // Bulk Excel attendance state
+  const [bulkExcelSections, setBulkExcelSections] = useState<any[]>([])
+  const [bulkExcelSectionsLoading, setBulkExcelSectionsLoading] = useState(false)
+  const [bulkExcelSection, setBulkExcelSection] = useState<any>(null)
+  const [bulkExcelStartDate, setBulkExcelStartDate] = useState<string>('')
+  const [bulkExcelEndDate, setBulkExcelEndDate] = useState<string>(new Date().toISOString().slice(0, 10))
+  const [bulkExcelDownloading, setBulkExcelDownloading] = useState(false)
+  const bulkExcelFileRef = useRef<HTMLInputElement>(null)
+  const [bulkExcelPendingFile, setBulkExcelPendingFile] = useState<File | null>(null)
+  const [bulkExcelImporting, setBulkExcelImporting] = useState(false)
+  const [bulkExcelResult, setBulkExcelResult] = useState<BulkExcelResult | null>(null)
+  const [bulkUnlockRequesting, setBulkUnlockRequesting] = useState(false)
+  const [bulkLockedSessionsInRange, setBulkLockedSessionsInRange] = useState<BulkLockedSession[]>([])
+  const [bulkExcelExcludedDates, setBulkExcelExcludedDates] = useState<Set<string>>(new Set())
+
+  // Preview state (after Excel is parsed client-side)
+  const [bulkPreviewData, setBulkPreviewData] = useState<BulkPreviewData | null>(null)
+  const [bulkPreviewDate, setBulkPreviewDate] = useState<string>('')
+
   // Staff attendance check state
   const [staffAttendanceStatus, setStaffAttendanceStatus] = useState<{
     can_mark_attendance: boolean
@@ -142,8 +195,20 @@ export default function PeriodAttendance(){
   const userPerms = (() => {
     try { return JSON.parse(localStorage.getItem('permissions') || '[]') as string[] } catch { return [] }
   })()
+  const userRoles = (() => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem('roles') || '[]') as Array<string | { name?: string }>
+      return parsed.map(role => {
+        if (typeof role === 'string') return role.toUpperCase().trim()
+        return String(role?.name || '').toUpperCase().trim()
+      }).filter(Boolean)
+    } catch {
+      return [] as string[]
+    }
+  })()
   const hasMarkAttendancePermission = Array.isArray(userPerms) && (userPerms.includes('academics.mark_attendance') || userPerms.includes('MARK_ATTENDANCE'))
   const hasClassAdvisorPermission = myClassSections && myClassSections.length > 0
+  const canViewUnlockApprovalSection = userRoles.includes('HOD') || userRoles.includes('AHOD') || userRoles.includes('IQAC')
   
   // Check if user has sections assigned via swap
   const hasAssignedSections = myClassSections && myClassSections.some((section: any) => section.is_assigned_via_swap)
@@ -828,66 +893,88 @@ export default function PeriodAttendance(){
         const dayNum = d.day
         for (const a of (d.assignments||[])) flat.push({ ...a, _day: dayNum })
       }
-      
-      // Load existing attendance sessions for the current month
-      await loadMarkedSessions(bulkMonth, flat)
-      
+
       setBulkAssignments(flat)
       setBulkModalOpen(true)
-      setSelectedAssignments({}); setBulkDateSelected({}); setBulkSelected({})
+      setSelectedAssignments({}); setBulkDateSelected({}); setBulkAttendanceGrid({})
+
+      // Load existing marked dates in background (do not block modal open)
+      void loadMarkedSessions(bulkMonth, flat)
     }catch(e){ console.error('openBulkModal', e); alert('Failed to open bulk modal') }
   }
 
   // Load existing attendance sessions for filtering
   async function loadMarkedSessions(month: string, assignments: any[]) {
+    setBulkMarkedSessionsLoading(true)
     try {
-      const [y, m] = month.split('-').map(x => parseInt(x))
-      const startDate = new Date(y, m - 1, 1).toISOString().slice(0, 10)
-      const endDate = new Date(y, m, 0).toISOString().slice(0, 10)
-      
-      // Fetch all attendance sessions for the month
-      const res = await fetchWithAuth(`/api/academics/period-attendance/?date_after=${startDate}&date_before=${endDate}`)
+      if (!assignments || assignments.length === 0) {
+        setMarkedSessions({})
+        return
+      }
+
+      // Build O(1) mapping from weekday+period+section -> assignment keys
+      const compositeToAssignmentKeys = new Map<string, string[]>()
+      const assignmentFilters: Array<{ section_id: number; period_id: number; day: number }> = []
+      const seenFilters = new Set<string>()
+      for (const a of assignments) {
+        const periodId = Number(a.period_id || a.period?.id)
+        const sectionId = Number(a.section_id || a.section?.id)
+        const day = Number(a._day)
+        if (!Number.isFinite(periodId) || !Number.isFinite(sectionId) || !Number.isFinite(day)) continue
+        const assignmentKey = a.id ? String(a.id) : `${day}_${periodId}_${sectionId}`
+        const composite = `${day}_${periodId}_${sectionId}`
+        if (!compositeToAssignmentKeys.has(composite)) compositeToAssignmentKeys.set(composite, [])
+        compositeToAssignmentKeys.get(composite)!.push(assignmentKey)
+
+        const filterKey = `${sectionId}_${periodId}_${day}`
+        if (!seenFilters.has(filterKey)) {
+          seenFilters.add(filterKey)
+          assignmentFilters.push({ section_id: sectionId, period_id: periodId, day })
+        }
+      }
+
+      const res = await fetchWithAuth('/api/academics/period-attendance/marked-keys/', {
+        method: 'POST',
+        body: JSON.stringify({ month, assignments: assignmentFilters }),
+      })
       if (!res.ok) {
         console.warn('Failed to load existing sessions')
         setMarkedSessions({})
         return
       }
-      
+
       const data = await res.json()
       const sessions = data.results || []
-      
+
       // Build a map: assignment_key -> Set of marked dates
       const marked: Record<string, Set<string>> = {}
-      
+
       for (const session of sessions) {
         const sessionDate = session.date
-        const sectionId = session.section?.id || session.section_id
-        const periodId = session.period?.id || session.period_id
-        
+        const sectionId = session.section_id
+        const periodId = session.period_id
+
         if (!sessionDate || !sectionId || !periodId) continue
-        
-        // Find matching assignment to get the day
+
         const dt = new Date(sessionDate)
         const dayOfWeek = dt.getDay() === 0 ? 7 : dt.getDay()
-        
-        const matchingAssignment = assignments.find(a => 
-          a._day === dayOfWeek && 
-          (a.period_id === periodId || a.period?.id === periodId) && 
-          (a.section_id === sectionId || a.section?.id === sectionId)
-        )
-        
-        if (matchingAssignment) {
-          const key = matchingAssignment.id ? String(matchingAssignment.id) : `${matchingAssignment._day}_${periodId}_${sectionId}`
+
+        const composite = `${dayOfWeek}_${periodId}_${sectionId}`
+        const assignmentKeys = compositeToAssignmentKeys.get(composite)
+        if (!assignmentKeys || assignmentKeys.length === 0) continue
+
+        for (const key of assignmentKeys) {
           if (!marked[key]) marked[key] = new Set()
           marked[key].add(sessionDate)
         }
       }
-      
+
       setMarkedSessions(marked)
-      console.log('Loaded marked sessions:', marked)
     } catch (e) {
       console.error('Error loading marked sessions:', e)
       setMarkedSessions({})
+    } finally {
+      setBulkMarkedSessionsLoading(false)
     }
   }
 
@@ -917,7 +1004,16 @@ export default function PeriodAttendance(){
         const all: Student[] = []
         for (const sres of settled){ if (sres.status !== 'fulfilled') continue; const data = sres.value || {}; const list = data.results || data.students || []; for (const st of list){ if (!st || !st.id) continue; if (!all.find(x=> x.id === st.id)) all.push({ id: st.id, reg_no: st.reg_no || st.regno || String(st.id), username: st.username || st.name || '' }) } }
         setAggStudents(all)
-        setBulkSelected(prev=> { const copy = { ...prev }; for (const s of all) if (copy[s.id] === undefined) copy[s.id] = false; return copy })
+        setBulkAttendanceGrid(prev => {
+          const next: Record<string, Record<number, 'P' | 'A'>> = {}
+          for (const [date, stuMap] of Object.entries(prev)) {
+            next[date] = { ...stuMap }
+            const validIds = new Set(all.map((s: any) => s.id))
+            for (const s of all) { if (!(s.id in next[date])) next[date][s.id] = 'P' }
+            for (const sid in next[date]) { if (!validIds.has(Number(sid))) delete next[date][Number(sid)] }
+          }
+          return next
+        })
       }catch(e){ console.error('loadAgg', e); setAggStudents([]) }
       finally{ setAggLoading(false) }
     }
@@ -1517,6 +1613,279 @@ export default function PeriodAttendance(){
     }
   }
 
+  // Bulk Excel: load sections
+  async function loadBulkExcelSections() {
+    setBulkExcelSectionsLoading(true)
+    try {
+      const res = await fetchWithAuth('/api/academics/bulk-attendance/sections/')
+      if (res.ok) {
+        const data = await res.json()
+        setBulkExcelSections(data)
+        if (data.length === 1) setBulkExcelSection(data[0])
+      }
+    } catch (e) {
+      console.error('Error loading bulk sections:', e)
+    } finally {
+      setBulkExcelSectionsLoading(false)
+    }
+  }
+
+  async function handleBulkExcelDownload() {
+    if (!bulkExcelSection || !bulkExcelStartDate || !bulkExcelEndDate) {
+      alert('Please select a section and date range')
+      return
+    }
+    setBulkExcelDownloading(true)
+    try {
+      const params = new URLSearchParams({
+        section_id: bulkExcelSection.section_id,
+        start_date: bulkExcelStartDate,
+        end_date: bulkExcelEndDate,
+      })
+      if (bulkExcelExcludedDates.size > 0) {
+        params.set('excluded_dates', [...bulkExcelExcludedDates].join(','))
+      }
+      const res = await fetchWithAuth(`/api/academics/bulk-attendance/download/?${params}`)
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Download failed' }))
+        alert(err.error || 'Download failed')
+        return
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `attendance_${bulkExcelSection.section_name}_${bulkExcelStartDate}_${bulkExcelEndDate}.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      alert('Download error: ' + String(e))
+    } finally {
+      setBulkExcelDownloading(false)
+    }
+  }
+
+  function handleBulkExcelFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] ?? null
+    if (!file) return
+    setBulkExcelPendingFile(file)
+    setBulkExcelResult(null)
+
+    const reader = new FileReader()
+    reader.onload = evt => {
+      try {
+        const data = evt.target?.result as ArrayBuffer
+        const wb = XLSX.read(data, { type: 'array' })
+        const ws = wb.Sheets[wb.SheetNames[0]]
+        const allRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }) as any[][]
+
+        if (allRows.length < 2) {
+          alert('Excel file has no data rows')
+          return
+        }
+
+        const headers = allRows[0] as any[]
+        // col A = Register Number, col B = Name, col C onwards = dates
+        const dates: string[] = headers.slice(2).map(h => String(h || '').trim()).filter(Boolean)
+
+        const previewRows: BulkPreviewRow[] = []
+        for (let i = 1; i < allRows.length; i++) {
+          const row = allRows[i]
+          let regNoRaw: any = row[0]
+          // Excel may cast integer reg-nos to float
+          if (typeof regNoRaw === 'number') {
+            regNoRaw = Number.isInteger(regNoRaw) ? String(regNoRaw) : String(Math.round(regNoRaw))
+          }
+          const regNo = String(regNoRaw || '').trim()
+          if (!regNo) continue
+
+          const name = String(row[1] || '').trim()
+          const statuses: Record<string, string> = {}
+          const remarks: Record<string, string> = {}
+          dates.forEach((date, idx) => {
+            statuses[date] = String(row[2 + idx] || '').trim()
+            remarks[date] = ''
+          })
+          previewRows.push({ reg_no: regNo, name, statuses, remarks })
+        }
+
+        setBulkPreviewData({ dates, rows: previewRows })
+        setBulkPreviewDate(dates[0] || '')
+      } catch (err) {
+        alert('Failed to parse Excel: ' + String(err))
+      }
+    }
+    reader.readAsArrayBuffer(file)
+    // reset so same file can be re-selected
+    e.target.value = ''
+  }
+
+  async function handleBulkExcelImport(lockSession: boolean) {
+    if (!bulkPreviewData || !bulkExcelSection) return
+    setBulkExcelImporting(true)
+    setBulkExcelResult(null)
+    try {
+      const attendance = bulkPreviewData.rows.map(row => ({
+        reg_no: row.reg_no,
+        dates: row.statuses,
+        remarks: row.remarks,
+      }))
+      const res = await fetchWithAuth('/api/academics/bulk-attendance/import/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          section_id: bulkExcelSection.section_id,
+          lock_session: lockSession,
+          attendance,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        alert(data.error || 'Import failed')
+        return
+      }
+      setBulkExcelResult(data)
+      setBulkPreviewData(null)
+      setBulkExcelPendingFile(null)
+    } catch (e) {
+      alert('Import error: ' + String(e))
+    } finally {
+      setBulkExcelImporting(false)
+    }
+  }
+
+  async function loadBulkLockedSessionsInRange() {
+    if (!bulkExcelSection) {
+      setBulkLockedSessionsInRange([])
+      return
+    }
+    try {
+      const params = new URLSearchParams({ section_id: String(bulkExcelSection.section_id) })
+      if (bulkExcelStartDate) params.set('start_date', bulkExcelStartDate)
+      if (bulkExcelEndDate) params.set('end_date', bulkExcelEndDate)
+      const res = await fetchWithAuth(`/api/academics/bulk-attendance/locked-sessions/?${params.toString()}`)
+      if (!res.ok) {
+        setBulkLockedSessionsInRange([])
+        return
+      }
+      const data = await res.json().catch(() => ({}))
+      setBulkLockedSessionsInRange(Array.isArray(data?.results) ? data.results : [])
+    } catch {
+      setBulkLockedSessionsInRange([])
+    }
+  }
+
+  function getBulkRequestSessions(result: BulkExcelResult | null) {
+    if (!result) return [] as BulkLockedSession[]
+    const sessionsById = new Map<number, BulkLockedSession>()
+    for (const session of result.locked_sessions || []) sessionsById.set(session.session_id, session)
+    for (const session of result.skipped_locked_sessions || []) sessionsById.set(session.session_id, session)
+    return Array.from(sessionsById.values()).sort((a, b) => a.date.localeCompare(b.date))
+  }
+
+  function getBulkRequestableSessions(result: BulkExcelResult | null) {
+    return getBulkRequestSessions(result).filter(session => !isBulkSessionRequestPending(session))
+  }
+
+  function getCurrentBulkRequestSessions() {
+    if (bulkExcelResult) return getBulkRequestSessions(bulkExcelResult)
+    return [...bulkLockedSessionsInRange].sort((a, b) => a.date.localeCompare(b.date))
+  }
+
+  function getCurrentBulkRequestableSessions() {
+    return getCurrentBulkRequestSessions().filter(session => !isBulkSessionRequestPending(session))
+  }
+
+  function hasCurrentBulkPendingRequests() {
+    return getCurrentBulkRequestSessions().some(session => isBulkSessionRequestPending(session))
+  }
+
+  function isBulkSessionRequestPending(session: BulkLockedSession) {
+    const status = String(session.unlock_request_status || '').toUpperCase()
+    return status === 'PENDING' || status === 'HOD_APPROVED'
+  }
+
+  async function handleBulkLockedSessionRequests() {
+    const requestableSessions = getCurrentBulkRequestableSessions()
+    if (!requestableSessions.length) return
+
+    setBulkUnlockRequesting(true)
+    try {
+      // Single request for all sessions at once
+      const res = await fetchWithAuth('/api/academics/bulk-attendance/unlock-request/', {
+        method: 'POST',
+        body: JSON.stringify({
+          session_ids: requestableSessions.map(s => s.session_id),
+          note: '',
+        }),
+      })
+
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        alert('Failed to submit unlock request: ' + String(data.error || data.detail || 'Unknown error'))
+        return
+      }
+
+      // Merge returned statuses back into state
+      const updatesBySession = new Map<number, Partial<BulkLockedSession>>()
+      for (const item of [...(data.created || []), ...(data.already_pending || [])]) {
+        updatesBySession.set(item.session_id, {
+          unlock_request_id: item.unlock_request_id,
+          unlock_request_status: item.unlock_request_status,
+          unlock_request_hod_status: item.unlock_request_hod_status,
+        })
+      }
+
+      setBulkExcelResult(prev => {
+        if (!prev) return prev
+        return {
+          ...prev,
+          locked_sessions: (prev.locked_sessions || []).map(session => {
+            const update = updatesBySession.get(session.session_id)
+            return update ? { ...session, ...update } : session
+          }),
+          skipped_locked_sessions: (prev.skipped_locked_sessions || []).map(session => {
+            const update = updatesBySession.get(session.session_id)
+            return update ? { ...session, ...update } : session
+          }),
+        }
+      })
+
+      setBulkLockedSessionsInRange(prev =>
+        prev.map(session => {
+          const update = updatesBySession.get(session.session_id)
+          return update ? { ...session, ...update } : session
+        })
+      )
+
+      const created = data.total_created ?? 0
+      const pending = data.total_already_pending ?? 0
+      if (created > 0) {
+        alert('Unlock request sent to IQAC.')
+      } else if (pending > 0) {
+        alert('Unlock request already pending approval.')
+      } else {
+        alert('Unlock request submitted.')
+      }
+    } finally {
+      setBulkUnlockRequesting(false)
+    }
+  }
+
+  async function handleBulkUnlockAndReset() {
+    await handleBulkLockedSessionRequests()
+  }
+
+  useEffect(() => {
+    if (viewMode !== 'bulk') return
+    if (!bulkExcelSection) {
+      setBulkLockedSessionsInRange([])
+      return
+    }
+    if (bulkExcelResult) return
+    loadBulkLockedSessionsInRange()
+  }, [viewMode, bulkExcelSection, bulkExcelStartDate, bulkExcelEndDate, bulkExcelResult])
+
   return (
     <div className="min-h-screen p-4 md:p-6 bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
       {/* Header */}
@@ -1653,6 +2022,22 @@ export default function PeriodAttendance(){
               Period Wise
             </button>
           )}
+          {(canAccessDailyAttendance || hasMarkAttendancePermission) && (
+            <button
+              onClick={() => {
+                setViewMode('bulk')
+                if (bulkExcelSections.length === 0) loadBulkExcelSections()
+              }}
+              className={`px-4 py-3 font-medium text-sm flex items-center gap-2 border-b-2 transition-colors ${
+                viewMode === 'bulk'
+                  ? 'border-indigo-600 text-indigo-600'
+                  : 'border-transparent text-gray-600 hover:text-gray-900 hover:border-gray-300'
+              }`}
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              Bulk / Excel
+            </button>
+          )}
         </div>
       </div>
 
@@ -1762,6 +2147,451 @@ export default function PeriodAttendance(){
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk / Excel Attendance */}
+      {viewMode === 'bulk' && (
+        <div className="space-y-6">
+          {/* Controls card */}
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200">
+            <div className="px-6 py-4 border-b border-slate-200 bg-gradient-to-r from-violet-50 to-indigo-50">
+              <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
+                <FileSpreadsheet className="w-5 h-5 text-violet-600" />
+                Bulk / Excel Attendance
+              </h2>
+              <p className="text-sm text-slate-500 mt-0.5">Download an Excel sheet with your class, fill in attendance, then import it back.</p>
+            </div>
+            <div className="p-6 space-y-5">
+              {/* Section selector */}
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Section</label>
+                {bulkExcelSectionsLoading ? (
+                  <div className="flex items-center gap-2 text-slate-500 text-sm"><Loader2 className="w-4 h-4 animate-spin" />Loading sections…</div>
+                ) : (
+                  <select
+                    value={bulkExcelSection?.section_id ?? ''}
+                    onChange={e => {
+                      const sec = bulkExcelSections.find(s => String(s.section_id) === e.target.value)
+                      setBulkExcelSection(sec ?? null)
+                      setBulkExcelResult(null)
+                      setBulkExcelExcludedDates(new Set())
+                    }}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  >
+                    <option value="">-- Select section --</option>
+                    {bulkExcelSections.map(s => (
+                      <option key={s.section_id} value={s.section_id}>
+                        {[s.department_short_name, s.batch_name, s.section_name].filter(Boolean).join(' · ')}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              {/* Date range */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Start Date</label>
+                  <input
+                    type="date"
+                    value={bulkExcelStartDate}
+                    onChange={e => { setBulkExcelStartDate(e.target.value); setBulkExcelResult(null); setBulkExcelExcludedDates(new Set()) }}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">End Date</label>
+                  <input
+                    type="date"
+                    value={bulkExcelEndDate}
+                    onChange={e => { setBulkExcelEndDate(e.target.value); setBulkExcelResult(null); setBulkExcelExcludedDates(new Set()) }}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  />
+                </div>
+              </div>
+
+              {/* Date exclusion calendar */}
+              {bulkExcelSection && bulkExcelStartDate && bulkExcelEndDate && (() => {
+                const startD = new Date(bulkExcelStartDate + 'T00:00:00')
+                const endD = new Date(bulkExcelEndDate + 'T00:00:00')
+                if (isNaN(startD.getTime()) || isNaN(endD.getTime()) || endD < startD) return null
+
+                // Build list of months
+                const months: { year: number; month: number }[] = []
+                const mCur = new Date(startD.getFullYear(), startD.getMonth(), 1)
+                const mEnd = new Date(endD.getFullYear(), endD.getMonth(), 1)
+                while (mCur <= mEnd) {
+                  months.push({ year: mCur.getFullYear(), month: mCur.getMonth() })
+                  mCur.setMonth(mCur.getMonth() + 1)
+                }
+
+                // Total days in range
+                let totalDays = 0
+                const tempC = new Date(startD)
+                while (tempC <= endD) { totalDays++; tempC.setDate(tempC.getDate() + 1) }
+                const selectedCount = totalDays - bulkExcelExcludedDates.size
+
+                const dayLabels = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']
+
+                return (
+                  <div className="border border-slate-200 rounded-xl bg-slate-50 p-4">
+                    <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-slate-700">Select Working Days</span>
+                        <span className="text-xs text-slate-500 bg-white border border-slate-200 px-2 py-0.5 rounded-full">
+                          {selectedCount} / {totalDays} days selected
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = new Set(bulkExcelExcludedDates)
+                            const c = new Date(startD)
+                            while (c <= endD) {
+                              const day = c.getDay()
+                              if (day === 0 || day === 6) next.add(c.toISOString().slice(0, 10))
+                              c.setDate(c.getDate() + 1)
+                            }
+                            setBulkExcelExcludedDates(next)
+                          }}
+                          className="text-xs px-2.5 py-1 bg-white border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-100 transition-colors"
+                        >
+                          Skip Weekends
+                        </button>
+                        {bulkExcelExcludedDates.size > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setBulkExcelExcludedDates(new Set())}
+                            className="text-xs px-2.5 py-1 bg-white border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-100 transition-colors"
+                          >
+                            Reset
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-5">
+                      {months.map(({ year, month }) => {
+                        const monthName = new Date(year, month, 1).toLocaleString('default', { month: 'long' })
+                        const firstDayOfWeek = new Date(year, month, 1).getDay()
+                        const daysInMonth = new Date(year, month + 1, 0).getDate()
+                        return (
+                          <div key={`${year}-${month}`} className="min-w-[196px]">
+                            <div className="text-xs font-semibold text-slate-600 mb-1.5 text-center">{monthName} {year}</div>
+                            <div className="grid grid-cols-7 gap-0.5">
+                              {dayLabels.map(dl => (
+                                <div key={dl} className="text-center text-[10px] font-medium text-slate-400 py-0.5 w-7">{dl}</div>
+                              ))}
+                              {Array.from({ length: firstDayOfWeek }).map((_, i) => (
+                                <div key={`empty-${i}`} className="w-7 h-7" />
+                              ))}
+                              {Array.from({ length: daysInMonth }).map((_, i) => {
+                                const d = i + 1
+                                const ds = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+                                const dt = new Date(ds + 'T00:00:00')
+                                const inRange = dt >= startD && dt <= endD
+                                const isExcluded = bulkExcelExcludedDates.has(ds)
+                                const isWeekend = dt.getDay() === 0 || dt.getDay() === 6
+                                if (!inRange) {
+                                  return (
+                                    <div key={ds} className="w-7 h-7 flex items-center justify-center text-[11px] text-slate-200">
+                                      {d}
+                                    </div>
+                                  )
+                                }
+                                return (
+                                  <button
+                                    key={ds}
+                                    type="button"
+                                    title={`${ds} — click to ${isExcluded ? 'include' : 'exclude'}`}
+                                    onClick={() =>
+                                      setBulkExcelExcludedDates(prev => {
+                                        const next = new Set(prev)
+                                        if (next.has(ds)) next.delete(ds); else next.add(ds)
+                                        return next
+                                      })
+                                    }
+                                    className={`w-7 h-7 rounded text-[11px] font-medium transition-colors flex items-center justify-center mx-auto ${
+                                      isExcluded
+                                        ? 'bg-red-100 text-red-400 line-through'
+                                        : isWeekend
+                                        ? 'bg-amber-50 text-amber-700 hover:bg-red-100 hover:text-red-500'
+                                        : 'bg-indigo-50 text-indigo-700 hover:bg-red-100 hover:text-red-500'
+                                    }`}
+                                  >
+                                    {d}
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              })()}
+
+              {/* Actions */}
+              <div className="flex flex-wrap gap-3 pt-1">
+                <button
+                  onClick={handleBulkExcelDownload}
+                  disabled={bulkExcelDownloading || !bulkExcelSection || !bulkExcelStartDate || !bulkExcelEndDate}
+                  className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors"
+                >
+                  {bulkExcelDownloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                  Download Excel
+                </button>
+
+                <label className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
+                  (!bulkExcelSection || !bulkExcelStartDate || !bulkExcelEndDate || !!bulkExcelResult)
+                    ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                    : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                }`}>
+                  {bulkExcelImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                  Import Excel
+                  <input
+                    ref={bulkExcelFileRef}
+                    type="file"
+                    accept=".xlsx,.xls"
+                    className="hidden"
+                    disabled={!bulkExcelSection || !bulkExcelStartDate || !bulkExcelEndDate || bulkExcelImporting || !!bulkExcelResult}
+                    onChange={handleBulkExcelFileChange}
+                  />
+                </label>
+
+                {getCurrentBulkRequestSessions().length > 0 && (
+                  <button
+                    onClick={handleBulkUnlockAndReset}
+                    disabled={bulkUnlockRequesting || getCurrentBulkRequestableSessions().length === 0}
+                    className="flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors"
+                  >
+                    {bulkUnlockRequesting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Unlock className="w-4 h-4" />}
+                    {getCurrentBulkRequestableSessions().length === 0 && hasCurrentBulkPendingRequests()
+                      ? 'Pending Approval'
+                      : 'Unlock + Reset'}
+                  </button>
+                )}
+
+              </div>
+            </div>
+          </div>
+
+          {/* Import result */}
+          {bulkExcelResult && (
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+              <h3 className="font-semibold text-slate-900 mb-3 flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 text-green-600" />
+                Import Complete
+              </h3>
+              <div className="grid grid-cols-3 gap-4 mb-4">
+                <div className="bg-green-50 rounded-lg p-3 text-center">
+                  <div className="text-2xl font-bold text-green-700">{bulkExcelResult.created}</div>
+                  <div className="text-xs text-green-600 mt-0.5">Records Created</div>
+                </div>
+                <div className="bg-blue-50 rounded-lg p-3 text-center">
+                  <div className="text-2xl font-bold text-blue-700">{bulkExcelResult.updated}</div>
+                  <div className="text-xs text-blue-600 mt-0.5">Records Updated</div>
+                </div>
+                <div className="bg-amber-50 rounded-lg p-3 text-center">
+                  <div className="text-2xl font-bold text-amber-700">{bulkExcelResult.locked}</div>
+                  <div className="text-xs text-amber-600 mt-0.5">Sessions Locked</div>
+                </div>
+              </div>
+              {typeof bulkExcelResult.period_records_updated === 'number' && bulkExcelResult.period_records_updated > 0 && (
+                <div className="mb-4 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-700">
+                  Synced {bulkExcelResult.period_records_updated} period attendance record{bulkExcelResult.period_records_updated === 1 ? '' : 's'} from the imported daily statuses.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Confirm Import Modal */}
+      {/* Bulk Excel Preview Modal */}
+      {bulkPreviewData && bulkExcelSection && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl flex flex-col" style={{ maxHeight: '90vh' }}>
+
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between flex-shrink-0 bg-gradient-to-r from-violet-50 to-indigo-50 rounded-t-xl">
+              <div className="flex items-center gap-3">
+                <div className="bg-gradient-to-br from-violet-500 to-indigo-600 p-2 rounded-lg shadow">
+                  <Eye className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-900">
+                    Daily Attendance — {[bulkExcelSection.department_short_name, bulkExcelSection.batch_name, bulkExcelSection.section_name].filter(Boolean).join(' · ')}
+                  </h2>
+                  <p className="text-sm text-slate-500">{bulkPreviewData.rows.length} students · Review before saving</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleBulkExcelImport(false)}
+                  disabled={bulkExcelImporting}
+                  className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors"
+                >
+                  {bulkExcelImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  Save Attendance
+                </button>
+                <button
+                  onClick={() => handleBulkExcelImport(true)}
+                  disabled={bulkExcelImporting}
+                  className="flex items-center gap-2 px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors"
+                >
+                  <Lock className="w-4 h-4" />
+                  Save + Lock
+                </button>
+                <button
+                  onClick={() => { setBulkPreviewData(null); setBulkExcelPendingFile(null) }}
+                  className="p-2 text-slate-400 hover:text-slate-600 transition-colors rounded-lg hover:bg-slate-100"
+                  title="Cancel"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Date tabs (only shown when multiple dates) */}
+            {bulkPreviewData.dates.length > 1 && (
+              <div className="px-6 py-3 border-b border-slate-200 flex gap-2 overflow-x-auto flex-shrink-0 bg-slate-50">
+                {bulkPreviewData.dates.map(date => (
+                  <button
+                    key={date}
+                    onClick={() => setBulkPreviewDate(date)}
+                    className={`px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
+                      bulkPreviewDate === date
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    {date}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Mark All Present bar */}
+            <div className="px-6 py-3 border-b border-slate-100 flex-shrink-0">
+              <button
+                onClick={() => {
+                  if (!bulkPreviewDate) return
+                  setBulkPreviewData(prev => {
+                    if (!prev) return prev
+                    return {
+                      ...prev,
+                      rows: prev.rows.map(r => ({
+                        ...r,
+                        statuses: { ...r.statuses, [bulkPreviewDate]: 'Present' },
+                      })),
+                    }
+                  })
+                }}
+                className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors"
+              >
+                <Check className="w-4 h-4" />
+                Mark All Present
+              </button>
+            </div>
+
+            {/* Student table */}
+            <div className="overflow-y-auto flex-1">
+              <table className="w-full">
+                <thead className="bg-slate-50 sticky top-0 z-10">
+                  <tr>
+                    <th className="text-left px-6 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide w-2/5">Student</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide w-1/4">Status</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Remarks</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {bulkPreviewData.rows.map((row, idx) => {
+                    const currentStatus = bulkPreviewDate ? (row.statuses[bulkPreviewDate] || '') : ''
+                    const currentRemark = bulkPreviewDate ? (row.remarks[bulkPreviewDate] || '') : ''
+                    const statusColor =
+                      currentStatus === 'Present' ? 'border-green-300 bg-green-50 text-green-800' :
+                      currentStatus === 'Absent'  ? 'border-red-300 bg-red-50 text-red-800' :
+                      currentStatus === 'OD'      ? 'border-blue-300 bg-blue-50 text-blue-800' :
+                      currentStatus === 'Leave'   ? 'border-amber-300 bg-amber-50 text-amber-800' :
+                      'border-slate-300'
+                    return (
+                      <tr key={row.reg_no} className={idx % 2 === 0 ? 'bg-white hover:bg-slate-50' : 'bg-slate-50/40 hover:bg-slate-50'}>
+                        <td className="px-6 py-3">
+                          <div className="font-semibold text-slate-900 text-sm">{row.name || row.reg_no}</div>
+                          <div className="text-xs text-slate-400 mt-0.5">{row.reg_no}</div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <select
+                            value={currentStatus}
+                            onChange={e => {
+                              if (!bulkPreviewDate) return
+                              const val = e.target.value
+                              setBulkPreviewData(prev => {
+                                if (!prev) return prev
+                                const newRows = [...prev.rows]
+                                newRows[idx] = { ...newRows[idx], statuses: { ...newRows[idx].statuses, [bulkPreviewDate]: val } }
+                                return { ...prev, rows: newRows }
+                              })
+                            }}
+                            className={`w-full border rounded-lg px-2 py-1.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-indigo-400 cursor-pointer ${statusColor}`}
+                          >
+                            <option value="">— Select —</option>
+                            <option value="Present">Present</option>
+                            <option value="Absent">Absent</option>
+                            <option value="OD">OD</option>
+                            <option value="Leave">Leave</option>
+                          </select>
+                        </td>
+                        <td className="px-4 py-3">
+                          <input
+                            type="text"
+                            value={currentRemark}
+                            onChange={e => {
+                              if (!bulkPreviewDate) return
+                              const val = e.target.value
+                              setBulkPreviewData(prev => {
+                                if (!prev) return prev
+                                const newRows = [...prev.rows]
+                                newRows[idx] = { ...newRows[idx], remarks: { ...newRows[idx].remarks, [bulkPreviewDate]: val } }
+                                return { ...prev, rows: newRows }
+                              })
+                            }}
+                            className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                            placeholder="Optional remark"
+                          />
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Footer count */}
+            <div className="px-6 py-3 border-t border-slate-200 flex-shrink-0 bg-slate-50 rounded-b-xl text-xs text-slate-500">
+              {bulkPreviewDate && (() => {
+                const present = bulkPreviewData.rows.filter(r => r.statuses[bulkPreviewDate] === 'Present').length
+                const absent  = bulkPreviewData.rows.filter(r => r.statuses[bulkPreviewDate] === 'Absent').length
+                const od      = bulkPreviewData.rows.filter(r => r.statuses[bulkPreviewDate] === 'OD').length
+                const leave   = bulkPreviewData.rows.filter(r => r.statuses[bulkPreviewDate] === 'Leave').length
+                const unmarked = bulkPreviewData.rows.filter(r => !r.statuses[bulkPreviewDate]).length
+                return (
+                  <span>
+                    {bulkPreviewDate} &nbsp;·&nbsp;
+                    <span className="text-green-700 font-medium">{present} Present</span> &nbsp;·&nbsp;
+                    <span className="text-red-700 font-medium">{absent} Absent</span> &nbsp;·&nbsp;
+                    <span className="text-blue-700 font-medium">{od} OD</span> &nbsp;·&nbsp;
+                    <span className="text-amber-700 font-medium">{leave} Leave</span>
+                    {unmarked > 0 && <span className="text-slate-400"> &nbsp;·&nbsp; {unmarked} unmarked</span>}
+                  </span>
+                )
+              })()}
             </div>
           </div>
         </div>
@@ -1897,14 +2727,6 @@ export default function PeriodAttendance(){
                 </div>
               )}
               
-              <div className="col-span-full mt-2">
-                <button 
-                  onClick={openBulkModal}
-                  className="w-full px-4 py-3 border-2 border-dashed border-indigo-300 text-indigo-600 rounded-lg font-medium hover:bg-indigo-50 transition-colors"
-                >
-                  Bulk Mark (All Assignments)
-                </button>
-              </div>
             </div>
           )}
         </div>
@@ -1943,6 +2765,30 @@ export default function PeriodAttendance(){
       </div>
       )}
 
+      {/* Period-wise Bulk Attendance */}
+      {viewMode === 'period' && (
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-6">
+          <div className="px-6 py-4 border-b border-slate-200 bg-indigo-50">
+            <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
+              <FileSpreadsheet className="w-5 h-5 text-indigo-600" />
+              Period-wise Bulk Attendance
+            </h2>
+            <p className="text-sm text-slate-600 mt-1">
+              Mark attendance for multiple assignments and dates in one action.
+            </p>
+          </div>
+          <div className="px-6 py-5">
+            <button
+              onClick={openBulkModal}
+              className="inline-flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium transition-colors"
+            >
+              <Save className="w-4 h-4" />
+              Open Period-wise Bulk Mark
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Request sections: history, access requests, unlock requests (moved below Assigned Periods) */}
       <div className="mb-6">
         <HodRequestHistory />
@@ -1950,9 +2796,11 @@ export default function PeriodAttendance(){
       <div className="mb-6">
         <HalfDayRequestsApproval />
       </div>
-      <div className="mb-6">
-        <AttendanceRequests />
-      </div>
+      {canViewUnlockApprovalSection && (
+        <div className="mb-6">
+          <AttendanceRequests />
+        </div>
+      )}
 
       {/* Daily Attendance Marking Panel */}
       {dailyMode && selectedSection && (
@@ -2810,36 +3658,40 @@ export default function PeriodAttendance(){
             </div>
 
             <div className="p-6 space-y-6">
-              {/* Month Selector */}
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-2 flex items-center gap-2">
                   <Calendar className="w-4 h-4 text-indigo-600" />
                   Select Month:
                 </label>
-                <input 
-                  type="month" 
-                  value={bulkMonth} 
-                  onChange={e=> setBulkMonth(e.target.value)}
+                <input
+                  type="month"
+                  value={bulkMonth}
+                  onChange={e => setBulkMonth(e.target.value)}
                   className="px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
                 />
               </div>
 
-              {/* Assignments */}
               <div>
                 <label className="block text-sm font-semibold text-slate-900 mb-3">Assignments</label>
+                {bulkMarkedSessionsLoading && (
+                  <div className="text-xs text-slate-500 mb-2 flex items-center gap-2">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    Loading already-marked dates...
+                  </div>
+                )}
                 <div className="border border-slate-200 rounded-lg p-4 max-h-60 overflow-y-auto bg-slate-50">
                   <label className="flex items-center gap-2 mb-3 text-sm font-medium text-slate-700">
-                    <input 
-                      type="checkbox" 
-                      checked={Object.keys(selectedAssignments).length>0 && Object.values(selectedAssignments).every(Boolean)} 
-                      onChange={(e)=>{ 
+                    <input
+                      type="checkbox"
+                      checked={Object.keys(selectedAssignments).length > 0 && Object.values(selectedAssignments).every(Boolean)}
+                      onChange={(e) => {
                         const checked = e.target.checked
-                        const next: Record<string,boolean> = {}
-                        for(const a of bulkAssignments){ 
-                          const key = a.id? String(a.id) : `${a._day}_${a.period_id}_${a.section_id}`
-                          next[key] = checked 
-                        } 
-                        setSelectedAssignments(next) 
+                        const next: Record<string, boolean> = {}
+                        for (const a of bulkAssignments) {
+                          const key = a.id ? String(a.id) : `${a._day}_${a.period_id}_${a.section_id}`
+                          next[key] = checked
+                        }
+                        setSelectedAssignments(next)
                       }}
                       className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
                     />
@@ -2848,12 +3700,9 @@ export default function PeriodAttendance(){
                   <div className="space-y-2">
                     {(() => {
                       const filteredAssignments = bulkAssignments.filter(a => {
-                        // Filter out assignments that are completely marked for the month
                         const key = a.id ? String(a.id) : `${a._day}_${a.period_id}_${a.section_id}`
                         const markedDates = markedSessions[key]
-                        if (!markedDates) return true // Show if no dates marked
-                        
-                        // Calculate total possible dates for this assignment in the month
+                        if (!markedDates) return true
                         try {
                           const [y, m] = bulkMonth.split('-').map(x => parseInt(x))
                           const lastDay = new Date(y, m, 0).getDate()
@@ -2863,13 +3712,12 @@ export default function PeriodAttendance(){
                             const dayOfWeek = dt.getDay() === 0 ? 7 : dt.getDay()
                             if (dayOfWeek === a._day) possibleDates++
                           }
-                          // Hide if all possible dates are marked
                           return markedDates.size < possibleDates
                         } catch {
                           return true
                         }
                       })
-                      
+
                       if (filteredAssignments.length === 0) {
                         return (
                           <div className="text-center py-8 text-slate-600">
@@ -2878,24 +3726,24 @@ export default function PeriodAttendance(){
                           </div>
                         )
                       }
-                      
-                      return filteredAssignments.map(a=>{
+
+                      return filteredAssignments.map(a => {
                         const key = a.id ? String(a.id) : `${a._day}_${a.period_id}_${a.section_id}`
                         const markedDates = markedSessions[key]
                         const markedCount = markedDates ? markedDates.size : 0
-                        
+
                         return (
                           <label key={key} className="flex items-start gap-3 p-2 hover:bg-white rounded-lg transition-colors cursor-pointer">
-                            <input 
-                              type="checkbox" 
-                              checked={!!selectedAssignments[key]} 
-                              onChange={()=> setSelectedAssignments(prev=> ({ ...prev, [key]: !prev[key] }))}
+                            <input
+                              type="checkbox"
+                              checked={!!selectedAssignments[key]}
+                              onChange={() => setSelectedAssignments(prev => ({ ...prev, [key]: !prev[key] }))}
                               className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 mt-0.5"
                             />
                             <div className="flex-1 text-sm">
                               <div className="font-medium text-slate-900">
-                                {a.label || `Period ${a.period_index}`} — {['Mon','Tue','Wed','Thu','Fri','Sat'][a._day-1] || `Day ${a._day}`} 
-                                {a.start_time ? ` ${a.start_time}${a.end_time? ' - '+a.end_time : ''}` : ''}
+                                {a.label || `Period ${a.period_index}`} — {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][a._day - 1] || `Day ${a._day}`}
+                                {a.start_time ? ` ${a.start_time}${a.end_time ? ' - ' + a.end_time : ''}` : ''}
                               </div>
                               <div className="text-xs text-slate-600 mt-0.5">
                                 {a.section_name || a.section?.name || (a.section_id ? `Section ${a.section_id}` : '')} — {a.subject_display || a.subject_text || ''}
@@ -2912,40 +3760,34 @@ export default function PeriodAttendance(){
                 </div>
               </div>
 
-              {/* Dates */}
               <div>
                 <label className="block text-sm font-semibold text-slate-900 mb-3">Dates (month view for selected assignments)</label>
                 <div className="flex flex-wrap gap-2">
                   {(() => {
-                    try{
-                      const [y,m] = bulkMonth.split('-').map(x=> parseInt(x))
-                      const last = new Date(y,m,0)
+                    try {
+                      const [y, m] = bulkMonth.split('-').map(x => parseInt(x))
+                      const last = new Date(y, m, 0)
                       const weekdays = new Set<number>()
-                      for(const a of bulkAssignments){ 
+                      for (const a of bulkAssignments) {
                         const key = a.id ? String(a.id) : `${a._day}_${a.period_id}_${a.section_id}`
-                        if (selectedAssignments[key]) weekdays.add(a._day) 
+                        if (selectedAssignments[key]) weekdays.add(a._day)
                       }
                       const dates: string[] = []
-                      for(let d=1; d<= last.getDate(); d++){ 
-                        const dt = new Date(y,m-1,d)
+                      for (let d = 1; d <= last.getDate(); d++) {
+                        const dt = new Date(y, m - 1, d)
                         const isow = dt.getDay() === 0 ? 7 : dt.getDay()
-                        if (weekdays.size>0 && weekdays.has(isow)) dates.push(dt.toISOString().slice(0,10)) 
+                        if (weekdays.size > 0 && weekdays.has(isow)) dates.push(dt.toISOString().slice(0, 10))
                       }
-                      
-                      // Get selected assignment keys
+
                       const selectedKeys = Object.keys(selectedAssignments).filter(k => selectedAssignments[k])
-                      
-                      // Filter dates: only show if at least one selected assignment doesn't have attendance for that date
                       const availableDates = dates.filter(dd => {
                         if (selectedKeys.length === 0) return true
-                        
-                        // Show date if ANY selected assignment doesn't have attendance on this date
                         return selectedKeys.some(key => {
                           const markedDates = markedSessions[key]
                           return !markedDates || !markedDates.has(dd)
                         })
                       })
-                      
+
                       if (availableDates.length === 0 && selectedKeys.length > 0) {
                         return (
                           <div className="text-center py-4 text-slate-600">
@@ -2954,20 +3796,32 @@ export default function PeriodAttendance(){
                           </div>
                         )
                       }
-                      
-                      return availableDates.map(dd=> {
-                        // Count how many selected assignments already have attendance on this date
+
+                      return availableDates.map(dd => {
                         const alreadyMarkedCount = selectedKeys.filter(key => {
                           const markedDates = markedSessions[key]
                           return markedDates && markedDates.has(dd)
                         }).length
-                        
+
                         return (
                           <label key={dd} className="inline-flex items-center gap-2 px-3 py-1.5 border border-slate-300 rounded-lg text-sm hover:bg-slate-100 cursor-pointer transition-colors">
-                            <input 
-                              type="checkbox" 
-                              checked={!!bulkDateSelected[dd]} 
-                              onChange={()=> setBulkDateSelected(prev=> ({ ...prev, [dd]: !prev[dd] }))}
+                            <input
+                              type="checkbox"
+                              checked={!!bulkDateSelected[dd]}
+                              onChange={() => {
+                                const checking = !bulkDateSelected[dd]
+                                setBulkDateSelected(prev => ({ ...prev, [dd]: !prev[dd] }))
+                                if (checking) {
+                                  setBulkAttendanceGrid(prev => {
+                                    if (prev[dd]) return prev
+                                    const next = { ...prev, [dd]: {} as Record<number, 'P' | 'A'> }
+                                    for (const s of aggStudents) next[dd][s.id] = 'P'
+                                    return next
+                                  })
+                                } else {
+                                  setBulkAttendanceGrid(prev => { const next = { ...prev }; delete next[dd]; return next })
+                                }
+                              }}
                               className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
                             />
                             <span>
@@ -2979,54 +3833,145 @@ export default function PeriodAttendance(){
                           </label>
                         )
                       })
-                    }catch(e){ return <div /> }
+                    } catch {
+                      return <div />
+                    }
                   })()}
                 </div>
               </div>
 
-              {/* Students */}
               <div>
-                <label className="block text-sm font-semibold text-slate-900 mb-3">
-                  Students (derived from selected assignments)
-                  <span className="ml-2 text-sm text-slate-600">({aggStudents.length} student{aggStudents.length !== 1 ? 's' : ''})</span>
-                </label>
-                <div className="border border-slate-200 rounded-lg p-4 max-h-64 overflow-y-auto bg-slate-50">
-                  {aggLoading && (
-                    <div className="flex items-center justify-center py-8 text-slate-600">
-                      <Loader2 className="w-6 h-6 animate-spin mr-2" />
-                      Loading students...
-                    </div>
-                  )}
-                  {!aggLoading && aggStudents.length === 0 && (
-                    <div className="text-center py-8 text-slate-600">No students for selected assignments</div>
-                  )}
-                  {!aggLoading && aggStudents.length > 0 && (
-                    <div className="space-y-1">
-                      {aggStudents.map(s=> (
-                        <label key={s.id} className="flex items-center gap-2 p-2 hover:bg-white rounded-lg transition-colors cursor-pointer">
-                          <input 
-                            type="checkbox" 
-                            checked={!!bulkSelected[s.id]} 
-                            onChange={_=> setBulkSelected(prev=> ({ ...prev, [s.id]: !prev[s.id] }))}
-                            className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
-                          />
-                          <span className="text-sm text-slate-900">{s.reg_no} — {s.username}</span>
+                {(() => {
+                  const checkedDates = Object.keys(bulkDateSelected).filter(d => bulkDateSelected[d]).sort()
+                  if (checkedDates.length === 0) {
+                    return (
+                      <>
+                        <label className="block text-sm font-semibold text-slate-900 mb-2">
+                          Students
+                          <span className="ml-2 text-sm font-normal text-slate-600">({aggStudents.length} student{aggStudents.length !== 1 ? 's' : ''})</span>
                         </label>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                        {aggLoading ? (
+                          <div className="flex items-center justify-center py-6 text-slate-600">
+                            <Loader2 className="w-5 h-5 animate-spin mr-2" />Loading students...
+                          </div>
+                        ) : aggStudents.length === 0 ? (
+                          <div className="text-center py-6 text-slate-500 text-sm">No students for selected assignments</div>
+                        ) : (
+                          <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
+                            Tick one or more dates above to mark individual attendance (P / A) per student.
+                            <span className="ml-1 text-amber-600 font-medium">({aggStudents.length} student{aggStudents.length !== 1 ? 's' : ''} ready)</span>
+                          </div>
+                        )}
+                      </>
+                    )
+                  }
+
+                  return (
+                    <>
+                      <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                        <label className="text-sm font-semibold text-slate-900">
+                          Attendance Grid
+                          <span className="ml-2 text-sm font-normal text-slate-600">
+                            {aggStudents.length} student{aggStudents.length !== 1 ? 's' : ''} x {checkedDates.length} date{checkedDates.length !== 1 ? 's' : ''}
+                          </span>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setBulkAttendanceGrid(prev => {
+                            const next = { ...prev }
+                            for (const d of checkedDates) {
+                              next[d] = {}
+                              for (const s of aggStudents) next[d][s.id] = 'P'
+                            }
+                            return next
+                          })}
+                          className="text-xs px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium transition-colors flex items-center gap-1"
+                        >
+                          <CheckCircle2 className="w-3 h-3" />
+                          Mark All Present
+                        </button>
+                      </div>
+                      {aggLoading ? (
+                        <div className="flex items-center justify-center py-6 text-slate-600">
+                          <Loader2 className="w-5 h-5 animate-spin mr-2" />Loading students...
+                        </div>
+                      ) : aggStudents.length === 0 ? (
+                        <div className="text-center py-6 text-slate-500 text-sm">No students for selected assignments</div>
+                      ) : (
+                        <div className="border border-slate-200 rounded-lg overflow-auto max-h-72">
+                          <table className="min-w-full text-sm border-collapse">
+                            <thead className="sticky top-0 z-20">
+                              <tr className="bg-slate-100">
+                                <th className="text-left px-3 py-2 font-medium text-slate-700 whitespace-nowrap sticky left-0 bg-slate-100 z-30 min-w-[190px] border-b border-slate-200">Student</th>
+                                {checkedDates.map(d => {
+                                  const allP = aggStudents.every(s => (bulkAttendanceGrid[d]?.[s.id] ?? 'P') === 'P')
+                                  const dt = new Date(d + 'T00:00:00')
+                                  const label = dt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
+                                  return (
+                                    <th key={d} className="px-1 py-1 text-center font-medium text-slate-700 min-w-[68px] border-b border-slate-200">
+                                      <div className="text-xs mb-0.5">{label}</div>
+                                      <button
+                                        type="button"
+                                        title={`Toggle all -> ${allP ? 'A' : 'P'} for ${d}`}
+                                        onClick={() => setBulkAttendanceGrid(prev => {
+                                          const next = { ...prev, [d]: { ...(prev[d] || {}) } }
+                                          const newSt = allP ? 'A' : 'P'
+                                          for (const s of aggStudents) next[d][s.id] = newSt as 'P' | 'A'
+                                          return next
+                                        })}
+                                        className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${allP ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' : 'bg-red-100 text-red-600 hover:bg-red-200'}`}
+                                      >
+                                        {allP ? 'All P' : 'All A'}
+                                      </button>
+                                    </th>
+                                  )
+                                })}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {aggStudents.map((s, idx) => (
+                                <tr key={s.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/70'}>
+                                  <td className={`px-3 py-1.5 whitespace-nowrap sticky left-0 z-10 text-xs border-b border-slate-100 ${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'}`}>
+                                    <span className="font-mono text-slate-400">{s.reg_no}</span>
+                                    <span className="ml-1.5 text-slate-800 font-medium">{s.username}</span>
+                                  </td>
+                                  {checkedDates.map(d => {
+                                    const st = bulkAttendanceGrid[d]?.[s.id] ?? 'P'
+                                    return (
+                                      <td key={d} className="px-1 py-1.5 text-center border-b border-slate-100">
+                                        <button
+                                          type="button"
+                                          onClick={() => setBulkAttendanceGrid(prev => ({
+                                            ...prev,
+                                            [d]: { ...(prev[d] || {}), [s.id]: st === 'P' ? 'A' : 'P' }
+                                          }))}
+                                          className={`w-9 h-7 rounded text-xs font-bold transition-colors ${st === 'P' ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' : 'bg-red-100 text-red-600 hover:bg-red-200'}`}
+                                        >
+                                          {st}
+                                        </button>
+                                      </td>
+                                    )
+                                  })}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </>
+                  )
+                })()}
               </div>
             </div>
 
-            {/* Modal Footer */}
-            <div className="sticky bottom-0 bg-white border-t border-slate-200 px-6 py-4 flex gap-3 rounded-b-xl">
-              <button 
-                onClick={async ()=>{
-                  const selectedDates = Object.keys(bulkDateSelected).filter(d=> bulkDateSelected[d])
-                  if (!selectedDates.length){ alert('Select at least one date'); return }
-                  const assignments_payload: any[] = []
-                  for(const a of bulkAssignments){ 
+            <div className="sticky bottom-0 bg-white border-t border-slate-200 px-6 py-4 flex flex-wrap gap-3 rounded-b-xl">
+              <button
+                onClick={async () => {
+                  const checkedDates = Object.keys(bulkDateSelected).filter(d => bulkDateSelected[d])
+                  if (!checkedDates.length) { alert('Select at least one date'); return }
+
+                  const assignmentsMap = new Map<string, { section_id: number; period_id: number }>()
+                  for (const a of bulkAssignments) {
                     const key = a.id ? String(a.id) : `${a._day}_${a.period_id}_${a.section?.id || a.section_id}`
                     if (!selectedAssignments[key]) continue
                     const raw_section = a.section_id || (a.section && (a.section.id || a.section.pk)) || a.section?.pk || a.section?.id
@@ -3034,30 +3979,82 @@ export default function PeriodAttendance(){
                     const section_id = Number(raw_section)
                     const period_id = Number(raw_period)
                     if (!Number.isFinite(section_id) || !Number.isFinite(period_id)) continue
-                    assignments_payload.push({ section_id, period_id }) 
+                    assignmentsMap.set(`${section_id}_${period_id}`, { section_id, period_id })
                   }
-                  const student_ids = Object.keys(bulkSelected).filter(k=> bulkSelected[Number(k)]).map(k=> Number(k))
-                  if (!assignments_payload.length){ alert('No assignments selected'); return }
-                  if (!student_ids.length){ alert('No students selected'); return }
-                  try{
-                    const res = await fetchWithAuth('/api/academics/period-attendance/bulk-mark/', { method: 'POST', body: JSON.stringify({ assignments: assignments_payload, dates: selectedDates, student_ids }) })
-                    if (!res.ok) { 
+                  const assignments_payload = Array.from(assignmentsMap.values())
+                  if (!assignments_payload.length) { alert('No assignments selected'); return }
+                  if (!aggStudents.length) { alert('No students found for selected assignments'); return }
+
+                  const date_records = checkedDates.map(date => ({
+                    date,
+                    records: aggStudents.map(s => ({ student_id: s.id, status: bulkAttendanceGrid[date]?.[s.id] ?? 'P' }))
+                  }))
+
+                  try {
+                    const res = await fetchWithAuth('/api/academics/period-attendance/bulk-mark-statuses/', {
+                      method: 'POST',
+                      body: JSON.stringify({ assignments: assignments_payload, date_records })
+                    })
+                    if (!res.ok) {
                       let txt = 'Failed'
-                      try{ const j = await res.json(); txt = JSON.stringify(j) }catch(_){ try{ txt = await res.text() }catch(_){}} 
-                      alert('Failed: '+txt)
-                      return 
+                      try { const j = await res.json(); txt = JSON.stringify(j) } catch (_) { try { txt = await res.text() } catch (_) {} }
+                      alert('Failed: ' + txt)
+                      return
                     }
                     alert('Bulk attendance saved')
                     setBulkModalOpen(false)
-                  }catch(e){ console.error('bulk save', e); alert('Failed to save bulk attendance') }
+                  } catch (e) {
+                    console.error('bulk save', e)
+                    alert('Failed to save bulk attendance')
+                  }
                 }}
                 className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
               >
                 <Save className="w-4 h-4" />
                 Save Bulk
               </button>
-              <button 
-                onClick={()=> setBulkModalOpen(false)}
+
+              <button
+                onClick={async () => {
+                  const checkedDates = Object.keys(bulkDateSelected).filter(d => bulkDateSelected[d])
+                  if (!checkedDates.length) { alert('Select at least one date first'); return }
+                  const allAssignmentsMap = new Map<string, { section_id: number; period_id: number }>()
+                  for (const a of bulkAssignments) {
+                    const raw_section = a.section_id || (a.section && (a.section.id || a.section.pk)) || a.section?.pk || a.section?.id
+                    const raw_period = a.period_id || (a.period && (a.period.id || a.period_id)) || a.period?.id || a.period_id
+                    const section_id = Number(raw_section)
+                    const period_id = Number(raw_period)
+                    if (!Number.isFinite(section_id) || !Number.isFinite(period_id)) continue
+                    allAssignmentsMap.set(`${section_id}_${period_id}`, { section_id, period_id })
+                  }
+                  const all_assignments = Array.from(allAssignmentsMap.values())
+                  if (!all_assignments.length) { alert('No assignments available'); return }
+                  try {
+                    const res = await fetchWithAuth('/api/academics/period-attendance/bulk-mark-range/', {
+                      method: 'POST',
+                      body: JSON.stringify({ assignments: all_assignments, dates: checkedDates, status: 'P', student_ids: [] })
+                    })
+                    if (!res.ok) {
+                      let txt = 'Failed'
+                      try { const j = await res.json(); txt = JSON.stringify(j) } catch (_) { try { txt = await res.text() } catch (_) {} }
+                      alert('Failed: ' + txt)
+                      return
+                    }
+                    alert('All assignments marked present')
+                    setBulkModalOpen(false)
+                  } catch (e) {
+                    console.error('all assignments present', e)
+                    alert('Failed to save')
+                  }
+                }}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                All Assignments Present
+              </button>
+
+              <button
+                onClick={() => setBulkModalOpen(false)}
                 className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg font-medium transition-colors"
               >
                 Close
@@ -3141,74 +4138,6 @@ export default function PeriodAttendance(){
           </div>
         )
       })()}
-
-      {/* Staff Swap Modal */}
-      {swapModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full max-h-[80vh] flex flex-col">
-            <div className="px-6 py-4 border-b border-slate-200 bg-gradient-to-r from-indigo-50 to-purple-50 flex items-center justify-between rounded-t-xl">
-              <div className="flex items-center gap-3">
-                <Users className="w-5 h-5 text-indigo-600" />
-                <h3 className="text-lg font-semibold text-slate-900">Select Staff Member</h3>
-              </div>
-              <button
-                onClick={() => setSwapModalOpen(false)}
-                className="p-1 hover:bg-slate-200 rounded-lg transition-colors"
-              >
-                <X className="w-5 h-5 text-slate-600" />
-              </button>
-            </div>
-            
-            <div className="p-6 overflow-y-auto flex-1">
-              {loadingStaff ? (
-                <div className="flex flex-col items-center justify-center py-8">
-                  <Loader2 className="w-8 h-8 animate-spin text-indigo-600 mb-3" />
-                  <p className="text-sm text-slate-600">Loading staff from your department...</p>
-                </div>
-              ) : departmentStaff.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-8 text-center">
-                  <div className="bg-slate-100 p-4 rounded-full mb-4">
-                    <Users className="w-12 h-12 text-slate-400" />
-                  </div>
-                  <h4 className="text-lg font-medium text-slate-900 mb-1">No Staff Found</h4>
-                  <p className="text-slate-600 text-sm">No other staff from your department are available</p>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  <p className="text-sm text-slate-600 mb-4">
-                    Select a staff member to assign attendance taking for this class:
-                  </p>
-                  {departmentStaff.map((staff: any) => (
-                    <button
-                      key={staff.id}
-                      onClick={() => handleSwapStaff(staff)}
-                      className="w-full p-4 border border-slate-200 rounded-lg hover:bg-indigo-50 hover:border-indigo-300 transition-colors text-left"
-                    >
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="font-medium text-slate-900">{staff.name}</p>
-                          <p className="text-sm text-slate-600">{staff.designation || 'Staff'}</p>
-                          <p className="text-xs text-slate-500 mt-1">ID: {staff.staff_id}</p>
-                        </div>
-                        <ArrowLeftRight className="w-5 h-5 text-indigo-600" />
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 rounded-b-xl">
-              <button
-                onClick={() => setSwapModalOpen(false)}
-                className="w-full px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-sm font-medium transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Half-Day Request Modal */}
       {showHalfDayRequestModal && (

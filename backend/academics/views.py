@@ -3455,6 +3455,86 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
         else:
             serializer.save(created_by=staff_profile)
 
+    @action(detail=False, methods=['post'], url_path='marked-keys')
+    def marked_keys(self, request):
+        """Return lightweight marked keys for bulk modal.
+
+        Payload:
+          {
+            month: 'YYYY-MM',
+            assignments: [{section_id, period_id, day}, ...]
+          }
+        Response:
+          { results: [{date, section_id, period_id}] }
+        """
+        import datetime
+
+        data = request.data or {}
+        month = str(data.get('month') or '').strip()
+        assignments = data.get('assignments') or []
+        if not month or len(month) != 7:
+            return Response({'detail': 'month is required in YYYY-MM format'}, status=400)
+
+        try:
+            year, mon = [int(x) for x in month.split('-')]
+            start_date = datetime.date(year, mon, 1)
+            if mon == 12:
+                end_date = datetime.date(year + 1, 1, 1) - datetime.timedelta(days=1)
+            else:
+                end_date = datetime.date(year, mon + 1, 1) - datetime.timedelta(days=1)
+        except Exception:
+            return Response({'detail': 'invalid month format'}, status=400)
+
+        section_ids = set()
+        period_ids = set()
+        allowed_weekdays = set()
+        for a in assignments:
+            try:
+                section_ids.add(int(a.get('section_id')))
+                period_ids.add(int(a.get('period_id')))
+                allowed_weekdays.add(int(a.get('day')))
+            except Exception:
+                continue
+
+        if not section_ids or not period_ids:
+            return Response({'results': []})
+
+        user = request.user
+        staff_profile = getattr(user, 'staff_profile', None)
+        if not staff_profile and not user.is_superuser:
+            return Response({'results': []})
+
+        qs = PeriodAttendanceSession.objects.filter(
+            date__gte=start_date,
+            date__lte=end_date,
+            section_id__in=list(section_ids),
+            period_id__in=list(period_ids),
+        )
+
+        if staff_profile and not user.is_superuser:
+            perms = get_user_permissions(user)
+            if 'academics.mark_attendance' not in perms:
+                qs = qs.filter(
+                    Q(created_by=staff_profile) |
+                    Q(assigned_to=staff_profile) |
+                    Q(timetable_assignment__staff=staff_profile) |
+                    Q(subject_batch__staff=staff_profile) |
+                    Q(subject_batch__created_by=staff_profile)
+                ).distinct()
+
+        results = []
+        for row in qs.values('date', 'section_id', 'period_id'):
+            dt = row['date']
+            if allowed_weekdays and dt.isoweekday() not in allowed_weekdays:
+                continue
+            results.append({
+                'date': dt.isoformat(),
+                'section_id': row['section_id'],
+                'period_id': row['period_id'],
+            })
+
+        return Response({'results': results})
+
     @action(detail=False, methods=['post'], url_path='bulk-mark')
     def bulk_mark(self, request):
         ser = BulkPeriodAttendanceSerializer(data=request.data)
@@ -3823,21 +3903,15 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'], url_path='bulk-mark-range')
     def bulk_mark_range(self, request):
-        """Bulk mark attendance for a date range (inclusive).
+        """Bulk mark attendance for a date range or explicit date list.
 
-        Expected payload: {
-            section_id, period_id, start_date, end_date, status, student_ids: [int,...]
-        }
+        Expected payload (supports both forms):
+          Form A: {section_id, period_id, start_date, end_date, status, student_ids}
+          Form B: {assignments: [{section_id, period_id},...], dates: [...], status, student_ids}
         """
+        import datetime
         data = request.data or {}
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.warning('bulk_mark_range called by user=%s payload=%s', getattr(request.user, 'username', request.user), data)
-        section_id = data.get('section_id')
-        period_id = data.get('period_id')
-        start_date = data.get('start_date')
-        end_date = data.get('end_date')
-        status_val = data.get('status')
+        status_val = data.get('status') or 'P'
         student_ids = data.get('student_ids') or []
 
         user = request.user
@@ -3845,324 +3919,576 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
         if not staff_profile:
             raise PermissionDenied('Only staff may perform bulk range marking')
 
-        # basic validation
-        import datetime
-        dates_list = None
+        # ── 1. Build dates_iter ──────────────────────────────────────────────
         if data.get('dates'):
-            # explicit list of ISO dates provided
             try:
-                dates_list = [datetime.date.fromisoformat(d) for d in (data.get('dates') or [])]
+                dates_iter = sorted(datetime.date.fromisoformat(d) for d in data['dates'])
             except Exception:
                 return Response({'detail': 'Invalid dates list'}, status=status.HTTP_400_BAD_REQUEST)
         else:
             try:
-                sd = datetime.date.fromisoformat(start_date)
-                ed = datetime.date.fromisoformat(end_date)
+                sd = datetime.date.fromisoformat(data.get('start_date'))
+                ed = datetime.date.fromisoformat(data.get('end_date'))
             except Exception:
                 return Response({'detail': 'Invalid dates'}, status=status.HTTP_400_BAD_REQUEST)
             if ed < sd:
                 return Response({'detail': 'end_date must be >= start_date'}, status=status.HTTP_400_BAD_REQUEST)
-
-        # resolve section & period
-        from .models import Section as _Section
-        from timetable.models import TimetableSlot
-        # support multiple assignments: [{section_id, period_id}, ...] or single section_id/period_id
-        assignments_payload = data.get('assignments')
-        assignments_list = []
-        if assignments_payload and isinstance(assignments_payload, (list, tuple)):
-            for item in assignments_payload:
-                try:
-                    sid = int(item.get('section_id'))
-                    pid = int(item.get('period_id'))
-                    s = _Section.objects.filter(pk=sid).first()
-                    p = TimetableSlot.objects.filter(pk=pid).first()
-                    if s and p:
-                        assignments_list.append((s, p))
-                except Exception:
-                    continue
-        else:
-            section = _Section.objects.filter(pk=int(section_id)).first() if section_id is not None else None
-            period = TimetableSlot.objects.filter(pk=int(period_id)).first() if period_id is not None else None
-            if section and period:
-                assignments_list.append((section, period))
-        logger.warning('Resolved assignments_list count=%d', len(assignments_list))
-
-        # permission: ensure user may mark these periods (reuse logic from bulk_mark)
-        perms = get_user_permissions(user)
-
-        # prepare students
-        from .models import StudentProfile as _StudentProfile
-        students = []
-        for sid in student_ids:
-            try:
-                s = _StudentProfile.objects.filter(pk=int(sid)).first()
-                if s:
-                    students.append(s)
-            except Exception:
-                continue
-
-        out_sessions = []
-        if dates_list is None:
-            day = sd
             delta = datetime.timedelta(days=1)
+            day = sd
             dates_iter = []
             while day <= ed:
                 dates_iter.append(day)
-                day = day + delta
+                day += delta
+
+        if not dates_iter:
+            return Response({'results': []})
+
+        # ── 2. Resolve assignments ────────────────────────────────────────────
+        from .models import Section as _Section
+        from timetable.models import TimetableSlot, TimetableAssignment, SpecialTimetableEntry
+        from .models import (
+            PeriodAttendanceSession, PeriodAttendanceRecord,
+            StudentSectionAssignment, StudentProfile as _SP,
+            TeachingAssignment as _TA,
+        )
+
+        assignments_payload = data.get('assignments')
+        assignments_list = []
+        if assignments_payload and isinstance(assignments_payload, (list, tuple)):
+            raw_sids = []
+            raw_pids = []
+            for item in assignments_payload:
+                try:
+                    raw_sids.append(int(item['section_id']))
+                    raw_pids.append(int(item['period_id']))
+                except Exception:
+                    pass
+            secs_map = {s.pk: s for s in _Section.objects.filter(pk__in=raw_sids)}
+            pers_map = {p.pk: p for p in TimetableSlot.objects.filter(pk__in=raw_pids)}
+            seen = set()
+            for item in assignments_payload:
+                try:
+                    sid, pid = int(item['section_id']), int(item['period_id'])
+                    if (sid, pid) in seen:
+                        continue
+                    seen.add((sid, pid))
+                    s, p = secs_map.get(sid), pers_map.get(pid)
+                    if s and p:
+                        assignments_list.append((s, p))
+                except Exception:
+                    pass
         else:
-            dates_iter = sorted(dates_list)
-        from timetable.models import TimetableAssignment
-        from .models import PeriodAttendanceSession, PeriodAttendanceRecord
-        logger.warning('Dates to process: %s', dates_iter)
+            try:
+                s = _Section.objects.filter(pk=int(data.get('section_id'))).first()
+                p = TimetableSlot.objects.filter(pk=int(data.get('period_id'))).first()
+                if s and p:
+                    assignments_list.append((s, p))
+            except Exception:
+                pass
+
+        if not assignments_list:
+            return Response({'results': []})
+
+        perms = get_user_permissions(user)
+        all_section_ids = list({s.pk for s, _ in assignments_list})
+        all_period_ids  = list({p.pk for _, p in assignments_list})
+
+        # ── 3. PRE-FETCH: TimetableAssignments ───────────────────────────────
+        # ta_staff[(sec_id, per_id, dow)] = TA owned by this staff
+        # ta_any  [(sec_id, per_id, dow)] = any TA (for permission fallback)
+        # ta_anysp[(sec_id, per_id)]      = any TA regardless of day
+        ta_staff = {}
+        ta_any   = {}
+        ta_anysp = {}
+        for ta in TimetableAssignment.objects.filter(
+            section_id__in=all_section_ids,
+            period_id__in=all_period_ids,
+        ).select_related('curriculum_row'):
+            k3 = (ta.section_id, ta.period_id, ta.day)
+            if ta.staff_id == staff_profile.pk:
+                ta_staff.setdefault(k3, ta)
+            ta_any.setdefault(k3, ta)
+            ta_anysp.setdefault((ta.section_id, ta.period_id), ta)
+
+        # ── 4. PRE-FETCH: TeachingAssignments for staff ───────────────────────
+        staff_ta_list = list(
+            _TA.objects.filter(is_active=True, staff=staff_profile)
+            .select_related('curriculum_row', 'elective_subject', 'section')
+        )
+        # Index by curriculum_row_id (also by elective parent) for fast lookup
+        teach_by_cr: dict = {}
+        for sta in staff_ta_list:
+            if sta.curriculum_row_id:
+                teach_by_cr.setdefault(sta.curriculum_row_id, []).append(sta)
+            if sta.elective_subject_id and getattr(sta.elective_subject, 'parent_id', None):
+                teach_by_cr.setdefault(sta.elective_subject.parent_id, []).append(sta)
+
+        def _staff_ta_matches_cr(cr_id, section_obj):
+            """Return True if staff has a TeachingAssignment for this curriculum_row."""
+            for sta in teach_by_cr.get(cr_id, []):
+                if sta.section_id is None or sta.section_id == section_obj.pk:
+                    return True
+            return False
+
+        def _best_teach_assign(cr_id, section_obj):
+            """Pick the best TeachingAssignment for (staff, cr_id, section)."""
+            candidates = teach_by_cr.get(cr_id, []) if cr_id else staff_ta_list
+            for sta in candidates:
+                if sta.section_id == section_obj.pk:
+                    return sta
+            for sta in candidates:
+                if sta.section_id is None:
+                    return sta
+            return None
+
+        # ── 5. PRE-FETCH: SpecialTimetableEntries ────────────────────────────
+        special_map = {}  # (sec_id, per_id, date) → SpecialTimetableEntry
+        for se in SpecialTimetableEntry.objects.filter(
+            timetable__section_id__in=all_section_ids,
+            period_id__in=all_period_ids,
+            date__in=dates_iter,
+            is_active=True,
+        ).select_related('timetable'):
+            key = (se.timetable.section_id, se.period_id, se.date)
+            special_map.setdefault(key, se)
+
+        # ── 6. PRE-FETCH: students per section ───────────────────────────────
+        section_students: dict = {}
+        if not student_ids:
+            seen_pks: dict = {}
+            for ssa in (
+                StudentSectionAssignment.objects
+                .filter(section_id__in=all_section_ids, end_date__isnull=True)
+                .exclude(student__status__in=['INACTIVE', 'DEBAR'])
+                .select_related('student')
+            ):
+                bucket = section_students.setdefault(ssa.section_id, [])
+                seen_s = seen_pks.setdefault(ssa.section_id, set())
+                if ssa.student_id not in seen_s:
+                    bucket.append(ssa.student)
+                    seen_s.add(ssa.student_id)
+            for stu in _SP.objects.filter(section_id__in=all_section_ids).exclude(status__in=['INACTIVE', 'DEBAR']).select_related('user'):
+                bucket = section_students.setdefault(stu.section_id, [])
+                seen_s = seen_pks.setdefault(stu.section_id, set())
+                if stu.pk not in seen_s:
+                    bucket.append(stu)
+                    seen_s.add(stu.pk)
+
+        specific_students = (
+            list(_SP.objects.filter(pk__in=[int(sid) for sid in student_ids]))
+            if student_ids else []
+        )
+
+        # ── 7. PLAN: determine (session_lookup, students) per (day, assignment) ─
+        session_plan = []
         for day in dates_iter:
             dow = day.isoweekday()
             for (section_obj, period_obj) in assignments_list:
-                logger.debug('Processing date=%s section=%s period=%s dow=%s', day, getattr(section_obj,'id',None), getattr(period_obj,'id',None), dow)
-                # first check for a special timetable entry that explicitly applies to this date
-                from timetable.models import SpecialTimetableEntry
-                special_entry = SpecialTimetableEntry.objects.filter(timetable__section=section_obj, period=period_obj, date=day, is_active=True).first()
-                if special_entry:
-                    logger.warning('Found special_entry id=%s for date=%s', getattr(special_entry, 'id', None), day)
-                    allow = False
+                se = special_map.get((section_obj.pk, period_obj.pk, day))
+                if se:
                     ta = None
-                    assign = None
-                    assign_for_matching = special_entry
-                    
-                    # Check if current staff can mark this special entry
-                    # 1. Check if staff is explicitly assigned to this entry
-                    if getattr(special_entry, 'staff_id', None) == staff_profile.id:
-                        allow = True
-                        logger.warning('special_entry staff matches %s', staff_profile.staff_id)
-                    
-                    # 2. Check if staff is in the subject_batch for this entry
-                    if not allow and special_entry.subject_batch:
-                        if getattr(special_entry.subject_batch, 'created_by_id', None) == staff_profile.id or getattr(special_entry.subject_batch, 'staff_id', None) == staff_profile.id:
-                            allow = True
-                            logger.warning('special_entry batch staff matches %s', staff_profile.staff_id)
-                    
-                    # 3. Check if staff is the teaching assignment for the curriculum_row
-                    if not allow and special_entry.curriculum_row:
-                        try:
-                            from academics.models import TeachingAssignment as _TA
-                            _spec_cr_name = getattr(special_entry.curriculum_row, 'course_name', None)
-                            _spec_dept_id = getattr(getattr(getattr(section_obj, 'batch', None), 'course', None), 'department_id', None) if section_obj else None
-                            spec_ta_match = _TA.objects.filter(is_active=True, staff=staff_profile).filter(
-                                Q(curriculum_row=special_entry.curriculum_row) |
-                                Q(elective_subject__parent=special_entry.curriculum_row) |
-                                Q(elective_subject__department_group__isnull=False,
-                                  elective_subject__parent__course_name=_spec_cr_name,
-                                  elective_subject__department_group__department_mappings__department_id=_spec_dept_id,
-                                  elective_subject__department_group__department_mappings__is_active=True)
-                            ).filter(Q(section=section_obj) | Q(section__isnull=True)).exists()
-                            if spec_ta_match:
-                                allow = True
-                                logger.warning('special_entry teaching assignment matches for %s', staff_profile.staff_id)
-                        except Exception as e:
-                            logger.warning('Error checking special_entry teaching assignment: %s', str(e))
-                else:
-                    # check timetable assignment exists for this section/period/day and that staff can mark it
-                    ta = TimetableAssignment.objects.filter(section=section_obj, period=period_obj, day=dow, staff=staff_profile).first()
                     allow = False
-                    assign_for_matching = None
-                    if ta is not None:
+
+                    # Special timetable entries must only be markable by:
+                    # - explicitly assigned staff, OR
+                    # - staff tied to the subject batch, OR
+                    # - staff who teaches the linked curriculum row.
+                    if getattr(se, 'staff_id', None) == staff_profile.pk:
                         allow = True
-                    else:
-                        # try resolve via teaching assignment (electives etc.) — allow if TeachingAssignment matches
-                        assign = TimetableAssignment.objects.filter(section=section_obj, period=period_obj, day=dow).first()
-                        if assign:
-                            from academics.models import TeachingAssignment as _TA
-                            _auto_cr_name = getattr(getattr(assign, 'curriculum_row', None), 'course_name', None)
-                            _sec_dept_id_auto = getattr(getattr(getattr(section_obj, 'batch', None), 'course', None), 'department_id', None) if section_obj else None
-                            ta_match_qs = _TA.objects.filter(is_active=True, staff=staff_profile).filter(
-                                Q(curriculum_row=assign.curriculum_row) |
-                                Q(elective_subject__parent=assign.curriculum_row) |
-                                Q(elective_subject__department_group__isnull=False,
-                                  elective_subject__parent__course_name=_auto_cr_name,
-                                  elective_subject__department_group__department_mappings__department_id=_sec_dept_id_auto,
-                                  elective_subject__department_group__department_mappings__is_active=True)
-                            ).filter(Q(section=section_obj) | Q(section__isnull=True))
-                            try:
-                                match_exists = ta_match_qs.exists()
-                            except Exception:
-                                match_exists = False
-                            if match_exists:
-                                allow = True
-                                # Store the assignment on the attendance session so records don't collide
-                                # with other subjects/staff for the same (section, period, date).
-                                ta = assign
-                            logger.warning('assign exists id=%s ta_match_exists=%s', getattr(assign, 'id', None), match_exists)
-                        else:
-                            # No timetable assignment for this specific day; try any day for this section+period
-                            assign_any = TimetableAssignment.objects.filter(section=section_obj, period=period_obj).first()
-                            if assign_any:
-                                from academics.models import TeachingAssignment as _TA
-                                _auto_any_cr_name = getattr(getattr(assign_any, 'curriculum_row', None), 'course_name', None)
-                                _sec_dept_id_any = getattr(getattr(getattr(section_obj, 'batch', None), 'course', None), 'department_id', None) if section_obj else None
-                                ta_match_qs = _TA.objects.filter(is_active=True, staff=staff_profile).filter(
-                                    Q(curriculum_row=assign_any.curriculum_row) |
-                                    Q(elective_subject__parent=assign_any.curriculum_row) |
-                                    Q(elective_subject__department_group__isnull=False,
-                                      elective_subject__parent__course_name=_auto_any_cr_name,
-                                      elective_subject__department_group__department_mappings__department_id=_sec_dept_id_any,
-                                      elective_subject__department_group__department_mappings__is_active=True)
-                                ).filter(Q(section=section_obj) | Q(section__isnull=True))
-                                try:
-                                    match_exists = ta_match_qs.exists()
-                                except Exception:
-                                    match_exists = False
-                                if match_exists:
-                                    allow = True
-                                    # use assign_any as assign so later elective resolution can use curriculum_row
-                                    assign = assign_any
-                                    # Store the assignment on the attendance session to keep subject-wise separation
-                                    ta = assign_any
-                                logger.warning('assign_any exists id=%s ta_match_exists=%s', getattr(assign_any, 'id', None), match_exists)
-                            else:
-                                logger.warning('no timetable assign for section=%s period=%s day=%s', getattr(section_obj,'id',None), getattr(period_obj,'id',None), dow)
-                    logger.warning('ta id=%s allow=%s', getattr(ta, 'id', None) if 'ta' in locals() else None, allow)
-                if not allow:
-                    logger.debug('Not allowed to mark for section=%s period=%s on dow=%s', getattr(section_obj,'id',None), getattr(period_obj,'id',None), dow)
+
+                    sb = getattr(se, 'subject_batch', None)
+                    if not allow and sb:
+                        if (
+                            getattr(sb, 'created_by_id', None) == staff_profile.pk
+                            or getattr(sb, 'staff_id', None) == staff_profile.pk
+                        ):
+                            allow = True
+
+                    se_cr_id = getattr(se, 'curriculum_row_id', None)
+                    if not allow and se_cr_id:
+                        if _staff_ta_matches_cr(se_cr_id, section_obj):
+                            allow = True
+
+                    if not allow and not (user.is_superuser or 'academics.mark_attendance' in perms):
+                        continue
+                else:
+                    ta = ta_staff.get((section_obj.pk, period_obj.pk, dow))
+                    allow = ta is not None
+                    if not allow:
+                        any_ta = ta_any.get((section_obj.pk, period_obj.pk, dow))
+                        if any_ta and _staff_ta_matches_cr(any_ta.curriculum_row_id, section_obj):
+                            allow, ta = True, any_ta
+                    if not allow:
+                        anysp = ta_anysp.get((section_obj.pk, period_obj.pk))
+                        if anysp and _staff_ta_matches_cr(anysp.curriculum_row_id, section_obj):
+                            allow, ta = True, anysp
+                    if not allow and not (user.is_superuser or 'academics.mark_attendance' in perms):
+                        continue
+
+                if se:
+                    cr_id = getattr(se, 'curriculum_row_id', None)
+                    teach_assign = _best_teach_assign(cr_id, section_obj) if cr_id else None
+                else:
+                    cr_id = getattr(ta, 'curriculum_row_id', None)
+                    teach_assign = _best_teach_assign(cr_id, section_obj)
+
+                if specific_students:
+                    target_students = specific_students
+                else:
+                    target_students = section_students.get(section_obj.pk, [])
+
+                lookup = {
+                    'section': section_obj,
+                    'period': period_obj,
+                    'date': day,
+                    'teaching_assignment': teach_assign,
+                }
+                if teach_assign is None:
+                    lookup['created_by'] = staff_profile
+
+                session_plan.append({
+                    'lookup': lookup,
+                    'defaults': {
+                        'created_by': staff_profile,
+                        'timetable_assignment': ta,
+                        'teaching_assignment': teach_assign,
+                    },
+                    'students': target_students,
+                    'day': day,
+                    'section_obj': section_obj,
+                    'period_obj': period_obj,
+                    'teach_assign_id': teach_assign.pk if teach_assign else None,
+                })
+
+        if not session_plan:
+            return Response({'results': []})
+
+        # ── 8. SESSIONS: pre-fetch existing, create only missing ─────────────
+        existing_sessions = {}
+        for sess in PeriodAttendanceSession.objects.filter(
+            section_id__in=all_section_ids,
+            period_id__in=all_period_ids,
+            date__in=dates_iter,
+        ):
+            k = (sess.section_id, sess.period_id, sess.date, sess.teaching_assignment_id)
+            existing_sessions[k] = sess
+            if sess.teaching_assignment_id is None:
+                existing_sessions[(sess.section_id, sess.period_id, sess.date, None, sess.created_by_id)] = sess
+
+        resolved: dict = {}
+        for idx, plan in enumerate(session_plan):
+            lk = plan['lookup']
+            k = (lk['section'].pk, lk['period'].pk, lk['date'], plan['teach_assign_id'])
+            sess = existing_sessions.get(k)
+            if sess is None and plan['teach_assign_id'] is None:
+                sess = existing_sessions.get((lk['section'].pk, lk['period'].pk, lk['date'], None, staff_profile.pk))
+            if sess:
+                resolved[idx] = sess
+            else:
+                sess, _ = PeriodAttendanceSession.objects.get_or_create(
+                    **lk, defaults=plan['defaults']
+                )
+                resolved[idx] = sess
+                existing_sessions[k] = sess
+
+        # ── 9. RECORDS: bulk create / update ─────────────────────────────────
+        all_session_ids = [s.pk for s in resolved.values()]
+        existing_records = {
+            (r.session_id, r.student_id): r
+            for r in PeriodAttendanceRecord.objects.filter(session_id__in=all_session_ids)
+        }
+
+        to_create = []
+        to_update = []
+        for idx, plan in enumerate(session_plan):
+            sess = resolved.get(idx)
+            if not sess:
+                continue
+            for stu in plan['students']:
+                key = (sess.pk, stu.pk)
+                if key in existing_records:
+                    rec = existing_records[key]
+                    if rec.status != status_val or rec.marked_by_id != staff_profile.pk:
+                        rec.status = status_val
+                        rec.marked_by = staff_profile
+                        to_update.append(rec)
+                else:
+                    to_create.append(PeriodAttendanceRecord(
+                        session=sess, student=stu,
+                        status=status_val, marked_by=staff_profile,
+                    ))
+                    # prevent duplicates within the same batch
+                    existing_records[key] = True  # type: ignore[assignment]
+
+        if to_create:
+            PeriodAttendanceRecord.objects.bulk_create(to_create, ignore_conflicts=True)
+        if to_update:
+            PeriodAttendanceRecord.objects.bulk_update(to_update, ['status', 'marked_by'], batch_size=500)
+
+        out_sessions = [
+            {
+                'date': plan['day'].isoformat(),
+                'section_id': plan['section_obj'].pk,
+                'period_id': plan['period_obj'].pk,
+                'session_id': resolved[idx].pk,
+            }
+            for idx, plan in enumerate(session_plan)
+            if idx in resolved
+        ]
+        return Response({'results': out_sessions})
+
+    @action(detail=False, methods=['post'], url_path='bulk-mark-statuses')
+    def bulk_mark_statuses(self, request):
+        """Mark attendance with individual per-student statuses per date.
+
+        Payload: {
+            assignments: [{section_id, period_id}],
+            date_records: [{date: "YYYY-MM-DD", records: [{student_id: N, status: "P"|"A"}]}]
+        }
+        """
+        import datetime as _dt
+        data = request.data or {}
+        user = request.user
+        staff_profile = getattr(user, 'staff_profile', None)
+        if not staff_profile:
+            raise PermissionDenied('Only staff may perform bulk attendance marking')
+
+        from .models import (
+            Section as _Section, PeriodAttendanceSession as _PAS,
+            PeriodAttendanceRecord as _PAR, StudentProfile as _SP,
+            TeachingAssignment as _TA,
+        )
+        from timetable.models import TimetableSlot as _TSlot, TimetableAssignment as _TAssign
+
+        perms = get_user_permissions(user)
+        assignments_payload = data.get('assignments') or []
+        date_records = data.get('date_records') or []
+
+        if not assignments_payload:
+            return Response({'detail': 'assignments required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not date_records:
+            return Response({'detail': 'date_records required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # ── 1. Resolve assignments in bulk ────────────────────────────────────
+        raw_sids = [int(a['section_id']) for a in assignments_payload if 'section_id' in a]
+        raw_pids = [int(a['period_id'])  for a in assignments_payload if 'period_id'  in a]
+        secs_map = {s.pk: s for s in _Section.objects.filter(pk__in=raw_sids)}
+        pers_map = {p.pk: p for p in _TSlot.objects.filter(pk__in=raw_pids)}
+        seen_sp = set()
+        assignments_list = []
+        for a in assignments_payload:
+            try:
+                sid, pid = int(a['section_id']), int(a['period_id'])
+                if (sid, pid) in seen_sp:
                     continue
+                seen_sp.add((sid, pid))
+                s, p = secs_map.get(sid), pers_map.get(pid)
+                if s and p:
+                    assignments_list.append((s, p))
+            except Exception:
+                continue
 
-                # Resolve a specific teaching assignment (subject option) for this staff/slot.
-                teach_assign = None
+        if not assignments_list:
+            return Response({'results': []})
+
+        # ── 2. Parse dates ────────────────────────────────────────────────────
+        all_dates = []
+        for dr in date_records:
+            try:
+                all_dates.append(_dt.date.fromisoformat(dr['date']))
+            except Exception:
+                pass
+        all_dates = sorted(set(all_dates))
+
+        all_section_ids = list({s.pk for s, _ in assignments_list})
+        all_period_ids  = list({p.pk for _, p in assignments_list})
+
+        # ── 3. PRE-FETCH: TimetableAssignments ───────────────────────────────
+        ta_staff = {}   # (sec_id, per_id, dow) → TA (this staff)
+        ta_any   = {}   # (sec_id, per_id, dow) → TA (any staff)
+        ta_anysp = {}   # (sec_id, per_id)      → TA (any day)
+        for ta in _TAssign.objects.filter(
+            section_id__in=all_section_ids,
+            period_id__in=all_period_ids,
+        ).select_related('curriculum_row'):
+            k3 = (ta.section_id, ta.period_id, ta.day)
+            if ta.staff_id == staff_profile.pk:
+                ta_staff.setdefault(k3, ta)
+            ta_any.setdefault(k3, ta)
+            ta_anysp.setdefault((ta.section_id, ta.period_id), ta)
+
+        # ── 4. PRE-FETCH: TeachingAssignments for staff ───────────────────────
+        staff_ta_list = list(
+            _TA.objects.filter(is_active=True, staff=staff_profile)
+            .select_related('curriculum_row', 'elective_subject', 'section')
+        )
+        teach_by_cr: dict = {}
+        for sta in staff_ta_list:
+            if sta.curriculum_row_id:
+                teach_by_cr.setdefault(sta.curriculum_row_id, []).append(sta)
+            if sta.elective_subject_id and getattr(sta.elective_subject, 'parent_id', None):
+                teach_by_cr.setdefault(sta.elective_subject.parent_id, []).append(sta)
+
+        def _ta_allowed(cr_id, section_obj):
+            for sta in teach_by_cr.get(cr_id, []):
+                if sta.section_id is None or sta.section_id == section_obj.pk:
+                    return True
+            return False
+
+        def _best_teach(cr_id, section_obj):
+            candidates = teach_by_cr.get(cr_id, []) if cr_id else staff_ta_list
+            for sta in candidates:
+                if sta.section_id == section_obj.pk:
+                    return sta
+            for sta in candidates:
+                if sta.section_id is None:
+                    return sta
+            return None
+
+        # ── 5. PRE-FETCH: students referenced in date_records ────────────────
+        all_student_ids = set()
+        for dr in date_records:
+            for rec in (dr.get('records') or []):
                 try:
-                    from academics.models import TeachingAssignment as _TA
-                    cr_id = None
-                    if special_entry and getattr(special_entry, 'curriculum_row_id', None):
-                        cr_id = getattr(special_entry, 'curriculum_row_id', None)
-                    elif ta is not None and getattr(ta, 'curriculum_row_id', None):
-                        cr_id = getattr(ta, 'curriculum_row_id', None)
-                    else:
-                        try:
-                            cr_id = getattr(assign, 'curriculum_row_id', None)
-                        except Exception:
-                            cr_id = None
-
-                    ta_qs = _TA.objects.filter(is_active=True, staff=staff_profile).filter(
-                        Q(section=section_obj) | Q(section__isnull=True)
-                    )
-                    if cr_id:
-                        ta_qs = ta_qs.filter(Q(curriculum_row_id=cr_id) | Q(elective_subject__parent_id=cr_id))
-                    teach_assign = ta_qs.order_by(
-                        models.Case(
-                            models.When(section=section_obj, then=models.Value(0)),
-                            default=models.Value(1),
-                            output_field=models.IntegerField(),
-                        ),
-                        'id',
-                    ).first()
-                except Exception:
-                    teach_assign = None
-
-                # optionally create special timetable entries for this date/period
-                try:
-                    if data.get('create_special'):
-                        from timetable.models import SpecialTimetable, SpecialTimetableEntry
-                        st_name = f"Temp-{section_obj.id}-{period_obj.id}-{day.isoformat()}"
-                        special_tt, _ = SpecialTimetable.objects.get_or_create(section=section_obj, name=st_name, defaults={'created_by': staff_profile, 'is_active': True})
-                        SpecialTimetableEntry.objects.get_or_create(timetable=special_tt, date=day, period=period_obj, defaults={'staff': staff_profile, 'curriculum_row': None, 'subject_batch': None, 'subject_text': None, 'is_active': True})
+                    all_student_ids.add(int(rec['student_id']))
                 except Exception:
                     pass
+        students_map = {s.pk: s for s in _SP.objects.filter(pk__in=all_student_ids)}
 
-                # create/get session and mark records
-                # IMPORTANT: session must be subject-wise. Prefer teaching_assignment identity.
-                lookup = {'section': section_obj, 'period': period_obj, 'date': day, 'teaching_assignment': teach_assign}
-                if teach_assign is None:
-                    # When teaching_assignment cannot be resolved, use created_by as discriminator.
-                    lookup['created_by'] = staff_profile
-                session, created = PeriodAttendanceSession.objects.get_or_create(
-                    **lookup,
-                    defaults={'created_by': staff_profile, 'timetable_assignment': ta, 'teaching_assignment': teach_assign}
-                )
-                logger.warning('get_or_create session returned id=%s created=%s timetable_assignment_on_session=%s teaching_assignment_on_session=%s', getattr(session, 'id', None), created, getattr(session, 'timetable_assignment_id', None), getattr(session, 'teaching_assignment_id', None))
+        # ── 6. PLAN sessions ─────────────────────────────────────────────────
+        # session_plan[key] = {lookup, defaults, records: [(student, status)]}
+        session_plan_map: dict = {}  # (sec_id, per_id, date, teach_id) → plan dict
+        for dr in date_records:
+            try:
+                day = _dt.date.fromisoformat(dr['date'])
+            except Exception:
+                continue
+            dow = day.isoweekday()
+            records = dr.get('records') or []
 
-                # Keep metadata up to date
-                dirty_fields = []
-                if session.created_by_id is None:
-                    session.created_by = staff_profile
-                    dirty_fields.append('created_by')
-                if ta is not None and session.timetable_assignment_id != getattr(ta, 'id', None):
-                    session.timetable_assignment = ta
-                    dirty_fields.append('timetable_assignment')
-                if teach_assign is not None and session.teaching_assignment_id != getattr(teach_assign, 'id', None):
-                    session.teaching_assignment = teach_assign
-                    dirty_fields.append('teaching_assignment')
-                if dirty_fields:
-                    session.save(update_fields=dirty_fields)
+            for (section_obj, period_obj) in assignments_list:
+                ta = ta_staff.get((section_obj.pk, period_obj.pk, dow))
+                allow = ta is not None
+                if not allow:
+                    any_ta = ta_any.get((section_obj.pk, period_obj.pk, dow))
+                    if any_ta and _ta_allowed(any_ta.curriculum_row_id, section_obj):
+                        allow, ta = True, any_ta
+                if not allow:
+                    anysp = ta_anysp.get((section_obj.pk, period_obj.pk))
+                    if anysp and _ta_allowed(anysp.curriculum_row_id, section_obj):
+                        allow, ta = True, anysp
+                if not allow and not (user.is_superuser or 'academics.mark_attendance' in perms):
+                    continue
 
-                # determine students for this assignment if student_ids not provided
-                if students:
-                    target_students = students
+                cr_id = getattr(ta, 'curriculum_row_id', None) if ta else None
+                teach_assign = _best_teach(cr_id, section_obj)
+                ta_id = teach_assign.pk if teach_assign else None
+
+                plan_key = (section_obj.pk, period_obj.pk, day, ta_id)
+                if plan_key not in session_plan_map:
+                    lookup = {
+                        'section': section_obj, 'period': period_obj,
+                        'date': day, 'teaching_assignment': teach_assign,
+                    }
+                    if teach_assign is None:
+                        lookup['created_by'] = staff_profile
+                    session_plan_map[plan_key] = {
+                        'lookup': lookup,
+                        'defaults': {
+                            'created_by': staff_profile,
+                            'timetable_assignment': ta,
+                            'teaching_assignment': teach_assign,
+                        },
+                        'records': [],
+                        'day': day,
+                        'section_obj': section_obj,
+                        'period_obj': period_obj,
+                        'ta_id': ta_id,
+                    }
+
+                valid_statuses = {'P', 'A', 'OD', 'LEAVE', 'LATE', 'HD'}
+                for rec in records:
+                    try:
+                        stu = students_map.get(int(rec['student_id']))
+                        if not stu:
+                            continue
+                        sv = rec.get('status', 'P')
+                        if sv not in valid_statuses:
+                            sv = 'P'
+                        session_plan_map[plan_key]['records'].append((stu, sv))
+                    except Exception:
+                        continue
+
+        if not session_plan_map:
+            return Response({'results': []})
+
+        # ── 7. SESSIONS: pre-fetch existing, create only missing ─────────────
+        existing_sessions = {}
+        for sess in _PAS.objects.filter(
+            section_id__in=all_section_ids,
+            period_id__in=all_period_ids,
+            date__in=all_dates,
+        ):
+            k = (sess.section_id, sess.period_id, sess.date, sess.teaching_assignment_id)
+            existing_sessions[k] = sess
+            if sess.teaching_assignment_id is None:
+                existing_sessions[(sess.section_id, sess.period_id, sess.date, None, sess.created_by_id)] = sess
+
+        resolved_plans = []
+        for plan_key, plan in session_plan_map.items():
+            lk = plan['lookup']
+            k = (lk['section'].pk, lk['period'].pk, lk['date'], plan['ta_id'])
+            sess = existing_sessions.get(k)
+            if sess is None and plan['ta_id'] is None:
+                sess = existing_sessions.get((lk['section'].pk, lk['period'].pk, lk['date'], None, staff_profile.pk))
+            if not sess:
+                sess, _ = _PAS.objects.get_or_create(**lk, defaults=plan['defaults'])
+                existing_sessions[k] = sess
+            resolved_plans.append((sess, plan))
+
+        # ── 8. RECORDS: bulk create / update ─────────────────────────────────
+        all_session_ids = [sess.pk for sess, _ in resolved_plans]
+        existing_records = {
+            (r.session_id, r.student_id): r
+            for r in _PAR.objects.filter(session_id__in=all_session_ids)
+        }
+
+        to_create = []
+        to_update = []
+        seen_keys: set = set()
+        for sess, plan in resolved_plans:
+            for (stu, sv) in plan['records']:
+                key = (sess.pk, stu.pk)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                if key in existing_records:
+                    rec = existing_records[key]
+                    if rec.status != sv or rec.marked_by_id != staff_profile.pk:
+                        rec.status = sv
+                        rec.marked_by = staff_profile
+                        to_update.append(rec)
                 else:
-                    target_students = []
-                    # prefer subject_batch students if timetable assignment exists
-                    if 'special_entry' in locals() and special_entry and getattr(special_entry, 'subject_batch', None):
-                        try:
-                            target_students = list(special_entry.subject_batch.students.all())
-                        except Exception:
-                            target_students = []
-                    elif ta and getattr(ta, 'subject_batch', None):
-                        try:
-                            target_students = list(ta.subject_batch.students.all())
-                        except Exception:
-                            target_students = []
-                    # else if special_entry or teaching assignment maps to elective, use ElectiveChoice
-                    if not target_students:
-                        try:
-                            from academics.models import TeachingAssignment as _TA
-                            # determine a curriculum_row to look up electives from
-                            cr = None
-                            if 'special_entry' in locals() and special_entry and getattr(special_entry, 'curriculum_row', None):
-                                cr = getattr(special_entry, 'curriculum_row')
-                            else:
-                                try:
-                                    cr = getattr(assign, 'curriculum_row', None)
-                                except Exception:
-                                    cr = None
-                            ta_match = None
-                            if cr is not None:
-                                _ta_cr_name = getattr(cr, 'course_name', None) if cr is not None else None
-                                _sec_dept_id_ta = getattr(getattr(getattr(section_obj, 'batch', None), 'course', None), 'department_id', None) if section_obj else None
-                                ta_match = _TA.objects.filter(is_active=True, staff=staff_profile, elective_subject__isnull=False).filter(
-                                    Q(elective_subject__parent=cr) |
-                                    Q(curriculum_row=cr) |
-                                    Q(elective_subject__department_group__isnull=False,
-                                      elective_subject__parent__course_name=_ta_cr_name,
-                                      elective_subject__department_group__department_mappings__department_id=_sec_dept_id_ta,
-                                      elective_subject__department_group__department_mappings__is_active=True)
-                                ).filter(Q(section=section_obj) | Q(section__isnull=True)).select_related('elective_subject').first()
-                            if ta_match and getattr(ta_match, 'elective_subject', None):
-                                from curriculum.models import ElectiveChoice
-                                es = ta_match.elective_subject
-                                choices = ElectiveChoice.objects.filter(elective_subject=es, is_active=True).select_related('student')
-                                target_students = [getattr(c, 'student') for c in choices if getattr(c, 'student', None) is not None]
-                        except Exception:
-                            target_students = []
-                    # final fallback: section students
-                    if not target_students:
-                        try:
-                            from .models import StudentSectionAssignment, StudentProfile as _StudentProfile
-                            assign_qs = StudentSectionAssignment.objects.filter(section=section_obj, end_date__isnull=True).exclude(student__status__in=['INACTIVE', 'DEBAR']).select_related('student__user')
-                            sts = [a.student for a in assign_qs]
-                            legacy = _StudentProfile.objects.filter(section=section_obj).exclude(status__in=['INACTIVE', 'DEBAR']).select_related('user')
-                            for s in legacy:
-                                if not any(x.pk == s.pk for x in sts):
-                                    sts.append(s)
-                            target_students = sts
-                        except Exception:
-                            target_students = []
+                    to_create.append(_PAR(
+                        session=sess, student=stu,
+                        status=sv, marked_by=staff_profile,
+                    ))
 
-                created_records = []
-                for stu in target_students:
-                    obj, created = PeriodAttendanceRecord.objects.update_or_create(
-                        session=session, student=stu,
-                        defaults={'status': status_val or 'P', 'marked_by': staff_profile}
-                    )
-                    created_records.append({'id': obj.id, 'student_id': getattr(obj.student, 'id', None), 'status': obj.status})
-                out_sessions.append({'date': day.isoformat(), 'section_id': section_obj.id, 'period_id': period_obj.id, 'session_id': session.id, 'records': created_records})
-                logger.warning('Created/updated %d records for date=%s section=%s period=%s', len(created_records), day.isoformat(), section_obj.id, period_obj.id)
+        if to_create:
+            _PAR.objects.bulk_create(to_create, ignore_conflicts=True)
+        if to_update:
+            _PAR.objects.bulk_update(to_update, ['status', 'marked_by'], batch_size=500)
 
+        out_sessions = [
+            {
+                'date': plan['day'].isoformat(),
+                'section_id': plan['section_obj'].pk,
+                'period_id': plan['period_obj'].pk,
+                'session_id': sess.pk,
+                'records_count': len(plan['records']),
+            }
+            for sess, plan in resolved_plans
+        ]
         return Response({'results': out_sessions})
 
     @action(detail=True, methods=['post'], url_path='lock')
@@ -4370,149 +4696,233 @@ class AttendanceUnlockRequestViewSet(viewsets.ModelViewSet):
 
 
 class UnifiedUnlockRequestsView(APIView):
-    """Unified view that returns both period attendance and daily attendance unlock requests."""
+    """Unified view that returns both period attendance and daily attendance unlock requests.
+    Daily bulk requests (same bulk_group_id) are collapsed into a single grouped row."""
     permission_classes = (IsAuthenticated,)
-    
+
     def get(self, request):
         from .models import DailyAttendanceUnlockRequest
         from .serializers import DailyAttendanceUnlockRequestSerializer
-        
+
         user = request.user
         perms = get_user_permissions(user)
-        
-        # Determine if user can view all requests or only their own
+
         can_view_all = 'analytics.view_all_analytics' in perms or user.is_superuser
         staff_profile = getattr(user, 'staff_profile', None)
-        
-        # Get period attendance unlock requests
+
+        # ── Period requests ───────────────────────────────────────────────────
         if can_view_all:
-            # Admin: get all HOD_APPROVED requests (final approval stage)
             period_requests = AttendanceUnlockRequest.objects.select_related(
                 'session__section', 'requested_by', 'reviewed_by', 'hod_reviewed_by'
             ).filter(hod_status='HOD_APPROVED').order_by('-requested_at')
         elif staff_profile:
-            # Staff: get only their requests
             period_requests = AttendanceUnlockRequest.objects.select_related(
                 'session__section', 'requested_by', 'reviewed_by', 'hod_reviewed_by'
             ).filter(requested_by=staff_profile).order_by('-requested_at')
         else:
             period_requests = AttendanceUnlockRequest.objects.none()
-        
-        # Get daily attendance unlock requests
+
+        period_serializer = AttendanceUnlockRequestSerializer(period_requests, many=True, context={'request': request})
+        period_data = list(period_serializer.data)
+        for item in period_data:
+            item['request_type'] = 'period'
+
+        # ── Daily requests (grouped by bulk_group_id) ─────────────────────────
         if can_view_all:
-            # Admin: get all pending daily requests (PENDING or HOD_APPROVED) — daily attendance
-            # does not require a mandatory HOD step, so admin sees requests at any pending stage
-            daily_requests = DailyAttendanceUnlockRequest.objects.select_related(
+            daily_qs = DailyAttendanceUnlockRequest.objects.select_related(
                 'session__section', 'requested_by', 'reviewed_by', 'hod_reviewed_by'
             ).filter(status__in=['PENDING', 'HOD_APPROVED']).order_by('-requested_at')
         elif staff_profile:
-            # Staff: get only their requests
-            daily_requests = DailyAttendanceUnlockRequest.objects.select_related(
+            daily_qs = DailyAttendanceUnlockRequest.objects.select_related(
                 'session__section', 'requested_by', 'reviewed_by', 'hod_reviewed_by'
             ).filter(requested_by=staff_profile).order_by('-requested_at')
         else:
-            daily_requests = DailyAttendanceUnlockRequest.objects.none()
-        
-        # Serialize period requests
-        period_serializer = AttendanceUnlockRequestSerializer(period_requests, many=True, context={'request': request})
-        period_data = period_serializer.data
-        for item in period_data:
-            item['request_type'] = 'period'
-        
-        # Serialize daily requests
-        daily_serializer = DailyAttendanceUnlockRequestSerializer(daily_requests, many=True, context={'request': request})
-        daily_data = daily_serializer.data
-        for item in daily_data:
-            item['request_type'] = 'daily'
-        
-        # Combine both types
-        combined_data = list(period_data) + list(daily_data)
-        # Sort by requested_at descending
+            daily_qs = DailyAttendanceUnlockRequest.objects.none()
+
+        # Collapse bulk groups into a single representative row
+        daily_data = []
+        seen_groups = set()
+        for req in daily_qs:
+            if req.bulk_group_id:
+                gid = str(req.bulk_group_id)
+                if gid in seen_groups:
+                    continue
+                seen_groups.add(gid)
+                # Fetch all sibling requests in this group
+                siblings = list(DailyAttendanceUnlockRequest.objects.filter(
+                    bulk_group_id=req.bulk_group_id
+                ).select_related('session__section', 'requested_by').order_by('session__date'))
+                section = req.session.section if req.session else None
+                dates = [str(s.session.date) for s in siblings if s.session]
+                daily_data.append({
+                    'id': req.id,
+                    'bulk_group_id': gid,
+                    'request_type': 'daily_bulk',
+                    'session_count': len(siblings),
+                    'dates': dates,
+                    'date_range': f"{dates[0]} → {dates[-1]}" if dates else '',
+                    'department': str(getattr(getattr(section, 'batch', None), 'course', None) and
+                                      getattr(section.batch.course, 'department', None) and
+                                      section.batch.course.department.name or ''),
+                    'section_name': str(section) if section else '',
+                    'session_display': f"{str(section)} | {len(siblings)} sessions ({dates[0]} → {dates[-1]})" if dates else str(section),
+                    'requested_by': {
+                        'name': req.requested_by.user.get_full_name() if req.requested_by and req.requested_by.user else '',
+                        'staff_id': str(req.requested_by.staff_id) if req.requested_by else '',
+                    },
+                    'requested_at': req.requested_at.isoformat() if req.requested_at else '',
+                    'note': req.note or '',
+                    'status': req.status,
+                    'hod_status': req.hod_status,
+                })
+            else:
+                # Individual (non-bulk) daily request
+                daily_data.append({
+                    'id': req.id,
+                    'bulk_group_id': None,
+                    'request_type': 'daily',
+                    'session_count': 1,
+                    'dates': [str(req.session.date)] if req.session else [],
+                    'department': '',
+                    'section_name': str(req.session.section) if req.session else '',
+                    'session_display': f"{str(req.session.section) if req.session else ''} | Daily Attendance @ {req.session.date if req.session else ''}",
+                    'requested_by': {
+                        'name': req.requested_by.user.get_full_name() if req.requested_by and req.requested_by.user else '',
+                        'staff_id': str(req.requested_by.staff_id) if req.requested_by else '',
+                    },
+                    'requested_at': req.requested_at.isoformat() if req.requested_at else '',
+                    'note': req.note or '',
+                    'status': req.status,
+                    'hod_status': req.hod_status,
+                })
+
+        combined_data = period_data + daily_data
         combined_data.sort(key=lambda x: x.get('requested_at', ''), reverse=True)
-        
+
         return Response({
             'results': combined_data,
             'total_period_requests': len(period_data),
             'total_daily_requests': len(daily_data),
-            'total_requests': len(combined_data)
+            'total_requests': len(combined_data),
         })
-    
+
     def patch(self, request):
-        """Handle approval/rejection for both types of unlock requests."""
+        """Handle approval/rejection for unlock requests. Daily bulk groups are acted on atomically."""
         user = request.user
         perms = get_user_permissions(user)
-        
+
         if not ('analytics.view_all_analytics' in perms or user.is_superuser):
             return Response({'detail': 'Permission denied'}, status=403)
-        
+
         request_id = request.data.get('id')
-        request_type = request.data.get('request_type', 'period')  # 'period' or 'daily'
+        request_type = request.data.get('request_type', 'period')  # 'period', 'daily', 'daily_bulk'
+        bulk_group_id = request.data.get('bulk_group_id')
         action = request.data.get('action')  # 'approve' or 'reject'
         final_note = request.data.get('note', '')
-        
-        if not all([request_id, action]):
-            return Response({'detail': 'Missing required fields: id, action'}, status=400)
-        
+
+        if not action:
+            return Response({'detail': 'Missing required field: action'}, status=400)
         if action not in ['approve', 'reject']:
             return Response({'detail': 'Invalid action. Must be approve or reject'}, status=400)
-        
+
+        staff_profile = getattr(user, 'staff_profile', None)
+
         try:
             if request_type == 'period':
+                if not request_id:
+                    return Response({'detail': 'Missing required field: id'}, status=400)
                 unlock_req = AttendanceUnlockRequest.objects.select_related('session').get(id=request_id)
-            else:
-                from .models import DailyAttendanceUnlockRequest
-                unlock_req = DailyAttendanceUnlockRequest.objects.select_related('session').get(id=request_id)
-                
-            # For period requests, HOD must have approved first.
-            # For daily requests, admin can approve directly (HOD step is optional).
-            if request_type == 'period' and unlock_req.status != 'HOD_APPROVED':
-                return Response({
-                    'detail': f'Request must be approved by HOD first. Current status: {unlock_req.status}'
-                }, status=400)
-            if request_type == 'daily' and unlock_req.status not in ['PENDING', 'HOD_APPROVED']:
-                return Response({
-                    'detail': f'Request has already been finalized. Current status: {unlock_req.status}'
-                }, status=400)
-            
-            staff_profile = getattr(user, 'staff_profile', None)
-            
-            if action == 'approve':
-                unlock_req.status = 'APPROVED'
-                unlock_req.reviewed_by = staff_profile
-                unlock_req.reviewed_at = timezone.now()
-                unlock_req.final_note = final_note
-                unlock_req.save()
-                
-                # Unlock the session
-                session = unlock_req.session
-                session.is_locked = False 
-                session.save(update_fields=['is_locked'])
-                
-                response_message = f'{request_type.title()} attendance session unlocked successfully'
-            else:  # reject
-                unlock_req.status = 'REJECTED'
-                unlock_req.reviewed_by = staff_profile
-                unlock_req.reviewed_at = timezone.now()
-                unlock_req.final_note = final_note
-                unlock_req.save()
-                
-                response_message = f'{request_type.title()} unlock request rejected'
-
-            if request_type == 'daily':
-                from .serializers import DailyAttendanceUnlockRequestSerializer
-                serializer = DailyAttendanceUnlockRequestSerializer(unlock_req, context={'request': request})
-            else:
+                if unlock_req.status != 'HOD_APPROVED':
+                    return Response({
+                        'detail': f'Request must be HOD-approved first. Current status: {unlock_req.status}'
+                    }, status=400)
+                if action == 'approve':
+                    unlock_req.status = 'APPROVED'
+                    unlock_req.reviewed_by = staff_profile
+                    unlock_req.reviewed_at = timezone.now()
+                    unlock_req.final_note = final_note
+                    unlock_req.save()
+                    unlock_req.session.is_locked = False
+                    unlock_req.session.save(update_fields=['is_locked'])
+                    msg = 'Period attendance session unlocked successfully'
+                else:
+                    unlock_req.status = 'REJECTED'
+                    unlock_req.reviewed_by = staff_profile
+                    unlock_req.reviewed_at = timezone.now()
+                    unlock_req.final_note = final_note
+                    unlock_req.save()
+                    msg = 'Period unlock request rejected'
                 serializer = AttendanceUnlockRequestSerializer(unlock_req, context={'request': request})
-            return Response({
-                'success': True,
-                'message': response_message,
-                'request': serializer.data
-            })
-            
-        except (AttendanceUnlockRequest.DoesNotExist, DailyAttendanceUnlockRequest.DoesNotExist):
+                return Response({'success': True, 'message': msg, 'request': serializer.data})
+
+            else:  # daily or daily_bulk
+                from .models import DailyAttendanceUnlockRequest, DailyAttendanceRecord
+                from django.db import transaction
+
+                # Resolve which records to act on
+                if bulk_group_id:
+                    reqs = list(DailyAttendanceUnlockRequest.objects.select_related('session').filter(
+                        bulk_group_id=bulk_group_id,
+                        status__in=['PENDING', 'HOD_APPROVED'],
+                    ))
+                    if not reqs:
+                        return Response({'detail': 'No pending requests found for this group'}, status=404)
+                elif request_id:
+                    req = DailyAttendanceUnlockRequest.objects.select_related('session').get(id=request_id)
+                    if req.status not in ['PENDING', 'HOD_APPROVED']:
+                        return Response({'detail': f'Request already finalised: {req.status}'}, status=400)
+                    reqs = [req]
+                else:
+                    return Response({'detail': 'Provide id or bulk_group_id'}, status=400)
+
+                with transaction.atomic():
+                    for req in reqs:
+                        if action == 'approve':
+                            req.status = 'APPROVED'
+                            req.reviewed_by = staff_profile
+                            req.reviewed_at = timezone.now()
+                            req.final_note = final_note
+                            req.save()
+                            req.session.is_locked = False
+                            req.session.save(update_fields=['is_locked'])
+                            DailyAttendanceRecord.objects.filter(session=req.session).delete()
+                        else:
+                            req.status = 'REJECTED'
+                            req.reviewed_by = staff_profile
+                            req.reviewed_at = timezone.now()
+                            req.final_note = final_note
+                            req.save()
+
+                count = len(reqs)
+                if action == 'approve':
+                    msg = f'Daily attendance unlocked and reset for {count} session{"s" if count > 1 else ""}'
+                else:
+                    msg = f'Daily unlock request rejected for {count} session{"s" if count > 1 else ""}'
+                return Response({'success': True, 'message': msg})
+
+        except AttendanceUnlockRequest.DoesNotExist:
             return Response({'detail': 'Request not found'}, status=404)
         except Exception as e:
             return Response({'detail': str(e)}, status=500)
+
+    def delete(self, request):
+        """Bulk-delete all unlock requests visible to IQAC/admin."""
+        user = request.user
+        perms = get_user_permissions(user)
+
+        if not ('analytics.view_all_analytics' in perms or user.is_superuser):
+            return Response({'detail': 'Permission denied'}, status=403)
+
+        from .models import DailyAttendanceUnlockRequest
+
+        deleted_period, _ = AttendanceUnlockRequest.objects.all().delete()
+        deleted_daily, _ = DailyAttendanceUnlockRequest.objects.all().delete()
+
+        return Response({
+            'deleted_period_requests': deleted_period,
+            'deleted_daily_requests': deleted_daily,
+            'total_deleted': deleted_period + deleted_daily,
+        })
 
 
 class StaffPeriodsView(APIView):
