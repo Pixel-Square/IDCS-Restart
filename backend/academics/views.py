@@ -5729,6 +5729,7 @@ class StudentMarksView(APIView):
             return Response({'detail': 'Student profile not found for user.'}, status=status.HTTP_403_FORBIDDEN)
 
         from django.db.models import Q
+        from django.db import OperationalError, ProgrammingError
         from collections import defaultdict
 
         section = sp.get_current_section() or getattr(sp, 'section', None)
@@ -5836,6 +5837,14 @@ class StudentMarksView(APIView):
         curriculum_by_code = {}
         try:
             if CurriculumDepartment is not None and dept is not None and regulation_code and semester is not None:
+                only_fields = ['course_code', 'course_name', 'class_type', 'internal_mark']
+                try:
+                    if hasattr(getattr(CurriculumDepartment, '_meta', None), 'get_field'):
+                        CurriculumDepartment._meta.get_field('enabled_assessments')
+                        only_fields.append('enabled_assessments')
+                except Exception:
+                    pass
+
                 rows = (
                     CurriculumDepartment.objects.filter(
                         department=dept,
@@ -5844,7 +5853,7 @@ class StudentMarksView(APIView):
                     )
                     .exclude(course_code__isnull=True)
                     .exclude(course_code='')
-                    .only('course_code', 'course_name', 'class_type', 'internal_mark')
+                    .only(*only_fields)
                 )
                 curriculum_by_code = {str(getattr(r, 'course_code', '') or '').strip(): r for r in rows if str(getattr(r, 'course_code', '') or '').strip()}
         except Exception:
@@ -6005,8 +6014,11 @@ class StudentMarksView(APIView):
             return _extract_lab_total_for_student(data, student_id)
 
         # Resolve candidate teaching assignments for the student's current section
-        # (used to scope published sheets / CQI rows).
+        # (used to scope published sheets / CQI rows) and to infer class_type / enabled_assessments
+        # consistent with staff OBE pages.
         ta_ids_by_code = defaultdict(list)
+        ta_meta_by_code = {}
+        ta_subject_by_code = {}
         try:
             ay_active = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.order_by('-id').first()
         except Exception:
@@ -6033,8 +6045,51 @@ class StudentMarksView(APIView):
                     tcode = str(tcode or '').strip()
                     if tcode:
                         ta_ids_by_code[tcode].append(getattr(ta, 'id', None))
+
+                        # Prefer section-specific teaching assignment metadata.
+                        try:
+                            is_section_match = bool(section is not None and getattr(ta, 'section_id', None) == getattr(section, 'id', None))
+                        except Exception:
+                            is_section_match = False
+
+                        existing = ta_meta_by_code.get(tcode)
+                        should_set = existing is None or (is_section_match and not existing.get('section_match'))
+                        if should_set:
+                            try:
+                                enabled = getattr(ta, 'enabled_assessments', None)
+                            except Exception:
+                                enabled = None
+                            if not isinstance(enabled, (list, tuple)):
+                                enabled = []
+                            cleaned_enabled = []
+                            for x in enabled:
+                                s = str(x or '').strip().lower()
+                                if s:
+                                    cleaned_enabled.append(s)
+
+                            try:
+                                ta_ct = getattr(ta, 'class_type', None)
+                            except Exception:
+                                ta_ct = None
+
+                            ta_meta_by_code[tcode] = {
+                                'class_type': ta_ct,
+                                'enabled_assessments': cleaned_enabled,
+                                'section_match': is_section_match,
+                            }
+
+                            # Use TA.subject as the authoritative Subject row for marks.
+                            # This avoids mismatches when multiple Subject rows share the same code.
+                            try:
+                                ta_subj = getattr(ta, 'subject', None) if getattr(ta, 'subject_id', None) else None
+                            except Exception:
+                                ta_subj = None
+                            if ta_subj is not None:
+                                ta_subject_by_code[tcode] = ta_subj
         except Exception:
             ta_ids_by_code = defaultdict(list)
+            ta_meta_by_code = {}
+            ta_subject_by_code = {}
 
         try:
             from OBE.models import LabPublishedSheet, ModelPublishedSheet, ObeCqiPublished
@@ -6099,14 +6154,19 @@ class StudentMarksView(APIView):
         out_courses = []
 
         for code in sorted(list(codes_set)):
-            subj = subject_by_code.get(code)
+            subj = ta_subject_by_code.get(code) or subject_by_code.get(code)
             # curriculum row metadata (class_type, internal max)
             class_type = None
             internal_max_total = None
+            enabled_assessments = None
             try:
                 row = curriculum_by_code.get(code)
                 if row is not None:
                     class_type = getattr(row, 'class_type', None)
+                    try:
+                        enabled_assessments = getattr(row, 'enabled_assessments', None)
+                    except Exception:
+                        enabled_assessments = None
                     im = getattr(row, 'internal_mark', None)
                     if im is not None:
                         try:
@@ -6115,6 +6175,26 @@ class StudentMarksView(APIView):
                             internal_max_total = None
             except Exception:
                 row = None
+
+            # Prefer TA metadata when present (matches staff OBE pages).
+            ta_meta = ta_meta_by_code.get(code) or {}
+            ta_ct = str(ta_meta.get('class_type') or '').strip() or None
+            if ta_ct:
+                class_type = ta_ct
+            ta_enabled = ta_meta.get('enabled_assessments')
+            if isinstance(ta_enabled, list) and ta_enabled:
+                enabled_assessments = ta_enabled
+            else:
+                # normalize curriculum enabled_assessments when present
+                if isinstance(enabled_assessments, (list, tuple)):
+                    cleaned = []
+                    for x in enabled_assessments:
+                        s = str(x or '').strip().lower()
+                        if s:
+                            cleaned.append(s)
+                    enabled_assessments = cleaned
+                else:
+                    enabled_assessments = []
 
             display_name = None
             try:
@@ -6129,39 +6209,42 @@ class StudentMarksView(APIView):
             if not display_name:
                 display_name = code
 
-            cia1 = cia2 = ssa1 = ssa2 = rev1 = rev2 = f1 = f2 = None
-            try:
-                cia1 = Cia1Mark.objects.filter(subject=subj, student=sp).first() if subj is not None else None
-            except Exception:
-                cia1 = None
-            try:
-                cia2 = Cia2Mark.objects.filter(subject=subj, student=sp).first() if subj is not None else None
-            except Exception:
-                cia2 = None
-            try:
-                ssa1 = Ssa1Mark.objects.filter(subject=subj, student=sp).first() if subj is not None else None
-            except Exception:
-                ssa1 = None
-            try:
-                ssa2 = Ssa2Mark.objects.filter(subject=subj, student=sp).first() if subj is not None else None
-            except Exception:
-                ssa2 = None
-            try:
-                rev1 = Review1Mark.objects.filter(subject=subj, student=sp).first() if subj is not None else None
-            except Exception:
-                rev1 = None
-            try:
-                rev2 = Review2Mark.objects.filter(subject=subj, student=sp).first() if subj is not None else None
-            except Exception:
-                rev2 = None
-            try:
-                f1 = Formative1Mark.objects.filter(subject=subj, student=sp).first() if subj is not None else None
-            except Exception:
-                f1 = None
-            try:
-                f2 = Formative2Mark.objects.filter(subject=subj, student=sp).first() if subj is not None else None
-            except Exception:
-                f2 = None
+            def _safe_total(model, field: str, ta_ids=None):
+                if subj is None:
+                    return None
+                base = model.objects.filter(subject=subj, student=sp)
+
+                # Prefer TA-scoped row when possible.
+                if ta_ids:
+                    try:
+                        v = (
+                            base.filter(Q(teaching_assignment_id__in=ta_ids) | Q(teaching_assignment__isnull=True))
+                            .values_list(field, flat=True)
+                            .first()
+                        )
+                        if v is not None:
+                            return v
+                    except (OperationalError, ProgrammingError):
+                        # tolerate DBs missing teaching_assignment_id
+                        pass
+                    except Exception:
+                        pass
+
+                # Then prefer legacy (unscoped) row.
+                try:
+                    v = base.filter(teaching_assignment__isnull=True).values_list(field, flat=True).first()
+                    if v is not None:
+                        return v
+                except (OperationalError, ProgrammingError):
+                    pass
+                except Exception:
+                    pass
+
+                # Final fallback: any row (works even when teaching_assignment_id is missing)
+                try:
+                    return base.values_list(field, flat=True).first()
+                except Exception:
+                    return None
 
             # internal mapping (may be None)
             try:
@@ -6184,14 +6267,14 @@ class StudentMarksView(APIView):
                 internal_max_cycle2 = internal_max_total / 2.0
 
             marks_vals = {
-                'cia1': _num(getattr(cia1, 'mark', None)),
-                'cia2': _num(getattr(cia2, 'mark', None)),
-                'ssa1': _num(getattr(ssa1, 'mark', None)),
-                'ssa2': _num(getattr(ssa2, 'mark', None)),
-                'review1': _num(getattr(rev1, 'mark', None)),
-                'review2': _num(getattr(rev2, 'mark', None)),
-                'formative1': _num(getattr(f1, 'total', None)),
-                'formative2': _num(getattr(f2, 'total', None)),
+                'cia1': _num(_safe_total(Cia1Mark, 'mark', ta_ids=(ta_ids_by_code.get(code) or []))),
+                'cia2': _num(_safe_total(Cia2Mark, 'mark', ta_ids=(ta_ids_by_code.get(code) or []))),
+                'ssa1': _num(_safe_total(Ssa1Mark, 'mark', ta_ids=(ta_ids_by_code.get(code) or []))),
+                'ssa2': _num(_safe_total(Ssa2Mark, 'mark', ta_ids=(ta_ids_by_code.get(code) or []))),
+                'review1': _num(_safe_total(Review1Mark, 'mark', ta_ids=(ta_ids_by_code.get(code) or []))),
+                'review2': _num(_safe_total(Review2Mark, 'mark', ta_ids=(ta_ids_by_code.get(code) or []))),
+                'formative1': _num(_safe_total(Formative1Mark, 'total', ta_ids=(ta_ids_by_code.get(code) or []))),
+                'formative2': _num(_safe_total(Formative2Mark, 'total', ta_ids=(ta_ids_by_code.get(code) or []))),
                 'model': None,
             }
 
@@ -6307,6 +6390,7 @@ class StudentMarksView(APIView):
                     'code': code,
                     'name': display_name,
                     'class_type': ct_norm or None,
+                    'enabled_assessments': enabled_assessments,
                     'marks': {
                         'cia1': marks_vals.get('cia1'),
                         'cia2': marks_vals.get('cia2'),

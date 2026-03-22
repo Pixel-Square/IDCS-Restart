@@ -15,10 +15,10 @@ from django.db.models import Q
 from rest_framework import status
 from rest_framework.decorators import api_view, parser_classes, permission_classes
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
-from academics.models import Department, DepartmentRole, StudentProfile
+from academics.models import Course, Department, DepartmentRole, StudentProfile
 from academics.utils import get_user_effective_departments
 
 from .models import AcademicCalendarEvent, HodColor
@@ -981,3 +981,91 @@ def poster_callback(request, event_id):
 
     logger.info('Poster callback received for event %s — design_id=%s', event_id, design_id)
     return Response({'ok': True})
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def public_events(request):
+    """Public, unauthenticated events feed for krgi.co.in.
+
+    Returns AcademicCalendarEvent rows along with branding-generated poster URLs.
+    """
+
+    limit_raw = (request.query_params.get('limit') or '').strip()
+    scope = (request.query_params.get('scope') or 'upcoming').strip().lower()
+    try:
+        limit = int(limit_raw) if limit_raw else 50
+    except Exception:
+        limit = 50
+    limit = max(1, min(limit, 200))
+
+    today = date.today()
+
+    qs = AcademicCalendarEvent.objects.all()
+
+    if scope == 'upcoming':
+        qs = qs.filter(end_date__gte=today).order_by('start_date', 'title')
+    elif scope == 'recent':
+        qs = qs.filter(start_date__lte=today).order_by('-start_date', '-created_at')
+    else:
+        qs = qs.order_by('-start_date', '-created_at')
+
+    events = list(qs[:limit])
+    out = []
+    for ev in events:
+        # Prefer branding poster preview/url, else fall back to event image_url
+        poster = (ev.branding_poster_preview or ev.branding_poster_url or ev.image_url or '').strip() or None
+        out.append({
+            'id': str(ev.id),
+            'title': ev.title,
+            'description': ev.description,
+            'start_date': ev.start_date.isoformat(),
+            'end_date': ev.end_date.isoformat() if ev.end_date else None,
+            'all_day': bool(ev.all_day),
+            'image': poster,
+            'poster_status': ev.branding_poster_status,
+        })
+
+    return Response({'results': out}, status=200)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def public_stats(request):
+    """Public, unauthenticated stats for krgi.co.in dashboard."""
+
+    # Students
+    students_count = StudentProfile.objects.filter(status='ACTIVE').count()
+
+    # Staff
+    try:
+        from academics.models import StaffProfile
+
+        staff_count = StaffProfile.objects.filter(status='ACTIVE').count()
+    except ImportError:
+        staff_count = 0
+
+    # Departments
+    departments_count = Department.objects.count()
+
+    # Courses
+    courses_count = Course.objects.count()
+
+    # Events
+    today = date.today()
+    active_events = AcademicCalendarEvent.objects.filter(
+        Q(end_date__gte=today) | Q(end_date__isnull=True, start_date__gte=today)
+    ).count()
+    total_events = AcademicCalendarEvent.objects.count()
+
+    return Response(
+        {
+            'students': students_count,
+            'staff': staff_count,
+            'departments': departments_count,
+            'courses': courses_count,
+            'active_events': active_events,
+            'total_events': total_events,
+        },
+        status=200,
+    )

@@ -4,6 +4,8 @@ from . import api_views
 from . import proposal_views
 
 urlpatterns = [
+    path('public-events/', api_views.public_events, name='academic_calendar_public_events'),
+    path('public-stats/', api_views.public_stats, name='academic_calendar_public_stats'),
     path('config/', api_views.config, name='academic_calendar_config'),
     path('events/', api_views.events, name='academic_calendar_events'),
     path('events/<uuid:event_id>/update/', api_views.event_update, name='academic_calendar_event_update'),

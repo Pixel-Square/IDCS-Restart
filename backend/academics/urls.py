@@ -47,6 +47,7 @@ from .views import UnifiedUnlockRequestsView, DepartmentStudentsView, AllStudent
 from .views import BulkAssignSecondarySectionView, RemoveSecondarySectionView
 from .student_import_views import StudentImportTemplateDownloadView, StudentBulkImportView
 from .rfreader_views import RFReaderGateListCreateView, RFReaderStudentListCreateView, RFReaderLastScanView
+from .public_views import PublicProfileLookupView
 
 
 router = DefaultRouter()
@@ -120,6 +121,9 @@ urlpatterns = [
     path('analytics/filters/', AnalyticsFiltersView.as_view()),
     path('analytics/class-report/', ClassAttendanceReportView.as_view()),
     path('analytics/today-periods/', TodayPeriodAttendanceView.as_view()),
+
+    # Public helpers for krgiweb
+    path('public-profile/', PublicProfileLookupView.as_view()),
     path('analytics/period-log/', PeriodAttendanceReportView.as_view()),
     path('analytics/overall-section/', OverallSectionView.as_view()),
     path('analytics/my-class-students/', MyClassStudentsView.as_view()),

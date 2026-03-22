@@ -285,6 +285,19 @@ def _filter_marks_queryset_for_teaching_assignment(qs, ta, *, strict_scope: bool
             if scoped_qs.exists():
                 return scoped_qs
             if strict_scope:
+                # In strict scope mode (multiple parallel TAs for the same subject),
+                # we still want to show legacy/unscoped marks (NULL teaching_assignment)
+                # that belong to the selected TA roster. Many older DBs stored CIA marks
+                # without TA linkage; returning qs.none() hides marks entirely.
+                student_ids = _get_teaching_assignment_student_ids(ta)
+                if student_ids:
+                    null_scoped = qs.filter(teaching_assignment__isnull=True, student_id__in=student_ids)
+                    if null_scoped.exists():
+                        return null_scoped
+                    # As a last resort (when TA linkage is inconsistent), return roster-filtered marks.
+                    roster_scoped = qs.filter(student_id__in=student_ids)
+                    if roster_scoped.exists():
+                        return roster_scoped
                 return qs.none()
             return qs.filter(teaching_assignment__isnull=True)
         return qs.filter(teaching_assignment__isnull=True)

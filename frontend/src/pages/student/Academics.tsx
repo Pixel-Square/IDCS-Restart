@@ -1,6 +1,7 @@
 ﻿import React, { useEffect, useState } from 'react';
 import fetchWithAuth from '../../services/fetchAuth';
 import { AlertCircle, Target, Award, BookOpen } from 'lucide-react';
+import { normalizeClassType } from '../../constants/classTypes';
 
 export default function StudentAcademics() {
   const [loading, setLoading] = useState(true);
@@ -51,6 +52,116 @@ export default function StudentAcademics() {
       .filter((n) => Number.isFinite(n)) as number[];
     if (!nums.length) return null;
     return nums.reduce((a, b) => a + b, 0);
+  };
+
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+
+  const calcWeightedPct = (
+    bi: any,
+    items: Array<{ prefix: string; co: number; weight: number }>
+  ): number | null => {
+    if (!bi || typeof bi !== 'object') return null;
+    let maxW = 0;
+    let score = 0;
+    let hasAny = false;
+
+    for (const it of items) {
+      const w = Number(it.weight) || 0;
+      if (w <= 0) continue;
+      maxW += w;
+
+      const vRaw = bi[`${it.prefix}_co${it.co}`];
+      const mxRaw = bi[`${it.prefix}_co${it.co}_max`];
+      const v = vRaw == null || vRaw === '' ? null : Number(vRaw);
+      const mx = mxRaw == null || mxRaw === '' ? null : Number(mxRaw);
+      if (v == null || !Number.isFinite(v) || mx == null || !Number.isFinite(mx) || mx <= 0) {
+        continue;
+      }
+      hasAny = true;
+      score += (v / mx) * w;
+    }
+
+    if (!maxW) return null;
+    if (!hasAny) return null;
+    return round2((score / maxW) * 100);
+  };
+
+  const internalPctForView = (
+    classType: string,
+    enabledSet: Set<string>,
+    bi: any,
+    view: 'cycle1' | 'cycle2' | 'model'
+  ): number | null => {
+    // Internal Mark page weights (default theory-like mapping)
+    const W = {
+      ssa: 1.5,
+      cia: 3.0,
+      fa: 2.5,
+    };
+    const ME = { co1: 2.0, co2: 2.0, co3: 2.0, co4: 2.0, co5: 4.0 };
+
+    const ct = normalizeClassType(classType);
+    const isSpecial = ct === 'SPECIAL' && enabledSet.size > 0;
+    const allow = (k: string) => (!isSpecial ? true : enabledSet.has(String(k || '').trim().toLowerCase()));
+
+    const fa1 = ct === 'TCPR' || ct === 'PROJECT' ? 'review1' : 'formative1';
+    const fa2 = ct === 'TCPR' || ct === 'PROJECT' ? 'review2' : 'formative2';
+
+    if (view === 'cycle1') {
+      if (ct === 'LAB' || ct === 'PRACTICAL') {
+        return calcWeightedPct(bi, [
+          { prefix: 'cia1', co: 1, weight: W.cia },
+          { prefix: 'cia1', co: 2, weight: W.cia },
+        ]);
+      }
+      if (ct === 'PROJECT') {
+        return calcWeightedPct(bi, [
+          { prefix: 'review1', co: 1, weight: W.fa },
+          { prefix: 'review1', co: 2, weight: W.fa },
+        ]);
+      }
+      const items: Array<{ prefix: string; co: number; weight: number }> = [];
+      if (allow('ssa1')) {
+        items.push({ prefix: 'ssa1', co: 1, weight: W.ssa }, { prefix: 'ssa1', co: 2, weight: W.ssa });
+      }
+      if (allow('cia1')) {
+        items.push({ prefix: 'cia1', co: 1, weight: W.cia }, { prefix: 'cia1', co: 2, weight: W.cia });
+      }
+      if (allow('formative1')) {
+        items.push({ prefix: fa1, co: 1, weight: W.fa }, { prefix: fa1, co: 2, weight: W.fa });
+      }
+      return calcWeightedPct(bi, items);
+    }
+
+    if (view === 'cycle2') {
+      if (ct === 'LAB' || ct === 'PRACTICAL') {
+        return calcWeightedPct(bi, [
+          { prefix: 'cia2', co: 3, weight: W.cia },
+          { prefix: 'cia2', co: 4, weight: W.cia },
+        ]);
+      }
+      if (ct === 'PROJECT') {
+        return calcWeightedPct(bi, [
+          { prefix: 'review2', co: 3, weight: W.fa },
+          { prefix: 'review2', co: 4, weight: W.fa },
+        ]);
+      }
+      const items: Array<{ prefix: string; co: number; weight: number }> = [];
+      if (allow('ssa2')) {
+        items.push({ prefix: 'ssa2', co: 3, weight: W.ssa }, { prefix: 'ssa2', co: 4, weight: W.ssa });
+      }
+      if (allow('cia2')) {
+        items.push({ prefix: 'cia2', co: 3, weight: W.cia }, { prefix: 'cia2', co: 4, weight: W.cia });
+      }
+      if (allow('formative2')) {
+        items.push({ prefix: fa2, co: 3, weight: W.fa }, { prefix: fa2, co: 4, weight: W.fa });
+      }
+      return calcWeightedPct(bi, items);
+    }
+
+    // MODEL: BI view currently does not expose ME per-CO columns; keep null (UI shows )
+    // If BI adds me_co1..me_co5 in future, we can compute using ME weights.
+    return null;
   };
 
   const renderAssessmentWithCOs = (label: string, mainValue: any, biData: any, biPrefix: string, cqiPrefix: string | null) => {
@@ -163,14 +274,20 @@ export default function StudentAcademics() {
             {courses.map((c: any) => {
               const m = c.marks || {};
               const bi = m.bi || {};
-              const ct = String(c.class_type || '').toUpperCase();
-              const internal = m.internal || {};
-              const internalNoModel = sumNums(
-                internal.cycle1_total ?? internal.cycle1,
-                internal.cycle2_total ?? internal.cycle2
+              const ct = normalizeClassType(c.class_type);
+              const enabledSet = new Set<string>(
+                (Array.isArray(c.enabled_assessments) ? c.enabled_assessments : [])
+                  .map((x: any) => String(x || '').trim().toLowerCase())
+                  .filter(Boolean)
               );
-              const totalInternal = internal.total ?? sumNums(internalNoModel, m.model ?? m.model_exam);
-              const internalMax = internal.max_total;
+              const isSpecial = ct === 'SPECIAL' && enabledSet.size > 0;
+              const allow = (k: string) => (!isSpecial ? true : enabledSet.has(String(k || '').trim().toLowerCase()));
+              const modelRaw = m.model ?? m.model_exam;
+              const modelPctFallback =
+                activeView === 'model' && modelRaw != null && modelRaw !== '' && Number.isFinite(Number(modelRaw))
+                  ? round2(Number(modelRaw))
+                  : null;
+              const internalPct = internalPctForView(ct, enabledSet, bi, activeView) ?? modelPctFallback;
 
               // Collect the assessments based on class type
               let c1Items: any[] = [];
@@ -182,9 +299,9 @@ export default function StudentAcademics() {
                 c2Items = [{ label: 'CIA 2 LAB', val: m.cia2, prefix: 'cia2', cqiPrefix: 'cqi_c2' }];
                 modelItems = [{ label: 'MODEL LAB', val: m.model ?? m.model_exam, prefix: 'model' }];
               } else if (ct === 'PRACTICAL') {
-                c1Items = [{ label: 'CIA 1 Review', val: m.cia1, prefix: 'cia1', cqiPrefix: 'cqi_c1' }];
-                c2Items = [{ label: 'CIA 2 Review', val: m.cia2, prefix: 'cia2', cqiPrefix: 'cqi_c2' }];
-                modelItems = [{ label: 'MODEL Review', val: m.model ?? m.model_exam, prefix: 'model' }];
+                c1Items = [{ label: 'CIA 1', val: m.cia1, prefix: 'cia1', cqiPrefix: 'cqi_c1' }];
+                c2Items = [{ label: 'CIA 2', val: m.cia2, prefix: 'cia2', cqiPrefix: 'cqi_c2' }];
+                modelItems = [{ label: 'MODEL', val: m.model ?? m.model_exam, prefix: 'model' }];
               } else if (ct === 'PROJECT') {
                 c1Items = [{ label: 'Review 1', val: m.review1, prefix: 'review1', cqiPrefix: 'cqi_c1' }];
                 c2Items = [{ label: 'Review 2', val: m.review2, prefix: 'review2', cqiPrefix: 'cqi_c2' }];
@@ -213,6 +330,19 @@ export default function StudentAcademics() {
                   { label: 'CIA 2', val: m.cia2, prefix: 'cia2', cqiPrefix: 'cqi_c2' }
                 ];
                 modelItems = [{ label: 'Model Exam', val: m.model ?? m.model_exam, prefix: 'model' }];
+              } else if (isSpecial) {
+                // SPECIAL: only the enabled subset of SSA/CIA/Formative and no MODEL
+                c1Items = [
+                  ...(allow('ssa1') ? [{ label: 'SSA 1', val: m.ssa1, prefix: 'ssa1', cqiPrefix: 'cqi_c1' }] : []),
+                  ...(allow('formative1') ? [{ label: 'Formative 1', val: m.formative1, prefix: 'formative1', cqiPrefix: 'cqi_c1' }] : []),
+                  ...(allow('cia1') ? [{ label: 'CIA 1', val: m.cia1, prefix: 'cia1', cqiPrefix: 'cqi_c1' }] : []),
+                ];
+                c2Items = [
+                  ...(allow('ssa2') ? [{ label: 'SSA 2', val: m.ssa2, prefix: 'ssa2', cqiPrefix: 'cqi_c2' }] : []),
+                  ...(allow('formative2') ? [{ label: 'Formative 2', val: m.formative2, prefix: 'formative2', cqiPrefix: 'cqi_c2' }] : []),
+                  ...(allow('cia2') ? [{ label: 'CIA 2', val: m.cia2, prefix: 'cia2', cqiPrefix: 'cqi_c2' }] : []),
+                ];
+                modelItems = [];
               } else {
                 c1Items = [
                   { label: 'SSA 1', val: m.ssa1, prefix: 'ssa1', cqiPrefix: 'cqi_c1' },
@@ -249,12 +379,12 @@ export default function StudentAcademics() {
                     <div className="flex flex-wrap items-center gap-2 mb-4">
                       <div className="px-3 py-1.5 rounded-lg bg-gray-50 border border-gray-200">
                         <span className="text-[11px] uppercase tracking-wider text-gray-500 font-bold mr-2">Internal</span>
-                        <span className="text-sm font-extrabold text-gray-900">{fmt(internalNoModel)}</span>
+                        <span className="text-sm font-extrabold text-gray-900">{internalPct == null ? '—' : `${fmt(internalPct)}%`}</span>
                       </div>
                       <div className="px-3 py-1.5 rounded-lg bg-gray-50 border border-gray-200">
                         <span className="text-[11px] uppercase tracking-wider text-gray-500 font-bold mr-2">Total</span>
                         <span className="text-sm font-extrabold text-gray-900">
-                          {fmt(totalInternal)}{internalMax != null && internalMax !== '' ? ` / ${fmt(internalMax)}` : ''}
+                          {internalPct == null ? '— / 100' : `${fmt(internalPct)} / 100`}
                         </span>
                       </div>
                     </div>
