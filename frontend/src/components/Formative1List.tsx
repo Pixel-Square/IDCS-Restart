@@ -32,10 +32,13 @@ import { ModalPortal } from './ModalPortal';
 import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
 import { useMarkEntryEditRequestsEnabled } from '../utils/requestControl';
 import { normalizeRegisterNo, registerNoKeys } from '../utils/excelImport';
+<<<<<<< HEAD
 import { clearLocalDraftCache } from '../utils/obeDraftCache';
+=======
+import { getApiBase } from '../services/apiBase';
+>>>>>>> 3b582c30c626f1af97739db7229424129dd6b6ba
 
-const DEFAULT_API_BASE = 'https://db.krgi.co.in';
-const API_BASE = import.meta.env.VITE_API_BASE || (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://localhost:8000' : DEFAULT_API_BASE);
+const API_BASE = getApiBase();
 
 function authHeaders(): Record<string, string> {
   const token = window.localStorage.getItem('access');
@@ -289,7 +292,9 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
   }>(null);
 
   const isPublished = Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published);
-  const markManagerLocked = skipMarkManager ? true : Boolean(sheet.markManagerLocked);
+  // Auto-unlock if user has already confirmed Mark Manager (snapshot exists) or started entering marks
+  const autoUnlockMarkManager = Boolean(sheet.markManagerSnapshot != null) || Object.keys(sheet.rowsByStudentId || {}).length > 0;
+  const markManagerLocked = skipMarkManager || autoUnlockMarkManager ? true : Boolean(sheet.markManagerLocked);
 
   // Restore publishedAt from backend when markLock indicates the table was published.
   // Avoid gating on `!publishedAt` so it still updates after refresh/poll.
@@ -1461,6 +1466,10 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
       const skill2Col = findCol((h) => h.startsWith('skill 2') || h.startsWith('skill2'));
       const att1Col = findCol((h) => h.startsWith('attitude 1') || h.startsWith('att1') || h.startsWith('attitude1'));
       const att2Col = findCol((h) => h.startsWith('attitude 2') || h.startsWith('att2') || h.startsWith('attitude2'));
+      // Alternate templates provide totals as Q1 (10) and Q2 (10).
+      // Q1 maps to Skill (split into 5 + 5), Q2 maps to Attitude (split into 5 + 5).
+      const q1Col = findCol((h) => h.startsWith('q1'));
+      const q2Col = findCol((h) => h.startsWith('q2'));
       const statusCol = findCol((h) => h === 'status' || h.includes('status'));
 
       if (regCol < 0) throw new Error('Could not find “Register No” column.');
@@ -1478,14 +1487,35 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
         return clamp(Number(n), 1, MAX_PART);
       };
 
+      const partOrBlank = (n: number): number | '' => {
+        if (!Number.isFinite(n)) return '';
+        if (n <= 0) return '';
+        return clamp(n, 1, MAX_PART);
+      };
+
+      const splitTotal10 = (n: number | null): { a: number | ''; b: number | '' } | null => {
+        if (n == null || !Number.isFinite(n)) return null;
+        const total = Math.max(0, Math.min(10, n));
+        const first = Math.max(0, Math.min(5, total));
+        const second = Math.max(0, Math.min(5, total - first));
+        return { a: partOrBlank(first), b: partOrBlank(second) };
+      };
+
       setSheet((prev) => {
         const nextRowsByStudentId: Record<string, F1RowState> = { ...prev.rowsByStudentId };
 
         for (let i = 1; i < rows.length; i++) {
           const row = rows[i] || [];
-          const reg = normalizeRegisterNo(row[regCol]);
-          if (!reg) continue;
-          const studentId = regToStudentId.get(reg);
+          const regKeys = registerNoKeys(row[regCol]);
+          if (!regKeys.length) continue;
+          let studentId: number | undefined;
+          for (const k of regKeys) {
+            const id = regToStudentId.get(k);
+            if (id) {
+              studentId = id;
+              break;
+            }
+          }
           if (!studentId) continue;
 
           const statusRaw = statusCol >= 0 ? String(row[statusCol] ?? '') : '';
@@ -1499,10 +1529,29 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
             continue;
           }
 
-          const skill1 = skill1Col >= 0 ? normalizePart(readFiniteNumber(row[skill1Col])) : existing.skill1;
-          const skill2 = skill2Col >= 0 ? normalizePart(readFiniteNumber(row[skill2Col])) : existing.skill2;
-          const att1 = att1Col >= 0 ? normalizePart(readFiniteNumber(row[att1Col])) : existing.att1;
-          const att2 = att2Col >= 0 ? normalizePart(readFiniteNumber(row[att2Col])) : existing.att2;
+          let skill1 = skill1Col >= 0 ? normalizePart(readFiniteNumber(row[skill1Col])) : existing.skill1;
+          let skill2 = skill2Col >= 0 ? normalizePart(readFiniteNumber(row[skill2Col])) : existing.skill2;
+          let att1 = att1Col >= 0 ? normalizePart(readFiniteNumber(row[att1Col])) : existing.att1;
+          let att2 = att2Col >= 0 ? normalizePart(readFiniteNumber(row[att2Col])) : existing.att2;
+
+          // If the template uses Q1/Q2 totals (10 each), split into two parts (5 + 5).
+          // Only apply when explicit Skill/Attitude columns are not present.
+          if (skill1Col < 0 && skill2Col < 0 && q1Col >= 0) {
+            const q1 = readFiniteNumber(row[q1Col]);
+            const split = splitTotal10(q1);
+            if (split) {
+              skill1 = split.a;
+              skill2 = split.b;
+            }
+          }
+          if (att1Col < 0 && att2Col < 0 && q2Col >= 0) {
+            const q2 = readFiniteNumber(row[q2Col]);
+            const split = splitTotal10(q2);
+            if (split) {
+              att1 = split.a;
+              att2 = split.b;
+            }
+          }
 
           nextRowsByStudentId[String(studentId)] = { ...existing, studentId, skill1, skill2, att1, att2 };
         }

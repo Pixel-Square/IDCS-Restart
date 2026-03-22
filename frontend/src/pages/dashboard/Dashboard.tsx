@@ -13,6 +13,15 @@ export default function DashboardPage() {
     // Use cached user data instead of making API call
     const cachedUser = getCachedMe();
     setUser(cachedUser);
+
+    const onMeUpdated = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      if (!detail) return;
+      setUser(detail);
+    };
+
+    window.addEventListener('idcs:me-updated', onMeUpdated as EventListener);
+    return () => window.removeEventListener('idcs:me-updated', onMeUpdated as EventListener);
   }, []);
 
   return (

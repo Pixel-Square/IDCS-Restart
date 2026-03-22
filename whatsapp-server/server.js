@@ -49,7 +49,8 @@ const API_KEYS = Array.from(
 );
 
 if (API_KEYS.length === 0) {
-  console.warn('[WA] WARNING: No API key is set (WA_API_KEY / OBE_WHATSAPP_API_KEY). Authenticated endpoints are unprotected!');
+  console.error('[WA] ERROR: No API key configured (WA_API_KEY / OBE_WHATSAPP_API_KEY). '
+    + 'Authenticated endpoints will be blocked until a key is set in the environment.');
 }
 
 // ─────────────────────────────────────────────
@@ -269,7 +270,12 @@ app.use((req, _res, next) => {
 
 // ─── API key middleware ───────────────────────
 function requireApiKey(req, res, next) {
-  if (API_KEYS.length === 0) return next(); // not configured → allow all (dev only)
+  if (API_KEYS.length === 0) {
+    return res.status(503).json({
+      ok: false,
+      detail: 'Gateway not configured: set WA_API_KEY or OBE_WHATSAPP_API_KEY in the server environment.',
+    });
+  }
   const key =
     req.headers['x-api-key'] ||
     (req.body && req.body.api_key) ||

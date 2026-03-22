@@ -75,3 +75,26 @@ export function showConfirm(message: string): Promise<boolean> {
     })
   })
 }
+
+/**
+ * Alias so components can reference the dialog type with a clearer name.
+ */
+export type DialogType = AlertType
+
+/**
+ * Register separate alert and confirm handlers (used by AppDialog).
+ * Internally wires up `_registerDialogSetter` so that `showAlert` and
+ * `showConfirm` both route through the same registered handlers.
+ */
+export function registerDialogHandlers(
+  alertHandler: (message: string, type?: AlertType) => Promise<void>,
+  confirmHandler: (message: string) => Promise<boolean>,
+): void {
+  _registerDialogSetter((payload) => {
+    if (payload.variant === 'confirm') {
+      confirmHandler(payload.message).then(payload.resolve)
+    } else {
+      alertHandler(payload.message, payload.type).then(() => payload.resolve(true))
+    }
+  })
+}

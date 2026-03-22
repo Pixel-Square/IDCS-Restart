@@ -2775,7 +2775,6 @@ export default function LabCourseMarksEntry({
       const n = Number(v);
       return Number.isFinite(n) ? n : null;
     };
-    const normalizeReg = (v: any) => normalizeRegisterNo(v);
     const normalizeHeaderKey = (v: any) =>
       String(v ?? '')
         .trim()
@@ -2852,9 +2851,16 @@ export default function LabCourseMarksEntry({
 
         for (let r = 1; r < rows.length; r++) {
           const line = rows[r] || [];
-          const reg = normalizeReg(line[regIdx]);
-          if (!reg) continue;
-          const student = studentByReg.get(reg);
+          const regKeys = registerNoKeys(line[regIdx]);
+          if (!regKeys.length) continue;
+          let student: Student | undefined;
+          for (const k of regKeys) {
+            const s = studentByReg.get(k);
+            if (s) {
+              student = s;
+              break;
+            }
+          }
           if (!student) continue;
 
           const sid = String(student.id);

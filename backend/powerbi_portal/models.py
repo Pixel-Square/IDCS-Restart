@@ -3,6 +3,7 @@ from __future__ import annotations
 from django.conf import settings
 from django.db import models
 from django.db.models import Q
+from erp.crypto_utils import decrypt_secret, encrypt_secret
 
 
 class Sheet(models.Model):
@@ -53,6 +54,8 @@ class SheetColumn(models.Model):
 
 
 class Room(models.Model):
+    _SENSITIVE_FIELDS = {'sql_server_password', 'postgres_password'}
+
     name = models.CharField(max_length=128)
     leader = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -70,7 +73,7 @@ class Room(models.Model):
     sql_server_port = models.PositiveIntegerField(null=True, blank=True)
     sql_server_database = models.CharField(max_length=255, blank=True, default='')
     sql_server_username = models.CharField(max_length=255, blank=True, default='')
-    sql_server_password = models.CharField(max_length=255, blank=True, default='')
+    sql_server_password = models.TextField(blank=True, default='')
 
     # Optional: per-room PostgreSQL connection details (for Power BI).
     # NOTE: Storing passwords in the DB is sensitive; restrict access in views/templates.
@@ -78,7 +81,7 @@ class Room(models.Model):
     postgres_port = models.PositiveIntegerField(null=True, blank=True)
     postgres_database = models.CharField(max_length=255, blank=True, default='')
     postgres_username = models.CharField(max_length=255, blank=True, default='')
-    postgres_password = models.CharField(max_length=255, blank=True, default='')
+    postgres_password = models.TextField(blank=True, default='')
 
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -86,6 +89,17 @@ class Room(models.Model):
         verbose_name = 'PowerBI Room'
         verbose_name_plural = 'PowerBI Rooms'
         ordering = ('-created_at',)
+
+    def __setattr__(self, name, value):
+        if name in self._SENSITIVE_FIELDS and isinstance(value, str):
+            value = encrypt_secret(value)
+        super().__setattr__(name, value)
+
+    def __getattribute__(self, name):
+        value = super().__getattribute__(name)
+        if name in {'sql_server_password', 'postgres_password'} and isinstance(value, str):
+            return decrypt_secret(value)
+        return value
 
     def __str__(self) -> str:
         return self.name

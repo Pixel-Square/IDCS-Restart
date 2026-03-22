@@ -6,7 +6,7 @@
 
 {# Inject custom admin CSS into the head #}
 {% block extrahead %}
-  <link rel="stylesheet" type="text/css" href="{% static 'css/admin_custom.css' %}">
+  <link rel="stylesheet" type="text/css" href="{% static 'css/admin_custom.css' %}?v=20260315-2">
   <script>
     // Fix for Django admin popup error: "Cannot read properties of null (reading 'dismissAddRelatedObjectPopup')"
     // This happens when the popup tries to access the parent window but it's null

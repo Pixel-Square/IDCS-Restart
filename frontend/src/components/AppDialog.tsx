@@ -8,9 +8,9 @@ import {
   X,
 } from 'lucide-react';
 import {
-  registerDialogHandlers,
+  _registerDialogSetter,
   showAlert,
-  DialogType,
+  AlertType,
 } from '../utils/dialog';
 
 // ─── types ────────────────────────────────────────────────────────────────────
@@ -20,7 +20,7 @@ type DialogMode = 'alert' | 'confirm';
 interface DialogEntry {
   id: number;
   message: string;
-  type: DialogType;
+  type: AlertType;
   mode: DialogMode;
   resolve: (value: boolean) => void;
   visible: boolean;
@@ -30,7 +30,7 @@ interface DialogEntry {
 
 let _idCounter = 0;
 
-const ICON: Record<DialogType, { el: React.ElementType; color: string; bg: string; ring: string }> = {
+const ICON: Record<AlertType, { el: React.ElementType; color: string; bg: string; ring: string }> = {
   success: { el: CheckCircle,    color: '#16a34a', bg: '#f0fdf4', ring: '#bbf7d0' },
   warning: { el: AlertTriangle,  color: '#d97706', bg: '#fffbeb', ring: '#fde68a' },
   error:   { el: XCircle,        color: '#dc2626', bg: '#fef2f2', ring: '#fecaca' },
@@ -60,7 +60,7 @@ export default function AppDialog() {
 
   /** Push a new dialog; trigger transition on next tick. */
   const openDialog = useCallback(
-    (message: string, type: DialogType, mode: DialogMode): Promise<boolean> =>
+    (message: string, type: AlertType, mode: DialogMode): Promise<boolean> =>
       new Promise<boolean>((resolve) => {
         const id = ++_idCounter;
         setDialogs((prev) => [
@@ -80,12 +80,14 @@ export default function AppDialog() {
   );
 
   useEffect(() => {
-    // Register alert / confirm handlers
-    registerDialogHandlers(
-      (message, type = 'info') =>
-        openDialog(message, type, 'alert').then(() => undefined),
-      (message) => openDialog(message, 'info', 'confirm'),
-    );
+    // Register the global dialog setter used by showAlert/showConfirm
+    _registerDialogSetter((payload) => {
+      if (payload.variant === 'confirm') {
+        openDialog(payload.message, payload.type ?? 'warning', 'confirm').then((ok) => payload.resolve(ok));
+        return;
+      }
+      openDialog(payload.message, payload.type ?? 'info', 'alert').then(() => payload.resolve(true));
+    });
 
     // Override window.alert so existing call sites are automatically upgraded
     const originalAlert = (window as any)._originalAlert ?? window.alert;

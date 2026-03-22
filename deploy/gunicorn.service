@@ -8,7 +8,7 @@ Group=www-data
 UMask=0007
 WorkingDirectory=/home/iqac/IDCS-Restart/backend
 EnvironmentFile=/home/iqac/IDCS-Restart/backend/.env
-Environment=GUNICORN_WORKERS=9
+Environment=GUNICORN_WORKERS=5
 Environment=GUNICORN_THREADS=2
 Environment=GUNICORN_TIMEOUT=60
 Environment=GUNICORN_GRACEFUL_TIMEOUT=30

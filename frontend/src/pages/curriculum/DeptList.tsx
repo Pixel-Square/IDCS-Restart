@@ -108,6 +108,17 @@ export default function DeptList() {
   const userPerms = (() => {
     try { return JSON.parse(localStorage.getItem('permissions') || '[]') as string[] } catch { return [] }
   })();
+  const userRoles = (() => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem('roles') || '[]') as Array<string | { name?: string }>;
+      return Array.isArray(parsed)
+        ? parsed.map((role) => (typeof role === 'string' ? role : String(role?.name || '')))
+        : [];
+    } catch {
+      return [] as string[];
+    }
+  })();
+  const isIqac = userRoles.map((r) => String(r || '').toUpperCase()).includes('IQAC');
   const canApprove = Array.isArray(userPerms) && (userPerms.includes('curriculum.department.approve') || userPerms.includes('CURRICULUM_DEPARTMENT_APPROVE'));
   // Propagate/copy is only for users with master curriculum or all-department curriculum access
   const canPropagate = Array.isArray(userPerms) && (
@@ -326,6 +337,32 @@ export default function DeptList() {
     } finally { setSavingAll(false); }
   }
 
+  const isPendingSubject = (row: any) => {
+    const statusRaw = String(row?.approval_status ?? row?.status ?? '').toUpperCase().trim();
+    return !Boolean(row?.is_elective) && statusRaw === 'PENDING';
+  };
+  const matchesFilter = (row: any) => {
+    const rowBatchId = row?.batch?.id ?? row?.batch_id ?? null;
+    return (
+      (!selectedReg || row.regulation === selectedReg) &&
+      (!selectedSem || row.semester === selectedSem) &&
+      (!selectedBatch || rowBatchId === selectedBatch)
+    );
+  };
+  const filteredPendingRows = rows.filter((row) => isPendingSubject(row) && matchesFilter(row));
+  const filteredPendingByDepartment = filteredPendingRows.reduce((acc: Record<number, number>, row: any) => {
+    const deptId = Number(row?.department?.id || 0);
+    if (!deptId) return acc;
+    acc[deptId] = (acc[deptId] || 0) + 1;
+    return acc;
+  }, {});
+  const filteredTotalPendingCount = filteredPendingRows.length;
+  const getPendingForDepartment = (departmentId: number) => Number(filteredPendingByDepartment[departmentId] || 0);
+  const selectedDepartment = allDepartments.find((d) => d.id === currentDept) || null;
+  const selectedDepartmentLabel = selectedDepartment
+    ? (selectedDepartment.short_name || selectedDepartment.code || selectedDepartment.name || `Dept ${selectedDepartment.id}`)
+    : null;
+
   return (
     <CurriculumLayout>
       <div className="px-4 pb-6">
@@ -418,11 +455,28 @@ export default function DeptList() {
                   title={hasRows ? '' : 'No curriculum rows for this department'}
                 >
                   {displayName}
+                  {isIqac && getPendingForDepartment(dept.id) > 0 ? (
+                    <span className="ml-2 inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 text-[11px] font-semibold rounded-full bg-red-600 text-white">
+                      {getPendingForDepartment(dept.id)}
+                    </span>
+                  ) : null}
                 </button>
               );
             })}
           </div>
         </div>
+        {isIqac && selectedDepartmentLabel ? (
+          <div className="flex items-center justify-between mb-3 px-1">
+            <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+              <span>{selectedDepartmentLabel} Department</span>
+              {getPendingForDepartment(currentDept || 0) > 0 ? (
+                <span className="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 text-[11px] font-semibold rounded-full bg-red-600 text-white">
+                  {getPendingForDepartment(currentDept || 0)}
+                </span>
+              ) : null}
+            </h3>
+          </div>
+        ) : null}
         <div className="flex items-center justify-between mb-4">
           <div />
           <div className="flex items-center gap-2">

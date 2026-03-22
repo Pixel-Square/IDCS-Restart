@@ -40,3 +40,29 @@ class IsIQACOrReadOnly(permissions.BasePermission):
             pass
 
         return False
+
+
+class IsIQACOnly(permissions.BasePermission):
+    """Allow access only to authenticated IQAC users (or superuser)."""
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        if user.is_superuser:
+            return True
+
+        try:
+            if user.groups.filter(name='IQAC').exists():
+                return True
+        except Exception:
+            pass
+
+        try:
+            role_names = {str(r.name or '').strip().upper() for r in user.roles.all()}
+            if 'IQAC' in role_names:
+                return True
+        except Exception:
+            pass
+
+        return False

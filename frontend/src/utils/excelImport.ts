@@ -38,6 +38,17 @@ export function normalizeRegisterNo(value: unknown): string {
   // If Excel exports numeric-looking text with trailing .0
   if (/^\d+\.0+$/.test(s)) s = s.replace(/\.0+$/, '');
 
+  // If the cell contains a long digit run (common register format), prefer it.
+  // This prevents mismatches when Excel cells include annotations like "(L)".
+  const digitRuns = s.match(/\d+/g);
+  if (digitRuns && digitRuns.length) {
+    let longest = '';
+    for (const run of digitRuns) {
+      if (run.length > longest.length) longest = run;
+    }
+    if (longest.length >= 8) return longest;
+  }
+
   // Normalize: keep only alphanumerics so "1142 1002" / "1142-1002" / etc match.
   s = s.replace(/[^0-9A-Za-z]/g, '');
 

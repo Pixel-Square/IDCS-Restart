@@ -40,9 +40,19 @@ class RequestTemplate(models.Model):
     #   "allotment_per_role": {"STAFF": 6, "HOD": 10},  // Initial balance for deduct action (optional)
     #   "from_date": "2026-06-01",  // REQUIRED: Start date for reset period (e.g., academic year start)
     #   "to_date": "2027-05-31",  // REQUIRED: End date for reset period (e.g., academic year end)
+    #   "split_date": "2026-12-01",  // OPTIONAL: Mid-period split date for deduct forms
     #   "overdraft_name": "LOP",  // Loss of Pay tracking field name
     #   "lop_non_reset": true,  // If true, LOP accumulates indefinitely (recommended: true)
     #   "attendance_status": "CL",  // Status code for attendance register
+    #   
+    #   // Split Date Logic (for deduct action only):
+    #   // - If split_date is set, allotment is divided into two equal halves
+    #   // - From from_date to split_date: Staff gets first half (e.g., 12 total → 6 available)
+    #   // - On/after split_date: Second half is added to current balance
+    #   // - Example: 12 CL, split on July 1
+    #   //   * Jan 1-Jun 30: 6 CL available (if used 3, balance=3)
+    #   //   * Jul 1: +6 added to balance (balance now=9 if 3 were used)
+    #   //   * Any usage beyond available goes to LOP
     #   
     #   // LOP Logic: LOP = Total absent days - Approved deduct form days covering those dates
     #   // When staff marked absent: LOP increases automatically
@@ -51,13 +61,17 @@ class RequestTemplate(models.Model):
     #   
     #   // Reset Behavior (run: python manage.py reset_leave_balances):
     #   // - COL (earn): Resets to 0 when to_date passes
-    #   // - Deduct forms: Reset to allotment_per_role when new period starts
+    #   // - Deduct forms: Reset to allotment_per_role (or half if split_date used) at period start
     #   // - LOP: Resets to 0 when to_date passes (unless lop_non_reset=true)
+    #   // - Split allocation: Run python manage.py apply_split_allocation to add second half on split_date
     #   
-    #   "max_uses": 5,  // For neutral action: max uses per staff per period
-    #   "usage_reset_duration": "monthly",  // For neutral action: "yearly" or "monthly"
-    #   "usage_from_date": "2026-01-01",  // For neutral: optional custom usage reset period start
-    #   "usage_to_date": "2026-01-31"  // For neutral: optional custom usage reset period end
+    #   "max_uses": 5,  // DEPRECATED: Old neutral form usage limit (no longer used)
+    #   "usage_reset_duration": "monthly",  // DEPRECATED: Old neutral form reset (no longer used)
+    #   "usage_from_date": "2026-01-01",  // DEPRECATED
+    #   "usage_to_date": "2026-01-31"  // DEPRECATED
+    #   
+    #   // Note: Neutral forms now use allotment_per_role similar to deduct forms.
+    #   // Usage decrements from allotment (12 → 11 → 10 ... → 0), overflow goes to LOP.
     # }
     leave_policy = models.JSONField(
         default=dict,

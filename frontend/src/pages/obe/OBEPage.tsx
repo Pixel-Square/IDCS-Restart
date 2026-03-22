@@ -26,24 +26,12 @@ import {
   fetchDraft,
 } from '../../services/obe';
 import { fetchTeachingAssignmentRoster } from '../../services/roster';
+import { getApiBase, getApiBaseCandidates } from '../../services/apiBase';
 
-function apiBase() {
-  const fromEnv = import.meta.env.VITE_API_BASE;
-  if (fromEnv) return String(fromEnv).replace(/\/+$/, '');
-
-  // Default to same-origin so `/api/...` works behind nginx/proxy setups.
-  if (typeof window !== 'undefined' && window.location?.origin) {
-    const host = String(window.location.hostname || '').trim().toLowerCase();
-    if (host === 'localhost' || host === '127.0.0.1') return 'http://localhost:8000';
-    return String(window.location.origin).replace(/\/+$/, '');
-  }
-
-  return 'https://db.krgi.co.in';
-}
-
-const API_BASE = apiBase();
-const PRIMARY_API_BASE = API_BASE;
-const FALLBACK_API_BASE = 'http://localhost:8000';
+const API_BASE = getApiBase();
+const API_BASE_CANDIDATES = getApiBaseCandidates();
+const PRIMARY_API_BASE = API_BASE_CANDIDATES[0] || API_BASE;
+const FALLBACK_API_BASE = API_BASE_CANDIDATES[1] || null;
 
 async function fetchWithFallback(url, options) {
   try {
@@ -51,16 +39,9 @@ async function fetchWithFallback(url, options) {
     if (!res.ok) throw new Error('Primary failed');
     return res;
   } catch (e) {
-    // Only attempt the http://localhost fallback when the frontend itself
-    // is running on a localhost host. Browsers block requests from secure
-    // public origins to loopback/private addresses (Private Network Access),
-    // so avoid hitting the fallback when served from https production sites.
-    if (typeof window !== 'undefined') {
-      const h = window.location.hostname;
-      if (h === 'localhost' || h === '127.0.0.1') {
-        const res = await fetch(`${FALLBACK_API_BASE}${url}`, options);
-        return res;
-      }
+    if (FALLBACK_API_BASE) {
+      const res = await fetch(`${FALLBACK_API_BASE}${url}`, options);
+      return res;
     }
     throw e;
   }

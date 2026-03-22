@@ -667,6 +667,15 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
       : questions;
     const ciaById: Record<string, any> =
       ciaSnapshot?.rowsByStudentId && typeof ciaSnapshot.rowsByStudentId === 'object' ? ciaSnapshot.rowsByStudentId : {};
+    const ciaHeaderMaxByCo: Record<CoKey, number> = emptyCoRecord(0);
+    ciaQuestions.forEach((qq, idx) => {
+      const w = effectiveCoWeightsForQuestion(ciaQuestions, idx);
+      const qMax = Number(qq.max) || 0;
+      for (const n of CO_NUMS) {
+        const k = coKey(n);
+        ciaHeaderMaxByCo[k] += qMax * (w[k] || 0);
+      }
+    });
 
     for (const s of students) {
       const total = ssaById.get(s.id) ?? null;
@@ -720,7 +729,7 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
         if (hasAny) {
           for (const n of CO_NUMS) {
             const k = coKey(n);
-            const mx = maxes.cia[k] || 0;
+            const mx = ciaHeaderMaxByCo[k] || (maxes.cia[k] || 0);
             ciaByCo[k] = mx ? clamp(sums[k], 0, mx) : null;
           }
         }
@@ -732,6 +741,7 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
         row[`ssaCo${n}`] = ssaByCo[k];
         row[`f1Co${n}`] = f1ByCo[k];
         row[`ciaCo${n}`] = ciaByCo[k];
+        row[`ciaMaxCo${n}`] = ciaHeaderMaxByCo[k] || (maxes.cia[k] || 0);
       }
       out.set(s.id, row);
     }
@@ -790,12 +800,6 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
     const ciaW = weights.cia1;
     const f1W = weights.formative1;
 
-    const maxTotalByCo: Record<CoKey, number> = emptyCoRecord(0);
-    for (const n of CO_NUMS) {
-      const k = coKey(n);
-      maxTotalByCo[k] = (maxes.ssa[k] || 0) + (maxes.cia[k] || 0) + (maxes.f1[k] || 0);
-    }
-
     return students.map((s, idx) => {
       const m = byStudentId.get(s.id);
 
@@ -805,19 +809,22 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
 
       for (const n of CO_NUMS) {
         const k = coKey(n);
+        const ciaMaxForStudent = (m as any)?.[`ciaMaxCo${n}`] ?? (maxes.cia[k] || 0);
+        const maxTotalForStudentCo =
+          (maxes.ssa[k] || 0) + ciaMaxForStudent + (maxes.f1[k] || 0);
         const coMark = weightedBlendMark({
           ssaMark: (m as any)?.[`ssaCo${n}`] ?? null,
           ciaMark: (m as any)?.[`ciaCo${n}`] ?? null,
           f1Mark: (m as any)?.[`f1Co${n}`] ?? null,
           ssaMax: maxes.ssa[k] || 0,
-          ciaMax: maxes.cia[k] || 0,
+          ciaMax: ciaMaxForStudent,
           f1Max: maxes.f1[k] || 0,
           ssaW,
           ciaW,
           f1W,
         });
         coMarkByCo[k] = coMark;
-        const denom = maxTotalByCo[k] || 0;
+        const denom = maxTotalForStudentCo || 0;
         pt3ByCo[k] = coMark == null || !denom ? null : round2((coMark / denom) * 3);
         flagByCo[k] = typeof pt3ByCo[k] === 'number' && (pt3ByCo[k] as number) < THRESHOLD_3PT;
       }

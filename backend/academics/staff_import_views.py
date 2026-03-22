@@ -55,13 +55,13 @@ class StaffImportTemplateDownloadView(APIView):
             ws.title = "Staff Import"
             
             # Headers
-            headers = ['Staff ID', 'Department', 'Name', 'Designation', 'Email', 'User Roles', 'Status']
+            headers = ['Staff ID', 'Department', 'Name', 'Designation', 'Email', 'Password', 'User Roles', 'Status']
             ws.append(headers)
             
             # Sample row
             sample_dept = dept_names[0] if dept_names else 'CSE'
             sample_role = role_names[0] if role_names else 'STAFF'
-            ws.append(['STF001', sample_dept, 'John Doe', 'Assistant Professor', 'john.doe@example.com', sample_role, 'ACTIVE'])
+            ws.append(['STF001', sample_dept, 'John Doe', 'Assistant Professor', 'john.doe@example.com', 'ChangeMe#2026', sample_role, 'ACTIVE'])
             
             # Add data validation (dropdown) for department column (column B)
             if dept_names:
@@ -75,7 +75,7 @@ class StaffImportTemplateDownloadView(APIView):
                 ws.add_data_validation(dv_dept)
                 dv_dept.add('B2:B1000')
             
-            # Add data validation (dropdown) for roles column (column F)
+            # Add data validation (dropdown) for roles column (column G)
             if role_names:
                 roles_list = ','.join(role_names)
                 dv_roles = DataValidation(type="list", formula1=f'"{roles_list}"', allow_blank=True)
@@ -85,9 +85,9 @@ class StaffImportTemplateDownloadView(APIView):
                 dv_roles.promptTitle = 'User Roles'
                 
                 ws.add_data_validation(dv_roles)
-                dv_roles.add('F2:F1000')
+                dv_roles.add('G2:G1000')
             
-            # Add data validation (dropdown) for status column (column G)
+            # Add data validation (dropdown) for status column (column H)
             if status_values:
                 status_list = ','.join(status_values)
                 dv_status = DataValidation(type="list", formula1=f'"{status_list}"', allow_blank=False)
@@ -97,7 +97,7 @@ class StaffImportTemplateDownloadView(APIView):
                 dv_status.promptTitle = 'Status'
                 
                 ws.add_data_validation(dv_status)
-                dv_status.add('G2:G1000')
+                dv_status.add('H2:H1000')
             
             # Adjust column widths
             ws.column_dimensions['A'].width = 15  # Staff ID
@@ -105,8 +105,9 @@ class StaffImportTemplateDownloadView(APIView):
             ws.column_dimensions['C'].width = 25  # Name
             ws.column_dimensions['D'].width = 25  # Designation
             ws.column_dimensions['E'].width = 30  # Email
-            ws.column_dimensions['F'].width = 30  # User Roles
-            ws.column_dimensions['G'].width = 12  # Status
+            ws.column_dimensions['F'].width = 20  # Password
+            ws.column_dimensions['G'].width = 30  # User Roles
+            ws.column_dimensions['H'].width = 12  # Status
             
             # Save to bytes
             from io import BytesIO
@@ -209,6 +210,7 @@ class StaffBulkImportView(APIView):
                         full_name = row.get('name', '').strip()
                         designation = row.get('designation', '').strip()
                         email = row.get('email', '').strip()
+                        password = row.get('password', '').strip()
                         roles_str = row.get('user roles', row.get('roles', '')).strip()
                         status_value = row.get('status', 'ACTIVE').strip().upper()
                         
@@ -248,14 +250,16 @@ class StaffBulkImportView(APIView):
                             user_obj.save()
                         else:
                             # Create new user
+                            if not password:
+                                errors.append(f'Row {idx}: Password is required for new users')
+                                continue
                             user_obj = User.objects.create(
                                 username=staff_id,
                                 first_name=first_name,
                                 last_name=last_name,
                                 email=email if email else '',
                             )
-                            # Set a default password (should be changed by user)
-                            user_obj.set_password('changeme123')
+                            user_obj.set_password(password)
                             user_obj.save()
                         
                         # Find department

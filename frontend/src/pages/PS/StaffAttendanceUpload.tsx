@@ -20,7 +20,7 @@ interface PreviewRow {
   today_morning_in: string | null;
   today_evening_out: string | null;
   today_raw: string;
-  yesterday_date: string;
+  yesterday_date: string | null;
   yesterday_morning_in: string | null;
   yesterday_evening_out: string | null;
   yesterday_raw: string;
@@ -44,6 +44,15 @@ interface Holiday {
   notes: string;
   created_by_name: string;
   created_at: string;
+  department_ids: number[];
+  departments_info: { id: number; name: string; code: string; short_name: string }[];
+}
+
+interface Department {
+  id: number;
+  code: string;
+  name: string;
+  short_name: string;
 }
 
 const StaffAttendanceUpload: React.FC = () => {
@@ -76,6 +85,8 @@ const StaffAttendanceUpload: React.FC = () => {
   const [holidayName, setHolidayName] = useState('');
   const [holidayNotes, setHolidayNotes] = useState('');
   const [holidayError, setHolidayError] = useState<string | null>(null);
+  const [allDepartments, setAllDepartments] = useState<Department[]>([]);
+  const [holidayDeptIds, setHolidayDeptIds] = useState<number[]>([]);
 
   // Sunday management states
   const [sundayMonth, setSundayMonth] = useState(new Date().getMonth() + 1);
@@ -92,7 +103,17 @@ const StaffAttendanceUpload: React.FC = () => {
   useEffect(() => {
     fetchHolidays();
     fetchAttendanceSettings();
+    fetchDepartments();
   }, []);
+
+  const fetchDepartments = async () => {
+    try {
+      const response = await apiClient.get(`${getApiBase()}/api/staff-attendance/holidays/departments/`);
+      setAllDepartments(response.data);
+    } catch (err: any) {
+      console.error('Failed to fetch departments:', err);
+    }
+  };
 
   const fetchHolidays = async () => {
     try {
@@ -116,13 +137,15 @@ const StaffAttendanceUpload: React.FC = () => {
       await apiClient.post(`${getApiBase()}/api/staff-attendance/holidays/`, {
         date: holidayDate,
         name: holidayName,
-        notes: holidayNotes
+        notes: holidayNotes,
+        department_ids: holidayDeptIds,
       });
 
       // Reset form and refresh list
       setHolidayDate('');
       setHolidayName('');
       setHolidayNotes('');
+      setHolidayDeptIds([]);
       setShowHolidayForm(false);
       setHolidayError(null);
       fetchHolidays();
@@ -982,6 +1005,41 @@ const StaffAttendanceUpload: React.FC = () => {
                   />
                 </div>
 
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Department Scope
+                    <span className="ml-1 text-xs text-gray-500 font-normal">(leave all unchecked for a college-wide holiday)</span>
+                  </label>
+                  {allDepartments.length === 0 ? (
+                    <p className="text-xs text-gray-400">Loading departments...</p>
+                  ) : (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-44 overflow-y-auto border border-gray-200 rounded-md p-2 bg-white">
+                      {allDepartments.map((dept) => (
+                        <label key={dept.id} className="flex items-center gap-1.5 cursor-pointer text-sm">
+                          <input
+                            type="checkbox"
+                            checked={holidayDeptIds.includes(dept.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setHolidayDeptIds(prev => [...prev, dept.id]);
+                              } else {
+                                setHolidayDeptIds(prev => prev.filter(id => id !== dept.id));
+                              }
+                            }}
+                            className="h-4 w-4 text-blue-600 border-gray-300 rounded"
+                          />
+                          <span className="text-gray-700" title={dept.name}>{dept.short_name || dept.code}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                  {holidayDeptIds.length > 0 && (
+                    <p className="text-xs text-blue-700 mt-1">
+                      Holiday applies to {holidayDeptIds.length} selected department{holidayDeptIds.length > 1 ? 's' : ''} only.
+                    </p>
+                  )}
+                </div>
+
                 {holidayError && (
                   <div className="text-sm text-red-600 flex items-center">
                     <AlertCircle className="h-4 w-4 mr-1" />
@@ -1003,6 +1061,7 @@ const StaffAttendanceUpload: React.FC = () => {
                       setHolidayDate('');
                       setHolidayName('');
                       setHolidayNotes('');
+                      setHolidayDeptIds([]);
                       setHolidayError(null);
                     }}
                     className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
@@ -1053,6 +1112,18 @@ const StaffAttendanceUpload: React.FC = () => {
                       </div>
                       {holiday.notes && (
                         <p className="mt-2 text-sm text-gray-600">{holiday.notes}</p>
+                      )}
+                      {/* Department scope badge */}
+                      {(holiday.departments_info?.length || 0) > 0 ? (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {holiday.departments_info.map(d => (
+                            <span key={d.id} className="inline-block bg-purple-100 text-purple-800 text-xs px-2 py-0.5 rounded">
+                              {d.short_name || d.code}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="mt-2 inline-block bg-green-100 text-green-800 text-xs px-2 py-0.5 rounded">All departments</span>
                       )}
                       <p className="mt-1 text-xs text-gray-500">
                         Added by {holiday.created_by_name} on {new Date(holiday.created_at).toLocaleDateString()}

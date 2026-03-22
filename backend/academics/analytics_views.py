@@ -1,7 +1,10 @@
+import logging
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import PermissionDenied
+
+logger = logging.getLogger(__name__)
 from django.db.models import Count, Q, Avg, F
 from django.utils import timezone
 from datetime import date, timedelta
@@ -10,6 +13,7 @@ from .models import (
     PeriodAttendanceSession,
     StudentProfile, 
     Section, 
+    Department,
     StaffProfile,
     DepartmentRole
 )
@@ -326,7 +330,6 @@ class AnalyticsFiltersView(APIView):
         if not (can_view_all or can_view_department or can_view_class):
             raise PermissionDenied('You do not have permission to view analytics')
         
-        from curriculum.models import Department
         departments = []
         sections = []
         
@@ -1553,16 +1556,10 @@ class MyClassAttendanceAnalyticsView(APIView):
             })
         
         except Exception as e:
-            # Return error details for debugging
-            import traceback
+            logger.exception('AttendanceAnalyticsView unhandled error for user=%s', getattr(request.user, 'id', None))
             return Response({
-                'error': f'Server error: {str(e)}',
+                'error': 'Server error. Please try again.',
                 'sections': [],
-                'debug': {
-                    'error_type': type(e).__name__,
-                    'traceback': traceback.format_exc(),
-                    'user_id': getattr(request, 'user', None) and getattr(request.user, 'id', None)
-                }
             }, status=500)
 
 

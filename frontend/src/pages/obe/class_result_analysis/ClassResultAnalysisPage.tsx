@@ -117,17 +117,6 @@ const PASS_MARK = 50; // percentage out of 100
 
 /* ──────────────────── HELPERS ──────────────────── */
 
-function apiBase(): string {
-  const fromEnv = (import.meta as any).env?.VITE_API_BASE;
-  if (fromEnv) return String(fromEnv).replace(/\/+$/, '');
-  if (typeof window !== 'undefined') {
-    const h = (window.location?.hostname || '').toLowerCase().trim();
-    if (h === 'localhost' || h === '127.0.0.1') return 'http://localhost:8000';
-    return window.location.origin.replace(/\/+$/, '');
-  }
-  return 'https://db.krgi.co.in';
-}
-
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(n, hi));
 const toNum  = (v: any): number | null => { const n = Number(v); return Number.isFinite(n) ? n : null; };
 

@@ -63,7 +63,6 @@ class FeedbackFormAdmin(admin.ModelAdmin):
         }),
         ('Class Selection (Multi-Select)', {
             'fields': (
-                'all_classes',
                 'years',
                 'semesters',
                 'sections',

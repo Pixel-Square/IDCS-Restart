@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 from django.contrib.auth.forms import UserCreationForm, UserChangeForm
 from django.utils.html import format_html
-from .models import User, Role, UserRole, Permission, RolePermission, UserQuery
+from .models import User, Role, UserRole, Permission, RolePermission, UserQuery, ProfileImageUpdateRequest
 from academics.models import StudentProfile, StaffProfile, Section, Department
 from django import forms
 from django.core.exceptions import ValidationError
@@ -277,6 +277,7 @@ class UserAdmin(DjangoUserAdmin):
                 request.session[f'accounts_user_import_raw_{token}'] = raw
                 request.session['accounts_user_import_last_token'] = token
                 request.session.modified = True
+
 
                 found = list(headers)
                 missing = [c for c in expected if c not in found]
@@ -740,3 +741,25 @@ class UserQueryAdmin(admin.ModelAdmin):
     def has_add_permission(self, request):
         """Prevent adding queries from admin - they should be created by users via API."""
         return False
+
+
+@admin.register(ProfileImageUpdateRequest)
+class ProfileImageUpdateRequestAdmin(admin.ModelAdmin):
+    list_display = ('id', 'user', 'status', 'requested_at', 'reviewed_at', 'reviewed_by')
+    list_filter = ('status', 'requested_at', 'reviewed_at')
+    search_fields = ('user__username', 'user__email', 'reason', 'review_note')
+    readonly_fields = ('requested_at', 'reviewed_at')
+
+
+# Register any remaining accounts models without explicit admin classes above.
+from django.apps import apps as django_apps
+from django.contrib.admin.sites import AlreadyRegistered
+
+_accounts_app_config = next((cfg for cfg in django_apps.get_app_configs() if cfg.name == 'accounts'), None)
+if _accounts_app_config:
+    for _model in _accounts_app_config.get_models():
+        if _model not in admin.site._registry:
+            try:
+                admin.site.register(_model)
+            except AlreadyRegistered:
+                pass

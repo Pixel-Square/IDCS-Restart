@@ -31,7 +31,7 @@ import { ModalPortal } from './ModalPortal';
 import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
 import { clearLocalDraftCache } from '../utils/obeDraftCache';
 import { useMarkEntryEditRequestsEnabled } from '../utils/requestControl';
-import { normalizeRegisterNo, registerNoKeys } from '../utils/excelImport';
+import { normalizeRegisterNo } from '../utils/excelImport';
 
 type Props = { subjectId: string; teachingAssignmentId?: number; label?: string; assessmentKey?: 'ssa1' | 'review1' };
 
@@ -184,7 +184,7 @@ function compareStudentName(a: { name?: string; reg_no?: string }, b: { name?: s
 }
 
 function shortenRegisterNo(registerNo: string): string {
-  return registerNo.slice(-8);
+  return String(registerNo || '').trim();
 }
 
 export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label, assessmentKey = 'ssa1' }: Props) {
@@ -386,10 +386,12 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
 
   // Authoritative locking: if the server reports entry_open=false, do not allow editing
   // even if local UI state thinks Mark Manager is confirmed.
+  // Auto-unlock if marks have already been entered (snapshot exists or rows have data).
+  const autoUnlockMarkManager = Boolean(sheet.markManagerSnapshot != null) || sheet.rows.length > 0;
   const tableBlocked = Boolean(
     globalLocked ||
       lockStatusUnknown ||
-      (!isPublished && !markManagerLocked) ||
+      (!isPublished && !markManagerLocked && !autoUnlockMarkManager) ||
       (isPublished ? (editRequestsEnabled && !entryOpen) : false) ||
       (!isPublished && markLock ? !markLock.entry_open : false),
   );
@@ -1259,7 +1261,8 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
       .trim()
       .toLowerCase()
       .replace(/[^0-9a-z]+/g, ' ')
-      .replace(/\s+/g, ' ');
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   function normalizeNameKey(v: any): string {
@@ -1280,118 +1283,318 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
 
     try {
       const buffer = await file.arrayBuffer();
-      const workbook = XLSX.read(buffer, { type: 'array' });
-      const firstName = workbook.SheetNames?.[0];
-      if (!firstName) throw new Error('No sheet found in the Excel file.');
-      const sheet0 = workbook.Sheets[firstName];
+      const workbook = XLSX.read(buffer, { type: 'array', cellText: true });
+      const sheetNames = Array.isArray(workbook.SheetNames) ? workbook.SheetNames : [];
+      if (!sheetNames.length) throw new Error('No sheet found in the Excel file.');
 
-      const ref = (sheet0 as any)['!ref'];
-      if (!ref) throw new Error('Excel sheet is empty.');
-      const range = XLSX.utils.decode_range(ref);
+      const parseSheetRows = (ws: any): any[][] => {
+        const cellAddrRe = /^[A-Z]+\d+$/;
+        let minR = Number.POSITIVE_INFINITY;
+        let minC = Number.POSITIVE_INFINITY;
+        let maxR = -1;
+        let maxC = -1;
 
-      const getCell = (r: number, c: number): any => {
-        const addr = XLSX.utils.encode_cell({ r, c });
-        return (sheet0 as any)[addr];
+        for (const k of Object.keys(ws || {})) {
+          if (!cellAddrRe.test(k)) continue;
+          const { r, c } = (XLSX as any).utils.decode_cell(k);
+          if (r < minR) minR = r;
+          if (c < minC) minC = c;
+          if (r > maxR) maxR = r;
+          if (c > maxC) maxC = c;
+        }
+
+        let range: { s: { r: number; c: number }; e: { r: number; c: number } } | undefined;
+        if (Number.isFinite(minR) && maxR >= 0 && maxC >= 0) {
+          range = {
+            s: { r: minR, c: minC },
+            e: { r: Math.min(maxR, minR + 5000), c: Math.min(maxC, minC + 200) },
+          };
+        } else if (typeof (ws as any)?.['!ref'] === 'string' && (ws as any)['!ref']) {
+          try {
+            const decoded = (XLSX as any).utils.decode_range((ws as any)['!ref']);
+            range = {
+              s: decoded.s,
+              e: { r: Math.min(decoded.e.r, decoded.s.r + 5000), c: Math.min(decoded.e.c, decoded.s.c + 200) },
+            };
+          } catch {
+            range = undefined;
+          }
+        }
+
+        return XLSX.utils.sheet_to_json(ws, {
+          header: 1,
+          defval: '',
+          blankrows: false,
+          raw: true,
+          ...(range ? { range } : null),
+        }) as any;
       };
-      const readCellText = (r: number, c: number): string => {
-        const cell = getCell(r, c);
-        if (!cell) return '';
-        const raw = cell.w ?? cell.v ?? '';
-        return String(raw ?? '');
+
+      const compact = (h: string) => String(h || '').replace(/\s+/g, '');
+
+      const scanHeaderRow = (rows: any[][]) => {
+        const maxScan = Math.min(rows.length - 1, 25);
+        for (let r = 0; r <= maxScan; r++) {
+          const rowNorm: string[] = (rows[r] || []).map(normalizeHeaderCell);
+          const findColLocal = (pred: (h: string) => boolean) => rowNorm.findIndex((h) => pred(h));
+          const reg = findColLocal((h) => {
+            const ch = compact(h);
+            return ch === 'regno' || ch === 'registernumber' || h === 'register no' || h === 'reg no' || h.includes('register');
+          });
+          if (reg < 0) continue;
+          const hasMarks =
+            findColLocal((h) => {
+              const ch = compact(h);
+              return ch.startsWith('q1') || ch.startsWith('co1') || ch.startsWith('q2') || ch.startsWith('co2') || ch.includes('total');
+            }) >= 0;
+          if (!hasMarks && r !== 0) continue;
+          return { headerRowIndex: r, header: rowNorm };
+        }
+        return { headerRowIndex: 0, header: (rows[0] || []).map(normalizeHeaderCell) };
       };
-      const readCellAny = (r: number, c: number): any => {
-        const cell = getCell(r, c);
-        return cell?.v ?? cell?.w ?? '';
+
+      const pickBestSheet = () => {
+        let best: { name: string; ws: any; rows: any[][]; headerRowIndex: number; header: string[]; regCol: number } | null = null;
+        let bestRegCount = -1;
+
+        for (const name of sheetNames) {
+          const ws = (workbook.Sheets as any)?.[name];
+          if (!ws) continue;
+          const rows: any[][] = parseSheetRows(ws);
+          if (!Array.isArray(rows) || rows.length === 0) continue;
+
+          const { headerRowIndex, header } = scanHeaderRow(rows);
+          const findCol = (pred: (h: string) => boolean) => header.findIndex((h) => pred(h));
+          const regColRel = findCol((h) => {
+            const ch = compact(h);
+            return ch === 'regno' || ch === 'registernumber' || h === 'register no' || h === 'reg no' || h.includes('register');
+          });
+          if (regColRel < 0) continue;
+
+          // Count rows that appear to have a register value.
+          let regCount = 0;
+          for (let r = headerRowIndex + 1; r < rows.length; r++) {
+            const line = rows[r] || [];
+            // Scan the whole row for a plausible register value (length >= 6).
+            let found = false;
+            for (let c = 0; c < Math.min(line.length, 200); c++) {
+              const norm = normalizeRegisterNo(line[c]);
+              if (norm.length >= 6) {
+                found = true;
+                break;
+              }
+            }
+            if (found) regCount += 1;
+          }
+
+          if (regCount > bestRegCount) {
+            bestRegCount = regCount;
+            best = { name, ws, rows, headerRowIndex, header, regCol: regColRel };
+          }
+        }
+
+        // Fallback: first sheet if nothing matched.
+        if (!best) {
+          const name = sheetNames[0];
+          const ws = (workbook.Sheets as any)?.[name];
+          const rows: any[][] = parseSheetRows(ws);
+          const { headerRowIndex, header } = scanHeaderRow(rows);
+          const findCol = (pred: (h: string) => boolean) => header.findIndex((h) => pred(h));
+          const regColRel = findCol((h) => {
+            const ch = compact(h);
+            return ch === 'regno' || ch === 'registernumber' || h === 'register no' || h === 'reg no' || h.includes('register');
+          });
+          best = { name, ws, rows, headerRowIndex, header, regCol: regColRel };
+        }
+        return { best, bestRegCount };
       };
 
-      const headerRow: string[] = [];
-      for (let c = range.s.c; c <= range.e.c; c++) {
-        headerRow.push(normalizeHeaderCell(readCellText(range.s.r, c)));
-      }
+      const picked = pickBestSheet();
+      const rows: any[][] = picked.best?.rows || [];
+      if (!Array.isArray(rows) || rows.length === 0) throw new Error('Excel sheet is empty.');
 
-      const findCol = (pred: (h: string) => boolean) => headerRow.findIndex((h) => pred(h));
+      const { headerRowIndex, header } = picked.best ? { headerRowIndex: picked.best.headerRowIndex, header: picked.best.header } : scanHeaderRow(rows);
+      const findCol = (pred: (h: string) => boolean) => header.findIndex((h) => pred(h));
 
-      const regColRel = findCol((h) => h === 'register no' || h === 'reg no' || h === 'regno' || h.includes('register'));
-      const nameColRel = findCol((h) => h === 'student name' || h === 'name' || h.includes('student'));
-      const q1ColRel = findCol((h) => h.startsWith('q1'));
-      const q2ColRel = findCol((h) => h.startsWith('q2'));
-      const totalColRel = findCol((h) => h === 'total' || h.includes('total'));
-      const statusColRel = findCol((h) => h === 'status' || h.includes('status'));
+      const regColRel = picked.best?.regCol ?? findCol((h) => {
+        const ch = compact(h);
+        return ch === 'regno' || ch === 'registernumber' || h === 'register no' || h === 'reg no' || h.includes('register');
+      });
+      const nameColRel = findCol((h) => {
+        const ch = compact(h);
+        return ch === 'studentname' || ch === 'name' || h === 'student name' || h === 'name' || h.includes('student');
+      });
+      const q1ColRel = findCol((h) => {
+        const ch = compact(h);
+        return ch.startsWith('q1') || ch.startsWith('co1');
+      });
+      const q2ColRel = findCol((h) => {
+        const ch = compact(h);
+        return ch.startsWith('q2') || ch.startsWith('co2');
+      });
+      const totalColRel = findCol((h) => {
+        const ch = compact(h);
+        return ch === 'total' || ch.includes('total');
+      });
+      const statusColRel = findCol((h) => {
+        const ch = compact(h);
+        return ch === 'status' || ch.includes('status');
+      });
 
       if (regColRel < 0) throw new Error('Could not find “Register No” column.');
 
-      const regCol = range.s.c + regColRel;
-      const nameCol = nameColRel >= 0 ? range.s.c + nameColRel : -1;
-      const q1Col = q1ColRel >= 0 ? range.s.c + q1ColRel : -1;
-      const q2Col = q2ColRel >= 0 ? range.s.c + q2ColRel : -1;
-      const totalCol = totalColRel >= 0 ? range.s.c + totalColRel : -1;
-      const statusCol = statusColRel >= 0 ? range.s.c + statusColRel : -1;
+      const regCol = regColRel;
+      const nameCol = nameColRel >= 0 ? nameColRel : -1;
+      const q1Col = q1ColRel >= 0 ? q1ColRel : -1;
+      const q2Col = q2ColRel >= 0 ? q2ColRel : -1;
+      const totalCol = totalColRel >= 0 ? totalColRel : -1;
+      const statusCol = statusColRel >= 0 ? statusColRel : -1;
 
       const q1Max = Number.isFinite(Number(CO_MAX.co1)) ? Number(CO_MAX.co1) : 0;
       const q2Max = Number.isFinite(Number(CO_MAX.co2)) ? Number(CO_MAX.co2) : 0;
 
-      setSheet((prev) => {
-        const regToIdx = new Map<string, number>();
-        const nameToIdx = new Map<string, number | null>();
-        prev.rows.forEach((row, idx) => {
-          const full = String(row.registerNo || '').trim();
-          for (const key of registerNoKeys(full)) {
-            if (!regToIdx.has(key)) regToIdx.set(key, idx);
-          }
+      const applyImport = (existingRows: any[]) => {
+        const fullToIdx = new Map<string, number | null>();
+        const last10ToIdx = new Map<string, number | null>();
+        const last8ToIdx = new Map<string, number | null>();
 
-          const nk = normalizeNameKey(row.name);
-          if (nk) {
-            if (!nameToIdx.has(nk)) nameToIdx.set(nk, idx);
-            else nameToIdx.set(nk, null); // not unique
-          }
+        const addUnique = (m: Map<string, number | null>, k: string, idx: number) => {
+          if (!k) return;
+          if (!m.has(k)) m.set(k, idx);
+          else m.set(k, null);
+        };
+
+        existingRows.forEach((row, idx) => {
+          const norm = normalizeRegisterNo(row?.registerNo);
+          if (!norm) return;
+          addUnique(fullToIdx, norm, idx);
+          if (norm.length > 10) addUnique(last10ToIdx, norm.slice(-10), idx);
+          if (norm.length > 8) addUnique(last8ToIdx, norm.slice(-8), idx);
         });
 
-        const nextRows = prev.rows.slice();
-        for (let r = range.s.r + 1; r <= range.e.r; r++) {
-          const regRaw = readCellText(r, regCol);
-          const keys = registerNoKeys(regRaw);
-          if (!keys.length) continue;
+        const resolveRosterIdx = (norm: string): number | undefined => {
+          if (!norm) return undefined;
+          const fullHit = fullToIdx.get(norm);
+          if (typeof fullHit === 'number') return fullHit;
 
-          let idx: number | undefined;
-          for (const k of keys) {
-            const hit = regToIdx.get(k);
-            if (hit != null) {
-              idx = hit;
-              break;
+          // Fallback for shortened register numbers in Excel (only if unique).
+          if (norm.length === 10) {
+            const hit10 = last10ToIdx.get(norm);
+            if (typeof hit10 === 'number') return hit10;
+          }
+          if (norm.length === 8) {
+            const hit8 = last8ToIdx.get(norm);
+            if (typeof hit8 === 'number') return hit8;
+          }
+          if (norm.length > 10) {
+            const hit10 = last10ToIdx.get(norm.slice(-10));
+            if (typeof hit10 === 'number') return hit10;
+          }
+          if (norm.length > 8) {
+            const hit8 = last8ToIdx.get(norm.slice(-8));
+            if (typeof hit8 === 'number') return hit8;
+          }
+          return undefined;
+        };
+
+        const stats = {
+          excelRegRows: 0,
+          matchedRows: 0,
+          unmatchedRows: 0,
+          unmatchedSamples: [] as string[],
+        };
+
+        const nextRows = existingRows.slice();
+
+        for (let r = headerRowIndex + 1; r < rows.length; r++) {
+          const line = rows[r] || [];
+
+          // Prefer the declared Register No column; fallback to scanning row.
+          let normReg = normalizeRegisterNo(line[regCol]);
+          if (normReg.length < 6) {
+            normReg = '';
+            for (let c = 0; c < Math.min(line.length, 200); c++) {
+              const n = normalizeRegisterNo(line[c]);
+              if (n.length >= 6) {
+                normReg = n;
+                break;
+              }
             }
           }
 
-          if (idx == null && nameCol >= 0) {
-            const nameRaw = readCellText(r, nameCol);
-            const nk = normalizeNameKey(nameRaw);
-            const hit = nk ? nameToIdx.get(nk) : undefined;
-            if (typeof hit === 'number') idx = hit;
+          if (!normReg) continue;
+          stats.excelRegRows += 1;
+          const idx = resolveRosterIdx(normReg);
+          if (idx == null) {
+            stats.unmatchedRows += 1;
+            if (stats.unmatchedSamples.length < 10) stats.unmatchedSamples.push(normReg);
+            continue;
           }
-          if (idx == null) continue;
+          stats.matchedRows += 1;
 
-          const statusRaw = statusCol >= 0 ? String(readCellText(r, statusCol) ?? '') : '';
+          const statusRaw = statusCol >= 0 ? String(line[statusCol] ?? '') : '';
           const status = statusRaw.trim().toLowerCase();
           const isAbsent = status === 'absent' || status === 'ab' || status === 'a';
 
-          const q1 = q1Col >= 0 ? readFiniteNumber(readCellAny(r, q1Col)) : null;
-          const q2 = q2Col >= 0 ? readFiniteNumber(readCellAny(r, q2Col)) : null;
-          const totalX = totalCol >= 0 ? readFiniteNumber(readCellAny(r, totalCol)) : null;
+          const q1 = q1Col >= 0 ? readFiniteNumber(line[q1Col]) : null;
+          const q2 = q2Col >= 0 ? readFiniteNumber(line[q2Col]) : null;
+          const totalX = totalCol >= 0 ? readFiniteNumber(line[totalCol]) : null;
 
-          const q1Clamped = q1 == null ? 0 : clamp(q1, 0, q1Max);
-          const q2Clamped = q2 == null ? 0 : clamp(q2, 0, q2Max);
+          const prevRow = nextRows[idx] || {};
+          const patch: any = {};
 
-          const computedTotal = totalX != null ? totalX : q1Clamped + q2Clamped;
-          const finalTotal = isAbsent ? 0 : clamp(computedTotal, 0, MAX_ASMT1);
+          if (isAbsent) {
+            patch.co1 = 0;
+            patch.co2 = 0;
+            patch.total = 0;
+          } else {
+            if (q1 != null) patch.co1 = round1(clamp(q1, 0, q1Max));
+            if (q2 != null) patch.co2 = round1(clamp(q2, 0, q2Max));
 
-          nextRows[idx] = {
-            ...nextRows[idx],
-            co1: round1(q1Clamped),
-            co2: round1(q2Clamped),
-            total: round1(finalTotal),
-          };
+            if (totalX != null) {
+              patch.total = round1(clamp(totalX, 0, MAX_ASMT1));
+            } else if (q1 != null && q2 != null) {
+              patch.total = round1(clamp((patch.co1 as number) + (patch.co2 as number), 0, MAX_ASMT1));
+            }
+          }
+
+          // Do not overwrite existing values with blanks.
+          nextRows[idx] = { ...prevRow, ...patch };
         }
-        return { ...prev, rows: nextRows };
-      });
+
+        return { nextRows, stats };
+      };
+
+      const existingRows = Array.isArray((sheet as any)?.rows) ? (sheet as any).rows : [];
+      const applied = applyImport(existingRows);
+      const nextRows = applied.nextRows;
+      const importStats = applied.stats;
+
+      const isNum = (v: any) => typeof v === 'number' && Number.isFinite(v);
+      let filledCells = 0;
+      for (let i = 0; i < nextRows.length; i++) {
+        const before = existingRows[i] || {};
+        const after = nextRows[i] || {};
+        if (!isNum(before.co1) && isNum(after.co1)) filledCells += 1;
+        if (!isNum(before.co2) && isNum(after.co2)) filledCells += 1;
+      }
+
+      setSheet((prev) => ({ ...prev, rows: nextRows }));
+
+      if (importStats.unmatchedRows > 0) {
+        console.warn('[SSA1] Excel rows not matched by register no:', {
+          excelRegRows: importStats.excelRegRows,
+          matchedRows: importStats.matchedRows,
+          unmatchedRows: importStats.unmatchedRows,
+          samples: importStats.unmatchedSamples,
+        });
+      }
+
+      alert(
+        `Import complete. Matched: ${importStats.matchedRows} row(s). Unmatched: ${importStats.unmatchedRows} row(s). Filled: ${filledCells} cell(s).${
+          importStats.unmatchedRows > 0 ? ' (Open console for unmatched register samples.)' : ''
+        }`,
+      );
     } finally {
       setExcelBusy(false);
     }

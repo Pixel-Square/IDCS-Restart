@@ -6,7 +6,7 @@ from django.db.models import Count, Q
 from django.http import HttpResponse
 from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject, DepartmentGroup, DepartmentGroupMapping
 from .serializers import CurriculumMasterSerializer, CurriculumDepartmentSerializer, ElectiveSubjectSerializer, DepartmentGroupSerializer
-from .permissions import IsIQACOrReadOnly
+from .permissions import IsIQACOrReadOnly, IsIQACOnly
 from accounts.utils import get_user_permissions
 from academics.utils import get_user_effective_departments
 import logging
@@ -459,6 +459,40 @@ class CurriculumDepartmentsView(APIView):
                 'short_name': getattr(d, 'short_name', None)
             })
         return Response({'results': results})
+
+
+class CurriculumPendingCountView(APIView):
+    """Return IQAC-only pending counts for department curriculum rows."""
+
+    permission_classes = (IsAuthenticated, IsIQACOnly)
+
+    def get(self, request):
+        pending_qs = CurriculumDepartment.objects.filter(
+            approval_status=CurriculumDepartment.APPROVAL_PENDING,
+            is_elective=False,
+        )
+
+        total_pending = pending_qs.count()
+        department_counts_qs = (
+            pending_qs
+            .values('department_id', 'department__code', 'department__short_name', 'department__name')
+            .annotate(count=Count('id'))
+            .order_by('department__code', 'department__name')
+        )
+
+        department_counts = []
+        for row in department_counts_qs:
+            dept_label = row.get('department__short_name') or row.get('department__code') or row.get('department__name') or 'Unknown'
+            department_counts.append({
+                'departmentId': row.get('department_id'),
+                'department': dept_label,
+                'count': row.get('count', 0),
+            })
+
+        return Response({
+            'totalPending': total_pending,
+            'departmentCounts': department_counts,
+        })
 
 
 class ElectiveChoicesView(APIView):

@@ -888,15 +888,38 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
         perms = get_user_permissions(user)
         from django.db.models import Q
 
+        # Get HOD-accessible department sections
+        hod_department_section_ids = []
+        try:
+            # Check if user is HOD of any department
+            hod_depts = DepartmentRole.objects.filter(
+                staff=staff_profile,
+                role__iexact='HOD',
+                academic_year__is_active=True
+            ).values_list('department_id', flat=True)
+            
+            if hod_depts:
+                # Get all sections from HOD's department(s)
+                from academics.models import Section
+                hod_department_section_ids = list(
+                    Section.objects.filter(
+                        batch__course__department_id__in=hod_depts
+                    ).values_list('id', flat=True)
+                )
+        except Exception:
+            pass
+
         # If caller has global view permission, expose elective assignments
         # but restrict visibility to assignments whose subject/row department
         # matches the user's effective departments (unless superuser).
         if 'academics.view_assigned_subjects' in perms or user.is_superuser:
             # base: elective assignments
             q = Q(elective_subject__isnull=False)
-            # include advisor sections and own assignments always
+            # include advisor sections, HOD department sections, and own assignments always
             if advisor_section_ids:
                 q |= Q(section_id__in=advisor_section_ids)
+            if hod_department_section_ids:
+                q |= Q(section_id__in=hod_department_section_ids)
             q |= Q(staff__user=getattr(user, 'id', None))
 
             # if not superuser, further restrict elective assignments to
@@ -912,17 +935,24 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
                         | Q(elective_subject__parent__department_id__in=allowed_depts)
                     )
                     # apply department filter only to elective assignments part
-                    q = (Q(elective_subject__isnull=False) & dept_q) | Q(section_id__in=advisor_section_ids) | Q(staff__user=getattr(user, 'id', None))
+                    q = (Q(elective_subject__isnull=False) & dept_q) | Q(section_id__in=advisor_section_ids)
+                    if hod_department_section_ids:
+                        q |= Q(section_id__in=hod_department_section_ids)
+                    q |= Q(staff__user=getattr(user, 'id', None))
                 else:
                     # no effective departments -> fall back to advisor sections and own assignments
                     q = Q(section_id__in=advisor_section_ids) | Q(staff__user=getattr(user, 'id', None))
+                    if hod_department_section_ids:
+                        q |= Q(section_id__in=hod_department_section_ids)
 
             return self.queryset.filter(q)
 
-        # Default: restrict to advisor sections and own assignments only
+        # Default: restrict to advisor sections, HOD department sections, and own assignments
         final_q = Q()
         if advisor_section_ids:
             final_q |= Q(section_id__in=advisor_section_ids)
+        if hod_department_section_ids:
+            final_q |= Q(section_id__in=hod_department_section_ids)
         final_q |= Q(staff__user=getattr(user, 'id', None))
 
         if final_q:
@@ -2443,6 +2473,8 @@ class StaffImportView(APIView):
                 row_errors.append('Username is required.')
             if not email:
                 row_errors.append('Email is required.')
+            if not password:
+                row_errors.append('Password is required.')
             if not department_name:
                 row_errors.append('Department is required.')
             if not record_status:
@@ -2496,7 +2528,7 @@ class StaffImportView(APIView):
                 with transaction.atomic():
                     user_obj = User.objects.create_user(
                         username=username,
-                        password=password if password else 'changeme123',
+                        password=password,
                         first_name=first_name,
                         last_name=last_name,
                         email=email,

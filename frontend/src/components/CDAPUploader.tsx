@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
+import { getApiBase } from '../services/apiBase';
 
-const DEFAULT_API_BASE = 'https://db.krgi.co.in';
-const API_BASE = import.meta.env.VITE_API_BASE || (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://localhost:8000' : DEFAULT_API_BASE);
+const API_BASE = getApiBase();
 
 function authHeaders(): Record<string, string> {
   const token = window.localStorage.getItem('access');

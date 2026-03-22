@@ -1199,16 +1199,29 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
       const headerRow = (rows[0] || []).map(normalizeHeaderCell);
       const findCol = (pred: (h: string) => boolean) => headerRow.findIndex((h) => pred(h));
 
+      const extractQLabel = (h: string): string | null => {
+        const s = String(h || '').trim();
+        if (!s) return null;
+        const m = s.match(/^(q|o)\s*0*(\d{1,2})\b/i);
+        if (!m) return null;
+        const prefix = String(m[1] || 'q').toUpperCase();
+        const n = Number(m[2] || 0);
+        if (!Number.isFinite(n) || n <= 0) return null;
+        return `${prefix}${n}`;
+      };
+
       const regCol = findCol((h) => h === 'register no' || h === 'reg no' || h === 'regno' || h.includes('register'));
       const statusCol = findCol((h) => h === 'status' || h.includes('status'));
       const kindCol = findCol((h) => h === 'absence kind' || h === 'absent kind' || h === 'kind');
       if (regCol < 0) throw new Error('Could not find Register No column.');
 
       const qCols = defs.map((q) => {
-        const key = String(q.label || '').toLowerCase();
-        const idx = findCol((h) => h === key || h.startsWith(key));
+        const label = String(q.label || '').trim().toUpperCase();
+        const idx = headerRow.findIndex((h) => extractQLabel(h) === label);
         return { q, col: idx };
       });
+
+      const q10Col = normalizedQpType === 'QP2' ? headerRow.findIndex((h) => extractQLabel(h) === 'Q10') : -1;
 
       const labCol = isTcplLike
         ? findCol((h) => h === String(tcplLabLabel || '').toLowerCase() || h.startsWith(String(tcplLabLabel || '').toLowerCase()))
@@ -1226,9 +1239,16 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
 
       for (let i = 1; i < rows.length; i++) {
         const rowArr = rows[i] || [];
-        const reg = normalizeRegisterNo(rowArr[regCol]);
-        if (!reg) continue;
-        const rowKey = regToKey.get(reg);
+        const regKeys = registerNoKeys(rowArr[regCol]);
+        if (!regKeys.length) continue;
+        let rowKey: string | undefined;
+        for (const k of regKeys) {
+          const key = regToKey.get(k);
+          if (key) {
+            rowKey = key;
+            break;
+          }
+        }
         if (!rowKey) continue;
 
         const prev = (nextSheet[rowKey] || {}) as TcplRowEntry;
@@ -1240,6 +1260,19 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
           const n = Number(raw);
           qObj[q.key] = Number.isFinite(n) ? Math.max(0, Math.min(q.max, n)) : '';
         });
+
+        // QP2: template has Q9 (8) and Q10 (8) but UI has only Q9 (16).
+        if (normalizedQpType === 'QP2' && q10Col >= 0) {
+          const q9 = defs.find((d) => String(d.key || '').toLowerCase() === 'q9' || String(d.label || '').trim().toUpperCase() === 'Q9');
+          if (q9) {
+            const add = Number(rowArr[q10Col]);
+            if (Number.isFinite(add)) {
+              const base = Number(qObj[q9.key] === '' ? 0 : (qObj[q9.key] as any) || 0);
+              const merged = Math.max(0, Math.min(q9.max, base + add));
+              qObj[q9.key] = merged;
+            }
+          }
+        }
 
         const status = statusCol >= 0 ? String(rowArr[statusCol] ?? '').trim().toLowerCase() : '';
         const absent = status === 'absent' || status === 'ab' || status === 'a';

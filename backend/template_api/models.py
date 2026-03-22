@@ -5,9 +5,11 @@ EventPosterAttachment — stores Canva-exported poster files linked to a fronten
 The file is downloaded from Canva's CDN by the backend proxy view and saved to MEDIA_ROOT.
 """
 from django.db import models
+from erp.crypto_utils import decrypt_secret, encrypt_secret
 
 
 class CanvaServiceToken(models.Model):
+    _SENSITIVE_FIELDS = {'access_token', 'refresh_token'}
     """
     Stores the Canva OAuth token belonging to the Branding user.
     Used as a **service account** so HODs can invoke Canva API calls
@@ -24,6 +26,17 @@ class CanvaServiceToken(models.Model):
 
     class Meta:
         verbose_name = 'Canva Service Token'
+
+    def __setattr__(self, name, value):
+        if name in self._SENSITIVE_FIELDS and isinstance(value, str):
+            value = encrypt_secret(value)
+        super().__setattr__(name, value)
+
+    def __getattribute__(self, name):
+        value = super().__getattribute__(name)
+        if name in {'access_token', 'refresh_token'} and isinstance(value, str):
+            return decrypt_secret(value)
+        return value
 
     def __str__(self) -> str:
         return f'Canva token for {self.display_name}'

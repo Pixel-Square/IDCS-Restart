@@ -80,7 +80,10 @@ export async function fetchWithAuth(input: RequestInfo | URL, init: RequestInit 
   let lastNetworkErr: any = null
 
   const isApiPath = typeof input === 'string' && input.startsWith('/api')
-  const candidates = isApiPath ? getApiBaseCandidates().map((b) => `${b}${input}`) : [String(input)]
+  const isDev = Boolean((import.meta as any)?.env?.DEV)
+  // In Vite dev, keep '/api/...' as-is so the dev server proxy can forward it.
+  // Rewriting to :8000 would trigger browser CORS.
+  const candidates = isApiPath && !isDev ? getApiBaseCandidates().map((b) => `${b}${input}`) : [String(input)]
 
   for (const url of candidates) {
     finalInput = url

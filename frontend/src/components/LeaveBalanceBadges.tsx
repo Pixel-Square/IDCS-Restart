@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Clock, RefreshCw } from 'lucide-react';
-import { getLeaveBalances, getActiveTemplates } from '../services/staffRequests';
-import type { LeaveBalance, RequestTemplate } from '../types/staffRequests';
+import { getLeaveBalances, getActiveTemplates, getLateEntryStats } from '../services/staffRequests';
+import type { LeaveBalance, RequestTemplate, LateEntryStats } from '../types/staffRequests';
 
 export default function LeaveBalanceBadges() {
   const [balances, setBalances] = useState<LeaveBalance[]>([]);
   const [templates, setTemplates] = useState<RequestTemplate[]>([]);
+  const [lateStats, setLateStats] = useState<LateEntryStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -17,7 +18,12 @@ export default function LeaveBalanceBadges() {
     setLoading(true);
     setError(null);
     try {
-      const [data, tmpl] = await Promise.all([getLeaveBalances(), getActiveTemplates()]);
+      const [data, tmpl, lateData] = await Promise.all([
+        getLeaveBalances(),
+        getActiveTemplates(),
+        getLateEntryStats().catch(() => null),
+      ]);
+      setLateStats(lateData);
       const actualBalances = data.balances || [];
       setTemplates(tmpl || []);
       
@@ -223,6 +229,27 @@ export default function LeaveBalanceBadges() {
           );
         })}
       </div>
+
+      {/* Late Entry Permission — monthly usage */}
+      {lateStats !== null && (
+        <div className="mt-4 border-t pt-3">
+          <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+            Late Entry — {lateStats.month}
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="border rounded-lg p-3 flex flex-col items-center justify-center gap-1 bg-amber-50 border-amber-200 text-amber-800">
+              <div className="text-xs font-semibold tracking-wide">10 MINS</div>
+              <div className="text-2xl font-bold">{lateStats.ten_mins}</div>
+              <div className="text-xs text-amber-600">this month</div>
+            </div>
+            <div className="border rounded-lg p-3 flex flex-col items-center justify-center gap-1 bg-orange-50 border-orange-200 text-orange-800">
+              <div className="text-xs font-semibold tracking-wide">1 HR</div>
+              <div className="text-2xl font-bold">{lateStats.one_hr}</div>
+              <div className="text-xs text-orange-600">this month</div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

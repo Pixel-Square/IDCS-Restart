@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { Mail, Lock, Eye, EyeOff, AlertCircle } from "lucide-react";
-import { login } from "../../services/auth";
+import { getMe, login } from "../../services/auth";
 import Navbar from "../../components/navigation/Navbar";
 
 export default function Login() {
@@ -60,8 +60,14 @@ export default function Login() {
 
     try {
       await login(identifier, password);
-      // Redirect to dashboard after successful login
-      nav("/dashboard");
+
+      // Re-fetch profile immediately so role/permissions caches are correct.
+      // Then hard-reload into the dashboard so App-level auth state is rebuilt.
+      const me = await getMe();
+      console.log("Logged role:", (me as any)?.role || (me as any)?.roles?.[0]);
+
+      // Cache fix: ensure the whole app reads the updated profile/roles.
+      window.location.href = "/dashboard";
     } catch (err) {
       const serverMsg = extractServerMessage(err) || extractNetworkMessage(err) || "Login failed";
       setError(serverMsg);

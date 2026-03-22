@@ -18,10 +18,11 @@ urlpatterns = [
     path('favicon.ico', lambda request: HttpResponse(status=204), name='favicon'),
     # path('grappelli/', include('grappelli.urls')),
     path('admin/', admin.site.urls),
-    path('', include('powerbi_portal.urls')),
+    path('powerbi/', include('powerbi_portal.urls')),
     path('api/accounts/', include('accounts.urls')),
     # also expose the same endpoints under /api/auth/ for compatibility
     path('api/auth/', include('accounts.urls')),
+    path('api/bi/', include('bi.urls')),
     path('api/academics/', include('academics.urls')),
     path('api/applications/', include('applications.urls')),
     path('api/attachments/', include('applications.attachments_urls')),

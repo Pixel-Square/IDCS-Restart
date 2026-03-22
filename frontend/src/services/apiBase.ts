@@ -61,6 +61,12 @@ export function getApiBase(): string {
  */
 export function getApiBaseCandidates(): string[] {
   const primary = trimTrailingSlashes(getApiBase())
+  if (typeof window !== 'undefined') {
+    const host = String(window.location.hostname || '').trim().toLowerCase()
+    if (host === 'localhost' || host === '127.0.0.1') {
+      return [primary]
+    }
+  }
   const fallback = trimTrailingSlashes(getFallbackFromEnvOrDefault())
   if (!fallback || fallback === primary) return [primary]
   return [primary, fallback]

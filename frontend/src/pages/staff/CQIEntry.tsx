@@ -1014,6 +1014,36 @@ export default function CQIEntry({
         const labCia2 = isLabLike ? readLabAssessmentByCo((labCia2Res as any)?.data ?? null, { fallbackCiaEnabled: true, profile: 'strict-lab' }) : null;
         const labModel = isLabLike ? readLabAssessmentByCo((labModelRes as any)?.data ?? null, { fallbackCiaEnabled: true, profile: 'strict-lab' }) : null;
 
+        const cia1Data = (cia1Res as any).data;
+        const cia1Questions = Array.isArray(cia1Data?.questions) ? cia1Data.questions : [];
+        const cia1HeaderMax = cia1Questions.reduce(
+          (acc: { co1: number; co2: number }, q: any, idxQ: number) => {
+            const qMax = Number(q?.max || 0);
+            const w = effectiveCia1Weights(cia1Questions, idxQ);
+            if (qMax > 0) {
+              acc.co1 += qMax * w.co1;
+              acc.co2 += qMax * w.co2;
+            }
+            return acc;
+          },
+          { co1: 0, co2: 0 },
+        );
+
+        const cia2Data = (cia2Res as any).data;
+        const cia2Questions = Array.isArray(cia2Data?.questions) ? cia2Data.questions : [];
+        const cia2HeaderMax = cia2Questions.reduce(
+          (acc: { co3: number; co4: number }, q: any, idxQ: number) => {
+            const qMax = Number(q?.max || 0);
+            const w = effectiveCia2Weights(cia2Questions, idxQ);
+            if (qMax > 0) {
+              acc.co3 += qMax * w.co3;
+              acc.co4 += qMax * w.co4;
+            }
+            return acc;
+          },
+          { co3: 0, co4: 0 },
+        );
+
         const totals: Record<number, Record<string, { value: number; max: number } | null>> = {};
 
         students.forEach(student => {
@@ -1049,10 +1079,10 @@ export default function CQIEntry({
                 ssaMark = ssa1Half;
                 ssaMax = coNum === 1 ? maxes.ssa1.co1 : maxes.ssa1.co2;
 
-                const cia1Data = (cia1Res as any).data;
                 if (cia1Data) {
                   const cia1ById = cia1Data.rowsByStudentId || {};
                   const cia1Row = cia1ById[String(student.id)] || {};
+<<<<<<< HEAD
                   const questionsRaw = cia1Data.questions || [];
                   const questions = Array.isArray(questionsRaw)
                     ? questionsRaw.map((q: any) => {
@@ -1061,17 +1091,17 @@ export default function CQIEntry({
                         return override != null ? { ...q, co: override } : q;
                       })
                     : [];
+=======
+>>>>>>> 3b582c30c626f1af97739db7229424129dd6b6ba
                   const qObj = (cia1Row as any)?.q && typeof (cia1Row as any).q === 'object' ? (cia1Row as any).q : (cia1Row as any);
 
                   let anyCiaForCo = false;
                   let ciaAcc = 0;
-                  let ciaMaxComputed = 0;
 
-                  questions.forEach((q: any, idxQ: number) => {
+                  cia1Questions.forEach((q: any, idxQ: number) => {
                     const qMax = Number(q?.max || 0);
-                    const w = effectiveCia1Weights(questions, idxQ);
+                    const w = effectiveCia1Weights(cia1Questions, idxQ);
                     const wCo = coNum === 2 ? w.co2 : w.co1;
-                    if (wCo > 0 && qMax > 0) ciaMaxComputed += qMax * wCo;
 
                     const raw = toNumOrNull(qObj?.[q.key]);
                     if (raw == null) return;
@@ -1083,7 +1113,8 @@ export default function CQIEntry({
 
                   if (anyCiaForCo) {
                     ciaMark = ciaAcc;
-                    ciaMax = ciaMaxComputed > 0 ? ciaMaxComputed : coNum === 1 ? maxes.cia1.co1 : maxes.cia1.co2;
+                    const headerMax = coNum === 1 ? cia1HeaderMax.co1 : cia1HeaderMax.co2;
+                    ciaMax = headerMax > 0 ? headerMax : coNum === 1 ? maxes.cia1.co1 : maxes.cia1.co2;
                   }
                 }
 
@@ -1135,10 +1166,10 @@ export default function CQIEntry({
                 ssaMark = ssa2Half;
                 ssaMax = coNum === 3 ? maxes.ssa2.co3 : maxes.ssa2.co4;
 
-                const cia2Data = (cia2Res as any).data;
                 if (cia2Data) {
                   const cia2ById = cia2Data.rowsByStudentId || {};
                   const cia2Row = cia2ById[String(student.id)] || {};
+<<<<<<< HEAD
                   const questionsRaw = cia2Data.questions || [];
                   const questions = Array.isArray(questionsRaw)
                     ? questionsRaw.map((q: any) => {
@@ -1147,17 +1178,17 @@ export default function CQIEntry({
                         return override != null ? { ...q, co: override } : q;
                       })
                     : [];
+=======
+>>>>>>> 3b582c30c626f1af97739db7229424129dd6b6ba
                   const qObj = (cia2Row as any)?.q && typeof (cia2Row as any).q === 'object' ? (cia2Row as any).q : (cia2Row as any);
 
                   let anyCiaForCo = false;
                   let ciaAcc = 0;
-                  let ciaMaxComputed = 0;
 
-                  questions.forEach((q: any, idxQ: number) => {
+                  cia2Questions.forEach((q: any, idxQ: number) => {
                     const qMax = Number(q?.max || 0);
-                    const w = effectiveCia2Weights(questions, idxQ);
+                    const w = effectiveCia2Weights(cia2Questions, idxQ);
                     const wCo = coNum === 4 ? w.co4 : w.co3;
-                    if (wCo > 0 && qMax > 0) ciaMaxComputed += qMax * wCo;
 
                     const raw = toNumOrNull(qObj?.[q.key]);
                     if (raw == null) return;
@@ -1169,7 +1200,8 @@ export default function CQIEntry({
 
                   if (anyCiaForCo) {
                     ciaMark = ciaAcc;
-                    ciaMax = ciaMaxComputed > 0 ? ciaMaxComputed : coNum === 3 ? maxes.cia2.co3 : maxes.cia2.co4;
+                    const headerMax = coNum === 3 ? cia2HeaderMax.co3 : cia2HeaderMax.co4;
+                    ciaMax = headerMax > 0 ? headerMax : coNum === 3 ? maxes.cia2.co3 : maxes.cia2.co4;
                   }
                 }
 

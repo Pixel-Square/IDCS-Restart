@@ -169,6 +169,13 @@ class InternalMarkMapping(models.Model):
 
 class Cia1Mark(models.Model):
     subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='cia1_marks')
+    teaching_assignment = models.ForeignKey(
+        'academics.TeachingAssignment',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='cia1_marks',
+    )
     student = models.ForeignKey('academics.StudentProfile', on_delete=models.CASCADE, related_name='cia1_marks')
     mark = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -176,7 +183,16 @@ class Cia1Mark(models.Model):
 
     class Meta:
         constraints = [
-            UniqueConstraint(fields=['subject', 'student'], name='unique_cia1_mark_per_subject_student'),
+            UniqueConstraint(
+                fields=['subject', 'student', 'teaching_assignment'],
+                condition=Q(teaching_assignment__isnull=False),
+                name='unique_cia1_mark_subject_student_ta',
+            ),
+            UniqueConstraint(
+                fields=['subject', 'student'],
+                condition=Q(teaching_assignment__isnull=True),
+                name='unique_cia1_mark_subject_student_legacy',
+            ),
         ]
 
 
@@ -231,6 +247,13 @@ class AssessmentDraft(models.Model):
 
 class Ssa1Mark(models.Model):
     subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='ssa1_marks')
+    teaching_assignment = models.ForeignKey(
+        'academics.TeachingAssignment',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='ssa1_marks',
+    )
     student = models.ForeignKey('academics.StudentProfile', on_delete=models.CASCADE, related_name='ssa1_marks')
     mark = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -238,12 +261,28 @@ class Ssa1Mark(models.Model):
 
     class Meta:
         constraints = [
-            UniqueConstraint(fields=['subject', 'student'], name='unique_ssa1_mark_per_subject_student'),
+            UniqueConstraint(
+                fields=['subject', 'student', 'teaching_assignment'],
+                condition=Q(teaching_assignment__isnull=False),
+                name='unique_ssa1_mark_subject_student_ta',
+            ),
+            UniqueConstraint(
+                fields=['subject', 'student'],
+                condition=Q(teaching_assignment__isnull=True),
+                name='unique_ssa1_mark_subject_student_legacy',
+            ),
         ]
 
 
 class Ssa2Mark(models.Model):
     subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='ssa2_marks')
+    teaching_assignment = models.ForeignKey(
+        'academics.TeachingAssignment',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='ssa2_marks',
+    )
     student = models.ForeignKey('academics.StudentProfile', on_delete=models.CASCADE, related_name='ssa2_marks')
     mark = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -251,12 +290,28 @@ class Ssa2Mark(models.Model):
 
     class Meta:
         constraints = [
-            UniqueConstraint(fields=['subject', 'student'], name='unique_ssa2_mark_per_subject_student'),
+            UniqueConstraint(
+                fields=['subject', 'student', 'teaching_assignment'],
+                condition=Q(teaching_assignment__isnull=False),
+                name='unique_ssa2_mark_subject_student_ta',
+            ),
+            UniqueConstraint(
+                fields=['subject', 'student'],
+                condition=Q(teaching_assignment__isnull=True),
+                name='unique_ssa2_mark_subject_student_legacy',
+            ),
         ]
 
 
 class Review1Mark(models.Model):
     subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='review1_marks')
+    teaching_assignment = models.ForeignKey(
+        'academics.TeachingAssignment',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='review1_marks',
+    )
     student = models.ForeignKey('academics.StudentProfile', on_delete=models.CASCADE, related_name='review1_marks')
     mark = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -264,12 +319,28 @@ class Review1Mark(models.Model):
 
     class Meta:
         constraints = [
-            UniqueConstraint(fields=['subject', 'student'], name='unique_review1_mark_per_subject_student'),
+            UniqueConstraint(
+                fields=['subject', 'student', 'teaching_assignment'],
+                condition=Q(teaching_assignment__isnull=False),
+                name='unique_review1_mark_subject_student_ta',
+            ),
+            UniqueConstraint(
+                fields=['subject', 'student'],
+                condition=Q(teaching_assignment__isnull=True),
+                name='unique_review1_mark_subject_student_legacy',
+            ),
         ]
 
 
 class Review2Mark(models.Model):
     subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='review2_marks')
+    teaching_assignment = models.ForeignKey(
+        'academics.TeachingAssignment',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='review2_marks',
+    )
     student = models.ForeignKey('academics.StudentProfile', on_delete=models.CASCADE, related_name='review2_marks')
     mark = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -277,12 +348,28 @@ class Review2Mark(models.Model):
 
     class Meta:
         constraints = [
-            UniqueConstraint(fields=['subject', 'student'], name='unique_review2_mark_per_subject_student'),
+            UniqueConstraint(
+                fields=['subject', 'student', 'teaching_assignment'],
+                condition=Q(teaching_assignment__isnull=False),
+                name='unique_review2_mark_subject_student_ta',
+            ),
+            UniqueConstraint(
+                fields=['subject', 'student'],
+                condition=Q(teaching_assignment__isnull=True),
+                name='unique_review2_mark_subject_student_legacy',
+            ),
         ]
 
 
 class Formative1Mark(models.Model):
     subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='formative1_marks')
+    teaching_assignment = models.ForeignKey(
+        'academics.TeachingAssignment',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='formative1_marks',
+    )
     student = models.ForeignKey('academics.StudentProfile', on_delete=models.CASCADE, related_name='formative1_marks')
 
     skill1 = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
@@ -296,12 +383,28 @@ class Formative1Mark(models.Model):
 
     class Meta:
         constraints = [
-            UniqueConstraint(fields=['subject', 'student'], name='unique_formative1_mark_per_subject_student'),
+            UniqueConstraint(
+                fields=['subject', 'student', 'teaching_assignment'],
+                condition=Q(teaching_assignment__isnull=False),
+                name='unique_formative1_mark_subject_student_ta',
+            ),
+            UniqueConstraint(
+                fields=['subject', 'student'],
+                condition=Q(teaching_assignment__isnull=True),
+                name='unique_formative1_mark_subject_student_legacy',
+            ),
         ]
 
 
 class Formative2Mark(models.Model):
     subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='formative2_marks')
+    teaching_assignment = models.ForeignKey(
+        'academics.TeachingAssignment',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='formative2_marks',
+    )
     student = models.ForeignKey('academics.StudentProfile', on_delete=models.CASCADE, related_name='formative2_marks')
 
     skill1 = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
@@ -315,12 +418,28 @@ class Formative2Mark(models.Model):
 
     class Meta:
         constraints = [
-            UniqueConstraint(fields=['subject', 'student'], name='unique_formative2_mark_per_subject_student'),
+            UniqueConstraint(
+                fields=['subject', 'student', 'teaching_assignment'],
+                condition=Q(teaching_assignment__isnull=False),
+                name='unique_formative2_mark_subject_student_ta',
+            ),
+            UniqueConstraint(
+                fields=['subject', 'student'],
+                condition=Q(teaching_assignment__isnull=True),
+                name='unique_formative2_mark_subject_student_legacy',
+            ),
         ]
 
 
 class Cia2Mark(models.Model):
     subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='cia2_marks')
+    teaching_assignment = models.ForeignKey(
+        'academics.TeachingAssignment',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='cia2_marks',
+    )
     student = models.ForeignKey('academics.StudentProfile', on_delete=models.CASCADE, related_name='cia2_marks')
     mark = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -328,7 +447,16 @@ class Cia2Mark(models.Model):
 
     class Meta:
         constraints = [
-            UniqueConstraint(fields=['subject', 'student'], name='unique_cia2_mark_per_subject_student'),
+            UniqueConstraint(
+                fields=['subject', 'student', 'teaching_assignment'],
+                condition=Q(teaching_assignment__isnull=False),
+                name='unique_cia2_mark_subject_student_ta',
+            ),
+            UniqueConstraint(
+                fields=['subject', 'student'],
+                condition=Q(teaching_assignment__isnull=True),
+                name='unique_cia2_mark_subject_student_legacy',
+            ),
         ]
 
 

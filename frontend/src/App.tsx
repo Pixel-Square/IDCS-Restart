@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
-import { getMe } from "./services/auth";
+import { derivePrimaryRole, getMe } from "./services/auth";
 import Navbar from "./components/navigation/Navbar";
 import DashboardSidebar from './components/layout/DashboardSidebar';
 import { useSidebar } from './components/layout/SidebarContext';
@@ -85,6 +85,8 @@ import RFReaderAddStudentsRFPage from './pages/RFReader/AddStudentsRFPage';
 import RFReaderGateScanPage from './pages/RFReader/GateScanPage';
 import RFReaderCardsDataPage from './pages/RFReader/CardsDataPage';
 import AttendanceAnalyticsRequestsPage from './pages/attendance/AttendanceAnalyticsRequestsPage';
+import RequestsPage from './pages/requests/RequestsPage';
+import ProfileImageUpdateRequestsPage from './pages/requests/ProfileImageUpdateRequestsPage';
 
 type RoleObj = { name: string };
 type Me = {
@@ -92,6 +94,7 @@ type Me = {
   username: string;
   email?: string;
   roles?: string[];
+  role?: string;
   permissions?: string[];
   profile_type?: string | null;
   profile?: any | null;
@@ -143,6 +146,7 @@ export default function App() {
                 typeof role === 'string' ? role : role.name,
               )
             : [],
+          role: derivePrimaryRole(r.roles),
           permissions: Array.isArray(r.permissions) ? r.permissions : [],
           profile_type: r.profile_type || null,
           profile: r.profile || null,
@@ -153,6 +157,29 @@ export default function App() {
       .finally(() => { if (!cancelled) { clearTimeout(timeout); setLoading(false) } })
 
     return () => { cancelled = true; clearTimeout(timeout) }
+  }, []);
+
+  useEffect(() => {
+    const onMeUpdated = (event: Event) => {
+      const detail = (event as CustomEvent).detail as Me | null | undefined;
+      if (!detail) return;
+      const normalizedUser = {
+        ...detail,
+        roles: Array.isArray(detail.roles)
+          ? detail.roles.map((role: string | RoleObj) =>
+              typeof role === 'string' ? role : role.name,
+            )
+          : [],
+        role: derivePrimaryRole(detail.roles as any),
+        permissions: Array.isArray(detail.permissions) ? detail.permissions : [],
+        profile_type: detail.profile_type || null,
+        profile: detail.profile || null,
+      };
+      setUser(normalizedUser as Me);
+    };
+
+    window.addEventListener('idcs:me-updated', onMeUpdated as EventListener);
+    return () => window.removeEventListener('idcs:me-updated', onMeUpdated as EventListener);
   }, []);
 
   if (loading) {
@@ -233,6 +260,10 @@ export default function App() {
                 <Route
                   path="/feedback"
                   element={<ProtectedRoute user={user} requiredPermissions={["feedback.feedback_page"]} element={<FeedbackPage />} />}
+                />
+                <Route
+                  path="/student/feedback"
+                  element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} requiredPermissions={["feedback.feedback_page"]} element={<FeedbackPage />} />}
                 />
                 <Route path="/academic-calendar" element={<AcademicCalendarRedirect user={user} />} />
                 <Route
@@ -483,7 +514,7 @@ export default function App() {
                 />
                 <Route
                   path="/staff-requests/pending-approvals"
-                  element={<ProtectedRoute user={user} requiredRoles={['HOD','AHOD','HR','HAA','IQAC','PS','PRINCIPAL']} requiredPermissions={['staff_requests.approve_requests']} element={<PendingApprovalsPage />} />}
+                  element={<ProtectedRoute user={user} requiredPermissions={['staff_requests.approve_requests']} element={<PendingApprovalsPage />} />}
                 />
                 
                 <Route
@@ -493,6 +524,36 @@ export default function App() {
                       user={user}
                       requiredRoles={['HOD', 'IQAC']}
                       element={<AttendanceAnalyticsRequestsPage />}
+                    />
+                  }
+                />
+                <Route
+                  path="/requests"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredPermissions={[
+                        'staff_requests.approve_requests',
+                        'accounts.profile_image_unlock_approve',
+                        'obe.master.manage',
+                        'academics.view_all_attendance',
+                        'academics.view_attendance_overall',
+                        'academics.view_all_departments',
+                        'academics.view_department_attendance',
+                        'academics.view_class_attendance',
+                        'academics.view_section_attendance',
+                      ]}
+                      element={<RequestsPage user={user} />}
+                    />
+                  }
+                />
+                <Route
+                  path="/requests/profile-image-update"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredPermissions={['accounts.profile_image_unlock_approve']}
+                      element={<ProfileImageUpdateRequestsPage />}
                     />
                   }
                 />
