@@ -106,6 +106,24 @@ class FeedbackForm(models.Model):
         default=True,
         help_text='If False, form is hidden from students/staff but data is preserved'
     )
+
+    # Legacy DB column (exists in some deployments as NOT NULL with no DB default).
+    # Keep it in the model so inserts always provide a value.
+    COMMENT_MODE_CHOICES = (
+        ('question_wise', 'Question-wise'),
+        ('common', 'Common'),
+    )
+    comment_mode = models.CharField(
+        max_length=20,
+        choices=COMMENT_MODE_CHOICES,
+        default='question_wise',
+        help_text='Legacy field: how comments are collected. Kept for DB compatibility.'
+    )
+
+    common_comment_enabled = models.BooleanField(
+        default=False,
+        help_text='If True, collect one common comment per subject (or form) instead of per-question comments.'
+    )
     status = models.CharField(
         max_length=10,
         choices=STATUS_CHOICES,
@@ -178,6 +196,13 @@ class FeedbackQuestion(models.Model):
     comment_enabled = models.BooleanField(
         default=True,
         help_text='Legacy field. Mirrors allow_comment.'
+    )
+
+    # Legacy DB column (exists in some deployments as NOT NULL with no DB default).
+    # Default must be set at the ORM layer to prevent NULL inserts.
+    is_mandatory = models.BooleanField(
+        default=False,
+        help_text='Legacy field. Whether this question is mandatory.'
     )
     
     order = models.PositiveIntegerField(
@@ -259,6 +284,12 @@ class FeedbackResponse(models.Model):
     answer_text = models.TextField(
         blank=True,
         help_text='Text response, used when answer_type is TEXT'
+    )
+
+    common_comment = models.TextField(
+        null=True,
+        blank=True,
+        help_text='Subject-level/common comment (stored per response row for compatibility).'
     )
 
     selected_option_text = models.CharField(

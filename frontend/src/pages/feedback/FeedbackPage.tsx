@@ -25,6 +25,7 @@ type Question = {
   options?: { id?: number; ui_id?: string; option_text: string }[];
   allow_rating: boolean;
   allow_comment: boolean;
+  is_mandatory?: boolean;
   rating_scale?: string | null;
   comment_required?: boolean;
   order: number;
@@ -38,7 +39,7 @@ const buildDefaultQuestions = (): Question[] => {
       question: 'How clearly did the faculty explain the subject concepts?',
       answer_type: 'BOTH',
       allow_rating: true,
-      allow_comment: true,
+      allow_comment: false,
       order: 1,
     },
     {
@@ -46,7 +47,7 @@ const buildDefaultQuestions = (): Question[] => {
       question: 'How effectively did the faculty answer students\' questions?',
       answer_type: 'BOTH',
       allow_rating: true,
-      allow_comment: true,
+      allow_comment: false,
       order: 2,
     },
     {
@@ -54,7 +55,7 @@ const buildDefaultQuestions = (): Question[] => {
       question: 'Was the pace of teaching comfortable for you?',
       answer_type: 'BOTH',
       allow_rating: true,
-      allow_comment: true,
+      allow_comment: false,
       order: 3,
     },
   ];
@@ -67,35 +68,35 @@ const buildIqacStudentDefaultQuestions = (): Question[] => {
       ui_id: `iqac-student-${seed}-1`,
       question: 'QUALITY OF ASSESSMENTS (SUMMATIVE AND FORMATIVE)\nTeacher is very effective in creating challenging, innovative and interesting assessments in summative, formative and laboratory components.',
       allow_rating: true,
-      allow_comment: true,
+      allow_comment: false,
       order: 1,
     },
     {
       ui_id: `iqac-student-${seed}-2`,
       question: 'QUALITY OF TEACHING\nTeacher effectively transfers expertise through classroom and laboratory engagement, nurturing knowledge, skills and attitude of learners and encouraging project-based and co-curricular learning.',
       allow_rating: true,
-      allow_comment: true,
+      allow_comment: false,
       order: 2,
     },
     {
       ui_id: `iqac-student-${seed}-3`,
       question: 'TECHNICAL EXPERTISE IN THE COURSE\nTeacher demonstrates thorough in-depth knowledge and strong technical expertise in the course.',
       allow_rating: true,
-      allow_comment: true,
+      allow_comment: false,
       order: 3,
     },
     {
       ui_id: `iqac-student-${seed}-4`,
       question: 'ENGLISH COMMUNICATION SKILLS\nTeacher teaches effectively in English and encourages students to communicate in English.',
       allow_rating: true,
-      allow_comment: true,
+      allow_comment: false,
       order: 4,
     },
     {
       ui_id: `iqac-student-${seed}-5`,
       question: 'GOAL SETTING FOR THE COURSE\nTeacher sets clear module-wise objectives and ensures learning outcomes are achieved through structured course delivery and assessment planning.',
       allow_rating: true,
-      allow_comment: true,
+      allow_comment: false,
       order: 5,
     },
   ];
@@ -113,7 +114,8 @@ const getInitialFormData = (): FeedbackFormData => ({
   regulation: null,
   years: [],
   semesters: [],
-  sections: []
+  sections: [],
+  common_comment_enabled: false,
 });
 
 type FeedbackFormData = {
@@ -129,6 +131,7 @@ type FeedbackFormData = {
   years: number[];
   semesters: number[];
   sections: number[];
+  common_comment_enabled: boolean;
 };
 
 type FeedbackForm = {
@@ -142,6 +145,9 @@ type FeedbackForm = {
   created_by_name: string;
   questions: Question[];
   year: number | null;
+  years?: number[];
+  semesters?: number[];
+  sections?: number[];
   semester_number: number | null;
   section_name: string | null;
   regulation_name: string | null;
@@ -154,6 +160,7 @@ type FeedbackForm = {
   years?: number[];
   sections?: number[];
   submission_status?: string;
+  common_comment_enabled?: boolean;
 };
 
 type ResponseStatistics = {
@@ -174,7 +181,10 @@ type ResponseDetail = {
     answer_type: string;
     question_type?: string;
     answer_star: number | null;
+    question_comment?: string | null;
     answer_text: string | null;
+    common_comment?: string | null;
+    selected_option?: string | null;
     selected_option_text?: string | null;
     teaching_assignment?: {
       teaching_assignment_id: number;
@@ -335,7 +345,7 @@ export default function FeedbackPage() {
   const [editingFormId, setEditingFormId] = useState<number | null>(null);
   const [newQuestion, setNewQuestion] = useState('');
   const [allowRating, setAllowRating] = useState(true);
-  const [allowComment, setAllowComment] = useState(true);
+  const [allowComment, setAllowComment] = useState(false);
   const [allowOwnType, setAllowOwnType] = useState(false);
   const [questionResponseTypeErrors, setQuestionResponseTypeErrors] = useState<Record<string, boolean>>({});
   const [submitting, setSubmitting] = useState(false);
@@ -350,6 +360,11 @@ export default function FeedbackPage() {
   const [departmentDropdownOpen, setDepartmentDropdownOpen] = useState(false);
   const [departmentLoading, setDepartmentLoading] = useState(true);
   const [departmentError, setDepartmentError] = useState<string | null>(null);
+  
+  // IQAC department state - for IQAC users to select from all departments
+  const [iqacAllDepartments, setIqacAllDepartments] = useState<Department[]>([]);
+  const [iqacSelectedDepartmentIds, setIqacSelectedDepartmentIds] = useState<number[]>([]);
+  const [iqacDepartmentDropdownOpen, setIqacDepartmentDropdownOpen] = useState(false);
 
   // Class options state
   const [classOptions, setClassOptions] = useState<ClassOptions>({
@@ -377,6 +392,8 @@ export default function FeedbackPage() {
   const [loadingStudentSubjects, setLoadingStudentSubjects] = useState(false);
   const [selectedSubject, setSelectedSubject] = useState<StudentSubject | null>(null);
   const [currentSubjectResponses, setCurrentSubjectResponses] = useState<Record<number, FeedbackResponse>>({});
+  const [currentSubjectCommonComment, setCurrentSubjectCommonComment] = useState('');
+  const [currentSubjectCommonCommentError, setCurrentSubjectCommonCommentError] = useState(false);
   const [commentValidationErrors, setCommentValidationErrors] = useState<Record<number, boolean>>({});
   const [ratingValidationErrors, setRatingValidationErrors] = useState<Record<number, boolean>>({});
   const [optionValidationErrors, setOptionValidationErrors] = useState<Record<number, boolean>>({});
@@ -387,8 +404,11 @@ export default function FeedbackPage() {
   const [loadingResponseView, setLoadingResponseView] = useState(false);
   const [responseViewError, setResponseViewError] = useState<string | null>(null);
   const [exportingFormId, setExportingFormId] = useState<number | null>(null);
+  const [deactivatingAllForms, setDeactivatingAllForms] = useState(false);
+  const [activatingAllForms, setActivatingAllForms] = useState(false);
 
   const [commonExportOpen, setCommonExportOpen] = useState(false);
+  const [commonExportMode, setCommonExportMode] = useState<'EXPORT' | 'DEACTIVATE' | 'ACTIVATE'>('EXPORT');
   const [commonExportLoading, setCommonExportLoading] = useState(false);
   const [commonExportDownloading, setCommonExportDownloading] = useState(false);
   const [commonExportError, setCommonExportError] = useState<string | null>(null);
@@ -401,6 +421,7 @@ export default function FeedbackPage() {
   const [commonExportSelectedYears, setCommonExportSelectedYears] = useState<number[]>([]);
   const [commonExportYears, setCommonExportYears] = useState<number[]>([]);
   const [commonExportYearsLoading, setCommonExportYearsLoading] = useState(false);
+  const [commonExportYearsLoaded, setCommonExportYearsLoaded] = useState(false);
 
   const [commonExportDeptDropdownOpen, setCommonExportDeptDropdownOpen] = useState(false);
   const [commonExportYearDropdownOpen, setCommonExportYearDropdownOpen] = useState(false);
@@ -410,6 +431,7 @@ export default function FeedbackPage() {
 
   // Ref for dropdowns
   const departmentDropdownRef = useRef<HTMLDivElement>(null);
+  const iqacDepartmentDropdownRef = useRef<HTMLDivElement>(null);
   const yearDropdownRef = useRef<HTMLDivElement>(null);
   const sectionDropdownRef = useRef<HTMLDivElement>(null);
 
@@ -474,6 +496,7 @@ export default function FeedbackPage() {
   const permissions = (user?.permissions || []).map(p => p.toLowerCase());
   const roleNamesUpper = (user?.roles || []).map(r => String(r).toUpperCase());
   const isIQACUser = roleNamesUpper.includes('IQAC');
+  const isAdminUser = roleNamesUpper.includes('ADMIN');
   const isStudentUser = String(user?.profile_type || '').toUpperCase() === 'STUDENT' || roleNamesUpper.includes('STUDENT');
   const canCreateFeedback = permissions.includes('feedback.create');
   const canReplyFeedback = permissions.includes('feedback.reply');
@@ -485,6 +508,8 @@ export default function FeedbackPage() {
 
   const getQuestionKey = (q: Question, index: number) => String(q.ui_id || q.id || index);
 
+  const questionAllowCommentSnapshotRef = useRef<Record<string, boolean>>({});
+
   const isOwnTypeEnabled = (q: Question) => q.question_type === 'radio' || q.question_type === 'rating_radio_comment';
 
   const deriveNonOwnTypeQuestionType = (q: Question): Question['question_type'] => {
@@ -492,6 +517,17 @@ export default function FeedbackPage() {
     if (q.allow_comment) return 'text';
     return 'rating';
   };
+
+  // Track latest per-question comment selections while Common Comment is OFF.
+  // This lets us restore exact manual choices when toggling Common Comment OFF again.
+  useEffect(() => {
+    if (formData.common_comment_enabled) return;
+    const next: Record<string, boolean> = {};
+    (formData.questions || []).forEach((q, idx) => {
+      next[getQuestionKey(q, idx)] = Boolean(q.allow_comment);
+    });
+    questionAllowCommentSnapshotRef.current = next;
+  }, [formData.common_comment_enabled, formData.questions]);
 
   const openFeedbackForm = (form: FeedbackForm) => {
     const submissionStatus = String(form.submission_status || '').toUpperCase();
@@ -560,6 +596,9 @@ export default function FeedbackPage() {
     const handleClickOutside = (event: MouseEvent) => {
       if (departmentDropdownRef.current && !departmentDropdownRef.current.contains(event.target as Node)) {
         setDepartmentDropdownOpen(false);
+      }
+      if (iqacDepartmentDropdownRef.current && !iqacDepartmentDropdownRef.current.contains(event.target as Node)) {
+        setIqacDepartmentDropdownOpen(false);
       }
       if (yearDropdownRef.current && !yearDropdownRef.current.contains(event.target as Node)) {
         setYearDropdownOpen(false);
@@ -659,37 +698,81 @@ export default function FeedbackPage() {
     }
   }, [user, canCreateFeedback]);
 
+  // Fetch IQAC departments on mount
+  useEffect(() => {
+    const fetchIQACDepartments = async () => {
+      if (isIQACUser && canCreateFeedback) {
+        try {
+          const response = await fetchWithAuth('/api/feedback/common-export/options/');
+          if (response.ok) {
+            const data = await response.json();
+            if (data.departments && Array.isArray(data.departments)) {
+              const departments = data.departments.map((dept: any) => ({
+                id: dept.id,
+                name: dept.name,
+                code: dept.code,
+                short_name: dept.short_name
+              }));
+              setIqacAllDepartments(departments);
+              console.log('IQAC departments loaded:', departments);
+            }
+          } else {
+            console.warn('Failed to fetch IQAC departments');
+          }
+        } catch (error) {
+          console.error('Error fetching IQAC departments:', error);
+        }
+      }
+    };
+
+    if (user) {
+      fetchIQACDepartments();
+    }
+  }, [user, isIQACUser, canCreateFeedback]);
+
   // Initialize selectedDepartments when form is opened
   useEffect(() => {
-    if (showCreateForm && departmentData) {
+    if (showCreateForm) {
       if (editingFormId) {
+        // Editing form
+        if (isIQACUser) {
+          // IQAC editing - use IQAC selected departments
+          if (formData.department) {
+            setIqacSelectedDepartmentIds([formData.department]);
+          }
+        } else {
+          // HOD editing
+          if (formData.department) {
+            setSelectedDepartments([formData.department]);
+          }
+        }
         if (formData.department) {
-          setSelectedDepartments([formData.department]);
-          setAllDepartmentsSelected(false);
           fetchClassOptions([formData.department], formData.years);
         }
         return;
       }
 
+      // New form
       if (isIQACUser) {
-        const allDeptIds = departmentData.departments.map(d => d.id);
-        setSelectedDepartments(allDeptIds);
-        setAllDepartmentsSelected(true);
-        fetchClassOptions(undefined);
+        // IQAC: Initialize with empty selection (user must select)
+        setIqacSelectedDepartmentIds([]);
         return;
       }
 
-      if (departmentData.has_multiple_departments) {
-        // For multi-department HODs, default to all departments selected
-        const allDeptIds = departmentData.departments.map(d => d.id);
-        setSelectedDepartments(allDeptIds);
-        setAllDepartmentsSelected(false);
-        // Fetch class options for all departments
-        fetchClassOptions(allDeptIds);
-      } else {
-        // Single department - set to that department
-        setSelectedDepartments(activeDepartment ? [activeDepartment.id] : []);
-        setAllDepartmentsSelected(false);
+      // HOD
+      if (departmentData) {
+        if (departmentData.has_multiple_departments) {
+          // For multi-department HODs, default to all departments selected
+          const allDeptIds = departmentData.departments.map(d => d.id);
+          setSelectedDepartments(allDeptIds);
+          setAllDepartmentsSelected(false);
+          // Fetch class options for all departments
+          fetchClassOptions(allDeptIds);
+        } else {
+          // Single department - set to that department
+          setSelectedDepartments(activeDepartment ? [activeDepartment.id] : []);
+          setAllDepartmentsSelected(false);
+        }
       }
     } else if (!showCreateForm) {
       // Reset when form is closed
@@ -862,6 +945,7 @@ export default function FeedbackPage() {
               : [],
             allow_rating: typeof q.allow_rating === 'boolean' ? q.allow_rating : Boolean(q.rating_scale),
             allow_comment: typeof q.allow_comment === 'boolean' ? q.allow_comment : Boolean(q.comment_required),
+            is_mandatory: typeof q.is_mandatory === 'boolean' ? q.is_mandatory : false,
             rating_scale: q.rating_scale ?? null,
             comment_required: q.comment_required,
             order: q.order ?? idx + 1,
@@ -870,6 +954,7 @@ export default function FeedbackPage() {
 
         const normalizedForms = (data || []).map((form: any) => ({
           ...form,
+          common_comment_enabled: Boolean(form.common_comment_enabled),
           questions: normalizeQuestions(form.questions || []),
         }));
 
@@ -1056,8 +1141,8 @@ export default function FeedbackPage() {
     }
   };
 
-  const openCommonExport = async () => {
-    if (!isIQACUser) return;
+  const openBulkFilterModal = async (mode: 'EXPORT' | 'DEACTIVATE' | 'ACTIVATE') => {
+    setCommonExportMode(mode);
     setCommonExportOpen(true);
     setCommonExportError(null);
 
@@ -1066,7 +1151,7 @@ export default function FeedbackPage() {
     try {
       const res = await fetchWithAuth('/api/feedback/common-export/options/');
       if (!res.ok) {
-        let msg = 'Failed to load export options';
+        let msg = 'Failed to load options';
         try {
           const data = await res.json();
           msg = data?.detail || msg;
@@ -1078,30 +1163,44 @@ export default function FeedbackPage() {
       const data = await res.json();
       setCommonExportOptions(data);
     } catch (e: any) {
-      setCommonExportError(e?.message || 'Failed to load export options');
+      setCommonExportError(e?.message || 'Failed to load options');
     } finally {
       setCommonExportLoading(false);
     }
+  };
+
+  const handleDeactivateAllForms = async () => {
+    await openBulkFilterModal('DEACTIVATE');
+  };
+
+  const handleActivateAllForms = async () => {
+    if (!(isIQACUser || isAdminUser)) return;
+    await openBulkFilterModal('ACTIVATE');
+  };
+
+  const openCommonExport = async () => {
+    if (!isIQACUser) return;
+    await openBulkFilterModal('EXPORT');
   };
 
   const closeCommonExport = () => {
     setCommonExportOpen(false);
     setCommonExportError(null);
     setCommonExportAllDepartments(true);
-    setCommonExportSelectedDepartmentIds([]);
     setCommonExportAllYears(true);
     setCommonExportSelectedYears([]);
-    setCommonExportYears([]);
     setCommonExportDeptDropdownOpen(false);
     setCommonExportYearDropdownOpen(false);
   };
 
   useEffect(() => {
     if (!commonExportOpen) return;
-    if (!isIQACUser && !(permissions || []).includes('feedback.analytics_view')) return;
+    if (!isIQACUser && !isAdminUser && !(permissions || []).includes('feedback.analytics_view')) return;
+    if (commonExportYearsLoaded || commonExportYearsLoading) return;
 
     // Always load years institution-wide (year filtering must work even for All Departments).
     const controller = new AbortController();
+
     const loadYears = async () => {
       setCommonExportYearsLoading(true);
       try {
@@ -1119,10 +1218,10 @@ export default function FeedbackPage() {
         const data = await res.json();
         const years = Array.isArray(data?.years) ? data.years : [];
         setCommonExportYears(years);
+        setCommonExportYearsLoaded(true);
       } catch (e: any) {
         if (String(e?.name || '') === 'AbortError') return;
         setCommonExportError(e?.message || 'Failed to load years');
-        setCommonExportYears([]);
       } finally {
         setCommonExportYearsLoading(false);
       }
@@ -1131,7 +1230,7 @@ export default function FeedbackPage() {
     loadYears();
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [commonExportOpen]);
+  }, [commonExportOpen, commonExportYearsLoaded]);
 
   useEffect(() => {
     if (!commonExportOpen) return;
@@ -1215,6 +1314,9 @@ export default function FeedbackPage() {
     try {
       const res = await fetchWithAuth('/api/feedback/common-export/', {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify(payload),
       });
       if (!res.ok) {
@@ -1249,6 +1351,122 @@ export default function FeedbackPage() {
     }
   };
 
+  const handleDeactivateFilteredForms = async () => {
+    if (!(isIQACUser || isAdminUser)) return;
+    setCommonExportError(null);
+
+    if (!commonExportAllDepartments && commonExportSelectedDepartmentIds.length === 0) {
+      setCommonExportError('Select at least one department or choose All Departments.');
+      return;
+    }
+
+    if (!commonExportAllYears && commonExportSelectedYears.length === 0) {
+      setCommonExportError('Select at least one year or choose All Years.');
+      return;
+    }
+
+    const payload = {
+      all_departments: commonExportAllDepartments,
+      department_ids: commonExportAllDepartments ? [] : commonExportSelectedDepartmentIds,
+      all_years: commonExportAllYears,
+      years: commonExportAllYears ? [] : commonExportSelectedYears,
+    };
+
+    setDeactivatingAllForms(true);
+    try {
+      const response = await fetchWithAuth('/api/feedback/deactivate-filtered/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        let errorMessage = 'Failed to deactivate feedback forms';
+        try {
+          const data = await response.json();
+          errorMessage = data?.detail || errorMessage;
+        } catch {
+          // Keep fallback message.
+        }
+        throw new Error(errorMessage);
+      }
+
+      const data = await response.json().catch(() => ({}));
+      await fetchFeedbackForms();
+      if (typeof data?.count === 'number') {
+        showToast(`Deactivated ${data.count} active form${data.count === 1 ? '' : 's'}`);
+      } else {
+        showToast('Feedback forms deactivated');
+      }
+      closeCommonExport();
+    } catch (error: any) {
+      console.error('[Feedback] Deactivate filtered failed:', error);
+      setCommonExportError(error?.message || 'Failed to deactivate feedback forms');
+    } finally {
+      setDeactivatingAllForms(false);
+    }
+  };
+
+  const handleActivateFilteredForms = async () => {
+    if (!(isIQACUser || isAdminUser)) return;
+    setCommonExportError(null);
+
+    if (!commonExportAllDepartments && commonExportSelectedDepartmentIds.length === 0) {
+      setCommonExportError('Select at least one department or choose All Departments.');
+      return;
+    }
+
+    if (!commonExportAllYears && commonExportSelectedYears.length === 0) {
+      setCommonExportError('Select at least one year or choose All Years.');
+      return;
+    }
+
+    const payload = {
+      all_departments: commonExportAllDepartments,
+      department_ids: commonExportAllDepartments ? [] : commonExportSelectedDepartmentIds,
+      all_years: commonExportAllYears,
+      years: commonExportAllYears ? [] : commonExportSelectedYears,
+    };
+
+    setActivatingAllForms(true);
+    try {
+      const response = await fetchWithAuth('/api/feedback/activate-filtered/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        let errorMessage = 'Failed to activate feedback forms';
+        try {
+          const data = await response.json();
+          errorMessage = data?.detail || errorMessage;
+        } catch {
+          // Keep fallback message.
+        }
+        throw new Error(errorMessage);
+      }
+
+      const data = await response.json().catch(() => ({}));
+      await fetchFeedbackForms();
+      if (typeof data?.count === 'number') {
+        showToast(`Activated ${data.count} form${data.count === 1 ? '' : 's'}`);
+      } else {
+        showToast('Feedback forms activated');
+      }
+      closeCommonExport();
+    } catch (error: any) {
+      console.error('[Feedback] Activate filtered failed:', error);
+      setCommonExportError(error?.message || 'Failed to activate feedback forms');
+    } finally {
+      setActivatingAllForms(false);
+    }
+  };
+
   // Get department from user profile (for HOD)
   const getDepartmentId = (): number | null => {
     if (user?.profile && user.profile.department_id) {
@@ -1259,6 +1477,8 @@ export default function FeedbackPage() {
 
   const handleAddQuestion = () => {
     if (!newQuestion.trim()) return;
+
+    const commonCommentEnabled = Boolean(formData.common_comment_enabled);
 
     // Ensure at least one response type is selected
     if (!allowRating && !allowComment && !allowOwnType) {
@@ -1273,7 +1493,7 @@ export default function FeedbackPage() {
 
     // Keep payload aligned to backend normalization rules.
     const nextAllowRating = questionType === 'rating_radio_comment' ? true : (questionType === 'radio' ? false : allowRating);
-    const nextAllowComment = ownTypeEnabled ? true : allowComment;
+    const nextAllowComment = commonCommentEnabled ? false : allowComment;
 
     const question: Question = {
       ui_id: `new-${Date.now()}-${formData.questions.length + 1}`,
@@ -1282,6 +1502,7 @@ export default function FeedbackPage() {
       options: ownTypeEnabled ? ensureMinOwnTypeOptions([]) : [],
       allow_rating: nextAllowRating,
       allow_comment: nextAllowComment,
+      is_mandatory: false,
       order: formData.questions.length + 1
     };
 
@@ -1291,9 +1512,9 @@ export default function FeedbackPage() {
     });
 
     setNewQuestion('');
-    // Reset to default: both enabled
+    // Reset to defaults for adding the next question
     setAllowRating(true);
-    setAllowComment(true);
+    setAllowComment(false);
     setAllowOwnType(false);
   };
 
@@ -1321,6 +1542,10 @@ export default function FeedbackPage() {
     field: 'allow_rating' | 'allow_comment',
     checked: boolean
   ) => {
+    if (field === 'allow_comment' && formData.common_comment_enabled) {
+      return;
+    }
+
     const updatedQuestions = [...formData.questions];
     const current = updatedQuestions[index];
     let next: Question = { ...current } as Question;
@@ -1407,7 +1632,8 @@ export default function FeedbackPage() {
           ...q,
           question_type: q.allow_rating ? 'rating_radio_comment' : 'radio',
           allow_rating: q.allow_rating ? true : false,
-          allow_comment: true,
+          // Enabling Own Type must not force question-wise comment on.
+          allow_comment: formData.common_comment_enabled ? false : q.allow_comment,
           options: ensureMinOwnTypeOptions(q.options),
         };
 
@@ -1458,7 +1684,8 @@ export default function FeedbackPage() {
     setSubmitError(null);
     setNewQuestion('');
     setAllowRating(true);
-    setAllowComment(true);
+    // Default unchecked for question-wise comment; admin can manually enable.
+    setAllowComment(false);
     setAllowOwnType(false);
     setQuestionResponseTypeErrors({});
 
@@ -1471,6 +1698,7 @@ export default function FeedbackPage() {
       type: (form.type as 'SUBJECT_FEEDBACK' | 'OPEN_FEEDBACK') || '',
       department: form.department || activeDepartment?.id || null,
       status: (form.status as 'DRAFT' | 'ACTIVE') || 'DRAFT',
+      common_comment_enabled: Boolean((form as any).common_comment_enabled),
       questions: (form.questions || []).map((q, idx) => ({
         id: q.id,
         ui_id: `saved-${q.id || idx}-${Date.now()}`,
@@ -1525,6 +1753,12 @@ export default function FeedbackPage() {
         setSubmitError(`Question ${i + 1} cannot be empty`);
         return;
       }
+
+      if (formData.common_comment_enabled && q.question_type === 'text') {
+        setSubmitError(`Question ${i + 1} is text-only. Disable Common Comment or enable rating.`);
+        return;
+      }
+
       const hasOwnType = isOwnTypeEnabled(q);
       if (!q.allow_rating && !q.allow_comment && !hasOwnType) {
         nextTypeErrors[getQuestionKey(q, i)] = true;
@@ -1557,18 +1791,27 @@ export default function FeedbackPage() {
       }
     }
 
-    // Validate department selection for multi-department HODs
-    if (departmentData && departmentData.has_multiple_departments) {
-      if (!allDepartmentsSelected && selectedDepartments.length === 0) {
+    // Validate department selection
+    if (isIQACUser) {
+      // IQAC must select at least one department
+      if (iqacSelectedDepartmentIds.length === 0) {
         setSubmitError('Please select at least one department');
         return;
       }
-    }
-
-    // Use the fetched HOD department
-    if (!activeDepartment?.id && (!departmentData || !departmentData.has_multiple_departments)) {
-      setSubmitError('Department information not found. Please refresh the page or contact administrator.');
-      return;
+    } else {
+      // HOD validation
+      if (departmentData && departmentData.has_multiple_departments) {
+        if (!allDepartmentsSelected && selectedDepartments.length === 0) {
+          setSubmitError('Please select at least one department');
+          return;
+        }
+      }
+      
+      // Use the fetched HOD department
+      if (!activeDepartment?.id && (!departmentData || !departmentData.has_multiple_departments)) {
+        setSubmitError('Department information not found. Please refresh the page or contact administrator.');
+        return;
+      }
     }
 
     setSubmitting(true);
@@ -1577,7 +1820,10 @@ export default function FeedbackPage() {
     try {
       // Determine departments to send
       let departmentsToSend: number[] = [];
-      if (isIQACUser && allDepartmentsSelected) {
+      if (isIQACUser) {
+        // IQAC: use selected departments
+        departmentsToSend = iqacSelectedDepartmentIds;
+      } else if (allDepartmentsSelected) {
         departmentsToSend = [];
       } else if (departmentData && departmentData.has_multiple_departments) {
         // Multi-department HOD - use selected departments
@@ -1595,11 +1841,13 @@ export default function FeedbackPage() {
         all_departments: isIQACUser && allDepartmentsSelected,
         department: formData.department,
         status: formData.status,
+        common_comment_enabled: Boolean(formData.common_comment_enabled),
         questions: formData.questions.map((q) => ({
           id: q.id,
           question: q.question,
           allow_rating: q.allow_rating,
-          allow_comment: q.allow_comment,
+          allow_comment: formData.common_comment_enabled ? false : q.allow_comment,
+          is_mandatory: Boolean(q.is_mandatory),
           order: q.order,
           answer_type: q.answer_type,
           question_type: q.question_type || 'rating',
@@ -1737,9 +1985,11 @@ export default function FeedbackPage() {
 
   const getMissingCommentQuestionIds = () => {
     if (!selectedForm) return [] as number[];
+    if (selectedForm.common_comment_enabled) return [] as number[];
     const currentResponses = selectedSubject ? currentSubjectResponses : responses;
     return selectedForm.questions
       .filter((question) => {
+        if (!question.allow_comment) return false;
         const comment = currentResponses[question.id!]?.answer_text;
         return !comment || !comment.trim();
       })
@@ -1773,6 +2023,10 @@ export default function FeedbackPage() {
   const hasAllMandatoryComments = selectedForm ? getMissingCommentQuestionIds().length === 0 : false;
   const hasAllMandatoryRatings = selectedForm ? getMissingRatingQuestionIds().length === 0 : false;
   const hasAllMandatoryOptions = selectedForm ? getMissingOptionQuestionIds().length === 0 : false;
+  const requiresCommonComment = Boolean(
+    selectedForm?.common_comment_enabled && selectedForm?.type === 'SUBJECT_FEEDBACK' && selectedSubject
+  );
+  const hasCommonComment = !requiresCommonComment || Boolean(currentSubjectCommonComment.trim());
 
   // Submit feedback response
   const handleSubmitResponse = async () => {
@@ -1782,6 +2036,12 @@ export default function FeedbackPage() {
 
     // Determine which responses to use based on mode
     const currentResponses = selectedSubject ? currentSubjectResponses : responses;
+
+    if (requiresCommonComment && !currentSubjectCommonComment.trim()) {
+      setCurrentSubjectCommonCommentError(true);
+      setResponseError('Please complete all required fields before submitting');
+      return;
+    }
 
     const missingCommentIds = getMissingCommentQuestionIds();
     if (missingCommentIds.length > 0) {
@@ -1821,6 +2081,7 @@ export default function FeedbackPage() {
     setCommentValidationErrors({});
     setRatingValidationErrors({});
     setOptionValidationErrors({});
+    setCurrentSubjectCommonCommentError(false);
 
     try {
       // Prepare payload - teaching_assignment_id goes at top level, not in each response
@@ -1829,6 +2090,7 @@ export default function FeedbackPage() {
       const payload = {
         feedback_form_id: selectedForm.id,
         responses: responsesArray,
+        ...(requiresCommonComment && { common_comment: currentSubjectCommonComment.trim() }),
         ...(selectedSubject && { teaching_assignment_id: selectedSubject.teaching_assignment_id })
       };
 
@@ -1876,6 +2138,8 @@ export default function FeedbackPage() {
         await fetchStudentSubjects(selectedForm.id);
         setSelectedSubject(null);
         setCurrentSubjectResponses({});
+        setCurrentSubjectCommonComment('');
+        setCurrentSubjectCommonCommentError(false);
         setCommentValidationErrors({});
         setRatingValidationErrors({});
         setOptionValidationErrors({});
@@ -2083,7 +2347,7 @@ export default function FeedbackPage() {
                 )}
 
                 {/* Department Selection - Multi-Select for HODs with multiple departments */}
-                {departmentData && departmentData.has_multiple_departments && (
+                {!isIQACUser && departmentData && departmentData.has_multiple_departments && (
                   <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4">
                     <div className="flex items-center gap-3 mb-3">
                       <Users className="w-5 h-5 text-indigo-600" />
@@ -2206,13 +2470,85 @@ export default function FeedbackPage() {
                   </div>
                 )}
 
-                {/* Single Department Display - Show inside form for single-department HODs */}
-                {departmentData && !departmentData.has_multiple_departments && activeDepartment && (
+                {/* Single Department Display - Show inside form for single-department HODs (NOT for IQAC) */}
+                {!isIQACUser && departmentData && !departmentData.has_multiple_departments && activeDepartment && (
                   <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 flex items-center gap-2">
                     <Users className="w-4 h-4 text-slate-600" />
                     <span className="text-sm text-slate-700">
                       Department: <span className="font-semibold text-slate-900">{activeDepartment.name}</span>
                     </span>
+                  </div>
+                )}
+
+                {/* IQAC Department Dropdown with All Departments checkbox */}
+                {isIQACUser && !editingFormId && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Department <span className="text-red-500">*</span>
+                    </label>
+                    <div className="relative" ref={iqacDepartmentDropdownRef}>
+                      <button
+                        type="button"
+                        onClick={() => setIqacDepartmentDropdownOpen(!iqacDepartmentDropdownOpen)}
+                        className="w-full px-4 py-2 text-left bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors flex items-center justify-between"
+                      >
+                        <span className={iqacSelectedDepartmentIds.length === 0 ? 'text-slate-500' : 'text-slate-900'}>
+                          {iqacSelectedDepartmentIds.length === 0
+                            ? 'Select department(s)'
+                            : iqacSelectedDepartmentIds.length === iqacAllDepartments.length
+                              ? 'All Departments'
+                              : iqacSelectedDepartmentIds.length === 1
+                                ? iqacAllDepartments.find(d => d.id === iqacSelectedDepartmentIds[0])?.name || 'Select'
+                                : `${iqacSelectedDepartmentIds.length} department(s) selected`}
+                        </span>
+                        <ChevronDown className={`w-4 h-4 transition-transform ${iqacDepartmentDropdownOpen ? 'rotate-180' : ''}`} />
+                      </button>
+
+                      {iqacDepartmentDropdownOpen && (
+                        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-300 rounded-lg shadow-lg z-10">
+                          <div className="max-h-80 overflow-y-auto p-2 space-y-2">
+                            {/* All Departments Checkbox */}
+                            <label className="flex items-center gap-3 p-2 hover:bg-slate-50 rounded cursor-pointer bg-slate-50 border-b border-slate-200">
+                              <input
+                                type="checkbox"
+                                checked={iqacSelectedDepartmentIds.length === iqacAllDepartments.length && iqacAllDepartments.length > 0}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    // Select all departments
+                                    setIqacSelectedDepartmentIds(iqacAllDepartments.map(d => d.id));
+                                  } else {
+                                    // Deselect all departments
+                                    setIqacSelectedDepartmentIds([]);
+                                  }
+                                }}
+                                className="w-4 h-4 rounded border-slate-300"
+                              />
+                              <span className="text-sm font-semibold text-slate-900">All Departments</span>
+                            </label>
+
+                            {/* Individual Department Checkboxes */}
+                            {iqacAllDepartments.map(dept => (
+                              <label key={dept.id} className="flex items-center gap-3 p-2 hover:bg-slate-50 rounded cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={iqacSelectedDepartmentIds.includes(dept.id)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setIqacSelectedDepartmentIds([...iqacSelectedDepartmentIds, dept.id]);
+                                    } else {
+                                      setIqacSelectedDepartmentIds(iqacSelectedDepartmentIds.filter(id => id !== dept.id));
+                                    }
+                                  }}
+                                  className="w-4 h-4 rounded border-slate-300"
+                                />
+                                <span className="text-sm text-slate-900">{dept.name}</span>
+                                {dept.code && <span className="text-xs text-slate-500">({dept.code})</span>}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
 
@@ -2224,7 +2560,22 @@ export default function FeedbackPage() {
                   <div className="grid grid-cols-2 gap-3">
                     <button
                       type="button"
-                      onClick={() => setFormData({ ...formData, target_type: 'STAFF', type: '' })}
+                      onClick={() => {
+                        if (!editingFormId) {
+                          setAllowRating(true);
+                          setAllowComment(false);
+                          setAllowOwnType(false);
+                          setFormData({
+                            ...formData,
+                            target_type: 'STAFF',
+                            type: '',
+                            common_comment_enabled: false,
+                            questions: [],
+                          });
+                          return;
+                        }
+                        setFormData({ ...formData, target_type: 'STAFF', type: '' });
+                      }}
                       className={`p-4 rounded-lg border-2 transition-all ${
                         formData.target_type === 'STAFF'
                           ? 'border-indigo-600 bg-indigo-50'
@@ -2241,7 +2592,7 @@ export default function FeedbackPage() {
                       onClick={() => {
                         if (isIQACUser && !editingFormId) {
                           setAllowRating(true);
-                          setAllowComment(true);
+                          setAllowComment(false);
                           setFormData({
                             ...formData,
                             target_type: 'STUDENT',
@@ -2250,6 +2601,16 @@ export default function FeedbackPage() {
                           });
                           return;
                         }
+                        if (!editingFormId && formData.target_type === 'STAFF') {
+                          setFormData({
+                            ...formData,
+                            target_type: 'STUDENT',
+                            type: '',
+                            questions: buildDefaultQuestions(),
+                          });
+                          return;
+                        }
+
                         setFormData({ ...formData, target_type: 'STUDENT', type: '' });
                       }}
                       className={`p-4 rounded-lg border-2 transition-all ${
@@ -2634,6 +2995,36 @@ export default function FeedbackPage() {
                 {formData.type && (
                   <div className="space-y-4">
                     <h3 className="text-lg font-semibold text-slate-800">Questions</h3>
+
+                    {formData.type === 'SUBJECT_FEEDBACK' && (
+                      <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+                        <label className="flex items-start gap-3 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={formData.common_comment_enabled}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              setFormData((prev) => ({
+                                ...prev,
+                                common_comment_enabled: checked,
+                                questions: (prev.questions || []).map((q) => ({
+                                  ...q,
+                                  allow_comment: checked ? false : true,
+                                })),
+                              }));
+                              setAllowComment(false);
+                            }}
+                            className="mt-1 w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-2 focus:ring-indigo-500"
+                          />
+                          <div>
+                            <p className="text-sm font-medium text-slate-800">Common Comment (Per Subject)</p>
+                            <p className="text-xs text-slate-600 mt-0.5">
+                              When enabled, students enter one overall comment per subject and per-question comments are disabled.
+                            </p>
+                          </div>
+                        </label>
+                      </div>
+                    )}
                     
                     {/* Existing questions */}
                     {formData.questions.length > 0 && (
@@ -2661,6 +3052,7 @@ export default function FeedbackPage() {
                                       type="checkbox"
                                       checked={q.allow_comment}
                                       onChange={(e) => handleUpdateQuestionType(index, 'allow_comment', e.target.checked)}
+                                      disabled={formData.common_comment_enabled}
                                       className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-2 focus:ring-indigo-500"
                                     />
                                     <span className="text-xs text-slate-700 flex items-center gap-1.5">
@@ -2789,6 +3181,7 @@ export default function FeedbackPage() {
                                 }
                                 setAllowComment(nextChecked);
                               }}
+                              disabled={formData.common_comment_enabled}
                               className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-2 focus:ring-indigo-500"
                             />
                             <span className="text-sm text-slate-700 flex items-center gap-1.5">
@@ -2805,9 +3198,6 @@ export default function FeedbackPage() {
                                 onChange={(e) => {
                                   const nextChecked = e.target.checked;
                                   setAllowOwnType(nextChecked);
-                                  if (nextChecked) {
-                                    setAllowComment(true);
-                                  }
                                 }}
                                 className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-2 focus:ring-indigo-500"
                               />
@@ -2852,7 +3242,7 @@ export default function FeedbackPage() {
                 <div className="flex items-center gap-3 pt-4 border-t border-slate-200">
                   <button
                     type="submit"
-                    disabled={submitting || !formData.type || formData.questions.length === 0 || !activeDepartment}
+                    disabled={submitting || !formData.type || formData.questions.length === 0 || (isIQACUser ? iqacSelectedDepartmentIds.length === 0 : !activeDepartment)}
                     className="px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-md"
                   >
                     {submitting ? (
@@ -2889,15 +3279,28 @@ export default function FeedbackPage() {
           <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-6 mb-6">
             <div className="flex items-center justify-between gap-3 mb-4">
               <h2 className="text-xl font-semibold text-slate-800">Your Feedback Forms</h2>
-              {isIQACUser && (
-                <button
-                  type="button"
-                  onClick={openCommonExport}
-                  className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors text-sm font-medium flex items-center gap-2"
-                >
-                  <Download className="w-4 h-4" />
-                  Common Export
-                </button>
+              {(isIQACUser || isAdminUser) && (
+                <div className="flex items-center gap-2">
+                  {isIQACUser && (
+                    <button
+                      type="button"
+                      onClick={openCommonExport}
+                      className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors text-sm font-medium flex items-center gap-2"
+                    >
+                      <Download className="w-4 h-4" />
+                      Common Export
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={handleDeactivateAllForms}
+                    disabled={deactivatingAllForms}
+                    className="px-4 py-2 rounded-lg transition-colors text-sm font-medium bg-red-100 text-red-700 hover:bg-red-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {deactivatingAllForms ? 'Deactivating...' : 'Deactivate All'}
+                  </button>
+                </div>
               )}
             </div>
             
@@ -3133,11 +3536,34 @@ export default function FeedbackPage() {
                                 {deactivatedForms.length}
                               </span>
                             </div>
-                            <ChevronDown
-                              className={`w-5 h-5 text-slate-600 transition-transform ${
-                                showDeactivatedForms ? 'transform rotate-180' : ''
-                              }`}
-                            />
+                            <div className="flex items-center gap-2">
+                              {(isIQACUser || isAdminUser) && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleActivateAllForms();
+                                  }}
+                                  disabled={activatingAllForms}
+                                  className="px-4 py-2 bg-green-100 text-green-700 hover:bg-green-200 rounded-lg transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                  {activatingAllForms ? (
+                                    <span className="inline-flex items-center gap-2">
+                                      <Loader2 className="w-4 h-4 animate-spin" />
+                                      Activating...
+                                    </span>
+                                  ) : (
+                                    'Activate All'
+                                  )}
+                                </button>
+                              )}
+
+                              <ChevronDown
+                                className={`w-5 h-5 text-slate-600 transition-transform ${
+                                  showDeactivatedForms ? 'transform rotate-180' : ''
+                                }`}
+                              />
+                            </div>
                           </button>
                           
                           {showDeactivatedForms && (
@@ -3266,7 +3692,13 @@ export default function FeedbackPage() {
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-lg shadow-xl max-w-lg w-full">
               <div className="p-5 border-b border-slate-200 flex items-center justify-between">
-                <h3 className="text-lg font-semibold text-slate-800">Common Export</h3>
+                <h3 className="text-lg font-semibold text-slate-800">
+                  {commonExportMode === 'DEACTIVATE'
+                    ? 'Deactivate Feedback Forms'
+                    : commonExportMode === 'ACTIVATE'
+                      ? 'Activate Feedback Forms'
+                      : 'Common Export'}
+                </h3>
                 <button
                   type="button"
                   onClick={closeCommonExport}
@@ -3423,19 +3855,41 @@ export default function FeedbackPage() {
                 <button
                   type="button"
                   onClick={closeCommonExport}
-                  disabled={commonExportDownloading}
+                  disabled={commonExportDownloading || deactivatingAllForms || activatingAllForms}
                   className="px-5 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 transition-colors disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
-                  onClick={handleDownloadCommonExport}
-                  disabled={commonExportDownloading || commonExportLoading}
-                  className="px-5 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors disabled:opacity-50 flex items-center gap-2"
+                  onClick={
+                    commonExportMode === 'DEACTIVATE'
+                      ? handleDeactivateFilteredForms
+                      : commonExportMode === 'ACTIVATE'
+                        ? handleActivateFilteredForms
+                        : handleDownloadCommonExport
+                  }
+                  disabled={commonExportLoading || commonExportDownloading || deactivatingAllForms || activatingAllForms}
+                  className={`${commonExportMode === 'DEACTIVATE' ? 'bg-red-600 hover:bg-red-700' : 'bg-emerald-600 hover:bg-emerald-700'} px-5 py-2 text-white rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2`}
                 >
-                  {commonExportDownloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                  {commonExportDownloading ? 'Exporting...' : 'Export'}
+                  {(commonExportMode === 'DEACTIVATE'
+                    ? deactivatingAllForms
+                    : commonExportMode === 'ACTIVATE'
+                      ? activatingAllForms
+                      : commonExportDownloading) ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : commonExportMode === 'DEACTIVATE' ? (
+                    <X className="w-4 h-4" />
+                  ) : commonExportMode === 'ACTIVATE' ? (
+                    <CheckCircle className="w-4 h-4" />
+                  ) : (
+                    <Download className="w-4 h-4" />
+                  )}
+                  {commonExportMode === 'DEACTIVATE'
+                    ? (deactivatingAllForms ? 'Deactivating...' : 'Deactivate')
+                    : commonExportMode === 'ACTIVATE'
+                      ? (activatingAllForms ? 'Activating...' : 'Activate')
+                      : (commonExportDownloading ? 'Exporting...' : 'Export')}
                 </button>
               </div>
             </div>
@@ -3579,9 +4033,28 @@ export default function FeedbackPage() {
                                     
                                     {/* Questions and Answers */}
                                     <div className="space-y-1.5">
+                                      {(() => {
+                                        const hasQuestionWiseComments = subject.answers.some(
+                                          (a) => String(a.question_comment ?? a.answer_text ?? '').trim() !== ''
+                                        );
+                                        const overallCommentOnce = hasQuestionWiseComments
+                                          ? ''
+                                          : String(
+                                              subject.answers.find(
+                                                (a) => String(a.common_comment ?? '').trim() !== ''
+                                              )?.common_comment ?? ''
+                                            ).trim();
+
+                                        return (
+                                          <>
                                       {subject.answers.map((answer, idx) => (
                                         <div key={idx} className="text-[10px]">
                                           <p className="text-slate-700 font-medium mb-0.5 leading-tight">{answer.question_text}</p>
+                                          {(() => {
+                                            const questionComment = String(answer.question_comment ?? answer.answer_text ?? '').trim();
+                                            const selectedOption = String(answer.selected_option ?? answer.selected_option_text ?? '').trim();
+                                            return (
+                                              <>
                                           
                                           {/* Star rating */}
                                           {answer.answer_star !== null && answer.answer_star !== undefined && (
@@ -3600,21 +4073,34 @@ export default function FeedbackPage() {
                                             </div>
                                           )}
                                           
-                                          {/* Text comment */}
-                                          {answer.answer_text && answer.answer_text.trim() !== '' && (
+                                          {/* Question-wise comment */}
+                                          {questionComment !== '' && (
                                             <p className="text-[10px] text-slate-600 bg-slate-50 p-1 rounded border border-slate-200 italic leading-snug">
-                                              "{answer.answer_text}"
+                                              <span className="not-italic font-semibold">Comment:</span> {questionComment}
                                             </p>
                                           )}
 
                                           {/* Radio selected option (Own Type / Radio questions) */}
-                                          {answer.selected_option_text && answer.selected_option_text.trim() !== '' && (
+                                          {selectedOption !== '' && (
                                             <p className="text-[10px] text-slate-700 mt-0.5">
-                                              <span className="font-semibold">Selected Option:</span> {answer.selected_option_text}
+                                              <span className="font-semibold">Selected Option:</span> {selectedOption}
                                             </p>
                                           )}
+                                              </>
+                                            );
+                                          })()}
                                         </div>
                                       ))}
+
+                                      {/* Show overall comment once per subject, only when question-wise comments are absent */}
+                                      {overallCommentOnce !== '' && (
+                                        <div className="text-[10px] text-slate-600 bg-slate-50 p-1.5 rounded border border-slate-200 leading-snug">
+                                          <span className="font-semibold">Overall Comment:</span> {overallCommentOnce}
+                                        </div>
+                                      )}
+                                          </>
+                                        );
+                                      })()}
                                     </div>
                                   </div>
                                 ))}
@@ -3646,9 +4132,28 @@ export default function FeedbackPage() {
                                 </div>
                               </div>
                               <div className="space-y-1.5 pl-2 border-l-2 border-green-300 ml-7">
+                                {(() => {
+                                  const hasQuestionWiseComments = resp.answers.some(
+                                    (a) => String(a.question_comment ?? a.answer_text ?? '').trim() !== ''
+                                  );
+                                  const overallCommentOnce = hasQuestionWiseComments
+                                    ? ''
+                                    : String(
+                                        resp.answers.find(
+                                          (a) => String(a.common_comment ?? '').trim() !== ''
+                                        )?.common_comment ?? ''
+                                      ).trim();
+
+                                  return (
+                                    <>
                                 {resp.answers.map((answer, idx) => (
                                   <div key={idx} className="pl-2">
                                     <p className="text-xs text-slate-700 font-medium mb-0.5">{answer.question_text}</p>
+                                    {(() => {
+                                      const questionComment = String(answer.question_comment ?? answer.answer_text ?? '').trim();
+                                      const selectedOption = String(answer.selected_option ?? answer.selected_option_text ?? '').trim();
+                                      return (
+                                        <>
                                     
                                     {/* Display star rating if provided */}
                                     {answer.answer_star !== null && answer.answer_star !== undefined && (
@@ -3667,26 +4172,41 @@ export default function FeedbackPage() {
                                       </div>
                                     )}
                                     
-                                    {/* Display text comment if provided */}
-                                    {answer.answer_text && answer.answer_text.trim() !== '' && (
-                                      <p className="text-xs text-slate-700 bg-white p-1.5 rounded border border-slate-200 italic leading-snug">
-                                        "{answer.answer_text}"
+                                    {/* Display question-wise comment if provided */}
+                                    {questionComment !== '' && (
+                                      <p className="text-xs text-slate-700 bg-white p-1.5 rounded border border-slate-200 leading-snug">
+                                        <span className="font-semibold">Comment:</span> {questionComment}
                                       </p>
                                     )}
 
                                     {/* Display radio selected option if provided */}
-                                    {answer.selected_option_text && answer.selected_option_text.trim() !== '' && (
+                                    {selectedOption !== '' && (
                                       <p className="text-xs text-slate-700 mt-1">
-                                        <span className="font-semibold">Selected Option:</span> {answer.selected_option_text}
+                                        <span className="font-semibold">Selected Option:</span> {selectedOption}
                                       </p>
                                     )}
                                     
                                     {/* Show message if neither rating nor comment provided */}
-                                    {(!answer.answer_star || answer.answer_star === 0) && (!answer.answer_text || answer.answer_text.trim() === '') && (
+                                    {(!answer.answer_star || answer.answer_star === 0) && questionComment === '' && selectedOption === '' && (
                                       <p className="text-xs text-slate-400 italic">(No response provided)</p>
                                     )}
+                                        </>
+                                      );
+                                    })()}
                                   </div>
                                 ))}
+
+                                {/* Show overall comment once per respondent, only when question-wise comments are absent */}
+                                {overallCommentOnce !== '' && (
+                                  <div className="pl-2">
+                                    <p className="text-xs text-slate-700 bg-white p-1.5 rounded border border-slate-200 leading-snug">
+                                      <span className="font-semibold">Overall Comment:</span> {overallCommentOnce}
+                                    </p>
+                                  </div>
+                                )}
+                                    </>
+                                  );
+                                })()}
                               </div>
                             </div>
                           );
@@ -4009,6 +4529,8 @@ export default function FeedbackPage() {
                                 if (subject.is_completed) return;
                                 setSelectedSubject(subject);
                                 setCurrentSubjectResponses({});
+                                setCurrentSubjectCommonComment('');
+                                setCurrentSubjectCommonCommentError(false);
                                 setCommentValidationErrors({});
                                 setRatingValidationErrors({});
                                 setOptionValidationErrors({});
@@ -4057,148 +4579,179 @@ export default function FeedbackPage() {
                 )}
 
                 {/* Questions View (for OPEN_FEEDBACK or when subject selected) */}
-                {(selectedForm.type === 'OPEN_FEEDBACK' || selectedSubject) && selectedForm.questions.map((question, index) => (
-                  <div key={question.id} className="p-5 bg-slate-50 rounded-lg border border-slate-200">
-                    <div className="flex items-start gap-3 mb-4">
-                      <span className="flex-shrink-0 w-8 h-8 bg-indigo-600 text-white rounded-full flex items-center justify-center font-semibold">
-                        {index + 1}
-                      </span>
-                      <div className="flex-1">
-                        <p className="text-slate-800 font-medium mb-2">{question.question}</p>
-                        <div className="flex items-center gap-2">
+                {(selectedForm.type === 'OPEN_FEEDBACK' || selectedSubject) && (
+                  <>
+                    {selectedForm.questions.map((question, index) => (
+                      <div key={question.id} className="p-5 bg-slate-50 rounded-lg border border-slate-200">
+                        <div className="flex items-start gap-3 mb-4">
+                          <span className="flex-shrink-0 w-8 h-8 bg-indigo-600 text-white rounded-full flex items-center justify-center font-semibold">
+                            {index + 1}
+                          </span>
+                          <div className="flex-1">
+                            <p className="text-slate-800 font-medium mb-2">{question.question}</p>
+                            <div className="flex items-center gap-2">
+                              {question.allow_rating && (
+                                <span className="inline-flex items-center gap-1 px-2 py-1 bg-yellow-100 text-yellow-800 text-xs rounded-full">
+                                  <Star className="w-3 h-3" />
+                                  Rating
+                                </span>
+                              )}
+                              {!selectedForm.common_comment_enabled && question.allow_comment && (
+                                <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full">
+                                  <FileText className="w-3 h-3" />
+                                  Comment
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Answer Input */}
+                        <div className="ml-11 space-y-4">
+                          {/* Star Rating Input */}
                           {question.allow_rating && (
-                            <span className="inline-flex items-center gap-1 px-2 py-1 bg-yellow-100 text-yellow-800 text-xs rounded-full">
-                              <Star className="w-3 h-3" />
-                              Rating
-                            </span>
+                            <div>
+                              <p className="text-sm font-medium text-slate-700 mb-2">
+                                Rate (1-5 stars) {!selectedForm.common_comment_enabled && question.allow_comment && <span className="text-red-500">*</span>}
+                              </p>
+                              <div className="flex gap-2">
+                                {[1, 2, 3, 4, 5].map((star) => {
+                                  const currentResponses = selectedSubject ? currentSubjectResponses : responses;
+                                  const currentRating = currentResponses[question.id!]?.answer_star || 0;
+                                  const isActive = star <= currentRating;
+                                  const isSelected = star === currentRating;
+                                  
+                                  return (
+                                    <button
+                                      key={star}
+                                      type="button"
+                                      onClick={() => handleResponseChange(question.id!, 'STAR', star)}
+                                      className={`p-3 rounded-lg border-2 transition-all ${
+                                        isSelected
+                                          ? 'border-yellow-500 bg-yellow-50'
+                                          : 'border-slate-200 hover:border-slate-300'
+                                      }`}
+                                    >
+                                      <Star
+                                        className={`w-6 h-6 transition-all ${
+                                          isActive
+                                            ? 'text-yellow-500 fill-yellow-500'
+                                            : 'text-slate-400'
+                                        }`}
+                                      />
+                                      <span className="block text-xs text-slate-600 mt-1">{star}</span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              {ratingValidationErrors[question.id!] && (
+                                <p className="text-xs text-red-600 mt-2">Rating is required</p>
+                              )}
+                            </div>
                           )}
-                          {question.allow_comment && (
-                            <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full">
-                              <FileText className="w-3 h-3" />
-                              Comment
-                            </span>
+
+                          {/* Text Comment Input (question-wise) */}
+                          {!selectedForm.common_comment_enabled && question.allow_comment && (
+                            <div>
+                              <p className="text-sm font-medium text-slate-700 mb-2">
+                                Comment <span className="text-red-500">*</span>
+                              </p>
+                              <textarea
+                                value={(selectedSubject ? currentSubjectResponses : responses)[question.id!]?.answer_text || ''}
+                                onChange={(e) => handleResponseChange(question.id!, 'TEXT', e.target.value)}
+                                onInput={handleTextareaInput}
+                                placeholder="Add your comments here..."
+                                required
+                                className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 resize-none overflow-hidden ${
+                                  commentValidationErrors[question.id!] ? 'border-red-400 focus:ring-red-500' : 'border-slate-300 focus:ring-indigo-500'
+                                }`}
+                                rows={4}
+                              />
+                              {commentValidationErrors[question.id!] && (
+                                <p className="text-xs text-red-600 mt-2">Comment is required</p>
+                              )}
+                            </div>
+                          )}
+
+                          {(question.question_type === 'rating_radio_comment' || question.question_type === 'radio') && (
+                            <div>
+                              <p className="text-sm font-medium text-slate-700 mb-2">
+                                Choose one option <span className="text-red-500">*</span>
+                              </p>
+                              <div className="flex flex-wrap gap-3">
+                                {(question.options || []).map((opt) => {
+                                  const currentResponses = selectedSubject ? currentSubjectResponses : responses;
+                                  const selected = currentResponses[question.id!]?.selected_option;
+                                  const checked = opt?.id !== undefined && selected === opt.id;
+                                  const radioId = `q-${question.id}-opt-${opt.id}`;
+
+                                  return (
+                                    <label
+                                      key={opt.ui_id || opt.id}
+                                      htmlFor={radioId}
+                                      className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition-colors w-auto min-w-[90px] ${
+                                        checked ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 hover:border-slate-300'
+                                      }`}
+                                    >
+                                      <input
+                                        id={radioId}
+                                        type="radio"
+                                        name={`q-${question.id}-opt`}
+                                        checked={checked}
+                                        onChange={() => {
+                                          if (opt?.id !== undefined) {
+                                            handleResponseChange(question.id!, 'OPTION', opt.id);
+                                          }
+                                        }}
+                                        className="w-4 h-4 text-indigo-600 border-slate-300 focus:ring-2 focus:ring-indigo-500"
+                                      />
+                                      <span className="text-sm text-slate-800">{opt.option_text}</span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                              {optionValidationErrors[question.id!] && (
+                                <p className="text-xs text-red-600 mt-2">Please select an option</p>
+                              )}
+                            </div>
                           )}
                         </div>
                       </div>
-                    </div>
+                    ))}
 
-                    {/* Answer Input */}
-                    <div className="ml-11 space-y-4">
-                      {/* Star Rating Input */}
-                      {question.allow_rating && (
-                        <div>
-                          <p className="text-sm font-medium text-slate-700 mb-2">
-                            Rate (1-5 stars) {question.allow_comment && <span className="text-red-500">*</span>}
-                          </p>
-                          <div className="flex gap-2">
-                            {[1, 2, 3, 4, 5].map((star) => {
-                              const currentResponses = selectedSubject ? currentSubjectResponses : responses;
-                              const currentRating = currentResponses[question.id!]?.answer_star || 0;
-                              const isActive = star <= currentRating;
-                              const isSelected = star === currentRating;
-                              
-                              return (
-                                <button
-                                  key={star}
-                                  type="button"
-                                  onClick={() => handleResponseChange(question.id!, 'STAR', star)}
-                                  className={`p-3 rounded-lg border-2 transition-all ${
-                                    isSelected
-                                      ? 'border-yellow-500 bg-yellow-50'
-                                      : 'border-slate-200 hover:border-slate-300'
-                                  }`}
-                                >
-                                  <Star
-                                    className={`w-6 h-6 transition-all ${
-                                      isActive
-                                        ? 'text-yellow-500 fill-yellow-500'
-                                        : 'text-slate-400'
-                                    }`}
-                                  />
-                                  <span className="block text-xs text-slate-600 mt-1">{star}</span>
-                                </button>
-                              );
-                            })}
-                          </div>
-                          {ratingValidationErrors[question.id!] && (
-                            <p className="text-xs text-red-600 mt-2">Rating is required</p>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Text Comment Input */}
-                      <div>
-                        <p className="text-sm font-medium text-slate-700 mb-2">
-                          Comment <span className="text-red-500">*</span>
-                        </p>
+                    {requiresCommonComment && (
+                      <div className="p-5 bg-slate-50 rounded-lg border border-slate-200">
+                        <p className="text-slate-800 font-medium mb-3">Overall Comment <span className="text-red-500">*</span></p>
                         <textarea
-                          value={(selectedSubject ? currentSubjectResponses : responses)[question.id!]?.answer_text || ''}
-                          onChange={(e) => handleResponseChange(question.id!, 'TEXT', e.target.value)}
+                          value={currentSubjectCommonComment}
+                          onChange={(e) => {
+                            setCurrentSubjectCommonComment(e.target.value);
+                            if (currentSubjectCommonCommentError) {
+                              setCurrentSubjectCommonCommentError(false);
+                            }
+                          }}
                           onInput={handleTextareaInput}
-                          placeholder="Add your comments here..."
+                          placeholder="Add your overall comments here..."
                           required
                           className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 resize-none overflow-hidden ${
-                            commentValidationErrors[question.id!] ? 'border-red-400 focus:ring-red-500' : 'border-slate-300 focus:ring-indigo-500'
+                            currentSubjectCommonCommentError ? 'border-red-400 focus:ring-red-500' : 'border-slate-300 focus:ring-indigo-500'
                           }`}
                           rows={4}
                         />
-                        {commentValidationErrors[question.id!] && (
-                          <p className="text-xs text-red-600 mt-2">Comment is required</p>
+                        {currentSubjectCommonCommentError && (
+                          <p className="text-xs text-red-600 mt-2">Overall comment is required</p>
                         )}
                       </div>
-
-                      {(question.question_type === 'rating_radio_comment' || question.question_type === 'radio') && (
-                        <div>
-                          <p className="text-sm font-medium text-slate-700 mb-2">
-                            Choose one option <span className="text-red-500">*</span>
-                          </p>
-                          <div className="flex flex-wrap gap-3">
-                            {(question.options || []).map((opt) => {
-                              const currentResponses = selectedSubject ? currentSubjectResponses : responses;
-                              const selected = currentResponses[question.id!]?.selected_option;
-                              const checked = opt?.id !== undefined && selected === opt.id;
-                              const radioId = `q-${question.id}-opt-${opt.id}`;
-
-                              return (
-                                <label
-                                  key={opt.ui_id || opt.id}
-                                  htmlFor={radioId}
-                                  className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition-colors w-auto min-w-[90px] ${
-                                    checked ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 hover:border-slate-300'
-                                  }`}
-                                >
-                                  <input
-                                    id={radioId}
-                                    type="radio"
-                                    name={`q-${question.id}-opt`}
-                                    checked={checked}
-                                    onChange={() => {
-                                      if (opt?.id !== undefined) {
-                                        handleResponseChange(question.id!, 'OPTION', opt.id);
-                                      }
-                                    }}
-                                    className="w-4 h-4 text-indigo-600 border-slate-300 focus:ring-2 focus:ring-indigo-500"
-                                  />
-                                  <span className="text-sm text-slate-800">{opt.option_text}</span>
-                                </label>
-                              );
-                            })}
-                          </div>
-                          {optionValidationErrors[question.id!] && (
-                            <p className="text-xs text-red-600 mt-2">Please select an option</p>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))}
+                    )}
+                  </>
+                )}
 
                 {/* Submit Button - Only show when viewing questions, not subject list */}
                 {(selectedForm.type === 'OPEN_FEEDBACK' || selectedSubject) && (
                   <div className="flex items-center gap-3 pt-4 border-t border-slate-200">
                     <button
                       onClick={handleSubmitResponse}
-                      disabled={submittingResponse || !hasAllMandatoryComments || !hasAllMandatoryRatings || !hasAllMandatoryOptions}
+                      disabled={submittingResponse || !hasAllMandatoryComments || !hasAllMandatoryRatings || !hasAllMandatoryOptions || !hasCommonComment}
                       className="flex-1 px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-md font-medium"
                     >
                       {submittingResponse ? (
@@ -4216,6 +4769,8 @@ export default function FeedbackPage() {
                     <button
                       onClick={selectedSubject ? () => {
                         setSelectedSubject(null);
+                        setCurrentSubjectCommonComment('');
+                        setCurrentSubjectCommonCommentError(false);
                         setCommentValidationErrors({});
                         setRatingValidationErrors({});
                         setOptionValidationErrors({});

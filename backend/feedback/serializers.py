@@ -173,7 +173,7 @@ class FeedbackQuestionSerializer(serializers.ModelSerializer):
         # Normalize behavior by question type.
         # - rating: honor allow_rating/allow_comment
         # - text: comment only
-        # - radio: comment + radio (options required)
+        # - radio: radio options required; comment is optional
         # - rating_radio_comment: rating + comment + radio (options required)
         if question_type == 'text':
             allow_rating = False
@@ -183,16 +183,17 @@ class FeedbackQuestionSerializer(serializers.ModelSerializer):
 
         if question_type == 'radio':
             allow_rating = False
-            allow_comment = True
             data['allow_rating'] = False
-            data['allow_comment'] = True
+            # Do not force allow_comment here; admin controls it.
+            allow_comment = data.get('allow_comment', allow_comment)
+            data['allow_comment'] = allow_comment
 
         # Own type enforces rating + comment and requires >=2 radio options.
         if question_type == 'rating_radio_comment':
             allow_rating = True
-            allow_comment = True
             data['allow_rating'] = True
-            data['allow_comment'] = True
+            allow_comment = data.get('allow_comment', allow_comment)
+            data['allow_comment'] = allow_comment
 
         if question_type in {'radio', 'rating_radio_comment'}:
             if options is None:
@@ -218,19 +219,28 @@ class FeedbackQuestionSerializer(serializers.ModelSerializer):
 
         data['question_type'] = question_type
         
-        # If both are provided, at least one must be True
-        if not allow_rating and not allow_comment:
+        # Ensure the question collects *something*.
+        # For radio questions, selecting an option counts even if allow_comment is False.
+        if question_type != 'radio' and not allow_rating and not allow_comment:
             raise serializers.ValidationError({
                 'allow_rating': 'At least one answer method (rating or comment) must be enabled.'
             })
         
-        # Set answer_type for backward compatibility
-        if allow_rating and allow_comment:
-            data['answer_type'] = 'BOTH'
-        elif allow_rating:
-            data['answer_type'] = 'STAR'
-        elif allow_comment:
+        # Set answer_type for backward compatibility.
+        # Note: radio / rating_radio_comment include option selection; comment is optional.
+        if question_type == 'text':
             data['answer_type'] = 'TEXT'
+        elif question_type == 'radio':
+            data['answer_type'] = 'TEXT'
+        elif question_type == 'rating_radio_comment':
+            data['answer_type'] = 'BOTH'
+        else:
+            if allow_rating and allow_comment:
+                data['answer_type'] = 'BOTH'
+            elif allow_rating:
+                data['answer_type'] = 'STAR'
+            elif allow_comment:
+                data['answer_type'] = 'TEXT'
             
         return data
 
@@ -263,6 +273,7 @@ class FeedbackFormSerializer(serializers.ModelSerializer):
             'id', 'target_type', 'type', 'status', 'created_at', 'updated_at',
             'created_by', 'created_by_name', 'questions', 'active',
             'department',
+            'common_comment_enabled',
             'year', 'semester_number', 'section_name', 'regulation_name',
             'years', 'semesters', 'sections',
             'target_display', 'context_display', 'class_context_display', 'is_submitted'
@@ -535,7 +546,8 @@ class FeedbackFormCreateSerializer(serializers.ModelSerializer):
         fields = [
             'target_type', 'type', 'is_subject_based', 'department', 'status', 'questions',
             'year', 'semester', 'section', 'regulation',
-            'years', 'semesters', 'sections'
+            'years', 'semesters', 'sections',
+            'common_comment_enabled',
         ]
     
     def validate(self, data):
@@ -580,12 +592,42 @@ class FeedbackFormCreateSerializer(serializers.ModelSerializer):
             if not data.get('years'):
                 raise serializers.ValidationError({'years': 'Please select at least one year.'})
             # Sections are optional: empty sections means all sections of selected year(s).
+
+        # Common comment per subject/form: enforce mutual exclusion with question-wise comments.
+        common_comment_enabled = bool(data.get('common_comment_enabled', False))
+        if common_comment_enabled:
+            questions = data.get('questions', []) or []
+            for idx, q in enumerate(questions):
+                q_type = (q.get('question_type') or 'rating').strip()
+                if q_type == 'text':
+                    raise serializers.ValidationError({
+                        'common_comment_enabled': (
+                            f'Common comment cannot be enabled with text-only questions (question {idx + 1}).'
+                        )
+                    })
+
+                # Force all question-wise comments off.
+                q['allow_comment'] = False
+                # Preserve allow_rating as-is; ensure the question still has an answer method.
+                allow_rating = bool(q.get('allow_rating', True))
+                if not allow_rating and q_type not in {'radio'}:
+                    raise serializers.ValidationError({
+                        'questions': (
+                            f'Question {idx + 1} must allow rating (or be a radio question) when common comment is enabled.'
+                        )
+                    })
+            data['questions'] = questions
         
         return data
     
     def create(self, validated_data):
         """Create feedback form with questions in a transaction."""
         questions_data = validated_data.pop('questions')
+        common_comment_enabled = bool(validated_data.get('common_comment_enabled', False))
+
+        # Legacy DB compatibility: feedback_forms.comment_mode is NOT NULL in some deployments.
+        # Keep it aligned with the common comment toggle.
+        validated_data.setdefault('comment_mode', 'common' if common_comment_enabled else 'question_wise')
         
         # Auto-set is_subject_based based on type if not provided
         if 'is_subject_based' not in validated_data:
@@ -599,7 +641,7 @@ class FeedbackFormCreateSerializer(serializers.ModelSerializer):
             for idx, question_data in enumerate(questions_data):
                 # Determine allow_rating and allow_comment from answer_type if not explicitly provided
                 allow_rating = question_data.get('allow_rating', True)
-                allow_comment = question_data.get('allow_comment', True)
+                allow_comment = False if common_comment_enabled else question_data.get('allow_comment', True)
                 answer_type = question_data.get('answer_type', 'BOTH')
                 
                 # Backward compatibility: if answer_type is provided but allow_* fields aren't
@@ -623,12 +665,13 @@ class FeedbackFormCreateSerializer(serializers.ModelSerializer):
 
                 if question_type == 'text':
                     allow_rating = False
-                    allow_comment = True
+                    allow_comment = False if common_comment_enabled else True
                     answer_type = 'TEXT'
 
                 if question_type == 'radio':
                     allow_rating = False
-                    allow_comment = True
+                    # Radio requires options; question-wise comment is optional.
+                    allow_comment = False if common_comment_enabled else bool(question_data.get('allow_comment', allow_comment))
                     answer_type = 'TEXT'
 
                 if question_type in {'radio', 'rating_radio_comment'}:
@@ -645,10 +688,10 @@ class FeedbackFormCreateSerializer(serializers.ModelSerializer):
                                 'questions': f'Option {idx_opt + 1} cannot be empty.'
                             })
 
-                # Own type always forces both enabled.
                 if question_type == 'rating_radio_comment':
                     allow_rating = True
-                    allow_comment = True
+                    # Own Type requires rating + options; question-wise comment is optional.
+                    allow_comment = False if common_comment_enabled else bool(question_data.get('allow_comment', allow_comment))
                     answer_type = 'BOTH'
 
                 created_question = FeedbackQuestion.objects.create(
@@ -660,6 +703,7 @@ class FeedbackFormCreateSerializer(serializers.ModelSerializer):
                     allow_rating=allow_rating,
                     allow_comment=allow_comment,
                     comment_enabled=allow_comment,
+                    is_mandatory=bool(question_data.get('is_mandatory', False)),
                 )
 
                 if question_type in {'radio', 'rating_radio_comment'}:
@@ -694,6 +738,7 @@ class FeedbackSubmissionSerializer(serializers.Serializer):
     feedback_form_id = serializers.IntegerField()
     responses = FeedbackResponseSerializer(many=True)
     teaching_assignment_id = serializers.IntegerField(required=False, allow_null=True)  # For subject feedback
+    common_comment = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     
     def validate_feedback_form_id(self, value):
         """Validate that feedback form exists and is active."""
@@ -709,6 +754,20 @@ class FeedbackSubmissionSerializer(serializers.Serializer):
         """Validate responses match questions and answer types."""
         feedback_form_id = data.get('feedback_form_id')
         responses = data.get('responses', [])
+
+        feedback_form = None
+        try:
+            feedback_form = FeedbackForm.objects.get(id=feedback_form_id)
+        except FeedbackForm.DoesNotExist:
+            raise serializers.ValidationError({'feedback_form_id': 'Feedback form not found.'})
+
+        common_comment_enabled = bool(getattr(feedback_form, 'common_comment_enabled', False))
+        common_comment_value = (data.get('common_comment') or '')
+        common_comment_value = str(common_comment_value).strip()
+        if common_comment_enabled:
+            if feedback_form.type == 'SUBJECT_FEEDBACK':
+                if not common_comment_value:
+                    raise serializers.ValidationError({'common_comment': 'Overall comment is mandatory.'})
         
         if not responses:
             raise serializers.ValidationError({
@@ -763,13 +822,13 @@ class FeedbackSubmissionSerializer(serializers.Serializer):
             answer_text = response.get('answer_text')
             selected_option = response.get('selected_option')
 
-            # Comment is mandatory for every question across all feedback forms.
-            if not answer_text or not str(answer_text).strip():
-                errors.append('Comment is mandatory for all feedback questions.')
+            requires_comment = bool(allow_comment) and not common_comment_enabled
+            if requires_comment and (not answer_text or not str(answer_text).strip()):
+                errors.append(f'Question {question_id} requires a comment')
                 continue
 
             if question_info.get('question_type') == 'rating_radio_comment':
-                # Rating + comment + radio are mandatory.
+                # Rating + radio are mandatory. Comment is required only when question-wise comments are enabled.
                 if answer_star is None:
                     errors.append(f'Question {question_id} requires a star rating (1-5)')
                     continue
@@ -789,7 +848,7 @@ class FeedbackSubmissionSerializer(serializers.Serializer):
                 continue
 
             if question_info.get('question_type') == 'radio':
-                # Comment + radio are mandatory; rating is not used.
+                # Radio is mandatory; comment is required only when question-wise comments are enabled.
                 if selected_option is None:
                     errors.append(f'Question {question_id} requires selecting one option')
                     continue
@@ -813,7 +872,7 @@ class FeedbackSubmissionSerializer(serializers.Serializer):
                 # Only comment allowed
                 pass
             elif allow_rating and allow_comment:
-                # Both allowed - rating and comment are required.
+                # Both allowed - rating is required; comment is required only when question-wise comments are enabled.
                 if answer_star is None:
                     errors.append(f'Question {question_id} requires a star rating (1-5)')
                 elif not isinstance(answer_star, int) or answer_star < 1 or answer_star > 5:
@@ -831,6 +890,11 @@ class FeedbackSubmissionSerializer(serializers.Serializer):
         feedback_form_id = self.validated_data['feedback_form_id']
         responses = self.validated_data['responses']
         teaching_assignment_id = self.validated_data.get('teaching_assignment_id')
+        common_comment_value = (self.validated_data.get('common_comment') or '')
+        common_comment_value = str(common_comment_value).strip() or None
+
+        feedback_form = FeedbackForm.objects.get(id=feedback_form_id)
+        common_comment_enabled = bool(getattr(feedback_form, 'common_comment_enabled', False))
         
         # Get teaching assignment object if provided (for subject feedback)
         teaching_assignment = None
@@ -876,7 +940,8 @@ class FeedbackSubmissionSerializer(serializers.Serializer):
                     user=user,
                     question_id=response_data['question'],
                     answer_star=response_data.get('answer_star'),
-                    answer_text=str(response_data.get('answer_text', '')).strip(),
+                    answer_text='' if common_comment_enabled else str(response_data.get('answer_text', '')).strip(),
+                    common_comment=common_comment_value if common_comment_enabled else None,
                     teaching_assignment=teaching_assignment,
                     selected_option_text=selected_option_text,
                 )

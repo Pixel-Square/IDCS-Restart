@@ -6,18 +6,21 @@ from .views import (
     GetUserDepartmentView,
     GetClassOptionsView,
     DeactivateFeedbackFormView,
+    DeactivateAllFeedbackFormsView,
+    DeactivateFilteredFeedbackFormsView,
+    ActivateAllFeedbackFormsView,
+    ActivateFilteredFeedbackFormsView,
     PublishFeedbackFormView,
-    UpdateFeedbackFormView,
     GetResponseStatisticsView,
     GetResponseListView,
-    ExportFeedbackResponsesExcelView,
-    CommonFeedbackExportOptionsView,
-    ExportCommonFeedbackResponsesExcelView,
-    ExportYearsView,
     GetStudentSubjectsView,
     GetSubjectsByYearView,
     DeleteFeedbackFormView,
-    DiagnosticElectiveChoicesView
+    DiagnosticElectiveChoicesView,
+    IQACExportOptionsView,
+    IQACExportYearsView,
+    IQACCommonExportView,
+    FormExportExcelView
 )
 
 urlpatterns = [
@@ -38,28 +41,30 @@ urlpatterns = [
     
     # API 6: Deactivate/Activate Feedback Form (HOD)
     path('<int:form_id>/toggle-active/', DeactivateFeedbackFormView.as_view(), name='feedback-toggle-active'),
+
+    # API: Deactivate all active forms (IQAC/Admin)
+    path('deactivate-all/', DeactivateAllFeedbackFormsView.as_view(), name='feedback-deactivate-all'),
+
+    # API: Deactivate filtered active forms (IQAC/Admin)
+    path('deactivate-filtered/', DeactivateFilteredFeedbackFormsView.as_view(), name='feedback-deactivate-filtered'),
+
+    # API: Activate all deactivated forms (IQAC/Admin)
+    path('activate-all/', ActivateAllFeedbackFormsView.as_view(), name='feedback-activate-all'),
+
+    # API: Activate filtered deactivated forms (IQAC/Admin)
+    path('activate-filtered/', ActivateFilteredFeedbackFormsView.as_view(), name='feedback-activate-filtered'),
     
     # API: Publish Feedback Form (HOD)
     path('<int:form_id>/publish/', PublishFeedbackFormView.as_view(), name='feedback-publish'),
-
-    # API: Update Draft Feedback Form (HOD)
-    path('<int:form_id>/update/', UpdateFeedbackFormView.as_view(), name='feedback-update'),
     
     # API 7: Get Response Statistics (HOD)
     path('<int:form_id>/statistics/', GetResponseStatisticsView.as_view(), name='feedback-statistics'),
     
     # API 8: Get Response List (HOD)
     path('<int:form_id>/responses/', GetResponseListView.as_view(), name='feedback-responses'),
-
-    # API: Export Responses Excel (HOD)
-    path('<int:form_id>/export-excel/', ExportFeedbackResponsesExcelView.as_view(), name='feedback-export-excel'),
-
-    # API: IQAC Common Export (filters: department/year)
-    path('common-export/options/', CommonFeedbackExportOptionsView.as_view(), name='feedback-common-export-options'),
-    path('common-export/', ExportCommonFeedbackResponsesExcelView.as_view(), name='feedback-common-export'),
-
-    # API: Export filter years (IQAC analytics)
-    path('export-years/', ExportYearsView.as_view(), name='feedback-export-years'),
+    
+    # API: Export Form Responses to Excel (HOD)
+    path('<int:form_id>/export-excel/', FormExportExcelView.as_view(), name='feedback-export-excel'),
     
     # API 9: Get Student Subjects for Subject Feedback
     path('<int:form_id>/subjects/', GetStudentSubjectsView.as_view(), name='feedback-subjects'),
@@ -72,4 +77,9 @@ urlpatterns = [
     
     # Diagnostic API: Check ElectiveChoice records
     path('diagnostic/elective-choices/', DiagnosticElectiveChoicesView.as_view(), name='diagnostic-elective-choices'),
+    
+    # IQAC Common Export APIs
+    path('common-export/options/', IQACExportOptionsView.as_view(), name='common-export-options'),
+    path('export-years/', IQACExportYearsView.as_view(), name='export-years'),
+    path('common-export/', IQACCommonExportView.as_view(), name='common-export'),
 ]
