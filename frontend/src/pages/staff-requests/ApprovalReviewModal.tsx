@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { X, User, Calendar, CheckCircle, XCircle, Clock, AlertCircle } from 'lucide-react';
 import { processApproval } from '../../services/staffRequests';
 import type { StaffRequest } from '../../types/staffRequests';
+import { formatFieldLabel, renderFormValue } from './formValueUtils';
 
 interface ApprovalReviewModalProps {
   request: StaffRequest;
@@ -118,10 +119,10 @@ export default function ApprovalReviewModal({ request, onClose, onProcessed }: A
               {Object.entries(request.form_data).map(([key, value]) => (
                 <div key={key} className="bg-gray-50 rounded-lg p-3">
                   <p className="text-xs font-medium text-gray-600 mb-1">
-                    {key.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}
+                    {formatFieldLabel(key)}
                   </p>
                   <p className="text-sm text-gray-900 break-words">
-                    {String(value) || '-'}
+                    {renderFormValue(value)}
                   </p>
                 </div>
               ))}

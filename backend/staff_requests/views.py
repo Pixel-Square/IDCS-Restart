@@ -663,6 +663,339 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         # Validation already guarantees the window check for this combination.
         return duration == '10 mins' and shift == 'FN'
 
+    def _recompute_overall_status_from_sessions(self, fn_status, an_status):
+        """Compute overall attendance status from FN/AN values."""
+        fn_val = fn_status
+        an_val = an_status
+
+        if fn_val is None and an_val is None:
+            return 'absent'
+        if fn_val is None:
+            return an_val
+        if an_val is None:
+            return fn_val
+        if fn_val == an_val:
+            return fn_val
+        if fn_val != 'absent' or an_val != 'absent':
+            return 'half_day'
+        return 'absent'
+
+    def _extract_attendance_targets_from_form_data(self, form_data):
+        """
+        Build (date, shift) targets from request form_data.
+        shift is one of: FN, AN, FULL.
+        """
+        from datetime import datetime, timedelta
+
+        targets = []
+
+        def parse_date(value):
+            if not value:
+                return None
+            if isinstance(value, str):
+                value = value.strip()
+                if not value:
+                    return None
+                return datetime.strptime(value, '%Y-%m-%d').date()
+            return value
+
+        def norm_shift(value):
+            token = str(value or '').strip().upper()
+            if token in ['FN', 'AN', 'FULL']:
+                return token
+            if token in ['FULL DAY', 'FULLDAY']:
+                return 'FULL'
+            return None
+
+        from_date = None
+        to_date = None
+        single_date = None
+
+        for start_key in ['from_date', 'start_date', 'fromDate', 'startDate']:
+            if start_key in form_data:
+                try:
+                    from_date = parse_date(form_data.get(start_key))
+                except Exception:
+                    from_date = None
+                if from_date:
+                    break
+
+        for end_key in ['to_date', 'end_date', 'toDate', 'endDate']:
+            if end_key in form_data and form_data.get(end_key):
+                try:
+                    to_date = parse_date(form_data.get(end_key))
+                except Exception:
+                    to_date = None
+                if to_date:
+                    break
+
+        if 'date' in form_data:
+            try:
+                single_date = parse_date(form_data.get('date'))
+            except Exception:
+                single_date = None
+
+        shift = norm_shift(form_data.get('shift'))
+        from_noon = norm_shift(form_data.get('from_noon', form_data.get('from_shift', form_data.get('shift'))))
+        to_noon = norm_shift(form_data.get('to_noon', form_data.get('to_shift')))
+
+        # Case 1: date range
+        if from_date and to_date:
+            current_date = from_date
+            while current_date <= to_date:
+                target_shift = 'FULL'
+                if current_date == from_date and from_noon in ['FN', 'AN', 'FULL']:
+                    target_shift = from_noon
+                elif current_date == to_date and to_noon in ['FN', 'AN', 'FULL']:
+                    target_shift = to_noon
+                targets.append((current_date, target_shift))
+                current_date += timedelta(days=1)
+            return targets
+
+        # Case 2: explicit single date
+        if single_date:
+            targets.append((single_date, shift if shift in ['FN', 'AN', 'FULL'] else 'FULL'))
+            return targets
+
+        # Case 3: from_date only
+        if from_date:
+            targets.append((from_date, from_noon if from_noon in ['FN', 'AN', 'FULL'] else 'FULL'))
+            return targets
+
+        return targets
+
+    def _remove_note_marker(self, notes, marker):
+        """Remove an exact semicolon-separated marker token from notes."""
+        parts = [p.strip() for p in str(notes or '').split(';') if p.strip()]
+        filtered = [p for p in parts if p != marker]
+        return '; '.join(filtered)
+
+    def _rollback_late_entry_attendance(self, staff_request):
+        """Revert attendance sessions impacted by a late-entry request back to absent."""
+        from staff_attendance.models import AttendanceRecord
+
+        lock_marker = f'LATE10_LOCK:req_{staff_request.id}'
+        targets = self._extract_attendance_targets_from_form_data(staff_request.form_data or {})
+        reverted = 0
+
+        for target_date, target_shift in targets:
+            record = AttendanceRecord.objects.filter(user=staff_request.applicant, date=target_date).first()
+            if not record:
+                continue
+
+            if target_shift == 'FN':
+                record.fn_status = 'absent'
+            elif target_shift == 'AN':
+                record.an_status = 'absent'
+            else:
+                record.fn_status = 'absent'
+                record.an_status = 'absent'
+
+            record.status = self._recompute_overall_status_from_sessions(record.fn_status, record.an_status)
+            record.notes = self._remove_note_marker(record.notes, lock_marker)
+            record.save()
+            reverted += 1
+
+        return reverted
+
+    def _recalculate_lop_for_user(self, user):
+        """Recalculate and persist LOP balance for a single user."""
+        from staff_attendance.models import AttendanceRecord
+
+        attendance_records = AttendanceRecord.objects.filter(user=user)
+        absent_units_by_date = {}
+        for record in attendance_records:
+            if record.date.weekday() == 6 or self._is_holiday_for_user(record.date, user):
+                continue
+            units = self._attendance_absent_units(record)
+            if units > 0:
+                absent_units_by_date[record.date] = units
+
+        absent_units_total = round(sum(absent_units_by_date.values()), 2)
+
+        covered_units = 0.0
+        approved_requests = StaffRequest.objects.filter(
+            applicant=user,
+            status='approved',
+            template__leave_policy__action__in=['deduct', 'neutral']
+        )
+
+        remaining_absent_units = dict(absent_units_by_date)
+        for approved_request in approved_requests:
+            request_units_by_date = self._extract_requested_units_by_date_for_user(
+                approved_request.form_data,
+                user
+            )
+            for req_date, req_units in request_units_by_date.items():
+                absent_left = remaining_absent_units.get(req_date, 0.0)
+                if absent_left <= 0:
+                    continue
+                covered_now = min(absent_left, float(req_units or 0.0))
+                if covered_now > 0:
+                    covered_units += covered_now
+                    remaining_absent_units[req_date] = round(absent_left - covered_now, 2)
+
+        lop_count = round(max(0.0, absent_units_total - covered_units), 2)
+
+        lop_balance, _ = StaffLeaveBalance.objects.get_or_create(
+            staff=user,
+            leave_type='LOP',
+            defaults={'balance': 0.0}
+        )
+        lop_balance.balance = lop_count
+        lop_balance.save(update_fields=['balance', 'updated_at'])
+        return lop_count
+
+    def _late_entry_rows_for_month(self, target_user, year, month):
+        """Return monthly late-entry rows and aggregate counts for a user."""
+        from datetime import date
+        import calendar
+
+        month_start = date(year, month, 1)
+        month_end = date(year, month, calendar.monthrange(year, month)[1])
+
+        late_requests = StaffRequest.objects.filter(
+            applicant=target_user,
+            status='approved',
+        ).filter(
+            Q(template__name__iexact='Late Entry Permission') |
+            Q(template__name__iexact='Late Entry Permission - SPL')
+        ).select_related('template').order_by('-created_at')
+
+        rows = []
+        ten_mins = 0
+        one_hr = 0
+
+        for req in late_requests:
+            form_data = req.form_data or {}
+            duration = self._normalize_late_duration(form_data.get('late_duration'))
+            if duration not in ['10 mins', '1 hr']:
+                continue
+
+            targets = self._extract_attendance_targets_from_form_data(form_data)
+            if not targets:
+                request_date = self._get_request_effective_date(form_data)
+                if request_date:
+                    targets = [(request_date, self._normalize_shift(form_data.get('shift', form_data.get('from_noon'))) or 'FULL')]
+
+            for target_date, target_shift in targets:
+                if not target_date or target_date < month_start or target_date > month_end:
+                    continue
+
+                if duration == '10 mins':
+                    ten_mins += 1
+                elif duration == '1 hr':
+                    one_hr += 1
+
+                rows.append({
+                    'request_id': req.id,
+                    'date': target_date.isoformat(),
+                    'shift': target_shift,
+                    'late_duration': duration,
+                    'template_name': req.template.name,
+                    'created_at': req.created_at.isoformat() if req.created_at else None,
+                })
+
+        return {
+            'month': f'{year:04d}-{month:02d}',
+            'ten_mins': ten_mins,
+            'one_hr': one_hr,
+            'total': ten_mins + one_hr,
+            'records': rows,
+        }
+
+    @action(detail=False, methods=['get'], url_path='balances/late_entry_monthly')
+    def balances_late_entry_monthly(self, request):
+        """
+        HR/Admin: get monthly late-entry counts and source approved records for a staff user.
+        GET /api/staff-requests/requests/balances/late_entry_monthly/?user_id=<id>&month=YYYY-MM
+        """
+        from datetime import date
+        from .permissions import IsAdminOrHR
+
+        if not IsAdminOrHR().has_permission(request, self):
+            return Response({'error': 'Only HR/Admin can access this endpoint'}, status=status.HTTP_403_FORBIDDEN)
+
+        user_id = request.query_params.get('user_id')
+        if not user_id:
+            return Response({'error': 'user_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        month_param = (request.query_params.get('month') or '').strip()
+        if month_param:
+            try:
+                year, month = map(int, month_param.split('-'))
+            except (ValueError, AttributeError):
+                return Response({'error': 'Invalid month format, use YYYY-MM'}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            today = date.today()
+            year, month = today.year, today.month
+
+        User = get_user_model()
+        try:
+            target_user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        data = self._late_entry_rows_for_month(target_user, year, month)
+        data['user'] = {
+            'id': target_user.id,
+            'username': target_user.username,
+            'full_name': target_user.get_full_name() or target_user.username,
+        }
+        return Response(data)
+
+    @action(detail=False, methods=['post'], url_path='balances/late_entry/delete')
+    def balances_delete_late_entry_record(self, request):
+        """
+        HR/Admin: delete an approved late-entry request record and rollback attendance to absent.
+        POST /api/staff-requests/requests/balances/late_entry/delete/
+        Body: {"request_id": <staff_request_id>, "month": "YYYY-MM"}
+        """
+        from datetime import date
+        from .permissions import IsAdminOrHR
+
+        if not IsAdminOrHR().has_permission(request, self):
+            return Response({'error': 'Only HR/Admin can access this endpoint'}, status=status.HTTP_403_FORBIDDEN)
+
+        request_id = request.data.get('request_id')
+        if not request_id:
+            return Response({'error': 'request_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        month_param = (request.data.get('month') or '').strip()
+        if month_param:
+            try:
+                year, month = map(int, month_param.split('-'))
+            except (ValueError, AttributeError):
+                return Response({'error': 'Invalid month format, use YYYY-MM'}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            today = date.today()
+            year, month = today.year, today.month
+
+        late_request = StaffRequest.objects.filter(id=request_id).select_related('applicant', 'template').first()
+        if not late_request:
+            return Response({'error': 'Late entry request not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if late_request.status != 'approved':
+            return Response({'error': 'Only approved late entry records can be deleted'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not self._is_late_entry_template(late_request.template):
+            return Response({'error': 'Only late entry templates are allowed for this action'}, status=status.HTTP_400_BAD_REQUEST)
+
+        target_user = late_request.applicant
+
+        with transaction.atomic():
+            reverted_records = self._rollback_late_entry_attendance(late_request)
+            late_request.delete()
+            lop_balance = self._recalculate_lop_for_user(target_user)
+
+        monthly = self._late_entry_rows_for_month(target_user, year, month)
+        return Response({
+            'message': 'Late entry record deleted and attendance rolled back successfully',
+            'reverted_records': reverted_records,
+            'lop_balance': lop_balance,
+            'monthly': monthly,
+        })
+
     def destroy(self, request, *args, **kwargs):
         """
         Allow applicant to delete only pending requests.
@@ -1735,6 +2068,19 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         template = staff_request.template
         attendance_action = template.attendance_action
         leave_policy = template.leave_policy
+        lock_marker = f'LATE10_LOCK:req_{staff_request.id}'
+        is_late_10_lock = (
+            self._is_late_entry_template(template)
+            and self._normalize_late_duration(staff_request.form_data.get('late_duration')) == '10 mins'
+        )
+
+        def apply_late10_lock(record):
+            if not is_late_10_lock:
+                return
+            existing_notes = record.notes or ''
+            if lock_marker in existing_notes:
+                return
+            record.notes = f"{existing_notes}; {lock_marker}" if existing_notes else lock_marker
         
         # Determine the target status to apply
         # Priority: leave_policy.attendance_status (for leave) > attendance_action.to_status (for permissions)
@@ -1958,6 +2304,8 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                                 record.notes = note
                         except (KeyError, ValueError) as e:
                             logger.warning(f'[AttendanceAction] Failed to format notes template: {e}')
+
+                    apply_late10_lock(record)
                     
                     record.save()
                     updated_count += 1
@@ -2055,6 +2403,8 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                                 record.notes = note
                         except (KeyError, ValueError) as e:
                             logger.warning(f'[AttendanceAction] Failed to format notes template: {e}')
+
+                    apply_late10_lock(record)
                     
                     record.save()
                     updated_count += 1
@@ -2171,6 +2521,8 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                             record.notes = note
                     except (KeyError, ValueError) as e:
                         logger.warning(f'[AttendanceAction] Failed to format notes template: {e}')
+
+                apply_late10_lock(record)
                 
                 record.save()
                 updated_count += 1

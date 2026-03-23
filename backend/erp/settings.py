@@ -305,6 +305,7 @@ _PROD_CSRF_ORIGINS = [
 _DEFAULT_DEBUG_ORIGINS = [
     'http://localhost',
     'http://localhost:3000',
+    'http://localhost:3001',
     'http://localhost:5173',
     'http://localhost:4173',
     'http://localhost:82',
@@ -316,6 +317,7 @@ _DEFAULT_DEBUG_ORIGINS = [
     'http://localhost:5176',
     'http://localhost:5177',
     'http://127.0.0.1:3000',
+    'http://127.0.0.1:3001',
     'http://127.0.0.1:5173',
     'http://127.0.0.1:4173',
     'http://127.0.0.1:82',

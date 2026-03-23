@@ -1,6 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Edit2, Trash2, ToggleLeft, ToggleRight, Search, Save, RefreshCw } from 'lucide-react';
-import { getTemplates, deleteTemplate, patchTemplate, searchStaffForBalanceEdit, getBalancesByUser, setBalanceForUser, recalculateLopBalances } from '../../services/staffRequests';
+import {
+  getTemplates,
+  deleteTemplate,
+  patchTemplate,
+  searchStaffForBalanceEdit,
+  getBalancesByUser,
+  setBalanceForUser,
+  recalculateLopBalances,
+  getLateEntryMonthlyByUser,
+  deleteLateEntryRecord,
+} from '../../services/staffRequests';
 import type { RequestTemplate } from '../../types/staffRequests';
 import TemplateEditorModal from './TemplateEditorModal';
 
@@ -19,6 +29,15 @@ export default function TemplateManagementPage() {
   const [loadingBalances, setLoadingBalances] = useState(false);
   const [savingBalanceKey, setSavingBalanceKey] = useState<string | null>(null);
   const [recalculatingLop, setRecalculatingLop] = useState(false);
+  const [lateEntryMonth, setLateEntryMonth] = useState(() => {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    return `${y}-${m}`;
+  });
+  const [lateEntryStats, setLateEntryStats] = useState<any | null>(null);
+  const [loadingLateEntry, setLoadingLateEntry] = useState(false);
+  const [deletingLateRequestId, setDeletingLateRequestId] = useState<number | null>(null);
 
   const loadTemplates = async () => {
     setLoading(true);
@@ -98,10 +117,60 @@ export default function TemplateManagementPage() {
         nextEdits[b.leave_type] = String(b.balance ?? 0);
       });
       setBalanceEdits(nextEdits);
+
+      setLoadingLateEntry(true);
+      const lateData = await getLateEntryMonthlyByUser(staff.id, lateEntryMonth);
+      setLateEntryStats(lateData || null);
     } catch (err: any) {
       alert(err?.response?.data?.error || 'Failed to load balances');
     } finally {
       setLoadingBalances(false);
+      setLoadingLateEntry(false);
+    }
+  };
+
+  const reloadSelectedStaffData = async () => {
+    if (!selectedStaff) return;
+
+    setLoadingBalances(true);
+    setLoadingLateEntry(true);
+    try {
+      const [balancesData, lateData] = await Promise.all([
+        getBalancesByUser(selectedStaff.id),
+        getLateEntryMonthlyByUser(selectedStaff.id, lateEntryMonth),
+      ]);
+
+      const balances = balancesData?.balances || [];
+      setSelectedStaffBalances(balances);
+      const nextEdits: Record<string, string> = {};
+      balances.forEach((b: any) => {
+        nextEdits[b.leave_type] = String(b.balance ?? 0);
+      });
+      setBalanceEdits(nextEdits);
+      setLateEntryStats(lateData || null);
+    } catch (err: any) {
+      alert(err?.response?.data?.error || 'Failed to refresh staff data');
+    } finally {
+      setLoadingBalances(false);
+      setLoadingLateEntry(false);
+    }
+  };
+
+  const handleDeleteLateRecord = async (requestId: number) => {
+    if (!selectedStaff) return;
+    const ok = window.confirm(
+      'Delete this approved late entry record? This will rollback attendance for that date/shift to absent and recalculate monthly counts.'
+    );
+    if (!ok) return;
+
+    try {
+      setDeletingLateRequestId(requestId);
+      await deleteLateEntryRecord(requestId, lateEntryMonth);
+      await reloadSelectedStaffData();
+    } catch (err: any) {
+      alert(err?.response?.data?.error || 'Failed to delete late entry record');
+    } finally {
+      setDeletingLateRequestId(null);
     }
   };
 
@@ -144,14 +213,7 @@ export default function TemplateManagementPage() {
       );
 
       if (selectedStaff) {
-        const refreshed = await getBalancesByUser(selectedStaff.id);
-        const balances = refreshed?.balances || [];
-        setSelectedStaffBalances(balances);
-        const nextEdits: Record<string, string> = {};
-        balances.forEach((b: any) => {
-          nextEdits[b.leave_type] = String(b.balance ?? 0);
-        });
-        setBalanceEdits(nextEdits);
+        await reloadSelectedStaffData();
       }
     } catch (err: any) {
       alert(err?.response?.data?.error || 'Failed to recalculate LOP');
@@ -159,6 +221,24 @@ export default function TemplateManagementPage() {
       setRecalculatingLop(false);
     }
   };
+
+  useEffect(() => {
+    if (!selectedStaff) return;
+
+    const run = async () => {
+      setLoadingLateEntry(true);
+      try {
+        const lateData = await getLateEntryMonthlyByUser(selectedStaff.id, lateEntryMonth);
+        setLateEntryStats(lateData || null);
+      } catch (err: any) {
+        alert(err?.response?.data?.error || 'Failed to load late entry monthly data');
+      } finally {
+        setLoadingLateEntry(false);
+      }
+    };
+
+    run();
+  }, [lateEntryMonth, selectedStaff?.id]);
 
   if (loading) {
     return (
@@ -419,6 +499,95 @@ export default function TemplateManagementPage() {
                   </table>
                 </div>
               )}
+
+              <div className="mt-6 border rounded-md bg-white">
+                <div className="px-4 py-3 border-b bg-amber-50 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-amber-900">Late Entry Count Editor (Monthly)</p>
+                    <p className="text-xs text-amber-700 mt-0.5">
+                      Counts are derived from approved Late Entry forms. Delete a record to rollback attendance to absent and recalculate counts.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs font-medium text-gray-700" htmlFor="lateEntryMonth">
+                      Month
+                    </label>
+                    <input
+                      id="lateEntryMonth"
+                      type="month"
+                      value={lateEntryMonth}
+                      onChange={(e) => setLateEntryMonth(e.target.value)}
+                      className="px-2 py-1 border border-gray-300 rounded-md text-sm"
+                    />
+                  </div>
+                </div>
+
+                <div className="p-4">
+                  {loadingLateEntry ? (
+                    <p className="text-sm text-gray-500">Loading late entry data...</p>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+                        <div className="rounded-md border bg-gray-50 p-3">
+                          <div className="text-xs text-gray-500">10 mins</div>
+                          <div className="text-xl font-bold text-gray-900">{lateEntryStats?.ten_mins ?? 0}</div>
+                        </div>
+                        <div className="rounded-md border bg-gray-50 p-3">
+                          <div className="text-xs text-gray-500">1 hr</div>
+                          <div className="text-xl font-bold text-gray-900">{lateEntryStats?.one_hr ?? 0}</div>
+                        </div>
+                        <div className="rounded-md border bg-gray-50 p-3">
+                          <div className="text-xs text-gray-500">Total</div>
+                          <div className="text-xl font-bold text-gray-900">{lateEntryStats?.total ?? 0}</div>
+                        </div>
+                      </div>
+
+                      <div className="overflow-auto border rounded-md">
+                        <table className="min-w-full text-sm">
+                          <thead className="bg-gray-100">
+                            <tr>
+                              <th className="px-3 py-2 text-left">Date</th>
+                              <th className="px-3 py-2 text-left">Shift</th>
+                              <th className="px-3 py-2 text-left">Duration</th>
+                              <th className="px-3 py-2 text-left">Template</th>
+                              <th className="px-3 py-2 text-left">Action</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(lateEntryStats?.records || []).length === 0 ? (
+                              <tr>
+                                <td className="px-3 py-4 text-gray-500" colSpan={5}>
+                                  No approved late entry records found for this month.
+                                </td>
+                              </tr>
+                            ) : (
+                              (lateEntryStats?.records || []).map((row: any) => (
+                                <tr key={`${row.request_id}:${row.date}:${row.shift}`} className="border-t">
+                                  <td className="px-3 py-2">{row.date}</td>
+                                  <td className="px-3 py-2">{row.shift || 'FULL'}</td>
+                                  <td className="px-3 py-2">{row.late_duration}</td>
+                                  <td className="px-3 py-2">{row.template_name}</td>
+                                  <td className="px-3 py-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteLateRecord(row.request_id)}
+                                      disabled={deletingLateRequestId === row.request_id}
+                                      className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md bg-red-600 text-white hover:bg-red-700 disabled:opacity-60"
+                                    >
+                                      <Trash2 size={14} />
+                                      {deletingLateRequestId === row.request_id ? 'Deleting...' : 'Delete'}
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
             </div>
           )}
         </div>

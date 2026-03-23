@@ -3,6 +3,7 @@ import { Eye, RefreshCw, CheckCircle, XCircle, Clock } from 'lucide-react';
 import { getPendingApprovals, getMyApprovals, processApproval, getRequest } from '../../services/staffRequests';
 import type { StaffRequest } from '../../types/staffRequests';
 import RequestDetailsModal from './RequestDetailsModal';
+import { formatShortFormValue } from './formValueUtils';
 
 interface QuickAction {
   request: StaffRequest;
@@ -60,8 +61,7 @@ export default function PendingApprovalsPage() {
     if (req.template?.form_schema?.length > 0) {
       const textField = req.template.form_schema.find(f => f.type === 'text' || f.type === 'textarea');
       if (textField && req.form_data[textField.name]) {
-        const str = String(req.form_data[textField.name] ?? '—');
-        return str.length > 50 ? str.substring(0, 50) + '…' : str || '—';
+        return formatShortFormValue(req.form_data[textField.name]);
       }
     }
     return '—';

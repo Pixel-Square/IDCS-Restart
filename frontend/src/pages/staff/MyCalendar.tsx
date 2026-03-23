@@ -5,6 +5,7 @@ import { getApiBase } from '../../services/apiBase';
 import { getMyRequests, getColClaimableInfo, getActiveTemplates, deleteMyPendingRequest } from '../../services/staffRequests';
 import NewRequestModal from '../staff-requests/NewRequestModal';
 import LeaveBalanceBadges from '../../components/LeaveBalanceBadges';
+import { renderFormValue } from '../staff-requests/formValueUtils';
 import type { StaffRequest } from '../../types/staffRequests';
 
 interface AttendanceRecord {
@@ -967,10 +968,9 @@ export default function MyCalendarPage() {
                     {Object.entries(request.form_data).slice(0, 4).map(([key, value]) => (
                       <div key={key} className="bg-gray-50 p-2 rounded">
                         <span className="text-gray-600">{key}:</span>
-                        <span className="font-medium ml-1">
-                          {String(value).substring(0, 20)}
-                          {String(value).length > 20 ? '...' : ''}
-                        </span>
+                        <div className="font-medium ml-1 truncate text-blue-700">
+                          {renderFormValue(value)}
+                        </div>
                       </div>
                     ))}
                   </div>

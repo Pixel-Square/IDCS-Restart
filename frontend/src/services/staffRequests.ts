@@ -179,6 +179,20 @@ export async function recalculateLopBalances(): Promise<any> {
   return res.data;
 }
 
+export async function getLateEntryMonthlyByUser(userId: number, month?: string): Promise<any> {
+  const params: Record<string, any> = { user_id: userId };
+  if (month) params.month = month;
+  const res = await apiClient.get(`${BASE_URL}/requests/balances/late_entry_monthly/`, { params });
+  return res.data;
+}
+
+export async function deleteLateEntryRecord(requestId: number, month?: string): Promise<any> {
+  const payload: Record<string, any> = { request_id: requestId };
+  if (month) payload.month = month;
+  const res = await apiClient.post(`${BASE_URL}/requests/balances/late_entry/delete/`, payload);
+  return res.data;
+}
+
 export async function getColClaimableInfo(): Promise<any> {
   const res = await apiClient.get(`${BASE_URL}/requests/col_claimable_info/`);
   return res.data;
