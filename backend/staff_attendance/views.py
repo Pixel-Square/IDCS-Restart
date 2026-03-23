@@ -2503,12 +2503,12 @@ class SpecialDepartmentDateAttendanceLimitViewSet(viewsets.ModelViewSet):
     ordering_fields = ['from_date', 'to_date', 'created_at', 'updated_at']
 
     def _reprocess_records_for_limit(self, instance):
-        """Recalculate attendance for already-saved rows covered by this limit."""
+        """Recalculate attendance rows covered by this limit and sync LOP for impacted users."""
         start_date = instance.from_date
         end_date = instance.to_date or instance.from_date
         dept_ids = list(instance.departments.values_list('id', flat=True))
         if not dept_ids:
-            return 0
+            return 0, 0
 
         records = AttendanceRecord.objects.filter(
             date__gte=start_date,
@@ -2516,6 +2516,7 @@ class SpecialDepartmentDateAttendanceLimitViewSet(viewsets.ModelViewSet):
         ).select_related('user', 'user__staff_profile', 'user__staff_profile__department')
 
         processed = 0
+        impacted_user_ids = set()
         for record in records:
             dept_id = None
             profile = getattr(record.user, 'staff_profile', None)
@@ -2535,10 +2536,189 @@ class SpecialDepartmentDateAttendanceLimitViewSet(viewsets.ModelViewSet):
             if dept_id not in dept_ids:
                 continue
 
+            old_fn = (record.fn_status or '').strip().lower()
+            old_an = (record.an_status or '').strip().lower()
+            old_status = (record.status or '').strip().lower()
+
             record.update_status()
             record.save(update_fields=['fn_status', 'an_status', 'status'])
             processed += 1
-        return processed
+
+            new_fn = (record.fn_status or '').strip().lower()
+            new_an = (record.an_status or '').strip().lower()
+            new_status = (record.status or '').strip().lower()
+            if (old_fn, old_an, old_status) != (new_fn, new_an, new_status):
+                impacted_user_ids.add(record.user_id)
+
+        recalculated = self._recalculate_lop_for_users(impacted_user_ids)
+        return processed, recalculated
+
+    def _recalculate_lop_for_users(self, user_ids, lop_name='LOP'):
+        """Recompute cumulative LOP balances for users after attendance status changes."""
+        if not user_ids:
+            return 0
+
+        from staff_requests.models import StaffRequest, StaffLeaveBalance
+
+        users = User.objects.filter(id__in=list(user_ids))
+        recalculated = 0
+
+        for user in users:
+            attendance_records = list(
+                AttendanceRecord.objects.filter(user=user).order_by('date')
+            )
+            absent_units_by_date = {}
+            for record in attendance_records:
+                if record.date.weekday() == 6 or self._is_holiday_for_user(record.date, user):
+                    continue
+                units = self._attendance_absent_units(record)
+                if units > 0:
+                    absent_units_by_date[record.date] = units
+
+            absent_units_total = round(sum(absent_units_by_date.values()), 2)
+
+            covered_units = 0.0
+            approved_requests = StaffRequest.objects.filter(
+                applicant=user,
+                status='approved',
+                template__leave_policy__action__in=['deduct', 'neutral']
+            )
+
+            remaining_absent_units = dict(absent_units_by_date)
+            for request in approved_requests:
+                request_units_by_date = self._extract_requested_units_by_date(request.form_data, user)
+                for req_date, req_units in request_units_by_date.items():
+                    absent_left = remaining_absent_units.get(req_date, 0.0)
+                    if absent_left <= 0:
+                        continue
+                    covered_now = min(absent_left, float(req_units or 0.0))
+                    if covered_now > 0:
+                        covered_units += covered_now
+                        remaining_absent_units[req_date] = round(absent_left - covered_now, 2)
+
+            lop_count = round(max(0.0, absent_units_total - covered_units), 2)
+            lop_balance, _ = StaffLeaveBalance.objects.get_or_create(
+                staff=user,
+                leave_type=lop_name,
+                defaults={'balance': 0.0}
+            )
+            if lop_balance.balance != lop_count:
+                lop_balance.balance = lop_count
+                lop_balance.save(update_fields=['balance'])
+                recalculated += 1
+
+        return recalculated
+
+    def _attendance_absent_units(self, record):
+        fn_status = (record.fn_status or '').strip().lower()
+        an_status = (record.an_status or '').strip().lower()
+
+        if fn_status or an_status:
+            units = 0.0
+            if fn_status == 'absent':
+                units += 0.5
+            if an_status == 'absent':
+                units += 0.5
+            return units
+
+        return 1.0 if (record.status or '').strip().lower() == 'absent' else 0.0
+
+    def _normalize_shift_value(self, value):
+        token = str(value or '').strip().upper()
+        if token == 'FULL DAY':
+            token = 'FULL'
+        return token
+
+    def _single_day_units(self, from_noon, to_noon):
+        if from_noon in ['FN', 'AN'] and to_noon in ['FN', 'AN']:
+            return 0.5 if from_noon == to_noon else 1.0
+        if from_noon in ['FN', 'AN'] and not to_noon:
+            return 0.5
+        if to_noon in ['FN', 'AN'] and not from_noon:
+            return 0.5
+        if from_noon == 'FULL' or to_noon == 'FULL':
+            return 1.0
+        return 1.0
+
+    def _extract_requested_units_by_date(self, form_data, user):
+        """Extract date -> requested units from form data (FN/AN-aware)."""
+        dates = {}
+        start_date = None
+        end_date = None
+
+        for start_key in ['start_date', 'from_date', 'startDate', 'fromDate', 'from']:
+            if start_key in form_data:
+                start_date = form_data[start_key]
+                break
+
+        for end_key in ['end_date', 'to_date', 'endDate', 'toDate', 'to']:
+            if end_key in form_data:
+                end_date = form_data[end_key]
+                break
+
+        if not start_date and 'date' in form_data:
+            start_date = form_data['date']
+        if not end_date and 'date' in form_data:
+            end_date = form_data['date']
+
+        if not (start_date and end_date):
+            return dates
+
+        try:
+            start = datetime.fromisoformat(start_date.replace('Z', '+00:00')).date() if isinstance(start_date, str) else start_date
+            end = datetime.fromisoformat(end_date.replace('Z', '+00:00')).date() if isinstance(end_date, str) else end_date
+
+            from_noon = self._normalize_shift_value(
+                form_data.get('from_noon', form_data.get('from_shift', form_data.get('shift', '')))
+            )
+            to_noon = self._normalize_shift_value(
+                form_data.get('to_noon', form_data.get('to_shift', form_data.get('shift', '')))
+            )
+
+            if start == end:
+                if start.weekday() == 6 or self._is_holiday_for_user(start, user):
+                    return {}
+                return {start: self._single_day_units(from_noon, to_noon)}
+
+            current = start
+            while current <= end:
+                if current.weekday() == 6 or self._is_holiday_for_user(current, user):
+                    current += timedelta(days=1)
+                    continue
+
+                units = 1.0
+                if current == start and from_noon == 'AN':
+                    units = 0.5
+                if current == end and to_noon == 'FN':
+                    units = 0.5
+                dates[current] = units
+                current += timedelta(days=1)
+        except Exception:
+            return {}
+
+        return dates
+
+    def _is_holiday_for_user(self, target_date, user):
+        holidays = Holiday.objects.filter(date=target_date).prefetch_related('departments')
+        if not holidays.exists():
+            return False
+
+        user_dept_id = None
+        try:
+            if user and hasattr(user, 'staff_profile'):
+                dept = user.staff_profile.get_current_department()
+                if dept:
+                    user_dept_id = dept.id
+        except Exception:
+            user_dept_id = None
+
+        for holiday in holidays:
+            dept_ids = list(holiday.departments.values_list('id', flat=True))
+            if not dept_ids:
+                return True
+            if user_dept_id is not None and user_dept_id in dept_ids:
+                return True
+        return False
 
     def perform_create(self, serializer):
         instance = serializer.save(created_by=self.request.user, updated_by=self.request.user)
@@ -2551,6 +2731,10 @@ class SpecialDepartmentDateAttendanceLimitViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def reapply(self, request, pk=None):
         instance = self.get_object()
-        processed = self._reprocess_records_for_limit(instance)
-        return Response({'success': True, 'reprocessed_records': processed})
+        processed, recalculated_users = self._reprocess_records_for_limit(instance)
+        return Response({
+            'success': True,
+            'reprocessed_records': processed,
+            'lop_recalculated_users': recalculated_users,
+        })
 

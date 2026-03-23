@@ -3085,6 +3085,149 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             }
         })
 
+    def _extract_requested_units_by_date_for_user(self, form_data, user):
+        """Extract date->requested units from form_data (FN/AN-aware) for a specific user."""
+        from datetime import datetime
+        from datetime import timedelta
+
+        dates = {}
+        start_date = None
+        end_date = None
+
+        for start_key in ['start_date', 'from_date', 'startDate', 'fromDate', 'from']:
+            if start_key in form_data:
+                start_date = form_data[start_key]
+                break
+
+        for end_key in ['end_date', 'to_date', 'endDate', 'toDate', 'to']:
+            if end_key in form_data:
+                end_date = form_data[end_key]
+                break
+
+        if not start_date and 'date' in form_data:
+            start_date = form_data['date']
+        if not end_date and 'date' in form_data:
+            end_date = form_data['date']
+
+        if not (start_date and end_date):
+            return dates
+
+        try:
+            if isinstance(start_date, str):
+                start = datetime.fromisoformat(start_date.replace('Z', '+00:00')).date()
+            else:
+                start = start_date
+
+            if isinstance(end_date, str):
+                end = datetime.fromisoformat(end_date.replace('Z', '+00:00')).date()
+            else:
+                end = end_date
+
+            from_noon = self._normalize_shift_value(
+                form_data.get('from_noon', form_data.get('from_shift', form_data.get('shift', '')))
+            )
+            to_noon = self._normalize_shift_value(
+                form_data.get('to_noon', form_data.get('to_shift', form_data.get('shift', '')))
+            )
+
+            if start == end:
+                if start.weekday() == 6 or self._is_holiday_for_user(start, user):
+                    return {}
+                return {start: self._single_day_units(from_noon, to_noon)}
+
+            current = start
+            while current <= end:
+                if current.weekday() == 6 or self._is_holiday_for_user(current, user):
+                    current += timedelta(days=1)
+                    continue
+
+                units = 1.0
+                if current == start and from_noon == 'AN':
+                    units = 0.5
+                if current == end and to_noon == 'FN':
+                    units = 0.5
+                dates[current] = units
+                current += timedelta(days=1)
+        except Exception:
+            pass
+
+        return dates
+
+    @action(detail=False, methods=['post'], url_path='balances/recalculate_lop')
+    def recalculate_lop_balances(self, request):
+        """
+        HR/Admin: recalculate LOP for all active staff from current attendance and approved requests.
+        POST /api/staff-requests/requests/balances/recalculate_lop/
+        """
+        from .permissions import IsAdminOrHR
+        from staff_attendance.models import AttendanceRecord
+
+        if not IsAdminOrHR().has_permission(request, self):
+            return Response({'error': 'Only HR/Admin can recalculate LOP'}, status=status.HTTP_403_FORBIDDEN)
+
+        User = get_user_model()
+        users = User.objects.filter(is_active=True, staff_profile__isnull=False).distinct()
+
+        processed_users = 0
+        updated_users = 0
+
+        for user in users:
+            processed_users += 1
+
+            attendance_records = AttendanceRecord.objects.filter(user=user)
+            absent_units_by_date = {}
+            for record in attendance_records:
+                if record.date.weekday() == 6 or self._is_holiday_for_user(record.date, user):
+                    continue
+                units = self._attendance_absent_units(record)
+                if units > 0:
+                    absent_units_by_date[record.date] = units
+
+            absent_units_total = round(sum(absent_units_by_date.values()), 2)
+
+            covered_units = 0.0
+            approved_requests = StaffRequest.objects.filter(
+                applicant=user,
+                status='approved',
+                template__leave_policy__action__in=['deduct', 'neutral']
+            )
+
+            remaining_absent_units = dict(absent_units_by_date)
+            for approved_request in approved_requests:
+                request_units_by_date = self._extract_requested_units_by_date_for_user(
+                    approved_request.form_data,
+                    user
+                )
+                for req_date, req_units in request_units_by_date.items():
+                    absent_left = remaining_absent_units.get(req_date, 0.0)
+                    if absent_left <= 0:
+                        continue
+                    covered_now = min(absent_left, float(req_units or 0.0))
+                    if covered_now > 0:
+                        covered_units += covered_now
+                        remaining_absent_units[req_date] = round(absent_left - covered_now, 2)
+
+            lop_count = round(max(0.0, absent_units_total - covered_units), 2)
+
+            lop_balance, _ = StaffLeaveBalance.objects.get_or_create(
+                staff=user,
+                leave_type='LOP',
+                defaults={'balance': 0.0}
+            )
+
+            old_lop = float(lop_balance.balance or 0.0)
+            if old_lop != lop_count:
+                lop_balance.balance = lop_count
+                lop_balance.save(update_fields=['balance', 'updated_at'])
+                updated_users += 1
+
+        return Response({
+            'success': True,
+            'message': 'LOP recalculation completed successfully',
+            'processed_users': processed_users,
+            'updated_users': updated_users,
+        })
+
     @action(detail=False, methods=['get'])
     def col_claimable_info(self, request):
         """

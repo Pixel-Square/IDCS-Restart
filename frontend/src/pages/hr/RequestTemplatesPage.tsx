@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Edit2, Trash2, ToggleLeft, ToggleRight, Search, Save } from 'lucide-react';
-import { getTemplates, deleteTemplate, patchTemplate, searchStaffForBalanceEdit, getBalancesByUser, setBalanceForUser } from '../../services/staffRequests';
+import { Plus, Edit2, Trash2, ToggleLeft, ToggleRight, Search, Save, RefreshCw } from 'lucide-react';
+import { getTemplates, deleteTemplate, patchTemplate, searchStaffForBalanceEdit, getBalancesByUser, setBalanceForUser, recalculateLopBalances } from '../../services/staffRequests';
 import type { RequestTemplate } from '../../types/staffRequests';
 import TemplateEditorModal from './TemplateEditorModal';
 
@@ -18,6 +18,7 @@ export default function TemplateManagementPage() {
   const [searchingStaff, setSearchingStaff] = useState(false);
   const [loadingBalances, setLoadingBalances] = useState(false);
   const [savingBalanceKey, setSavingBalanceKey] = useState<string | null>(null);
+  const [recalculatingLop, setRecalculatingLop] = useState(false);
 
   const loadTemplates = async () => {
     setLoading(true);
@@ -129,6 +130,33 @@ export default function TemplateManagementPage() {
       alert(err?.response?.data?.error || 'Failed to update balance');
     } finally {
       setSavingBalanceKey(null);
+    }
+  };
+
+  const handleRecalculateLop = async () => {
+    if (!window.confirm('Recalculate LOP for all staff using current attendance records?')) return;
+
+    try {
+      setRecalculatingLop(true);
+      const res = await recalculateLopBalances();
+      alert(
+        `LOP recalculation completed. Processed: ${res?.processed_users ?? 0}, Updated: ${res?.updated_users ?? 0}`
+      );
+
+      if (selectedStaff) {
+        const refreshed = await getBalancesByUser(selectedStaff.id);
+        const balances = refreshed?.balances || [];
+        setSelectedStaffBalances(balances);
+        const nextEdits: Record<string, string> = {};
+        balances.forEach((b: any) => {
+          nextEdits[b.leave_type] = String(b.balance ?? 0);
+        });
+        setBalanceEdits(nextEdits);
+      }
+    } catch (err: any) {
+      alert(err?.response?.data?.error || 'Failed to recalculate LOP');
+    } finally {
+      setRecalculatingLop(false);
     }
   };
 
@@ -259,10 +287,23 @@ export default function TemplateManagementPage() {
 
       <div className="bg-white rounded-lg shadow-md">
         <div className="border-b border-gray-200 px-6 py-4">
-          <h3 className="text-xl font-bold text-gray-900">Staff Leave Balance Editor</h3>
-          <p className="text-sm text-gray-600 mt-1">
-            HR can search staff and edit balances directly (CL, OD, COL, LOP, Others, etc.)
-          </p>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h3 className="text-xl font-bold text-gray-900">Staff Leave Balance Editor</h3>
+              <p className="text-sm text-gray-600 mt-1">
+                HR can search staff and edit balances directly (CL, OD, COL, LOP, Others, etc.)
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleRecalculateLop}
+              disabled={recalculatingLop}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-60"
+            >
+              <RefreshCw size={16} className={recalculatingLop ? 'animate-spin' : ''} />
+              {recalculatingLop ? 'Recalculating...' : 'Recalculate LOP'}
+            </button>
+          </div>
         </div>
 
         <div className="p-6 space-y-4">

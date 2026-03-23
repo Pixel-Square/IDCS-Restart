@@ -174,6 +174,11 @@ export async function setBalanceForUser(userId: number, leaveType: string, balan
   return res.data;
 }
 
+export async function recalculateLopBalances(): Promise<any> {
+  const res = await apiClient.post(`${BASE_URL}/requests/balances/recalculate_lop/`);
+  return res.data;
+}
+
 export async function getColClaimableInfo(): Promise<any> {
   const res = await apiClient.get(`${BASE_URL}/requests/col_claimable_info/`);
   return res.data;
