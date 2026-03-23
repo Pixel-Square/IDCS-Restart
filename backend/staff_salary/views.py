@@ -2,7 +2,7 @@ import ast
 import calendar
 import csv
 import io
-from datetime import date
+from datetime import date, datetime, timedelta
 
 from django.contrib.auth import get_user_model
 from django.db.models import Q
@@ -12,7 +12,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from academics.models import Department
-from staff_requests.models import StaffLeaveBalance
+from staff_requests.models import StaffRequest
 from staff_requests.permissions import IsAdminOrHR
 
 from .models import (
@@ -31,7 +31,7 @@ from .models import (
 DEFAULT_FORMULAS = {
     'working_days': 'days_in_month - lop_days',
     'lop_amount': '(basic_salary + allowance) / lop_days if lop_days > 0 else 0',
-    'gross_salary': '(basic_salary + allowance) - lop_amount',
+    'gross_salary': '(basic_salary + allowance) - (lop_amount * lop_days)',
     'total_salary': 'gross_salary + total_earn',
     'net_salary': 'total_salary + pf_amount - od_new - total_deduction - others',
 }
@@ -85,6 +85,212 @@ class SafeFormulaEvaluator:
 
 class StaffSalaryViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticated]
+
+    def _attendance_absent_units(self, record):
+        fn_status = (record.fn_status or '').strip().lower()
+        an_status = (record.an_status or '').strip().lower()
+
+        if fn_status or an_status:
+            units = 0.0
+            if fn_status == 'absent':
+                units += 0.5
+            if an_status == 'absent':
+                units += 0.5
+            return units
+
+        return 1.0 if (record.status or '').strip().lower() == 'absent' else 0.0
+
+    def _normalize_shift_value(self, value):
+        token = str(value or '').strip().upper()
+        if token == 'FULL DAY':
+            token = 'FULL'
+        return token
+
+    def _single_day_units(self, from_noon, to_noon):
+        if from_noon in ['FN', 'AN'] and to_noon in ['FN', 'AN']:
+            return 0.5 if from_noon == to_noon else 1.0
+        if from_noon in ['FN', 'AN'] and not to_noon:
+            return 0.5
+        if to_noon in ['FN', 'AN'] and not from_noon:
+            return 0.5
+        if from_noon == 'FULL' or to_noon == 'FULL':
+            return 1.0
+        return 1.0
+
+    def _parse_form_date(self, raw_value):
+        if isinstance(raw_value, datetime):
+            return raw_value.date()
+        if isinstance(raw_value, date):
+            return raw_value
+        if not isinstance(raw_value, str):
+            return None
+
+        token = raw_value.strip()
+        if not token:
+            return None
+
+        try:
+            return datetime.fromisoformat(token.replace('Z', '+00:00')).date()
+        except Exception:
+            pass
+
+        try:
+            return datetime.strptime(token[:10], '%Y-%m-%d').date()
+        except Exception:
+            return None
+
+    def _build_monthly_holiday_map(self, month_start, month_end):
+        from staff_attendance.models import Holiday
+
+        holiday_map = {}
+        holidays = Holiday.objects.filter(date__gte=month_start, date__lte=month_end).prefetch_related('departments')
+        for holiday in holidays:
+            dept_ids = set(holiday.departments.values_list('id', flat=True))
+            holiday_map[holiday.date] = {
+                'all_departments': len(dept_ids) == 0,
+                'department_ids': dept_ids,
+            }
+        return holiday_map
+
+    def _is_holiday_for_department(self, target_date, department_id, holiday_map):
+        holiday_entry = holiday_map.get(target_date)
+        if not holiday_entry:
+            return False
+        if holiday_entry['all_departments']:
+            return True
+        return department_id is not None and department_id in holiday_entry['department_ids']
+
+    def _extract_requested_units_by_date(self, form_data, month_start, month_end, is_holiday):
+        dates = {}
+
+        start_date = None
+        end_date = None
+        for start_key in ['start_date', 'from_date', 'startDate', 'fromDate', 'from']:
+            if start_key in form_data:
+                start_date = form_data[start_key]
+                break
+
+        for end_key in ['end_date', 'to_date', 'endDate', 'toDate', 'to']:
+            if end_key in form_data:
+                end_date = form_data[end_key]
+                break
+
+        if not start_date and 'date' in form_data:
+            start_date = form_data['date']
+        if not end_date and 'date' in form_data:
+            end_date = form_data['date']
+
+        start = self._parse_form_date(start_date)
+        end = self._parse_form_date(end_date)
+        if not start or not end:
+            return dates
+
+        from_noon = self._normalize_shift_value(
+            form_data.get('from_noon', form_data.get('from_shift', form_data.get('shift', '')))
+        )
+        to_noon = self._normalize_shift_value(
+            form_data.get('to_noon', form_data.get('to_shift', form_data.get('shift', '')))
+        )
+
+        if start > end:
+            start, end = end, start
+
+        start = max(start, month_start)
+        end = min(end, month_end)
+        if start > end:
+            return dates
+
+        if start == end:
+            if start.weekday() == 6 or is_holiday(start):
+                return dates
+            return {start: self._single_day_units(from_noon, to_noon)}
+
+        current = start
+        while current <= end:
+            if current.weekday() == 6 or is_holiday(current):
+                current += timedelta(days=1)
+                continue
+
+            units = 1.0
+            if current == start and from_noon == 'AN':
+                units = 0.5
+            if current == end and to_noon == 'FN':
+                units = 0.5
+            dates[current] = units
+            current += timedelta(days=1)
+
+        return dates
+
+    def _build_monthly_lop_map(self, staff_users, month_date):
+        from staff_attendance.models import AttendanceRecord
+
+        if not staff_users:
+            return {}
+
+        month_start = month_date
+        month_end = date(month_date.year, month_date.month, calendar.monthrange(month_date.year, month_date.month)[1])
+        holiday_map = self._build_monthly_holiday_map(month_start, month_end)
+
+        staff_ids = [u.id for u in staff_users]
+        dept_map = {}
+        for user in staff_users:
+            profile = getattr(user, 'staff_profile', None)
+            dept = getattr(profile, 'department', None) if profile else None
+            dept_map[user.id] = dept.id if dept else None
+
+        absent_units_map = {staff_id: {} for staff_id in staff_ids}
+        attendance_records = AttendanceRecord.objects.filter(
+            user_id__in=staff_ids,
+            date__gte=month_start,
+            date__lte=month_end,
+        )
+
+        for record in attendance_records:
+            if record.date.weekday() == 6:
+                continue
+
+            department_id = dept_map.get(record.user_id)
+            if self._is_holiday_for_department(record.date, department_id, holiday_map):
+                continue
+
+            absent_units = self._attendance_absent_units(record)
+            if absent_units > 0:
+                absent_units_map[record.user_id][record.date] = absent_units
+
+        approved_requests = StaffRequest.objects.filter(
+            applicant_id__in=staff_ids,
+            status='approved',
+            template__leave_policy__action__in=['deduct', 'neutral'],
+        )
+
+        for request in approved_requests:
+            department_id = dept_map.get(request.applicant_id)
+
+            def is_holiday_for_request(target_date):
+                return self._is_holiday_for_department(target_date, department_id, holiday_map)
+
+            requested_units = self._extract_requested_units_by_date(
+                request.form_data or {},
+                month_start,
+                month_end,
+                is_holiday_for_request,
+            )
+            if not requested_units:
+                continue
+
+            remaining_for_staff = absent_units_map.get(request.applicant_id, {})
+            for request_date, request_units in requested_units.items():
+                absent_left = float(remaining_for_staff.get(request_date, 0.0))
+                if absent_left <= 0:
+                    continue
+                covered_now = min(absent_left, float(request_units or 0.0))
+                if covered_now > 0:
+                    remaining_for_staff[request_date] = round(absent_left - covered_now, 2)
+
+        return {
+            staff_id: round(sum(absent_units_map.get(staff_id, {}).values()), 2)
+            for staff_id in staff_ids
+        }
 
     def _check_hr(self, request):
         if IsAdminOrHR().has_permission(request, self):
@@ -155,10 +361,7 @@ class StaffSalaryViewSet(viewsets.ViewSet):
             for m in SalaryMonthlyInput.objects.filter(staff_id__in=staff_ids, month=month_date)
         }
 
-        lop_map = {
-            b.staff_id: float(b.balance or 0)
-            for b in StaffLeaveBalance.objects.filter(staff_id__in=staff_ids, leave_type='LOP')
-        }
+        lop_map = self._build_monthly_lop_map(staff_users, month_date)
 
         historical_inputs = SalaryMonthlyInput.objects.filter(
             staff_id__in=staff_ids,
@@ -245,7 +448,7 @@ class StaffSalaryViewSet(viewsets.ViewSet):
             context['working_days'] = working_days
             lop_amount = SafeFormulaEvaluator.evaluate(formulas.get('lop_amount'), context, default=((basic_salary + allowance) / lop_days if lop_days > 0 else 0))
             context['lop_amount'] = lop_amount
-            gross_salary = SafeFormulaEvaluator.evaluate(formulas.get('gross_salary'), context, default=(basic_salary + allowance) - lop_amount)
+            gross_salary = SafeFormulaEvaluator.evaluate(formulas.get('gross_salary'), context, default=(basic_salary + allowance) - (lop_amount * lop_days))
             context['gross_salary'] = gross_salary
             total_salary = SafeFormulaEvaluator.evaluate(formulas.get('total_salary'), context, default=gross_salary + total_earn)
             context['total_salary'] = total_salary
