@@ -36,8 +36,8 @@ export function getApiBase(): string {
 
     // When the frontend is served by a dev server, default to a Django backend on :8000.
     // This avoids same-origin API calls accidentally hitting the dev server.
-    if (port === '5173' || port === '4173' || port === '3000') {
-      return trimTrailingSlashes(`${protocol}//${host}:8000`)
+    if (port === '5173' || port === '4173' || port === '3000' || port === '3001') {
+      return trimTrailingSlashes(`http://${host}:8000`)
     }
 
     // If the UI is served on localhost without a port (e.g. http://localhost/),

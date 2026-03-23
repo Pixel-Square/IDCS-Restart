@@ -597,7 +597,6 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
             })
 
     def _build_staff_monthly_matrix_report(self, month_start, month_end, department_id=None, report_type='2'):
-        from staff_requests.models import StaffLeaveBalance
 
         staff_users = User.objects.filter(
             staff_profile__isnull=False
@@ -608,14 +607,6 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
 
         staff_users = list(staff_users.order_by('staff_profile__department__name', 'first_name', 'username'))
         staff_ids = [u.id for u in staff_users]
-
-        lop_balance_map = {
-            row['staff_id']: float(row['balance'] or 0.0)
-            for row in StaffLeaveBalance.objects.filter(
-                staff_id__in=staff_ids,
-                leave_type__iexact='LOP'
-            ).values('staff_id', 'balance')
-        }
 
         records = AttendanceRecord.objects.filter(
             user_id__in=staff_ids,
@@ -700,6 +691,23 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                 return f"FN:{overall_code} AN:{overall_code}"
             return ''
 
+        def _is_lop_code(code):
+            c = str(code or '').strip().upper()
+            return c in {'A', 'ABSENT', 'LOP'}
+
+        # Monthly LOP is computed strictly within selected month filter.
+        monthly_lop_map = {uid: 0.0 for uid in staff_ids}
+        for rec in records:
+            fn_code = _to_code(rec.fn_status)
+            an_code = _to_code(rec.an_status)
+            lop_units = 0.0
+            if _is_lop_code(fn_code):
+                lop_units += 0.5
+            if _is_lop_code(an_code):
+                lop_units += 0.5
+            if lop_units > 0:
+                monthly_lop_map[rec.user_id] = monthly_lop_map.get(rec.user_id, 0.0) + lop_units
+
         rows = []
         for user_obj in staff_users:
             profile = getattr(user_obj, 'staff_profile', None)
@@ -713,7 +721,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                 'staff_id': staff_code,
                 'staff_name': staff_name,
                 'department': getattr(dept, 'name', 'N/A') if dept else 'N/A',
-                'days': max(0.0, float(day_count) - float(lop_balance_map.get(user_obj.id, 0.0))),
+                'days': max(0.0, float(day_count) - float(monthly_lop_map.get(user_obj.id, 0.0))),
                 'values': {}
             }
 
@@ -915,6 +923,7 @@ class CSVUploadViewSet(viewsets.ViewSet):
     """ViewSet for CSV upload by PS role."""
 
     permission_classes = [StaffAttendanceUploadPermission]
+    LATE10_LOCK_MARKER = 'LATE10_LOCK:'
 
     # ------------------------------------------------------------------ helpers
 
@@ -1329,13 +1338,17 @@ class CSVUploadViewSet(viewsets.ViewSet):
         """
         Create or update an AttendanceRecord.
 
-        mode='today'     → set morning_in (+ evening_out if present); absent if no scan
+        mode='today'     → set morning_in only; today's evening_out is intentionally ignored
         mode='yesterday' → fill deferred evening_out; backfill morning_in if missing
         mode='backfill'  → only create if no record exists yet (or overwrite=True);
                            caller must guard with `if p_in or p_out` so that days with
                            no biometric data are NOT written as absent.
         """
         record = AttendanceRecord.objects.filter(user=user, date=target_date).first()
+
+        # Never overwrite attendance rows that were locked by approved 10-min late entry forms.
+        if record is not None and record.notes and self.LATE10_LOCK_MARKER in record.notes:
+            return None
 
         # backfill: skip if record already exists and no overwrite.
         # Exception: holiday_mode must still process existing records so COL logic can run.
@@ -1423,7 +1436,7 @@ class CSVUploadViewSet(viewsets.ViewSet):
         Process a monthly biometric CSV.
 
         On upload date D (e.g. March 5):
-          • D5 column  → today's morning_in (+ evening_out if two distinct times)
+                    • D5 column  → today's morning_in only (out-time ignored)
           • D4 column  → yesterday's deferred evening_out (half-day / late exit)
           • D1..D3     → backfill any day not yet saved in the DB
         """
@@ -1480,6 +1493,8 @@ class CSVUploadViewSet(viewsets.ViewSet):
 
                     today_val = row.get(self._col(today_day), '')
                     t_in, t_out = self._parse_time_range(today_val)
+                    # Business rule: when PS uploads, today's out-time is ignored.
+                    t_out = None
 
                     yest_val = row.get(self._col(yest_day), '') if yest_day >= 1 else ''
                     # For yesterday: parse BOTH morning_in and evening_out
@@ -1603,10 +1618,11 @@ class CSVUploadViewSet(viewsets.ViewSet):
 
                     row_saved = False
 
-                    # 1. TODAY: morning entry (+ evening if two distinct times)
+                    # 1. TODAY: morning entry only (skip today's out-time from upload)
                     # Special handling for holidays: if staff came to college, award COL
                     if self._is_holiday(today, user):
                         t_in, t_out = self._parse_time_range(row.get(self._col(today_day), ''))
+                        t_out = None
                         # If there's attendance data on a holiday, it's COL
                         if t_in or t_out:
                             # Save attendance record for holiday work (respects overwrite_existing)
@@ -1638,6 +1654,7 @@ class CSVUploadViewSet(viewsets.ViewSet):
                     else:
                         # Normal working day processing
                         t_in, t_out = self._parse_time_range(row.get(self._col(today_day), ''))
+                        t_out = None
                         if self._upsert_record(user, today, t_in, t_out,
                                                'today', overwrite_existing, source_file):
                             row_saved = True
@@ -1870,6 +1887,11 @@ class CSVUploadViewSet(viewsets.ViewSet):
             for rec in records.only('id', 'user_id', 'date'):
                 if (rec.user_id, rec.date) in protected_pairs:
                     protected_ids.append(rec.id)
+
+        # Also preserve rows locked by approved 10-min late entry forms.
+        for rec in records.only('id', 'notes'):
+            if rec.notes and self.LATE10_LOCK_MARKER in rec.notes and rec.id not in protected_ids:
+                protected_ids.append(rec.id)
 
         deletable_records = records.exclude(id__in=protected_ids)
         protected_count = len(protected_ids)

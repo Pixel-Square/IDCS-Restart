@@ -1,6 +1,7 @@
 import React from 'react';
 import { X, CheckCircle, XCircle, Clock, User } from 'lucide-react';
 import type { StaffRequest } from '../../types/staffRequests';
+import { formatFieldLabel, renderFormValue } from './formValueUtils';
 
 interface Props {
   request: StaffRequest;
@@ -91,10 +92,10 @@ export default function RequestDetailsModal({ request, onClose }: Props) {
               {Object.entries(request.form_data).map(([key, value]) => (
                 <div key={key}>
                   <div className="text-sm font-medium text-gray-700 mb-1">
-                    {key.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')}
+                    {formatFieldLabel(key)}
                   </div>
                   <div className="text-sm text-gray-900 break-words">
-                    {String(value) || '-'}
+                    {renderFormValue(value)}
                   </div>
                 </div>
               ))}

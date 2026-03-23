@@ -4,6 +4,7 @@ import { getMyRequests } from '../../services/staffRequests';
 import type { StaffRequest } from '../../types/staffRequests';
 import RequestDetailsModal from './RequestDetailsModal';
 import NewRequestModal from './NewRequestModal';
+import { formatShortFormValue } from './formValueUtils';
 
 type StatusFilter = 'all' | 'pending' | 'approved' | 'rejected';
 
@@ -44,8 +45,7 @@ export default function MyRequestsPage() {
     if (req.template?.form_schema?.length > 0) {
       const textField = req.template.form_schema.find(f => f.type === 'text' || f.type === 'textarea');
       if (textField && req.form_data[textField.name]) {
-        const str = String(req.form_data[textField.name] ?? '—');
-        return str.length > 50 ? str.substring(0, 50) + '…' : str || '—';
+        return formatShortFormValue(req.form_data[textField.name]);
       }
     }
     return '—';
