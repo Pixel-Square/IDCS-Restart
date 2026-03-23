@@ -1,0 +1,15 @@
+ id | short_name | code |                    name                    
+----+------------+------+--------------------------------------------
+  1 | AI&DS      | 243  | Artificial Intelligence & Data Science
+  2 | AI&ML      | 148  | Artificial Intelligence & Machine Learning
+  3 | CSE        | 104  | Computer Science
+  4 | EEE        | 105  | Electrical and Electronics Engineering
+  5 | IT         | 205  | Information Technology
+  6 | ECE        | 106  | Electronics and Communication
+  7 | ME         | 114  | Mechanical
+  8 | CE         | 103  | Civil
+ 10 | RE         | RE   | RESEARCH
+ 11 | S&H        | S&H  | Science & Humanities
+ 17 | T&P        | T&P  | Training & Placement
+(11 rows)
+

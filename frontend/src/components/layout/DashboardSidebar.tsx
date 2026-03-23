@@ -504,15 +504,18 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   
   // Staff Requests system
   // Note: 'My Requests' moved into My Calendar; keep direct link removed to avoid duplication
-  // PERMISSION-BASED ONLY: Only show request approvals to users with explicit staff_requests.approve_requests permission
+  // Align with backend: approver roles can access pending approvals even without explicit permission.
+  const approverRoles = ['HOD', 'AHOD', 'HR', 'HAA', 'IQAC', 'PS', 'PRINCIPAL', 'ADMIN'];
+  const hasApproverRole = rolesUpper.some((r) => approverRoles.includes(r));
   const hasApprovePermission = permsLower.includes('staff_requests.approve_requests');
+  const canAccessPendingApprovals = hasApprovePermission || hasApproverRole;
   
-  if (hasApprovePermission && !items.some(item => item.key === 'staff_requests_approvals')) {
+  if (canAccessPendingApprovals && !items.some(item => item.key === 'staff_requests_approvals')) {
     items.push({ key: 'staff_requests_approvals', label: 'Pending Approvals', to: '/staff-requests/pending-approvals' });
   }
 
   // Requests Hub: ONLY for users with staff_requests.approve_requests permission
-  if (hasApprovePermission && !items.some(item => item.key === 'requests_hub')) {
+  if (canAccessPendingApprovals && !items.some(item => item.key === 'requests_hub')) {
     items.push({ key: 'requests_hub', label: 'Requests', to: '/requests' });
   }
 

@@ -78,6 +78,7 @@ INSTALLED_APPS = [
     'OBE',
     'question_bank',
     'template_api',
+    'reporting',
     'announcements.apps.AnnouncementsConfig',
 ]
 # Staff requests dynamic forms & workflow engine

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Power BI Reporting Portal Login</title>
+  <style>
+    body { margin: 0; font-family: "Segoe UI", Tahoma, sans-serif; background: linear-gradient(135deg, #e9f2ff, #f7fbff); min-height: 100vh; display: grid; place-items: center; }
+    .card { width: min(420px, 92vw); background: #fff; border-radius: 14px; box-shadow: 0 18px 40px rgba(24, 70, 120, 0.18); padding: 24px; }
+    h1 { margin: 0 0 8px; font-size: 1.2rem; color: #123; }
+    p { margin: 0 0 16px; color: #456; font-size: 0.94rem; }
+    label { display: block; margin: 10px 0 6px; font-weight: 600; color: #234; font-size: 0.9rem; }
+    input { width: 100%; box-sizing: border-box; border: 1px solid #c7d7ef; border-radius: 8px; padding: 10px 12px; font-size: 0.95rem; }
+    input:focus { outline: none; border-color: #2c70c9; box-shadow: 0 0 0 3px rgba(44, 112, 201, 0.14); }
+    .btn { margin-top: 14px; width: 100%; border: 0; border-radius: 8px; padding: 11px 12px; font-weight: 700; color: #fff; background: #1f5fb8; cursor: pointer; }
+    .error { margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: #fff0f0; color: #8b1d1d; border: 1px solid #f0c4c4; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <form class="card" method="post" action="">
+    {% csrf_token %}
+    <h1>Power BI Reporting Portal</h1>
+    <p>Login to access only reporting exports.</p>
+
+    <label for="username">Username</label>
+    <input id="username" name="username" type="text" autocomplete="username" required />
+
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required />
+
+    <button class="btn" type="submit">Sign in</button>
+
+    {% if error %}
+      <div class="error">{{ error }}</div>
+    {% endif %}
+  </form>
+</body>
+</html>

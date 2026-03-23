@@ -1,0 +1,54 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+  <div style="max-width: 980px;">
+    <h1>Power BI Exports</h1>
+
+    {% if forbidden %}
+      <p>You do not have permission to access reporting exports.</p>
+    {% else %}
+      <p>Export marks in Power BI format from reporting views.</p>
+
+      <form method="get" style="display:grid; grid-template-columns: repeat(4, minmax(160px,1fr)); gap: 12px; margin: 16px 0;">
+        <div>
+          <label>Year</label><br />
+          <input type="text" name="year" value="{{ request.GET.year|default:'' }}" style="width:100%;" />
+        </div>
+        <div>
+          <label>Sem</label><br />
+          <input type="text" name="sem" value="{{ request.GET.sem|default:'' }}" style="width:100%;" />
+        </div>
+        <div>
+          <label>Dept</label><br />
+          <input type="text" name="dept" value="{{ request.GET.dept|default:'' }}" style="width:100%;" />
+        </div>
+        <div>
+          <label>Sec</label><br />
+          <input type="text" name="sec" value="{{ request.GET.sec|default:'' }}" style="width:100%;" />
+        </div>
+        <div>
+          <label>Course Type</label><br />
+          <input type="text" name="course_type" value="{{ request.GET.course_type|default:'' }}" style="width:100%;" />
+        </div>
+        <div>
+          <label>Course Code</label><br />
+          <input type="text" name="course_code" value="{{ request.GET.course_code|default:'' }}" style="width:100%;" />
+        </div>
+        <div>
+          <label>Category</label><br />
+          <input type="text" name="course_category" value="{{ request.GET.course_category|default:'' }}" style="width:100%;" />
+        </div>
+        <div style="display:flex; align-items:flex-end; gap:8px;">
+          <button type="submit" class="button">Apply Filters</button>
+          <a href="." class="button">Clear</a>
+        </div>
+      </form>
+
+      <div style="display:flex; gap:10px; margin-top: 8px; flex-wrap: wrap;">
+        <a class="button default" href="{% url 'reporting_admin_export_csv' 'theory' %}?{{ request.GET.urlencode }}">Export Theory CSV</a>
+        <a class="button default" href="{% url 'reporting_admin_export_csv' 'tcpr-tcpl' %}?{{ request.GET.urlencode }}">Export TCPR/TCPL CSV</a>
+        <a class="button default" href="{% url 'reporting_admin_export_csv' 'project-lab' %}?{{ request.GET.urlencode }}">Export Project/Lab CSV</a>
+      </div>
+    {% endif %}
+  </div>
+{% endblock %}

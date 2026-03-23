@@ -16,6 +16,8 @@ def welcome(request):
 urlpatterns = [
     path('', welcome, name='welcome'),
     path('favicon.ico', lambda request: HttpResponse(status=204), name='favicon'),
+    path('reporting-portal/', include('reporting.portal_urls')),
+    path('admin/reporting/', include('reporting.admin_urls')),
     # path('grappelli/', include('grappelli.urls')),
     path('admin/', admin.site.urls),
     path('api/accounts/', include('accounts.urls')),
@@ -39,6 +41,7 @@ urlpatterns = [
     path('api/idscan/', include('idcsscan.urls')),
     path('api/feedback/', include('feedback.urls')),
     path('api/announcements/', include('announcements.api_urls')),
+    path('api/reporting/', include('reporting.urls')),
 ]
 
 # Admin dashboard data endpoint (counts for models) - always available

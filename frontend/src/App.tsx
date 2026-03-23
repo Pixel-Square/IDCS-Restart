@@ -549,7 +549,7 @@ export default function App() {
                 />
                 <Route
                   path="/staff-requests/pending-approvals"
-                  element={<ProtectedRoute user={user} requiredPermissions={['staff_requests.approve_requests']} element={<PendingApprovalsPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['HOD', 'AHOD', 'HR', 'HAA', 'IQAC', 'PS', 'PRINCIPAL', 'ADMIN']} requiredPermissions={['staff_requests.approve_requests']} element={<PendingApprovalsPage />} />}
                 />
                 
                 <Route

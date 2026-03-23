@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Power BI Reporting Portal</title>
+  <style>
+    body { margin: 0; font-family: "Segoe UI", Tahoma, sans-serif; background: #f6f9ff; color: #123; }
+    .wrap { max-width: 980px; margin: 24px auto; padding: 0 14px; }
+    .top { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 14px; }
+    h1 { margin: 0; font-size: 1.3rem; }
+    .logout { text-decoration: none; color: #1f5fb8; font-weight: 700; }
+    .card { background: #fff; border-radius: 12px; box-shadow: 0 10px 26px rgba(20, 50, 90, 0.1); padding: 16px; }
+    .grid { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 10px; }
+    label { display: block; font-size: 0.85rem; color: #345; margin-bottom: 5px; }
+    input { width: 100%; box-sizing: border-box; border: 1px solid #c7d7ef; border-radius: 8px; padding: 9px 10px; font-size: 0.92rem; }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+    .btn { text-decoration: none; display: inline-block; border: 0; border-radius: 8px; padding: 10px 12px; font-weight: 700; cursor: pointer; }
+    .btn-filter { background: #1f5fb8; color: #fff; }
+    .btn-clear { background: #eff4ff; color: #1f5fb8; }
+    .btn-export { background: #0f7a5a; color: #fff; }
+    .hint { font-size: 0.9rem; color: #456; margin-top: 10px; }
+    @media (max-width: 840px) { .grid { grid-template-columns: repeat(2, minmax(150px, 1fr)); } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <h1>Power BI Reporting Portal</h1>
+      <div>
+        <span style="margin-right:10px; color:#456;">User: {{ portal_user }}</span>
+        <a class="logout" href="{% url 'reporting_portal_logout' %}">Logout</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <form method="get" action="{% url 'reporting_portal_home' %}">
+        <div class="grid">
+          <div><label>Year</label><input type="text" name="year" value="{{ filters.year }}" /></div>
+          <div><label>Sem</label><input type="text" name="sem" value="{{ filters.sem }}" /></div>
+          <div><label>Dept</label><input type="text" name="dept" value="{{ filters.dept }}" /></div>
+          <div><label>Sec</label><input type="text" name="sec" value="{{ filters.sec }}" /></div>
+          <div><label>Course Type</label><input type="text" name="course_type" value="{{ filters.course_type }}" /></div>
+          <div><label>Course Code</label><input type="text" name="course_code" value="{{ filters.course_code }}" /></div>
+          <div><label>Category</label><input type="text" name="course_category" value="{{ filters.course_category }}" /></div>
+        </div>
+        <div class="actions">
+          <button class="btn btn-filter" type="submit">Apply Filters</button>
+          <a class="btn btn-clear" href="{% url 'reporting_portal_home' %}">Clear</a>
+          <a class="btn btn-export" href="{% url 'reporting_portal_export_csv' 'theory' %}?{{ request.GET.urlencode }}">Export Theory CSV</a>
+          <a class="btn btn-export" href="{% url 'reporting_portal_export_csv' 'tcpr-tcpl' %}?{{ request.GET.urlencode }}">Export TCPR/TCPL CSV</a>
+          <a class="btn btn-export" href="{% url 'reporting_portal_export_csv' 'project-lab' %}?{{ request.GET.urlencode }}">Export Project/Lab CSV</a>
+        </div>
+      </form>
+      <p class="hint">This portal exposes reporting exports only. It does not provide Django admin model access.</p>
+    </div>
+  </div>
+</body>
+</html>
