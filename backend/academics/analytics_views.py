@@ -1777,6 +1777,7 @@ class BulkAttendanceImportView(APIView):
         created_count = 0
         updated_count = 0
         locked_count = 0
+        period_records_created = 0
         period_records_updated = 0
         processed_session_ids = set()
         skipped_locked_sessions = {}
@@ -1839,14 +1840,14 @@ class BulkAttendanceImportView(APIView):
                         'date': att_date,
                     }
 
-                    period_status = None
-                    if norm_status in ('OD', 'LEAVE'):
-                        period_status = norm_status
-                    elif norm_status == 'LATE':
+                    # Keep period-wise attendance in sync with bulk daily import.
+                    # Existing behavior is retained for LATE (treated as Present in period records).
+                    if norm_status == 'LATE':
                         period_status = 'P'
-                    if period_status:
-                        session_overrides = period_overrides.setdefault(session.id, {})
-                        session_overrides[student.id] = period_status
+                    else:
+                        period_status = norm_status
+                    session_overrides = period_overrides.setdefault(session.id, {})
+                    session_overrides[student.id] = period_status
 
                     remark = str(remarks_map.get(date_str, '') or '').strip()
 
@@ -1876,20 +1877,85 @@ class BulkAttendanceImportView(APIView):
 
             if period_overrides:
                 from .models import PeriodAttendanceSession, PeriodAttendanceRecord
+                from .models import AcademicYear, TeachingAssignment
+                from timetable.models import TimetableAssignment
 
                 for session_id, student_statuses in period_overrides.items():
                     meta = session_meta.get(session_id)
                     if not meta:
                         continue
-                    period_sessions = PeriodAttendanceSession.objects.filter(
+                    period_sessions = list(PeriodAttendanceSession.objects.filter(
                         section_id=meta['section_id'],
                         date=meta['date'],
-                    )
+                    ))
+
+                    # If period sessions are missing for this date, seed them from the regular timetable
+                    # so imported daily attendance is persisted into period-wise records as well.
+                    if not period_sessions:
+                        active_ay = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.order_by('-id').first()
+                        weekday = meta['date'].isoweekday()
+                        timetable_rows = TimetableAssignment.objects.filter(
+                            section_id=meta['section_id'],
+                            day=weekday,
+                        ).select_related('period', 'staff', 'curriculum_row', 'subject_batch', 'subject_batch__curriculum_row')
+
+                        for tt_row in timetable_rows:
+                            teaching_assignment = None
+                            if active_ay and tt_row.staff_id:
+                                curriculum_row = tt_row.curriculum_row
+                                if curriculum_row is None and getattr(tt_row, 'subject_batch', None) is not None:
+                                    curriculum_row = getattr(tt_row.subject_batch, 'curriculum_row', None)
+                                if curriculum_row is not None:
+                                    teaching_assignment = TeachingAssignment.objects.filter(
+                                        staff_id=tt_row.staff_id,
+                                        section_id=meta['section_id'],
+                                        curriculum_row=curriculum_row,
+                                        academic_year=active_ay,
+                                        is_active=True,
+                                    ).first()
+
+                            lookup = {
+                                'section_id': meta['section_id'],
+                                'period': tt_row.period,
+                                'date': meta['date'],
+                                'teaching_assignment': teaching_assignment,
+                                'subject_batch': tt_row.subject_batch,
+                            }
+                            PeriodAttendanceSession.objects.get_or_create(
+                                **lookup,
+                                defaults={
+                                    'created_by': staff_profile,
+                                    'timetable_assignment': tt_row,
+                                },
+                            )
+
+                        period_sessions = list(PeriodAttendanceSession.objects.filter(
+                            section_id=meta['section_id'],
+                            date=meta['date'],
+                        ))
+
+                    if not period_sessions:
+                        continue
+
                     for student_id, period_status in student_statuses.items():
-                        period_records_updated += PeriodAttendanceRecord.objects.filter(
-                            session__in=period_sessions,
-                            student_id=student_id,
-                        ).update(status=period_status)
+                        for period_session in period_sessions:
+                            period_record, created = PeriodAttendanceRecord.objects.get_or_create(
+                                session=period_session,
+                                student_id=student_id,
+                                defaults={
+                                    'status': period_status,
+                                    'marked_by': staff_profile,
+                                },
+                            )
+                            if created:
+                                period_records_created += 1
+                                continue
+
+                            if period_record.status != period_status or period_record.marked_by_id != staff_profile.id:
+                                period_record.status = period_status
+                                period_record.marked_by = staff_profile
+                                period_record.save(update_fields=['status', 'marked_by', 'marked_at'])
+                                period_records_updated += 1
 
             if lock_session and processed_session_ids:
                 locked_count = DailyAttendanceSession.objects.filter(
@@ -1944,6 +2010,7 @@ class BulkAttendanceImportView(APIView):
             'created': created_count,
             'updated': updated_count,
             'locked': locked_count,
+            'period_records_created': period_records_created,
             'period_records_updated': period_records_updated,
             'locked_sessions': locked_session_list,
             'skipped_locked_sessions': skipped_locked_session_list,

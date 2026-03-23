@@ -1630,6 +1630,22 @@ export default function PeriodAttendance(){
     }
   }
 
+  function getBulkExcelEffectiveExcludedDates(startDate: string, endDate: string, excludedDates: Set<string>): string[] {
+    const effective = new Set(excludedDates)
+    const startD = new Date(startDate + 'T00:00:00')
+    const endD = new Date(endDate + 'T00:00:00')
+    if (isNaN(startD.getTime()) || isNaN(endD.getTime()) || endD < startD) return [...effective]
+
+    const cursor = new Date(startD)
+    while (cursor <= endD) {
+      if (cursor.getDay() === 0) {
+        effective.add(cursor.toISOString().slice(0, 10))
+      }
+      cursor.setDate(cursor.getDate() + 1)
+    }
+    return [...effective]
+  }
+
   async function handleBulkExcelDownload() {
     if (!bulkExcelSection || !bulkExcelStartDate || !bulkExcelEndDate) {
       alert('Please select a section and date range')
@@ -1642,8 +1658,13 @@ export default function PeriodAttendance(){
         start_date: bulkExcelStartDate,
         end_date: bulkExcelEndDate,
       })
-      if (bulkExcelExcludedDates.size > 0) {
-        params.set('excluded_dates', [...bulkExcelExcludedDates].join(','))
+      const effectiveExcludedDates = getBulkExcelEffectiveExcludedDates(
+        bulkExcelStartDate,
+        bulkExcelEndDate,
+        bulkExcelExcludedDates,
+      )
+      if (effectiveExcludedDates.length > 0) {
+        params.set('excluded_dates', effectiveExcludedDates.join(','))
       }
       const res = await fetchWithAuth(`/api/academics/bulk-attendance/download/?${params}`)
       if (!res.ok) {
@@ -2230,9 +2251,19 @@ export default function PeriodAttendance(){
 
                 // Total days in range
                 let totalDays = 0
+                let sundayCount = 0
                 const tempC = new Date(startD)
-                while (tempC <= endD) { totalDays++; tempC.setDate(tempC.getDate() + 1) }
-                const selectedCount = totalDays - bulkExcelExcludedDates.size
+                while (tempC <= endD) {
+                  totalDays++
+                  if (tempC.getDay() === 0) sundayCount++
+                  tempC.setDate(tempC.getDate() + 1)
+                }
+                const manualExcludedCount = [...bulkExcelExcludedDates].reduce((count, ds) => {
+                  const d = new Date(ds + 'T00:00:00')
+                  if (isNaN(d.getTime())) return count
+                  return d.getDay() === 0 ? count : count + 1
+                }, 0)
+                const selectedCount = totalDays - sundayCount - manualExcludedCount
 
                 const dayLabels = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']
 
@@ -2240,7 +2271,7 @@ export default function PeriodAttendance(){
                   <div className="border border-slate-200 rounded-xl bg-slate-50 p-4">
                     <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
                       <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold text-slate-700">Select Working Days</span>
+                        <span className="text-sm font-semibold text-slate-700">Mark the Non-Working Days</span>
                         <span className="text-xs text-slate-500 bg-white border border-slate-200 px-2 py-0.5 rounded-full">
                           {selectedCount} / {totalDays} days selected
                         </span>
@@ -2253,7 +2284,7 @@ export default function PeriodAttendance(){
                             const c = new Date(startD)
                             while (c <= endD) {
                               const day = c.getDay()
-                              if (day === 0 || day === 6) next.add(c.toISOString().slice(0, 10))
+                              if (day === 6) next.add(c.toISOString().slice(0, 10))
                               c.setDate(c.getDate() + 1)
                             }
                             setBulkExcelExcludedDates(next)
@@ -2294,7 +2325,8 @@ export default function PeriodAttendance(){
                                 const ds = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
                                 const dt = new Date(ds + 'T00:00:00')
                                 const inRange = dt >= startD && dt <= endD
-                                const isExcluded = bulkExcelExcludedDates.has(ds)
+                                const isSunday = dt.getDay() === 0
+                                const isExcluded = isSunday || bulkExcelExcludedDates.has(ds)
                                 const isWeekend = dt.getDay() === 0 || dt.getDay() === 6
                                 if (!inRange) {
                                   return (
@@ -2307,16 +2339,20 @@ export default function PeriodAttendance(){
                                   <button
                                     key={ds}
                                     type="button"
-                                    title={`${ds} — click to ${isExcluded ? 'include' : 'exclude'}`}
+                                    title={isSunday ? `${ds} — Sunday is locked` : `${ds} — click to ${isExcluded ? 'include' : 'exclude'}`}
+                                    disabled={isSunday}
                                     onClick={() =>
                                       setBulkExcelExcludedDates(prev => {
+                                        if (isSunday) return prev
                                         const next = new Set(prev)
                                         if (next.has(ds)) next.delete(ds); else next.add(ds)
                                         return next
                                       })
                                     }
                                     className={`w-7 h-7 rounded text-[11px] font-medium transition-colors flex items-center justify-center mx-auto ${
-                                      isExcluded
+                                      isSunday
+                                        ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
+                                        : isExcluded
                                         ? 'bg-red-100 text-red-400 line-through'
                                         : isWeekend
                                         ? 'bg-amber-50 text-amber-700 hover:bg-red-100 hover:text-red-500'
@@ -2381,34 +2417,6 @@ export default function PeriodAttendance(){
             </div>
           </div>
 
-          {/* Import result */}
-          {bulkExcelResult && (
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-              <h3 className="font-semibold text-slate-900 mb-3 flex items-center gap-2">
-                <CheckCircle2 className="w-5 h-5 text-green-600" />
-                Import Complete
-              </h3>
-              <div className="grid grid-cols-3 gap-4 mb-4">
-                <div className="bg-green-50 rounded-lg p-3 text-center">
-                  <div className="text-2xl font-bold text-green-700">{bulkExcelResult.created}</div>
-                  <div className="text-xs text-green-600 mt-0.5">Records Created</div>
-                </div>
-                <div className="bg-blue-50 rounded-lg p-3 text-center">
-                  <div className="text-2xl font-bold text-blue-700">{bulkExcelResult.updated}</div>
-                  <div className="text-xs text-blue-600 mt-0.5">Records Updated</div>
-                </div>
-                <div className="bg-amber-50 rounded-lg p-3 text-center">
-                  <div className="text-2xl font-bold text-amber-700">{bulkExcelResult.locked}</div>
-                  <div className="text-xs text-amber-600 mt-0.5">Sessions Locked</div>
-                </div>
-              </div>
-              {typeof bulkExcelResult.period_records_updated === 'number' && bulkExcelResult.period_records_updated > 0 && (
-                <div className="mb-4 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-700">
-                  Synced {bulkExcelResult.period_records_updated} period attendance record{bulkExcelResult.period_records_updated === 1 ? '' : 's'} from the imported daily statuses.
-                </div>
-              )}
-            </div>
-          )}
         </div>
       )}
 
@@ -2765,34 +2773,7 @@ export default function PeriodAttendance(){
       </div>
       )}
 
-      {/* Period-wise Bulk Attendance */}
-      {viewMode === 'period' && (
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-6">
-          <div className="px-6 py-4 border-b border-slate-200 bg-indigo-50">
-            <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
-              <FileSpreadsheet className="w-5 h-5 text-indigo-600" />
-              Period-wise Bulk Attendance
-            </h2>
-            <p className="text-sm text-slate-600 mt-1">
-              Mark attendance for multiple assignments and dates in one action.
-            </p>
-          </div>
-          <div className="px-6 py-5">
-            <button
-              onClick={openBulkModal}
-              className="inline-flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium transition-colors"
-            >
-              <Save className="w-4 h-4" />
-              Open Period-wise Bulk Mark
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Request sections: history, access requests, unlock requests (moved below Assigned Periods) */}
-      <div className="mb-6">
-        <HodRequestHistory />
-      </div>
+      {/* Request sections: access requests, unlock requests (moved below Assigned Periods) */}
       <div className="mb-6">
         <HalfDayRequestsApproval />
       </div>
