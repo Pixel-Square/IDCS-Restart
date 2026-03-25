@@ -4,10 +4,13 @@ import {
   fetchApplicationTypes,
   fetchMyApplications,
   cancelApplication,
+  fetchApplicationsNav,
+  ApplicationsNavResponse,
   ApplicationTypeListItem,
   MyApplicationItem,
 } from '../../services/applications'
 import { ensureProfilePhotoPresent } from '../../services/auth'
+import ApplicationsInboxPage from './ApplicationsInboxPage'
 
 function statusBadgeClass(state: string): string {
   switch (state?.toUpperCase()) {
@@ -161,7 +164,7 @@ function AppTimer({ app }: { app: MyApplicationItem }): JSX.Element {
   return <SlaCountdown deadline={app.sla_deadline ?? null} endAt={app.gatepass_window_end ?? null} />
 }
 
-export default function ApplicationsPage(): JSX.Element {
+export function MyApplicationsContent(): JSX.Element {
   const navigate = useNavigate()
 
   const [types, setTypes] = useState<ApplicationTypeListItem[]>([])
@@ -215,12 +218,7 @@ export default function ApplicationsPage(): JSX.Element {
   }, [])
 
   return (
-    <main className="min-h-screen bg-gray-50 p-4 md:p-6">
-      <div className="max-w-5xl mx-auto space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Applications</h1>
-          <p className="text-sm text-gray-500 mt-1">Submit a new application or track your existing ones.</p>
-        </div>
+    <div className="space-y-6">
 
         {error && (
           <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
@@ -396,6 +394,63 @@ export default function ApplicationsPage(): JSX.Element {
             </section>
           </>
         )}
+    </div>
+  )
+}
+
+export default function ApplicationsPage(): JSX.Element {
+  const [activeTab, setActiveTab] = useState<'my_apps' | 'inbox'>('my_apps');
+  const [nav, setNav] = useState<ApplicationsNavResponse | null>(null);
+
+  useEffect(() => {
+    fetchApplicationsNav().then(setNav).catch(() => {});
+  }, []);
+
+  const hasInboxRole = Boolean(nav?.show_applications) && ((nav?.staff_roles?.length || 0) > 0 || (nav?.override_roles?.length || 0) > 0);
+
+  return (
+    <main className="min-h-screen bg-gray-50 flex flex-col p-4 md:p-6 lg:p-8">
+      <div className="max-w-6xl w-full mx-auto space-y-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-gray-200">
+          <div>
+            <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-gray-900">Applications Desk</h1>
+            <p className="text-sm text-gray-500 mt-1">Manage all your applications and pending approvals.</p>
+          </div>
+          {hasInboxRole && (
+            <div className="flex bg-white shadow-sm border border-gray-200 rounded-xl p-1 shrink-0">
+              <button
+                onClick={() => setActiveTab('my_apps')}
+                className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-5 py-2.5 sm:py-2 text-sm font-medium rounded-lg transition-all duration-200 ${
+                  activeTab === 'my_apps'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                }`}
+              >
+                <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                My Applications
+              </button>
+              <button
+                onClick={() => setActiveTab('inbox')}
+                className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-5 py-2.5 sm:py-2 text-sm font-medium rounded-lg transition-all duration-200 ${
+                  activeTab === 'inbox'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                }`}
+              >
+                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                </svg>
+                Approvals Inbox
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="pb-10 relative mt-4">
+          {activeTab === 'my_apps' ? <MyApplicationsContent /> : <ApplicationsInboxPage isSubComponent={true} />}
+        </div>
       </div>
     </main>
   )

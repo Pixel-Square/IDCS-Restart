@@ -168,10 +168,14 @@ export async function lookupAny(uid: string): Promise<LookupAnyResult> {
 
 export type GatepassLogRow = {
   application_id: number
+  uid?: string | null
   user_username: string | null
   user_name: string | null
   user_role: 'STUDENT' | 'STAFF' | null
   department_name: string | null
+  reg_no?: string | null
+  staff_id?: string | null
+  profile_image_url?: string | null
   gate_username: string | null
   mode: 'ONLINE' | 'OFFLINE' | string
   status: string
@@ -180,6 +184,7 @@ export type GatepassLogRow = {
   in_status: 'ON_TIME' | 'LATE' | 'NOT_RETURNED'
   out_at?: string | null
   in_at?: string | null
+  log_at?: string | null
 }
 
 export type FetchGatepassLogsParams = {
@@ -188,6 +193,8 @@ export type FetchGatepassLogsParams = {
   status?: string
   out?: 'EXITED' | 'NOT_EXITED' | ''
   in?: 'ON_TIME' | 'LATE' | 'NOT_RETURNED' | ''
+  from?: string
+  to?: string
   q?: string
   limit?: number
 }
@@ -201,6 +208,8 @@ export async function fetchGatepassLogs(
   if (params.status) qp.set('status', String(params.status))
   if (params.out) qp.set('out', params.out)
   if (params.in) qp.set('in', params.in)
+  if (params.from) qp.set('from', String(params.from))
+  if (params.to) qp.set('to', String(params.to))
   if (params.q) qp.set('q', String(params.q))
   if (params.limit) qp.set('limit', String(params.limit))
 

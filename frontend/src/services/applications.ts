@@ -18,10 +18,12 @@ export type ApproverInboxItem = {
   application_type: string
   applicant_name: string
   applicant_roll_or_staff_id: string | null
+  applicant_kind?: 'STUDENT' | 'STAFF' | null
   department_name: string | null
   current_step_role: string | null
   submitted_at: string
   current_state: string
+  applicant_profile_image?: string | null
 }
 
 async function parseJson<T>(res: Response): Promise<T> {
@@ -262,7 +264,9 @@ export type PastApprovalItem = {
   application_id: number
   application_type: string
   applicant_name: string
+  applicant_profile_image?: string | null
   applicant_roll_or_staff_id: string | null
+  applicant_kind?: 'STUDENT' | 'STAFF' | null
   department_name: string | null
   current_state: string
   submitted_at: string | null

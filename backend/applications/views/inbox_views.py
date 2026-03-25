@@ -1,6 +1,7 @@
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from django.conf import settings
 
 from applications.services import inbox_service
 from applications.serializers.inbox_serializers import ApproverInboxItemSerializer
@@ -13,7 +14,7 @@ class ApproverInboxView(APIView):
     def get(self, request, *args, **kwargs):
         user = request.user
         items = inbox_service.get_pending_approvals_for_user(user)
-        serializer = ApproverInboxItemSerializer(items, many=True)
+        serializer = ApproverInboxItemSerializer(items, many=True, context={'request': request})
         return Response(serializer.data)
 
 
@@ -50,13 +51,37 @@ class PastApprovalsView(APIView):
                 'application_type',
                 'applicant_user',
                 'student_profile__section__batch__course__department',
+                'staff_profile__department',
                 'gatepass_scanned_by',
             )
             .order_by('-final_decision_at')[:50]
         )
 
+        def applicant_profile_image_url(app):
+            try:
+                if app.student_profile and getattr(app.student_profile, 'profile_image', None):
+                    return request.build_absolute_uri(app.student_profile.profile_image.url)
+                if app.staff_profile and getattr(app.staff_profile, 'profile_image', None):
+                    return request.build_absolute_uri(app.staff_profile.profile_image.url)
+                path = (getattr(app.applicant_user, 'profile_image', '') or '').strip() if app.applicant_user else ''
+                if not path:
+                    return None
+                if path.startswith('http://') or path.startswith('https://'):
+                    return path
+                media_url = settings.MEDIA_URL or '/media/'
+                rel = f"{media_url.rstrip('/')}/{path.lstrip('/')}"
+                return request.build_absolute_uri(rel)
+            except Exception:
+                return None
+
         data = []
         for app in apps:
+            kind = None
+            if getattr(app, 'student_profile', None):
+                kind = 'STUDENT'
+            elif getattr(app, 'staff_profile', None):
+                kind = 'STAFF'
+
             roll = None
             if app.student_profile:
                 roll = app.student_profile.reg_no
@@ -75,6 +100,8 @@ class PastApprovalsView(APIView):
                 'application_id': app.id,
                 'application_type': app.application_type.name,
                 'applicant_name': _display_name(app.applicant_user),
+                'applicant_profile_image': applicant_profile_image_url(app),
+                'applicant_kind': kind,
                 'applicant_roll_or_staff_id': roll,
                 'department_name': dept,
                 'current_state': app.current_state,

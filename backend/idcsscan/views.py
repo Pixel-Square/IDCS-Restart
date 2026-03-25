@@ -25,7 +25,7 @@ Assign/unassign/gatepass-check require SECURITY role.
 from __future__ import annotations
 
 import re
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any, Optional
 
 from django.contrib.auth import get_user_model
@@ -351,6 +351,9 @@ def _build_offline_log_rows(
     out_filter: str,
     in_filter: str,
     q: str,
+    from_dt: Optional[datetime],
+    to_dt: Optional[datetime],
+    base_url: str,
     limit: int,
 ) -> list[dict]:
     """Build log rows for OFFLINE scans that were pulled.
@@ -368,6 +371,11 @@ def _build_offline_log_rows(
         .select_related("pulled_security_user")
         .order_by("-recorded_at")
     )
+
+    if from_dt:
+        qs = qs.filter(recorded_at__gte=from_dt)
+    if to_dt:
+        qs = qs.filter(recorded_at__lte=to_dt)
 
     # Pull a bigger slice; we dedupe by UID.
     scan_cap = min(limit * 50, 5000)
@@ -392,12 +400,17 @@ def _build_offline_log_rows(
                 "uid": uid,
                 "out_at": None,
                 "in_at": None,
+                "log_at": None,
                 "gate_username": None,
                 "application_id": None,
                 "user_role": None,
                 "user_username": None,
                 "user_name": uid,
                 "department_name": None,
+                "reg_no": None,
+                "staff_id": None,
+                "profile_image_url": None,
+                "__sort_dt": None,
             }
 
             # Best-effort resolve role/department for filtering/display.
@@ -409,6 +422,26 @@ def _build_offline_log_rows(
                 _dep_id, dep_name = _extract_department_for_profile(p_type, p_data)
                 entry["department_name"] = dep_name
                 entry["_department_id"] = _dep_id
+                try:
+                    entry["profile_image_url"] = p_data.get("profile_image_url") if isinstance(p_data, dict) else None
+                except Exception:
+                    entry["profile_image_url"] = None
+
+                try:
+                    if entry.get("profile_image_url") and str(entry["profile_image_url"]).startswith("/"):
+                        entry["profile_image_url"] = f"{base_url}{entry['profile_image_url']}"
+                except Exception:
+                    pass
+                if p_type == "student":
+                    try:
+                        entry["reg_no"] = p_data.get("reg_no") if isinstance(p_data, dict) else None
+                    except Exception:
+                        entry["reg_no"] = None
+                if p_type == "staff":
+                    try:
+                        entry["staff_id"] = p_data.get("staff_id") if isinstance(p_data, dict) else None
+                    except Exception:
+                        entry["staff_id"] = None
             else:
                 entry["_department_id"] = None
 
@@ -427,6 +460,15 @@ def _build_offline_log_rows(
                 )
             if entry.get("application_id") is None:
                 entry["application_id"] = -(rec.id or 0)
+
+        # Track the latest recorded datetime for sorting.
+        try:
+            if rec.recorded_at:
+                prev = entry.get("__sort_dt")
+                if prev is None or rec.recorded_at > prev:
+                    entry["__sort_dt"] = rec.recorded_at
+        except Exception:
+            pass
 
     rows: list[dict] = []
     for uid, entry in by_uid.items():
@@ -453,10 +495,14 @@ def _build_offline_log_rows(
         rows.append(
             {
                 "application_id": int(entry.get("application_id") or 0),
+                "uid": entry.get("uid"),
                 "user_username": entry.get("user_username"),
                 "user_name": entry.get("user_name"),
                 "user_role": entry.get("user_role"),
                 "department_name": entry.get("department_name"),
+                "reg_no": entry.get("reg_no"),
+                "staff_id": entry.get("staff_id"),
+                "profile_image_url": entry.get("profile_image_url"),
                 "gate_username": entry.get("gate_username"),
                 "mode": "OFFLINE",
                 "status": "",
@@ -465,14 +511,11 @@ def _build_offline_log_rows(
                 "in_status": in_status,
                 "out_at": out_at,
                 "in_at": in_at,
+                "log_at": None,
+                "__sort_dt": entry.get("__sort_dt"),
             }
         )
 
-    # Sort by latest available time.
-    def _sort_key(r: dict) -> str:
-        return str(r.get("out_at") or r.get("in_at") or "")
-
-    rows.sort(key=_sort_key, reverse=True)
     return rows[:limit]
 
 
@@ -700,6 +743,8 @@ class GatepassLogsView(APIView):
       - status: application current_state
       - out: EXITED|NOT_EXITED
       - in: ON_TIME|LATE|NOT_RETURNED
+            - from: YYYY-MM-DD (inclusive; filters by OUT/IN scan time, with created_at fallback)
+            - to: YYYY-MM-DD (inclusive)
       - q: search (name/username/reg_no/staff_id)
       - limit: int (default 200, max 2000)
     """
@@ -715,6 +760,29 @@ class GatepassLogsView(APIView):
         out_filter = str(request.query_params.get("out") or "").strip().upper()
         in_filter = str(request.query_params.get("in") or "").strip().upper()
         q = str(request.query_params.get("q") or "").strip()
+
+        def _parse_date_param(raw: str, *, is_end: bool) -> Optional[datetime]:
+            raw = str(raw or "").strip()
+            if not raw:
+                return None
+            try:
+                # Accept YYYY-MM-DD
+                d = date.fromisoformat(raw)
+                if is_end:
+                    dt = datetime(d.year, d.month, d.day, 23, 59, 59, 999999)
+                else:
+                    dt = datetime(d.year, d.month, d.day, 0, 0, 0)
+                return _ensure_aware(dt)
+            except Exception:
+                return None
+
+        from_dt = _parse_date_param(request.query_params.get("from") or "", is_end=False)
+        to_dt = _parse_date_param(request.query_params.get("to") or "", is_end=True)
+
+        try:
+            base_url = str(request.build_absolute_uri("/") or "").rstrip("/")
+        except Exception:
+            base_url = ""
 
         dept_raw = str(request.query_params.get("department_id") or "").strip()
         dept_id: Optional[int] = None
@@ -745,6 +813,24 @@ class GatepassLogsView(APIView):
             .all()
             .order_by("-created_at")
         )
+
+        if from_dt or to_dt:
+            # Filter by scan times (OUT/IN) when present.
+            # Only fall back to created_at when there are no scans.
+            scanned_any = Q(gatepass_scanned_at__isnull=False) | Q(gatepass_in_scanned_at__isnull=False)
+            scanned_range = Q()
+            if from_dt:
+                scanned_range &= Q(gatepass_scanned_at__gte=from_dt) | Q(gatepass_in_scanned_at__gte=from_dt)
+            if to_dt:
+                scanned_range &= Q(gatepass_scanned_at__lte=to_dt) | Q(gatepass_in_scanned_at__lte=to_dt)
+
+            no_scans_created = Q(gatepass_scanned_at__isnull=True, gatepass_in_scanned_at__isnull=True)
+            if from_dt:
+                no_scans_created &= Q(created_at__gte=from_dt)
+            if to_dt:
+                no_scans_created &= Q(created_at__lte=to_dt)
+
+            qs = qs.filter((scanned_any & scanned_range) | no_scans_created)
 
         if status_filter:
             qs = qs.filter(current_state__iexact=status_filter)
@@ -782,6 +868,9 @@ class GatepassLogsView(APIView):
                 out_filter=out_filter,
                 in_filter=in_filter,
                 q=q,
+                from_dt=from_dt,
+                to_dt=to_dt,
+                base_url=base_url,
                 limit=limit,
             )
             results.extend(offline_rows)
@@ -813,6 +902,32 @@ class GatepassLogsView(APIView):
                 continue
 
             applicant_role = "STUDENT" if app.student_profile_id else ("STAFF" if app.staff_profile_id else None)
+
+            uid = None
+            reg_no = None
+            staff_id = None
+            profile_image_url = None
+            try:
+                if app.student_profile:
+                    uid = getattr(app.student_profile, "rfid_uid", None) or None
+                    reg_no = getattr(app.student_profile, "reg_no", None) or None
+                    profile_image_url = (
+                        app.student_profile.profile_image.url if getattr(app.student_profile, "profile_image", None) else None
+                    )
+                elif app.staff_profile:
+                    uid = getattr(app.staff_profile, "rfid_uid", None) or None
+                    staff_id = getattr(app.staff_profile, "staff_id", None) or None
+                    profile_image_url = (
+                        app.staff_profile.profile_image.url if getattr(app.staff_profile, "profile_image", None) else None
+                    )
+            except Exception:
+                pass
+
+            try:
+                if profile_image_url and str(profile_image_url).startswith("/") and base_url:
+                    profile_image_url = f"{base_url}{profile_image_url}"
+            except Exception:
+                pass
 
             dept_name = None
             try:
@@ -860,13 +975,29 @@ class GatepassLogsView(APIView):
                 current_state = app.current_state
                 reason = _extract_reason(app)
 
+            sort_dt = None
+            try:
+                sort_dt = app.gatepass_in_scanned_at or app.gatepass_scanned_at or app.created_at
+            except Exception:
+                sort_dt = None
+            if sort_dt:
+                try:
+                    sort_dt = timezone.localtime(sort_dt)
+                except Exception:
+                    pass
+            log_at = sort_dt.isoformat() if sort_dt else None
+
             results.append(
                 {
                     "application_id": app.id,
+                    "uid": uid,
                     "user_username": getattr(app.applicant_user, "username", None),
                     "user_name": _display_name(app.applicant_user),
                     "user_role": applicant_role,
                     "department_name": dept_name,
+                    "reg_no": reg_no,
+                    "staff_id": staff_id,
+                    "profile_image_url": profile_image_url,
                     "gate_username": gate_username,
                     "mode": mode,
                     "status": current_state,
@@ -875,10 +1006,41 @@ class GatepassLogsView(APIView):
                     "in_status": in_status,
                     "out_at": out_at,
                     "in_at": in_at,
+                    "log_at": log_at,
+                    "__sort_dt": sort_dt,
                 }
             )
 
-        return Response({"results": results}, status=status.HTTP_200_OK)
+        # Ensure the combined OFFLINE + ONLINE list is ordered by the most recent activity.
+        def _row_dt(row: dict) -> Optional[datetime]:
+            dt = row.get("__sort_dt")
+            if isinstance(dt, datetime):
+                return dt
+            # Fallback: parse log_at/out_at/in_at if needed
+            for k in ("log_at", "out_at", "in_at"):
+                v = row.get(k)
+                if not v:
+                    continue
+                try:
+                    parsed = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+                    return _ensure_aware(parsed)
+                except Exception:
+                    continue
+            return None
+
+        results.sort(key=lambda r: _row_dt(r) or datetime.min.replace(tzinfo=timezone.get_current_timezone()), reverse=True)
+        for r in results:
+            r.pop("__sort_dt", None)
+            # Fill log_at for offline rows if missing.
+            if not r.get("log_at"):
+                dt = _row_dt(r)
+                if dt:
+                    try:
+                        r["log_at"] = timezone.localtime(dt).isoformat()
+                    except Exception:
+                        r["log_at"] = dt.isoformat()
+
+        return Response({"results": results[:limit]}, status=status.HTTP_200_OK)
 
 
 class GatepassOfflineSecurityUsersView(APIView):

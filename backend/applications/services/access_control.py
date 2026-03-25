@@ -48,6 +48,14 @@ def can_user_view_application(application: app_models.Application, user) -> bool
     if getattr(user, 'is_superuser', False):
         return True
 
+    # Permission override (e.g., HR)
+    try:
+        has_perm = getattr(user, 'has_perm', None)
+        if callable(has_perm) and user.has_perm('applications.view_any_application'):
+            return True
+    except Exception:
+        pass
+
     # Applicant
     if application.applicant_user_id == getattr(user, 'id', None):
         return True

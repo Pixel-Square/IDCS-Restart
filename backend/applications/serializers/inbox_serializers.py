@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.conf import settings
 
 from applications import models as app_models
 
@@ -12,9 +13,56 @@ class ApproverInboxItemSerializer(serializers.Serializer):
     current_step_role = serializers.SerializerMethodField()
     submitted_at = serializers.DateTimeField()
     current_state = serializers.CharField()
+    applicant_profile_image = serializers.SerializerMethodField()
+    applicant_kind = serializers.SerializerMethodField()
+
+    def get_applicant_profile_image(self, obj):
+        req = self.context.get('request')
+
+        def to_abs(url_or_path):
+            if not url_or_path:
+                return None
+            if url_or_path.startswith('http://') or url_or_path.startswith('https://'):
+                return url_or_path
+            if req:
+                return req.build_absolute_uri(url_or_path)
+            return url_or_path
+
+        try:
+            sp = getattr(obj, 'student_profile', None)
+            if sp and getattr(sp, 'profile_image', None):
+                return to_abs(sp.profile_image.url)
+
+            st = getattr(obj, 'staff_profile', None)
+            if st and getattr(st, 'profile_image', None):
+                return to_abs(st.profile_image.url)
+
+            user = getattr(obj, 'applicant_user', None)
+            user_path = getattr(user, 'profile_image', '') if user else ''
+            if user_path:
+                media_url = settings.MEDIA_URL or '/media/'
+                rel = f"{media_url.rstrip('/')}/{str(user_path).lstrip('/')}"
+                return to_abs(rel)
+        except Exception:
+            return None
+        return None
 
     def get_applicant_name(self, obj):
-        return getattr(obj.applicant_user, 'get_full_name', lambda: str(obj.applicant_user))()
+        user = getattr(obj, 'applicant_user', None)
+        if not user:
+            return ''
+        full = getattr(user, 'get_full_name', lambda: '')() or ''
+        full = full.strip()
+        if full:
+            return full
+        return getattr(user, 'username', None) or str(user)
+
+    def get_applicant_kind(self, obj):
+        if getattr(obj, 'student_profile', None):
+            return 'STUDENT'
+        if getattr(obj, 'staff_profile', None):
+            return 'STAFF'
+        return None
 
     def get_applicant_roll_or_staff_id(self, obj):
         if getattr(obj, 'student_profile', None):

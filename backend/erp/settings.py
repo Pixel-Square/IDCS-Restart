@@ -426,6 +426,11 @@ OBE_WHATSAPP_TIMEOUT_SECONDS = float(os.getenv('OBE_WHATSAPP_TIMEOUT_SECONDS', '
 OBE_WHATSAPP_DEFAULT_COUNTRY_CODE = os.getenv('OBE_WHATSAPP_DEFAULT_COUNTRY_CODE', '91')
 OBE_WHATSAPP_ALLOW_NON_LOCAL_URL = os.getenv('OBE_WHATSAPP_ALLOW_NON_LOCAL_URL', '0') == '1'
 
+# Applications WhatsApp notifications (approval workflow)
+# Uses the same whatsapp-web.js gateway configured by OBE_WHATSAPP_* settings.
+# Enable by setting: APPLICATION_WHATSAPP_NOTIFICATIONS_ENABLED=1
+APPLICATION_WHATSAPP_NOTIFICATIONS_ENABLED = os.getenv('APPLICATION_WHATSAPP_NOTIFICATIONS_ENABLED', '0') == '1'
+
 # WhatsApp gateway conventions vary; these paths control what the IQAC Settings page proxies.
 OBE_WHATSAPP_GATEWAY_STATUS_PATH = os.getenv('OBE_WHATSAPP_GATEWAY_STATUS_PATH', '/status')
 OBE_WHATSAPP_GATEWAY_QR_IMAGE_PATH = os.getenv('OBE_WHATSAPP_GATEWAY_QR_IMAGE_PATH', '/qr.png')

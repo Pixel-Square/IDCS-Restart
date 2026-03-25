@@ -433,7 +433,20 @@ def process_approval(application: app_models.Application, user, action: str, rem
                 notification_service.notify_application_rejected(application)
             except Exception:
                 pass
-            return app_models.Application.objects.get(pk=application.pk)
+            updated = app_models.Application.objects.get(pk=application.pk)
+            try:
+                notification_service.notify_whatsapp_step_action(
+                    updated,
+                    actor=user,
+                    approved_step=current_step,
+                    action='REJECT',
+                    remarks=remarks or '',
+                    is_override=user_is_override,
+                    next_step=None,
+                )
+            except Exception:
+                pass
+            return updated
 
         # APPROVE -> advance
         next_step = get_next_approval_step(application, current_step)
@@ -450,8 +463,34 @@ def process_approval(application: app_models.Application, user, action: str, rem
                 notification_service.notify_application_final_approved(application)
             except Exception:
                 pass
-            return app_models.Application.objects.get(pk=application.pk)
+            updated = app_models.Application.objects.get(pk=application.pk)
+            try:
+                notification_service.notify_whatsapp_step_action(
+                    updated,
+                    actor=user,
+                    approved_step=current_step,
+                    action='APPROVE',
+                    remarks=remarks or '',
+                    is_override=user_is_override,
+                    next_step=None,
+                )
+            except Exception:
+                pass
+            return updated
 
         # Otherwise set current_step and ensure state is IN_REVIEW
         application_state.move_to_in_review(application, target_step)
-        return app_models.Application.objects.get(pk=application.pk)
+        updated = app_models.Application.objects.get(pk=application.pk)
+        try:
+            notification_service.notify_whatsapp_step_action(
+                updated,
+                actor=user,
+                approved_step=current_step,
+                action='APPROVE',
+                remarks=remarks or '',
+                is_override=user_is_override,
+                next_step=target_step,
+            )
+        except Exception:
+            pass
+        return updated
