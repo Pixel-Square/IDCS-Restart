@@ -66,6 +66,15 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
   hod_event_management: PartyPopper,
   haa_event_approvals: ClipboardList,
   haa_event_management: PartyPopper,
+  coe_portal: Shield,
+  coe_students_list: GraduationCap,
+  coe_course_list: BookOpen,
+  coe_arrear_list: ClipboardList,
+  coe_bundle_allocation: ClipboardList,
+  coe_bar_scan: ScanLine,
+  coe_bar_scan_entry: ScanLine,
+  coe_retrival: FileText,
+  coe_one_page_report: FileText,
 };
 
 export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string }) {
@@ -309,9 +318,10 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
 
   const entry = data.entry_points || {};
 
-  const items: Array<{ key: string; label: string; to: string }> = [];
+  const items: Array<{ key: string; label: string; to: string; icon?: any }> = [];
   const permsLower = (data.permissions || []).map(p => (p || '').toString().toLowerCase());
   const rolesUpper = (data.roles || []).map(r => (r || '').toString().toUpperCase());
+  const emailLower = String((data as any).email || '').toLowerCase().trim();
   const flags = data.flags || {};
   const isIqac = rolesUpper.includes('IQAC');
   const isIqacMain = Boolean((data as any)?.is_iqac_main === true || (isIqac && String((data as any)?.username || '').trim() === '000000'));
@@ -381,6 +391,18 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // Announcements page: permission-driven visibility
   if (permsLower.includes('announcements.view_announcement_page')) {
     items.push({ key: 'announcements', label: 'Announcements', to: '/announcements' });
+  }
+
+  if ((permsLower.includes('coe.portal.access') || emailLower === 'coe@krct.ac.in') && !items.some((item) => item.key === 'coe_portal')) {
+    items.push({ key: 'coe_portal', label: 'COE Portal', to: '/coe' });
+    items.push({ key: 'coe_students_list', label: 'StudentsList', to: '/coe/students' });
+    items.push({ key: 'coe_course_list', label: 'Course List', to: '/coe/courses' });
+    items.push({ key: 'coe_arrear_list', label: 'Arrear List', to: '/coe/arrears' });
+    items.push({ key: 'coe_bundle_allocation', label: 'Bundle Allocation', to: '/coe/bundle-allocation' });
+    items.push({ key: 'coe_bar_scan', label: 'Barcode Reader', to: '/coe/bar-scan' });
+    items.push({ key: 'coe_bar_scan_entry', label: 'Barcode Entry', to: '/coe/bar-scan/entry' });
+    items.push({ key: 'coe_retrival', label: 'Retrival', to: '/coe/retrival' });
+    items.push({ key: 'coe_one_page_report', label: 'One Page Report', to: '/coe/one-page-report' });
   }
 
   // Advisor pages: require ADVISOR role or explicit permission

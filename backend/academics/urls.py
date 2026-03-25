@@ -48,6 +48,7 @@ from .views import BulkAssignSecondarySectionView, RemoveSecondarySectionView
 from .student_import_views import StudentImportTemplateDownloadView, StudentBulkImportView
 from .rfreader_views import RFReaderGateListCreateView, RFReaderStudentListCreateView, RFReaderLastScanView
 from .public_views import PublicProfileLookupView
+from .barcode_views import StudentBarcodeLookupView
 
 
 router = DefaultRouter()
@@ -157,4 +158,7 @@ urlpatterns = [
     path('bulk-attendance/locked-sessions/', BulkAttendanceLockedSessionsView.as_view()),
     path('bulk-attendance/import/', BulkAttendanceImportView.as_view()),
     path('bulk-attendance/unlock-request/', BulkDailyAttendanceUnlockRequestView.as_view()),
+    
+    # Barcode Lookup
+    path('student/lookup/<str:code>/', StudentBarcodeLookupView.as_view()),
 ]

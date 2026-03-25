@@ -26,6 +26,7 @@ urlpatterns = [
     path('api/academics/', include('academics.urls')),
     path('api/applications/', include('applications.urls')),
     path('api/attachments/', include('applications.attachments_urls')),
+    path('api/coe/', include('COE.urls')),
     path('api/curriculum/', include('curriculum.urls')),
     path('api/obe/', include('OBE.urls')),
     path('api/template/', include('template_api.urls')),

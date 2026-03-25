@@ -53,6 +53,7 @@ def resolve_dashboard_capabilities(user) -> Dict:
         }
         return {
             'username': '',
+            'email': '',
             'is_iqac_main': False,
             'profile_type': None,
             'roles': [],
@@ -159,6 +160,7 @@ def resolve_dashboard_capabilities(user) -> Dict:
         'can_view_feedback_page': 'feedback.feedback_page' in lower_perms,
         'can_create_feedback': 'feedback.create' in lower_perms,
         'can_reply_feedback': 'feedback.reply' in lower_perms,
+        'can_access_coe_portal': ('coe.portal.access' in lower_perms) or str(getattr(user, 'email', '') or '').strip().lower() == 'coe@krct.ac.in',
     }
 
     # `hod_role_present` should reflect explicit `accounts.Role` membership only.
@@ -181,10 +183,12 @@ def resolve_dashboard_capabilities(user) -> Dict:
         'hod_obe_requests': ('obe.hod_obe_requests' in lower_perms),
         'obe_master_requests': ('obe.master_obe_requests' in lower_perms),
         'feedback_page': bool(flags.get('can_view_feedback_page')),
+        'coe_portal': bool(flags.get('can_access_coe_portal')),
     }
 
     return {
         'username': str(getattr(user, 'username', '') or ''),
+        'email': str(getattr(user, 'email', '') or ''),
         'is_iqac_main': bool(is_iqac_main),
         'profile_type': profile_type,
         'roles': role_names,

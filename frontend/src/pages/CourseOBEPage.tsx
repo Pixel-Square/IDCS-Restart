@@ -37,7 +37,7 @@ export default function CourseOBEPage(): JSX.Element {
     try {
       const stored = localStorage.getItem(`obe_course_qp_${courseId}`);
       const v = String(stored || '').trim().toUpperCase();
-      return v === 'QP2' ? 'QP2' : 'QP1';
+      return v === 'QP2' || v === 'TCPR' ? v : 'QP1';
     } catch {
       return 'QP1';
     }
@@ -159,11 +159,11 @@ export default function CourseOBEPage(): JSX.Element {
           override = null;
         }
         const ov = String(override || '').trim().toUpperCase();
-        if (ov === 'QP1' || ov === 'QP2') {
+        if (ov === 'QP1' || ov === 'QP2' || ov === 'TCPR') {
           setCourseQpType(ov);
         } else {
           const qp = String((pick as any)?.question_paper_type || '').trim().toUpperCase();
-          setCourseQpType(qp === 'QP2' ? 'QP2' : 'QP1');
+          setCourseQpType(qp === 'QP2' || qp === 'TCPR' ? qp : 'QP1');
         }
 
         if (normalizeClassType((pick as any)?.class_type) === 'SPECIAL') {
@@ -230,10 +230,13 @@ export default function CourseOBEPage(): JSX.Element {
                     QP Type:
                     <select
                       className="ml-2 obe-input"
-                      value={String(courseQpType || 'QP1').trim().toUpperCase() === 'QP2' ? 'QP2' : 'QP1'}
+                      value={(() => {
+                        const current = String(courseQpType || 'QP1').trim().toUpperCase();
+                        return current === 'QP2' || current === 'TCPR' ? current : 'QP1';
+                      })()}
                       onChange={(e) => {
                         const v = String(e.target.value || '').trim().toUpperCase();
-                        const next = v === 'QP2' ? 'QP2' : 'QP1';
+                        const next = v === 'QP2' || v === 'TCPR' ? v : 'QP1';
                         setCourseQpType(next);
                         try {
                           localStorage.setItem(`obe_course_qp_${courseId}`, next);
@@ -246,6 +249,7 @@ export default function CourseOBEPage(): JSX.Element {
                     >
                       <option value="QP1">QP1</option>
                       <option value="QP2">QP2</option>
+                      <option value="TCPR">TCPR</option>
                     </select>
                   </span>
                 </div>

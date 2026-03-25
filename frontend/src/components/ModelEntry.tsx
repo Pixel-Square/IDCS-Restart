@@ -179,8 +179,6 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
 
   const normalizedClassType = useMemo(() => normalizeObeClassType(classType), [classType]);
   const isTheory = normalizedClassType === 'THEORY';
-  const isTcplLike = normalizedClassType === 'TCPL' || normalizedClassType === 'TCPR';
-  const tcplLikeKind = normalizedClassType === 'TCPR' ? 'TCPR' : 'TCPL';
 
   const {
     data: publishWindow,
@@ -268,10 +266,15 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     [subjectId, teachingAssignmentId],
   );
   const [qpType, setQpType] = useState<string>('');
+  const normalizedQpType = useMemo(() => String(qpType ?? '').trim().toUpperCase(), [qpType]);
+  const isTcprByQp = normalizedQpType === 'TCPR';
+  const isTcplLike = normalizedClassType === 'TCPL' || normalizedClassType === 'TCPR' || isTcprByQp;
+  const tcplLikeKind = normalizedClassType === 'TCPR' || isTcprByQp ? 'TCPR' : 'TCPL';
 
   useEffect(() => {
     const norm = (v: any) => {
       const s = String(v ?? '').trim().toUpperCase();
+      if (s === 'TCPR') return 'TCPR';
       if (s === 'QP2') return 'QP2';
       if (s === 'QP1') return 'QP1';
       return '';
@@ -294,8 +297,6 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     const fromStorage = norm(stored);
     setQpType(fromStorage || 'QP1');
   }, [qpTypeStorageKey, questionPaperType]);
-
-  const normalizedQpType = String(qpType ?? '').trim().toUpperCase();
 
   useEffect(() => {
     let alive = true;

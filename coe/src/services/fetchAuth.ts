@@ -52,31 +52,6 @@ async function refreshToken(): Promise<string> {
   refreshPromise = (async () => {
     try {
       const refresh = window.localStorage.getItem('refresh')
-      // Defensive check: some clients or bugs may have stored an access token
-      // in `refresh`. If the stored token appears to be an access token,
-      // clear auth and fail early to avoid sending wrong token to the
-      // refresh endpoint (which returns token_not_valid).
-      if (refresh) {
-        try {
-          const parts = String(refresh).split('.')
-          if (parts.length === 3) {
-            const b = parts[1].replace(/-/g, '+').replace(/_/g, '/')
-            const padded = b + '='.repeat((4 - (b.length % 4)) % 4)
-            const payload = JSON.parse(decodeURIComponent(Array.prototype.map.call(atob(padded), function(c: string) {
-              return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)
-            }).join('')))
-            const tt = (payload && (payload.token_type || payload.type || payload.kid)) || ''
-            if (String(tt).toLowerCase().includes('access')) {
-              // Stored value is an access token — avoid using it as refresh.
-              window.localStorage.removeItem('access')
-              window.localStorage.removeItem('refresh')
-              throw new Error('stored refresh token appears to be an access token')
-            }
-          }
-        } catch (err) {
-          // If parsing fails, continue — refresh endpoint will return a clear error.
-        }
-      }
       if (!refresh) throw new Error('no refresh token')
 
       // Try refresh against primary base, then fallback.
@@ -144,10 +119,7 @@ export async function fetchWithAuth(input: RequestInfo | URL, init: RequestInit 
   let lastNetworkErr: any = null
 
   const isApiPath = typeof input === 'string' && input.startsWith('/api')
-  const isDev = Boolean((import.meta as any)?.env?.DEV)
-  // In Vite dev, keep '/api/...' as-is so the dev server proxy can forward it.
-  // Rewriting to :8000 would trigger browser CORS.
-  const candidates = isApiPath && !isDev ? getApiBaseCandidates().map((b) => `${b}${input}`) : [String(input)]
+  const candidates = isApiPath ? getApiBaseCandidates().map((b) => `${b}${input}`) : [String(input)]
 
   for (const url of candidates) {
     finalInput = url
