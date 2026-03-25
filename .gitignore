@@ -19,7 +19,7 @@ backend/media/
 backend/staticfiles/
 
 # Env files
-.env
+.env.*
 .env.local
 .env.dev
 .env.prod
