@@ -7,6 +7,7 @@ from datetime import datetime, date as date_type, timedelta
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from django.core.management import call_command
+from django.http import HttpResponse
 from django.db import transaction
 from django.utils import timezone
 from django.db.models import Q
@@ -259,7 +260,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
             }
         })
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], url_path='organization-analytics')
     def organization_analytics(self, request):
         """
         Get organization-wide staff attendance analytics with date range filter
@@ -290,7 +291,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         from_date_str = request.query_params.get('from_date')
         to_date_str = request.query_params.get('to_date')
         department_id = request.query_params.get('department_id')
-        export_format = request.query_params.get('format', 'json')
+        export_format = request.query_params.get('export') or request.query_params.get('format', 'json')
 
         if report_type in ['2', '3', '4', '5']:
             if not month_str:
@@ -607,6 +608,11 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                 'staff_analytics': analytics_list,
             })
 
+    @action(detail=False, methods=['get'], url_path='organization_analytics')
+    def organization_analytics_legacy(self, request):
+        # Backward-compatible alias for older frontend clients using underscore path.
+        return self.organization_analytics(request)
+
     def _build_staff_monthly_matrix_report(self, month_start, month_end, department_id=None, report_type='2'):
 
         staff_users = User.objects.filter(
@@ -874,6 +880,14 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         ws = wb.active
         ws.title = 'Staff Attendance'
 
+        def _excel_safe(value):
+            if value is None:
+                return ''
+            if isinstance(value, (int, float, bool, datetime, date_type)):
+                return value
+            # Remove control characters that break openpyxl writes.
+            return re.sub(r'[\x00-\x08\x0B-\x0C\x0E-\x1F]', '', str(value))
+
         month = payload.get('month')
         report_type = payload.get('report_type')
         
@@ -900,13 +914,13 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
 
         # Add data rows
         for row in payload.get('staff_rows') or []:
-            excel_row = [row.get('staff_id', ''), row.get('staff_name', '')]
+            excel_row = [_excel_safe(row.get('staff_id', '')), _excel_safe(row.get('staff_name', ''))]
             if report_type in ['2', '4', '5']:
                 excel_row.append(row.get('days', 0))
             values = row.get('values') or {}
             for dcol in payload.get('day_columns') or []:
                 cell = values.get(dcol) or {}
-                value = cell.get('value', '-')
+                value = _excel_safe(cell.get('value', '-'))
                 excel_row.append(value)
             ws.append(excel_row)
 
@@ -928,7 +942,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         wb.save(output)
         output.seek(0)
         
-        response = Response(
+        response = HttpResponse(
             output.getvalue(),
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
@@ -944,6 +958,13 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         wb = Workbook()
         ws = wb.active
         ws.title = 'Analytics'
+
+        def _excel_safe(value):
+            if value is None:
+                return ''
+            if isinstance(value, (int, float, bool, datetime, date_type)):
+                return value
+            return re.sub(r'[\x00-\x08\x0B-\x0C\x0E-\x1F]', '', str(value))
 
         # Add header section
         ws.append(['ORGANIZATION ATTENDANCE ANALYTICS'])
@@ -982,9 +1003,9 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         for item in sorted(analytics_list, key=lambda x: x['name']):
             attendance_pct = (item['present'] / working_days * 100) if working_days and working_days > 0 else 0
             ws.append([
-                item['name'],
-                item['email'],
-                item['department'],
+                _excel_safe(item['name']),
+                _excel_safe(item['email']),
+                _excel_safe(item['department']),
                 round(item['present'], 1),
                 round(item['absent'], 1),
                 item['cl_count'],
@@ -992,7 +1013,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                 item['late_entry_count'],
                 item['col_count'],
                 item['others_count'],
-                f"{attendance_pct:.2f}%"
+                _excel_safe(f"{attendance_pct:.2f}%")
             ])
 
         # Auto-adjust column widths
@@ -1013,7 +1034,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         wb.save(output)
         output.seek(0)
         
-        response = Response(
+        response = HttpResponse(
             output.getvalue(),
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )

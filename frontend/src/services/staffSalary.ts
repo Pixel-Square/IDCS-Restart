@@ -1,5 +1,5 @@
 import { apiClient } from './auth';
-import { getApiBase, getApiBaseCandidates } from './apiBase';
+import { getApiBaseCandidates } from './apiBase';
 
 function trimTrailingSlashes(value: string): string {
   return String(value || '').replace(/\/+$/, '');
@@ -12,8 +12,6 @@ function getSalaryBaseCandidates(): string[] {
     const b = trimTrailingSlashes(base);
     if (!b) return;
     roots.push(`${b}/api/staff-salary/salary`);
-    roots.push(`${b}/staff-salary/salary`);
-    roots.push(`${b}/api/staff_salary/salary`);
   };
 
   // In local/dev setups, prefer the actively running Django server first.
@@ -70,6 +68,25 @@ async function postWithFallback(path: string, payload?: any, config?: any) {
     }
   }
   throw lastError;
+}
+
+function isExcelDownloadResponse(res: any): boolean {
+  const contentType = String(res?.headers?.['content-type'] || '').toLowerCase();
+  const disposition = String(res?.headers?.['content-disposition'] || '').toLowerCase();
+
+  if (contentType.includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')) {
+    return true;
+  }
+
+  if (disposition.includes('.xlsx') || disposition.includes('attachment')) {
+    return true;
+  }
+
+  return false;
+}
+
+function isSalaryReportPayload(data: any): boolean {
+  return !!data && typeof data === 'object' && typeof data.report_type === 'string' && !!data.report;
 }
 
 export async function getSalaryDeclarations(params?: { department_id?: string }) {
@@ -150,6 +167,10 @@ export async function downloadMonthlySalarySheet(month: string, department_id?: 
         params,
         responseType: 'blob',
       });
+      if (!isExcelDownloadResponse(res)) {
+        lastError = new Error('Unexpected non-Excel response while downloading monthly sheet');
+        continue;
+      }
       return res;
     } catch (err: any) {
       lastError = err;
@@ -167,11 +188,29 @@ export async function publishSalaryMonth(month: string, department_id?: string, 
 }
 
 export async function getSalaryReport(params: { month: string; report_type: 'payroll' | 'bank_staff'; bank?: string }) {
-  return getWithFallback('/salary_reports/', { params });
+  const roots = getSalaryBaseCandidates();
+  let lastError: any;
+  for (const root of roots) {
+    try {
+      const res = await apiClient.get(`${root}/salary_reports/`, { params });
+      if (!isSalaryReportPayload(res?.data)) {
+        lastError = new Error('Unexpected salary report payload');
+        continue;
+      }
+      return res.data;
+    } catch (err: any) {
+      lastError = err;
+      const status = err?.response?.status;
+      if (status && status !== 404) {
+        throw err;
+      }
+    }
+  }
+  throw lastError;
 }
 
 export async function downloadSalaryReportExcel(params: { month: string; report_type: 'payroll' | 'bank_staff'; bank?: string }) {
-  const queryParams: any = { ...params, format: 'excel' };
+  const queryParams: any = { ...params, export: 'excel' };
 
   const roots = getSalaryBaseCandidates();
   let lastError: any;
@@ -181,6 +220,10 @@ export async function downloadSalaryReportExcel(params: { month: string; report_
         params: queryParams,
         responseType: 'blob',
       });
+      if (!isExcelDownloadResponse(res)) {
+        lastError = new Error('Unexpected non-Excel response while downloading salary report');
+        continue;
+      }
       return res;
     } catch (err: any) {
       lastError = err;

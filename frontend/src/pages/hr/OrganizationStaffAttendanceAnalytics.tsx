@@ -1,6 +1,5 @@
 import React, { useState, useMemo } from 'react';
 import { Download, Calendar, BarChart3, Loader, Search, Plus, Trash2 } from 'lucide-react';
-import { getApiBase } from '../../services/apiBase';
 import fetchWithAuth from '../../services/fetchAuth';
 
 interface AnalyticsData {
@@ -75,6 +74,15 @@ interface SpecialLimitItem {
 }
 
 export default function OrganizationStaffAttendanceAnalytics() {
+  const analyticsEndpoint = '/api/staff-attendance/records/organization-analytics/';
+  const legacyAnalyticsEndpoint = '/api/staff-attendance/records/organization_analytics/';
+
+  const fetchAnalyticsWithFallback = async (query: string) => {
+    const primary = await fetchWithAuth(`${analyticsEndpoint}?${query}`);
+    if (primary.status !== 404) return primary;
+    return fetchWithAuth(`${legacyAnalyticsEndpoint}?${query}`);
+  };
+
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
@@ -107,7 +115,7 @@ export default function OrganizationStaffAttendanceAnalytics() {
   const loadDepartments = async () => {
     try {
       const response = await fetchWithAuth(
-        `${getApiBase()}/api/staff-attendance/records/available_departments/`
+        '/api/staff-attendance/records/available_departments/'
       );
       const data = await response.json();
       if (data.departments) {
@@ -122,7 +130,7 @@ export default function OrganizationStaffAttendanceAnalytics() {
     try {
       setLoadingSpecialLimits(true);
       const response = await fetchWithAuth(
-        `${getApiBase()}/api/staff-attendance/special-department-date-limits/`
+        '/api/staff-attendance/special-department-date-limits/'
       );
       if (!response.ok) {
         throw new Error('Failed to load special attendance limits');
@@ -175,7 +183,7 @@ export default function OrganizationStaffAttendanceAnalytics() {
       setSavingSpecialLimit(true);
       setError(null);
       const response = await fetchWithAuth(
-        `${getApiBase()}/api/staff-attendance/special-department-date-limits/`,
+        '/api/staff-attendance/special-department-date-limits/',
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -213,7 +221,7 @@ export default function OrganizationStaffAttendanceAnalytics() {
     if (!window.confirm('Delete this special attendance time limit?')) return;
     try {
       const response = await fetchWithAuth(
-        `${getApiBase()}/api/staff-attendance/special-department-date-limits/${id}/`,
+        `/api/staff-attendance/special-department-date-limits/${id}/`,
         { method: 'DELETE' }
       );
       if (!response.ok) {
@@ -229,7 +237,7 @@ export default function OrganizationStaffAttendanceAnalytics() {
     try {
       setError(null);
       const response = await fetchWithAuth(
-        `${getApiBase()}/api/staff-attendance/special-department-date-limits/${id}/reapply/`,
+        `/api/staff-attendance/special-department-date-limits/${id}/reapply/`,
         { method: 'POST' }
       );
       if (!response.ok) {
@@ -261,7 +269,7 @@ export default function OrganizationStaffAttendanceAnalytics() {
     setError(null);
 
     try {
-      const params = new URLSearchParams({ format: 'json', report_type: reportType });
+      const params = new URLSearchParams({ export: 'json', report_type: reportType });
 
       if (reportType === '1') {
         params.append('from_date', fromDate);
@@ -274,9 +282,7 @@ export default function OrganizationStaffAttendanceAnalytics() {
         params.append('department_id', departmentId);
       }
 
-      const response = await fetchWithAuth(
-        `${getApiBase()}/api/staff-attendance/records/organization_analytics/?${params.toString()}`
-      );
+      const response = await fetchAnalyticsWithFallback(params.toString());
 
       if (!response.ok) {
         const errorData = await response.json();
@@ -304,7 +310,7 @@ export default function OrganizationStaffAttendanceAnalytics() {
     }
 
     try {
-      const params = new URLSearchParams({ format: 'excel', report_type: reportType });
+      const params = new URLSearchParams({ export: 'excel', report_type: reportType });
 
       if (reportType === '1') {
         params.append('from_date', fromDate);
@@ -317,9 +323,7 @@ export default function OrganizationStaffAttendanceAnalytics() {
         params.append('department_id', departmentId);
       }
 
-      const response = await fetchWithAuth(
-        `${getApiBase()}/api/staff-attendance/records/organization_analytics/?${params.toString()}`
-      );
+      const response = await fetchAnalyticsWithFallback(params.toString());
 
       if (!response.ok) {
         throw new Error('Failed to download analytics');

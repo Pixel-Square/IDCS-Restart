@@ -513,3 +513,47 @@ class SpecialDepartmentDateAttendanceLimit(models.Model):
     def __str__(self):
         to_text = self.to_date.isoformat() if self.to_date else self.from_date.isoformat()
         return f"{self.name} ({self.from_date.isoformat()} to {to_text})"
+
+
+class StaffBiometricPunchLog(models.Model):
+    """Stores raw biometric punches used to update staff attendance in real time."""
+
+    class Direction(models.TextChoices):
+        IN = 'IN', 'IN'
+        OUT = 'OUT', 'OUT'
+        UNKNOWN = 'UNKNOWN', 'UNKNOWN'
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='biometric_punch_logs'
+    )
+    raw_uid = models.CharField(max_length=64, blank=True, default='', db_index=True)
+    raw_staff_id = models.CharField(max_length=64, blank=True, default='', db_index=True)
+    punch_time = models.DateTimeField(db_index=True)
+    direction = models.CharField(max_length=10, choices=Direction.choices, default=Direction.UNKNOWN)
+    source = models.CharField(max_length=40, default='essl_realtime', db_index=True)
+    device_ip = models.GenericIPAddressField(null=True, blank=True)
+    device_port = models.PositiveIntegerField(null=True, blank=True)
+    payload = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'staff_biometric_punch_log'
+        ordering = ['-punch_time', '-id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['raw_uid', 'raw_staff_id', 'punch_time', 'direction', 'source'],
+                name='unique_staff_biometric_punch'
+            )
+        ]
+        indexes = [
+            models.Index(fields=['user', 'punch_time']),
+            models.Index(fields=['source', 'punch_time']),
+        ]
+
+    def __str__(self):
+        who = self.raw_staff_id or self.raw_uid or 'unknown'
+        return f"{who} {self.direction} @ {self.punch_time}"

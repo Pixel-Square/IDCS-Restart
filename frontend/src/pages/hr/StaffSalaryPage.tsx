@@ -1567,6 +1567,8 @@ export default function StaffSalaryPage() {
                       <th className="px-2 py-2 text-left">Staff Name</th>
                       <th className="px-2 py-2 text-left">Department</th>
                       <th className="px-2 py-2 text-left">Bank</th>
+                      <th className="px-2 py-2 text-left">A/C No</th>
+                      <th className="px-2 py-2 text-left">IFSC Code</th>
                       <th className="px-2 py-2 text-right">Gross Salary</th>
                     </tr>
                   </thead>
@@ -1578,12 +1580,14 @@ export default function StaffSalaryPage() {
                         <td className="px-2 py-2">{row.staff_name}</td>
                         <td className="px-2 py-2">{row.department}</td>
                         <td className="px-2 py-2">{row.bank}</td>
+                        <td className="px-2 py-2">{row.account_no || '-'}</td>
+                        <td className="px-2 py-2">{row.ifsc_code || '-'}</td>
                         <td className="px-2 py-2 text-right">{Number(row.gross_salary || 0).toFixed(2)}</td>
                       </tr>
                     ))}
                     {bankStaffReport.rows?.length === 0 && (
                       <tr>
-                        <td className="px-2 py-6 text-center text-slate-500" colSpan={6}>No rows found for selected filter</td>
+                        <td className="px-2 py-6 text-center text-slate-500" colSpan={8}>No rows found for selected filter</td>
                       </tr>
                     )}
                   </tbody>

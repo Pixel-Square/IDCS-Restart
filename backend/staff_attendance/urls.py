@@ -1,6 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import AttendanceRecordViewSet, UploadLogViewSet, CSVUploadViewSet, HalfDayRequestViewSet, HolidayViewSet, AttendanceSettingsViewSet, DepartmentAttendanceSettingsViewSet, SpecialDepartmentDateAttendanceLimitViewSet
+from .realtime_views import BiometricRealtimeIngestView
 
 router = DefaultRouter()
 router.register(r'records', AttendanceRecordViewSet, basename='attendance-record')
@@ -14,4 +15,5 @@ router.register(r'special-department-date-limits', SpecialDepartmentDateAttendan
 
 urlpatterns = [
     path('', include(router.urls)),
+    path('biometric/realtime/', BiometricRealtimeIngestView.as_view(), name='biometric-realtime-ingest'),
 ]

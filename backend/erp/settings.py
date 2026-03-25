@@ -250,6 +250,18 @@ SIMPLE_JWT = {
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
 
+# Staff biometric realtime ingestion security.
+# If this is set, callers to /api/staff-attendance/biometric/realtime/
+# must provide header: X-Biometric-Key: <value>
+STAFF_BIOMETRIC_INGEST_KEY = os.getenv('STAFF_BIOMETRIC_INGEST_KEY', '').strip()
+
+# eSSL/ZKTeco realtime listener defaults (used by sync_essl_realtime command).
+ESSL_DEVICE_IP = os.getenv('ESSL_DEVICE_IP', '192.168.81.80').strip()
+ESSL_DEVICE_PORT = int(os.getenv('ESSL_DEVICE_PORT', '4370'))
+ESSL_DEVICE_PASSWORD = int(os.getenv('ESSL_DEVICE_PASSWORD', '0'))
+ESSL_RECONNECT_DELAY = int(os.getenv('ESSL_RECONNECT_DELAY', '5'))
+ESSL_CONNECT_TIMEOUT = int(os.getenv('ESSL_CONNECT_TIMEOUT', '8'))
+
 # --- SMS / OTP ---
 # OTP verification uses `accounts.services.sms.send_sms`.
 # By default, SMS_BACKEND=console which logs the SMS (useful for dev).

@@ -1501,10 +1501,49 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         logger.info(f'[LeaveBalance] Processing complete for request #{staff_request.id}')
         
         # Sync attendance if configured
-        attendance_status = leave_policy.get('attendance_status')
+        attendance_status = self._resolve_attendance_status_for_request(
+            template=staff_request.template,
+            leave_policy=leave_policy,
+            form_data=form_data,
+        )
         if attendance_status:
             date_list = self._get_date_list_from_form_data(form_data)
             self._sync_attendance(staff_request.applicant, date_list, attendance_status)
+
+    def _resolve_attendance_status_for_request(self, template, leave_policy, form_data):
+        """
+        Resolve the effective attendance status code for a request.
+
+        For ON duty forms, if the submitted `type` value contains OD subtype code
+        (ODB/ODR/ODP/ODO), return that code instead of generic OD.
+        """
+        if not leave_policy:
+            return None
+
+        base_status = (leave_policy.get('attendance_status') or '').strip()
+        if not base_status:
+            return None
+
+        if base_status.upper() != 'OD':
+            return base_status
+
+        form_data = form_data or {}
+        raw_type = str(form_data.get('type') or '').strip()
+        if not raw_type:
+            return base_status
+
+        allowed_od_codes = {'ODB', 'ODR', 'ODP', 'ODO'}
+
+        # Accept values like "ODB - Basic" or plain "ODB".
+        code_token = raw_type.split('-', 1)[0].strip().replace(' ', '').upper()
+        if code_token in allowed_od_codes:
+            return code_token
+
+        raw_upper = raw_type.replace(' ', '').upper()
+        if raw_upper in allowed_od_codes:
+            return raw_upper
+
+        return base_status
 
     def _reduce_lop_for_covered_absences(self, staff_request, leave_policy, form_data):
         """
@@ -2118,6 +2157,8 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                 return
             record.notes = f"{existing_notes}; {lock_marker}" if existing_notes else lock_marker
         
+        form_data = staff_request.form_data or {}
+
         # Determine the target status to apply
         # Priority: leave_policy.attendance_status (for leave) > attendance_action.to_status (for permissions)
         # This ensures leave templates (CL, OD, ML) use the correct status code
@@ -2126,7 +2167,11 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         
         if leave_policy and leave_policy.get('attendance_status'):
             # Use leave_policy configuration (for CL, OD, ML, etc.) - PRIORITY
-            to_status = leave_policy.get('attendance_status')
+            to_status = self._resolve_attendance_status_for_request(
+                template=template,
+                leave_policy=leave_policy,
+                form_data=form_data,
+            )
             logger.info(f'[AttendanceAction] Using leave_policy.attendance_status: {to_status}')
         elif attendance_action and attendance_action.get('change_status'):
             # Use attendance_action configuration (for Late Entry Permission, etc.)
@@ -2142,7 +2187,6 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         add_notes = attendance_action.get('add_notes', False) if attendance_action else False
         notes_template = attendance_action.get('notes_template', '') if attendance_action else ''
         
-        form_data = staff_request.form_data
         # Support both old and new field names for backward compatibility
         shift = form_data.get('shift', None)  # Old field (backward compatibility)
         # Also fall back to 'shift' so that forms like Late Entry (which have a 'shift' select

@@ -2,12 +2,15 @@ import ast
 import calendar
 import csv
 import io
+import math
+import re
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 
 from django.contrib.auth import get_user_model
+from django.http import HttpResponse
 from django.db import IntegrityError, connection
 from django.db.models import Q
 from rest_framework import status, viewsets
@@ -568,6 +571,8 @@ class StaffSalaryViewSet(viewsets.ViewSet):
                 'staff_name': staff.get_full_name() or staff.username,
                 'department': {'id': dept.id if dept else None, 'name': dept.name if dept else 'N/A'},
                 'bank_name': declaration.bank.name if declaration and declaration.bank else '',
+                'account_no': declaration.account_no if declaration else '',
+                'ifsc_code': declaration.ifsc_code if declaration else '',
                 'include_in_salary': include_in_salary,
                 'is_cash': is_cash,
                 'computed_salary': round(computed_salary, 2),
@@ -808,6 +813,8 @@ class StaffSalaryViewSet(viewsets.ViewSet):
                 'staff_name': row.get('staff_name', ''),
                 'department': (row.get('department') or {}).get('name', 'N/A'),
                 'bank': row_bank,
+                'account_no': row.get('account_no', ''),
+                'ifsc_code': row.get('ifsc_code', ''),
                 'gross_salary': round(float(row.get('computed_gross_salary', row.get('gross_salary', 0)) or 0), 2),
             })
 
@@ -830,15 +837,27 @@ class StaffSalaryViewSet(viewsets.ViewSet):
             cell.font = font
 
     def _excel_response(self, wb, filename):
+        for ws in wb.worksheets:
+            for row in ws.iter_rows():
+                for cell in row:
+                    if isinstance(cell.value, str):
+                        cell.value = re.sub(r'[\x00-\x08\x0B-\x0C\x0E-\x1F]', '', cell.value)
+
         output = io.BytesIO()
         wb.save(output)
         output.seek(0)
-        response = Response(
+        response = HttpResponse(
             output.getvalue(),
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         return response
+
+    def _safe_excel_number(self, value, default=0.0):
+        num = self._to_float_safe(value, default)
+        if not math.isfinite(num):
+            return float(default)
+        return num
 
     def _export_monthly_sheet_excel(self, payload):
         wb = Workbook()
@@ -869,20 +888,27 @@ class StaffSalaryViewSet(viewsets.ViewSet):
                 (r.get('department') or {}).get('name', ''),
                 'Yes' if r.get('include_in_salary', True) else 'No',
                 'Yes' if r.get('is_cash', False) else 'No',
-                r.get('basic_salary', 0),
-                r.get('allowance', 0),
-                r.get('days', 0),
-                r.get('gross_salary', 0),
-                r.get('lop_amount', 0),
+                self._safe_excel_number(r.get('basic_salary', 0)),
+                self._safe_excel_number(r.get('allowance', 0)),
+                self._safe_excel_number(r.get('days', 0)),
+                self._safe_excel_number(r.get('gross_salary', 0)),
+                self._safe_excel_number(r.get('lop_amount', 0)),
             ]
             earn_values = r.get('earn_values') or {}
             for e in payload.get('earn_types', []):
-                row.append(earn_values.get(str(e['id']), 0))
-            row.extend([r.get('total_salary', 0), r.get('pf_amount', 0), r.get('od_new', 0)])
+                row.append(self._safe_excel_number(earn_values.get(str(e['id']), 0)))
+            row.extend([
+                self._safe_excel_number(r.get('total_salary', 0)),
+                self._safe_excel_number(r.get('pf_amount', 0)),
+                self._safe_excel_number(r.get('od_new', 0)),
+            ])
             deduction_values = r.get('deduction_values') or {}
             for d in payload.get('deduction_types', []):
-                row.append(deduction_values.get(str(d['id']), 0))
-            row.extend([r.get('others', 0), r.get('net_salary', 0)])
+                row.append(self._safe_excel_number(deduction_values.get(str(d['id']), 0)))
+            row.extend([
+                self._safe_excel_number(r.get('others', 0)),
+                self._safe_excel_number(r.get('net_salary', 0)),
+            ])
             ws.append(row)
 
         return self._excel_response(wb, f"salary_monthly_sheet_{payload.get('month')}.xlsx")
@@ -960,7 +986,7 @@ class StaffSalaryViewSet(viewsets.ViewSet):
         ws = wb.active
         ws.title = 'Bank Staff Report'
 
-        ws.append(['S.No', 'Staff ID', 'Staff Name', 'Department', 'Bank', 'Gross Salary'])
+        ws.append(['S.No', 'Staff ID', 'Staff Name', 'Department', 'Bank', 'A/C No', 'IFSC Code', 'Gross Salary'])
         self._apply_excel_header_style(ws, 1)
 
         for row in report.get('rows', []):
@@ -970,7 +996,9 @@ class StaffSalaryViewSet(viewsets.ViewSet):
                 row.get('staff_name', ''),
                 row.get('department', ''),
                 row.get('bank', ''),
-                row.get('gross_salary', 0),
+                row.get('account_no', ''),
+                row.get('ifsc_code', ''),
+                self._safe_excel_number(row.get('gross_salary', 0)),
             ])
 
         return self._excel_response(wb, f"salary_bank_staff_report_{report.get('month')}.xlsx")
@@ -1380,7 +1408,11 @@ class StaffSalaryViewSet(viewsets.ViewSet):
         month_str = request.query_params.get('month')
         report_type = str(request.query_params.get('report_type') or 'payroll').strip().lower()
         bank_name = request.query_params.get('bank')
-        export_format = str(request.query_params.get('format') or 'json').strip().lower()
+        export_format = str(
+            request.query_params.get('export')
+            or request.query_params.get('format')
+            or 'json'
+        ).strip().lower()
 
         if not month_str:
             return Response({'error': 'month is required (YYYY-MM)'}, status=status.HTTP_400_BAD_REQUEST)

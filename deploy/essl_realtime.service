@@ -1,0 +1,18 @@
+[Unit]
+Description=eSSL Realtime Staff Attendance Sync
+After=network.target
+
+[Service]
+Type=simple
+User=iqac
+Group=www-data
+WorkingDirectory=/home/iqac/IDCS-Restart/backend
+EnvironmentFile=/home/iqac/IDCS-Restart/backend/.env
+ExecStart=/home/iqac/IDCS-Restart/backend/.venv/bin/python manage.py sync_essl_realtime
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
