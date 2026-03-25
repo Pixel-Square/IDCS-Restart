@@ -4,7 +4,6 @@ import fetchWithAuth from '../../services/fetchAuth';
 import useDashboard from '../../hooks/useDashboard';
 import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText, ScanLine, Shield, MessageCircle, ChevronDown, ChevronRight, UserCheck, Wallet } from 'lucide-react';
 import { useSidebar } from './SidebarContext';
-import { fetchPendingPublishRequestCount } from '../../services/obe';
 import { ApplicationsNavResponse, fetchApplicationsNav } from '../../services/applications';
 import { useAttendanceNotificationCount } from '../../hooks/useAttendanceNotificationCount';
 import { fetchCurriculumPendingCount } from '../../services/curriculum';
@@ -20,6 +19,7 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
   home: Home,
   hod_advisors: Users,
   hod_teaching: BookOpen,
+  faculty_directory: Users,
   staffs: Users,
   staff_students: GraduationCap,
   mentor_assign: Users,
@@ -72,7 +72,6 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   const loc = useLocation();
 
   const { collapsed, toggle } = useSidebar();
-  const [pendingObeReqCount, setPendingObeReqCount] = useState<number>(0);
   const [pendingSwapReqCount, setPendingSwapReqCount] = useState<number>(0);
   const [pendingAttendanceReqCount, setPendingAttendanceReqCount] = useState<number>(0);
   const [pendingCurriculumCount, setPendingCurriculumCount] = useState<number>(0);
@@ -86,43 +85,8 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   const { count: attendanceNotifCount } = useAttendanceNotificationCount(isHodOrIqac);
 
   const perms = (data?.permissions || []).map((p) => String(p || '').toLowerCase());
-  const canObeMaster = perms.includes('obe.master.manage');
+  const canObeMasterManage = perms.includes('obe.master.manage');
   const isStaff = data?.flags?.is_staff || false;
-
-  useEffect(() => {
-    let mounted = true;
-    const token = window.localStorage.getItem('access');
-    if (!canObeMaster || !token) {
-      setPendingObeReqCount(0);
-      return () => {
-        mounted = false;
-      };
-    }
-    (async () => {
-      try {
-        const resp = await fetchPendingPublishRequestCount();
-        if (!mounted) return;
-        setPendingObeReqCount(Number(resp.pending || 0));
-      } catch {
-        // badge is best-effort
-      }
-    })();
-    const interval = window.setInterval(() => {
-      (async () => {
-        try {
-          const resp = await fetchPendingPublishRequestCount();
-          if (!mounted) return;
-          setPendingObeReqCount(Number(resp.pending || 0));
-        } catch {
-          // ignore
-        }
-      })();
-    }, 30_000);
-    return () => {
-      mounted = false;
-      window.clearInterval(interval);
-    };
-  }, [canObeMaster]);
 
   // Fetch pending swap request count and attendance assignment request count for staff
   useEffect(() => {
@@ -189,6 +153,19 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
       loc.pathname.startsWith('/haa/event-approvals')
     ) {
       setExpanded((p) => ({ ...p, haa_event_management: true }));
+    }
+  }, [loc.pathname]);
+
+  // auto-expand Faculty Directory group when on faculty pages
+  useEffect(() => {
+    if (
+      loc.pathname.startsWith('/staffs') ||
+      loc.pathname.startsWith('/hod/advisors') ||
+      loc.pathname.startsWith('/advisor/teaching') ||
+      loc.pathname.startsWith('/hod/staff-attendance') ||
+      loc.pathname.startsWith('/faculty/attendance')
+    ) {
+      setExpanded((p) => ({ ...p, faculty_directory: true }));
     }
   }, [loc.pathname]);
 
@@ -284,10 +261,14 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   if (permsLower.includes('curriculum.import_elective_choices')) items.push({ key: 'elective_import', label: 'Elective Import', to: '/curriculum/elective-import' });
 
   // HOD pages: require HOD role or explicit permission
-  if (entry.hod_advisors && (rolesUpper.includes('HOD') || permsLower.includes('academics.assign_advisor'))) items.push({ key: 'hod_advisors', label: 'Advisor Assign', to: '/hod/advisors' });
-  if (entry.hod_teaching && (rolesUpper.includes('ADVISOR') || permsLower.includes('academics.assign_teaching'))) items.push({ key: 'hod_teaching', label: 'Teaching Assign', to: '/advisor/teaching' });
-  const canHodObeRequests = Boolean((entry as any)?.hod_obe_requests) || rolesUpper.includes('HOD');
-  if (canHodObeRequests) items.push({ key: 'hod_obe_requests', label: 'HOD: OBE Requests', to: '/hod/obe-requests' });
+  const canAccessTeachingAssign = entry.hod_teaching && (rolesUpper.includes('ADVISOR') || permsLower.includes('academics.assign_teaching'));
+  const canAccessAdvisorAssign = entry.hod_advisors && (rolesUpper.includes('HOD') || permsLower.includes('academics.assign_advisor'));
+  const canAccessFacultyDirectory = permsLower.includes('academics.view_staffs_page') || rolesUpper.includes('PS');
+  const canAccessFacultyAttendance = rolesUpper.includes('HOD');
+  const canAccessIqacFacultyAttendance = rolesUpper.includes('IQAC');
+  if (canAccessAdvisorAssign || canAccessTeachingAssign || canAccessFacultyAttendance || canAccessIqacFacultyAttendance || canAccessFacultyDirectory) {
+    items.push({ key: 'faculty_directory', label: 'Faculty Directory', to: '#' });
+  }
   if (rolesUpper.includes('HOD') || rolesUpper.includes('ADVISOR')) items.push({ key: 'hod_result_analysis', label: 'Result Analysis', to: '/hod/result-analysis' });
 
   // ── Event Proposal Workflow ───────────────────────────────────────────
@@ -319,15 +300,9 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'iqac_event_approvals', label: 'Event Approvals', to: '/iqac/event-approvals' });
   }
 
-  // HOD staff attendance
-  if (rolesUpper.includes('HOD')) {
-    items.push({ key: 'hod_staff_attendance', label: 'Staff Attendance', to: '/hod/staff-attendance' });
-  }
+  // HOD staff attendance moved under Faculty Directory dropdown group.
 
-  // Staffs page: require explicit view permission
-  if (permsLower.includes('academics.view_staffs_page') || rolesUpper.includes('PS')) {
-    items.push({ key: 'staffs', label: 'Staff Directory', to: '/staffs' });
-  }
+  // Staffs page moved under Faculty Directory dropdown group.
 
   // Students page: require explicit view permission  
   if (permsLower.includes('students.view_students')) {
@@ -425,11 +400,6 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   }
   // PBAS Manager intentionally hidden from sidebar for all users
   
-  // IQAC staff attendance
-  if (rolesUpper.includes('IQAC') && !items.some((item) => item.key === 'iqac_staff_attendance')) {
-    items.push({ key: 'iqac_staff_attendance', label: 'Staff Attendance', to: '/iqac/staff-attendance' });
-  }
-
   if (isIqac && !items.some((item) => item.key === 'applications_admin')) {
     items.push({ key: 'applications_admin', label: 'Applications Admin', to: '/iqac/applications-admin' });
   }
@@ -455,9 +425,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   if (!isSecurity && applicationsNav?.show_applications && !items.some((item) => item.key === 'applications_home')) {
     items.push({ key: 'applications_home', label: 'My Applications', to: '/applications' });
   }
-  if (!isSecurity && applicationsNav?.show_applications && (applicationsNav.staff_roles.length > 0 || applicationsNav.override_roles.length > 0) && !flags.is_student && !items.some((item) => item.key === 'applications_inbox')) {
-    items.push({ key: 'applications_inbox', label: 'Approvals Inbox', to: '/applications/inbox' });
-  }
+  const canAccessApplicationsInbox =
+    !isSecurity &&
+    Boolean(applicationsNav?.show_applications) &&
+    ((applicationsNav?.staff_roles?.length || 0) > 0 || (applicationsNav?.override_roles?.length || 0) > 0) &&
+    !flags.is_student;
   if (canPbasManage && !items.some((item) => item.key === 'pbas_manager')) {
     items.push({ key: 'pbas_manager', label: 'PBAS Manager', to: '/iqac/pbas' });
   }
@@ -472,11 +444,8 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     }
   }
 
-  if (canObeMaster && !isIqac && !items.some(item => item.key === 'obe_due_dates')) {
+  if (canObeMasterManage && !isIqac && !items.some(item => item.key === 'obe_due_dates')) {
     items.push({ key: 'obe_due_dates', label: 'OBE: Due Dates', to: '/obe/master/due-dates' });
-  }
-  if (canObeMaster && !items.some(item => item.key === 'obe_requests')) {
-    items.push({ key: 'obe_requests', label: 'OBE: Requests', to: '/obe/master/requests' });
   }
 
   // HR Features
@@ -515,7 +484,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   }
 
   // Requests Hub: ONLY for users with staff_requests.approve_requests permission
-  if (canAccessPendingApprovals && !items.some(item => item.key === 'requests_hub')) {
+  if ((canAccessPendingApprovals || canAccessApplicationsInbox) && !items.some(item => item.key === 'requests_hub')) {
     items.push({ key: 'requests_hub', label: 'Requests', to: '/requests' });
   }
 
@@ -558,7 +527,8 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
               const active = i.to !== '#' && loc.pathname.startsWith(i.to);
               const isHodGroup = i.key === 'hod_event_management';
               const isHaaGroup = i.key === 'haa_event_management';
-              const isGroup = isHodGroup || isHaaGroup;
+              const isFacultyGroup = i.key === 'faculty_directory';
+              const isGroup = isHodGroup || isHaaGroup || isFacultyGroup;
               const groupActive =
                 (isHodGroup && (
                   loc.pathname.startsWith('/events/create-event') ||
@@ -569,12 +539,20 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                   loc.pathname.startsWith('/events/create-event') ||
                   loc.pathname.startsWith('/events/my-proposals') ||
                   loc.pathname.startsWith('/haa/event-approvals')
+                )) ||
+                (isFacultyGroup && (
+                  loc.pathname.startsWith('/staffs') ||
+                  loc.pathname.startsWith('/hod/advisors') ||
+                  loc.pathname.startsWith('/advisor/teaching') ||
+                  loc.pathname.startsWith('/hod/staff-attendance')
                 ));
               const groupOpen = isHodGroup
                 ? Boolean(expanded.hod_event_management)
                 : isHaaGroup
                   ? Boolean(expanded.haa_event_management)
-                  : false;
+                  : isFacultyGroup
+                    ? Boolean(expanded.faculty_directory)
+                    : false;
               return (
                 <li key={i.key} className="relative">
                   <Link
@@ -591,6 +569,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                         setExpanded((p) => ({ ...p, haa_event_management: !p.haa_event_management }));
                         return;
                       }
+                      if (isFacultyGroup) {
+                        e.preventDefault();
+                        setExpanded((p) => ({ ...p, faculty_directory: !p.faculty_directory }));
+                        return;
+                      }
                       // preserve mobile toggle behaviour
                       if (window.innerWidth < 1024) toggle();
                       // toggle submenu expansion for specific groups
@@ -602,9 +585,6 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                     <Icon className={`flex-shrink-0 ${collapsed ? 'lg:w-5 lg:h-5' : 'w-6 h-6'}`} />
                     <span className={`flex-1 font-medium text-base ${collapsed ? 'lg:hidden' : ''}`}>
                       {i.label}
-                      {i.key === 'obe_requests' && pendingObeReqCount > 0 ? (
-                        <span className="ml-2 inline-flex items-center justify-center px-2 py-0.5 text-xs font-medium rounded-full bg-red-600 text-white">{pendingObeReqCount}</span>
-                      ) : null}
                       {i.key === 'staff_timetable' && pendingSwapReqCount > 0 ? (
                         <span className="ml-2 inline-flex items-center justify-center px-2 py-0.5 text-xs font-medium rounded-full bg-orange-600 text-white">{pendingSwapReqCount}</span>
                       ) : null}
@@ -679,10 +659,51 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                       </ul>
                     )}
 
+                    {/* Submenu for Faculty Directory group */}
+                    {i.key === 'faculty_directory' && groupOpen && !collapsed ? (
+                      <ul className="pl-8 mt-1 space-y-1">
+                        {canAccessFacultyDirectory && (
+                          <li>
+                            <Link to="/staffs" className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/staffs') ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`} onClick={() => { if (window.innerWidth < 1024) toggle(); }}>
+                              <Users className="w-4 h-4" /> <span>Faculties</span>
+                            </Link>
+                          </li>
+                        )}
+                        {canAccessAdvisorAssign && (
+                          <li>
+                            <Link to="/hod/advisors" className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/hod/advisors') ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`} onClick={() => { if (window.innerWidth < 1024) toggle(); }}>
+                              <Users className="w-4 h-4" /> <span>Advisor Assign</span>
+                            </Link>
+                          </li>
+                        )}
+                        {canAccessTeachingAssign && (
+                          <li>
+                            <Link to="/advisor/teaching" className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/advisor/teaching') ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`} onClick={() => { if (window.innerWidth < 1024) toggle(); }}>
+                              <BookOpen className="w-4 h-4" /> <span>Teaching Assign</span>
+                            </Link>
+                          </li>
+                        )}
+                        {canAccessFacultyAttendance && (
+                          <li>
+                            <Link to="/hod/staff-attendance" className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/hod/staff-attendance') ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`} onClick={() => { if (window.innerWidth < 1024) toggle(); }}>
+                              <Users className="w-4 h-4" /> <span>Faculty Attendance</span>
+                            </Link>
+                          </li>
+                        )}
+                        {canAccessIqacFacultyAttendance && (
+                          <li>
+                            <Link to="/faculty/attendance" className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/faculty/attendance') ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`} onClick={() => { if (window.innerWidth < 1024) toggle(); }}>
+                              <Users className="w-4 h-4" /> <span>Faculty Attendance</span>
+                            </Link>
+                          </li>
+                        )}
+                      </ul>
+                    ) : null}
+
                     {/* Submenu for Academic: show OBE Master and Due Dates.
                       Hidden when sidebar is collapsed and for IQAC role
                       (IQAC main account uses other IQAC tools instead). */}
-                    {i.key === 'academic' && canObeMaster && expanded.academic && !collapsed && !isIqac ? (
+                    {i.key === 'academic' && canObeMasterManage && expanded.academic && !collapsed && !isIqac ? (
                     <ul className="pl-8 mt-1 space-y-1">
                       <li>
                         <Link to={'/academic?tab=obe_master'} className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/academic') && new URLSearchParams(loc.search).get('tab') === 'obe_master' ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'}`} onClick={() => { if (window.innerWidth < 1024) toggle(); }}>

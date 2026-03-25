@@ -1,7 +1,11 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
-import { Bell, ClipboardList, FileText, Camera } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { Bell, ClipboardList, FileText, Camera, ArrowLeft } from 'lucide-react';
 import DashboardLayout from '../../components/layout/DashboardLayout';
+import ObeRequestsPage from '../iqac/ObeRequestsPage';
+import ObeEditRequestsPage from '../hod/ObeEditRequestsPage';
+import ApplicationsInboxPage from '../applications/ApplicationsInboxPage';
+import { fetchApplicationsNav } from '../../services/applications';
 
 type RequestsPageProps = {
   user?: any | null;
@@ -16,8 +20,11 @@ type RequestLink = {
 };
 
 export default function RequestsPage({ user }: RequestsPageProps) {
+  const [searchParams] = useSearchParams();
   const roles = ((user?.roles || []) as string[]).map((r) => String(r || '').toUpperCase());
   const perms = ((user?.permissions || []) as string[]).map((p) => String(p || '').toLowerCase());
+  const section = String(searchParams.get('section') || '').toLowerCase();
+  const [canSeeApplicationsInbox, setCanSeeApplicationsInbox] = React.useState(false);
 
   // PERMISSION-BASED ONLY: Staff approvals require explicit permission
   const canSeeStaffApprovals = perms.includes('staff_requests.approve_requests');
@@ -30,8 +37,32 @@ export default function RequestsPage({ user }: RequestsPageProps) {
     perms.includes('academics.view_department_attendance') ||
     perms.includes('academics.view_class_attendance') ||
     perms.includes('academics.view_section_attendance');
-  const canSeeObeRequests = perms.includes('obe.master.manage');
+  const canSeeObeMasterRequests = perms.includes('obe.master_obe_requests');
+  const canSeeHodObeRequests = perms.includes('obe.hod_obe_requests');
   const canSeeProfileImageUnlockRequests = perms.includes('accounts.profile_image_unlock_approve');
+
+  React.useEffect(() => {
+    let mounted = true;
+    const isSecurity = roles.includes('SECURITY');
+
+    (async () => {
+      try {
+        const nav = await fetchApplicationsNav();
+        if (!mounted) return;
+        const hasInboxRole =
+          Boolean(nav?.show_applications) &&
+          ((nav?.staff_roles?.length || 0) > 0 || (nav?.override_roles?.length || 0) > 0);
+        setCanSeeApplicationsInbox(!isSecurity && hasInboxRole);
+      } catch {
+        if (!mounted) return;
+        setCanSeeApplicationsInbox(false);
+      }
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, [roles]);
 
   const links: RequestLink[] = [];
 
@@ -55,12 +86,22 @@ export default function RequestsPage({ user }: RequestsPageProps) {
     });
   }
 
-  if (canSeeObeRequests) {
+  if (canSeeObeMasterRequests) {
     links.push({
-      key: 'obe-requests',
-      title: 'OBE Requests',
+      key: 'obe-master-requests',
+      title: 'OBE: Master Requests',
       description: 'Review and process OBE master-level requests.',
-      to: '/obe/master/requests',
+      to: '/requests?section=obe-master-requests',
+      icon: FileText,
+    });
+  }
+
+  if (canSeeHodObeRequests) {
+    links.push({
+      key: 'obe-hod-requests',
+      title: 'HOD: OBE Requests',
+      description: 'Review and process HOD-level OBE requests.',
+      to: '/requests?section=obe-hod-requests',
       icon: FileText,
     });
   }
@@ -75,9 +116,35 @@ export default function RequestsPage({ user }: RequestsPageProps) {
     });
   }
 
+  if (canSeeApplicationsInbox) {
+    links.push({
+      key: 'applications-inbox',
+      title: 'Approvals Inbox',
+      description: 'Review and process application approvals assigned to you.',
+      to: '/requests?section=applications-inbox',
+      icon: ClipboardList,
+    });
+  }
+
+  const showObeMasterSection = section === 'obe-master-requests' && canSeeObeMasterRequests;
+  const showObeHodSection = section === 'obe-hod-requests' && canSeeHodObeRequests;
+  const showApplicationsInboxSection = section === 'applications-inbox' && canSeeApplicationsInbox;
+
   return (
     <DashboardLayout>
       <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto">
+        {(showObeMasterSection || showObeHodSection || showApplicationsInboxSection) && (
+          <div className="mb-4">
+            <Link
+              to="/requests"
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Back to Requests Hub
+            </Link>
+          </div>
+        )}
+
         <div className="mb-6 flex gap-3 items-center">
           <div className="p-3 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl shadow-sm text-white">
             <Bell className="h-6 w-6" />
@@ -90,13 +157,33 @@ export default function RequestsPage({ user }: RequestsPageProps) {
           </div>
         </div>
 
-        {links.length === 0 ? (
+        {showObeMasterSection ? (
+          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm">
+            <ObeRequestsPage />
+          </div>
+        ) : null}
+
+        {showObeHodSection ? (
+          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm">
+            <ObeEditRequestsPage />
+          </div>
+        ) : null}
+
+        {showApplicationsInboxSection ? (
+          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+            <ApplicationsInboxPage />
+          </div>
+        ) : null}
+
+        {!showObeMasterSection && !showObeHodSection && !showApplicationsInboxSection && links.length === 0 ? (
           <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center text-slate-500 shadow-sm">
             <Bell className="h-10 w-10 mx-auto text-slate-300 mb-3" />
             <h3 className="text-lg font-semibold text-slate-700">No Request Workflows</h3>
             <p className="mt-1">You do not have permission to access request workflows.</p>
           </div>
-        ) : (
+        ) : null}
+
+        {!showObeMasterSection && !showObeHodSection && !showApplicationsInboxSection && links.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
             {links.map((item) => {
               const Icon = item.icon;
@@ -123,7 +210,7 @@ export default function RequestsPage({ user }: RequestsPageProps) {
               );
             })}
           </div>
-        )}
+        ) : null}
       </div>
     </DashboardLayout>
   );

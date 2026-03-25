@@ -49,6 +49,7 @@ def resolve_dashboard_capabilities(user) -> Dict:
             'department_curriculum': False,
             'student_curriculum_view': False,
             'hod_obe_requests': False,
+            'obe_master_requests': False,
         }
         return {
             'username': '',
@@ -160,7 +161,13 @@ def resolve_dashboard_capabilities(user) -> Dict:
         'can_reply_feedback': 'feedback.reply' in lower_perms,
     }
 
-    hod_role_present = any(str(r).upper() == 'HOD' for r in role_names)
+    # `hod_role_present` should reflect explicit `accounts.Role` membership only.
+    # Do NOT treat DepartmentRole/RoleAssignment-inferred roles as equivalent
+    # for enabling certain entry points (like HOD: OBE Requests).
+    try:
+        hod_role_present = roles_qs.filter(name__iexact='HOD').exists()
+    except Exception:
+        hod_role_present = any(str(r).upper() == 'HOD' for r in role_names)
     entry_points = {
         'curriculum_master': bool(flags.get('can_edit_curriculum_master') or flags.get('can_view_curriculum_master')),
         'department_curriculum': bool(flags.get('can_fill_department_curriculum') or flags.get('can_approve_department_curriculum')),
@@ -170,7 +177,9 @@ def resolve_dashboard_capabilities(user) -> Dict:
         'hod_advisors': bool(flags.get('can_assign_advisor') or hod_role_present),
         'hod_teaching': bool(flags.get('can_assign_teaching') or hod_role_present),
         'staff_students': bool('students.view_students' in lower_perms),
-        'hod_obe_requests': bool(hod_role_present),
+        # Show HOD OBE Requests if the user's roles grant the canonical permission.
+        'hod_obe_requests': ('obe.hod_obe_requests' in lower_perms),
+        'obe_master_requests': ('obe.master_obe_requests' in lower_perms),
         'feedback_page': bool(flags.get('can_view_feedback_page')),
     }
 

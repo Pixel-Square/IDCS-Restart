@@ -63,7 +63,7 @@ import PBASManagerPage from './pages/iqac/PBASManagerPage';
 import { StaffAttendanceUpload } from './pages/PS';
 import { MyAttendance } from './pages/staff';
 import HODStaffAttendancePage from './pages/hod/StaffAttendance';
-import IQACStaffAttendancePage from './pages/iqac/StaffAttendance';
+import FacultyAttendancePage from './pages/faculty/Attendance';
 import PSStaffAttendanceViewPage from './pages/PS/StaffAttendanceView';
 import RequestTemplatesPage from './pages/hr/RequestTemplatesPage';
 import OrganizationStaffAttendanceAnalytics from './pages/hr/OrganizationStaffAttendanceAnalytics';
@@ -300,7 +300,7 @@ export default function App() {
                 <Route path="/obe/course/:code/lca/cotarget" element={<COTargetPageWrapper />} />
                 <Route path="/obe/course/:code/*" element={<CourseOBEPage />} />
                 <Route path="/obe/request" element={<ProtectedRoute user={user} requiredProfile={'STAFF'} element={<OBERequestPage />} />} />
-                <Route path="/obe/master/requests" element={<ProtectedRoute user={user} requiredPermissions={["obe.master.manage"]} element={<OBERequestsPage />} />} />
+                <Route path="/obe/master/requests" element={<ProtectedRoute user={user} requiredPermissions={["obe.master_obe_requests"]} element={<OBERequestsPage />} />} />
                 <Route path="/obe/master/due-dates" element={<ProtectedRoute user={user} requiredPermissions={["obe.master.manage"]} element={<OBEDueDatesPage />} />} />
                 <Route path="/academic" element={<AcademicPage />} />
 
@@ -310,7 +310,7 @@ export default function App() {
                 />
                 <Route
                   path="/hod/obe-requests"
-                  element={<ProtectedRoute user={user} requiredRoles={["HOD"]} requiredPermissions={["academics.assign_advisor"]} element={<ObeEditRequestsPage />} />}
+                  element={<ProtectedRoute user={user} requiredPermissions={["obe.hod_obe_requests"]} element={<ObeEditRequestsPage />} />}
                 />
                 <Route
                   path="/hod/result-analysis"
@@ -392,12 +392,16 @@ export default function App() {
                 />
                 <Route
                   path="/iqac/obe-requests"
-                  element={<ProtectedRoute user={user} requiredPermissions={["obe.master.manage"]} element={<ObeRequestsPage />} />}
+                  element={<ProtectedRoute user={user} requiredPermissions={["obe.master_obe_requests"]} element={<ObeRequestsPage />} />}
                 />
                 {/* PBAS IQAC route removed */}
                 <Route
+                  path="/faculty/attendance"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<FacultyAttendancePage />} />}
+                />
+                <Route
                   path="/iqac/staff-attendance"
-                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<IQACStaffAttendancePage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<FacultyAttendancePage />} />}
                 />
                 <Route
                   path="/ps/staff-attendance/view"
@@ -567,17 +571,7 @@ export default function App() {
                   element={
                     <ProtectedRoute
                       user={user}
-                      requiredPermissions={[
-                        'staff_requests.approve_requests',
-                        'accounts.profile_image_unlock_approve',
-                        'obe.master.manage',
-                        'academics.view_all_attendance',
-                        'academics.view_attendance_overall',
-                        'academics.view_all_departments',
-                        'academics.view_department_attendance',
-                        'academics.view_class_attendance',
-                        'academics.view_section_attendance',
-                      ]}
+                      requiredProfile={'STAFF'}
                       element={<RequestsPage user={user} />}
                     />
                   }

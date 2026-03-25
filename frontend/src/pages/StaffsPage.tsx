@@ -134,11 +134,7 @@ export default function StaffsPage() {
       
       // Set first department as default (or 'all' if user can view all staff)
       if (depts.length > 0 && currentDeptId === null) {
-        if (data.can_view_all) {
-          setCurrentDeptId('all')
-        } else {
-          setCurrentDeptId(depts[0].id)
-        }
+        setCurrentDeptId(data.can_view_all ? 'all' : depts[0].id)
       }
     } catch (err) {
       console.error('Error fetching staffs:', err)
@@ -275,6 +271,8 @@ export default function StaffsPage() {
       return false
     })
   }, [allStaff, allStaffSearch])
+
+  const isOverallView = canViewAllStaff
 
   const handleAssignStaffToDept = async (staffId: number) => {
     if (currentDeptId === 'all' || currentDeptId === null) {
@@ -437,7 +435,7 @@ export default function StaffsPage() {
             <div className="flex items-center space-x-3">
               <Users className="h-8 w-8 text-indigo-600" />
               <div>
-                <h1 className="text-2xl font-bold text-gray-900">Staff Directory</h1>
+                <h1 className="text-2xl font-bold text-gray-900">Faculty Directory</h1>
                 <p className="text-sm text-gray-600">View staff members by department</p>
               </div>
             </div>
@@ -503,18 +501,11 @@ export default function StaffsPage() {
           <div>
             <h4 className="text-sm font-medium text-gray-700 mb-2">Department:</h4>
             <div className="flex flex-wrap gap-2">
-              {canViewAllStaff && (
-                <button
-                  onClick={() => setCurrentDeptId('all')}
-                  className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
-                    currentDeptId === 'all'
-                      ? 'bg-indigo-100 text-indigo-700 border-2 border-indigo-200'
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
-                >
+              {isOverallView ? (
+                <div className="px-4 py-2 rounded-full text-sm font-medium bg-indigo-100 text-indigo-700 border-2 border-indigo-200">
                   All Departments
-                </button>
-              )}
+                </div>
+              ) : null}
               {departments.map((dept) => {
                 const isActive = currentDeptId === dept.id
                 const displayName = dept.short_name || dept.code || dept.name || `Dept ${dept.id}`
@@ -522,6 +513,7 @@ export default function StaffsPage() {
                   <button
                     key={dept.id}
                     onClick={() => setCurrentDeptId(dept.id)}
+                    disabled={isOverallView}
                     className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
                       isActive
                         ? 'bg-blue-100 text-blue-700'
@@ -538,7 +530,7 @@ export default function StaffsPage() {
 
         {/* Staff Table for Selected Department(s) */}
         {currentDeptId !== null && (() => {
-          if (currentDeptId === 'all') {
+          if (isOverallView || currentDeptId === 'all') {
             // Show all staff across all departments
             const allStaffs = departments.flatMap(d =>
               (d.staffs || []).map(staff => ({ ...staff, departmentInfo: d } as StaffMember & { departmentInfo: Department }))
