@@ -258,7 +258,14 @@ export default function App() {
                 />
                 <Route path="/queries" element={<QueriesPage />} />
                 <Route path="/notifications" element={<NotificationsPage />} />
-                <Route path="/announcements" element={<AnnouncementsPage user={user} />} />
+                <Route
+                  path="/announcements"
+                  element={<ProtectedRoute user={user} requiredPermissions={["announcements.view_announcement_page"]} element={<AnnouncementsPage user={user} />} />}
+                />
+                <Route
+                  path="/announcements/sent"
+                  element={<ProtectedRoute user={user} requiredPermissions={["announcements.view_announcement_page"]} element={<AnnouncementsPage user={user} />} />}
+                />
                 <Route
                   path="/ps/staff-attendance/upload"
                   element={<ProtectedRoute user={user} requiredRoles={['PS']} element={<StaffAttendanceUpload />} />}

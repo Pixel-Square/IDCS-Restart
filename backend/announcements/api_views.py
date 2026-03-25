@@ -1,19 +1,30 @@
-from rest_framework import viewsets, status, permissions
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from rest_framework.pagination import PageNumberPagination
-from django.db.models import Q, Prefetch
-from django.utils import timezone
+import logging
 
-from .models import Announcement, AnnouncementCourse, AnnouncementRead
-from .serializers import (
-    AnnouncementListSerializer,
-    AnnouncementDetailSerializer,
-    AnnouncementReadSerializer,
-    CourseSimpleSerializer
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.utils import timezone
+from rest_framework import status
+from rest_framework.exceptions import ValidationError as DRFValidationError
+from rest_framework.pagination import PageNumberPagination
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from .models import Announcement, AnnouncementReadStatus
+from .permissions import (
+    HasAnnouncementCreatePermission,
+    HasAnnouncementPagePermission,
 )
-from academics.models import Course, StudentCourseEnrollment
-from accounts.models import UserRole
+from .serializers import (
+    AnnouncementCreateSerializer,
+    AnnouncementListSerializer,
+    AnnouncementUpdateSerializer,
+)
+from .services import AnnouncementScopeService
+from .services import ROLE_STUDENT, get_actor_role
+
+
+logger = logging.getLogger(__name__)
 
 
 class AnnouncementPagination(PageNumberPagination):
@@ -22,132 +33,182 @@ class AnnouncementPagination(PageNumberPagination):
     max_page_size = 100
 
 
-class IsHodOrIqac(permissions.BasePermission):
-    """Permission to check if user is HOD or IQAC."""
-    
-    def has_permission(self, request, view):
-        if not request.user.is_authenticated:
-            return False
-        
-        # Check if user has HOD or IQAC role
-        user_roles = request.user.roles.values_list('name', flat=True)
-        return 'HOD' in user_roles or 'IQAC' in user_roles or request.user.is_superuser
+class AnnouncementListView(APIView):
+    permission_classes = [IsAuthenticated, HasAnnouncementPagePermission]
+
+    def get(self, request):
+        scope = AnnouncementScopeService.build_scope(request.user)
+        queryset = AnnouncementScopeService.queryset_for_user(request.user, scope)
+
+        paginator = AnnouncementPagination()
+        page = paginator.paginate_queryset(queryset, request)
+        serializer = AnnouncementListSerializer(page, many=True, context={'request': request})
+        return paginator.get_paginated_response(serializer.data)
 
 
-class AnnouncementViewSet(viewsets.ModelViewSet):
-    """ViewSet for managing announcements."""
-    
-    pagination_class = AnnouncementPagination
-    
-    def get_permission(self):
-        """Return permission classes based on action."""
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsHodOrIqac]
-        return [permissions.IsAuthenticated]
-    
-    def get_permissions(self):
-        """Return list of permission instances."""
-        return [permission() for permission in self.get_permission()]
-    
-    def get_serializer_class(self):
-        """Return serializer class based on action."""
-        if self.action == 'retrieve':
-            return AnnouncementDetailSerializer
-        elif self.action in ['create', 'update', 'partial_update']:
-            return AnnouncementDetailSerializer
-        return AnnouncementListSerializer
-    
-    def get_queryset(self):
-        """Return filtered queryset based on user."""
-        user = self.user
-        
-        if user.is_superuser:
-            # Superusers see all announcements
-            queryset = Announcement.objects.filter(is_published=True)
-        else:
-            # Check user's enrolled courses
-            student_enrollments = StudentCourseEnrollment.objects.filter(
-                student__user=user
-            ).values_list('course_id', flat=True)
-            
-            # Announcements for user's courses or global announcements
-            queryset = Announcement.objects.filter(
-                Q(courses__id__in=student_enrollments) | Q(courses__isnull=True),
-                is_published=True
-            ).distinct()
-        
-        # Always prefetch related data
-        queryset = queryset.select_related(
-            'created_by'
-        ).prefetch_related(
-            'courses',
-            'reads'
-        )
-        
-        return queryset.order_by('-created_at')
-    
-    @property
-    def user(self):
-        return self.request.user
-    
-    def create(self, request, *args, **kwargs):
-        """Create a new announcement."""
-        serializer = self.get_serializer(data=request.data)
+class AnnouncementCreateView(APIView):
+    permission_classes = [IsAuthenticated, HasAnnouncementCreatePermission]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def post(self, request):
+        scope = AnnouncementScopeService.build_scope(request.user)
+        serializer = AnnouncementCreateSerializer(data=request.data, context={'request': request})
+        if not serializer.is_valid():
+            logger.warning(
+                'Announcement create serializer validation failed for user=%s errors=%s',
+                getattr(request.user, 'id', None),
+                serializer.errors,
+            )
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            AnnouncementScopeService.validate_create_payload(
+                user=request.user,
+                scope=scope,
+                payload=serializer.validated_data,
+            )
+            announcement = serializer.save(created_by=request.user)
+            read_serializer = AnnouncementListSerializer(announcement, context={'request': request})
+            return Response(read_serializer.data, status=status.HTTP_201_CREATED)
+        except DRFValidationError as exc:
+            logger.warning(
+                'Announcement create scope validation failed for user=%s error=%s payload_keys=%s',
+                getattr(request.user, 'id', None),
+                exc.detail,
+                list(serializer.validated_data.keys()),
+            )
+            return Response(exc.detail, status=status.HTTP_400_BAD_REQUEST)
+        except DjangoValidationError as exc:
+            logger.warning(
+                'Announcement create model validation failed for user=%s error=%s payload_keys=%s',
+                getattr(request.user, 'id', None),
+                exc.message_dict or exc.messages,
+                list(serializer.validated_data.keys()),
+            )
+            payload = exc.message_dict or {'detail': exc.messages[0] if exc.messages else 'Invalid announcement data'}
+            return Response(payload, status=status.HTTP_400_BAD_REQUEST)
+        except Exception:
+            logger.exception('Unexpected announcement create failure for user=%s', getattr(request.user, 'id', None))
+            return Response({'detail': 'Unexpected server error while creating announcement.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class AnnouncementSentListView(APIView):
+    permission_classes = [IsAuthenticated, HasAnnouncementPagePermission]
+
+    def get(self, request):
+        scope = AnnouncementScopeService.build_scope(request.user)
+        if get_actor_role(roles=scope.roles) == ROLE_STUDENT:
+            return Response({'detail': 'Students are not allowed to view sent announcements.'}, status=status.HTTP_403_FORBIDDEN)
+
+        queryset = AnnouncementScopeService.sent_queryset_for_user(request.user)
+
+        paginator = AnnouncementPagination()
+        page = paginator.paginate_queryset(queryset, request)
+        serializer = AnnouncementListSerializer(page, many=True, context={'request': request})
+        return paginator.get_paginated_response(serializer.data)
+
+
+class AnnouncementDetailView(APIView):
+    permission_classes = [IsAuthenticated, HasAnnouncementPagePermission]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get_object(self, request, announcement_id):
+        scope = AnnouncementScopeService.build_scope(request.user)
+        queryset = AnnouncementScopeService.queryset_for_user(request.user, scope)
+        return queryset.filter(id=announcement_id).first()
+
+    def put(self, request, announcement_id):
+        obj = self.get_object(request, announcement_id)
+        if obj is None:
+            return Response({'detail': 'Announcement not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        scope = AnnouncementScopeService.build_scope(request.user)
+        if not (
+            request.user.is_superuser
+            or obj.created_by_id == request.user.id
+            or 'announcements.manage_announcement' in scope.permissions
+        ):
+            return Response({'detail': 'You do not have permission to update this announcement.'}, status=status.HTTP_403_FORBIDDEN)
+
+        serializer = AnnouncementUpdateSerializer(obj, data=request.data, partial=False, context={'request': request})
         serializer.is_valid(raise_exception=True)
-        self.perform_create(serializer)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-    
-    def perform_create(self, serializer):
-        """Perform creation with current user."""
-        serializer.save(created_by=self.request.user)
-    
-    @action(detail=True, methods=['post'])
-    def mark_as_read(self, request, pk=None):
-        """Mark announcement as read by current user."""
-        announcement = self.get_object()
-        read_obj, created = AnnouncementRead.objects.get_or_create(
-            announcement=announcement,
-            user=request.user
+
+        AnnouncementScopeService.validate_create_payload(
+            user=request.user,
+            scope=scope,
+            payload=serializer.validated_data,
         )
-        
-        serializer = AnnouncementReadSerializer(read_obj)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-    
-    @action(detail=True, methods=['post'])
-    def mark_as_unread(self, request, pk=None):
-        """Mark announcement as unread by current user."""
-        announcement = self.get_object()
-        AnnouncementRead.objects.filter(
+        updated = serializer.save()
+        return Response(AnnouncementListSerializer(updated, context={'request': request}).data)
+
+    def delete(self, request, announcement_id):
+        obj = self.get_object(request, announcement_id)
+        if obj is None:
+            return Response({'detail': 'Announcement not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        scope = AnnouncementScopeService.build_scope(request.user)
+        if not (
+            request.user.is_superuser
+            or obj.created_by_id == request.user.id
+            or 'announcements.manage_announcement' in scope.permissions
+        ):
+            return Response({'detail': 'You do not have permission to delete this announcement.'}, status=status.HTTP_403_FORBIDDEN)
+
+        obj.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class AnnouncementOptionsView(APIView):
+    permission_classes = [IsAuthenticated, HasAnnouncementPagePermission]
+
+    def get(self, request):
+        scope = AnnouncementScopeService.build_scope(request.user)
+        data = AnnouncementScopeService.create_options_for_user(request.user, scope)
+        return Response(data)
+
+
+class AnnouncementMarkReadView(APIView):
+    permission_classes = [IsAuthenticated, HasAnnouncementPagePermission]
+
+    def post(self, request, announcement_id):
+        scope = AnnouncementScopeService.build_scope(request.user)
+        announcement = AnnouncementScopeService.queryset_for_user(request.user, scope).filter(id=announcement_id).first()
+        if announcement is None:
+            return Response({'detail': 'Announcement not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        AnnouncementReadStatus.objects.update_or_create(
             announcement=announcement,
-            user=request.user
-        ).delete()
-        return Response({'status': 'marked as unread'}, status=status.HTTP_200_OK)
-    
-    @action(detail=False, methods=['get'])
-    def my_courses(self, request):
-        """Get courses for current user to filter announcements."""
-        if request.user.is_authenticated:
-            # Get student's enrolled courses
-            enrollments = StudentCourseEnrollment.objects.filter(
-                student__user=request.user
-            ).select_related('course')
-            courses = [enrollment.course for enrollment in enrollments]
-            serializer = CourseSimpleSerializer(courses, many=True)
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        return Response([], status=status.HTTP_200_OK)
-    
-    @action(detail=False, methods=['get'])
-    def available_courses(self, request):
-        """Get all available courses for announcement targeting (HOD/IQAC only)."""
-        if not request.user.is_authenticated:
-            return Response([], status=status.HTTP_401_UNAUTHORIZED)
-        
-        # Check if user is HOD or IQAC
-        user_roles = request.user.roles.values_list('name', flat=True)
-        if 'HOD' not in user_roles and 'IQAC' not in user_roles and not request.user.is_superuser:
-            return Response([], status=status.HTTP_403_FORBIDDEN)
-        
-        # Return all courses
-        courses = Course.objects.all().order_by('name')
-        serializer = CourseSimpleSerializer(courses, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+            user=request.user,
+            defaults={'is_read': True, 'read_at': timezone.now()},
+        )
+        return Response({'status': 'ok'})
+
+
+class AnnouncementUnreadCountView(APIView):
+    permission_classes = [IsAuthenticated, HasAnnouncementPagePermission]
+
+    def get(self, request):
+        scope = AnnouncementScopeService.build_scope(request.user)
+        count = AnnouncementScopeService.unread_count_for_user(request.user, scope)
+        return Response({'unread_count': count})
+
+
+# Compatibility endpoints for existing clients using /announcements/announcements/...
+class LegacyAnnouncementListView(AnnouncementListView):
+    pass
+
+
+class LegacyAnnouncementCreateView(AnnouncementCreateView):
+    pass
+
+
+class LegacyAnnouncementMarkReadView(AnnouncementMarkReadView):
+    pass
+
+
+class LegacyAnnouncementOptionsView(AnnouncementOptionsView):
+    pass
+
+
+class LegacyAnnouncementSentListView(AnnouncementSentListView):
+    pass

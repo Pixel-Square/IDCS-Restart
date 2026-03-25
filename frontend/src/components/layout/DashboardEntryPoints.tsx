@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, BookOpen, GraduationCap, Calendar, Clock, CheckCircle, XCircle, AlertCircle, Bell, ArrowRight } from 'lucide-react';
+import { User, BookOpen, GraduationCap, Calendar, Clock, CheckCircle, XCircle, AlertCircle, Bell, ArrowRight, X } from 'lucide-react';
 import { apiClient } from '../../services/auth';
 import { getApiBase } from '../../services/apiBase';
 import { useNavigate } from 'react-router-dom';
@@ -12,11 +12,10 @@ interface Announcement {
   id: string;
   title: string;
   content: string;
-  source: 'hod' | 'iqac';
+  target_type: 'ALL' | 'DEPARTMENT' | 'CLASS' | 'ROLE';
   created_by_name: string;
   created_at: string;
   is_read: boolean;
-  course_count: number;
 }
 
 interface AttendanceStatus {
@@ -37,6 +36,9 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
   const [avatarCandidateIndex, setAvatarCandidateIndex] = useState(0);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [loadingAnnouncements, setLoadingAnnouncements] = useState(true);
+  const [popupAnnouncement, setPopupAnnouncement] = useState<Announcement | null>(null);
+  const [showPopup, setShowPopup] = useState(false);
+  const [markingReadId, setMarkingReadId] = useState<string | null>(null);
 
   const avatarUrlCandidates = React.useMemo(() => {
     const rootValue = String((user as any)?.profile_image || '').trim();
@@ -164,15 +166,53 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
   const fetchRecentAnnouncements = async () => {
     try {
       setLoadingAnnouncements(true);
-      const url = `${getApiBase()}/api/announcements/announcements/?page_size=3`;
+      const url = `${getApiBase()}/api/announcements/announcements/?page=1&page_size=2`;
       const response = await apiClient.get(url);
-      const data = response.data.results || response.data;
-      setAnnouncements(data.slice(0, 3));
+      const data: Announcement[] = Array.isArray(response.data)
+        ? response.data
+        : (response.data?.results || []);
+      const recent = data.slice(0, 2);
+      setAnnouncements(recent);
+
+      const latestUnread = recent.find((announcement) => !announcement.is_read) || null;
+      setPopupAnnouncement(latestUnread);
+      setShowPopup(Boolean(latestUnread));
     } catch (error) {
       console.error('Failed to fetch announcements:', error);
+      setAnnouncements([]);
     } finally {
       setLoadingAnnouncements(false);
     }
+  };
+
+  const markAnnouncementRead = async (announcementId: string) => {
+    setMarkingReadId(announcementId);
+    try {
+      await apiClient.post(`${getApiBase()}/api/announcements/announcements/${announcementId}/mark-read/`);
+      setAnnouncements((prev) => prev.map((item) => (
+        item.id === announcementId ? { ...item, is_read: true } : item
+      )));
+      setPopupAnnouncement((prev) => (prev && prev.id === announcementId ? null : prev));
+      setShowPopup(false);
+    } catch (error) {
+      console.error('Failed to mark announcement as read:', error);
+    } finally {
+      setMarkingReadId(null);
+    }
+  };
+
+  const handlePopupView = async () => {
+    if (!popupAnnouncement) return;
+    await markAnnouncementRead(popupAnnouncement.id);
+    navigate('/announcements');
+  };
+
+  const handlePopupDismiss = async () => {
+    if (!popupAnnouncement) {
+      setShowPopup(false);
+      return;
+    }
+    await markAnnouncementRead(popupAnnouncement.id);
   };
 
   const unreadCount = announcements.filter((ann) => !ann.is_read).length;
@@ -193,6 +233,51 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
   
   return (
     <div className="space-y-6">
+      <div
+        className={`fixed top-4 left-1/2 -translate-x-1/2 sm:left-auto sm:right-6 sm:translate-x-0 z-50 w-[calc(100vw-2rem)] sm:w-[360px] transition-all duration-300 ${
+          showPopup && popupAnnouncement ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4 pointer-events-none'
+        }`}
+      >
+        <div className="rounded-xl bg-white border border-gray-200 shadow-lg px-4 py-3">
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 flex-shrink-0 w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
+              <Bell className="w-4 h-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-gray-900 truncate">{popupAnnouncement?.title}</p>
+              <p className="text-xs text-gray-600 mt-1 truncate">{popupAnnouncement?.content}</p>
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handlePopupView}
+                  disabled={markingReadId === popupAnnouncement?.id}
+                  className="px-3 py-1.5 rounded-md bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 disabled:opacity-60"
+                >
+                  View
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePopupDismiss}
+                  disabled={markingReadId === popupAnnouncement?.id}
+                  className="px-3 py-1.5 rounded-md border border-gray-300 text-gray-700 text-xs font-semibold hover:bg-gray-50 disabled:opacity-60"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handlePopupDismiss}
+              disabled={markingReadId === popupAnnouncement?.id}
+              className="text-gray-400 hover:text-gray-600 disabled:opacity-60"
+              aria-label="Dismiss announcement"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </div>
+
       {/* Welcome Card */}
       <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-6 sm:p-8 shadow-md">
         <div className="flex items-center gap-4">
@@ -316,11 +401,6 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
                     <h4 className="font-semibold text-gray-900 truncate">{announcement.title}</h4>
                     <p className="text-sm text-gray-600 mt-1 line-clamp-2">{announcement.content}</p>
                     <div className="flex items-center gap-2 mt-2 text-xs text-gray-500">
-                      <span className={`px-2 py-0.5 rounded text-white text-xs font-medium ${
-                        announcement.source === 'hod' ? 'bg-purple-600' : 'bg-blue-600'
-                      }`}>
-                        {announcement.source.toUpperCase()}
-                      </span>
                       <span>{formatDate(announcement.created_at)}</span>
                       <span>by {announcement.created_by_name}</span>
                     </div>
