@@ -15,14 +15,29 @@ type Announcement = {
   target_roles: string[];
   department_name?: string | null;
   class_name?: string | null;
+  created_by?: {
+    username?: string | null;
+    name?: string | null;
+    profile_image?: string | null;
+  } | null;
   created_by_name: string;
   created_by_role: string;
   created_by_label: string;
   created_at: string;
   is_read: boolean;
   attachment_url: string | null;
+  tag?: string | null;
   expiry_date: string | null;
   is_expired: boolean;
+};
+
+type AnnouncementReader = {
+  user_id: number;
+  username: string;
+  full_name: string;
+  role?: string | null;
+  is_read: boolean;
+  read_at: string;
 };
 
 type OptionDepartment = { id: number; code: string; name: string };
@@ -71,6 +86,57 @@ const formatAnnouncementDate = (value: string) => {
   return `${datePart}, ${timePart}`;
 };
 
+const formatExpiryRelative = (value: string | null) => {
+  if (!value) return '';
+  const now = new Date();
+  const expiry = new Date(value);
+  const diffMs = expiry.getTime() - now.getTime();
+  if (Number.isNaN(diffMs)) return '';
+  if (diffMs <= 0) return 'Expired';
+
+  const daysTotal = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  if (daysTotal >= 30) {
+    const months = Math.floor(daysTotal / 30);
+    const days = daysTotal % 30;
+    return `Expires in ${months} month${months > 1 ? 's' : ''}${days ? ` ${days} day${days > 1 ? 's' : ''}` : ''}`;
+  }
+  if (daysTotal >= 7) {
+    const weeks = Math.floor(daysTotal / 7);
+    const days = daysTotal % 7;
+    return `Expires in ${weeks} week${weeks > 1 ? 's' : ''}${days ? ` ${days} day${days > 1 ? 's' : ''}` : ''}`;
+  }
+  if (daysTotal > 0) return `Expires in ${daysTotal} day${daysTotal > 1 ? 's' : ''}`;
+  return 'Expires today';
+};
+
+const getCreatorName = (announcement: Announcement) => {
+  const apiName = announcement.created_by?.name || announcement.created_by?.username;
+  return apiName || announcement.created_by_label || announcement.created_by_name || 'Admin';
+};
+
+const getCreatorInitials = (announcement: Announcement) => {
+  const name = getCreatorName(announcement);
+  const letters = (name.match(/\b[A-Z]/gi) || []).slice(0, 2).join('').toUpperCase();
+  return letters || 'AD';
+};
+
+const getCreatorAvatar = (announcement: Announcement) => {
+  const url = announcement.created_by?.profile_image;
+  if (!url) return null;
+  if (url.startsWith('http://') || url.startsWith('https://')) return url;
+  if (url.startsWith('/')) return `${getApiBase()}${url}`;
+  return url;
+};
+
+const getTagMeta = (tag?: string | null) => {
+  const key = (tag || '').trim().toUpperCase();
+  if (!key) return null;
+  if (key === 'CRITICAL') return { label: 'Critical', bg: 'bg-rose-100', text: 'text-rose-700', border: 'border-rose-200' };
+  if (key === 'INFO') return { label: 'Info', bg: 'bg-blue-100', text: 'text-blue-700', border: 'border-blue-200' };
+  if (key === 'EVENT') return { label: 'Event', bg: 'bg-amber-100', text: 'text-amber-700', border: 'border-amber-200' };
+  return { label: key, bg: 'bg-slate-100', text: 'text-slate-700', border: 'border-slate-200' };
+};
+
 const roleLabel = (role: string) => {
   const normalized = String(role || '').toUpperCase();
   if (normalized === 'STUDENT') return 'Students';
@@ -113,10 +179,13 @@ export default function AnnouncementsPage({ user }: AnnouncementsPageProps) {
   const [options, setOptions] = useState<CreateOptions | null>(null);
   const [activeTab, setActiveTab] = useState<'all' | 'unread' | 'sent'>('all');
   const [selectedAnnouncement, setSelectedAnnouncement] = useState<Announcement | null>(null);
+  const [announcementReaders, setAnnouncementReaders] = useState<Record<string, AnnouncementReader[]>>({});
+  const [readerRoleFilter, setReaderRoleFilter] = useState<'ALL' | 'HOD' | 'STAFF' | 'STUDENT'>('ALL');
 
   const [showCreate, setShowCreate] = useState(false);
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
+  const [tag, setTag] = useState('');
   const [targetType, setTargetType] = useState<TargetType>('ALL');
   const [selectedRoles, setSelectedRoles] = useState<string[]>([]);
   const [selectedDepartmentIds, setSelectedDepartmentIds] = useState<number[]>([]);
@@ -242,6 +311,15 @@ export default function AnnouncementsPage({ user }: AnnouncementsPageProps) {
     if (!announcement.is_read) {
       await markAsRead(announcement.id);
     }
+
+    try {
+      const res = await apiClient.get<{ readers: AnnouncementReader[] }>(`${getApiBase()}/api/announcements/announcements/${announcement.id}/readers/`);
+      setAnnouncementReaders((prev) => ({ ...prev, [announcement.id]: res.data.readers || [] }));
+    } catch (fetchError: any) {
+      if (fetchError?.response?.status !== 403) {
+        console.error('Failed to load readers', fetchError);
+      }
+    }
   };
 
   const onTargetTypeChange = (value: TargetType) => {
@@ -333,6 +411,7 @@ export default function AnnouncementsPage({ user }: AnnouncementsPageProps) {
   const resetCreateForm = () => {
     setTitle('');
     setContent('');
+    setTag('');
     setSelectedClassId('');
     setAttachment(null);
     setExpiresIn('1M');
@@ -360,6 +439,9 @@ export default function AnnouncementsPage({ user }: AnnouncementsPageProps) {
       formData.append('target_type', targetType.toUpperCase());
       formData.append('is_active', 'true');
       formData.append('expires_in', expiresIn);
+      if (tag.trim()) {
+        formData.append('tag', tag.trim());
+      }
 
       selectedRoles.forEach((role) => formData.append('target_roles', role.toUpperCase()));
       selectedDepartmentIds.forEach((departmentId) => formData.append('department_ids', String(departmentId)));
@@ -400,7 +482,7 @@ export default function AnnouncementsPage({ user }: AnnouncementsPageProps) {
 
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-6 sm:px-6">
-      <div className="mx-auto max-w-5xl space-y-6">
+      <div className="mx-auto max-w-[1200px] space-y-6">
         <header className="flex flex-col gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-start gap-3">
             <div className="mt-0.5 inline-flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 text-blue-700">
@@ -453,6 +535,20 @@ export default function AnnouncementsPage({ user }: AnnouncementsPageProps) {
                   className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                   placeholder="Share the full announcement content"
                 />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">Tag (optional)</label>
+                <select
+                  value={tag}
+                  onChange={(event) => setTag(event.target.value)}
+                  className="h-11 w-full rounded-lg border border-slate-300 px-3 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                >
+                  <option value="">No tag</option>
+                  <option value="CRITICAL">Critical</option>
+                  <option value="INFO">Info</option>
+                  <option value="EVENT">Event</option>
+                </select>
               </div>
 
               {showTargetTypeDropdown ? (
@@ -620,6 +716,11 @@ export default function AnnouncementsPage({ user }: AnnouncementsPageProps) {
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0 flex-1 space-y-2">
                     <div className="flex items-center gap-2">
+                      {getTagMeta(announcement.tag) ? (
+                        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${getTagMeta(announcement.tag)?.bg} ${getTagMeta(announcement.tag)?.text} ${getTagMeta(announcement.tag)?.border}`}>
+                          {getTagMeta(announcement.tag)?.label}
+                        </span>
+                      ) : null}
                       {!announcement.is_read && activeTab !== 'sent' ? (
                         <span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-emerald-700">New</span>
                       ) : null}
@@ -631,22 +732,34 @@ export default function AnnouncementsPage({ user }: AnnouncementsPageProps) {
                     </div>
                     <h3 className="truncate text-lg font-bold text-slate-900">{announcement.title}</h3>
                     <p className="line-clamp-2 text-sm text-slate-600">{announcement.content}</p>
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                      <span className="font-medium text-slate-700">By {announcement.created_by_label || announcement.created_by_name}</span>
-                      <span>&bull;</span>
-                      <span>{formatAnnouncementDate(announcement.created_at)}</span>
-                      {activeTab === 'sent' ? (
-                        <>
-                          <span>&bull;</span>
-                          <span>{targetSummary(announcement)}</span>
-                        </>
+                    {activeTab === 'sent' ? (
+                      <div className="text-xs text-slate-500">{targetSummary(announcement)}</div>
+                    ) : null}
+                  </div>
+
+                  <div className="flex shrink-0 items-start gap-3">
+                    {!announcement.is_read && activeTab !== 'sent' ? (
+                      <span className="mt-1 flex h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500 shadow-[0_0_0_6px_rgba(16,185,129,0.15)]" aria-hidden />
+                    ) : null}
+                    {getCreatorAvatar(announcement) ? (
+                      <img
+                        src={getCreatorAvatar(announcement) as string}
+                        alt={getCreatorName(announcement)}
+                        className="h-11 w-11 rounded-full border border-slate-200 object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-11 w-11 items-center justify-center rounded-full bg-slate-200 text-sm font-semibold text-slate-700">
+                        {getCreatorInitials(announcement)}
+                      </div>
+                    )}
+                    <div className="text-right text-[11px] leading-tight text-slate-500">
+                      <div className="font-semibold text-slate-800">{getCreatorName(announcement)}</div>
+                      <div>{formatAnnouncementDate(announcement.created_at)}</div>
+                      {announcement.expiry_date ? (
+                        <div className="text-[10px] text-slate-500">{formatExpiryRelative(announcement.expiry_date)}</div>
                       ) : null}
                     </div>
                   </div>
-
-                  {!announcement.is_read && activeTab !== 'sent' ? (
-                    <span className="flex h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500 shadow-[0_0_0_6px_rgba(16,185,129,0.15)]" aria-hidden />
-                  ) : null}
                 </div>
               </button>
             ))}
@@ -672,6 +785,58 @@ export default function AnnouncementsPage({ user }: AnnouncementsPageProps) {
 
             <div className="space-y-4 p-5">
               <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-700">{selectedAnnouncement.content}</p>
+
+                {announcementReaders[selectedAnnouncement.id] ? (
+                  <section className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <div className="flex items-center justify-between text-sm font-semibold text-slate-800">
+                      <span>Views</span>
+                      <span className="text-xs text-slate-500">{targetSummary(selectedAnnouncement)}</span>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2 text-xs">
+                      {(() => {
+                        const rolesPresent = new Set(
+                          announcementReaders[selectedAnnouncement.id]
+                            .map((reader) => (reader.role || '').toUpperCase())
+                            .filter((r) => r),
+                        );
+                        const options: Array<'ALL' | 'HOD' | 'STAFF' | 'STUDENT'> = ['ALL'];
+                        if (rolesPresent.has('HOD')) options.push('HOD');
+                        if (rolesPresent.has('STAFF')) options.push('STAFF');
+                        if (rolesPresent.has('STUDENT')) options.push('STUDENT');
+
+                        return options.map((role) => {
+                          const active = readerRoleFilter === role;
+                          return (
+                            <button
+                              key={role}
+                              type="button"
+                              onClick={() => setReaderRoleFilter(role)}
+                              className={`rounded-full border px-3 py-1 font-semibold transition ${active ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 bg-white text-slate-700 hover:border-blue-300'}`}
+                            >
+                              {role === 'ALL' ? 'All' : roleLabel(role)}
+                            </button>
+                          );
+                        });
+                      })()}
+                    </div>
+
+                    {announcementReaders[selectedAnnouncement.id].filter((reader) => readerRoleFilter === 'ALL' || (reader.role || '').toUpperCase() === readerRoleFilter).length === 0 ? (
+                      <p className="text-xs text-slate-500">No views yet.</p>
+                    ) : (
+                      <div className="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">
+                        {announcementReaders[selectedAnnouncement.id]
+                          .filter((reader) => readerRoleFilter === 'ALL' || (reader.role || '').toUpperCase() === readerRoleFilter)
+                          .map((reader) => (
+                            <div key={reader.user_id} className="flex items-center justify-between gap-3 px-3 py-2 text-xs text-slate-700">
+                              <div className="font-semibold text-slate-800">{reader.full_name || reader.username}</div>
+                              <div className="text-right text-slate-500">{formatAnnouncementDate(reader.read_at)}</div>
+                            </div>
+                          ))}
+                      </div>
+                    )}
+                  </section>
+                ) : null}
 
               {selectedAnnouncement.attachment_url ? (
                 <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">

@@ -18,6 +18,7 @@ from .permissions import (
 from .serializers import (
     AnnouncementCreateSerializer,
     AnnouncementListSerializer,
+    AnnouncementReadStatusSerializer,
     AnnouncementUpdateSerializer,
 )
 from .services import AnnouncementScopeService
@@ -191,6 +192,41 @@ class AnnouncementUnreadCountView(APIView):
         scope = AnnouncementScopeService.build_scope(request.user)
         count = AnnouncementScopeService.unread_count_for_user(request.user, scope)
         return Response({'unread_count': count})
+
+
+class AnnouncementReadersView(APIView):
+    permission_classes = [IsAuthenticated, HasAnnouncementPagePermission]
+
+    def get(self, request, announcement_id):
+        scope = AnnouncementScopeService.build_scope(request.user)
+        announcement = AnnouncementScopeService.queryset_for_user(request.user, scope).filter(id=announcement_id).first()
+        if announcement is None:
+            return Response({'detail': 'Announcement not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if not (
+            request.user.is_superuser
+            or announcement.created_by_id == request.user.id
+            or 'announcements.manage_announcement' in scope.permissions
+        ):
+            return Response({'detail': 'You do not have permission to view readers for this announcement.'}, status=status.HTTP_403_FORBIDDEN)
+
+        read_statuses = (
+            AnnouncementReadStatus.objects.filter(announcement=announcement, is_read=True)
+            .select_related('user')
+            .order_by('-read_at')
+        )
+
+        serializer = AnnouncementReadStatusSerializer(read_statuses, many=True)
+        payload = {
+            'id': str(announcement.id),
+            'title': announcement.title,
+            'target_type': announcement.target_type,
+            'target_roles': announcement.target_roles,
+            'department_name': getattr(announcement.department, 'name', None),
+            'class_name': str(getattr(announcement, 'target_class', '') or '') or None,
+            'readers': serializer.data,
+        }
+        return Response(payload)
 
 
 # Compatibility endpoints for existing clients using /announcements/announcements/...

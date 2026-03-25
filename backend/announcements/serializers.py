@@ -30,6 +30,7 @@ class AnnouncementListSerializer(serializers.ModelSerializer):
     target_department_ids = serializers.SerializerMethodField()
     attachment_url = serializers.SerializerMethodField()
     is_expired = serializers.SerializerMethodField()
+    tag = serializers.CharField(read_only=True, allow_blank=True, allow_null=True)
 
     class Meta:
         model = Announcement
@@ -37,6 +38,7 @@ class AnnouncementListSerializer(serializers.ModelSerializer):
             'id',
             'title',
             'content',
+            'tag',
             'target_type',
             'target_roles',
             'department',
@@ -112,6 +114,41 @@ class AnnouncementListSerializer(serializers.ModelSerializer):
 
     def get_is_expired(self, obj):
         return bool(getattr(obj, 'is_expired', False))
+
+
+class AnnouncementReadStatusSerializer(serializers.ModelSerializer):
+    user_id = serializers.IntegerField(source='user.id', read_only=True)
+    username = serializers.CharField(source='user.username', read_only=True)
+    full_name = serializers.SerializerMethodField()
+    role = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AnnouncementReadStatus
+        fields = ['user_id', 'username', 'full_name', 'role', 'is_read', 'read_at']
+        read_only_fields = fields
+
+    def get_full_name(self, obj):
+        getter = getattr(obj.user, 'get_full_name', None)
+        if callable(getter):
+            name = getter()
+            if name:
+                return name
+        fallback = getattr(obj.user, 'full_name', None) or getattr(obj.user, 'name', None)
+        return fallback or obj.user.username
+
+    def get_role(self, obj):
+        try:
+            roles = list(obj.user.roles.values_list('name', flat=True))
+        except Exception:
+            roles = []
+        if not roles:
+            return None
+        priority = ['PRINCIPAL', 'IQAC', 'HOD', 'STAFF', 'STUDENT']
+        upper = [str(r or '').strip().upper() for r in roles]
+        for role in priority:
+            if role in upper:
+                return role
+        return upper[0]
 
 
 class AnnouncementCreateSerializer(serializers.ModelSerializer):
