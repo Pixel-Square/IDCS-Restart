@@ -472,18 +472,7 @@ class ProfileUpdateView(APIView):
         username = request.data.get('username')
         profile_image = request.FILES.get('profile_image')
 
-        one_time_name_email_edit = (
-            first_name is not None
-            or last_name is not None
-            or email is not None
-            or profile_edited is not None
-        )
-
-        if one_time_name_email_edit and bool(getattr(user, 'name_email_edited', False)):
-            return Response(
-                {'detail': 'Name and email can only be edited once.'},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        # Allow name/email edits without one-time restriction.
 
         # Update user fields if provided
         updated = False
@@ -500,9 +489,7 @@ class ProfileUpdateView(APIView):
             user.email = str(email).strip()
             updated = True
 
-        if one_time_name_email_edit:
-            user.name_email_edited = True
-            updated = True
+        # Do not mark name/email as permanently edited; allow subsequent edits.
 
         if username is not None:
             new_username = str(username).strip()

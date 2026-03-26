@@ -137,6 +137,9 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
   const [profile, setProfile] = useState({ name: '', first_name: '', last_name: '', email: '', nameEdited: false });
   const [nameEmailEditError, setNameEmailEditError] = useState<string | null>(null);
   const [nameEmailSaving, setNameEmailSaving] = useState(false);
+  const [emailEditing, setEmailEditing] = useState(false);
+  const [emailSaving, setEmailSaving] = useState(false);
+  const [emailEditError, setEmailEditError] = useState<string | null>(null);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
   const [avatarCandidateIndex, setAvatarCandidateIndex] = useState(0);
@@ -619,10 +622,7 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
     const firstName = String(profile.first_name || '').trim();
     const lastName = String(profile.last_name || '').trim();
 
-    const confirmEdit = window.confirm(
-      'This is a one-time edit. After saving you cannot change your name again.'
-    );
-    if (!confirmEdit) return;
+    // Allow repeated edits; no one-time confirmation.
 
     if (!firstName) {
       setNameEmailEditError('First name cannot be empty.');
@@ -637,7 +637,6 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
         body: JSON.stringify({
           first_name: firstName,
           last_name: lastName,
-          profileEdited: true,
         })
       });
 
@@ -649,7 +648,6 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
       const updated = await getMe();
       const normalized = {
         ...updated,
-        profileEdited: true,
         roles: Array.isArray(updated.roles) ? updated.roles.map((role: any) => (typeof role === 'string' ? role : role.name)) : [],
       } as Me;
       setUser(normalized);
@@ -658,7 +656,7 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
         first_name: String(normalized.first_name || ''),
         last_name: String(normalized.last_name || ''),
         email: String(normalized.email || ''),
-        nameEdited: true,
+        nameEdited: Boolean((normalized as any)?.profileEdited ?? (normalized as any)?.name_email_edited),
       });
       setIsEditingName(false);
     } catch (e: any) {
@@ -668,8 +666,44 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
     }
   }
 
+  async function handleSaveEmail() {
+    setEmailEditError(null);
+    const next = String((profile.email || '')).trim().toLowerCase();
+    if (!next) {
+      setEmailEditError('Email cannot be empty.');
+      return;
+    }
+    // simple validation
+    const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRe.test(next)) {
+      setEmailEditError('Enter a valid email address.');
+      return;
+    }
+
+    try {
+      setEmailSaving(true);
+      const response = await fetchWithAuth('/api/accounts/profile/update/', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: next }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.detail || 'Failed to update email');
+      }
+      const updated = await getMe();
+      applyUserUpdate(updated);
+      setProfile((p) => ({ ...p, email: String(updated.email || '') }));
+      setEmailEditing(false);
+    } catch (e: any) {
+      setEmailEditError(String(e?.message || e || 'Failed to update email'));
+    } finally {
+      setEmailSaving(false);
+    }
+  }
+
   function startEditingName() {
-    if (profile.nameEdited) return;
+    // Allow editing name even if previously edited
     setProfile((prev) => ({ ...prev, name: getDisplayName(user), first_name: String(user?.first_name || ''), last_name: String(user?.last_name || '') }));
     setIsEditingName(true);
     setNameEmailEditError(null);
@@ -679,6 +713,12 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
     setProfile((prev) => ({ ...prev, name: getDisplayName(user), first_name: String(user?.first_name || ''), last_name: String(user?.last_name || '') }));
     setIsEditingName(false);
     setNameEmailEditError(null);
+  }
+
+  function cancelEditingEmail() {
+    setProfile((prev) => ({ ...prev, email: String(user?.email || '') }));
+    setEmailEditing(false);
+    setEmailEditError(null);
   }
 
   function handleAvatarEditClick() {
@@ -1079,30 +1119,67 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                         </div>
                       </div>
 
-                      {!profile.nameEdited && (
-                        <button
-                          onClick={startEditingName}
-                          className="mt-2 flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700"
-                        >
-                          <Edit2 className="w-3 h-3" />
-                          Edit
-                        </button>
-                      )}
+                      <button
+                        onClick={startEditingName}
+                        className="mt-2 flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700"
+                      >
+                        <Edit2 className="w-3 h-3" />
+                        Edit
+                      </button>
                     </div>
                   )}
                 </div>
               </div>
             </div>
 
-            {/* Email Card */}
+            {/* Email Card (editable) */}
             <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow">
               <div className="flex items-start gap-3">
                 <div className="w-10 h-10 bg-emerald-100 rounded-lg flex items-center justify-center flex-shrink-0">
                   <Mail className="w-5 h-5 text-emerald-600" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-semibold text-gray-500 mb-1">Email</div>
-                  <div className="text-gray-900 font-medium truncate">{profile.email || '—'}</div>
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm font-semibold text-gray-500 mb-1">Email</div>
+                    <div>
+                      <button
+                        onClick={() => { setEmailEditing(true); setEmailEditError(null); }}
+                        className="text-xs text-blue-600 hover:text-blue-700"
+                      >
+                        Edit
+                      </button>
+                    </div>
+                  </div>
+
+                  {emailEditing ? (
+                    <div className="mt-2 flex items-center gap-2">
+                      <input
+                        type="email"
+                        value={profile.email || ''}
+                        onChange={(e) => setProfile((p) => ({ ...p, email: e.target.value }))}
+                        className="w-full px-3 py-2 border rounded text-sm"
+                        disabled={emailSaving}
+                      />
+                      <button
+                        onClick={handleSaveEmail}
+                        disabled={emailSaving}
+                        className="px-3 py-2 bg-green-600 text-white rounded text-sm hover:bg-green-700"
+                      >
+                        {emailSaving ? 'Saving...' : 'Save'}
+                      </button>
+                      <button
+                        onClick={cancelEditingEmail}
+                        disabled={emailSaving}
+                        className="px-3 py-2 bg-gray-200 text-gray-700 rounded text-sm hover:bg-gray-300"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="text-gray-900 font-medium truncate mt-2">{profile.email || '—'}</div>
+                  )}
+
+                  {emailEditError && <div className="text-xs text-red-600 mt-2">{emailEditError}</div>}
                 </div>
               </div>
             </div>
