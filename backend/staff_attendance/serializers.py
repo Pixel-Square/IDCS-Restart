@@ -7,6 +7,7 @@ from .models import (
     AttendanceSettings,
     DepartmentAttendanceSettings,
     SpecialDepartmentDateAttendanceLimit,
+    StaffAttendanceTimeLimitOverride,
 )
 from academics.models import Department
 
@@ -254,3 +255,44 @@ class SpecialDepartmentDateAttendanceLimitSerializer(serializers.ModelSerializer
             }
             for dept in obj.departments.all()
         ]
+
+
+class StaffAttendanceTimeLimitOverrideSerializer(serializers.ModelSerializer):
+    user_info = serializers.SerializerMethodField()
+    created_by_name = serializers.CharField(source='created_by.username', read_only=True)
+    updated_by_name = serializers.CharField(source='updated_by.username', read_only=True)
+
+    class Meta:
+        model = StaffAttendanceTimeLimitOverride
+        fields = [
+            'id',
+            'user', 'user_info',
+            'attendance_in_time_limit', 'attendance_out_time_limit', 'mid_time_split',
+            'apply_time_based_absence', 'enabled',
+            'created_by', 'created_by_name',
+            'updated_by', 'updated_by_name',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = [
+            'created_by', 'created_by_name',
+            'updated_by', 'updated_by_name',
+            'created_at', 'updated_at',
+        ]
+
+    def get_user_info(self, obj):
+        user = obj.user
+        profile = getattr(user, 'staff_profile', None)
+        dept = getattr(profile, 'department', None) if profile else None
+        full_name = f"{user.first_name} {user.last_name}".strip() or user.username
+        return {
+            'id': user.id,
+            'username': user.username,
+            'full_name': full_name,
+            'staff_id': getattr(profile, 'staff_id', None) if profile else None,
+            'department': {
+                'id': getattr(dept, 'id', None),
+                'code': getattr(dept, 'code', None),
+                'short_name': getattr(dept, 'short_name', None),
+                'name': getattr(dept, 'name', None),
+            } if dept else None,
+        }

@@ -80,6 +80,19 @@ class AttendanceRecord(models.Model):
             out_limit = '17:00:00'
             mid_split = '13:00:00'
             apply_absence = True
+
+            # Priority 0: Staff-specific override (highest priority)
+            staff_override = StaffAttendanceTimeLimitOverride.objects.filter(
+                user=self.user,
+                enabled=True,
+            ).first()
+
+            if staff_override:
+                in_limit = staff_override.attendance_in_time_limit
+                out_limit = staff_override.attendance_out_time_limit
+                mid_split = staff_override.mid_time_split
+                apply_absence = staff_override.apply_time_based_absence
+            
             
             # Try to get special date-range settings first, then department-specific settings
             department_settings = None
@@ -96,7 +109,7 @@ class AttendanceRecord(models.Model):
                 if not user_department:
                     user_department = getattr(self.user.staff_profile, 'department', None)
 
-            if user_department:
+            if user_department and not staff_override:
 
                 # Priority 1: HR special date-range limits for this department/date
                 special_settings = SpecialDepartmentDateAttendanceLimit.objects.filter(
@@ -122,13 +135,13 @@ class AttendanceRecord(models.Model):
                         enabled=True
                     ).first()
             
-            if department_settings:
+            if department_settings and not staff_override:
                 # Use department-specific settings
                 in_limit = department_settings.attendance_in_time_limit
                 out_limit = department_settings.attendance_out_time_limit
                 mid_split = department_settings.mid_time_split
                 apply_absence = department_settings.apply_time_based_absence
-            elif not special_settings:
+            elif not special_settings and not staff_override:
                 # Fall back to global settings
                 global_settings = AttendanceSettings.objects.first()
                 if global_settings:
@@ -471,6 +484,52 @@ class DepartmentAttendanceSettings(models.Model):
     def __str__(self):
         dept_count = self.departments.count()
         return f"{self.name} ({dept_count} dept{'s' if dept_count != 1 else ''})"
+
+
+class StaffAttendanceTimeLimitOverride(models.Model):
+    """Staff-specific attendance time limits (one override per staff).
+
+    Priority order during status calculation:
+    1) StaffAttendanceTimeLimitOverride (if enabled)
+    2) SpecialDepartmentDateAttendanceLimit (department/date-range)
+    3) DepartmentAttendanceSettings
+    4) AttendanceSettings (global)
+    """
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='staff_attendance_time_limit_override'
+    )
+    attendance_in_time_limit = models.TimeField(default='08:45:00')
+    attendance_out_time_limit = models.TimeField(default='17:00:00')
+    mid_time_split = models.TimeField(default='13:00:00')
+    apply_time_based_absence = models.BooleanField(default=True)
+    enabled = models.BooleanField(default=True)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='created_staff_attendance_time_limit_overrides'
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='updated_staff_attendance_time_limit_overrides'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'staff_attendance_staff_time_limits'
+        verbose_name = 'Staff Attendance Time Limit Override'
+        verbose_name_plural = 'Staff Attendance Time Limit Overrides'
+        ordering = ['-updated_at', '-id']
+
+    def __str__(self):
+        return f"{self.user.username} staff time limits"
 
 
 class SpecialDepartmentDateAttendanceLimit(models.Model):

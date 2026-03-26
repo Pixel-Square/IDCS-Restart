@@ -55,6 +55,31 @@ interface Department {
   short_name: string;
 }
 
+interface StaffOption {
+  user_id: number;
+  username: string;
+  full_name: string;
+  staff_id: string | null;
+  department: { id: number; code: string; short_name: string; name: string } | null;
+}
+
+interface StaffTimeLimitOverride {
+  id: number;
+  user: number;
+  user_info: {
+    id: number;
+    username: string;
+    full_name: string;
+    staff_id: string | null;
+    department: { id: number; code: string; short_name: string; name: string } | null;
+  };
+  attendance_in_time_limit: string;
+  attendance_out_time_limit: string;
+  mid_time_split: string;
+  apply_time_based_absence: boolean;
+  enabled: boolean;
+}
+
 const StaffAttendanceUpload: React.FC = () => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isDryRun, setIsDryRun] = useState(true);
@@ -113,13 +138,57 @@ const StaffAttendanceUpload: React.FC = () => {
   const [deptSettingSelectedDepts, setDeptSettingSelectedDepts] = useState<number[]>([]);
   const [savingDeptSetting, setSavingDeptSetting] = useState(false);
 
+  // Staff-specific time limits states
+  const [staffOverrideDeptId, setStaffOverrideDeptId] = useState<number | ''>('');
+  const [staffSearch, setStaffSearch] = useState('');
+  const [staffOptions, setStaffOptions] = useState<StaffOption[]>([]);
+  const [loadingStaffOptions, setLoadingStaffOptions] = useState(false);
+  const [selectedStaffUserId, setSelectedStaffUserId] = useState<number | null>(null);
+
+  const [staffOverrideInTime, setStaffOverrideInTime] = useState('08:45');
+  const [staffOverrideOutTime, setStaffOverrideOutTime] = useState('17:00');
+  const [staffOverrideMidTime, setStaffOverrideMidTime] = useState('13:00');
+  const [staffOverrideApplyAbsence, setStaffOverrideApplyAbsence] = useState(true);
+  const [staffOverrideEnabled, setStaffOverrideEnabled] = useState(true);
+  const [savingStaffOverride, setSavingStaffOverride] = useState(false);
+  const [staffOverrides, setStaffOverrides] = useState<StaffTimeLimitOverride[]>([]);
+  const [loadingStaffOverrides, setLoadingStaffOverrides] = useState(false);
+
   // Fetch holidays on component mount
   useEffect(() => {
     fetchHolidays();
     fetchAttendanceSettings();
     fetchDepartmentSettings();
     fetchDepartments();
+    fetchStaffOverrides('');
   }, []);
+
+  useEffect(() => {
+    // Refresh the list view when department filter changes
+    fetchStaffOverrides(staffOverrideDeptId);
+    // Clear options when changing department
+    setStaffOptions([]);
+    setSelectedStaffUserId(null);
+  }, [staffOverrideDeptId]);
+
+  useEffect(() => {
+    if (!selectedStaffUserId) return;
+    const existing = staffOverrides.find(o => o.user === selectedStaffUserId);
+    if (existing) {
+      setStaffOverrideInTime(existing.attendance_in_time_limit.substring(0, 5));
+      setStaffOverrideOutTime(existing.attendance_out_time_limit.substring(0, 5));
+      setStaffOverrideMidTime(existing.mid_time_split.substring(0, 5));
+      setStaffOverrideApplyAbsence(existing.apply_time_based_absence);
+      setStaffOverrideEnabled(existing.enabled);
+    } else {
+      // Default to current global fallback values for convenience
+      setStaffOverrideInTime(inTimeLimit);
+      setStaffOverrideOutTime(outTimeLimit);
+      setStaffOverrideMidTime('13:00');
+      setStaffOverrideApplyAbsence(true);
+      setStaffOverrideEnabled(true);
+    }
+  }, [selectedStaffUserId, staffOverrides, inTimeLimit, outTimeLimit]);
 
   const fetchDepartments = async () => {
     try {
@@ -127,6 +196,77 @@ const StaffAttendanceUpload: React.FC = () => {
       setAllDepartments(response.data);
     } catch (err: any) {
       console.error('Failed to fetch departments:', err);
+    }
+  };
+
+  const fetchStaffOverrides = async (departmentId: number | '' = '') => {
+    try {
+      setLoadingStaffOverrides(true);
+      const params = new URLSearchParams();
+      if (departmentId) params.append('department_id', departmentId.toString());
+      const url = `${getApiBase()}/api/staff-attendance/staff-time-limits/${params.toString() ? `?${params.toString()}` : ''}`;
+      const response = await apiClient.get(url);
+      setStaffOverrides(response.data);
+    } catch (err: any) {
+      console.error('Failed to fetch staff overrides:', err);
+    } finally {
+      setLoadingStaffOverrides(false);
+    }
+  };
+
+  const fetchStaffOptions = async () => {
+    try {
+      setLoadingStaffOptions(true);
+      const params = new URLSearchParams();
+      if (staffOverrideDeptId) params.append('department_id', staffOverrideDeptId.toString());
+      if (staffSearch.trim()) params.append('q', staffSearch.trim());
+
+      const response = await apiClient.get(
+        `${getApiBase()}/api/staff-attendance/staff-time-limits/staff_options/?${params.toString()}`
+      );
+      setStaffOptions(response.data);
+    } catch (err: any) {
+      console.error('Failed to fetch staff options:', err);
+      alert(err.response?.data?.error || 'Failed to fetch staff list');
+    } finally {
+      setLoadingStaffOptions(false);
+    }
+  };
+
+  const handleSaveStaffOverride = async () => {
+    if (!selectedStaffUserId) {
+      alert('Please select a staff');
+      return;
+    }
+    setSavingStaffOverride(true);
+    try {
+      await apiClient.post(`${getApiBase()}/api/staff-attendance/staff-time-limits/upsert/`, {
+        user: selectedStaffUserId,
+        attendance_in_time_limit: `${staffOverrideInTime}:00`,
+        attendance_out_time_limit: `${staffOverrideOutTime}:00`,
+        mid_time_split: `${staffOverrideMidTime}:00`,
+        apply_time_based_absence: staffOverrideApplyAbsence,
+        enabled: staffOverrideEnabled,
+      });
+
+      alert('Staff time limits saved successfully!');
+      await fetchStaffOverrides(staffOverrideDeptId);
+    } catch (err: any) {
+      const data = err.response?.data;
+      alert(data?.error || data?.detail || 'Failed to save staff time limits');
+    } finally {
+      setSavingStaffOverride(false);
+    }
+  };
+
+  const handleDeleteStaffOverride = async (id: number) => {
+    if (!confirm('Are you sure you want to delete this staff override?')) return;
+    try {
+      await apiClient.delete(`${getApiBase()}/api/staff-attendance/staff-time-limits/${id}/`);
+      alert('Staff override deleted successfully!');
+      fetchStaffOverrides(staffOverrideDeptId);
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to delete staff override');
     }
   };
 
@@ -1121,6 +1261,203 @@ const StaffAttendanceUpload: React.FC = () => {
               ))}
             </div>
           )}
+        </div>
+      </div>
+
+      {/* Staff-Specific Attendance Time Settings */}
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 mb-6">
+        <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
+          <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+            <Clock className="h-5 w-5 text-blue-600" />
+            Staff-Specific Time Limits
+          </h2>
+          <p className="text-sm text-gray-600 mt-1">
+            Set custom time limits for a particular staff (overrides department and global limits)
+          </p>
+        </div>
+
+        <div className="p-6 space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Department Filter</label>
+              <select
+                value={staffOverrideDeptId}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setStaffOverrideDeptId(v ? parseInt(v) : '');
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">All Departments</option>
+                {allDepartments.map((dept) => (
+                  <option key={dept.id} value={dept.id}>
+                    {dept.short_name || dept.code} — {dept.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Search Staff</label>
+              <input
+                type="text"
+                value={staffSearch}
+                onChange={(e) => setStaffSearch(e.target.value)}
+                placeholder="Staff ID / Name"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            <div className="flex items-end">
+              <button
+                onClick={fetchStaffOptions}
+                disabled={loadingStaffOptions}
+                className="w-full inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+              >
+                {loadingStaffOptions ? 'Loading...' : 'Fetch Staff'}
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Select Staff (Staff ID — Name)</label>
+            <select
+              value={selectedStaffUserId ?? ''}
+              onChange={(e) => setSelectedStaffUserId(e.target.value ? parseInt(e.target.value) : null)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">Select a staff</option>
+              {staffOptions.map((s) => (
+                <option key={s.user_id} value={s.user_id}>
+                  {(s.staff_id || s.username)} — {s.full_name}
+                </option>
+              ))}
+            </select>
+            {staffOptions.length === 0 && (
+              <p className="text-xs text-gray-500 mt-1">
+                Use department filter and click “Fetch Staff” to load options.
+              </p>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">In Time Limit</label>
+              <input
+                type="time"
+                value={staffOverrideInTime}
+                onChange={(e) => setStaffOverrideInTime(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Out Time Limit</label>
+              <input
+                type="time"
+                value={staffOverrideOutTime}
+                onChange={(e) => setStaffOverrideOutTime(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Noon Split (FN/AN)</label>
+              <input
+                type="time"
+                value={staffOverrideMidTime}
+                onChange={(e) => setStaffOverrideMidTime(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-6">
+            <label className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                checked={staffOverrideApplyAbsence}
+                onChange={(e) => setStaffOverrideApplyAbsence(e.target.checked)}
+                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span className="text-sm font-medium text-gray-700">Apply time-based absence rules</span>
+            </label>
+            <label className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                checked={staffOverrideEnabled}
+                onChange={(e) => setStaffOverrideEnabled(e.target.checked)}
+                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span className="text-sm font-medium text-gray-700">Enabled</span>
+            </label>
+          </div>
+
+          <button
+            onClick={handleSaveStaffOverride}
+            disabled={savingStaffOverride || !selectedStaffUserId}
+            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+          >
+            <CheckCircle className="h-4 w-4 mr-2" />
+            {savingStaffOverride ? 'Saving...' : 'Save Staff Time Limits'}
+          </button>
+
+          <div className="pt-2">
+            <h3 className="text-sm font-semibold text-gray-900 mb-2">Existing Staff Overrides</h3>
+            {loadingStaffOverrides ? (
+              <div className="text-center py-6">
+                <Clock className="animate-spin h-6 w-6 text-gray-400 mx-auto mb-2" />
+                <p className="text-gray-500 text-sm">Loading staff overrides...</p>
+              </div>
+            ) : staffOverrides.length === 0 ? (
+              <div className="text-center py-6 bg-gray-50 rounded-lg border border-dashed border-gray-300">
+                <Clock className="h-10 w-10 text-gray-400 mx-auto mb-2" />
+                <p className="text-gray-500 text-sm">No staff overrides yet</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {staffOverrides.map((o) => (
+                  <div
+                    key={o.id}
+                    className={`border rounded-lg p-3 flex items-start justify-between ${o.enabled ? 'bg-white border-gray-200' : 'bg-gray-50 border-gray-200 opacity-60'}`}
+                  >
+                    <div className="flex-1">
+                      <div className="text-sm font-semibold text-gray-900">
+                        {(o.user_info.staff_id || o.user_info.username)} — {o.user_info.full_name}
+                      </div>
+                      <div className="text-xs text-gray-600 mt-0.5">
+                        Dept: {o.user_info.department?.short_name || o.user_info.department?.code || '-'}
+                      </div>
+                      <div className="mt-2 text-xs bg-gray-50 p-2 rounded space-y-0.5">
+                        <div><span className="font-medium">In:</span> {o.attendance_in_time_limit.substring(0, 5)}</div>
+                        <div><span className="font-medium">Out:</span> {o.attendance_out_time_limit.substring(0, 5)}</div>
+                        <div><span className="font-medium">Noon:</span> {o.mid_time_split.substring(0, 5)}</div>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => {
+                          const deptId = o.user_info.department?.id;
+                          if (deptId) setStaffOverrideDeptId(deptId);
+                          setSelectedStaffUserId(o.user);
+                        }}
+                        className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                        title="Edit"
+                      >
+                        <FileText className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteStaffOverride(o.id)}
+                        className="p-1.5 text-red-600 hover:bg-red-50 rounded transition-colors"
+                        title="Delete"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

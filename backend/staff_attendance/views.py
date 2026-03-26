@@ -18,8 +18,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import PermissionDenied
 from accounts.models import User
-from .models import AttendanceRecord, UploadLog, HalfDayRequest, Holiday, AttendanceSettings, DepartmentAttendanceSettings, SpecialDepartmentDateAttendanceLimit
-from .serializers import AttendanceRecordSerializer, UploadLogSerializer, CSVUploadSerializer, HalfDayRequestSerializer, HalfDayRequestCreateSerializer, HalfDayRequestReviewSerializer, HolidaySerializer, HolidayCreateSerializer, AttendanceSettingsSerializer, DepartmentAttendanceSettingsSerializer, SpecialDepartmentDateAttendanceLimitSerializer
+from .models import AttendanceRecord, UploadLog, HalfDayRequest, Holiday, AttendanceSettings, DepartmentAttendanceSettings, SpecialDepartmentDateAttendanceLimit, StaffAttendanceTimeLimitOverride
+from .serializers import AttendanceRecordSerializer, UploadLogSerializer, CSVUploadSerializer, HalfDayRequestSerializer, HalfDayRequestCreateSerializer, HalfDayRequestReviewSerializer, HolidaySerializer, HolidayCreateSerializer, AttendanceSettingsSerializer, DepartmentAttendanceSettingsSerializer, SpecialDepartmentDateAttendanceLimitSerializer, StaffAttendanceTimeLimitOverrideSerializer
 from .permissions import StaffAttendanceViewPermission, StaffAttendanceUploadPermission, StaffAttendanceConfigPermission
 
 
@@ -2698,6 +2698,130 @@ class DepartmentAttendanceSettingsViewSet(viewsets.ModelViewSet):
                 {'message': 'No department-specific settings found. Using global defaults.'},
                 status=status.HTTP_404_NOT_FOUND
             )
+
+
+class StaffAttendanceTimeLimitOverrideViewSet(viewsets.ModelViewSet):
+    """Manage staff-specific attendance time limits (PS/HR/Admin).
+
+    Each staff can have at most one override row.
+    """
+
+    queryset = StaffAttendanceTimeLimitOverride.objects.all().select_related(
+        'user',
+        'user__staff_profile',
+        'user__staff_profile__department',
+        'created_by',
+        'updated_by',
+    )
+    serializer_class = StaffAttendanceTimeLimitOverrideSerializer
+    permission_classes = [StaffAttendanceConfigPermission]
+    filterset_fields = ['enabled', 'user']
+    ordering_fields = ['updated_at', 'created_at', 'id']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        department_id = self.request.query_params.get('department_id')
+        q = (self.request.query_params.get('q') or '').strip()
+
+        if department_id:
+            qs = qs.filter(user__staff_profile__department_id=department_id)
+
+        if q:
+            qs = qs.filter(
+                Q(user__username__icontains=q) |
+                Q(user__first_name__icontains=q) |
+                Q(user__last_name__icontains=q) |
+                Q(user__staff_profile__staff_id__icontains=q)
+            )
+
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user, updated_by=self.request.user)
+
+    def perform_update(self, serializer):
+        serializer.save(updated_by=self.request.user)
+
+    @action(detail=False, methods=['get'], permission_classes=[StaffAttendanceConfigPermission])
+    def staff_options(self, request):
+        """List staff options for picker, with optional department filter and query.
+
+        Query params:
+        - department_id: filter staff_profile.department
+        - q: matches staff_id / username / first/last name
+        """
+        department_id = request.query_params.get('department_id')
+        q = (request.query_params.get('q') or '').strip()
+
+        users = User.objects.filter(is_active=True, staff_profile__isnull=False).select_related(
+            'staff_profile',
+            'staff_profile__department'
+        )
+        if department_id:
+            users = users.filter(staff_profile__department_id=department_id)
+
+        if q:
+            users = users.filter(
+                Q(username__icontains=q) |
+                Q(first_name__icontains=q) |
+                Q(last_name__icontains=q) |
+                Q(staff_profile__staff_id__icontains=q)
+            )
+
+        users = users.order_by('staff_profile__staff_id', 'username')[:50]
+
+        results = []
+        for u in users:
+            profile = getattr(u, 'staff_profile', None)
+            dept = getattr(profile, 'department', None) if profile else None
+            full_name = f"{u.first_name} {u.last_name}".strip() or u.username
+            results.append({
+                'user_id': u.id,
+                'username': u.username,
+                'full_name': full_name,
+                'staff_id': getattr(profile, 'staff_id', None) if profile else None,
+                'department': {
+                    'id': getattr(dept, 'id', None),
+                    'code': getattr(dept, 'code', None),
+                    'short_name': getattr(dept, 'short_name', None),
+                    'name': getattr(dept, 'name', None),
+                } if dept else None,
+            })
+
+        return Response(results)
+
+    @action(detail=False, methods=['post'], permission_classes=[StaffAttendanceConfigPermission])
+    def upsert(self, request):
+        """Create or update a staff override by user.
+
+        Payload:
+        - user: user id
+        - attendance_in_time_limit (HH:MM:SS)
+        - attendance_out_time_limit (HH:MM:SS)
+        - mid_time_split (HH:MM:SS)
+        - apply_time_based_absence (bool)
+        - enabled (bool)
+        """
+        user_id = request.data.get('user')
+        if not user_id:
+            return Response({'error': 'user is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            target_user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        instance = StaffAttendanceTimeLimitOverride.objects.filter(user=target_user).first()
+        if instance:
+            serializer = self.get_serializer(instance, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save(updated_by=request.user)
+            return Response(serializer.data)
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(user=target_user, created_by=request.user, updated_by=request.user)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 class SpecialDepartmentDateAttendanceLimitViewSet(viewsets.ModelViewSet):
