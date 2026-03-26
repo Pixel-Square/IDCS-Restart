@@ -3870,6 +3870,7 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
 
                 # ── Daily-attendance override ──────────────────────────────────────────
                 # If the student has a daily attendance record for this section/date:
+                #   A (Absent)  → force 'A' status (locked; cannot change)
                 #   OD / LEAVE  → force the same status (locked; cannot differ per period)
                 #   LATE        → force Present ('P') for every period
                 # Any other daily status leaves the submitted status_val unchanged.
@@ -3880,9 +3881,18 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                         section_id=session.section_id, date=session.date
                     ).first()
                     if _daily_session:
+                        # Check if daily attendance session is locked - if so, prevent saving period attendance
+                        if _daily_session.is_locked:
+                            # Skip this record - daily attendance is locked, cannot modify period records
+                            continue
+                        
                         _daily_rec = _DAR.objects.filter(session=_daily_session, student=stu).first()
                         if _daily_rec:
-                            if _daily_rec.status in ('OD', 'LEAVE'):
+                            if _daily_rec.status == 'A':
+                                # Force Absent when daily attendance is Absent
+                                status_val = 'A'
+                                daily_override = 'ABSENT'
+                            elif _daily_rec.status in ('OD', 'LEAVE'):
                                 status_val = _daily_rec.status
                                 daily_override = _daily_rec.status
                             elif _daily_rec.status == 'LATE':
