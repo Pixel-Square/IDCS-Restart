@@ -53,7 +53,7 @@ REVOKE ALL ON SCHEMA public FROM pbi_readonly;
 ## 4) Connection details to share with Power BI users
 
 - Host: database host/IP reachable from user machine
-- Port: DB port (current env indicates 6432)
+- Port: DB port (current env indicates 5432)
 - Database: `college_erp`
 - Username: `pbi_readonly`
 - Tables/Views to select:

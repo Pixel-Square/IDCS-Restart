@@ -42,7 +42,7 @@ In Power BI Desktop:
    - reporting.vw_marks_project_lab
 
 Note:
-- Port 6432 is commonly PgBouncer. If you must use 6432, add `pbi_readonly` to PgBouncer auth/userlist and reload PgBouncer first.
+- Use port 5432 for direct PostgreSQL connections in this setup.
 - If PgBouncer userlist is not updated, `password authentication failed` can happen even when PostgreSQL role/password is correct.
 
 ## 4) Migrate existing Excel-based PBIX with minimal break

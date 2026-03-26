@@ -435,6 +435,8 @@ export default function FeedbackPage() {
   });
   const [loadingClassOptions, setLoadingClassOptions] = useState(false);
   const [classOptionsError, setClassOptionsError] = useState<string | null>(null);
+  const [sectionOptions, setSectionOptions] = useState<ClassOption[]>([]);
+  const [sectionOptionsLoading, setSectionOptionsLoading] = useState(false);
   const [yearDropdownOpen, setYearDropdownOpen] = useState(false);
   const [sectionDropdownOpen, setSectionDropdownOpen] = useState(false);
 
@@ -464,6 +466,7 @@ export default function FeedbackPage() {
   const [loadingResponseView, setLoadingResponseView] = useState(false);
   const [responseViewError, setResponseViewError] = useState<string | null>(null);
   const [exportingFormId, setExportingFormId] = useState<number | null>(null);
+  const [exportingSubjectWiseReport, setExportingSubjectWiseReport] = useState(false);
   const [deactivatingAllForms, setDeactivatingAllForms] = useState(false);
   const [activatingAllForms, setActivatingAllForms] = useState(false);
 
@@ -486,6 +489,31 @@ export default function FeedbackPage() {
   const [commonExportDeptDropdownOpen, setCommonExportDeptDropdownOpen] = useState(false);
   const [commonExportYearDropdownOpen, setCommonExportYearDropdownOpen] = useState(false);
   
+  // Subject Wise Report modal state
+  const [subjectWiseReportOpen, setSubjectWiseReportOpen] = useState(false);
+  const [subjectWiseReportLoading, setSubjectWiseReportLoading] = useState(false);
+  const [subjectWiseReportDownloading, setSubjectWiseReportDownloading] = useState(false);
+  const [subjectWiseReportError, setSubjectWiseReportError] = useState<string | null>(null);
+  const [subjectWiseReportOptions, setSubjectWiseReportOptions] = useState<{
+    departments: { id: number; code: string; short_name: string; name: string }[];
+  } | null>(null);
+  const [subjectWiseReportAllDepartments, setSubjectWiseReportAllDepartments] = useState(true);
+  const [subjectWiseReportSelectedDepartmentIds, setSubjectWiseReportSelectedDepartmentIds] = useState<number[]>([]);
+  const [subjectWiseReportAllYears, setSubjectWiseReportAllYears] = useState(true);
+  const [subjectWiseReportSelectedYears, setSubjectWiseReportSelectedYears] = useState<number[]>([]);
+  const [subjectWiseReportYears, setSubjectWiseReportYears] = useState<number[]>([1, 2, 3, 4]);
+  const [subjectWiseReportYearsLoading, setSubjectWiseReportYearsLoading] = useState(false);
+  const [subjectWiseReportDeptDropdownOpen, setSubjectWiseReportDeptDropdownOpen] = useState(false);
+  const [subjectWiseReportYearDropdownOpen, setSubjectWiseReportYearDropdownOpen] = useState(false);
+  
+  // Subject filter state
+  const [subjectWiseReportSubjects, setSubjectWiseReportSubjects] = useState<{ code: string; name: string }[]>([]);
+  const [subjectWiseReportSubjectsLoading, setSubjectWiseReportSubjectsLoading] = useState(false);
+  const [subjectWiseReportAllSubjects, setSubjectWiseReportAllSubjects] = useState(true);
+  const [subjectWiseReportSelectedSubjectCodes, setSubjectWiseReportSelectedSubjectCodes] = useState<string[]>([]);
+  const [subjectWiseReportSubjectDropdownOpen, setSubjectWiseReportSubjectDropdownOpen] = useState(false);
+  const subjectWiseReportSubjectDropdownRef = useRef<HTMLDivElement>(null);
+  
   // Deactivated forms accordion state
   const [showDeactivatedForms, setShowDeactivatedForms] = useState(false);
 
@@ -497,6 +525,9 @@ export default function FeedbackPage() {
 
   const commonExportDeptDropdownRef = useRef<HTMLDivElement>(null);
   const commonExportYearDropdownRef = useRef<HTMLDivElement>(null);
+
+  const subjectWiseReportDeptDropdownRef = useRef<HTMLDivElement>(null);
+  const subjectWiseReportYearDropdownRef = useRef<HTMLDivElement>(null);
 
   // Subjects by year state (for HOD form creation)
   const [subjectsByYear, setSubjectsByYear] = useState<{
@@ -646,6 +677,10 @@ export default function FeedbackPage() {
 
   // Helper function to get available sections based on selected years
   const getAvailableSections = (): ClassOption[] => {
+    if (sectionOptions.length > 0) {
+      return [...sectionOptions].sort((a, b) => (a.display_name || a.label).localeCompare(b.display_name || b.label));
+    }
+
     if (isIQACUser) {
       return (classOptions.sections || []).sort((a, b) => (a.display_name || a.label).localeCompare(b.display_name || b.label));
     }
@@ -673,6 +708,17 @@ export default function FeedbackPage() {
   // Note: Semester selection removed - backend will automatically determine
   // the current semester based on the active academic year parity
 
+  const hasDepartmentSelectionForSections = (() => {
+    if (isIQACUser) {
+      return iqacSelectedDepartmentIds.length > 0;
+    }
+    if (departmentData && departmentData.has_multiple_departments) {
+      if (allDepartmentsSelected) return true;
+      return selectedDepartments.length > 0;
+    }
+    return !!activeDepartment;
+  })();
+
   // Close dropdowns when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -694,6 +740,16 @@ export default function FeedbackPage() {
       }
       if (commonExportYearDropdownRef.current && !commonExportYearDropdownRef.current.contains(event.target as Node)) {
         setCommonExportYearDropdownOpen(false);
+      }
+
+      if (subjectWiseReportDeptDropdownRef.current && !subjectWiseReportDeptDropdownRef.current.contains(event.target as Node)) {
+        setSubjectWiseReportDeptDropdownOpen(false);
+      }
+      if (subjectWiseReportYearDropdownRef.current && !subjectWiseReportYearDropdownRef.current.contains(event.target as Node)) {
+        setSubjectWiseReportYearDropdownOpen(false);
+      }
+      if (subjectWiseReportSubjectDropdownRef.current && !subjectWiseReportSubjectDropdownRef.current.contains(event.target as Node)) {
+        setSubjectWiseReportSubjectDropdownOpen(false);
       }
     };
 
@@ -1045,7 +1101,7 @@ export default function FeedbackPage() {
       setSelectedDepartments([]);
       setAllDepartmentsSelected(false);
     }
-  }, [showCreateForm, departmentData, editingFormId, formData.department, formData.years, isIQACUser]);
+  }, [showCreateForm, departmentData, editingFormId, formData.department, isIQACUser]);
 
   // Fetch class options function (extracted for reuse)
   const fetchClassOptions = async (deptIds?: number[], selectedYears?: number[]) => {
@@ -1099,22 +1155,99 @@ export default function FeedbackPage() {
     }
   }, [user, canCreateFeedback]);
 
-  // Refresh section options when years change during form creation.
+  // Load sections dynamically when department or years change during form creation
   useEffect(() => {
     if (!showCreateForm || !canCreateFeedback || formData.target_type !== 'STUDENT') {
       return;
     }
 
-    const deptIds = (isIQACUser && allDepartmentsSelected)
-      ? undefined
-      : selectedDepartments.length > 0
-        ? selectedDepartments
-        : activeDepartment
-          ? [activeDepartment.id]
-          : undefined;
+    let deptIds: number[] = [];
 
-    fetchClassOptions(deptIds, formData.years);
-  }, [showCreateForm, canCreateFeedback, formData.target_type, formData.years, selectedDepartments, activeDepartment, isIQACUser, allDepartmentsSelected]);
+    if (isIQACUser) {
+      if (iqacSelectedDepartmentIds.length === 0) {
+        setSectionOptions([]);
+        setFormData(prev => ({ ...prev, sections: [] }));
+        return;
+      }
+      deptIds = iqacSelectedDepartmentIds;
+    } else if (departmentData && departmentData.has_multiple_departments) {
+      if (!allDepartmentsSelected && selectedDepartments.length === 0) {
+        setSectionOptions([]);
+        setFormData(prev => ({ ...prev, sections: [] }));
+        return;
+      }
+      if (allDepartmentsSelected) {
+        deptIds = departmentData.departments.map(d => d.id);
+      } else if (selectedDepartments.length > 0) {
+        deptIds = selectedDepartments;
+      } else if (activeDepartment) {
+        deptIds = [activeDepartment.id];
+      }
+    } else if (activeDepartment) {
+      deptIds = [activeDepartment.id];
+    } else {
+      setSectionOptions([]);
+      setFormData(prev => ({ ...prev, sections: [] }));
+      return;
+    }
+
+    if (deptIds.length === 0 || formData.years.length === 0) {
+      setSectionOptions([]);
+      setFormData(prev => ({ ...prev, sections: [] }));
+      return;
+    }
+
+    const loadSections = async () => {
+      try {
+        setSectionOptionsLoading(true);
+        const params = new URLSearchParams();
+        params.set('dept_ids', deptIds.join(','));
+        params.set('years', formData.years.join(','));
+
+        const response = await fetchWithAuth(`/api/sections/by-dept-year/?${params.toString()}`);
+        const data = await response.json().catch(() => []);
+
+        if (!response.ok || !Array.isArray(data)) {
+          setSectionOptions([]);
+          setFormData(prev => ({ ...prev, sections: [] }));
+          return;
+        }
+
+        const nextSections: ClassOption[] = data.map((s: any) => ({
+          value: s.id,
+          label: s.label || String(s.id),
+          display_name: s.label || String(s.id),
+          year: typeof s.year === 'number' ? s.year : undefined,
+          department_label: s.department_short_name || undefined,
+        }));
+
+        setSectionOptions(nextSections);
+        setFormData(prev => ({
+          ...prev,
+          sections: prev.sections.filter(secId => nextSections.some(opt => opt.value === secId)),
+        }));
+      } catch (error) {
+        console.error('Error loading sections by dept/year:', error);
+        setSectionOptions([]);
+        setFormData(prev => ({ ...prev, sections: [] }));
+      } finally {
+        setSectionOptionsLoading(false);
+      }
+    };
+
+    loadSections();
+  }, [
+    showCreateForm,
+    canCreateFeedback,
+    formData.target_type,
+    formData.years,
+    isIQACUser,
+    allDepartmentsSelected,
+    selectedDepartments,
+    iqacSelectedDepartmentIds,
+    activeDepartment,
+    departmentData,
+  ]);
 
   // Fetch subjects by year when creating Subject Feedback
   useEffect(() => {
@@ -1404,6 +1537,46 @@ export default function FeedbackPage() {
       alert(error?.message || 'Failed to export feedback responses');
     } finally {
       setExportingFormId(null);
+    }
+  };
+
+  const handleSubjectWiseReport = async (formId?: number) => {
+    setExportingSubjectWiseReport(true);
+    try {
+      const params = new URLSearchParams();
+      if (formId) params.append('form_id', formId.toString());
+      
+      const response = await fetchWithAuth(`/api/feedback/subject-wise-report/?${params}`);
+
+      if (!response.ok) {
+        let errorMessage = 'Failed to export subject wise report';
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData?.detail || errorMessage;
+        } catch {
+          // Keep fallback error message.
+        }
+        throw new Error(errorMessage);
+      }
+
+      const blob = await response.blob();
+      const contentDisposition = response.headers.get('Content-Disposition') || '';
+      const fileNameMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+      const fileName = fileNameMatch?.[1] || `Subject_Wise_Report_${new Date().toISOString().slice(0, 10)}.xlsx`;
+
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (error: any) {
+      console.error('[Feedback] Subject Wise Report export failed:', error);
+      alert(error?.message || 'Failed to export subject wise report');
+    } finally {
+      setExportingSubjectWiseReport(false);
     }
   };
 
@@ -1730,6 +1903,256 @@ export default function FeedbackPage() {
       setCommonExportError(error?.message || 'Failed to activate feedback forms');
     } finally {
       setActivatingAllForms(false);
+    }
+  };
+
+  // Subject Wise Report Modal Handlers
+  const openSubjectWiseReportModal = async () => {
+    setSubjectWiseReportOpen(true);
+    setSubjectWiseReportError(null);
+
+    if (subjectWiseReportOptions) return;
+    setSubjectWiseReportLoading(true);
+    try {
+      const res = await fetchWithAuth('/api/feedback/common-export/options/');
+      if (!res.ok) {
+        let msg = 'Failed to load options';
+        try {
+          const data = await res.json();
+          msg = data?.detail || msg;
+        } catch {
+          // ignore
+        }
+        throw new Error(msg);
+      }
+      const data = await res.json();
+      setSubjectWiseReportOptions(data);
+    } catch (e: any) {
+      setSubjectWiseReportError(e?.message || 'Failed to load options');
+    } finally {
+      setSubjectWiseReportLoading(false);
+    }
+  };
+
+  const closeSubjectWiseReport = () => {
+    setSubjectWiseReportOpen(false);
+    setSubjectWiseReportError(null);
+    setSubjectWiseReportAllDepartments(true);
+    setSubjectWiseReportAllYears(true);
+    setSubjectWiseReportSelectedYears([]);
+    setSubjectWiseReportDeptDropdownOpen(false);
+    setSubjectWiseReportYearDropdownOpen(false);
+  };
+
+  useEffect(() => {
+    if (!subjectWiseReportOpen) return;
+    if (!canDepartmentScopedCreate && !(permissions || []).includes('feedback.analytics_view')) return;
+
+    // Use predefined years [1, 2, 3, 4] for Subject Wise Report
+    setSubjectWiseReportYears([1, 2, 3, 4]);
+  }, [subjectWiseReportOpen, canDepartmentScopedCreate, permissions]);
+
+  useEffect(() => {
+    if (!subjectWiseReportOpen) return;
+    if (!subjectWiseReportAllDepartments) return;
+    const allIds = (subjectWiseReportOptions?.departments || []).map((d) => d.id);
+    setSubjectWiseReportSelectedDepartmentIds(allIds);
+  }, [subjectWiseReportOpen, subjectWiseReportAllDepartments, subjectWiseReportOptions]);
+
+  useEffect(() => {
+    if (!subjectWiseReportOpen) return;
+    if (!subjectWiseReportAllYears) return;
+    setSubjectWiseReportSelectedYears(subjectWiseReportYears);
+  }, [subjectWiseReportOpen, subjectWiseReportAllYears, subjectWiseReportYears]);
+
+  // Load subjects when departments or years change
+  useEffect(() => {
+    if (!subjectWiseReportOpen) return;
+    
+    const deptIds = subjectWiseReportAllDepartments
+      ? (subjectWiseReportOptions?.departments || []).map((d) => d.id)
+      : subjectWiseReportSelectedDepartmentIds;
+    
+    // Departments are required, years are optional
+    if (deptIds.length === 0) {
+      setSubjectWiseReportSubjects([]);
+      setSubjectWiseReportAllSubjects(true);
+      setSubjectWiseReportSelectedSubjectCodes([]);
+      return;
+    }
+    
+    const years = subjectWiseReportAllYears ? subjectWiseReportYears : subjectWiseReportSelectedYears;
+    
+    const loadSubjects = async () => {
+      setSubjectWiseReportSubjectsLoading(true);
+      setSubjectWiseReportSubjects([]);
+      try {
+        const params = new URLSearchParams();
+        deptIds.forEach((id) => params.append('dept_ids', id.toString()));
+        // Only add years parameter if years are selected
+        if (years.length > 0) {
+          years.forEach((year) => params.append('years', year.toString()));
+        }
+        
+        const res = await fetchWithAuth(`/api/feedback/subjects-filter/?${params.toString()}`);
+        if (!res.ok) {
+          let msg = 'Failed to load subjects';
+          try {
+            const data = await res.json();
+            msg = data?.detail || msg;
+          } catch {
+            // ignore
+          }
+          throw new Error(msg);
+        }
+        const data = await res.json();
+        const subjects = Array.isArray(data?.subjects) ? data.subjects : [];
+        setSubjectWiseReportSubjects(subjects);
+        setSubjectWiseReportAllSubjects(true);
+        setSubjectWiseReportSelectedSubjectCodes([]);
+      } catch (e: any) {
+        console.error('[SubjectWiseReport] Error loading subjects:', e);
+        setSubjectWiseReportSubjects([]);
+      } finally {
+        setSubjectWiseReportSubjectsLoading(false);
+      }
+    };
+    
+    loadSubjects();
+  }, [subjectWiseReportOpen, subjectWiseReportAllDepartments, subjectWiseReportSelectedDepartmentIds, subjectWiseReportAllYears, subjectWiseReportSelectedYears, subjectWiseReportOptions]);
+
+  const toggleSubjectWiseReportDepartmentId = (deptId: number) => {
+    const allIds = (subjectWiseReportOptions?.departments || []).map((d) => d.id);
+    if (subjectWiseReportAllDepartments) {
+      setSubjectWiseReportAllDepartments(false);
+      setSubjectWiseReportSelectedDepartmentIds(allIds.filter((id) => id !== deptId));
+      return;
+    }
+
+    setSubjectWiseReportSelectedDepartmentIds((prev) => {
+      if (prev.includes(deptId)) {
+        return prev.filter((id) => id !== deptId);
+      }
+      return [...prev, deptId];
+    });
+  };
+
+  const toggleSubjectWiseReportYearValue = (yearValue: number) => {
+    if (subjectWiseReportAllYears) {
+      setSubjectWiseReportAllYears(false);
+      setSubjectWiseReportSelectedYears(subjectWiseReportYears.filter((y) => y !== yearValue));
+      return;
+    }
+
+    setSubjectWiseReportSelectedYears((prev) => {
+      if (prev.includes(yearValue)) {
+        return prev.filter((y) => y !== yearValue);
+      }
+      return [...prev, yearValue].sort((a, b) => a - b);
+    });
+  };
+
+  const getSubjectWiseReportDepartmentSummary = () => {
+    if (subjectWiseReportAllDepartments) return 'All Departments Selected';
+    const count = subjectWiseReportSelectedDepartmentIds.length;
+    if (count === 0) return 'Select Departments';
+    return `${count} Departments Selected`;
+  };
+
+  const getSubjectWiseReportYearSummary = () => {
+    if (subjectWiseReportAllYears) return 'All Years Selected';
+    const selected = [...subjectWiseReportSelectedYears].sort((a, b) => a - b);
+    if (selected.length === 0) return 'Select Years';
+    return selected.map((y) => 'Year ' + String(y)).join(', ');
+  };
+
+  const toggleSubjectWiseReportSubjectCode = (subjectCode: string) => {
+    if (subjectWiseReportAllSubjects) {
+      setSubjectWiseReportAllSubjects(false);
+      setSubjectWiseReportSelectedSubjectCodes(
+        subjectWiseReportSubjects.map((s) => s.code).filter((code) => code !== subjectCode)
+      );
+      return;
+    }
+
+    setSubjectWiseReportSelectedSubjectCodes((prev) => {
+      if (prev.includes(subjectCode)) {
+        return prev.filter((code) => code !== subjectCode);
+      }
+      return [...prev, subjectCode];
+    });
+  };
+
+  const getSubjectWiseReportSubjectSummary = () => {
+    if (subjectWiseReportSubjects.length === 0) return 'No Subjects Available';
+    if (subjectWiseReportAllSubjects) return 'All Subjects Selected';
+    const count = subjectWiseReportSelectedSubjectCodes.length;
+    if (count === 0) return 'Select Subjects';
+    return `${count} Subjects Selected`;
+  };
+
+  const handleDownloadSubjectWiseReport = async () => {
+    if (!canDepartmentScopedCreate) return;
+    setSubjectWiseReportError(null);
+
+    if (!subjectWiseReportAllDepartments && subjectWiseReportSelectedDepartmentIds.length === 0) {
+      setSubjectWiseReportError('Select at least one department or choose All Departments.');
+      return;
+    }
+
+    if (!subjectWiseReportAllYears && subjectWiseReportSelectedYears.length === 0) {
+      setSubjectWiseReportError('Select at least one year or choose All Years.');
+      return;
+    }
+
+    setSubjectWiseReportError(null);
+    setSubjectWiseReportDownloading(true);
+    try {
+      const params = new URLSearchParams();
+      params.append('all_departments', String(subjectWiseReportAllDepartments));
+      if (!subjectWiseReportAllDepartments) {
+        subjectWiseReportSelectedDepartmentIds.forEach((id) => params.append('department_ids[]', String(id)));
+      }
+      if (!subjectWiseReportAllYears) {
+        subjectWiseReportSelectedYears.forEach((year) => params.append('years[]', String(year)));
+      }
+      if (!subjectWiseReportAllSubjects && subjectWiseReportSelectedSubjectCodes.length > 0) {
+        subjectWiseReportSelectedSubjectCodes.forEach((code) => params.append('subject_codes[]', code));
+      }
+
+      const res = await fetchWithAuth(`/api/feedback/bulk-subject-wise-report/?${params.toString()}`);
+
+      if (!res.ok) {
+        let errorMessage = 'Failed to generate subject wise report';
+        try {
+          const data = await res.json();
+          errorMessage = data?.detail || errorMessage;
+        } catch {
+          // Keep fallback message.
+        }
+        throw new Error(errorMessage);
+      }
+
+      const blob = await res.blob();
+      const contentDisposition = res.headers.get('Content-Disposition') || '';
+      const fileNameMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+      const fileName = fileNameMatch?.[1] || `Bulk_Subject_Wise_Report_${new Date().toISOString().slice(0, 10)}.xlsx`;
+
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+
+      showToast('Subject wise report downloaded successfully');
+      closeSubjectWiseReport();
+    } catch (e: any) {
+      setSubjectWiseReportError(e?.message || 'Failed to export subject wise report');
+    } finally {
+      setSubjectWiseReportDownloading(false);
     }
   };
 
@@ -2861,6 +3284,22 @@ export default function FeedbackPage() {
               <h2 className="text-xl font-semibold text-slate-800">
                 {editingFormId ? 'Edit Draft Feedback Form' : 'Create Feedback Form'}
               </h2>
+              {showCreateForm && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCreateForm(false);
+                    setEditingFormId(null);
+                    setFormData(getInitialFormData());
+                    setNewQuestion('');
+                    setSubmitError(null);
+                  }}
+                  className="px-3 py-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors flex items-center gap-1 text-sm font-medium"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                  Back
+                </button>
+              )}
               {!showCreateForm && (
                 <div className="relative group">
                   <button
@@ -3326,16 +3765,16 @@ export default function FeedbackPage() {
                             <button
                               type="button"
                               onClick={() => setSectionDropdownOpen(!sectionDropdownOpen)}
-                              disabled={(isIQACUser && allDepartmentsSelected) || formData.years.length === 0}
+                              disabled={!hasDepartmentSelectionForSections || formData.years.length === 0}
                               className={`w-full px-4 py-2 text-left border border-slate-300 rounded-lg bg-white hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 flex items-center justify-between ${
-                                ((isIQACUser && allDepartmentsSelected) || formData.years.length === 0) ? 'opacity-50 cursor-not-allowed' : ''
+                                (!hasDepartmentSelectionForSections || formData.years.length === 0) ? 'opacity-50 cursor-not-allowed' : ''
                               }`}
                             >
                               <span className="text-sm text-slate-700 truncate">
-                                {(isIQACUser && allDepartmentsSelected)
-                                  ? 'All Departments selected (sections disabled)'
-                                  : (formData.years.length === 0)
-                                  ? 'Select year(s) first...'
+                                {(!hasDepartmentSelectionForSections || formData.years.length === 0)
+                                  ? 'Select department and year first'
+                                  : sectionOptionsLoading
+                                  ? 'Loading sections...'
                                   : formData.sections.length === 0
                                   ? 'Select Sections...'
                                       : formData.sections
@@ -3349,7 +3788,7 @@ export default function FeedbackPage() {
                               <ChevronDown className={`w-4 h-4 text-slate-500 transition-transform flex-shrink-0 ml-2 ${sectionDropdownOpen ? 'rotate-180' : ''}`} />
                             </button>
 
-                            {sectionDropdownOpen && !((isIQACUser && allDepartmentsSelected) || formData.years.length === 0) && (
+                            {sectionDropdownOpen && hasDepartmentSelectionForSections && formData.years.length > 0 && (
                               <div className="absolute z-10 w-full mt-1 bg-white border border-slate-300 rounded-lg shadow-lg max-h-60 overflow-y-auto">
                                 <div className="p-2 space-y-1">
                                   {getAvailableSections().map((sec) => (
@@ -3852,6 +4291,17 @@ export default function FeedbackPage() {
                     >
                       <Download className="w-4 h-4" />
                       Common Export
+                    </button>
+                  )}
+
+                  {canDepartmentScopedCreate && (
+                    <button
+                      type="button"
+                      onClick={openSubjectWiseReportModal}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium flex items-center gap-2"
+                    >
+                      <Download className="w-4 h-4" />
+                      Subject Wise Report
                     </button>
                   )}
 
@@ -4453,6 +4903,258 @@ export default function FeedbackPage() {
                     : commonExportMode === 'ACTIVATE'
                       ? (activatingAllForms ? 'Activating...' : 'Activate')
                       : (commonExportDownloading ? 'Exporting...' : 'Export')}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Subject Wise Report Modal */}
+        {subjectWiseReportOpen && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg shadow-xl max-w-lg w-full">
+              <div className="p-5 border-b border-slate-200 flex items-center justify-between">
+                <h3 className="text-lg font-semibold text-slate-800">Subject Wise Report</h3>
+                <button
+                  type="button"
+                  onClick={closeSubjectWiseReport}
+                  className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+                >
+                  <X className="w-5 h-5 text-slate-600" />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4">
+                {subjectWiseReportError && (
+                  <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-800 flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 text-red-600 mt-0.5" />
+                    <span>{subjectWiseReportError}</span>
+                  </div>
+                )}
+
+                {subjectWiseReportLoading ? (
+                  <div className="flex items-center justify-center py-10">
+                    <Loader2 className="w-6 h-6 text-indigo-600 animate-spin" />
+                  </div>
+                ) : (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-2">Select Departments</label>
+                      <div ref={subjectWiseReportDeptDropdownRef} className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setSubjectWiseReportDeptDropdownOpen((v) => !v)}
+                          className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 flex items-center justify-between"
+                        >
+                          <span className="text-sm text-slate-700">{getSubjectWiseReportDepartmentSummary()}</span>
+                          <ChevronDown className={`w-4 h-4 text-slate-500 transition-transform ${subjectWiseReportDeptDropdownOpen ? 'rotate-180' : ''}`} />
+                        </button>
+
+                        {subjectWiseReportDeptDropdownOpen && (
+                          <div className="absolute z-50 mt-2 w-full bg-white border border-slate-200 rounded-lg shadow-lg p-3 max-h-60 overflow-auto">
+                            <label className="flex items-center gap-2 text-sm text-slate-700 select-none mb-2">
+                              <input
+                                type="checkbox"
+                                checked={subjectWiseReportAllDepartments}
+                                onChange={(e) => {
+                                  const next = e.target.checked;
+                                  if (next) {
+                                    const allIds = (subjectWiseReportOptions?.departments || []).map((d) => d.id);
+                                    setSubjectWiseReportAllDepartments(true);
+                                    setSubjectWiseReportSelectedDepartmentIds(allIds);
+                                  } else {
+                                    setSubjectWiseReportAllDepartments(false);
+                                    setSubjectWiseReportSelectedDepartmentIds([]);
+                                  }
+                                }}
+                                className="h-4 w-4 accent-indigo-600"
+                              />
+                              <span className="font-medium">All Departments</span>
+                            </label>
+
+                            {(subjectWiseReportOptions?.departments || []).length === 0 ? (
+                              <p className="text-sm text-slate-500 px-2 py-1">No departments available.</p>
+                            ) : (
+                              <div className="space-y-2">
+                                {(subjectWiseReportOptions?.departments || []).map((d) => {
+                                  const label = d.short_name || d.code || d.name;
+                                  const checked = subjectWiseReportSelectedDepartmentIds.includes(d.id) || subjectWiseReportAllDepartments;
+                                  return (
+                                    <label
+                                      key={d.id}
+                                      className="flex items-center gap-2 text-sm text-slate-700 px-2 py-1 rounded hover:bg-slate-50 select-none cursor-pointer"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onChange={() => toggleSubjectWiseReportDepartmentId(d.id)}
+                                        className="h-4 w-4 accent-indigo-600"
+                                      />
+                                      <span>{label}</span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-2">Select Years</label>
+                      <div ref={subjectWiseReportYearDropdownRef} className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setSubjectWiseReportYearDropdownOpen((v) => !v)}
+                          className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 flex items-center justify-between"
+                        >
+                          <span className="text-sm text-slate-700">{getSubjectWiseReportYearSummary()}</span>
+                          <ChevronDown className={`w-4 h-4 text-slate-500 transition-transform ${subjectWiseReportYearDropdownOpen ? 'rotate-180' : ''}`} />
+                        </button>
+
+                        {subjectWiseReportYearDropdownOpen && (
+                          <div className="absolute z-50 mt-2 w-full bg-white border border-slate-200 rounded-lg shadow-lg p-3 max-h-60 overflow-auto">
+                            <label className="flex items-center gap-2 text-sm text-slate-700 select-none mb-2">
+                              <input
+                                type="checkbox"
+                                checked={subjectWiseReportAllYears}
+                                onChange={(e) => {
+                                  const next = e.target.checked;
+                                  if (next) {
+                                    setSubjectWiseReportAllYears(true);
+                                    setSubjectWiseReportSelectedYears(subjectWiseReportYears);
+                                  } else {
+                                    setSubjectWiseReportAllYears(false);
+                                    setSubjectWiseReportSelectedYears([]);
+                                  }
+                                }}
+                                className="h-4 w-4 accent-indigo-600"
+                              />
+                              <span className="font-medium">All Years</span>
+                            </label>
+
+                            {subjectWiseReportYears.length === 0 ? (
+                              <p className="text-sm text-slate-500 px-2 py-1">No years available.</p>
+                            ) : (
+                              <div className="space-y-2">
+                                {subjectWiseReportYears.map((y) => {
+                                  const checked = subjectWiseReportSelectedYears.includes(y) || subjectWiseReportAllYears;
+                                  return (
+                                    <label
+                                      key={y}
+                                      className="flex items-center gap-2 text-sm text-slate-700 px-2 py-1 rounded hover:bg-slate-50 select-none cursor-pointer"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onChange={() => toggleSubjectWiseReportYearValue(y)}
+                                        className="h-4 w-4 accent-indigo-600"
+                                      />
+                                      <span>Year {y}</span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-2">Select Subjects</label>
+                      <div ref={subjectWiseReportSubjectDropdownRef} className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setSubjectWiseReportSubjectDropdownOpen((v) => !v)}
+                          disabled={subjectWiseReportSubjectsLoading || subjectWiseReportSubjects.length === 0}
+                          className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 flex items-center justify-between disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <span className="text-sm text-slate-700">
+                            {subjectWiseReportSubjectsLoading ? 'Loading subjects...' : getSubjectWiseReportSubjectSummary()}
+                          </span>
+                          <ChevronDown className={`w-4 h-4 text-slate-500 transition-transform ${subjectWiseReportSubjectDropdownOpen ? 'rotate-180' : ''}`} />
+                        </button>
+
+                        {subjectWiseReportSubjectDropdownOpen && (
+                          <div className="absolute z-50 mt-2 w-full bg-white border border-slate-200 rounded-lg shadow-lg p-3 max-h-60 overflow-auto">
+                            {subjectWiseReportSubjectsLoading ? (
+                              <div className="flex items-center justify-center py-4">
+                                <Loader2 className="w-4 h-4 text-indigo-600 animate-spin" />
+                              </div>
+                            ) : subjectWiseReportSubjects.length === 0 ? (
+                              <p className="text-sm text-slate-500 px-2 py-1">No subjects available.</p>
+                            ) : (
+                              <>
+                                <label className="flex items-center gap-2 text-sm text-slate-700 select-none mb-2">
+                                  <input
+                                    type="checkbox"
+                                    checked={subjectWiseReportAllSubjects}
+                                    onChange={(e) => {
+                                      const next = e.target.checked;
+                                      if (next) {
+                                        setSubjectWiseReportAllSubjects(true);
+                                        setSubjectWiseReportSelectedSubjectCodes([]);
+                                      } else {
+                                        setSubjectWiseReportAllSubjects(false);
+                                        setSubjectWiseReportSelectedSubjectCodes(subjectWiseReportSubjects.map((s) => s.code));
+                                      }
+                                    }}
+                                    className="h-4 w-4 accent-indigo-600"
+                                  />
+                                  <span className="font-medium">All Subjects</span>
+                                </label>
+                                <div className="space-y-2">
+                                  {subjectWiseReportSubjects.map((subject) => {
+                                    const checked = subjectWiseReportSelectedSubjectCodes.includes(subject.code) || subjectWiseReportAllSubjects;
+                                    return (
+                                      <label
+                                        key={subject.code}
+                                        className="flex items-center gap-2 text-sm text-slate-700 px-2 py-1 rounded hover:bg-slate-50 select-none cursor-pointer"
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          checked={checked}
+                                          onChange={() => toggleSubjectWiseReportSubjectCode(subject.code)}
+                                          className="h-4 w-4 accent-indigo-600"
+                                        />
+                                        <span>{subject.code} - {subject.name}</span>
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div className="p-5 border-t border-slate-200 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={closeSubjectWiseReport}
+                  disabled={subjectWiseReportDownloading}
+                  className="px-5 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadSubjectWiseReport}
+                  disabled={subjectWiseReportLoading || subjectWiseReportDownloading}
+                  className="bg-blue-600 hover:bg-blue-700 px-5 py-2 text-white rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
+                >
+                  {subjectWiseReportDownloading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Download className="w-4 h-4" />
+                  )}
+                  {subjectWiseReportDownloading ? 'Generating...' : 'Download'}
                 </button>
               </div>
             </div>

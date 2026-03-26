@@ -21,6 +21,9 @@ from .views import (
     IQACExportYearsView,
     IQACCommonExportView,
     FormExportExcelView,
+    SubjectWiseReportView,
+    BulkSubjectWiseReportView,
+    SubjectsFilterView,
     PrincipalCreateFeedbackView,
     PrincipalAnalyticsDashboardView,
     PrincipalFormAnalyticsView,
@@ -85,6 +88,15 @@ urlpatterns = [
     path('common-export/options/', IQACExportOptionsView.as_view(), name='common-export-options'),
     path('export-years/', IQACExportYearsView.as_view(), name='export-years'),
     path('common-export/', IQACCommonExportView.as_view(), name='common-export'),
+
+    # Subject Wise Report API
+    path('subject-wise-report/', SubjectWiseReportView.as_view(), name='subject-wise-report'),
+    
+    # Bulk Subject Wise Report API (with modal filters)
+    path('bulk-subject-wise-report/', BulkSubjectWiseReportView.as_view(), name='bulk-subject-wise-report'),
+    
+    # Subjects Filter API (for dynamic subject dropdown)
+    path('subjects-filter/', SubjectsFilterView.as_view(), name='subjects-filter'),
 
     # Principal integrated dashboard/analytics APIs
     path('principal/create/', PrincipalCreateFeedbackView.as_view(), name='principal-create'),

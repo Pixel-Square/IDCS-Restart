@@ -8,6 +8,7 @@ from erp import admin_views
 from django.conf.urls.static import static
 from django.http import HttpResponse
 from django.shortcuts import render
+from academics.views import SectionsByDeptYearView
 
 
 def welcome(request):
@@ -40,6 +41,8 @@ urlpatterns = [
     path('api/staff-salary/', include('staff_salary.urls')),
     path('api/idscan/', include('idcsscan.urls')),
     path('api/feedback/', include('feedback.urls')),
+    # Helper for feedback creation: sections filtered by department & year
+    path('api/sections/by-dept-year/', SectionsByDeptYearView.as_view()),
     path('api/announcements/', include('announcements.api_urls')),
     path('api/reporting/', include('reporting.urls')),
 ]

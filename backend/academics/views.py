@@ -1891,6 +1891,113 @@ class HODSectionsView(APIView):
         return Response({'results': results})
 
 
+class SectionsByDeptYearView(APIView):
+    """Return sections filtered by departments and years for feedback creation.
+
+    Response items are simple objects of the form:
+        {"id": <section_id>, "label": "DEPT - A - Year 3", "year": 3, "department_short_name": "DEPT"}
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        from .models import Section, AcademicYear
+
+        dept_ids_param = request.GET.get('dept_ids', '')
+        years_param = request.GET.get('years', '')
+
+        try:
+            dept_ids = [int(v) for v in dept_ids_param.split(',') if v.strip()]
+        except ValueError:
+            dept_ids = []
+
+        try:
+            years = [int(v) for v in years_param.split(',') if v.strip()]
+        except ValueError:
+            years = []
+
+        qs = Section.objects.select_related(
+            'batch',
+            'batch__course__department',
+            'batch__department',
+            'managing_department',
+        )
+
+        if dept_ids:
+            qs = qs.filter(
+                Q(batch__course__department_id__in=dept_ids) |
+                Q(batch__department_id__in=dept_ids) |
+                Q(managing_department_id__in=dept_ids)
+            )
+
+        current_acad_year = None
+        active_ay = AcademicYear.objects.filter(is_active=True).first()
+        if active_ay:
+            try:
+                current_acad_year = int(str(active_ay.name).split('-')[0])
+            except Exception:
+                current_acad_year = None
+
+        results = []
+
+        for sec in qs:
+            batch = getattr(sec, 'batch', None)
+            course = getattr(batch, 'course', None) if batch else None
+
+            dept = (
+                getattr(course, 'department', None)
+                if course is not None
+                else getattr(batch, 'department', None) if batch else None
+            ) or getattr(sec, 'managing_department', None)
+
+            dept_short = None
+            if dept is not None:
+                dept_short = getattr(dept, 'short_name', None) or getattr(dept, 'code', None) or getattr(dept, 'name', None)
+
+            student_year = None
+            if batch and getattr(batch, 'start_year', None) and current_acad_year:
+                try:
+                    delta = current_acad_year - int(batch.start_year)
+                    student_year = delta + 1
+                except Exception:
+                    student_year = None
+
+            if student_year is not None:
+                if student_year < 1 or student_year > 4:
+                    continue
+                if years and student_year not in years:
+                    continue
+            elif years:
+                # When year filter is supplied but we cannot compute year, skip.
+                continue
+
+            if dept_ids and dept is None:
+                continue
+
+            label_parts = []
+            if dept_short:
+                label_parts.append(dept_short)
+            label_parts.append(str(sec.name))
+            if student_year is not None:
+                label_parts.append(f"Year {student_year}")
+            # Use plain ASCII hyphens to avoid escaped unicode sequences like "\\u2013" in responses
+            label = " - ".join(label_parts)
+
+            results.append({
+                'id': sec.id,
+                'label': label,
+                'year': student_year,
+                'department_short_name': dept_short,
+            })
+
+        results.sort(key=lambda item: (
+            item.get('department_short_name') or '',
+            item.get('year') or 0,
+            item.get('label') or '',
+        ))
+
+        return Response(results)
+
+
 class HODStaffListView(APIView):
     permission_classes = (IsAuthenticated, IsHODOfDepartment)
 

@@ -4241,3 +4241,573 @@ class FormExportExcelView(APIView):
                 'detail': f'Error exporting feedback: {str(e)}'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+
+class SubjectWiseReportView(APIView):
+    """
+    API: Subject Wise Report
+    GET /api/feedback/subject-wise-report/
+    
+    Returns aggregated feedback report grouped by subject + staff.
+    Shows average rating and total rating count for each subject-staff combination.
+    Supports filtering by department_ids, years, and optionally form_id.
+    
+    Example response:
+    [
+        {
+            'subject_code': 'ADB1322',
+            'subject_name': 'Big Data Analytics',
+            'staff_name': 'Reetha Jeyarani',
+            'average_rating': 4.25,
+            'total_ratings': 63
+        }
+    ]
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        try:
+            scope = get_feedback_department_scope(request.user)
+            if not scope.get('allowed'):
+                return Response({
+                    'detail': 'You do not have permission to view feedback reports.'
+                }, status=status.HTTP_403_FORBIDDEN)
+            
+            # Get filter parameters
+            all_departments = request.GET.get('all_departments', 'false').lower() == 'true'
+            department_ids = request.GET.getlist('department_ids[]')
+            if not department_ids:
+                department_ids_str = request.GET.get('department_ids', '')
+                if department_ids_str:
+                    department_ids = [int(d) for d in department_ids_str.split(',') if d.strip()]
+            else:
+                department_ids = [int(d) for d in department_ids if d.strip()]
+            
+            years_str = request.GET.get('years', '')
+            years = [int(y) for y in years_str.split(',') if y.strip()] if years_str else []
+            
+            form_id = request.GET.get('form_id')
+            
+            # Start with responses that have ratings
+            qs = FeedbackResponse.objects.filter(
+                answer_star__isnull=False
+            ).select_related(
+                'feedback_form',
+                'feedback_form__department',
+                'user',
+                'teaching_assignment',
+                'teaching_assignment__subject',
+                'teaching_assignment__curriculum_row',
+                'teaching_assignment__elective_subject',
+                'teaching_assignment__staff',
+                'teaching_assignment__staff__user',
+                'teaching_assignment__section',
+                'teaching_assignment__section__batch'
+            ).prefetch_related(
+                'user__student_profile'
+            )
+            
+            # Apply department scope filter
+            qs = apply_department_scope_filter(qs, scope, field_name='feedback_form__department_id')
+            
+            # Filter by specific departments if requested
+            if not scope.get('all_departments'):
+                # Own-department users are already scoped
+                all_departments = True
+            
+            if not all_departments and department_ids:
+                qs = qs.filter(feedback_form__department_id__in=department_ids)
+            
+            # Filter by years if specified
+            if years:
+                year_filter = Q()
+                for year in years:
+                    year_filter |= Q(feedback_form__years__contains=[year])
+                    year_filter |= Q(feedback_form__year=year)
+                qs = qs.filter(year_filter)
+            
+            # Filter by form_id if specified
+            if form_id:
+                try:
+                    form_id = int(form_id)
+                    qs = qs.filter(feedback_form_id=form_id)
+                except (ValueError, TypeError):
+                    pass
+            
+            # Group by subject and staff, calculate average and count
+            from django.db.models import Avg, Count
+            
+            report_data = []
+            
+            # Create a dictionary to aggregate data (subject_code + staff_name -> data)
+            aggregated = {}
+            
+            for response in qs:
+                # Skip if no teaching assignment
+                if not response.teaching_assignment:
+                    continue
+                
+                ta = response.teaching_assignment
+                
+                # Get subject code and name
+                subject_code = None
+                subject_name = None
+                
+                if ta.curriculum_row:
+                    subject_code = ta.curriculum_row.course_code
+                    subject_name = ta.curriculum_row.course_name
+                elif ta.elective_subject:
+                    subject_code = ta.elective_subject.course_code
+                    subject_name = ta.elective_subject.course_name
+                elif ta.subject:
+                    subject_code = ta.subject.code
+                    subject_name = ta.subject.name
+                elif ta.custom_subject:
+                    subject_code = ta.custom_subject
+                    subject_name = ta.get_custom_subject_display()
+                
+                if not subject_code or not subject_name:
+                    continue
+                
+                # Get staff name
+                staff_name = None
+                if ta.staff and ta.staff.user:
+                    staff_name = ta.staff.user.get_full_name() or ta.staff.user.username
+                
+                if not staff_name:
+                    staff_name = "Unknown Staff"
+                
+                # Create a unique key
+                key = f"{subject_code}|{subject_name}|{staff_name}"
+                
+                # Initialize if not exists
+                if key not in aggregated:
+                    aggregated[key] = {
+                        'subject_code': subject_code,
+                        'subject_name': subject_name,
+                        'staff_name': staff_name,
+                        'ratings': []
+                    }
+                
+                # Add rating
+                aggregated[key]['ratings'].append(response.answer_star)
+            
+            # Calculate averages and counts
+            for key, data in aggregated.items():
+                if data['ratings']:
+                    total_ratings = len(data['ratings'])
+                    average_rating = sum(data['ratings']) / total_ratings
+                    # Round to 2 decimals
+                    average_rating = round(average_rating, 2)
+                    
+                    report_data.append({
+                        'subject_code': data['subject_code'],
+                        'subject_name': data['subject_name'],
+                        'staff_name': data['staff_name'],
+                        'average_rating': average_rating,
+                        'total_ratings': total_ratings
+                    })
+            
+            # Sort by subject name, then by staff name
+            report_data.sort(key=lambda x: (x['subject_name'], x['staff_name']))
+            
+            # Generate Excel file
+            import openpyxl
+            from io import BytesIO
+            
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = 'Subject Wise Report'
+            
+            # Add headers
+            headers = [
+                'Subject Code',
+                'Subject Name',
+                'Staff Name',
+                'Average Rating',
+                'Total Ratings'
+            ]
+            ws.append(headers)
+            
+            # Add data rows
+            for item in report_data:
+                ws.append([
+                    item['subject_code'],
+                    item['subject_name'],
+                    item['staff_name'],
+                    item['average_rating'],
+                    item['total_ratings']
+                ])
+            
+            # Adjust column widths
+            ws.column_dimensions['A'].width = 15
+            ws.column_dimensions['B'].width = 30
+            ws.column_dimensions['C'].width = 20
+            ws.column_dimensions['D'].width = 18
+            ws.column_dimensions['E'].width = 15
+            
+            # Save to bytes
+            output = BytesIO()
+            wb.save(output)
+            output.seek(0)
+            
+            # Return as file download
+            from django.http import FileResponse
+            from datetime import datetime
+            filename = f"Subject_Wise_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            response = FileResponse(
+                output,
+                content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+            response['Content-Disposition'] = f'attachment; filename="{filename}"'
+            return response
+            
+        except Exception as e:
+            logger.exception('[SubjectWiseReportView] ERROR')
+            return Response({
+                'detail': f'Error generating subject wise report: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class SubjectsFilterView(APIView):
+    """
+    API: Get Subjects for filtering
+    GET /api/feedback/subjects-filter/?dept_ids=1,2&years=2,3
+    
+    Returns distinct subjects from TeachingAssignment based on selected departments and years.
+    Independent of feedback submission status - returns all assigned subjects.
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        try:
+            scope = get_feedback_department_scope(request.user)
+            if not scope.get('allowed'):
+                return Response({
+                    'detail': 'You do not have permission to view feedback data.'
+                }, status=status.HTTP_403_FORBIDDEN)
+            
+            # Get filter parameters
+            dept_ids_str = request.GET.get('dept_ids', '')
+            dept_ids = [int(d) for d in dept_ids_str.split(',') if d.strip()] if dept_ids_str else []
+            
+            years_str = request.GET.get('years', '')
+            years = [int(y) for y in years_str.split(',') if y.strip()] if years_str else []
+            
+            # Query TeachingAssignment directly, not FeedbackResponse
+            # This returns all assigned subjects regardless of feedback submission status
+            from academics.models import TeachingAssignment
+            
+            qs = TeachingAssignment.objects.select_related(
+                'subject',
+                'curriculum_row',
+                'elective_subject',
+                'department'
+            )
+            
+            # Filter by specific departments if provided
+            if dept_ids:
+                qs = qs.filter(department_id__in=dept_ids)
+            
+            # Filter by years if provided
+            if years:
+                qs = qs.filter(year__in=years)
+            
+            # Get distinct subjects
+            subjects_data = []
+            seen_codes = set()
+            
+            # Use values_list to get distinct subjects efficiently
+            subjects_qs = qs.values_list(
+                'subject__code',
+                'subject__name',
+                'curriculum_row__course_code',
+                'curriculum_row__course_name',
+                'elective_subject__course_code',
+                'elective_subject__course_name'
+            ).distinct()
+            
+            for row in subjects_qs:
+                subject_code = row[0] or row[2] or row[4]  # subject code, curriculum code, or elective code
+                subject_name = row[1] or row[3] or row[5]   # subject name, curriculum name, or elective name
+                
+                if subject_code and subject_code not in seen_codes:
+                    seen_codes.add(subject_code)
+                    subjects_data.append({
+                        'code': subject_code,
+                        'name': subject_name or 'Unknown'
+                    })
+            
+            # Sort by name
+            subjects_data.sort(key=lambda x: x['name'])
+            
+            return Response({
+                'success': True,
+                'subjects': subjects_data
+            })
+            
+        except Exception as e:
+            logger.exception('[SubjectsFilterView] ERROR: %s', str(e))
+            return Response({
+                'detail': f'Error fetching subjects: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+
+class BulkSubjectWiseReportView(APIView):
+    """
+    API: Bulk Subject Wise Report (with modal filters)
+    GET /api/feedback/bulk-subject-wise-report/
+    
+    Returns aggregated feedback report grouped by department, year, staff, and subject.
+    Supports filtering by department_ids, years, and subject_codes.
+    
+    Query Parameters:
+    - all_departments=true/false
+    - department_ids[]=1,2,3
+    - years[]=1,2
+    - subject_codes[]=ADB1322,CS101 (optional)
+    
+    Output columns:
+    - Department
+    - Year
+    - Staff Name
+    - Subject Code
+    - Subject Name
+    - Total Students (Count of distinct students)
+    - Total Stars Given (Sum of all ratings)
+    - Average Rating (Avg of ratings, rounded to 2 decimals)
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        try:
+            from django.db.models import Sum, Count, Avg
+            
+            scope = get_feedback_department_scope(request.user)
+            if not scope.get('allowed'):
+                return Response({
+                    'detail': 'You do not have permission to view feedback reports.'
+                }, status=status.HTTP_403_FORBIDDEN)
+            
+            # Get filter parameters
+            all_departments = request.GET.get('all_departments', 'false').lower() == 'true'
+            
+            department_ids = request.GET.getlist('department_ids[]')
+            if not department_ids:
+                department_ids_str = request.GET.get('department_ids', '')
+                if department_ids_str:
+                    department_ids = [int(d) for d in department_ids_str.split(',') if d.strip()]
+            else:
+                department_ids = [int(d) for d in department_ids if d.strip()]
+            
+            years_str = request.GET.get('years', '')
+            years = [int(y) for y in years_str.split(',') if y.strip()] if years_str else []
+            
+            subject_codes = request.GET.getlist('subject_codes[]')
+            if not subject_codes:
+                subject_codes_str = request.GET.get('subject_codes', '')
+                if subject_codes_str:
+                    subject_codes = [s.strip() for s in subject_codes_str.split(',') if s.strip()]
+            
+            # Start with responses that have ratings
+            qs = FeedbackResponse.objects.filter(
+                answer_star__isnull=False
+            ).select_related(
+                'feedback_form',
+                'feedback_form__department',
+                'user',
+                'teaching_assignment',
+                'teaching_assignment__subject',
+                'teaching_assignment__curriculum_row',
+                'teaching_assignment__elective_subject',
+                'teaching_assignment__staff',
+                'teaching_assignment__staff__user'
+            ).prefetch_related(
+                'user__student_profile',
+                'feedback_form__years'
+            )
+            
+            # Apply department scope filter
+            qs = apply_department_scope_filter(qs, scope, field_name='feedback_form__department_id')
+            
+            # Filter by specific departments if requested
+            if not all_departments and department_ids:
+                qs = qs.filter(feedback_form__department_id__in=department_ids)
+            
+            # Filter by years if specified
+            if years:
+                year_filter = Q()
+                for year in years:
+                    year_filter |= Q(feedback_form__years__contains=[year])
+                qs = qs.filter(year_filter)
+            
+            # Build subject filter based on curriculum_row and elective_subject codes
+            if subject_codes:
+                subject_filter = Q()
+                subject_filter |= Q(teaching_assignment__curriculum_row__course_code__in=subject_codes)
+                subject_filter |= Q(teaching_assignment__elective_subject__course_code__in=subject_codes)
+                qs = qs.filter(subject_filter)
+            
+            # Process responses manually to handle department and year properly
+            report_data = []
+            processed_keys = set()
+            
+            for response in qs:
+                if not response.teaching_assignment:
+                    continue
+                
+                ta = response.teaching_assignment
+                
+                # Get department name
+                dept_name = response.feedback_form.department.name if response.feedback_form.department else 'Unknown'
+                
+                # Get year from form
+                form_years = response.feedback_form.years or [1]
+                years_to_process = years if years else form_years
+                
+                # Get staff name
+                if ta.staff and ta.staff.user:
+                    staff_name = ta.staff.user.get_full_name() or ta.staff.user.username
+                else:
+                    staff_name = 'Unknown Staff'
+                
+                # Get subject info
+                subject_code = None
+                subject_name = None
+                
+                if ta.curriculum_row:
+                    subject_code = ta.curriculum_row.course_code
+                    subject_name = ta.curriculum_row.course_name
+                elif ta.elective_subject:
+                    subject_code = ta.elective_subject.course_code
+                    subject_name = ta.elective_subject.course_name
+                elif ta.subject:
+                    subject_code = ta.subject.code
+                    subject_name = ta.subject.name
+                
+                if not subject_code:
+                    continue
+                
+                # Process each year
+                for year in years_to_process:
+                    if isinstance(year, (list, tuple)):
+                        year = year[0] if year else 1
+                    
+                    key = f"{dept_name}|{year}|{staff_name}|{subject_code}|{subject_name}"
+                    
+                    if key not in processed_keys:
+                        processed_keys.add(key)
+                        
+                        # Aggregate data for this combination
+                        subset = qs.filter(
+                            feedback_form__department_id=response.feedback_form.department_id,
+                            teaching_assignment__staff_id=ta.staff_id,
+                            teaching_assignment__curriculum_row_id=ta.curriculum_row_id if ta.curriculum_row else None,
+                            teaching_assignment__elective_subject_id=ta.elective_subject_id if ta.elective_subject else None
+                        )
+                        
+                        # Apply year filter to subset
+                        year_filter = Q(feedback_form__years__contains=[year])
+                        subset = subset.filter(year_filter)
+                        
+                        agg = subset.aggregate(
+                            total_students=Count('user_id', distinct=True),
+                            total_stars=Sum('answer_star'),
+                            avg_rating=Avg('answer_star')
+                        )
+                        
+                        total_students = agg.get('total_students') or 0
+                        total_stars = agg.get('total_stars') or 0
+                        avg_rating = agg.get('avg_rating') or 0
+                        
+                        if avg_rating:
+                            avg_rating = round(float(avg_rating), 2)
+                        
+                        report_data.append({
+                            'department': dept_name,
+                            'year': year,
+                            'staff_name': staff_name,
+                            'subject_code': subject_code,
+                            'subject_name': subject_name,
+                            'total_students': total_students,
+                            'total_stars': total_stars,
+                            'average_rating': avg_rating
+                        })
+            
+            # Remove duplicates and sort
+            final_data = []
+            seen = set()
+            for item in report_data:
+                key = (item['department'], item['year'], item['staff_name'], item['subject_code'])
+                if key not in seen:
+                    seen.add(key)
+                    final_data.append(item)
+            
+            final_data.sort(key=lambda x: (x['department'], x['year'], x['staff_name'], x['subject_name']))
+            
+            # Generate Excel file
+            import openpyxl
+            from io import BytesIO
+            
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = 'Subject Wise Report'
+            
+            # Add headers
+            headers = [
+                'Department',
+                'Year',
+                'Staff Name',
+                'Subject Code',
+                'Subject Name',
+                'Total Students',
+                'Total Stars',
+                'Average Rating'
+            ]
+            ws.append(headers)
+            
+            # Add data rows
+            for item in final_data:
+                ws.append([
+                    item['department'],
+                    f"Year {item['year']}" if isinstance(item['year'], int) else item['year'],
+                    item['staff_name'],
+                    item['subject_code'],
+                    item['subject_name'],
+                    item['total_students'],
+                    item['total_stars'],
+                    item['average_rating']
+                ])
+            
+            # Adjust column widths
+            ws.column_dimensions['A'].width = 20
+            ws.column_dimensions['B'].width = 10
+            ws.column_dimensions['C'].width = 20
+            ws.column_dimensions['D'].width = 15
+            ws.column_dimensions['E'].width = 25
+            ws.column_dimensions['F'].width = 16
+            ws.column_dimensions['G'].width = 14
+            ws.column_dimensions['H'].width = 16
+            
+            # Save to bytes
+            output = BytesIO()
+            wb.save(output)
+            output.seek(0)
+            
+            # Return as file download
+            from django.http import FileResponse
+            from datetime import datetime
+            filename = f"Subject_Wise_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            response = FileResponse(
+                output,
+                content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+            response['Content-Disposition'] = f'attachment; filename="{filename}"'
+            return response
+            
+        except Exception as e:
+            logger.exception('[BulkSubjectWiseReportView] ERROR')
+            return Response({
+                'detail': f'Error generating subject wise report: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
