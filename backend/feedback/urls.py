@@ -20,6 +20,7 @@ from .views import (
     IQACExportOptionsView,
     IQACExportYearsView,
     IQACCommonExportView,
+    NonRespondersExportView,
     FormExportExcelView,
     SubjectWiseReportView,
     BulkSubjectWiseReportView,
@@ -88,6 +89,7 @@ urlpatterns = [
     path('common-export/options/', IQACExportOptionsView.as_view(), name='common-export-options'),
     path('export-years/', IQACExportYearsView.as_view(), name='export-years'),
     path('common-export/', IQACCommonExportView.as_view(), name='common-export'),
+    path('non-responders-export/', NonRespondersExportView.as_view(), name='non-responders-export'),
 
     # Subject Wise Report API
     path('subject-wise-report/', SubjectWiseReportView.as_view(), name='subject-wise-report'),

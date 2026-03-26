@@ -3982,6 +3982,340 @@ class IQACCommonExportView(APIView):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+class NonRespondersExportView(APIView):
+    """
+    API: Export Non-Responded Students (Form-wise)
+    POST /api/feedback/non-responders-export/
+
+    Returns Excel file containing students who have not responded,
+    filtered by department and year.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            scope = get_feedback_department_scope(request.user)
+            if not scope.get('allowed'):
+                return Response({
+                    'detail': 'You do not have permission to export non-responders.'
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            all_departments = bool(request.data.get('all_departments', False))
+            department_ids = request.data.get('department_ids', []) or []
+            years = request.data.get('years', []) or []
+
+            try:
+                department_ids = [int(d) for d in department_ids if str(d).strip()]
+            except Exception:
+                department_ids = []
+            try:
+                years = [int(y) for y in years if str(y).strip()]
+            except Exception:
+                years = []
+
+            forms_qs = FeedbackForm.objects.filter(
+                target_type='STUDENT',
+                status='ACTIVE',
+            ).select_related('department', 'created_by')
+
+            forms_qs = apply_department_scope_filter(forms_qs, scope, field_name='department_id')
+
+            if not scope.get('all_departments'):
+                all_departments = True
+
+            if not all_departments and department_ids:
+                forms_qs = forms_qs.filter(department_id__in=department_ids)
+
+            # Do not pre-filter forms by form.year/years metadata.
+            # Some forms are section-targeted and may not carry complete year metadata;
+            # applying year at this stage can hide valid non-responders.
+            # Year filtering is applied later per-student (derived from section/batch).
+
+            from django.contrib.auth import get_user_model
+            from academics.models import Section, AcademicYear, Department
+            User = get_user_model()
+
+            # Resolve target departments for sheet creation (include zero-row departments).
+            target_department_ids = []
+            if scope.get('all_departments'):
+                if not all_departments and department_ids:
+                    target_department_ids = [int(d) for d in department_ids]
+                else:
+                    target_department_ids = list(Department.objects.values_list('id', flat=True).order_by('name'))
+            else:
+                scoped_ids = [int(d) for d in (scope.get('department_ids') or []) if d]
+                if not all_departments and department_ids:
+                    requested_ids = {int(d) for d in department_ids}
+                    target_department_ids = [d for d in scoped_ids if d in requested_ids]
+                else:
+                    target_department_ids = scoped_ids
+
+            target_departments = list(
+                Department.objects.filter(id__in=target_department_ids)
+                .values('id', 'name')
+                .order_by('name')
+            )
+            target_department_map = {int(d['id']): (d.get('name') or f"Department {d['id']}") for d in target_departments}
+
+            current_ay = AcademicYear.objects.filter(is_active=True).first()
+            current_acad_year = None
+            if current_ay:
+                try:
+                    current_acad_year = int(str(current_ay.name).split('-')[0])
+                except Exception:
+                    current_acad_year = None
+
+            def _student_year_from_section(section):
+                if not section or not current_acad_year:
+                    return None
+                try:
+                    batch = getattr(section, 'batch', None)
+                    start_year = getattr(batch, 'start_year', None) if batch else None
+                    if not start_year and batch:
+                        try:
+                            start_year = int(str(batch.name).split('-')[0])
+                        except Exception:
+                            start_year = None
+                    if not start_year:
+                        return None
+                    return int(current_acad_year) - int(start_year) + 1
+                except Exception:
+                    return None
+
+            non_responder_rows = []
+
+            for form in forms_qs.order_by('department__name', '-created_at', 'id'):
+                # Determine responded users per form using submission tracker first.
+                # This avoids counting partial/incomplete responses as submitted.
+                responded_user_ids = set(
+                    FeedbackFormSubmission.objects.filter(
+                        feedback_form=form,
+                        submission_status='SUBMITTED',
+                    ).values_list('user_id', flat=True)
+                )
+                if not responded_user_ids:
+                    # Backward-compatible fallback for legacy data without submission rows.
+                    responded_user_ids = set(
+                        FeedbackResponse.objects.filter(feedback_form=form)
+                        .values_list('user_id', flat=True)
+                        .distinct()
+                    )
+
+                expected_qs = User.objects.none()
+
+                # Robust department-scope fallback for legacy/student records where
+                # home_department may be missing or sections are linked via either
+                # batch.course.department or batch.department.
+                dept_students_qs = User.objects.filter(
+                    is_active=True,
+                    student_profile__status='ACTIVE',
+                ).filter(
+                    Q(student_profile__home_department_id=form.department_id)
+                    | Q(student_profile__section__batch__course__department_id=form.department_id)
+                    | Q(student_profile__section__batch__department_id=form.department_id)
+                )
+
+                if form.all_classes:
+                    expected_qs = dept_students_qs
+                else:
+                    sections_to_query = []
+
+                    if form.sections:
+                        sections_to_query = [int(s) for s in form.sections if str(s).strip()]
+                    elif form.section_id:
+                        sections_to_query = [int(form.section_id)]
+                    else:
+                        sections_filter = Q(
+                            Q(batch__course__department_id=form.department_id) |
+                            Q(batch__department_id=form.department_id)
+                        )
+
+                        if form.years:
+                            year_filters = Q()
+                            for year in form.years:
+                                if current_acad_year:
+                                    try:
+                                        batch_start_year = int(current_acad_year) - int(year) + 1
+                                        year_filters |= Q(batch__start_year=batch_start_year)
+                                        year_filters |= Q(batch__name__startswith=str(batch_start_year))
+                                    except Exception:
+                                        continue
+                            if year_filters:
+                                sections_filter &= year_filters
+                        elif form.year and current_acad_year:
+                            try:
+                                batch_start_year = int(current_acad_year) - int(form.year) + 1
+                                sections_filter &= (Q(batch__start_year=batch_start_year) | Q(batch__name__startswith=str(batch_start_year)))
+                            except Exception:
+                                pass
+
+                        if form.semesters:
+                            sections_filter &= Q(semester_id__in=form.semesters)
+                        elif form.semester_id:
+                            sections_filter &= Q(semester_id=form.semester_id)
+
+                        sections_to_query = list(
+                            Section.objects.filter(sections_filter).values_list('id', flat=True)
+                        )
+
+                    if sections_to_query:
+                        expected_qs = User.objects.filter(
+                            is_active=True,
+                            student_profile__status='ACTIVE',
+                            student_profile__section_id__in=sections_to_query,
+                        )
+                    else:
+                        # If a form has incomplete targeting metadata, fallback to
+                        # department students so 0-response forms are still represented.
+                        expected_qs = dept_students_qs
+
+                expected_qs = expected_qs.select_related(
+                    'student_profile',
+                    'student_profile__section',
+                    'student_profile__section__batch',
+                ).distinct()
+
+                if responded_user_ids:
+                    expected_qs = expected_qs.exclude(id__in=responded_user_ids)
+
+                for user in expected_qs:
+                    student_profile = getattr(user, 'student_profile', None)
+                    if not student_profile:
+                        continue
+
+                    student_year = _student_year_from_section(getattr(student_profile, 'section', None))
+                    if years and (student_year is None or int(student_year) not in years):
+                        continue
+
+                    section_name = ''
+                    if getattr(student_profile, 'section', None):
+                        section_name = student_profile.section.name or ''
+
+                    non_responder_rows.append({
+                        'department_id': form.department_id,
+                        'department': form.department.name if form.department else 'Unknown',
+                        'year': student_year,
+                        'form_id': form.id,
+                        'form_type': form.get_type_display(),
+                        'created_on': form.created_at.strftime('%Y-%m-%d'),
+                        'student_name': user.get_full_name() or user.username,
+                        'register_number': getattr(student_profile, 'reg_no', '') or user.username,
+                        'section': section_name,
+                    })
+
+            non_responder_rows.sort(
+                key=lambda r: (
+                    r['department'] or '',
+                    (r['year'] if isinstance(r['year'], int) else 99),
+                    r['form_id'],
+                    r['register_number'] or '',
+                )
+            )
+
+            import openpyxl
+            from io import BytesIO
+            from django.http import FileResponse
+            from collections import defaultdict
+
+            wb = openpyxl.Workbook()
+            default_ws = wb.active
+
+            headers = [
+                'Department',
+                'Year',
+                'Form ID',
+                'Form Type',
+                'Created On',
+                'Student Name',
+                'Register Number',
+                'Section',
+            ]
+
+            department_rows = defaultdict(list)
+            for row in non_responder_rows:
+                department_rows[row.get('department_id')].append(row)
+
+            def _safe_sheet_title(name, used_titles):
+                base = (str(name or 'Unknown').strip() or 'Unknown')[:31]
+                title = base
+                idx = 1
+                while title in used_titles:
+                    suffix = f"_{idx}"
+                    title = f"{base[:31-len(suffix)]}{suffix}"
+                    idx += 1
+                used_titles.add(title)
+                return title
+
+            used_titles = set()
+
+            if target_department_map or department_rows:
+                is_first = True
+                ordered_department_ids = [d['id'] for d in target_departments]
+                extra_department_ids = [dept_id for dept_id in sorted(department_rows.keys(), key=lambda x: (x is None, x)) if dept_id not in target_department_map]
+                ordered_department_ids.extend(extra_department_ids)
+
+                for dept_id in ordered_department_ids:
+                    dept_name = target_department_map.get(dept_id)
+                    if not dept_name:
+                        dept_name = 'Unknown Department'
+                        if dept_id is not None:
+                            dept_name = f"Department {dept_id}"
+
+                    ws = default_ws if is_first else wb.create_sheet()
+                    ws.title = _safe_sheet_title(dept_name, used_titles)
+                    is_first = False
+
+                    ws.append(headers)
+                    for row in department_rows.get(dept_id, []):
+                        ws.append([
+                            row['department'],
+                            f"Year {row['year']}" if isinstance(row['year'], int) else '',
+                            row['form_id'],
+                            row['form_type'],
+                            row['created_on'],
+                            row['student_name'],
+                            row['register_number'],
+                            row['section'],
+                        ])
+
+                    ws.column_dimensions['A'].width = 22
+                    ws.column_dimensions['B'].width = 10
+                    ws.column_dimensions['C'].width = 10
+                    ws.column_dimensions['D'].width = 20
+                    ws.column_dimensions['E'].width = 14
+                    ws.column_dimensions['F'].width = 26
+                    ws.column_dimensions['G'].width = 18
+                    ws.column_dimensions['H'].width = 12
+            else:
+                default_ws.title = 'Non Responders'
+                default_ws.append(headers)
+                default_ws.column_dimensions['A'].width = 22
+                default_ws.column_dimensions['B'].width = 10
+                default_ws.column_dimensions['C'].width = 10
+                default_ws.column_dimensions['D'].width = 20
+                default_ws.column_dimensions['E'].width = 14
+                default_ws.column_dimensions['F'].width = 26
+                default_ws.column_dimensions['G'].width = 18
+                default_ws.column_dimensions['H'].width = 12
+
+            output = BytesIO()
+            wb.save(output)
+            output.seek(0)
+
+            response = FileResponse(
+                output,
+                content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+            response['Content-Disposition'] = 'attachment; filename="Non_Responders_Report.xlsx"'
+            return response
+
+        except Exception as e:
+            logger.exception('[NonRespondersExportView] ERROR')
+            return Response({
+                'detail': f'Error exporting non-responders: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 class FormExportExcelView(APIView):
     """
     API: Export Form Responses to Excel
@@ -4564,7 +4898,7 @@ class BulkSubjectWiseReportView(APIView):
     Query Parameters:
     - all_departments=true/false
     - department_ids[]=1,2,3
-    - years[]=1,2
+    - years=1,2
     - subject_codes[]=ADB1322,CS101 (optional)
     
     Output columns:
@@ -4573,7 +4907,7 @@ class BulkSubjectWiseReportView(APIView):
     - Staff Name
     - Subject Code
     - Subject Name
-    - Total Students (Count of distinct students)
+    - Responded Students (distinct students who submitted responses)
     - Total Stars Given (Sum of all ratings)
     - Average Rating (Avg of ratings, rounded to 2 decimals)
     """
@@ -4582,6 +4916,7 @@ class BulkSubjectWiseReportView(APIView):
     def get(self, request):
         try:
             from django.db.models import Sum, Count, Avg
+            from academics.models import Department
             
             scope = get_feedback_department_scope(request.user)
             if not scope.get('allowed'):
@@ -4608,6 +4943,28 @@ class BulkSubjectWiseReportView(APIView):
                 subject_codes_str = request.GET.get('subject_codes', '')
                 if subject_codes_str:
                     subject_codes = [s.strip() for s in subject_codes_str.split(',') if s.strip()]
+
+            # Resolve target departments for sheet creation (include zero-response departments).
+            target_department_ids = []
+            if scope.get('all_departments'):
+                if not all_departments and department_ids:
+                    target_department_ids = [int(d) for d in department_ids]
+                else:
+                    target_department_ids = list(Department.objects.values_list('id', flat=True).order_by('name'))
+            else:
+                scoped_ids = [int(d) for d in (scope.get('department_ids') or []) if d]
+                if not all_departments and department_ids:
+                    requested_ids = {int(d) for d in department_ids}
+                    target_department_ids = [d for d in scoped_ids if d in requested_ids]
+                else:
+                    target_department_ids = scoped_ids
+
+            target_departments = list(
+                Department.objects.filter(id__in=target_department_ids)
+                .values('id', 'name')
+                .order_by('name')
+            )
+            target_department_map = {int(d['id']): (d.get('name') or f"Department {d['id']}") for d in target_departments}
             
             # Start with responses that have ratings
             qs = FeedbackResponse.objects.filter(
@@ -4623,8 +4980,7 @@ class BulkSubjectWiseReportView(APIView):
                 'teaching_assignment__staff',
                 'teaching_assignment__staff__user'
             ).prefetch_related(
-                'user__student_profile',
-                'feedback_form__years'
+                'user__student_profile'
             )
             
             # Apply department scope filter
@@ -4716,7 +5072,7 @@ class BulkSubjectWiseReportView(APIView):
                             avg_rating=Avg('answer_star')
                         )
                         
-                        total_students = agg.get('total_students') or 0
+                        responded_students = agg.get('total_students') or 0
                         total_stars = agg.get('total_stars') or 0
                         avg_rating = agg.get('avg_rating') or 0
                         
@@ -4724,12 +5080,13 @@ class BulkSubjectWiseReportView(APIView):
                             avg_rating = round(float(avg_rating), 2)
                         
                         report_data.append({
+                            'department_id': response.feedback_form.department_id,
                             'department': dept_name,
                             'year': year,
                             'staff_name': staff_name,
                             'subject_code': subject_code,
                             'subject_name': subject_name,
-                            'total_students': total_students,
+                            'responded_students': responded_students,
                             'total_stars': total_stars,
                             'average_rating': avg_rating
                         })
@@ -4750,9 +5107,7 @@ class BulkSubjectWiseReportView(APIView):
             from io import BytesIO
             
             wb = openpyxl.Workbook()
-            ws = wb.active
-            ws.title = 'Subject Wise Report'
-            
+
             # Add headers
             headers = [
                 'Department',
@@ -4760,34 +5115,80 @@ class BulkSubjectWiseReportView(APIView):
                 'Staff Name',
                 'Subject Code',
                 'Subject Name',
-                'Total Students',
+                'Responded Students',
                 'Total Stars',
                 'Average Rating'
             ]
-            ws.append(headers)
-            
-            # Add data rows
+
+            # Build one sheet per department in a single workbook
+            from collections import defaultdict
+            department_rows = defaultdict(list)
             for item in final_data:
-                ws.append([
-                    item['department'],
-                    f"Year {item['year']}" if isinstance(item['year'], int) else item['year'],
-                    item['staff_name'],
-                    item['subject_code'],
-                    item['subject_name'],
-                    item['total_students'],
-                    item['total_stars'],
-                    item['average_rating']
-                ])
-            
-            # Adjust column widths
-            ws.column_dimensions['A'].width = 20
-            ws.column_dimensions['B'].width = 10
-            ws.column_dimensions['C'].width = 20
-            ws.column_dimensions['D'].width = 15
-            ws.column_dimensions['E'].width = 25
-            ws.column_dimensions['F'].width = 16
-            ws.column_dimensions['G'].width = 14
-            ws.column_dimensions['H'].width = 16
+                department_rows[item.get('department_id')].append(item)
+
+            def _safe_sheet_title(name, used_titles):
+                base = (str(name or 'Unknown Department').strip() or 'Unknown Department')[:31]
+                title = base
+                idx = 1
+                while title in used_titles:
+                    suffix = f"_{idx}"
+                    title = f"{base[:31-len(suffix)]}{suffix}"
+                    idx += 1
+                used_titles.add(title)
+                return title
+
+            used_titles = set()
+            default_ws = wb.active
+
+            if target_department_map or department_rows:
+                is_first = True
+                ordered_department_ids = [d['id'] for d in target_departments]
+                extra_department_ids = [dept_id for dept_id in sorted(department_rows.keys(), key=lambda x: (x is None, x)) if dept_id not in target_department_map]
+                ordered_department_ids.extend(extra_department_ids)
+
+                for dept_id in ordered_department_ids:
+                    dept_name = target_department_map.get(dept_id)
+                    if not dept_name:
+                        dept_name = 'Unknown Department'
+                        if dept_id is not None:
+                            dept_name = f"Department {dept_id}"
+
+                    ws = default_ws if is_first else wb.create_sheet()
+                    ws.title = _safe_sheet_title(dept_name, used_titles)
+                    is_first = False
+
+                    ws.append(headers)
+                    for item in department_rows.get(dept_id, []):
+                        ws.append([
+                            item['department'],
+                            f"Year {item['year']}" if isinstance(item['year'], int) else item['year'],
+                            item['staff_name'],
+                            item['subject_code'],
+                            item['subject_name'],
+                            item['responded_students'],
+                            item['total_stars'],
+                            item['average_rating']
+                        ])
+
+                    ws.column_dimensions['A'].width = 20
+                    ws.column_dimensions['B'].width = 10
+                    ws.column_dimensions['C'].width = 20
+                    ws.column_dimensions['D'].width = 15
+                    ws.column_dimensions['E'].width = 25
+                    ws.column_dimensions['F'].width = 18
+                    ws.column_dimensions['G'].width = 14
+                    ws.column_dimensions['H'].width = 16
+            else:
+                default_ws.title = 'Subject Wise Report'
+                default_ws.append(headers)
+                default_ws.column_dimensions['A'].width = 20
+                default_ws.column_dimensions['B'].width = 10
+                default_ws.column_dimensions['C'].width = 20
+                default_ws.column_dimensions['D'].width = 15
+                default_ws.column_dimensions['E'].width = 25
+                default_ws.column_dimensions['F'].width = 18
+                default_ws.column_dimensions['G'].width = 14
+                default_ws.column_dimensions['H'].width = 16
             
             # Save to bytes
             output = BytesIO()
