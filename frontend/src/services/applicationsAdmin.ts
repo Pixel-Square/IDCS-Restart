@@ -51,8 +51,10 @@ export type RoleRow = { id: number; name: string; description?: string }
 export type FlowStepRow = {
   id: number
   order: number
-  role_id: number
+  role_id: number | null
   role_name: string | null
+  stage_id: number | null
+  stage_name: string | null
   sla_hours: number | null
   escalate_to_role_id: number | null
   escalate_to_role_name: string | null
@@ -78,6 +80,46 @@ export type RolePermissionRow = {
   role_name: string | null
   can_edit_all: boolean
   can_override_flow: boolean
+}
+
+export type RoleHierarchyRow = {
+  id: number
+  role_id: number
+  role_name: string | null
+  rank: number
+}
+
+export type RoleHierarchyStageRoleRow = {
+  id: number
+  role_id: number
+  role_name: string | null
+  rank: number
+}
+
+export type RoleHierarchyStageUserRow = {
+  id: number
+  user_id: number
+  username: string | null
+  name: string | null
+}
+
+export type RoleHierarchyStageRow = {
+  id: number
+  name: string
+  order: number
+  roles: RoleHierarchyStageRoleRow[]
+  users: RoleHierarchyStageUserRow[]
+}
+
+export type AdminUserSearchRow = {
+  user_id: number
+  username: string | null
+  email: string | null
+  name: string | null
+  mobile_no: string | null
+  reg_no: string | null
+  staff_id: string | null
+  profile_type: 'STUDENT' | 'STAFF' | null
 }
 
 export type SubmissionRow = {
@@ -197,6 +239,36 @@ export async function fetchApplicationRolePermissionsAdmin(typeId: number): Prom
 
 export async function saveApplicationRolePermissionsAdmin(typeId: number, items: Array<{ role_id: number; can_edit_all: boolean; can_override_flow: boolean }>): Promise<RolePermissionRow[]> {
   return parseJson(await fetchWithAuth(`/api/applications/admin/types/${encodeURIComponent(String(typeId))}/role-permissions/`, { method: 'PUT', body: JSON.stringify({ items }) }))
+}
+
+export async function fetchApplicationRoleHierarchyAdmin(typeId: number): Promise<RoleHierarchyRow[]> {
+  return parseJson(await fetchWithAuth(`/api/applications/admin/types/${encodeURIComponent(String(typeId))}/role-hierarchy/`))
+}
+
+export async function saveApplicationRoleHierarchyAdmin(typeId: number, items: Array<{ role_id: number; rank: number }>): Promise<RoleHierarchyRow[]> {
+  return parseJson(await fetchWithAuth(`/api/applications/admin/types/${encodeURIComponent(String(typeId))}/role-hierarchy/`, { method: 'PUT', body: JSON.stringify({ items }) }))
+}
+
+export async function fetchApplicationRoleHierarchyStagesAdmin(typeId: number): Promise<RoleHierarchyStageRow[]> {
+  return parseJson(await fetchWithAuth(`/api/applications/admin/types/${encodeURIComponent(String(typeId))}/role-hierarchy-stages/`))
+}
+
+export async function saveApplicationRoleHierarchyStagesAdmin(
+  typeId: number,
+  items: Array<{
+    id?: number
+    name: string
+    order: number
+    roles: Array<{ role_id: number; rank: number }>
+    users: Array<{ user_id?: number; username?: string }>
+  }>
+): Promise<RoleHierarchyStageRow[]> {
+  return parseJson(await fetchWithAuth(`/api/applications/admin/types/${encodeURIComponent(String(typeId))}/role-hierarchy-stages/`, { method: 'PUT', body: JSON.stringify({ items }) }))
+}
+
+export async function searchApplicationsAdminUsers(q: string): Promise<AdminUserSearchRow[]> {
+  const query = `?q=${encodeURIComponent(String(q || ''))}`
+  return parseJson(await fetchWithAuth(`/api/applications/admin/users/search/${query}`))
 }
 
 export async function fetchApplicationSubmissionsAdmin(typeId?: number | null): Promise<SubmissionRow[]> {

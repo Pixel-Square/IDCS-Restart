@@ -17,7 +17,11 @@ class ApprovalActionSerializer(serializers.ModelSerializer):
         return obj.step.order if obj.step else None
 
     def get_step_role(self, obj):
-        return obj.step.role.name if obj.step and obj.step.role else None
+        if not obj.step:
+            return None
+        if getattr(obj.step, 'stage_id', None):
+            return getattr(obj.step.stage, 'name', None)
+        return obj.step.role.name if obj.step.role else None
 
     def get_acted_by(self, obj):
         return obj.acted_by.username if obj.acted_by else None
@@ -37,7 +41,11 @@ class ApplicationApprovalHistorySerializer(serializers.ModelSerializer):
         return obj.step.order if obj.step else None
 
     def get_step_role(self, obj):
-        return obj.step.role.name if obj.step and obj.step.role else None
+        if not obj.step:
+            return None
+        if getattr(obj.step, 'stage_id', None):
+            return getattr(obj.step.stage, 'name', None)
+        return obj.step.role.name if obj.step.role else None
 
     def get_acted_by(self, obj):
         if not obj.acted_by:

@@ -204,6 +204,15 @@ class ApprovalStep(models.Model):
     order = models.PositiveIntegerField()
     role = models.ForeignKey(
         'accounts.Role',
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name='approval_steps'
+    )
+    stage = models.ForeignKey(
+        'applications.ApplicationRoleHierarchyStage',
+        null=True,
+        blank=True,
         on_delete=models.PROTECT,
         related_name='approval_steps'
     )
@@ -225,7 +234,14 @@ class ApprovalStep(models.Model):
         unique_together = (('approval_flow', 'order'),)
 
     def __str__(self):
-        return f"{self.approval_flow} - Step {self.order} ({self.role.name})"
+        label = None
+        if self.stage_id:
+            label = self.stage.name
+        elif self.role_id:
+            label = self.role.name
+        else:
+            label = 'Unassigned'
+        return f"{self.approval_flow} - Step {self.order} ({label})"
 
 
 class ApprovalAction(models.Model):
@@ -274,6 +290,98 @@ class RoleApplicationPermission(models.Model):
 
     def __str__(self):
         return f"{self.role.name} perms for {self.application_type.code}"
+
+
+class ApplicationRoleHierarchy(models.Model):
+    """Manual role priority override for flow starter selection.
+
+    Lower rank means higher priority.
+    When empty for a given application_type, the system falls back to the
+    default ordering defined in `applications.services.flow_selection`.
+    """
+
+    application_type = models.ForeignKey(
+        ApplicationType,
+        on_delete=models.CASCADE,
+        related_name='role_hierarchy',
+    )
+    role = models.ForeignKey(
+        'accounts.Role',
+        on_delete=models.CASCADE,
+        related_name='application_role_hierarchy',
+    )
+    rank = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        unique_together = (('application_type', 'role'),)
+        ordering = ('application_type', 'rank', 'role')
+
+    def __str__(self):
+        return f"{self.application_type.code}: {self.role.name} (rank {self.rank})"
+
+
+class ApplicationRoleHierarchyStage(models.Model):
+    """A stage (group) for manual role hierarchy configuration.
+
+    Stages are evaluated in ascending `order`.
+    A stage may contain:
+    - specific users (absolute override)
+    - a ranked list of roles
+    """
+
+    application_type = models.ForeignKey(
+        ApplicationType,
+        on_delete=models.CASCADE,
+        related_name='role_hierarchy_stages',
+    )
+    name = models.CharField(max_length=120, default='Stage')
+    order = models.PositiveIntegerField(default=1)
+
+    class Meta:
+        ordering = ('application_type', 'order', 'id')
+
+    def __str__(self):
+        return f"{self.application_type.code}: {self.name} (#{self.order})"
+
+
+class ApplicationRoleHierarchyStageRole(models.Model):
+    stage = models.ForeignKey(
+        ApplicationRoleHierarchyStage,
+        on_delete=models.CASCADE,
+        related_name='stage_roles',
+    )
+    role = models.ForeignKey(
+        'accounts.Role',
+        on_delete=models.CASCADE,
+        related_name='role_hierarchy_stage_roles',
+    )
+    rank = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        unique_together = (('stage', 'role'),)
+        ordering = ('stage', 'rank', 'role')
+
+    def __str__(self):
+        return f"{self.stage} -> {self.role.name} (rank {self.rank})"
+
+
+class ApplicationRoleHierarchyStageUser(models.Model):
+    stage = models.ForeignKey(
+        ApplicationRoleHierarchyStage,
+        on_delete=models.CASCADE,
+        related_name='stage_users',
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='application_role_hierarchy_stage_users',
+    )
+
+    class Meta:
+        unique_together = (('stage', 'user'),)
+
+    def __str__(self):
+        return f"{self.stage} -> {self.user}"
 
 
 class ApplicationFormVersion(models.Model):

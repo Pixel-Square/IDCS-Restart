@@ -310,7 +310,11 @@ class ApplicationListSerializer(serializers.ModelSerializer):
 
     def get_current_step_role(self, obj):
         step = approval_engine.get_current_approval_step(obj)
-        return step.role.name if step and step.role else None
+        if not step:
+            return None
+        if getattr(step, 'stage_id', None):
+            return getattr(step.stage, 'name', None)
+        return step.role.name if step.role else None
 
     def get_needs_gatepass_scan(self, obj):
         """True if this approved application requires an RFID gatepass exit scan."""
@@ -442,7 +446,11 @@ class ApplicationDetailSerializer(serializers.ModelSerializer):
 
     def get_current_step(self, obj):
         step = approval_engine.get_current_approval_step(obj)
-        return step.role.name if step and step.role else None
+        if not step:
+            return None
+        if getattr(step, 'stage_id', None):
+            return getattr(step.stage, 'name', None)
+        return step.role.name if step.role else None
 
     def get_approval_history(self, obj):
         actions = obj.actions.order_by('acted_at')
@@ -527,10 +535,14 @@ class ApplicationDetailSerializer(serializers.ModelSerializer):
         if not flow:
             # Fall back to returning just the existing actions when no flow
             result = []
-            for idx, action in enumerate(obj.actions.order_by('acted_at').select_related('step__role', 'acted_by')):
+            for idx, action in enumerate(obj.actions.order_by('acted_at').select_related('step__role', 'step__stage', 'acted_by')):
                 result.append({
                     'step_order': action.step.order if action.step else idx + 1,
-                    'step_role': action.step.role.name if action.step and action.step.role else None,
+                    'step_role': (
+                        getattr(action.step.stage, 'name', None)
+                        if action.step and getattr(action.step, 'stage_id', None)
+                        else (action.step.role.name if action.step and action.step.role else None)
+                    ),
                     'is_starter': idx == 0,
                     'is_final': False,
                     'status': 'SUBMITTED' if idx == 0 else action.action,
@@ -540,13 +552,13 @@ class ApplicationDetailSerializer(serializers.ModelSerializer):
                 })
             return result
 
-        steps = list(flow.steps.select_related('role').order_by('order'))
+        steps = list(flow.steps.select_related('role', 'stage').order_by('order'))
         if not steps:
             return []
 
         # Build a map: step_id -> ApprovalAction (latest per step)
         actions_by_step = {}
-        for action in obj.actions.order_by('acted_at').select_related('step__role', 'acted_by'):
+        for action in obj.actions.order_by('acted_at').select_related('step__role', 'step__stage', 'acted_by'):
             if action.step_id is not None:
                 actions_by_step[action.step_id] = action
 
@@ -562,7 +574,7 @@ class ApplicationDetailSerializer(serializers.ModelSerializer):
                 status = 'SUBMITTED' if is_starter else raw_status
                 result.append({
                     'step_order': step.order,
-                    'step_role': step.role.name if step.role else None,
+                    'step_role': getattr(step.stage, 'name', None) if getattr(step, 'stage_id', None) else (step.role.name if step.role else None),
                     'is_starter': is_starter,
                     'is_final': is_final,
                     'status': status,
@@ -573,7 +585,7 @@ class ApplicationDetailSerializer(serializers.ModelSerializer):
             else:
                 result.append({
                     'step_order': step.order,
-                    'step_role': step.role.name if step.role else None,
+                    'step_role': getattr(step.stage, 'name', None) if getattr(step, 'stage_id', None) else (step.role.name if step.role else None),
                     'is_starter': is_starter,
                     'is_final': is_final,
                     'status': 'PENDING',

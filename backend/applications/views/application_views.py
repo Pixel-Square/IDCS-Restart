@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from accounts.models import Role
 from applications import models as app_models
 from applications.serializers import (
     ApplicationCreateSerializer,
@@ -76,7 +77,65 @@ def _get_step_assignees(application: app_models.Application, step: app_models.Ap
     authority mappings (mentor map / department role etc). Fallback to listing
     all active users who explicitly hold the role.
     """
-    if application is None or step is None or step.role is None:
+    if application is None or step is None:
+        return []
+
+    # If step targets a stage, aggregate assignees from pinned users and each role in the stage.
+    if getattr(step, 'stage_id', None):
+        assignees: list[dict] = []
+        seen_user_ids: set[int] = set()
+
+        try:
+            pinned = (
+                app_models.ApplicationRoleHierarchyStageUser.objects
+                .filter(stage_id=step.stage_id)
+                .select_related('user')
+            )
+            for row in pinned:
+                u = row.user
+                if u is None or not getattr(u, 'is_active', True):
+                    continue
+                if getattr(u, 'id', None) in seen_user_ids:
+                    continue
+                name = (f"{getattr(u, 'first_name', '')} {getattr(u, 'last_name', '')}".strip() or getattr(u, 'username', '') or str(u))
+                payload = {'id': u.id, 'name': name, 'username': getattr(u, 'username', None)}
+                staff_profile = getattr(u, 'staff_profile', None)
+                staff_id = getattr(staff_profile, 'staff_id', None) if staff_profile is not None else None
+                if staff_id:
+                    payload['staff_id'] = staff_id
+                assignees.append(payload)
+                seen_user_ids.add(u.id)
+        except Exception:
+            pass
+
+        try:
+            role_ids = (
+                app_models.ApplicationRoleHierarchyStageRole.objects
+                .filter(stage_id=step.stage_id)
+                .values_list('role_id', flat=True)
+                .distinct()
+            )
+            roles = list(Role.objects.filter(id__in=list(role_ids)))
+
+            class _StepLike:
+                def __init__(self, role):
+                    self.role = role
+
+            for role in roles:
+                # Reuse existing resolver logic for each role.
+                for row in _get_step_assignees(application, _StepLike(role)):
+                    uid = row.get('id')
+                    if uid and uid in seen_user_ids:
+                        continue
+                    if uid:
+                        seen_user_ids.add(uid)
+                    assignees.append(row)
+        except Exception:
+            pass
+
+        return assignees
+
+    if step.role is None:
         return []
 
     try:
@@ -106,10 +165,18 @@ def _get_step_assignees(application: app_models.Application, step: app_models.Ap
 def _forwarded_to_payload(application):
     """Return forwarded_to dict based on the application's current step."""
     step = approval_engine.get_current_approval_step(application)
-    if step is None or step.role is None:
+    if step is None:
+        return None
+    label = None
+    if getattr(step, 'stage_id', None):
+        label = getattr(step.stage, 'name', None)
+    elif getattr(step, 'role_id', None):
+        label = step.role.name
+
+    if not label:
         return None
     return {
-        'role_name': step.role.name,
+        'role_name': label,
         'step_order': step.order,
         'is_final': step.is_final,
         'assignees': _get_step_assignees(application, step),
@@ -398,23 +465,58 @@ class CreateAndSubmitView(APIView):
             flow = approval_engine._get_flow_for_application(temp_app)
             if not flow:
                 return Response({'detail': 'No active approval flow configured for this application type.'}, status=status.HTTP_400_BAD_REQUEST)
-            starter_step = flow.steps.select_related('role').order_by('order').first()
-            starter_role = getattr(starter_step, 'role', None)
-            starter_role_name = (getattr(starter_role, 'name', '') or '').strip().upper()
-            if not starter_role_name:
+            starter_step = flow.steps.select_related('role', 'stage').order_by('order').first()
+            if starter_step is None:
+                return Response({'detail': 'Approval flow has no steps configured.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            starter_label = None
+            starter_roles = []
+            allowed = False
+            user_roles = list(request.user.roles.all())
+            
+            if getattr(starter_step, 'stage_id', None):
+                starter_label = getattr(starter_step.stage, 'name', None)
+                
+                # Check if user is explicitly pinned to this stage
+                try:
+                    if app_models.ApplicationRoleHierarchyStageUser.objects.filter(
+                        stage_id=starter_step.stage_id, user=request.user
+                    ).exists():
+                        allowed = True
+                except Exception:
+                    pass
+                
+                role_ids = (
+                    app_models.ApplicationRoleHierarchyStageRole.objects
+                    .filter(stage_id=starter_step.stage_id)
+                    .values_list('role_id', flat=True)
+                    .distinct()
+                )
+                starter_roles = list(Role.objects.filter(id__in=list(role_ids)))
+            elif getattr(starter_step, 'role_id', None):
+                starter_label = getattr(starter_step.role, 'name', None)
+                starter_roles = [starter_step.role]
+
+            if not starter_roles and not allowed:
                 return Response({'detail': 'Approval flow has no starter role configured.'}, status=status.HTTP_400_BAD_REQUEST)
 
-            user_roles = list(request.user.roles.all())
-            allowed = False
-            if starter_role is not None and starter_role in user_roles:
-                allowed = True
-            elif starter_role_name == 'STUDENT' and student_profile is not None:
-                allowed = True
-            elif starter_role_name == 'STAFF' and staff_profile is not None:
-                allowed = True
+            if not allowed:
+                for role in starter_roles:
+                    role_name = (getattr(role, 'name', '') or '').strip().upper()
+                    if not role_name:
+                        continue
+                    if role in user_roles:
+                        allowed = True
+                        break
+                    if role_name == 'STUDENT' and student_profile is not None:
+                        allowed = True
+                        break
+                    if role_name == 'STAFF' and staff_profile is not None:
+                        allowed = True
+                        break
 
             if not allowed:
-                return Response({'detail': f'Only {starter_role_name} can create this application.'}, status=status.HTTP_403_FORBIDDEN)
+                return Response({'detail': f'Only {starter_label or "starter role"} can create this application.'}, status=status.HTTP_403_FORBIDDEN)
 
             application = app_models.Application.objects.create(
                 application_type=app_type,
@@ -440,9 +542,28 @@ class CreateAndSubmitView(APIView):
             except Exception as exc:
                 return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
-            # Auto-advance step 1 if user's role matches it (e.g. STUDENT role = step 1)
+            # Auto-advance step 1 if user matches the step (role or stage)
             step1 = approval_engine.get_current_approval_step(application)
-            if step1 and step1.role in user_roles:
+            should_auto_advance = False
+            
+            if step1:
+                # 1. Direct role match
+                if getattr(step1, 'role', None) and step1.role in user_roles:
+                    should_auto_advance = True
+                # 2. Stage match (temporary/UI roles)
+                elif getattr(step1, 'stage_id', None):
+                    if app_models.ApplicationRoleHierarchyStageUser.objects.filter(
+                        stage_id=step1.stage_id, user=request.user
+                    ).exists():
+                        should_auto_advance = True
+                    else:
+                        role_ids = app_models.ApplicationRoleHierarchyStageRole.objects.filter(
+                            stage_id=step1.stage_id
+                        ).values_list('role_id', flat=True).distinct()
+                        if any(r.id in role_ids for r in user_roles):
+                            should_auto_advance = True
+
+            if should_auto_advance:
                 try:
                     application = approval_engine.process_approval(application, request.user, 'APPROVE')
                 except Exception:
@@ -518,19 +639,35 @@ class ApplicationStepInfoView(APIView):
 
         if current_step:
             is_final = current_step.is_final
+
+            current_label = ''
+            if getattr(current_step, 'stage_id', None):
+                current_label = getattr(current_step.stage, 'name', '') or ''
+            elif getattr(current_step, 'role_id', None):
+                current_label = current_step.role.name if current_step.role else ''
+
             current_step_data = {
                 'order': current_step.order,
-                'role_name': current_step.role.name if current_step.role else '',
+                'role_name': current_label,
                 'is_final': is_final,
             }
-            if next_step and next_step.role:
+
+            next_label = ''
+            if next_step:
+                if getattr(next_step, 'stage_id', None):
+                    next_label = getattr(next_step.stage, 'name', '') or ''
+                elif getattr(next_step, 'role_id', None):
+                    next_label = next_step.role.name if next_step.role else ''
+
                 next_step_data = {
                     'order': next_step.order,
-                    'role_name': next_step.role.name,
+                    'role_name': next_label,
                 }
-                forward_label = f'Forward to {next_step.role.name}'
-            elif is_final:
+
+            if is_final:
                 forward_label = 'Approve'
+            elif next_label:
+                forward_label = f'Forward to {next_label}'
 
         return Response({
             'can_act': can_act,

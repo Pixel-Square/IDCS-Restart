@@ -16,6 +16,11 @@ def _read_reporting_sql() -> str:
         if alt.exists():
             sql_path = alt
 
+    # In some dev/test workspaces the optional reporting SQL bundle is not checked in.
+    # Allow migrations to proceed; the reporting views can be applied later.
+    if not sql_path.exists():
+        return ''
+
     sql = sql_path.read_text(encoding='utf-8')
     # Migration already runs in a transaction; avoid nested BEGIN/COMMIT from script.
     sql = sql.replace('BEGIN;\n\n', '').replace('\n\nCOMMIT;\n', '\n')
@@ -24,6 +29,9 @@ def _read_reporting_sql() -> str:
 
 def apply_reporting_sql(apps, schema_editor):
     sql = _read_reporting_sql()
+    if not sql.strip():
+        print('reporting.0001_powerbi_reporting_views: SQL file missing; skipping view creation.')
+        return
     with schema_editor.connection.cursor() as cursor:
         cursor.execute(sql)
 

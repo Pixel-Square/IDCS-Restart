@@ -24,15 +24,22 @@ def get_pending_approvals_for_user(user):
 
     qs = Application.objects.filter(
         current_state=Application.ApplicationState.IN_REVIEW,
+    ).exclude(
+        applicant_user_id=getattr(user, 'id', None),
     ).select_related(
         'application_type',
         'applicant_user',
         'student_profile__section__batch__course__department',
         'current_step__role',
+        'current_step__stage',
     ).order_by('-created_at')
 
     pending_apps = []
     for app in qs.iterator():
+        # Never show a user's own submissions as items to approve.
+        if getattr(app, 'applicant_user_id', None) == getattr(user, 'id', None):
+            continue
+
         current_step = approval_engine.get_current_approval_step(app)
         if current_step is None:
             continue

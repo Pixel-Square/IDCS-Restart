@@ -27,6 +27,9 @@ from applications.views.admin_views import (
     ApplicationsAdminStepListCreateView,
     ApplicationsAdminStepDetailView,
     ApplicationsAdminRolePermissionsView,
+    ApplicationsAdminRoleHierarchyView,
+    ApplicationsAdminRoleHierarchyStagesView,
+    ApplicationsAdminUserSearchView,
     ApplicationsAdminSubmissionListView,
 )
 
@@ -58,5 +61,8 @@ urlpatterns = [
     path('admin/flows/<int:flow_id>/steps/', ApplicationsAdminStepListCreateView.as_view(), name='applications-admin-steps'),
     path('admin/steps/<int:id>/', ApplicationsAdminStepDetailView.as_view(), name='applications-admin-step-detail'),
     path('admin/types/<int:type_id>/role-permissions/', ApplicationsAdminRolePermissionsView.as_view(), name='applications-admin-role-permissions'),
+    path('admin/types/<int:type_id>/role-hierarchy/', ApplicationsAdminRoleHierarchyView.as_view(), name='applications-admin-role-hierarchy'),
+    path('admin/types/<int:type_id>/role-hierarchy-stages/', ApplicationsAdminRoleHierarchyStagesView.as_view(), name='applications-admin-role-hierarchy-stages'),
+    path('admin/users/search/', ApplicationsAdminUserSearchView.as_view(), name='applications-admin-user-search'),
     path('admin/submissions/', ApplicationsAdminSubmissionListView.as_view(), name='applications-admin-submissions'),
 ]

@@ -6,6 +6,7 @@ from django.db.models import Q
 
 from academics.models import DepartmentRole, SectionAdvisor, StudentMentorMap
 from applications import models as app_models
+from accounts.models import Role
 
 
 class ApplicationsNavView(APIView):
@@ -32,13 +33,25 @@ class ApplicationsNavView(APIView):
         def _active_flow_step_exists(role_code: str, department_id=None) -> bool:
             qs = app_models.ApprovalStep.objects.filter(
                 approval_flow__is_active=True,
-                role__name__iexact=str(role_code or ''),
+            ).filter(
+                Q(role__name__iexact=str(role_code or ''))
+                | Q(stage__stage_roles__role__name__iexact=str(role_code or ''))
             )
             if department_id is None:
                 return qs.filter(approval_flow__department__isnull=True).exists()
             return qs.filter(
                 Q(approval_flow__department_id=department_id) | Q(approval_flow__department__isnull=True)
             ).exists()
+
+        def _active_stage_step_exists_for_pinned_user() -> bool:
+            """Return True if any active step targets a stage this user is pinned to."""
+            try:
+                return app_models.ApprovalStep.objects.filter(
+                    approval_flow__is_active=True,
+                    stage__stage_users__user=user,
+                ).exists()
+            except Exception:
+                return False
 
         roles = []
 
@@ -80,6 +93,28 @@ class ApplicationsNavView(APIView):
         roles_rel = getattr(user, 'roles', None)
         user_roles = list(roles_rel.all()) if roles_rel is not None and hasattr(roles_rel, 'all') else []
 
+        # Include roles from any Role Hierarchy stage pins (across application types).
+        # This supports using stages as a way to group override eligibility.
+        try:
+            stage_ids = (
+                app_models.ApplicationRoleHierarchyStageUser.objects
+                .filter(user=user)
+                .values_list('stage_id', flat=True)
+                .distinct()
+            )
+            if stage_ids:
+                stage_role_ids = (
+                    app_models.ApplicationRoleHierarchyStageRole.objects
+                    .filter(stage_id__in=stage_ids)
+                    .values_list('role_id', flat=True)
+                    .distinct()
+                )
+                stage_roles = list(Role.objects.filter(id__in=stage_role_ids))
+                by_id = {r.id: r for r in (user_roles + stage_roles) if getattr(r, 'id', None) is not None}
+                user_roles = list(by_id.values())
+        except Exception:
+            pass
+
         # Also include any of the user's logical roles that are directly used as
         # approval-step roles in active flows. This covers setups where approvals
         # are assigned via static role membership rather than academic mappings.
@@ -106,7 +141,9 @@ class ApplicationsNavView(APIView):
         if staff is None:
             override_roles = []
 
-        show_applications = bool(roles or override_roles)
+        # Pinned stage users should still see Approvals Inbox even if they don't
+        # have a static Role that matches a step.
+        show_applications = bool(roles or override_roles or _active_stage_step_exists_for_pinned_user())
 
         return Response({
             'show_applications': show_applications,

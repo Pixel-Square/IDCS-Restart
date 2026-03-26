@@ -311,6 +311,7 @@ export default function ApplicationsInboxPage({ isSubComponent = false }: Props)
 									) : (
 										<div className="divide-y divide-gray-100">
 											{history.map((row) => {
+												const statusText = (row.decision || row.current_state || '').toString()
 												const exited = !!row.gatepass_scanned_at
 												const exitTime = row.gatepass_scanned_at
 													? new Date(row.gatepass_scanned_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -343,8 +344,8 @@ export default function ApplicationsInboxPage({ isSubComponent = false }: Props)
 																			</span>
 																		)
 																	})()}
-																	<span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${stateBadgeClass(row.current_state)}`}>
-																		{row.current_state}
+																	<span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${stateBadgeClass(statusText)}`}>
+																		{statusText}
 																	</span>
 																</div>
 																{exited && (

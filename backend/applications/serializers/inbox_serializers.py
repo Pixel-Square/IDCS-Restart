@@ -82,4 +82,9 @@ class ApproverInboxItemSerializer(serializers.Serializer):
         return None
 
     def get_current_step_role(self, obj):
-        return getattr(obj.current_step, 'role', None) and getattr(obj.current_step.role, 'name', None)
+        step = getattr(obj, 'current_step', None)
+        if not step:
+            return None
+        if getattr(step, 'stage_id', None):
+            return getattr(step.stage, 'name', None)
+        return getattr(step.role, 'name', None) if getattr(step, 'role_id', None) else None

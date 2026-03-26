@@ -14,9 +14,11 @@ import {
   deleteApplicationFieldAdmin,
   deleteApplicationStepAdmin,
   DepartmentRow,
+  AdminUserSearchRow,
   fetchApplicationsAdminOverview,
   fetchApplicationFieldsAdmin,
   fetchApplicationFlowsAdmin,
+  fetchApplicationRoleHierarchyStagesAdmin,
   fetchApplicationRolePermissionsAdmin,
   fetchApplicationStepsAdmin,
   fetchApplicationSubmissionsAdmin,
@@ -26,9 +28,12 @@ import {
   fetchDepartmentsAdmin,
   FlowRow,
   FlowStepRow,
+  searchApplicationsAdminUsers,
   reorderApplicationFieldsAdmin,
+  RoleHierarchyStageRow,
   RolePermissionRow,
   RoleRow,
+  saveApplicationRoleHierarchyStagesAdmin,
   saveApplicationRolePermissionsAdmin,
   SubmissionRow,
   updateApplicationFieldAdmin,
@@ -37,7 +42,7 @@ import {
   updateApplicationTypeAdmin,
 } from '../../services/applicationsAdmin'
 
-type TabKey = 'overview' | 'types' | 'fields' | 'versions' | 'flows' | 'permissions' | 'submissions'
+type TabKey = 'overview' | 'types' | 'fields' | 'versions' | 'starter-final' | 'flows' | 'hierarchy' | 'permissions' | 'submissions'
 
 type FieldDraft = {
   id: number | null
@@ -67,6 +72,7 @@ type StepDraft = {
   id?: number
   order: number
   role_id: number
+  stage_id: number | null
   sla_hours: string
   escalate_to_role_id: number | null
   next_step_type: 'OVERRIDE' | 'FINAL'
@@ -147,6 +153,7 @@ function toStepDraft(step?: FlowStepRow | null, nextStep?: FlowStepRow | null): 
     id: step?.id,
     order: step?.order || 1,
     role_id: step?.role_id || 0,
+    stage_id: step?.stage_id ?? null,
     sla_hours: step?.sla_hours == null ? '' : String(step.sla_hours),
     escalate_to_role_id: step?.escalate_to_role_id ?? null,
     next_step_type: nextStep?.is_final ? 'FINAL' : 'OVERRIDE',
@@ -173,13 +180,17 @@ function statusPillClass(active: boolean): string {
   return active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
 }
 
-function SectionCard(props: { title: string; subtitle?: string; children: React.ReactNode; right?: React.ReactNode }) {
+function normalizeStageOrders<T extends { order: number }>(stages: T[]): T[] {
+  return stages.map((s, idx) => ({ ...s, order: idx + 1 }))
+}
+
+function SectionCard(props: { title: string; subtitle?: React.ReactNode; children: React.ReactNode; right?: React.ReactNode }) {
   return (
     <div className="bg-white border border-gray-200 rounded-2xl shadow-sm">
       <div className="px-5 py-4 border-b border-gray-100 flex items-start justify-between gap-4">
         <div>
           <h3 className="text-sm font-semibold text-gray-900">{props.title}</h3>
-          {props.subtitle ? <p className="text-xs text-gray-500 mt-1">{props.subtitle}</p> : null}
+          {props.subtitle ? <div className="text-xs text-gray-500 mt-1">{props.subtitle}</div> : null}
         </div>
         {props.right}
       </div>
@@ -203,6 +214,7 @@ export default function ApplicationsAdminPage(): JSX.Element {
   const [fields, setFields] = useState<AppFieldRow[]>([])
   const [versions, setVersions] = useState<AppVersionRow[]>([])
   const [flows, setFlows] = useState<FlowRow[]>([])
+  const [roleHierarchyStages, setRoleHierarchyStages] = useState<RoleHierarchyStageRow[]>([])
   const [rolePermissions, setRolePermissions] = useState<RolePermissionRow[]>([])
   const [submissions, setSubmissions] = useState<SubmissionRow[]>([])
 
@@ -221,6 +233,20 @@ export default function ApplicationsAdminPage(): JSX.Element {
   const [newStepDrafts, setNewStepDrafts] = useState<Record<number, StepDraft>>({})
   const [permissionDrafts, setPermissionDrafts] = useState<Record<number, { can_edit_all: boolean; can_override_flow: boolean }>>({})
   const [editingFlowId, setEditingFlowId] = useState<number | null>(null)
+
+  const [stageDrafts, setStageDrafts] = useState<
+    Array<{
+      id?: number
+      name: string
+      order: number
+      roles: Array<{ role_id: number; rankText: string }>
+      users: Array<{ user_id?: number; username?: string; label?: string }>
+    }>
+  >([])
+  const [selectedStageIndex, setSelectedStageIndex] = useState<number>(0)
+  const [newStageName, setNewStageName] = useState<string>('')
+  const [newStageUsername, setNewStageUsername] = useState<string>('')
+  const [pinnedUserResults, setPinnedUserResults] = useState<AdminUserSearchRow[]>([])
 
   const [showGroupModal, setShowGroupModal] = useState(false)
   const [groupDraft, setGroupDraft] = useState<{ name: string; role_ids: number[] }>({ name: '', role_ids: [] })
@@ -263,15 +289,43 @@ export default function ApplicationsAdminPage(): JSX.Element {
   }, [])
 
   useEffect(() => {
+    if (tab !== 'hierarchy') return
+    const q = String(newStageUsername || '').trim()
+    if (q.length < 2) {
+      setPinnedUserResults([])
+      return
+    }
+
+    let alive = true
+    setPinnedUserResults([])
+    const t = window.setTimeout(async () => {
+      try {
+        const rows = await searchApplicationsAdminUsers(q)
+        if (!alive) return
+        setPinnedUserResults(Array.isArray(rows) ? rows : [])
+      } catch (_e) {
+        if (!alive) return
+        setPinnedUserResults([])
+      }
+    }, 250)
+
+    return () => {
+      alive = false
+      window.clearTimeout(t)
+    }
+  }, [newStageUsername, tab])
+
+  useEffect(() => {
     if (!selectedTypeId) return
     let mounted = true
     ;(async () => {
       setLoadingDetail(true)
       try {
-        const [fieldsRes, versionsRes, flowsRes, permissionsRes, submissionsRes] = await Promise.all([
+        const [fieldsRes, versionsRes, flowsRes, stagesRes, permissionsRes, submissionsRes] = await Promise.all([
           fetchApplicationFieldsAdmin(selectedTypeId),
           fetchApplicationVersionsAdmin(selectedTypeId),
           fetchApplicationFlowsAdmin(selectedTypeId),
+          fetchApplicationRoleHierarchyStagesAdmin(selectedTypeId),
           fetchApplicationRolePermissionsAdmin(selectedTypeId),
           fetchApplicationSubmissionsAdmin(selectedTypeId),
         ])
@@ -279,6 +333,7 @@ export default function ApplicationsAdminPage(): JSX.Element {
         setFields(fieldsRes)
         setVersions(versionsRes)
         setFlows(flowsRes)
+        setRoleHierarchyStages(stagesRes)
         setRolePermissions(permissionsRes)
         setSubmissions(submissionsRes)
         setFieldDraft(emptyFieldDraft((fieldsRes[fieldsRes.length - 1]?.order || 0) + 1))
@@ -294,6 +349,7 @@ export default function ApplicationsAdminPage(): JSX.Element {
             {
               order: nextOrder,
               role_id: roleIdForNew,
+              stage_id: null,
               sla_hours: '',
               escalate_to_role_id: null,
               next_step_type: 'OVERRIDE',
@@ -314,6 +370,22 @@ export default function ApplicationsAdminPage(): JSX.Element {
           }
         })
         setPermissionDrafts(nextPermissionDrafts)
+
+        const nextStageDrafts = (stagesRes || []).map((stage) => ({
+          id: stage.id,
+          name: stage.name,
+          order: stage.order,
+          roles: (stage.roles || []).map((r) => ({ role_id: r.role_id, rankText: String(r.rank) })),
+          users: (stage.users || [])
+            .map((u) => ({
+              user_id: u.user_id,
+              username: String(u.username || '').trim() || undefined,
+              label: String(u.name || '').trim() || (String(u.username || '').trim() || undefined),
+            }))
+            .filter((u) => Boolean(u.user_id || u.username)),
+        }))
+        setStageDrafts(normalizeStageOrders(nextStageDrafts.slice().sort((a, b) => (a.order || 0) - (b.order || 0))))
+        setSelectedStageIndex(0)
       } catch (e: any) {
         if (!mounted) return
         setError(e?.message || 'Failed to load selected application type.')
@@ -348,16 +420,18 @@ export default function ApplicationsAdminPage(): JSX.Element {
 
   async function refreshSelectedTypeDetail(typeId = selectedTypeId) {
     if (!typeId) return
-    const [fieldsRes, versionsRes, flowsRes, permissionsRes, submissionsRes] = await Promise.all([
+    const [fieldsRes, versionsRes, flowsRes, stagesRes, permissionsRes, submissionsRes] = await Promise.all([
       fetchApplicationFieldsAdmin(typeId),
       fetchApplicationVersionsAdmin(typeId),
       fetchApplicationFlowsAdmin(typeId),
+      fetchApplicationRoleHierarchyStagesAdmin(typeId),
       fetchApplicationRolePermissionsAdmin(typeId),
       fetchApplicationSubmissionsAdmin(typeId),
     ])
     setFields(fieldsRes)
     setVersions(versionsRes)
     setFlows(flowsRes)
+    setRoleHierarchyStages(stagesRes)
     setRolePermissions(permissionsRes)
     setSubmissions(submissionsRes)
     setFlowDrafts(Object.fromEntries(flowsRes.map((flow) => [flow.id, { is_active: flow.is_active, override_role_ids: flow.override_roles.map((r) => r.id), sla_hours: flow.sla_hours == null ? '' : String(flow.sla_hours) }])))
@@ -372,6 +446,7 @@ export default function ApplicationsAdminPage(): JSX.Element {
         {
           order: nextOrder,
           role_id: roleIdForNew,
+          stage_id: null,
           sla_hours: '',
           escalate_to_role_id: null,
           next_step_type: 'OVERRIDE',
@@ -391,6 +466,22 @@ export default function ApplicationsAdminPage(): JSX.Element {
       }
     })
     setPermissionDrafts(nextPermissionDrafts)
+
+    const nextStageDrafts = (stagesRes || []).map((stage) => ({
+      id: stage.id,
+      name: stage.name,
+      order: stage.order,
+      roles: (stage.roles || []).map((r) => ({ role_id: r.role_id, rankText: String(r.rank) })),
+      users: (stage.users || [])
+        .map((u) => ({
+          user_id: u.user_id,
+          username: String(u.username || '').trim() || undefined,
+          label: String(u.name || '').trim() || (String(u.username || '').trim() || undefined),
+        }))
+        .filter((u) => Boolean(u.user_id || u.username)),
+    }))
+    setStageDrafts(normalizeStageOrders(nextStageDrafts.slice().sort((a, b) => (a.order || 0) - (b.order || 0))))
+    setSelectedStageIndex(0)
   }
 
   function switchTab(nextTab: TabKey) {
@@ -621,7 +712,8 @@ export default function ApplicationsAdminPage(): JSX.Element {
       setBusy(`save-step-${stepId}`)
       await updateApplicationStepAdmin(stepId, {
         order: draft.order,
-        role_id: draft.role_id,
+        role_id: draft.stage_id ? null : draft.role_id,
+        stage_id: draft.stage_id,
         sla_hours: draft.sla_hours ? Number(draft.sla_hours) : null,
         escalate_to_role_id: draft.is_final ? null : draft.escalate_to_role_id,
         is_final: draft.is_final,
@@ -648,7 +740,8 @@ export default function ApplicationsAdminPage(): JSX.Element {
       setBusy(`add-step-${flowId}`)
       const created = await createApplicationStepAdmin(flowId, {
         order: draft.order,
-        role_id: draft.role_id,
+        role_id: draft.stage_id ? null : draft.role_id,
+        stage_id: draft.stage_id,
         sla_hours: draft.sla_hours ? Number(draft.sla_hours) : null,
         escalate_to_role_id: draft.escalate_to_role_id,
         is_final: false,
@@ -709,12 +802,96 @@ export default function ApplicationsAdminPage(): JSX.Element {
     }
   }
 
+  async function saveHierarchyStages() {
+    if (!selectedTypeId) return
+    try {
+      setBusy('hierarchy-stages')
+      setError(null)
+
+      const payload = stageDrafts
+        .map((s, idx) => ({
+          id: s.id,
+          name: String(s.name || '').trim() || `Stage ${idx + 1}`,
+          order: idx + 1,
+          roles: (s.roles || [])
+            .map((r) => {
+              const raw = String(r.rankText ?? '').trim()
+              if (!raw) return null
+              const rank = Number(raw)
+              if (!Number.isFinite(rank) || rank < 0) {
+                throw new Error(`Invalid rank for role_id=${r.role_id} in stage ${s.name || idx + 1}`)
+              }
+              return { role_id: r.role_id, rank: Math.floor(rank) }
+            })
+            .filter(Boolean) as Array<{ role_id: number; rank: number }>,
+          users: (s.users || [])
+            .map((u) => ({
+              user_id: u.user_id,
+              username: u.user_id ? undefined : (String(u.username || '').trim() || undefined),
+            }))
+            .filter((u) => Boolean(u.user_id || u.username)),
+        }))
+
+      await saveApplicationRoleHierarchyStagesAdmin(selectedTypeId, payload)
+      await refreshSelectedTypeDetail(selectedTypeId)
+      flash('Role hierarchy stages saved.')
+    } catch (e: any) {
+      setError(e?.message || 'Failed to save role hierarchy stages.')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const orderedStagesForStarter = useMemo(() => {
+    const stages = [...(roleHierarchyStages || [])].sort((a, b) => (a.order || 0) - (b.order || 0))
+    return stages.map((s) => ({
+      ...s,
+      roles: [...(s.roles || [])].sort((a, b) => (a.rank || 0) - (b.rank || 0)),
+    }))
+  }, [roleHierarchyStages])
+
+  const flowRoleSelectGroups = useMemo(() => {
+    const stagesSorted = [...(roleHierarchyStages || [])].sort((a, b) => (a.order || 0) - (b.order || 0))
+    const roleNameById = new Map<number, string>()
+    ;(roles || []).forEach((r) => {
+      roleNameById.set(r.id, r.name)
+    })
+
+    const stageGroups = stagesSorted
+      .map((s) => {
+        const stageRoles = [...(s.roles || [])]
+          .sort((a, b) => (a.rank || 0) - (b.rank || 0))
+          .map((r) => ({
+            role_id: r.role_id,
+            role_name: r.role_name || roleNameById.get(r.role_id) || `Role ${r.role_id}`,
+          }))
+        const uniq: Array<{ role_id: number; role_name: string }> = []
+        const seen = new Set<number>()
+        for (const row of stageRoles) {
+          if (!row.role_id || seen.has(row.role_id)) continue
+          seen.add(row.role_id)
+          uniq.push(row)
+        }
+        return { id: s.id, name: s.name, roles: uniq }
+      })
+
+    const stageRoleIds = new Set<number>()
+    stageGroups.forEach((g) => g.roles.forEach((r) => stageRoleIds.add(r.role_id)))
+    const remainingRoles = (roles || [])
+      .filter((r) => !stageRoleIds.has(r.id))
+      .map((r) => ({ role_id: r.id, role_name: r.name }))
+
+    return { stageGroups, remainingRoles }
+  }, [roleHierarchyStages, roles])
+
   const tabs: Array<{ key: TabKey; label: string }> = [
     { key: 'overview', label: 'Overview' },
     { key: 'types', label: 'Application Types' },
     { key: 'fields', label: 'Fields' },
     { key: 'versions', label: 'Schema Versions' },
+    { key: 'starter-final', label: 'Starter/Final Roles' },
     { key: 'flows', label: 'Approval Flows' },
+    { key: 'hierarchy', label: 'Role Hierarchy' },
     { key: 'permissions', label: 'Role Permissions' },
     { key: 'submissions', label: 'Submissions' },
   ]
@@ -1002,14 +1179,46 @@ export default function ApplicationsAdminPage(): JSX.Element {
               </SectionCard>
             )}
 
-            {tab === 'flows' && (
+            {tab === 'starter-final' && (
               <div className="space-y-4">
-                <SectionCard title="Starter/Final roles" subtitle="Only the Starter (Step 1) role can fill/submit this application type. The Final step is the final approver.">
+                <SectionCard title="Starter/Final roles" subtitle="Starter role = Step 1 filler/submission role. Final role = final approver.">
                   <div className="text-sm text-gray-600">
                     Configure Step 1 as the filler role (e.g., STUDENT). Configure the chain until the final approver is marked as Final.
                   </div>
                 </SectionCard>
 
+                <SectionCard title="Starter role priority (from Role Hierarchy stages)" subtitle="Stage order is applied first; role rank is applied inside each stage.">
+                  {!orderedStagesForStarter.length ? (
+                    <div className="text-sm text-gray-500">No Role Hierarchy stages configured for this application type.</div>
+                  ) : (
+                    <div className="space-y-3">
+                      {orderedStagesForStarter.map((stage, idx) => (
+                        <div key={stage.id} className="rounded-xl border border-gray-200 bg-white p-4">
+                          <div className="text-sm font-semibold text-gray-900">{`Stage ${idx + 1}: ${stage.name}`}</div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {(stage.roles || []).length ? (
+                              stage.roles.map((r) => (
+                                <span
+                                  key={r.id}
+                                  className="px-2.5 py-1 rounded-full border border-gray-200 bg-gray-50 text-xs text-gray-700"
+                                >
+                                  {`${r.role_name || `Role ${r.role_id}`} (rank ${r.rank})`}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-sm text-gray-500">No roles configured in this stage.</span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </SectionCard>
+              </div>
+            )}
+
+            {tab === 'flows' && (
+              <div className="space-y-4">
                 <SectionCard title="Create Approval Flow" subtitle="Workflows are stored as approval flow records. You can create global or department-specific flows.">
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                     <select className="border border-gray-200 rounded-lg px-3 py-2 text-sm" value={newFlowDraft.department_id} onChange={(e) => setNewFlowDraft((v) => ({ ...v, department_id: e.target.value }))}>
@@ -1022,13 +1231,40 @@ export default function ApplicationsAdminPage(): JSX.Element {
                     </label>
                     <div className="md:col-span-2 border border-gray-200 rounded-lg px-3 py-2">
                       <div className="text-xs text-gray-500 mb-2">Override roles</div>
+                      {roleHierarchyStages.length ? (
+                        <div className="flex flex-wrap gap-2 mb-2">
+                          {[...roleHierarchyStages].sort((a, b) => (a.order || 0) - (b.order || 0)).map((stage) => {
+                            const stageRoleIds = (stage.roles || []).map((r) => r.role_id)
+                            const isSelected = stageRoleIds.length > 0 && stageRoleIds.every((id) => newFlowDraft.override_role_ids.includes(id))
+                            return (
+                              <button
+                                key={stage.id}
+                                type="button"
+                                className={`px-2.5 py-1 rounded-full border text-xs ${isSelected ? 'bg-indigo-50 border-indigo-300 text-indigo-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+                                onClick={() => {
+                                  if (!stageRoleIds.length) return
+                                  setNewFlowDraft((v) => {
+                                    const cur = v.override_role_ids || []
+                                    const next = isSelected
+                                      ? cur.filter((id) => !stageRoleIds.includes(id))
+                                      : Array.from(new Set([...cur, ...stageRoleIds]))
+                                    return { ...v, override_role_ids: next }
+                                  })
+                                }}
+                              >
+                                {stage.name}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      ) : null}
                       <div className="flex flex-wrap gap-2">
-                        {roles.map((role) => {
-                          const checked = newFlowDraft.override_role_ids.includes(role.id)
+                        {flowRoleSelectGroups.remainingRoles.map((role) => {
+                          const checked = newFlowDraft.override_role_ids.includes(role.role_id)
                           return (
-                            <label key={role.id} className={`px-2.5 py-1 rounded-full border text-xs cursor-pointer ${checked ? 'bg-indigo-50 border-indigo-300 text-indigo-700' : 'bg-white border-gray-200 text-gray-600'}`}>
-                              <input type="checkbox" className="hidden" checked={checked} onChange={(e) => setNewFlowDraft((v) => ({ ...v, override_role_ids: e.target.checked ? [...v.override_role_ids, role.id] : v.override_role_ids.filter((id) => id !== role.id) }))} />
-                              {role.name}
+                            <label key={role.role_id} className={`px-2.5 py-1 rounded-full border text-xs cursor-pointer ${checked ? 'bg-indigo-50 border-indigo-300 text-indigo-700' : 'bg-white border-gray-200 text-gray-600'}`}>
+                              <input type="checkbox" className="hidden" checked={checked} onChange={(e) => setNewFlowDraft((v) => ({ ...v, override_role_ids: e.target.checked ? [...v.override_role_ids, role.role_id] : v.override_role_ids.filter((id) => id !== role.role_id) }))} />
+                              {role.role_name}
                             </label>
                           )
                         })}
@@ -1057,9 +1293,9 @@ export default function ApplicationsAdminPage(): JSX.Element {
                   const lastIsFinal = Boolean(lastStep?.is_final)
                   const starterStep = orderedSteps[0] || null
                   const finalStep = orderedSteps.find((s) => Boolean((s as any)?.is_final)) || (lastIsFinal ? lastStep : null)
-                  const starterRoleName = starterStep?.role_name || null
-                  const finalRoleName = finalStep?.role_name || null
-                  const newStepDraft = newStepDrafts[flow.id] || { order: (lastStep?.order || 0) + 1, role_id: 0, sla_hours: '', escalate_to_role_id: null, next_step_type: 'OVERRIDE', is_final: false, can_override: false, auto_skip_if_unavailable: false }
+                  const starterRoleName = starterStep?.stage_name || starterStep?.role_name || null
+                  const finalRoleName = finalStep?.stage_name || finalStep?.role_name || null
+                  const newStepDraft = newStepDrafts[flow.id] || { order: (lastStep?.order || 0) + 1, role_id: 0, stage_id: null, sla_hours: '', escalate_to_role_id: null, next_step_type: 'OVERRIDE', is_final: false, can_override: false, auto_skip_if_unavailable: false }
 
                   const isEditing = editingFlowId === flow.id
                   return (
@@ -1067,9 +1303,11 @@ export default function ApplicationsAdminPage(): JSX.Element {
                       key={flow.id}
                       title={`Flow #${flow.id}`}
                       subtitle={
-                        `${flow.department_name ? `Department-specific flow for ${flow.department_name}.` : 'Global flow used when no department-specific flow exists.'}`
-                        + `${starterRoleName ? ` Starter: ${starterRoleName}.` : ''}`
-                        + `${finalRoleName ? ` Final: ${finalRoleName}.` : ''}`
+                        <div className="space-y-0.5">
+                          <div>{flow.department_name ? `Department-specific flow for ${flow.department_name}.` : 'Global flow used when no department-specific flow exists.'}</div>
+                          {finalRoleName ? <div>{`Final: ${finalRoleName}.`}</div> : null}
+                          {starterRoleName ? <div>{`Starter: ${starterRoleName}.`}</div> : null}
+                        </div>
                       }
                       right={(
                         <div className="flex items-center gap-2">
@@ -1110,13 +1348,40 @@ export default function ApplicationsAdminPage(): JSX.Element {
                           </div>
                           <div className="border border-gray-200 rounded-lg px-3 py-2">
                             <div className="text-xs text-gray-500 mb-2">Override roles</div>
+                            {roleHierarchyStages.length ? (
+                              <div className="flex flex-wrap gap-2 mb-2">
+                                {[...roleHierarchyStages].sort((a, b) => (a.order || 0) - (b.order || 0)).map((stage) => {
+                                  const stageRoleIds = (stage.roles || []).map((r) => r.role_id)
+                                  const isSelected = stageRoleIds.length > 0 && stageRoleIds.every((id) => flowDraft.override_role_ids.includes(id))
+                                  return (
+                                    <button
+                                      key={stage.id}
+                                      type="button"
+                                      className={`px-2.5 py-1 rounded-full border text-xs ${isSelected ? 'bg-indigo-50 border-indigo-300 text-indigo-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+                                      onClick={() => {
+                                        if (!stageRoleIds.length) return
+                                        setFlowDrafts((v) => {
+                                          const cur = flowDraft.override_role_ids || []
+                                          const next = isSelected
+                                            ? cur.filter((id) => !stageRoleIds.includes(id))
+                                            : Array.from(new Set([...cur, ...stageRoleIds]))
+                                          return { ...v, [flow.id]: { ...flowDraft, override_role_ids: next } }
+                                        })
+                                      }}
+                                    >
+                                      {stage.name}
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                            ) : null}
                             <div className="flex flex-wrap gap-2">
-                              {roles.map((role) => {
-                                const checked = flowDraft.override_role_ids.includes(role.id)
+                              {flowRoleSelectGroups.remainingRoles.map((role) => {
+                                const checked = flowDraft.override_role_ids.includes(role.role_id)
                                 return (
-                                  <label key={role.id} className={`px-2.5 py-1 rounded-full border text-xs cursor-pointer ${checked ? 'bg-indigo-50 border-indigo-300 text-indigo-700' : 'bg-white border-gray-200 text-gray-600'}`}>
-                                    <input type="checkbox" className="hidden" checked={checked} onChange={(e) => setFlowDrafts((v) => ({ ...v, [flow.id]: { ...flowDraft, override_role_ids: e.target.checked ? [...flowDraft.override_role_ids, role.id] : flowDraft.override_role_ids.filter((id) => id !== role.id) } }))} />
-                                    {role.name}
+                                  <label key={role.role_id} className={`px-2.5 py-1 rounded-full border text-xs cursor-pointer ${checked ? 'bg-indigo-50 border-indigo-300 text-indigo-700' : 'bg-white border-gray-200 text-gray-600'}`}>
+                                    <input type="checkbox" className="hidden" checked={checked} onChange={(e) => setFlowDrafts((v) => ({ ...v, [flow.id]: { ...flowDraft, override_role_ids: e.target.checked ? [...flowDraft.override_role_ids, role.role_id] : flowDraft.override_role_ids.filter((id) => id !== role.role_id) } }))} />
+                                    {role.role_name}
                                   </label>
                                 )
                               })}
@@ -1152,20 +1417,39 @@ export default function ApplicationsAdminPage(): JSX.Element {
                                       <div className="flex items-center gap-2">
                                         <select
                                           className="border border-gray-200 rounded-lg px-2 py-1.5 min-w-[150px]"
-                                          value={stepDraft.role_id}
+                                          value={stepDraft.stage_id ? -Number(stepDraft.stage_id) : stepDraft.role_id}
                                           onChange={(e) => {
-                                            const nextRoleId = Number(e.target.value || 0)
+                                            const selected = Number(e.target.value || 0)
                                             setStepDrafts((v) => ({
                                               ...v,
                                               [step.id]: {
                                                 ...stepDraft,
-                                                role_id: nextRoleId,
+                                                role_id: selected < 0 ? 0 : selected,
+                                                stage_id: selected < 0 ? Math.abs(selected) : null,
                                               },
                                             }))
                                           }}
                                         >
                                           <option value={0}>Select role</option>
-                                          {roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
+                                          {flowRoleSelectGroups.stageGroups.length ? (
+                                            <optgroup label="Stages">
+                                              {flowRoleSelectGroups.stageGroups.map((g) => (
+                                                <option key={`stage-${g.id}`} value={-Number(g.id)}>{g.name}</option>
+                                              ))}
+                                            </optgroup>
+                                          ) : null}
+                                          {flowRoleSelectGroups.stageGroups.map((g) => (
+                                            <optgroup key={g.id} label={g.name}>
+                                              {g.roles.map((r) => (
+                                                <option key={`stage-${g.id}-role-${r.role_id}`} value={r.role_id}>{r.role_name}</option>
+                                              ))}
+                                            </optgroup>
+                                          ))}
+                                          <optgroup label="All roles">
+                                            {flowRoleSelectGroups.remainingRoles.map((r) => (
+                                              <option key={`role-${r.role_id}`} value={r.role_id}>{r.role_name}</option>
+                                            ))}
+                                          </optgroup>
                                         </select>
                                         {isStarter ? (
                                           <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-indigo-50 border border-indigo-200 text-indigo-700">Starter</span>
@@ -1192,7 +1476,18 @@ export default function ApplicationsAdminPage(): JSX.Element {
                                           }))}
                                         >
                                           <option value="">Select escalation role</option>
-                                          {roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
+                                          {flowRoleSelectGroups.stageGroups.map((g) => (
+                                            <optgroup key={g.id} label={g.name}>
+                                              {g.roles.map((r) => (
+                                                <option key={`stage-${g.id}-esc-${r.role_id}`} value={r.role_id}>{r.role_name}</option>
+                                              ))}
+                                            </optgroup>
+                                          ))}
+                                          <optgroup label="All roles">
+                                            {flowRoleSelectGroups.remainingRoles.map((r) => (
+                                              <option key={`esc-${r.role_id}`} value={r.role_id}>{r.role_name}</option>
+                                            ))}
+                                          </optgroup>
                                         </select>
                                       )}
                                     </td>
@@ -1255,17 +1550,36 @@ export default function ApplicationsAdminPage(): JSX.Element {
                                   <td className="py-3 pr-3">
                                     <select
                                       className="border border-gray-200 rounded-lg px-2 py-1.5 min-w-[150px]"
-                                      value={newStepDraft.role_id}
+                                      value={newStepDraft.stage_id ? -Number(newStepDraft.stage_id) : newStepDraft.role_id}
                                       onChange={(e) => setNewStepDrafts((v) => ({
                                         ...v,
                                         [flow.id]: {
                                           ...newStepDraft,
-                                          role_id: Number(e.target.value || 0),
+                                          role_id: Number(e.target.value || 0) < 0 ? 0 : Number(e.target.value || 0),
+                                          stage_id: Number(e.target.value || 0) < 0 ? Math.abs(Number(e.target.value || 0)) : null,
                                         },
                                       }))}
                                     >
                                       <option value={0}>Select role</option>
-                                      {roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
+                                      {flowRoleSelectGroups.stageGroups.length ? (
+                                        <optgroup label="Stages">
+                                          {flowRoleSelectGroups.stageGroups.map((g) => (
+                                            <option key={`new-stage-${g.id}`} value={-Number(g.id)}>{g.name}</option>
+                                          ))}
+                                        </optgroup>
+                                      ) : null}
+                                      {flowRoleSelectGroups.stageGroups.map((g) => (
+                                        <optgroup key={g.id} label={g.name}>
+                                          {g.roles.map((r) => (
+                                            <option key={`new-stage-${g.id}-role-${r.role_id}`} value={r.role_id}>{r.role_name}</option>
+                                          ))}
+                                        </optgroup>
+                                      ))}
+                                      <optgroup label="All roles">
+                                        {flowRoleSelectGroups.remainingRoles.map((r) => (
+                                          <option key={`new-role-${r.role_id}`} value={r.role_id}>{r.role_name}</option>
+                                        ))}
+                                      </optgroup>
                                     </select>
                                     <div className="text-[11px] text-gray-500 mt-1">Step 1 should be the role that fills the application (e.g., STUDENT).</div>
                                   </td>
@@ -1282,7 +1596,18 @@ export default function ApplicationsAdminPage(): JSX.Element {
                                       }))}
                                     >
                                       <option value="">Select escalation role</option>
-                                      {roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
+                                      {flowRoleSelectGroups.stageGroups.map((g) => (
+                                        <optgroup key={g.id} label={g.name}>
+                                          {g.roles.map((r) => (
+                                            <option key={`new-stage-${g.id}-esc-${r.role_id}`} value={r.role_id}>{r.role_name}</option>
+                                          ))}
+                                        </optgroup>
+                                      ))}
+                                      <optgroup label="All roles">
+                                        {flowRoleSelectGroups.remainingRoles.map((r) => (
+                                          <option key={`new-esc-${r.role_id}`} value={r.role_id}>{r.role_name}</option>
+                                        ))}
+                                      </optgroup>
                                     </select>
                                   </td>
                                   <td className="py-3 pr-3">
@@ -1310,7 +1635,7 @@ export default function ApplicationsAdminPage(): JSX.Element {
                                       type="button"
                                       className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white rounded-lg px-3 py-1.5 text-xs font-medium"
                                       onClick={() => addStep(flow.id)}
-                                      disabled={busy === `add-step-${flow.id}` || !newStepDraft.role_id}
+                                      disabled={busy === `add-step-${flow.id}` || (!newStepDraft.role_id && !newStepDraft.stage_id)}
                                     >
                                       {busy === `add-step-${flow.id}` ? 'Adding…' : 'Add Step 1'}
                                     </button>
@@ -1327,6 +1652,314 @@ export default function ApplicationsAdminPage(): JSX.Element {
                 })}
                 {!flows.length && <SectionCard title="Approval Flows"><div className="text-sm text-gray-500">No approval flows configured for the selected application type.</div></SectionCard>}
               </div>
+            )}
+
+            {tab === 'hierarchy' && (
+              <SectionCard
+                title="Role Hierarchy"
+                subtitle="Configure hierarchy stages (groups). A user pinned to a stage will always use that stage and ignore role hierarchy. Otherwise the first stage that matches the user's effective roles is used."
+              >
+                {!selectedType ? (
+                  <div className="text-sm text-gray-500">Select an application type first.</div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+                      <div className="lg:col-span-4">
+                        <div className="border border-gray-200 rounded-xl bg-gray-50 p-3">
+                          <div className="text-xs text-gray-500 mb-2">Stages</div>
+                          <div className="space-y-2">
+                            {stageDrafts.length === 0 ? (
+                              <div className="text-sm text-gray-500">No stages yet. Create one.</div>
+                            ) : (
+                              stageDrafts.map((stage, idx) => {
+                                const active = idx === selectedStageIndex
+                                return (
+                                  <div
+                                    key={stage.id ?? `new-${idx}`}
+                                    className={`w-full rounded-xl border px-3 py-2 ${active ? 'border-indigo-300 bg-indigo-50' : 'border-gray-200 bg-white hover:bg-gray-100'}`}
+                                  >
+                                    <div className="flex items-center justify-between gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => setSelectedStageIndex(idx)}
+                                        className="flex-1 text-left"
+                                      >
+                                        <div className="flex items-center justify-between gap-2">
+                                          <div className="text-sm font-semibold text-gray-900">{stage.name || `Stage ${idx + 1}`}</div>
+                                          <div className="text-xs text-gray-500">#{stage.order}</div>
+                                        </div>
+                                        <div className="mt-1 text-xs text-gray-500">Roles: {stage.roles?.length || 0} • Users: {stage.users?.length || 0}</div>
+                                      </button>
+                                      <div className="flex items-center gap-1">
+                                        <button
+                                          type="button"
+                                          className="text-xs border border-gray-200 rounded-md px-2 py-1 hover:bg-white disabled:opacity-50"
+                                          disabled={idx === 0}
+                                          onClick={() => {
+                                            setStageDrafts((v) => {
+                                              if (idx <= 0) return v
+                                              const next = v.slice()
+                                              ;[next[idx - 1], next[idx]] = [next[idx], next[idx - 1]]
+                                              return normalizeStageOrders(next)
+                                            })
+                                            setSelectedStageIndex((cur) => (cur === idx ? idx - 1 : cur === idx - 1 ? idx : cur))
+                                          }}
+                                        >
+                                          Up
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="text-xs border border-gray-200 rounded-md px-2 py-1 hover:bg-white disabled:opacity-50"
+                                          disabled={idx === stageDrafts.length - 1}
+                                          onClick={() => {
+                                            setStageDrafts((v) => {
+                                              if (idx >= v.length - 1) return v
+                                              const next = v.slice()
+                                              ;[next[idx], next[idx + 1]] = [next[idx + 1], next[idx]]
+                                              return normalizeStageOrders(next)
+                                            })
+                                            setSelectedStageIndex((cur) => (cur === idx ? idx + 1 : cur === idx + 1 ? idx : cur))
+                                          }}
+                                        >
+                                          Down
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="text-xs border border-red-200 text-red-700 rounded-md px-2 py-1 hover:bg-red-50"
+                                          onClick={() => {
+                                            if (!window.confirm('Delete this stage?')) return
+                                            setStageDrafts((v) => normalizeStageOrders(v.filter((_, i) => i !== idx)))
+                                            setSelectedStageIndex((cur) => {
+                                              if (cur === idx) return Math.max(0, idx - 1)
+                                              if (cur > idx) return cur - 1
+                                              return cur
+                                            })
+                                          }}
+                                        >
+                                          Delete
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )
+                              })
+                            )}
+                          </div>
+
+                          <div className="mt-3 flex gap-2">
+                            <input
+                              className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                              placeholder="New stage name"
+                              value={newStageName}
+                              onChange={(e) => setNewStageName(e.target.value)}
+                            />
+                            <button
+                              type="button"
+                              className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg px-4 py-2 text-sm font-medium"
+                              onClick={() => {
+                                const name = String(newStageName || '').trim() || `Stage ${stageDrafts.length + 1}`
+                                setStageDrafts((v) => normalizeStageOrders([...v, { name, order: v.length + 1, roles: [], users: [] }]))
+                                setNewStageName('')
+                                setSelectedStageIndex(stageDrafts.length)
+                              }}
+                            >
+                              Add
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="lg:col-span-8">
+                        {stageDrafts.length === 0 ? (
+                          <div className="text-sm text-gray-500">Create a stage to configure roles/users.</div>
+                        ) : (
+                          (() => {
+                            const stage = stageDrafts[selectedStageIndex]
+                            if (!stage) return null
+                            const stageKey = stage.id ?? `idx-${selectedStageIndex}`
+                            const selectedRolesById = new Map((stage.roles || []).map((r) => [r.role_id, r]))
+
+                            function updateStage(patch: Partial<typeof stage>) {
+                              setStageDrafts((v) => v.map((s, i) => (i === selectedStageIndex ? { ...s, ...patch } : s)))
+                            }
+
+                            return (
+                              <div key={stageKey} className="space-y-4">
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                  <div className="md:col-span-2">
+                                    <div className="text-xs text-gray-500 mb-1">Stage name</div>
+                                    <input
+                                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                                      value={stage.name}
+                                      onChange={(e) => updateStage({ name: e.target.value })}
+                                    />
+                                  </div>
+                                  <div className="flex items-end">
+                                    <div className="text-xs text-gray-500">Order: <span className="text-gray-900 font-semibold">#{stage.order}</span></div>
+                                  </div>
+                                </div>
+
+                                <div className="flex justify-between gap-2">
+                                  <button
+                                    type="button"
+                                    className="border border-gray-200 rounded-lg px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                                    onClick={() => {
+                                      if (!window.confirm('Delete this stage?')) return
+                                      setStageDrafts((v) => normalizeStageOrders(v.filter((_, i) => i !== selectedStageIndex)))
+                                      setSelectedStageIndex(0)
+                                    }}
+                                  >
+                                    Delete Stage
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white rounded-lg px-4 py-2 text-sm font-medium"
+                                    disabled={busy === 'hierarchy-stages'}
+                                    onClick={saveHierarchyStages}
+                                  >
+                                    {busy === 'hierarchy-stages' ? 'Saving…' : 'Save Stages'}
+                                  </button>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  <div className="border border-gray-200 rounded-xl bg-white p-4">
+                                    <div className="text-sm font-semibold text-gray-900">Roles in this stage</div>
+                                    <div className="text-xs text-gray-500 mt-1">Pick roles and set rank (lower = higher priority). Only these roles participate for this stage.</div>
+                                    <div className="mt-3 space-y-2 max-h-80 overflow-y-auto">
+                                      {roles.map((role) => {
+                                        const existing = selectedRolesById.get(role.id)
+                                        const checked = Boolean(existing)
+                                        return (
+                                          <div key={role.id} className="flex items-center justify-between gap-3 border border-gray-100 rounded-lg px-3 py-2">
+                                            <label className="flex items-center gap-2">
+                                              <input
+                                                type="checkbox"
+                                                checked={checked}
+                                                onChange={(e) => {
+                                                  const nextChecked = e.target.checked
+                                                  const nextRoles = [...(stage.roles || [])]
+                                                  if (nextChecked) {
+                                                    nextRoles.push({ role_id: role.id, rankText: '0' })
+                                                  } else {
+                                                    const idx = nextRoles.findIndex((r) => r.role_id === role.id)
+                                                    if (idx >= 0) nextRoles.splice(idx, 1)
+                                                  }
+                                                  updateStage({ roles: nextRoles })
+                                                }}
+                                              />
+                                              <span className="text-sm text-gray-800">{role.name}</span>
+                                            </label>
+                                            <input
+                                              type="number"
+                                              min={0}
+                                              step={1}
+                                              disabled={!checked}
+                                              className="w-24 border border-gray-200 rounded-lg px-3 py-1.5 text-sm disabled:bg-gray-50"
+                                              value={existing?.rankText ?? ''}
+                                              onChange={(e) => {
+                                                const nextRoles = (stage.roles || []).map((r) => r.role_id === role.id ? { ...r, rankText: e.target.value } : r)
+                                                updateStage({ roles: nextRoles })
+                                              }}
+                                            />
+                                          </div>
+                                        )
+                                      })}
+                                    </div>
+                                  </div>
+
+                                  <div className="border border-gray-200 rounded-xl bg-white p-4">
+                                    <div className="text-sm font-semibold text-gray-900">Users pinned to this stage</div>
+                                    <div className="text-xs text-gray-500 mt-1">If a username is listed here, that user will always use this stage (ignores role hierarchy).</div>
+
+                                    <div className="mt-3 flex gap-2">
+                                      <input
+                                        className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                                        placeholder="Search user (username / reg no / staff id / email)"
+                                        value={newStageUsername}
+                                        onChange={(e) => setNewStageUsername(e.target.value)}
+                                      />
+                                    </div>
+
+                                    {pinnedUserResults.length ? (
+                                      <div className="mt-2 border border-gray-200 rounded-lg bg-white overflow-hidden">
+                                        <div className="max-h-56 overflow-y-auto">
+                                          {pinnedUserResults.map((r) => {
+                                            const displayName = String(r.name || '').trim()
+                                            const uname = String(r.username || '').trim()
+                                            const email = String(r.email || '').trim()
+                                            const regNo = String(r.reg_no || '').trim()
+                                            const staffId = String(r.staff_id || '').trim()
+                                            const labelParts: string[] = []
+                                            if (uname) labelParts.push(uname)
+                                            if (regNo) labelParts.push(regNo)
+                                            if (staffId) labelParts.push(staffId)
+                                            if (email) labelParts.push(email)
+                                            const sub = labelParts.join(' • ')
+
+                                            return (
+                                              <button
+                                                key={r.user_id}
+                                                type="button"
+                                                className="w-full text-left px-3 py-2 hover:bg-gray-50 border-b border-gray-100 last:border-b-0"
+                                                onClick={() => {
+                                                  const exists = (stage.users || []).some((u) => (u.user_id && u.user_id === r.user_id) || (!u.user_id && u.username && uname && String(u.username).toLowerCase() === uname.toLowerCase()))
+                                                  if (exists) {
+                                                    setNewStageUsername('')
+                                                    setPinnedUserResults([])
+                                                    return
+                                                  }
+                                                  updateStage({
+                                                    users: [
+                                                      ...(stage.users || []),
+                                                      {
+                                                        user_id: r.user_id,
+                                                        username: uname || undefined,
+                                                        label: displayName || uname || regNo || staffId || email || String(r.user_id),
+                                                      },
+                                                    ],
+                                                  })
+                                                  setNewStageUsername('')
+                                                  setPinnedUserResults([])
+                                                }}
+                                              >
+                                                <div className="text-sm text-gray-900 font-medium">{displayName || uname || 'User'}</div>
+                                                {sub ? <div className="text-xs text-gray-500 mt-0.5">{sub}</div> : null}
+                                              </button>
+                                            )
+                                          })}
+                                        </div>
+                                      </div>
+                                    ) : null}
+
+                                    <div className="mt-3 space-y-2">
+                                      {(stage.users || []).length === 0 ? (
+                                        <div className="text-sm text-gray-500">No pinned users.</div>
+                                      ) : (
+                                        (stage.users || []).map((u) => (
+                                          <div key={String(u.user_id || u.username)} className="flex items-center justify-between gap-2 border border-gray-100 rounded-lg px-3 py-2">
+                                            <div className="text-sm text-gray-800">{u.label || u.username || String(u.user_id || '')}</div>
+                                            <button
+                                              type="button"
+                                              className="text-xs text-red-600 hover:text-red-700"
+                                              onClick={() => updateStage({ users: (stage.users || []).filter((x) => (u.user_id ? x.user_id !== u.user_id : String(x.username || '').toLowerCase() !== String(u.username || '').toLowerCase())) })}
+                                            >
+                                              Remove
+                                            </button>
+                                          </div>
+                                        ))
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            )
+                          })()
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </SectionCard>
             )}
 
             {tab === 'permissions' && (

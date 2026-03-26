@@ -269,6 +269,8 @@ export type PastApprovalItem = {
   applicant_kind?: 'STUDENT' | 'STAFF' | null
   department_name: string | null
   current_state: string
+  decision?: 'APPROVED' | 'REJECTED' | 'SKIPPED' | null
+  decision_at?: string | null
   submitted_at: string | null
   final_decision_at: string | null
   gatepass_scanned_at: string | null

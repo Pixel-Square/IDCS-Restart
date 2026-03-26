@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from applications import models as app_models
+from accounts.models import Role
 from applications.serializers.types import (
     ApplicationTypeListSerializer,
     ApplicationTypeSchemaSerializer,
@@ -66,46 +67,29 @@ def _user_can_initiate_type(user, app_type: app_models.ApplicationType) -> bool:
     # Prefer a flow whose starter role matches the user's effective/last role.
     flow = None
     if dept is not None:
-        dept_flow = flow_selection.select_best_initiable_flow(flows.filter(department=dept), user)
+        dept_flow = flow_selection.select_best_initiable_flow(
+            flows.filter(department=dept),
+            user,
+            application_type_id=app_type.id,
+        )
         if dept_flow is not None:
             flow = dept_flow
 
     if flow is None:
-        global_flow = flow_selection.select_best_initiable_flow(flows.filter(department__isnull=True), user)
+        global_flow = flow_selection.select_best_initiable_flow(
+            flows.filter(department__isnull=True),
+            user,
+            application_type_id=app_type.id,
+        )
         if global_flow is not None:
             flow = global_flow
 
     if flow is None:
         return False
 
-    first_step = flow.steps.select_related('role').order_by('order').first()
-    if first_step is None or first_step.role is None:
-        return False
-
-    role_name = str(getattr(first_step.role, 'name', '') or '').strip().upper()
-    if not role_name:
-        return False
-
-    # Primary check: user's logical role memberships
-    try:
-        if user.roles.filter(name__iexact=role_name).exists():
-            return True
-    except Exception:
-        pass
-
-    # Fallback: if starter is STUDENT/STAFF, allow by presence of profile
-    if role_name == 'STUDENT':
-        try:
-            return getattr(user, 'student_profile', None) is not None
-        except Exception:
-            return False
-    if role_name == 'STAFF':
-        try:
-            return getattr(user, 'staff_profile', None) is not None
-        except Exception:
-            return False
-
-    return False
+    # The flow_selection service has already verified the user can initiate this flow
+    # (either via direct role or pinned stage).
+    return True
 
 
 class ApplicationTypeListView(APIView):

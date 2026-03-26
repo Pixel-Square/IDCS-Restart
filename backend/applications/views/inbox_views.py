@@ -35,26 +35,22 @@ class PastApprovalsView(APIView):
     permission_classes = (IsAuthenticated,)
 
     def get(self, request):
-        acted_app_ids = (
+        actions = (
             app_models.ApprovalAction.objects
-            .filter(acted_by=request.user)
-            .values_list('application_id', flat=True)
-            .distinct()
-        )
-        apps = (
-            app_models.Application.objects
             .filter(
-                id__in=acted_app_ids,
-                current_state__in=['APPROVED', 'REJECTED'],
+                acted_by=request.user,
+                action__in=[app_models.ApprovalAction.Action.APPROVED, app_models.ApprovalAction.Action.REJECTED],
             )
+            .exclude(application__applicant_user=request.user)
             .select_related(
-                'application_type',
-                'applicant_user',
-                'student_profile__section__batch__course__department',
-                'staff_profile__department',
-                'gatepass_scanned_by',
+                'application',
+                'application__application_type',
+                'application__applicant_user',
+                'application__student_profile__section__batch__course__department',
+                'application__staff_profile__department',
+                'application__gatepass_scanned_by',
             )
-            .order_by('-final_decision_at')[:50]
+            .order_by('-acted_at')[:50]
         )
 
         def applicant_profile_image_url(app):
@@ -75,7 +71,8 @@ class PastApprovalsView(APIView):
                 return None
 
         data = []
-        for app in apps:
+        for act in actions:
+            app = act.application
             kind = None
             if getattr(app, 'student_profile', None):
                 kind = 'STUDENT'
@@ -105,6 +102,8 @@ class PastApprovalsView(APIView):
                 'applicant_roll_or_staff_id': roll,
                 'department_name': dept,
                 'current_state': app.current_state,
+                'decision': act.action,
+                'decision_at': act.acted_at.isoformat() if act.acted_at else None,
                 'submitted_at': app.submitted_at.isoformat() if app.submitted_at else None,
                 'final_decision_at': app.final_decision_at.isoformat() if app.final_decision_at else None,
                 'gatepass_scanned_at': app.gatepass_scanned_at.isoformat() if app.gatepass_scanned_at else None,

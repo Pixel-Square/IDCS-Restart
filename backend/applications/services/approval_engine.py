@@ -5,6 +5,7 @@ from django.utils import timezone
 from django.core.exceptions import PermissionDenied
 
 from applications import models as app_models
+from accounts.models import Role
 from applications.services import application_state
 from applications.services import notification_service
 from applications.services import flow_selection
@@ -88,7 +89,11 @@ def _get_flow_for_application(application) -> Optional[app_models.ApprovalFlow]:
 
     if dept is not None:
         dept_qs = qs_with_steps.filter(department=dept)
-        dept_flow = flow_selection.select_best_initiable_flow(dept_qs, applicant_user)
+        dept_flow = flow_selection.select_best_initiable_flow(
+            dept_qs,
+            applicant_user,
+            application_type_id=getattr(application, 'application_type_id', None),
+        )
         if dept_flow is not None:
             try:
                 if dept_flow.steps.exists():
@@ -97,7 +102,11 @@ def _get_flow_for_application(application) -> Optional[app_models.ApprovalFlow]:
                 return dept_flow
 
     global_qs = qs_with_steps.filter(department__isnull=True)
-    global_flow = flow_selection.select_best_initiable_flow(global_qs, applicant_user)
+    global_flow = flow_selection.select_best_initiable_flow(
+        global_qs,
+        applicant_user,
+        application_type_id=getattr(application, 'application_type_id', None),
+    )
     if global_flow is None:
         global_flow = global_qs.order_by('-id').first()
     if global_flow is not None:
@@ -125,7 +134,7 @@ def get_current_approval_step(application) -> Optional[app_models.ApprovalStep]:
 
     if application.current_step_id:
         # Refresh from DB to ensure up-to-date instance
-        step = app_models.ApprovalStep.objects.select_related('approval_flow', 'role').filter(pk=application.current_step_id).first()
+        step = app_models.ApprovalStep.objects.select_related('approval_flow', 'role', 'stage').filter(pk=application.current_step_id).first()
         if step is None:
             return None
 
@@ -135,7 +144,7 @@ def get_current_approval_step(application) -> Optional[app_models.ApprovalStep]:
         if flow is not None:
             if step.approval_flow_id == flow.id:
                 return step
-            return flow.steps.select_related('role').order_by('order').first()
+            return flow.steps.select_related('role', 'stage').order_by('order').first()
 
         # No active flow configured; keep legacy behavior.
         return step
@@ -143,7 +152,73 @@ def get_current_approval_step(application) -> Optional[app_models.ApprovalStep]:
     if not flow:
         return None
 
-    return flow.steps.select_related('role').order_by('order').first()
+    return flow.steps.select_related('role', 'stage').order_by('order').first()
+
+
+def _user_matches_stage_step(application: app_models.Application, step: app_models.ApprovalStep, user) -> bool:
+    if step is None or not getattr(step, 'stage_id', None):
+        return False
+
+    try:
+        # If the user is pinned to ANY stage for this application_type,
+        # they should behave like a "temporary role" of that stage only.
+        pinned_stage_id = (
+            app_models.ApplicationRoleHierarchyStageUser.objects
+            .filter(user=user, stage__application_type=application.application_type)
+            .values_list('stage_id', flat=True)
+            .first()
+        )
+        if pinned_stage_id:
+            # Pinned user may act only for their pinned stage.
+            return int(pinned_stage_id) == int(step.stage_id)
+    except Exception:
+        pass
+
+    # Not pinned anywhere for this application_type — allow stage membership by roles.
+    try:
+        if app_models.ApplicationRoleHierarchyStageUser.objects.filter(user=user, stage_id=step.stage_id).exists():
+            return True
+    except Exception:
+        pass
+
+    stage_role_ids = []
+    try:
+        stage_role_ids = list(
+            app_models.ApplicationRoleHierarchyStageRole.objects
+            .filter(stage_id=step.stage_id)
+            .values_list('role_id', flat=True)
+            .distinct()
+        )
+    except Exception:
+        stage_role_ids = []
+
+    if not stage_role_ids:
+        return False
+
+    # Direct role membership
+    try:
+        user_role_ids = {r.id for r in _user_roles(user) if getattr(r, 'id', None) is not None}
+        if any(rid in user_role_ids for rid in stage_role_ids):
+            return True
+    except Exception:
+        pass
+
+    # Concrete approver mapping for semantic roles (HOD/ADVISOR/etc.)
+    try:
+        from applications.services import approver_resolver
+
+        class _StepLike:
+            def __init__(self, role):
+                self.role = role
+
+        for role in Role.objects.filter(id__in=stage_role_ids):
+            resolved = approver_resolver.resolve_current_approver(application, _StepLike(role))
+            if resolved is not None and getattr(resolved, 'id', None) == getattr(user, 'id', None):
+                return True
+    except Exception:
+        pass
+
+    return False
 
 
 def get_next_approval_step(application, current_step: Optional[app_models.ApprovalStep]) -> Optional[app_models.ApprovalStep]:
@@ -177,6 +252,38 @@ def _user_roles(user):
     return list(user.roles.all())
 
 
+def _user_roles_with_stage_pins(user, application: app_models.Application):
+    """Return the user's effective roles for this application.
+
+    In addition to static role memberships, include roles from the Role Hierarchy
+    stage the user is pinned to for this application_type (if any). This allows
+    stage-pinned users to inherit grouped role behavior for override checks.
+    """
+    base_roles = _user_roles(user)
+
+    try:
+        stage_id = (
+            app_models.ApplicationRoleHierarchyStageUser.objects
+            .filter(user=user, stage__application_type=application.application_type)
+            .values_list('stage_id', flat=True)
+            .first()
+        )
+        if not stage_id:
+            return base_roles
+
+        role_ids = (
+            app_models.ApplicationRoleHierarchyStageRole.objects
+            .filter(stage_id=stage_id)
+            .values_list('role_id', flat=True)
+            .distinct()
+        )
+        extra_roles = list(Role.objects.filter(id__in=role_ids))
+        by_id = {r.id: r for r in (base_roles + extra_roles) if getattr(r, 'id', None) is not None}
+        return list(by_id.values())
+    except Exception:
+        return base_roles
+
+
 def _user_has_override(user, application) -> bool:
     """Return True if the user may override the approval flow for this application.
 
@@ -189,7 +296,7 @@ def _user_has_override(user, application) -> bool:
     if not flow:
         return False
 
-    user_roles = _user_roles(user)
+    user_roles = _user_roles_with_stage_pins(user, application)
     if not user_roles:
         return False
 
@@ -229,18 +336,22 @@ def user_can_act(application: app_models.Application, user) -> bool:
         return False
 
     # Prefer concrete approver mapping (mentor/advisor/HOD etc.) when resolvable.
-    try:
-        from applications.services import approver_resolver
-        resolved = approver_resolver.resolve_current_approver(application, current_step)
-        if resolved is not None:
-            return getattr(resolved, 'id', None) == getattr(user, 'id', None)
-    except Exception:
-        # fall back to role-based checks
-        pass
+    if getattr(current_step, 'stage_id', None):
+        if _user_matches_stage_step(application, current_step, user):
+            return True
+    else:
+        try:
+            from applications.services import approver_resolver
+            resolved = approver_resolver.resolve_current_approver(application, current_step)
+            if resolved is not None:
+                return getattr(resolved, 'id', None) == getattr(user, 'id', None)
+        except Exception:
+            # fall back to role-based checks
+            pass
 
     # User can act if any of their roles matches the current step role
     user_roles = _user_roles(user)
-    if current_step.role in user_roles:
+    if current_step.role_id and current_step.role in user_roles:
         return True
 
     # SLA escalation: if current step is overdue and user has the escalate role, allow action
@@ -287,7 +398,7 @@ def auto_skip_unavailable_steps(application, start_step: Optional[app_models.App
         iterator = steps_qs.filter(order__gt=start_step.order).iterator()
 
     for step in iterator:
-        if is_approver_available(step.role, application):
+        if is_approver_available(getattr(step, 'role', None), application):
             return step
 
         # If not available but allowed to auto-skip, record a SKIPPED action
@@ -355,18 +466,21 @@ def process_approval(application: app_models.Application, user, action: str, rem
         elif current_step is not None:
             # Prefer concrete approver mapping when possible.
             resolved = None
-            try:
-                from applications.services import approver_resolver
-                resolved = approver_resolver.resolve_current_approver(application, current_step)
-            except Exception:
-                resolved = None
-
-            if resolved is not None:
-                allowed = getattr(resolved, 'id', None) == getattr(user, 'id', None)
+            if getattr(current_step, 'stage_id', None):
+                allowed = _user_matches_stage_step(application, current_step, user)
             else:
-                # Fallback: role-based permission when no mapping exists.
-                if current_step.role in _user_roles(user):
-                    allowed = True
+                try:
+                    from applications.services import approver_resolver
+                    resolved = approver_resolver.resolve_current_approver(application, current_step)
+                except Exception:
+                    resolved = None
+
+                if resolved is not None:
+                    allowed = getattr(resolved, 'id', None) == getattr(user, 'id', None)
+                else:
+                    # Fallback: role-based permission when no mapping exists.
+                    if current_step.role_id and current_step.role in _user_roles(user):
+                        allowed = True
 
             # SLA escalation: if overdue, also allow escalate role (or concrete assignee for it)
             try:
