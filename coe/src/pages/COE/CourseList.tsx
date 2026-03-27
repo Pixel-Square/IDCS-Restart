@@ -11,6 +11,7 @@ import {
   readCourseSelectionMap,
   writeCourseSelectionMap,
 } from './courseSelectionStorage';
+import { readTTScheduleMap, setTTDateForCourse } from './ttScheduleStore';
 
 const DEPARTMENTS = ['ALL', 'AIDS', 'AIML', 'CSE', 'CIVIL', 'ECE', 'EEE', 'IT', 'MECH'] as const;
 const SEMESTERS = ['SEM1', 'SEM2', 'SEM3', 'SEM4', 'SEM5', 'SEM6', 'SEM7', 'SEM8'] as const;
@@ -38,6 +39,10 @@ export default function CourseList() {
   const [passwordError, setPasswordError] = useState('');
   const [validatingPassword, setValidatingPassword] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [ttScheduleMap, setTtScheduleMap] = useState<Record<string, string>>({});
+  const [showTtModal, setShowTtModal] = useState(false);
+  const [ttTargetCourseKey, setTtTargetCourseKey] = useState('');
+  const [ttDateInput, setTtDateInput] = useState('');
 
   const getCurrentFilterKey = () => `${department}::${semester}`;
 
@@ -82,6 +87,7 @@ export default function CourseList() {
   useEffect(() => {
     setIsLocked(isFilterLocked(getCurrentFilterKey()));
     setHasUnsavedChanges(false);
+    setTtScheduleMap(readTTScheduleMap(getCurrentFilterKey()));
   }, [department, semester]);
 
   useEffect(() => {
@@ -239,6 +245,31 @@ export default function CourseList() {
     }
   };
 
+  const openTtCalendar = (courseKey: string) => {
+    const current = ttScheduleMap[courseKey] || '';
+    setTtTargetCourseKey(courseKey);
+    setTtDateInput(current);
+    setShowTtModal(true);
+  };
+
+  const saveTtDate = () => {
+    const filterKey = getCurrentFilterKey();
+    setTTDateForCourse(filterKey, ttTargetCourseKey, ttDateInput);
+    setTtScheduleMap(readTTScheduleMap(filterKey));
+    setShowTtModal(false);
+    setTtTargetCourseKey('');
+    setTtDateInput('');
+  };
+
+  const clearTtDate = () => {
+    const filterKey = getCurrentFilterKey();
+    setTTDateForCourse(filterKey, ttTargetCourseKey, '');
+    setTtScheduleMap(readTTScheduleMap(filterKey));
+    setShowTtModal(false);
+    setTtTargetCourseKey('');
+    setTtDateInput('');
+  };
+
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
       {showPasswordModal ? (
@@ -358,13 +389,13 @@ export default function CourseList() {
 
               return (
                 <div key={row.key} className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                    <div>
-                      <p className="text-lg font-bold text-gray-900">{row.courseName}</p>
-                      <p className="text-xs font-medium text-gray-500">{row.courseCode || 'NO_CODE'} | {row.department} | {row.semester}</p>
-                    </div>
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-lg font-bold text-gray-900 truncate">{row.courseName}</p>
+                          <p className="text-xs font-medium text-gray-500 truncate">{row.courseCode || 'NO_CODE'} | {row.department} | {row.semester}</p>
+                        </div>
 
-                    <div className="flex flex-wrap items-center gap-4 text-sm">
+                        <div className="w-full lg:w-80 flex-shrink-0 flex flex-wrap lg:flex-nowrap items-center gap-4 text-sm justify-end">
                       <div className="inline-flex items-center gap-3 rounded-md border border-gray-200 bg-white px-2 py-1">
                         <span className="text-xs font-semibold uppercase text-gray-500">QP</span>
                         <label className="inline-flex items-center gap-1">
@@ -397,6 +428,26 @@ export default function CourseList() {
                           />
                           TCPR
                         </label>
+                        <label className="inline-flex items-center gap-1">
+                          <input
+                            type="radio"
+                            name={`qp-${row.key}`}
+                            checked={conf.qpType === 'TCPL'}
+                            disabled={isLocked || conf.eseType === 'NON_ESE'}
+                            onChange={() => updateSelection(row.key, { qpType: 'TCPL' })}
+                          />
+                          TCPL
+                        </label>
+                        <label className="inline-flex items-center gap-1">
+                          <input
+                            type="radio"
+                            name={`qp-${row.key}`}
+                            checked={conf.qpType === 'OE'}
+                            disabled={isLocked || conf.eseType === 'NON_ESE'}
+                            onChange={() => updateSelection(row.key, { qpType: 'OE' })}
+                          />
+                          OE
+                        </label>
                       </div>
 
                       <div className="inline-flex items-center gap-3 rounded-md border border-gray-200 bg-white px-2 py-1">
@@ -421,6 +472,58 @@ export default function CourseList() {
                           />
                           NON-ESE
                         </label>
+                      </div>
+
+                      <div className="relative inline-flex items-center gap-2 rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1 whitespace-nowrap">
+                        <span className="text-xs font-semibold uppercase text-indigo-700">TT</span>
+                        <button
+                          onClick={() => openTtCalendar(row.key)}
+                          className="rounded-md border border-indigo-300 bg-white px-2 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
+                        >
+                          Calendar
+                        </button>
+                        <span className="text-xs text-indigo-700">
+                          {ttScheduleMap[row.key] || 'Not Set'}
+                        </span>
+
+                        {showTtModal && ttTargetCourseKey === row.key && (
+                          <div className="absolute right-0 top-full mt-2 z-[60] bg-white p-4 rounded-xl shadow-xl w-72 border border-gray-200">
+                            <h2 className="text-base font-bold text-gray-900 mb-1">Set TT Date</h2>
+                            <p className="text-xs text-gray-500 mb-3 whitespace-normal">Choose the attendance date for this course.</p>
+                            <input
+                              type="date"
+                              value={ttDateInput}
+                              onChange={(e) => setTtDateInput(e.target.value)}
+                              onKeyDown={(e) => e.preventDefault()}
+                              onPaste={(e) => e.preventDefault()}
+                              className="w-full border border-gray-300 p-2 text-sm rounded mb-4 focus:outline-none focus:border-indigo-500"
+                            />
+                            <div className="flex justify-end space-x-2">
+                              <button
+                                onClick={() => {
+                                  setShowTtModal(false);
+                                  setTtTargetCourseKey('');
+                                  setTtDateInput('');
+                                }}
+                                className="px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                onClick={clearTtDate}
+                                className="px-3 py-1.5 text-xs font-medium bg-amber-50 text-amber-700 hover:bg-amber-100 rounded-md transition-colors"
+                              >
+                                Clear
+                              </button>
+                              <button
+                                onClick={saveTtDate}
+                                className="px-3 py-1.5 text-xs font-medium bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors"
+                              >
+                                Save
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>

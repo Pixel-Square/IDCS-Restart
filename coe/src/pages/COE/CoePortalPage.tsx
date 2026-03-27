@@ -56,75 +56,75 @@ export default function CoePortalPage({ user }: Props) {
   const userEmail = String(user?.email || '').toLowerCase();
 
   return (
-    <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
-      <div className="rounded-xl border border-blue-100 bg-white p-6 shadow-sm">
-        <h1 className="text-2xl font-bold text-gray-900">COE Portal</h1>
-        <p className="mt-2 text-sm text-gray-600">
+    <div className="mx-auto max-w-6xl space-y-6 py-2">
+      <div className="rounded-2xl border border-[#deb9ac] bg-white/95 p-6 shadow-[0_30px_45px_-30px_rgba(111,29,52,0.55)]">
+        <h1 className="text-2xl font-bold text-[#5b1a30]">COE Portal</h1>
+        <p className="mt-2 text-sm text-[#6a4a40]">
           All modules in this portal are permission-controlled. If the database manager updates role-permission mapping, access updates automatically.
         </p>
         <div className="mt-5 grid gap-3 sm:grid-cols-2">
           <Link
             to="/coe/courses"
-            className="rounded-lg border border-gray-200 bg-gray-50 p-4 hover:bg-gray-100"
+            className="rounded-xl border border-[#ead7d0] bg-[#fcf8f5] p-4 transition-colors hover:bg-[#f7eee8]"
           >
-            <p className="text-sm font-semibold text-gray-900">Course List</p>
-            <p className="mt-1 text-xs text-gray-600">Select courses, set QP type, and ESE mode.</p>
+            <p className="text-sm font-semibold text-[#4f1a2c]">Course List</p>
+            <p className="mt-1 text-xs text-[#755348]">Select courses, set QP type, and ESE mode.</p>
           </Link>
           <Link
             to="/coe/students"
-            className="rounded-lg border border-blue-200 bg-blue-50 p-4 hover:bg-blue-100"
+            className="rounded-xl border border-[#d8a791] bg-[#f8ede8] p-4 transition-colors hover:bg-[#f4e3db]"
           >
-            <p className="text-sm font-semibold text-gray-900">Students List</p>
-            <p className="mt-1 text-xs text-gray-600">Shows only selected courses with generated dummy and barcode.</p>
+            <p className="text-sm font-semibold text-[#4f1a2c]">Students List</p>
+            <p className="mt-1 text-xs text-[#755348]">Shows only selected courses with generated dummy and barcode.</p>
           </Link>
           <Link
             to="/coe/arrears"
-            className="rounded-lg border border-amber-200 bg-amber-50 p-4 hover:bg-amber-100"
+            className="rounded-xl border border-[#ebb08d] bg-[#fff4eb] p-4 transition-colors hover:bg-[#feebdc]"
           >
-            <p className="text-sm font-semibold text-gray-900">Arrear List</p>
-            <p className="mt-1 text-xs text-gray-600">Add arrear students manually or by Excel upload for each sem/course.</p>
+            <p className="text-sm font-semibold text-[#4f1a2c]">Arrear List</p>
+            <p className="mt-1 text-xs text-[#755348]">Add arrear students manually or by Excel upload for each sem/course.</p>
           </Link>
         </div>
       </div>
 
-      {loading ? <div className="rounded-xl border border-gray-200 bg-white p-6 text-gray-600">Loading COE permissions...</div> : null}
+      {loading ? <div className="rounded-2xl border border-[#ead7d0] bg-white p-6 text-[#7a5a50]">Loading COE permissions...</div> : null}
 
-      {!loading && error ? <div className="rounded-xl border border-red-200 bg-red-50 p-6 text-red-700">{error}</div> : null}
+      {!loading && error ? <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-red-700">{error}</div> : null}
 
       {!loading && !error && context ? (
         <>
-          <div className="rounded-xl border border-gray-200 bg-white p-6">
-            <h2 className="text-lg font-semibold text-gray-900">Access Summary</h2>
+          <div className="rounded-2xl border border-[#ead7d0] bg-white/95 p-6">
+            <h2 className="text-lg font-semibold text-[#5b1a30]">Access Summary</h2>
             <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
-              <div className="rounded-lg border border-gray-100 bg-gray-50 p-3">
-                <p className="text-gray-500">Current Login</p>
-                <p className="font-medium text-gray-800">{userEmail || 'unknown'}</p>
+              <div className="rounded-lg border border-[#f0e3de] bg-[#fdf9f7] p-3">
+                <p className="text-[#8d6b60]">Current Login</p>
+                <p className="font-medium text-[#4f1a2c]">{userEmail || 'unknown'}</p>
               </div>
-              <div className="rounded-lg border border-gray-100 bg-gray-50 p-3">
-                <p className="text-gray-500">COE Account</p>
-                <p className="font-medium text-gray-800">{context.is_coe_login ? 'Yes' : 'No'}</p>
+              <div className="rounded-lg border border-[#f0e3de] bg-[#fdf9f7] p-3">
+                <p className="text-[#8d6b60]">COE Account</p>
+                <p className="font-medium text-[#4f1a2c]">{context.is_coe_login ? 'Yes' : 'No'}</p>
               </div>
-              <div className="rounded-lg border border-gray-100 bg-gray-50 p-3">
-                <p className="text-gray-500">Access Via Permission</p>
-                <p className="font-medium text-gray-800">{context.access_via_permission ? 'Granted' : 'Not Granted'}</p>
+              <div className="rounded-lg border border-[#f0e3de] bg-[#fdf9f7] p-3">
+                <p className="text-[#8d6b60]">Access Via Permission</p>
+                <p className="font-medium text-[#4f1a2c]">{context.access_via_permission ? 'Granted' : 'Not Granted'}</p>
               </div>
-              <div className="rounded-lg border border-gray-100 bg-gray-50 p-3">
-                <p className="text-gray-500">COE Permission Codes</p>
-                <p className="font-medium text-gray-800">{context.permissions.length}</p>
+              <div className="rounded-lg border border-[#f0e3de] bg-[#fdf9f7] p-3">
+                <p className="text-[#8d6b60]">COE Permission Codes</p>
+                <p className="font-medium text-[#4f1a2c]">{context.permissions.length}</p>
               </div>
             </div>
           </div>
 
-          <div className="rounded-xl border border-gray-200 bg-white p-6">
-            <h2 className="text-lg font-semibold text-gray-900">Feature Access</h2>
+          <div className="rounded-2xl border border-[#ead7d0] bg-white/95 p-6">
+            <h2 className="text-lg font-semibold text-[#5b1a30]">Feature Access</h2>
             <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {Object.entries(context.features).map(([featureKey, enabled]) => (
                 <div
                   key={featureKey}
-                  className={`rounded-lg border p-4 ${enabled ? 'border-green-200 bg-green-50' : 'border-gray-200 bg-gray-50'}`}
+                  className={`rounded-lg border p-4 ${enabled ? 'border-[#d8a791] bg-[#f9ece6]' : 'border-[#eadfdb] bg-[#faf6f4]'}`}
                 >
-                  <p className="text-sm font-medium text-gray-900">{FEATURE_LABELS[featureKey as keyof CoePortalContext['features']]}</p>
-                  <p className={`mt-1 text-xs ${enabled ? 'text-green-700' : 'text-gray-500'}`}>
+                  <p className="text-sm font-medium text-[#4f1a2c]">{FEATURE_LABELS[featureKey as keyof CoePortalContext['features']]}</p>
+                  <p className={`mt-1 text-xs ${enabled ? 'text-[#7a2038]' : 'text-[#8e6f65]'}`}>
                     {enabled ? 'Enabled for this login' : 'Disabled for this login'}
                   </p>
                 </div>
@@ -132,14 +132,14 @@ export default function CoePortalPage({ user }: Props) {
             </div>
           </div>
 
-          <div className="rounded-xl border border-gray-200 bg-white p-6">
-            <h2 className="text-lg font-semibold text-gray-900">Enabled Modules</h2>
+          <div className="rounded-2xl border border-[#ead7d0] bg-white/95 p-6">
+            <h2 className="text-lg font-semibold text-[#5b1a30]">Enabled Modules</h2>
             {enabledFeatures.length === 0 ? (
-              <p className="mt-3 text-sm text-gray-600">No COE modules are enabled for this login.</p>
+              <p className="mt-3 text-sm text-[#7a5a50]">No COE modules are enabled for this login.</p>
             ) : (
-              <ul className="mt-3 space-y-2 text-sm text-gray-700">
+              <ul className="mt-3 space-y-2 text-sm text-[#5e3a33]">
                 {enabledFeatures.map((featureKey) => (
-                  <li key={featureKey} className="rounded-md bg-blue-50 px-3 py-2">
+                  <li key={featureKey} className="rounded-md border border-[#efccb8] bg-[#fff5ee] px-3 py-2">
                     {FEATURE_LABELS[featureKey]}
                   </li>
                 ))}

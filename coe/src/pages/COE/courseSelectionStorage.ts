@@ -1,4 +1,4 @@
-export type QpType = 'QP1' | 'QP2' | 'TCPR';
+export type QpType = 'QP1' | 'QP2' | 'TCPR' | 'TCPL' | 'OE';
 export type EseType = 'ESE' | 'NON_ESE';
 
 export type CourseSelection = {

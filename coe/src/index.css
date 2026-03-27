@@ -2,15 +2,35 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --coe-burgundy-900: #4f1429;
+  --coe-burgundy-700: #6f1d34;
+  --coe-rust-600: #b2472e;
+  --coe-rust-400: #d67d55;
+  --coe-cream-100: #f8efe9;
+}
+
 html, body {
   height: 100%;
 }
 
 body {
   margin: 0;
-  background: #f9fafb;
+  color: #2e1c1c;
+  font-family: 'Segoe UI Variable', 'Segoe UI', 'Trebuchet MS', 'Calibri', sans-serif;
+  background:
+    radial-gradient(circle at 8% 8%, rgba(178, 71, 46, 0.18), transparent 38%),
+    radial-gradient(circle at 86% 0%, rgba(111, 29, 52, 0.2), transparent 40%),
+    linear-gradient(160deg, #f7f2ef 0%, #f4ebe6 55%, #f0e1d7 100%);
 }
 
 #root {
   min-height: 100vh;
+}
+
+.coe-app-bg {
+  background:
+    radial-gradient(1100px 650px at -5% 0%, rgba(214, 125, 85, 0.2), transparent 55%),
+    radial-gradient(920px 540px at 115% 8%, rgba(111, 29, 52, 0.18), transparent 52%),
+    linear-gradient(180deg, var(--coe-cream-100) 0%, #f5ece6 100%);
 }

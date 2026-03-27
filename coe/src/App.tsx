@@ -1,16 +1,21 @@
-import React from 'react';
-import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { Link, NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 
 import ArrearList from './pages/COE/ArrearList';
+import AttendancePage from './pages/COE/AttendancePage';
 import BarScan from './pages/COE/BarScan';
 import BarScanMarkEntry from './pages/COE/BarScanMarkEntry';
 import BundleAllocation from './pages/COE/BundleAllocation';
 import BundleBarcodeView from './pages/COE/BundleBarcodeView';
 import CoePortalPage from './pages/COE/CoePortalPage';
 import CourseList from './pages/COE/CourseList';
+import DashboardPage from './pages/DashboardPage';
 import LoginPage from './pages/LoginPage';
 import OnePageReport from './pages/COE/OnePageReport';
+import ProfilePage from './pages/ProfilePage';
+import QueriesPage from './pages/QueriesPage';
 import RetrivalPage from './pages/COE/RetrivalPage';
+import { logout } from './services/auth';
 import StudentsList from './pages/COE/StudentsList';
 
 function hasAccessToken(): boolean {
@@ -37,10 +42,24 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 }
 
 function Shell({ children }: { children: React.ReactNode }) {
+  const location = useLocation();
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const isAuthenticated = hasAccessToken();
+  const isLoginPage = location.pathname === '/login';
+
+  useEffect(() => {
+    setIsSidebarOpen(false);
+  }, [location.pathname]);
+
+  const topLinks = [
+    { to: '/dashboard', label: 'Dashboard' },
+    { to: '/profile', label: 'Profile' },
+  ];
+
   const links = [
     { to: '/coe', label: 'Portal' },
     { to: '/coe/courses', label: 'Courses' },
+    { to: '/coe/attendance', label: 'Attendance' },
     { to: '/coe/students', label: 'Students' },
     { to: '/coe/arrears', label: 'Arrears' },
     { to: '/coe/bundle-allocation', label: 'Bundles' },
@@ -50,57 +69,154 @@ function Shell({ children }: { children: React.ReactNode }) {
     { to: '/coe/retrival', label: 'Retrival Logs' },
   ];
 
+  const bottomLinks = [{ to: '/queries', label: 'Raise Token' }];
+
+  function handleLogout() {
+    logout();
+    window.location.href = '/login';
+  }
+
+  if (isLoginPage) {
+    return (
+      <div className="coe-app-bg min-h-screen">
+        <main className="mx-auto flex min-h-screen max-w-6xl items-center px-4 py-8 sm:px-6 lg:px-8">
+          <div className="w-full">{children}</div>
+        </main>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen">
-      <header className="border-b bg-white">
-        <div className="mx-auto max-w-6xl px-4 py-4 flex flex-col gap-3">
-          <div className="text-lg font-bold text-gray-900">COE Portal</div>
-          <nav className="flex flex-wrap items-center gap-2 text-sm">
+    <div className="coe-app-bg min-h-screen">
+      <div className="relative min-h-screen">
+        <header className="sticky top-0 z-40 border-b border-[#c8917f]/40 bg-gradient-to-r from-[#6f1d34] via-[#7a2038] to-[#a3462d] px-4 py-3 text-white shadow-sm sm:px-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-lg font-bold">COE Portal</p>
+              <p className="text-xs text-white/80">Controller of Examinations Workspace</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="rounded-lg border border-white/40 bg-white/10 px-3 py-1.5 text-sm font-semibold text-white hover:bg-white/20 lg:hidden"
+                onClick={() => setIsSidebarOpen(true)}
+              >
+                Menu
+              </button>
+              <button
+                type="button"
+                className="rounded-lg border border-white/40 bg-white/10 px-3 py-1.5 text-sm font-semibold text-white hover:bg-white/20"
+                onClick={handleLogout}
+              >
+                Logout
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <aside
+          className={`fixed bottom-0 left-0 top-[73px] z-30 w-72 transform border-r border-white/35 bg-gradient-to-b from-[#5f1730] via-[#7a2038] to-[#a3462d] p-5 text-white shadow-2xl transition-transform duration-200 lg:translate-x-0 ${
+            isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
+          }`}
+        >
+          <div className="flex h-full flex-col">
+            <nav className="space-y-2">
+              {topLinks.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  className={({ isActive }) =>
+                    `block rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+                      isActive ? 'bg-white text-[#6f1d34] shadow-lg' : 'bg-white/10 text-white hover:bg-white/20'
+                    }`
+                  }
+                >
+                  {item.label}
+                </NavLink>
+              ))}
+            </nav>
+
+            <nav className="mt-5 space-y-2">
             {links.map((item) => (
-              <Link
+              <NavLink
                 key={item.to}
-                className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-blue-700 hover:bg-blue-100"
                 to={item.to}
+                className={({ isActive }) =>
+                  `block rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+                    isActive ? 'bg-white text-[#6f1d34] shadow-lg' : 'bg-white/10 text-white hover:bg-white/20'
+                  }`
+                }
               >
                 {item.label}
-              </Link>
+              </NavLink>
             ))}
             {!isAuthenticated ? (
-              <Link
-                className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-emerald-700 hover:bg-emerald-100"
+              <NavLink
                 to="/login"
+                className={({ isActive }) =>
+                  `block rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+                    isActive ? 'bg-white text-[#6f1d34] shadow-lg' : 'bg-white/10 text-white hover:bg-white/20'
+                  }`
+                }
               >
                 Login
-              </Link>
+              </NavLink>
             ) : null}
-          </nav>
-        </div>
-      </header>
+            </nav>
 
-      <main className="mx-auto max-w-6xl px-4 py-6">
-        {children}
-      </main>
+            <nav className="mt-auto space-y-2 border-t border-white/20 pt-4">
+              {bottomLinks.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  className={({ isActive }) =>
+                    `block rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+                      isActive ? 'bg-white text-[#6f1d34] shadow-lg' : 'bg-white/10 text-white hover:bg-white/20'
+                    }`
+                  }
+                >
+                  {item.label}
+                </NavLink>
+              ))}
+            </nav>
+          </div>
+
+        </aside>
+
+        {isSidebarOpen ? (
+          <button
+            type="button"
+            className="fixed bottom-0 left-0 right-0 top-[73px] z-20 bg-black/40 lg:hidden"
+            onClick={() => setIsSidebarOpen(false)}
+            aria-label="Close sidebar"
+          />
+        ) : null}
+
+        <div className="relative z-10 min-h-[calc(100vh-73px)] lg:pl-72">
+          <main className="px-4 py-6 sm:px-6 lg:px-10 lg:py-8">{children}</main>
+        </div>
+      </div>
     </div>
   );
 }
 
 function Home() {
   return (
-    <div className="rounded-xl border bg-white p-6">
-      <h1 className="text-xl font-bold text-gray-900">COE</h1>
-      <p className="mt-2 text-sm text-gray-600">
+    <div className="rounded-2xl border border-[#d9b7ac] bg-white/95 p-6 shadow-[0_20px_45px_-30px_rgba(111,29,52,0.55)]">
+      <h1 className="text-xl font-bold text-[#5a192f]">COE</h1>
+      <p className="mt-2 text-sm text-[#6f4a3f]">
         This standalone COE app now runs all COE pages, data APIs, and logs directly from this project.
       </p>
       <div className="mt-4 flex flex-wrap gap-2">
         <Link
           to="/coe"
-          className="inline-flex items-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+          className="inline-flex items-center rounded-lg bg-[#6f1d34] px-4 py-2 text-sm font-semibold text-white hover:bg-[#591729]"
         >
           Open COE Portal
         </Link>
         <Link
           to="/coe/one-page-report"
-          className="inline-flex items-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+          className="inline-flex items-center rounded-lg bg-[#b2472e] px-4 py-2 text-sm font-semibold text-white hover:bg-[#913925]"
         >
           Open One Page Report
         </Link>
@@ -110,18 +226,21 @@ function Home() {
 }
 
 export default function App() {
-  const appUser = readCachedUser();
   const isAuthenticated = hasAccessToken();
 
   return (
     <Shell>
       <Routes>
-        <Route path="/" element={<Navigate to={isAuthenticated ? '/coe' : '/login'} replace />} />
+        <Route path="/" element={<Navigate to={isAuthenticated ? '/dashboard' : '/login'} replace />} />
         <Route path="/home" element={<Home />} />
         <Route path="/login" element={<LoginPage />} />
-        <Route path="/coe" element={<RequireAuth><CoePortalPage user={appUser} /></RequireAuth>} />
+        <Route path="/dashboard" element={<RequireAuth><DashboardPage /></RequireAuth>} />
+        <Route path="/profile" element={<RequireAuth><ProfilePage /></RequireAuth>} />
+        <Route path="/queries" element={<RequireAuth><QueriesPage /></RequireAuth>} />
+        <Route path="/coe" element={<RequireAuth><CoePortalPage user={readCachedUser()} /></RequireAuth>} />
         <Route path="/coe/students" element={<RequireAuth><StudentsList /></RequireAuth>} />
         <Route path="/coe/courses" element={<RequireAuth><CourseList /></RequireAuth>} />
+        <Route path="/coe/attendance" element={<RequireAuth><AttendancePage /></RequireAuth>} />
         <Route path="/coe/arrears" element={<RequireAuth><ArrearList /></RequireAuth>} />
         <Route path="/coe/bundle-allocation" element={<RequireAuth><BundleAllocation /></RequireAuth>} />
         <Route path="/coe/bundle-barcodes" element={<RequireAuth><BundleBarcodeView /></RequireAuth>} />
@@ -129,7 +248,7 @@ export default function App() {
         <Route path="/coe/bar-scan/entry" element={<RequireAuth><BarScanMarkEntry /></RequireAuth>} />
         <Route path="/coe/retrival" element={<RequireAuth><RetrivalPage /></RequireAuth>} />
         <Route path="/coe/one-page-report" element={<RequireAuth><OnePageReport /></RequireAuth>} />
-        <Route path="*" element={<Navigate to={isAuthenticated ? '/coe' : '/login'} replace />} />
+        <Route path="*" element={<Navigate to={isAuthenticated ? '/dashboard' : '/login'} replace />} />
       </Routes>
     </Shell>
   );

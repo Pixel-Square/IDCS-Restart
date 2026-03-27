@@ -9,6 +9,7 @@ import {
   getBundleFinalizeConfig,
   setBundleFinalizeConfig,
 } from '../../utils/coeBundleFinalizeStore';
+import { getAttendanceFilterKey, readCourseAbsenteesMap } from './attendanceStore';
 
 const DEPARTMENTS = ['ALL', 'AIDS', 'AIML', 'CSE', 'CIVIL', 'ECE', 'EEE', 'IT', 'MECH'] as const;
 const SEMESTERS = ['SEM1', 'SEM2', 'SEM3', 'SEM4', 'SEM5', 'SEM6', 'SEM7', 'SEM8'] as const;
@@ -93,6 +94,10 @@ export default function BundleAllocation() {
   const [passwordError, setPasswordError] = useState('');
   const [validatingPassword, setValidatingPassword] = useState(false);
   const navigate = useNavigate();
+  const absentCourseMap = useMemo(
+    () => readCourseAbsenteesMap(getAttendanceFilterKey(department, semester)),
+    [department, semester]
+  );
 
   useEffect(() => {
     const cfg = getBundleFinalizeConfig(department, semester);
@@ -138,8 +143,20 @@ export default function BundleAllocation() {
               return selection?.eseType === 'ESE';
             })
             .forEach((course) => {
-              const originalStudents = course.students || [];
-              const students: BundleStudent[] = course.students.map((student: CoeCourseStudent) => {
+              const courseKey = getCourseKey({
+                department: deptBlock.department,
+                semester,
+                courseCode: course.course_code || '',
+                courseName: course.course_name || '',
+              });
+              const courseAbsentees = absentCourseMap.get(courseKey);
+
+              const originalStudents = (course.students || []).filter((student: CoeCourseStudent) => {
+                const regNo = String(student.reg_no || '').trim();
+                return regNo ? !(courseAbsentees?.has(regNo)) : true;
+              });
+
+              const students: BundleStudent[] = originalStudents.map((student: CoeCourseStudent) => {
                 globalSequence += 1;
                 const dummy = `KR00${deptCode}${semesterDigit}${String(globalSequence).padStart(5, '0')}`;
                 const saved = savedByDummy.get(dummy);
@@ -189,7 +206,7 @@ export default function BundleAllocation() {
     return () => {
       active = false;
     };
-  }, [department, semester]);
+  }, [department, semester, absentCourseMap]);
 
   const bundleSize = useMemo(() => {
     const parsed = Number.parseInt(bundleSizeInput, 10);

@@ -531,6 +531,82 @@ class CoeStudentsCourseMapView(APIView):
                     'is_arrear': False,
                 }
 
+        # Include students from sections that lack a TeachingAssignment but have mandatory Curriculum courses
+        from academics.models import Section
+        from curriculum.models import CurriculumDepartment
+        
+        section_qs = Section.objects.all().select_related('batch', 'batch__course', 'batch__course__department', 'semester')
+        if sem_number is not None:
+            section_qs = section_qs.filter(semester__number=sem_number)
+            
+        for sec in section_qs:
+            if not getattr(sec, 'batch_id', None) or not getattr(sec, 'semester_id', None):
+                continue
+                
+            try:
+                dept_obj = sec.batch.course.department
+            except Exception:
+                dept_obj = None
+            if not dept_obj:
+                continue
+                
+            short = str(getattr(dept_obj, 'short_name', '') or '').strip().upper()
+            code_ = str(getattr(dept_obj, 'code', '') or '').strip().upper()
+            name_ = str(getattr(dept_obj, 'name', '') or '').strip().upper()
+            dept_name = _normalize_department_label([short, code_, name_])
+            if not dept_name:
+                continue
+
+            if department_filter != 'ALL' and dept_name != department_filter:
+                continue
+
+            assign_qs = StudentSectionAssignment.objects.filter(
+                section=sec,
+                end_date__isnull=True,
+            ).exclude(student__status__in=['INACTIVE', 'DEBAR']).select_related('student__user')
+            
+            if not assign_qs.exists():
+                continue
+                
+            students_for_sec = [a.student for a in assign_qs]
+            
+            mandatory_courses = CurriculumDepartment.objects.filter(
+                department=dept_obj,
+                semester=sec.semester,
+                is_elective=False
+            )
+            
+            for mc in mandatory_courses:
+                course_code = str(getattr(mc, 'course_code', '') or '').strip()
+                course_name = str(getattr(mc, 'course_name', '') or '').strip()
+                if not course_code and not course_name:
+                    continue
+                
+                # Skip dummy elective group placeholders incorrectly marked as mandatory
+                if not course_code and 'elective' in course_name.lower():
+                    continue
+
+                course_key = f"{course_code}::{course_name}".strip(':')
+                if course_key not in dept_course_map[dept_name]:
+                    dept_course_map[dept_name][course_key] = {
+                        'course_code': course_code,
+                        'course_name': course_name,
+                        'students_map': {},
+                    }
+                course_entry = dept_course_map[dept_name][course_key]
+
+                for sp in students_for_sec:
+                    sid = getattr(sp, 'id', None)
+                    if sid is None:
+                        continue
+                    if sid not in course_entry['students_map']:
+                        course_entry['students_map'][sid] = {
+                            'id': sid,
+                            'reg_no': str(getattr(sp, 'reg_no', '') or ''),
+                            'name': _student_name(sp),
+                            'is_arrear': False,
+                        }
+
         arrear_qs = CoeArrearStudent.objects.all()
         if sem_number is not None:
             arrear_qs = arrear_qs.filter(semester=f'SEM{sem_number}')

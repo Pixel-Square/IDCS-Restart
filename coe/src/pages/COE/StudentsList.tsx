@@ -17,6 +17,7 @@ import {
   getCourseKey,
   readCourseSelectionMap,
 } from './courseSelectionStorage';
+import { getAttendanceFilterKey, readCourseAbsenteesMap } from './attendanceStore';
 import {
   appendRetrivalEntry,
   clearRetrivalApplyPayload,
@@ -108,6 +109,10 @@ export default function StudentsList() {
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
   const [pdfPreviewFileName, setPdfPreviewFileName] = useState('');
   const processedRetrivalApplyKeyRef = useRef<string>('');
+  const absentCourseMap = useMemo(
+    () => readCourseAbsenteesMap(getAttendanceFilterKey(department, semester)),
+    [department, semester]
+  );
 
   const semesterOptions = useMemo<(typeof SEMESTERS)[number][]>(() => {
     const rawSemesters = (data as any)?.available_semesters;
@@ -410,7 +415,20 @@ export default function StudentsList() {
           return config?.eseType === 'ESE';
         })
         .map((course) => {
-          const students: AugStudent[] = course.students.map((student) => {
+          const courseKey = getCourseKey({
+            department: deptBlock.department,
+            semester,
+            courseCode: course.course_code || '',
+            courseName: course.course_name || '',
+          });
+          const courseAbsentees = absentCourseMap.get(courseKey);
+
+          const sourceStudents = (course.students || []).filter((student) => {
+            const regNo = String(student.reg_no || '').trim();
+            return regNo ? !(courseAbsentees?.has(regNo)) : true;
+          });
+
+          const students: AugStudent[] = sourceStudents.map((student) => {
             globalSequence += 1;
             const enrollmentId = `ROW::${globalSequence}`;
             const dummy = `KR00${deptCode}${semesterDigit}${String(globalSequence).padStart(5, '0')}`;
@@ -428,7 +446,7 @@ export default function StudentsList() {
           });
 
           const isCourseShuffled = students.some((student, index) => {
-            const original = course.students[index];
+            const original = sourceStudents[index];
             const saved = savedByDummy.get(student.dummy);
             if (!saved || !original) return false;
             return saved.reg_no !== original.reg_no || saved.name !== original.name;
@@ -449,7 +467,7 @@ export default function StudentsList() {
       semester_filter: data.semester_filter,
       departments,
     });
-  }, [data, semester, selectionMap]);
+  }, [data, semester, selectionMap, absentCourseMap]);
 
   useEffect(() => {
     let active = true;

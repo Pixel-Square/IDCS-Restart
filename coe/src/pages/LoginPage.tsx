@@ -46,19 +46,20 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="mx-auto max-w-md rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-      <h1 className="text-2xl font-bold text-gray-900">COE Login</h1>
-      <p className="mt-2 text-sm text-gray-600">Sign in to access COE modules.</p>
+    <div className="mx-auto max-w-md rounded-2xl border border-[#dbb6a9] bg-white/95 p-7 shadow-[0_35px_50px_-32px_rgba(111,29,52,0.6)]">
+      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#9b4934]">Secure Access</p>
+      <h1 className="mt-2 text-2xl font-bold text-[#5c1a31]">COE Login</h1>
+      <p className="mt-2 text-sm text-[#6e4d42]">Sign in to access COE modules.</p>
 
       <form className="mt-5 space-y-4" onSubmit={handleLogin}>
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700" htmlFor="coe-login-identifier">
+          <label className="mb-1 block text-sm font-medium text-[#674338]" htmlFor="coe-login-identifier">
             Email or Username
           </label>
           <input
             id="coe-login-identifier"
             type="text"
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none"
+            className="w-full rounded-lg border border-[#e5c9be] bg-[#fffdfa] px-3 py-2 text-sm text-[#3b2323] focus:border-[#b2472e] focus:outline-none"
             value={identifier}
             onChange={(e) => setIdentifier(e.target.value)}
             autoComplete="username"
@@ -66,13 +67,13 @@ export default function LoginPage() {
         </div>
 
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700" htmlFor="coe-login-password">
+          <label className="mb-1 block text-sm font-medium text-[#674338]" htmlFor="coe-login-password">
             Password
           </label>
           <input
             id="coe-login-password"
             type="password"
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none"
+            className="w-full rounded-lg border border-[#e5c9be] bg-[#fffdfa] px-3 py-2 text-sm text-[#3b2323] focus:border-[#b2472e] focus:outline-none"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             autoComplete="current-password"
@@ -84,7 +85,7 @@ export default function LoginPage() {
         <button
           type="submit"
           disabled={loading}
-          className="w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+          className="w-full rounded-lg bg-[#6f1d34] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#5a182b] disabled:cursor-not-allowed disabled:opacity-50"
         >
           {loading ? 'Signing in...' : 'Sign In'}
         </button>
