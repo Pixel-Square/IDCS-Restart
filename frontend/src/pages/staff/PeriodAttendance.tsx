@@ -91,6 +91,7 @@ export default function PeriodAttendance(){
   const [students, setStudents] = useState<Student[]>([])
   const [marks, setMarks] = useState<Record<number,string>>({})
   // dailyLocks: maps student id → their daily attendance override reason
+  //   'ABSENT'        → period status is locked to Absent (cannot be changed)
   //   'OD' | 'LEAVE'  → period status is locked to that value (cannot be changed)
   //   'LATE'          → period status was forced to Present by daily LATE
   const [dailyLocks, setDailyLocks] = useState<Record<number, string>>({})
@@ -208,12 +209,26 @@ export default function PeriodAttendance(){
   })()
   const hasMarkAttendancePermission = Array.isArray(userPerms) && (userPerms.includes('academics.mark_attendance') || userPerms.includes('MARK_ATTENDANCE'))
   const hasClassAdvisorPermission = myClassSections && myClassSections.length > 0
+  const isAdvisorRole = userRoles.includes('ADVISOR')
+  const canAccessBulkAttendance = isAdvisorRole && hasMarkAttendancePermission
   const canViewUnlockApprovalSection = userRoles.includes('HOD') || userRoles.includes('AHOD') || userRoles.includes('IQAC')
   
   // Check if user has sections assigned via swap
   const hasAssignedSections = myClassSections && myClassSections.some((section: any) => section.is_assigned_via_swap)
   // Class advisors always have daily attendance access regardless of mark_attendance permission
   const canAccessDailyAttendance = hasClassAdvisorPermission
+
+  useEffect(() => {
+    if (viewMode === 'bulk' && !canAccessBulkAttendance) {
+      if (canAccessDailyAttendance) {
+        setViewMode('daily')
+      } else if (hasMarkAttendancePermission) {
+        setViewMode('period')
+      } else {
+        setViewMode('daily')
+      }
+    }
+  }, [viewMode, canAccessBulkAttendance, canAccessDailyAttendance, hasMarkAttendancePermission])
 
   useEffect(()=>{ fetchPeriods(); loadMyClassSections(); checkStaffAttendanceStatus(); fetchAllPendingRequests() }, [date])
   useEffect(()=>{ if (selectedSection && dailyMode) loadDailyAttendance() }, [selectedSection, date, dailyMode])
@@ -567,7 +582,11 @@ export default function PeriodAttendance(){
               const dailyData = await dailyRes.json();
               (dailyData.students || []).forEach((student: any) => {
                 const status = student.status || 'P';
-                if (status === 'OD' || status === 'LEAVE') {
+                if (status === 'A') {
+                  // Mark as Absent and lock it
+                  dailyMarks[student.student_id] = 'A';
+                  locksByStudent[student.student_id] = 'ABSENT';
+                } else if (status === 'OD' || status === 'LEAVE') {
                   dailyMarks[student.student_id] = status;
                   locksByStudent[student.student_id] = status;
                 } else if (status === 'LATE') {
@@ -603,8 +622,9 @@ export default function PeriodAttendance(){
           const settled = await Promise.allSettled(tasks)
           const updated = { ...initial }
           for (const s of settled){ if (s.status !== 'fulfilled' || !s.value) continue; const pj = s.value; const recs = pj.records || []; recs.forEach((r:any)=>{ const sid = r.student_pk || (r.student && r.student.id) || null; if (sid) updated[sid] = r.status || updated[sid] || 'A' }) }
-          // Re-apply OD/LEAVE locks so saved records can never override them
+          // Re-apply ABSENT/OD/LEAVE locks so saved records can never override them
           for (const [sidStr, lock] of Object.entries(locksByStudent)) {
+            if (lock === 'ABSENT') updated[Number(sidStr)] = 'A'
             if (lock === 'OD' || lock === 'LEAVE') updated[Number(sidStr)] = lock
             if (lock === 'LATE') updated[Number(sidStr)] = 'P'
           }
@@ -761,7 +781,11 @@ export default function PeriodAttendance(){
               const dailyData = await dailyRes.json();
               (dailyData.students || []).forEach((student: any) => {
                 const status = student.status || 'P';
-                if (status === 'OD' || status === 'LEAVE') {
+                if (status === 'A') {
+                  // Mark as Absent and lock it
+                  if (initialMarks[student.student_id] !== undefined) initialMarks[student.student_id] = 'A';
+                  consecutiveLocks[student.student_id] = 'ABSENT';
+                } else if (status === 'OD' || status === 'LEAVE') {
                   if (initialMarks[student.student_id] !== undefined) initialMarks[student.student_id] = status;
                   consecutiveLocks[student.student_id] = status;
                 } else if (status === 'LATE') {
@@ -2049,7 +2073,7 @@ export default function PeriodAttendance(){
               Period Wise
             </button>
           )}
-          {(canAccessDailyAttendance || hasMarkAttendancePermission) && (
+          {canAccessBulkAttendance && (
             <button
               onClick={() => {
                 setViewMode('bulk')
@@ -2067,6 +2091,14 @@ export default function PeriodAttendance(){
           )}
         </div>
       </div>
+
+      {viewMode === 'bulk' && !canAccessBulkAttendance && (
+        <div className="bg-yellow-50 border border-yellow-200 rounded-xl shadow-sm mb-6 p-4">
+          <p className="text-sm text-yellow-700">
+            Bulk / Excel attendance is available only for users with the Advisor role and daily attendance marking permission.
+          </p>
+        </div>
+      )}
 
       {/* Daily Attendance Section */}
       {viewMode === 'daily' && !dailyMode && myClassSections && myClassSections.length > 0 && (
@@ -2180,7 +2212,7 @@ export default function PeriodAttendance(){
       )}
 
       {/* Bulk / Excel Attendance */}
-      {viewMode === 'bulk' && (
+      {viewMode === 'bulk' && canAccessBulkAttendance && (
         <div className="space-y-6">
           {/* Controls card */}
           <div className="bg-white rounded-xl shadow-sm border border-slate-200">
@@ -2779,15 +2811,10 @@ export default function PeriodAttendance(){
       </div>
       )}
 
-      {/* Request sections: access requests, unlock requests (moved below Assigned Periods) */}
+      {/* Request sections: access requests (moved below Assigned Periods) */}
       <div className="mb-6">
         <HalfDayRequestsApproval />
       </div>
-      {canViewUnlockApprovalSection && (
-        <div className="mb-6">
-          <AttendanceRequests />
-        </div>
-      )}
 
       {/* Daily Attendance Marking Panel */}
       {dailyMode && selectedSection && (
@@ -3031,6 +3058,15 @@ export default function PeriodAttendance(){
                     <span className="hidden sm:inline">Mark All Present</span>
                     <span className="sm:hidden">All Present</span>
                   </button>
+                  <button
+                    onClick={() => markAllDaily('A')}
+                    disabled={dailySessionData?.is_locked}
+                    className={`px-3 sm:px-4 py-2 bg-red-100 hover:bg-red-200 text-red-800 rounded-lg text-xs sm:text-sm font-medium border border-red-300 flex items-center gap-1 sm:gap-2 ${dailySessionData?.is_locked ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed disabled:border-slate-300' : ''}`}
+                  >
+                    <X className="w-3 sm:w-4 h-3 sm:h-4" />
+                    <span className="hidden sm:inline">Mark All Absent</span>
+                    <span className="sm:hidden">All Absent</span>
+                  </button>
                 </div>
 
                 {/* Students Table */}
@@ -3053,6 +3089,9 @@ export default function PeriodAttendance(){
                           LATE: 'bg-yellow-50 text-yellow-800 border-yellow-300',
                           LEAVE: 'bg-purple-50 text-purple-800 border-purple-300'
                         }
+                        // Strict lock: if dailyLocks[student.student_id] is set to 'ABSENT', 'OD', 'LEAVE', or 'LATE', lock the selector
+                        const lockReason = dailyLocks[student.student_id]
+                        const isLocked = lockReason === 'ABSENT' || lockReason === 'OD' || lockReason === 'LEAVE' || lockReason === 'LATE' || dailySessionData?.is_locked || dailySessionData?.is_read_only
                         return (
                           <tr key={student.student_id} className="hover:bg-slate-50">
                             <td className="py-3 px-2 sm:px-4 text-sm">
@@ -3065,7 +3104,7 @@ export default function PeriodAttendance(){
                                     className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
                                       student.latest_record.type === 'OD' 
                                         ? 'bg-blue-100 text-blue-800 border border-blue-300' 
-                                        : 'bg-purple-100 text-purple-800 border border-purple-300'
+                                        : 'bg-purple-100 text-purple-800 border-purple-300'
                                     }`}
                                   >
                                     <span className="font-semibold">{student.latest_record.type}</span>
@@ -3108,14 +3147,20 @@ export default function PeriodAttendance(){
                                 <select
                                   value={status}
                                   onChange={(e) => handleAttendanceStatusChange(student.student_id, e.target.value)}
-                                  disabled={dailySessionData?.is_locked || dailySessionData?.is_read_only}
-                                  className={`px-2 sm:px-3 py-1.5 rounded-lg border text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500 w-full ${statusClasses[status]} ${(dailySessionData?.is_locked || dailySessionData?.is_read_only) ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''}`}
+                                  disabled={isLocked}
+                                  className={`px-2 sm:px-3 py-1.5 rounded-lg border text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500 w-full ${statusClasses[status]} ${isLocked ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''}`}
                                 >
                                   <option value="P">Present</option>
+                                  <option value="A">Absent</option>
                                   <option value="OD">On Duty</option>
                                   <option value="LATE">Late</option>
                                   <option value="LEAVE">Leave</option>
                                 </select>
+                                {lockReason && (lockReason === 'ABSENT' || lockReason === 'OD' || lockReason === 'LEAVE' || lockReason === 'LATE') && (
+                                  <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                                    <Lock className="w-4 h-4 text-slate-400" title={`Locked by daily status: ${lockReason}`}/>
+                                  </div>
+                                )}
                               </div>
                               {/* Mobile remarks input */}
                               <div className="mt-2 sm:hidden">
@@ -3123,9 +3168,9 @@ export default function PeriodAttendance(){
                                   type="text"
                                   value={attendanceRemarks[student.student_id] || ''}
                                   onChange={(e) => setAttendanceRemarks(prev => ({ ...prev, [student.student_id]: e.target.value }))}
-                                  disabled={dailySessionData?.is_locked || dailySessionData?.is_read_only}
+                                  disabled={isLocked}
                                   placeholder="Remarks (optional)"
-                                  className={`px-2 py-1.5 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 w-full ${(dailySessionData?.is_locked || dailySessionData?.is_read_only) ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''}`}
+                                  className={`px-2 py-1.5 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 w-full ${isLocked ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''}`}
                                 />
                               </div>
                             </td>
@@ -3134,9 +3179,9 @@ export default function PeriodAttendance(){
                                 type="text"
                                 value={attendanceRemarks[student.student_id] || ''}
                                 onChange={(e) => setAttendanceRemarks(prev => ({ ...prev, [student.student_id]: e.target.value }))}
-                                disabled={dailySessionData?.is_locked || dailySessionData?.is_read_only}
+                                disabled={isLocked}
                                 placeholder="Optional remarks"
-                                className={`px-3 py-1.5 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 w-full ${(dailySessionData?.is_locked || dailySessionData?.is_read_only) ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''}`}
+                                className={`px-3 py-1.5 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 w-full ${isLocked ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''}`}
                               />
                             </td>
                           </tr>
@@ -3507,10 +3552,10 @@ export default function PeriodAttendance(){
                 <tbody className="divide-y divide-slate-200">
                   {students.map(s=> {
                     const status = marks[s.id] || 'P'
-                    const dailyLock = dailyLocks[s.id] || null  // 'OD' | 'LEAVE' | 'LATE' | null
+                    const dailyLock = dailyLocks[s.id] || null  // 'ABSENT' | 'OD' | 'LEAVE' | 'LATE' | null
                     // assigned to someone else = view only for the original staff
                     const isAssignedToOther = !!(selected as any).assigned_to && !(selected as any).original_staff
-                    const isLocked = selected.attendance_session_locked || dailyLock === 'OD' || dailyLock === 'LEAVE' || isAssignedToOther
+                    const isLocked = selected.attendance_session_locked || dailyLock === 'ABSENT' || dailyLock === 'OD' || dailyLock === 'LEAVE' || isAssignedToOther
                     const statusSelectClasses: Record<string,string> = {
                       P: 'bg-green-50 text-green-800 border-green-300',
                       A: 'bg-red-50 text-red-800 border-red-300',
@@ -3538,15 +3583,20 @@ export default function PeriodAttendance(){
                               Late→P
                             </span>
                           )}
+                          {dailyLock === 'ABSENT' && (
+                            <span className="mt-1 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700" title="Marked ABSENT in daily attendance">
+                              Daily Absent
+                            </span>
+                          )}
                         </td>
                         <td className="py-3 px-2 sm:px-4">
                           <div className="flex items-center gap-2">
                             <span className={`inline-block w-3 h-3 rounded-full ${badgeCls}`} />
                             {isLocked && dailyLock ? (
-                              /* OD / LEAVE locked from daily attendance */
-                              <div className="flex items-center gap-1.5 px-2 sm:px-3 py-1.5 border rounded-lg text-sm font-medium bg-slate-100 text-slate-600 border-slate-300 w-full" title={`Locked by daily attendance (${dailyLock})`}>
+                              /* ABSENT / OD / LEAVE locked from daily attendance */
+                              <div className="flex items-center gap-1.5 px-2 sm:px-3 py-1.5 border rounded-lg text-sm font-medium bg-slate-100 text-slate-600 border-slate-300 w-full" title={`Locked by daily attendance (${dailyLock === 'ABSENT' ? 'Absent' : dailyLock === 'OD' ? 'On Duty' : 'Leave'})`}>
                                 <Lock className="w-3 h-3 text-slate-400" />
-                                {dailyLock === 'OD' ? 'On Duty' : 'Leave'}
+                                {dailyLock === 'ABSENT' ? 'Absent' : dailyLock === 'OD' ? 'On Duty' : 'Leave'}
                               </div>
                             ) : (
                             <div className="relative inline-block w-full">

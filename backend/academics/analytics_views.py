@@ -467,8 +467,8 @@ class ClassAttendanceReportView(APIView):
                 pass
         recs = recs_q
 
-        # total strength: count students in the section (active only)
-        total_strength = StudentProfile.objects.filter(section_id=int(section_id)).exclude(status__in=['INACTIVE', 'DEBAR']).count()
+        # total strength: count all students in the section (include all statuses)
+        total_strength = StudentProfile.objects.filter(section_id=int(section_id)).count()
 
         # counts
         present_count = recs.filter(status__in=['P', 'OD', 'LATE']).count()
@@ -1358,6 +1358,12 @@ def _daily_bulk_access_context(user, staff_profile):
     from .models import SectionAdvisor, DailyAttendanceSession, DepartmentRole, TeachingAssignment
 
     perms = get_user_permissions(user)
+    can_mark_attendance = 'academics.mark_attendance' in perms or user.is_superuser
+    is_advisor = user.is_superuser or SectionAdvisor.objects.filter(
+        advisor=staff_profile,
+        is_active=True,
+    ).exists()
+
     can_view_all = 'analytics.view_all_analytics' in perms or user.is_superuser
     can_view_department = 'analytics.view_department_analytics' in perms or can_view_all
 
@@ -1388,6 +1394,8 @@ def _daily_bulk_access_context(user, staff_profile):
         'advisor_section_ids': advisor_section_ids,
         'assigned_section_ids': assigned_section_ids,
         'department_ids': department_ids,
+        'is_advisor': is_advisor,
+        'can_mark_attendance': can_mark_attendance,
     }
 
 
@@ -1395,6 +1403,8 @@ def _can_access_daily_bulk_section(user, staff_profile, section, start_date=None
     from .models import DailyAttendanceSession
 
     ctx = _daily_bulk_access_context(user, staff_profile)
+    if not (ctx.get('is_advisor') and ctx.get('can_mark_attendance')):
+        return False
     if ctx['can_view_all']:
         return True
     if section.id in ctx['advisor_section_ids']:
@@ -1431,6 +1441,8 @@ class BulkAttendanceSectionsView(APIView):
         from .models import Section
 
         ctx = _daily_bulk_access_context(user, staff_profile)
+        if not (ctx.get('is_advisor') and ctx.get('can_mark_attendance')):
+            raise PermissionDenied('You do not have permission to access bulk attendance sections')
         if ctx['can_view_all']:
             qs = Section.objects.all()
         else:
@@ -2641,9 +2653,10 @@ class DailyAttendanceView(APIView):
                 # ── Update existing period attendance records ──────────────────────────
                 # After saving daily attendance, update all existing period attendance records
                 # for the same students on the same date to reflect daily attendance overrides:
-                #   OD/LEAVE → force same status in all period records
-                #   LATE     → force Present ('P') in all period records  
-                #   P/A      → no override needed for period records
+                #   A (Absent) → force 'A' (Absent) in all period records and lock them
+                #   OD/LEAVE   → force same status in all period records
+                #   LATE       → force Present ('P') in all period records  
+                #   P (Present)→ no override needed for period records
                 from .models import PeriodAttendanceSession, PeriodAttendanceRecord
                 
                 period_sessions = PeriodAttendanceSession.objects.filter(
@@ -2652,19 +2665,27 @@ class DailyAttendanceView(APIView):
                 )
                 
                 period_records_updated = 0
+                period_sessions_to_lock = set()  # Track sessions that have absent students
+                
                 for student_info in updated_students:
                     student_id = student_info['student_id']
                     daily_status = student_info['status']
                     
                     # Determine what the period status should be
                     period_status = None
-                    if daily_status in ('OD', 'LEAVE'):
+                    if daily_status == 'A':
+                        # Force Absent in all period records when daily attendance is Absent
+                        period_status = 'A'
+                        # Mark sessions for locking (so period advisors cannot change it)
+                        for psession in period_sessions:
+                            period_sessions_to_lock.add(psession.id)
+                    elif daily_status in ('OD', 'LEAVE'):
                         # Force OD/LEAVE in all period records
                         period_status = daily_status
                     elif daily_status == 'LATE':
                         # Force Present in all period records
                         period_status = 'P'
-                    # For 'P' or 'A' daily status, don't override period records
+                    # For 'P' (Present) daily status, don't override period records
                     
                     if period_status:
                         # Update all period records for this student on this date
@@ -3968,3 +3989,80 @@ class AttendanceNotificationCountView(APIView):
 
         # User has no actionable requests
         return Response({'count': 0, 'role': 'none'})
+
+
+class OverallDailyAttendanceReportView(APIView):
+    """
+    GET /api/academics/analytics/overall-daily-attendance-report/
+    Returns overall daily attendance summary for KRCT on a specific date.
+    Only accessible to users with 'analytics.view_all_analytics' permission.
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        from .models import DailyAttendanceRecord, StudentProfile
+        from django.db.models import Count
+        
+        user = request.user
+        perms = get_user_permissions(user)
+        
+        # Check for overall permission
+        if 'analytics.view_all_analytics' not in perms and not user.is_superuser:
+            raise PermissionDenied('Overall analytics permission required')
+        
+        # Get date parameter, default to today
+        date_str = request.query_params.get('date')
+        if not date_str:
+            from django.utils import timezone
+            date_str = timezone.now().date().isoformat()
+        
+        try:
+            from datetime import date
+            report_date = date.fromisoformat(date_str)
+        except ValueError:
+            return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=400)
+        
+        # Get all daily attendance records for the date
+        records = DailyAttendanceRecord.objects.filter(
+            session__date=report_date
+        ).select_related('student')
+        
+        # Calculate totals
+        total_strength = StudentProfile.objects.all().count()
+        
+        # Count by status
+        status_counts = records.values('status').annotate(count=Count('status'))
+        status_dict = {item['status']: item['count'] for item in status_counts}
+        
+        present_count = status_dict.get('P', 0)
+        absent_count = status_dict.get('A', 0)
+        leave_count = status_dict.get('LEAVE', 0)
+        od_count = status_dict.get('OD', 0)
+        suspension_count = status_dict.get('SUSPENSION', 0)  # Not used in current model
+        
+        # Calculate percentages
+        marked_students = present_count + absent_count + leave_count + od_count + suspension_count
+        if marked_students > 0:
+            present_pct = (present_count / marked_students) * 100
+            absent_pct = (absent_count / marked_students) * 100
+            leave_pct = (leave_count / marked_students) * 100
+            od_pct = (od_count / marked_students) * 100
+            suspension_pct = (suspension_count / marked_students) * 100
+        else:
+            present_pct = absent_pct = leave_pct = od_pct = suspension_pct = 0
+        
+        return Response({
+            'title': 'Daily Students Attendance for KRCT',
+            'date': report_date.isoformat(),
+            'total_strength': total_strength,
+            'total_present': present_count,
+            'total_absent': absent_count,
+            'total_leave': leave_count,
+            'total_od': od_count,
+            'suspension': suspension_count,
+            'present_percentage': round(present_pct, 2),
+            'absent_percentage': round(absent_pct, 2),
+            'leave_percentage': round(leave_pct, 2),
+            'od_percentage': round(od_pct, 2),
+            'suspension_percentage': round(suspension_pct, 2),
+        })

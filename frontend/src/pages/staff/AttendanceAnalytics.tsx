@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Lock, Unlock, RefreshCw, X, Calendar, Clock, Users, BarChart3, FileText, CheckCircle2, XCircle, AlertCircle, Building2, GraduationCap, Loader2, FileSpreadsheet, ChevronDown, ChevronUp } from 'lucide-react'
+import { Lock, Unlock, RefreshCw, X, Calendar, Clock, Users, BarChart3, FileText, CheckCircle2, XCircle, AlertCircle, Building2, GraduationCap, Loader2, FileSpreadsheet, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react'
 import fetchWithAuth from '../../services/fetchAuth'
 import AttendanceRequests from './AttendanceRequests'
 import { useAttendanceNotificationCount } from '../../hooks/useAttendanceNotificationCount'
@@ -66,6 +66,9 @@ const AttendanceAnalytics: React.FC = () => {
   const [reportModalOpen, setReportModalOpen] = useState(false)
   const [reportData, setReportData] = useState<any | null>(null)
   const [reportLoading, setReportLoading] = useState(false)
+  const [overallReportModalOpen, setOverallReportModalOpen] = useState(false)
+  const [overallReportData, setOverallReportData] = useState<any | null>(null)
+  const [overallReportLoading, setOverallReportLoading] = useState(false)
 
   // ── Student-day expansion ───────────────────────────────────────────────────
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
@@ -754,6 +757,26 @@ const AttendanceAnalytics: React.FC = () => {
     finally{ setSectionLoading(false) }
   }
 
+  async function openOverallReport() {
+    setOverallReportLoading(true)
+    try {
+      const date = dateFrom || new Date().toISOString().split('T')[0]
+      const res = await fetchWithAuth(`/api/academics/analytics/overall-daily-attendance-report/?date=${encodeURIComponent(date)}`)
+      if (!res.ok) {
+        const error = await res.text()
+        throw new Error(`Failed to fetch overall report: ${error}`)
+      }
+      const data = await res.json()
+      setOverallReportData(data)
+      setOverallReportModalOpen(true)
+    } catch (e) {
+      console.error('Failed to load overall report', e)
+      alert('Failed to load overall report')
+    } finally {
+      setOverallReportLoading(false)
+    }
+  }
+
   return (
     <div className="w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
       {/* Header Section */}
@@ -1003,6 +1026,16 @@ const AttendanceAnalytics: React.FC = () => {
                   {ovHasFilters && <span className="px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-700 rounded-full">Filtered</span>}
                 </div>
                 <div className="flex items-center gap-2">
+                  {permissionLevel === 'all' && (
+                    <button
+                      onClick={openOverallReport}
+                      disabled={overallReportLoading}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {overallReportLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <BarChart3 className="w-3.5 h-3.5" />}
+                      Overall Report
+                    </button>
+                  )}
                   <button
                     onClick={() => setShowOverallFilters(v => !v)}
                     className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border transition-colors ${
@@ -2110,10 +2143,8 @@ const AttendanceAnalytics: React.FC = () => {
               </button>
             </div>
             <div className="p-6">
-              {/* Content removed - requests moved to Mark Attendance page */}
-              <div className="text-center py-8 text-gray-500">
-                <p>Session unlock requests have been moved to the Mark Attendance page.</p>
-              </div>
+              {/* Show unlock requests for approval */}
+              <AttendanceRequests />
             </div>
           </div>
         </div>
@@ -2220,6 +2251,100 @@ const AttendanceAnalytics: React.FC = () => {
                     </div>
                     <div className="text-sm text-purple-800 font-mono">
                       {(reportData.leaveRegs || []).length ? (reportData.leaveRegs || []).join(', ') : <span className="text-purple-600 italic">None</span>}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {overallReportModalOpen && overallReportData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm">
+          <div className="fixed inset-0 bg-black/50" onClick={() => { setOverallReportModalOpen(false); setOverallReportData(null) }} />
+          <div className="bg-white rounded-xl shadow-2xl w-[80vw] max-w-[600px] mx-4 z-50 overflow-auto max-h-[85vh]">
+            <div className="bg-gradient-to-r from-blue-600 to-indigo-600 p-6 border-b">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="flex items-center gap-2 text-white mb-1">
+                    <BarChart3 className="w-5 h-5" />
+                    <h3 className="text-xl font-semibold">{overallReportData.title}</h3>
+                  </div>
+                  <div className="text-blue-100 text-sm">
+                    <span className="inline-flex items-center gap-1">
+                      <Calendar className="w-3 h-3" />
+                      {overallReportData.date}
+                    </span>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => { setOverallReportModalOpen(false); setOverallReportData(null) }} 
+                  className="px-3 py-2 bg-white/20 hover:bg-white/30 text-white rounded-lg transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            <div className="p-6">
+              {overallReportLoading ? (
+                <div className="p-12 text-center">
+                  <Loader2 className="w-8 h-8 text-blue-600 animate-spin mx-auto mb-3" />
+                  <p className="text-gray-600">Loading overall report data...</p>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                    <div className="text-center">
+                      <div className="text-3xl font-bold text-gray-900 mb-1">{overallReportData.total_strength}</div>
+                      <div className="text-sm text-gray-600">Total Strength</div>
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                    <div className="bg-gradient-to-br from-green-50 to-emerald-50 border border-green-200 rounded-lg p-4">
+                      <div className="flex items-center gap-2 mb-2">
+                        <CheckCircle2 className="w-4 h-4 text-green-600" />
+                        <span className="text-xs font-medium text-green-700">Present</span>
+                      </div>
+                      <div className="text-2xl font-bold text-green-700">{overallReportData.total_present}</div>
+                      <div className="text-xs text-green-600">{overallReportData.present_percentage}%</div>
+                    </div>
+                    
+                    <div className="bg-gradient-to-br from-red-50 to-rose-50 border border-red-200 rounded-lg p-4">
+                      <div className="flex items-center gap-2 mb-2">
+                        <XCircle className="w-4 h-4 text-red-600" />
+                        <span className="text-xs font-medium text-red-700">Absent</span>
+                      </div>
+                      <div className="text-2xl font-bold text-red-700">{overallReportData.total_absent}</div>
+                      <div className="text-xs text-red-600">{overallReportData.absent_percentage}%</div>
+                    </div>
+                    
+                    <div className="bg-gradient-to-br from-purple-50 to-violet-50 border border-purple-200 rounded-lg p-4">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Calendar className="w-4 h-4 text-purple-600" />
+                        <span className="text-xs font-medium text-purple-700">Leave</span>
+                      </div>
+                      <div className="text-2xl font-bold text-purple-700">{overallReportData.total_leave}</div>
+                      <div className="text-xs text-purple-600">{overallReportData.leave_percentage}%</div>
+                    </div>
+                    
+                    <div className="bg-gradient-to-br from-blue-50 to-cyan-50 border border-blue-200 rounded-lg p-4">
+                      <div className="flex items-center gap-2 mb-2">
+                        <FileText className="w-4 h-4 text-blue-600" />
+                        <span className="text-xs font-medium text-blue-700">OD</span>
+                      </div>
+                      <div className="text-2xl font-bold text-blue-700">{overallReportData.total_od}</div>
+                      <div className="text-xs text-blue-600">{overallReportData.od_percentage}%</div>
+                    </div>
+                    
+                    <div className="bg-gradient-to-br from-gray-50 to-slate-50 border border-gray-200 rounded-lg p-4">
+                      <div className="flex items-center gap-2 mb-2">
+                        <AlertTriangle className="w-4 h-4 text-gray-600" />
+                        <span className="text-xs font-medium text-gray-700">Suspension</span>
+                      </div>
+                      <div className="text-2xl font-bold text-gray-700">{overallReportData.suspension}</div>
+                      <div className="text-xs text-gray-600">{overallReportData.suspension_percentage}%</div>
                     </div>
                   </div>
                 </div>
