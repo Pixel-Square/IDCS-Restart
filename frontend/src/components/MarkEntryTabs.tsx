@@ -1407,6 +1407,7 @@ export default function MarkEntryTabs({
                 if (String(active).startsWith('cqi_')) {
                   return (
                     <CQIEntry
+                      key={`${activeCqi?.assessmentType || 'model'}:${(activeCqi?.cos || []).join('_')}`}
                       subjectId={subjectId}
                       teachingAssignmentId={selectedTaId ?? undefined}
                       classType={effectiveClassType ?? null}

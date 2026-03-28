@@ -311,16 +311,27 @@ function buildInternalSchema(classType: string | null, enabledSet: Set<string>):
   }
 
   if (ct === 'TCPL') {
-    // TCPL uses LAB1/LAB2 stored under formative1/formative2.
-    cycles = cycles.map((c, idx) => {
-      if (idx === 2 || idx === 5 || idx === 8 || idx === 11) return 'lab';
-      return c;
-    });
-    labels = labels.map((l, idx) => {
-      if (idx === 2 || idx === 5) return l.replace('-FA', '-LAB1');
-      if (idx === 8 || idx === 11) return l.replace('-FA', '-LAB2');
-      return l;
-    });
+    // TCPL uses 21-slot schema: SSA/CIA/LAB/CIAExam per CO + ME CO1..CO5.
+    const tcplVisible: number[] = [];
+    const tcplHeader: string[] = [];
+    const tcplCycles: string[] = [];
+    const tcplLabels: string[] = [];
+    for (let co = 1; co <= 4; co++) {
+      const base = (co - 1) * 4;
+      const labSuffix = co <= 2 ? 'LAB1' : 'LAB2';
+      tcplVisible.push(base, base + 1, base + 2, base + 3);
+      tcplHeader.push(`CO${co}`, `CO${co}`, `CO${co}`, `CO${co}`);
+      tcplCycles.push('ssa', 'cia', 'lab', 'cia_exam');
+      tcplLabels.push(`CO${co}-SSA`, `CO${co}-CIA`, `CO${co}-${labSuffix}`, `CO${co}-CIAExam`);
+    }
+    // ME columns at indices 16-20
+    for (let c = 1; c <= 5; c++) {
+      tcplVisible.push(15 + c);
+      tcplHeader.push(`CO${c}`);
+      tcplCycles.push('ME');
+      tcplLabels.push(`ME-CO${c}`);
+    }
+    return { visible: tcplVisible, header: tcplHeader, cycles: tcplCycles, labels: tcplLabels };
   }
 
   if (ct === 'LAB') {
@@ -677,11 +688,23 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
               }
             }
 
-            while (arr.length < DEFAULT_INTERNAL_MAPPING.weights.length) arr.push(DEFAULT_INTERNAL_MAPPING.weights[arr.length] ?? 0);
+            // TCPL: upgrade 17-slot → 21-slot by inserting 0 for CIA Exam slots.
+            if (ct === 'TCPL' && arr.length === DEFAULT_INTERNAL_MAPPING.weights.length) {
+              const upgraded: number[] = [];
+              for (let co = 0; co < 4; co++) {
+                const base = co * 3;
+                upgraded.push(arr[base] ?? 0, arr[base + 1] ?? 0, arr[base + 2] ?? 0, 0);
+              }
+              upgraded.push(...arr.slice(12, 17));
+              arr = upgraded;
+            }
+            const tcplSlotLen = 21;
+            const slotLen = ct === 'TCPL' ? tcplSlotLen : DEFAULT_INTERNAL_MAPPING.weights.length;
+            while (arr.length < slotLen) arr.push(ct === 'TCPL' ? 0 : (DEFAULT_INTERNAL_MAPPING.weights[arr.length] ?? 0));
             if (ct === 'LAB' || ct === 'PRACTICAL') {
               arr = sanitizeLabPractical(arr);
             }
-            setInternalMarkWeights(arr.slice(0, DEFAULT_INTERNAL_MAPPING.weights.length));
+            setInternalMarkWeights(arr.slice(0, slotLen));
           } else {
             setInternalMarkWeights([...DEFAULT_INTERNAL_MAPPING.weights]);
           }
@@ -1040,12 +1063,15 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
   const schema = useMemo(() => buildInternalSchema(effectiveClassType, enabledSet), [effectiveClassType, enabledSet]);
 
   const effMapping = useMemo(() => {
+    // TCPL uses 21 weight slots; all other class types use 17.
+    const isTcplScheme = effectiveClassType === 'TCPL';
+    const maxSlot = isTcplScheme ? 21 : DEFAULT_INTERNAL_MAPPING.weights.length;
     const weightsArr = Array.isArray(internalMarkWeights) && internalMarkWeights.length ? internalMarkWeights : DEFAULT_INTERNAL_MAPPING.weights;
-    const weightsAll = weightsArr.slice(0, DEFAULT_INTERNAL_MAPPING.weights.length);
-    while (weightsAll.length < DEFAULT_INTERNAL_MAPPING.weights.length) weightsAll.push(DEFAULT_INTERNAL_MAPPING.weights[weightsAll.length] ?? 0);
+    const weightsAll = weightsArr.slice(0, maxSlot);
+    while (weightsAll.length < maxSlot) weightsAll.push(0);
     const weights = schema.visible.map((i) => weightsAll[i] ?? 0);
     return { header: schema.header, weights, cycles: schema.cycles, visible: schema.visible, labels: schema.labels };
-  }, [internalMarkWeights, schema]);
+  }, [internalMarkWeights, schema, effectiveClassType]);
 
   const maxTotal = useMemo(() => {
     const w = effMapping.weights.map((x: any) => Number(x) || 0);
@@ -1160,29 +1186,38 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
   const computedRows = useMemo(() => {
     const ct = effectiveClassType;
 
-    // Map the visible weights back into their 0..16 slot positions.
-    const wFull = new Array(17).fill(0);
+    // Map the visible weights back into their slot positions.
+    // TCPL uses 21 slots (SSA/CIA/LAB/CIAExam per CO + ME×5); all others use 17.
+    const isTcpl = ct === 'TCPL';
+    const wFullLen = isTcpl ? 21 : 17;
+    const wFull = new Array(wFullLen).fill(0);
     for (let i = 0; i < effMapping.visible.length; i++) {
       const idx = effMapping.visible[i];
-      wFull[idx] = Number(effMapping.weights[i]) || 0;
+      if (idx < wFull.length) wFull[idx] = Number(effMapping.weights[i]) || 0;
     }
+    // TCPL 21-slot: CO1=[0..3], CO2=[4..7], CO3=[8..11], CO4=[12..15], ME=[16..20]
+    // Other 17-slot: CO1=[0..2], CO2=[3..5], CO3=[6..8], CO4=[9..11], ME=[12..16]
     const wCo1Ssa = wFull[0] || 0;
     const wCo1Cia = wFull[1] || 0;
     const wCo1Fa = wFull[2] || 0;
-    const wCo2Ssa = wFull[3] || 0;
-    const wCo2Cia = wFull[4] || 0;
-    const wCo2Fa = wFull[5] || 0;
-    const wCo3Ssa = wFull[6] || 0;
-    const wCo3Cia = wFull[7] || 0;
-    const wCo3Fa = wFull[8] || 0;
-    const wCo4Ssa = wFull[9] || 0;
-    const wCo4Cia = wFull[10] || 0;
-    const wCo4Fa = wFull[11] || 0;
-    const wMeCo1 = wFull[12] || 0;
-    const wMeCo2 = wFull[13] || 0;
-    const wMeCo3 = wFull[14] || 0;
-    const wMeCo4 = wFull[15] || 0;
-    const wMeCo5 = wFull[16] || 0;
+    const wCo1CiaExam = isTcpl ? (wFull[3] || 0) : 0;
+    const wCo2Ssa = wFull[isTcpl ? 4 : 3] || 0;
+    const wCo2Cia = wFull[isTcpl ? 5 : 4] || 0;
+    const wCo2Fa = wFull[isTcpl ? 6 : 5] || 0;
+    const wCo2CiaExam = isTcpl ? (wFull[7] || 0) : 0;
+    const wCo3Ssa = wFull[isTcpl ? 8 : 6] || 0;
+    const wCo3Cia = wFull[isTcpl ? 9 : 7] || 0;
+    const wCo3Fa = wFull[isTcpl ? 10 : 8] || 0;
+    const wCo3CiaExam = isTcpl ? (wFull[11] || 0) : 0;
+    const wCo4Ssa = wFull[isTcpl ? 12 : 9] || 0;
+    const wCo4Cia = wFull[isTcpl ? 13 : 10] || 0;
+    const wCo4Fa = wFull[isTcpl ? 14 : 11] || 0;
+    const wCo4CiaExam = isTcpl ? (wFull[15] || 0) : 0;
+    const wMeCo1 = wFull[isTcpl ? 16 : 12] || 0;
+    const wMeCo2 = wFull[isTcpl ? 17 : 13] || 0;
+    const wMeCo3 = wFull[isTcpl ? 18 : 14] || 0;
+    const wMeCo4 = wFull[isTcpl ? 19 : 15] || 0;
+    const wMeCo5 = wFull[isTcpl ? 20 : 16] || 0;
 
     const cia1Snap = published.cia1 && typeof published.cia1 === 'object' ? published.cia1 : null;
     const cia2Snap = published.cia2 && typeof published.cia2 === 'object' ? published.cia2 : null;
@@ -1725,24 +1760,23 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
           const ciaExamRaw = (row as any)?.ciaExam;
           const ciaExamNum = typeof ciaExamRaw === 'number' && Number.isFinite(ciaExamRaw) ? ciaExamRaw : null;
           const pairEnabled = coB != null && coBEnabled;
+          // Experiment average only (0-2); CIA Exam is returned separately.
           const expPartA = avgA == null || !expMaxA ? null : clamp((avgA / expMaxA) * 2, 0, 2);
           const expPartB = avgB == null || !expMaxB ? null : clamp((avgB / expMaxB) * 2, 0, 2);
-          const ciaPart = ciaEnabled && ciaExamNum != null ? clamp((ciaExamNum / 30) * 1.5, 0, 1.5) : null;
 
-          const a = !coAEnabled || (expPartA == null && ciaPart == null)
-            ? null
-            : (expPartA ?? 0) + (ciaPart ?? 0);
-          const b = !pairEnabled || (expPartB == null && ciaPart == null)
-            ? null
-            : (expPartB ?? 0) + (ciaPart ?? 0);
+          const a = !coAEnabled || expPartA == null ? null : expPartA;
+          const b = !pairEnabled || expPartB == null ? null : expPartB;
+          // Raw CIA exam mark (0-30); null when disabled or not entered.
+          const ciaExam = ciaEnabled ? ciaExamNum : null;
 
           return {
-            a: a == null ? null : clamp(a, 0, 3.5),
-            b: b == null ? null : clamp(b, 0, 3.5),
+            a: a == null ? null : clamp(a, 0, 2),
+            b: b == null ? null : clamp(b, 0, 2),
+            ciaExam,
           };
         };
 
-        return { get, CO_MAX_A: 3.5, CO_MAX_B: 3.5 };
+        return { get, CO_MAX_A: 2, CO_MAX_B: 2 };
       };
 
       const tcplLab1 = ct === 'TCPL' ? readTcplLabPair(publishedTcplLab.lab1, 1, 2) : null;
@@ -1753,6 +1787,9 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       const tcplLab1Co2 = tcpl1?.b ?? null;
       const tcplLab2Co3 = tcpl2?.a ?? null;
       const tcplLab2Co4 = tcpl2?.b ?? null;
+      // Separate CIA Exam marks per lab sheet (shared between the two COs in each lab).
+      const tcplCiaExam1 = tcpl1?.ciaExam ?? null; // lab1 CIA Exam (CO1 & CO2)
+      const tcplCiaExam2 = tcpl2?.ciaExam ?? null; // lab2 CIA Exam (CO3 & CO4)
 
       const cia1Row = cia1ById[String(s.id)] || {};
       const cia2Row = cia2ById[String(s.id)] || {};
@@ -1812,30 +1849,35 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       const co1Fa = (ct === 'TCPR' || ct === 'PROJECT')
         ? scale(review1Co1, maxes.review1.co1, wCo1Fa)
         : ct === 'TCPL'
-          ? scale(tcplLab1Co1, tcplLab1?.CO_MAX_A ?? maxes.f1.co1, wCo1Fa)
+          ? scale(tcplLab1Co1, tcplLab1?.CO_MAX_A ?? 2, wCo1Fa)
           : scale(f1Co1, maxes.f1.co1, wCo1Fa);
+      // TCPL CIA Exam: raw mark out of 30, one per lab sheet (CO1&CO2 share lab1, CO3&CO4 share lab2).
+      const co1CiaExam = ct === 'TCPL' ? scale(tcplCiaExam1, 30, wCo1CiaExam) : null;
       const co2Ssa = scale(ssa1Co2Mark, maxes.ssa1.co2, wCo2Ssa);
       const co2Cia = scale(ciaCo2, maxes.cia1.co2, wCo2Cia);
       const co2Fa = (ct === 'TCPR' || ct === 'PROJECT')
         ? scale(review1Co2, maxes.review1.co2, wCo2Fa)
         : ct === 'TCPL'
-          ? scale(tcplLab1Co2, tcplLab1?.CO_MAX_B ?? maxes.f1.co2, wCo2Fa)
+          ? scale(tcplLab1Co2, tcplLab1?.CO_MAX_B ?? 2, wCo2Fa)
           : scale(f1Co2, maxes.f1.co2, wCo2Fa);
+      const co2CiaExam = ct === 'TCPL' ? scale(tcplCiaExam1, 30, wCo2CiaExam) : null;
 
       const co3Ssa = scale(ssa2Co3Mark, maxes.ssa2.co3, wCo3Ssa);
       const co3Cia = scale(ciaCo3, maxes.cia2.co3, wCo3Cia);
       const co3Fa = (ct === 'TCPR' || ct === 'PROJECT')
         ? scale(review2Co3, maxes.review2.co3, wCo3Fa)
         : ct === 'TCPL'
-          ? scale(tcplLab2Co3, tcplLab2?.CO_MAX_A ?? maxes.f2.co3, wCo3Fa)
+          ? scale(tcplLab2Co3, tcplLab2?.CO_MAX_A ?? 2, wCo3Fa)
           : scale(f2Co3, maxes.f2.co3, wCo3Fa);
+      const co3CiaExam = ct === 'TCPL' ? scale(tcplCiaExam2, 30, wCo3CiaExam) : null;
       const co4Ssa = scale(ssa2Co4Mark, maxes.ssa2.co4, wCo4Ssa);
       const co4Cia = scale(ciaCo4, maxes.cia2.co4, wCo4Cia);
       const co4Fa = (ct === 'TCPR' || ct === 'PROJECT')
         ? scale(review2Co4, maxes.review2.co4, wCo4Fa)
         : ct === 'TCPL'
-          ? scale(tcplLab2Co4, tcplLab2?.CO_MAX_B ?? maxes.f2.co4, wCo4Fa)
+          ? scale(tcplLab2Co4, tcplLab2?.CO_MAX_B ?? 2, wCo4Fa)
           : scale(f2Co4, maxes.f2.co4, wCo4Fa);
+      const co4CiaExam = ct === 'TCPL' ? scale(tcplCiaExam2, 30, wCo4CiaExam) : null;
 
       const model = getModelCoMarks(s);
       const meCo1 = scale(model.co1, model.max.co1, wMeCo1);
@@ -1844,7 +1886,15 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       const meCo4 = scale(model.co4, model.max.co4, wMeCo4);
       const meCo5 = scale(model.co5, model.max.co5, wMeCo5);
 
-      const partsFull = [
+      // TCPL uses 21-slot partsFull (SSA/CIA/LAB/CIAExam per CO + ME×5).
+      // All other class types use the standard 17-slot layout.
+      const partsFull = ct === 'TCPL' ? [
+        co1Ssa, co1Cia, co1Fa, co1CiaExam,
+        co2Ssa, co2Cia, co2Fa, co2CiaExam,
+        co3Ssa, co3Cia, co3Fa, co3CiaExam,
+        co4Ssa, co4Cia, co4Fa, co4CiaExam,
+        meCo1, meCo2, meCo3, meCo4, meCo5,
+      ] : [
         co1Ssa,
         co1Cia,
         co1Fa,

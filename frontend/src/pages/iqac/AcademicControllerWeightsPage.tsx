@@ -228,25 +228,19 @@ function buildInternalWeightsGroups(classType: string): InternalWeightsGroup[] {
   ];
 }
 
-export default function AcademicControllerWeightsPage() {
-  const [weights, setWeights] = useState<Record<string, WeightsRow>>({});
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+// ---------------------------------------------------------------------------
+// Module-level helpers (not inside useEffect) so they can be used by both
+// the load effect AND handleSave.
+// ---------------------------------------------------------------------------
 
-  useEffect(() => {
-    setLoading(true);
-    setError(null);
-    (async () => {
-      const buildDefaults = (): Record<string, WeightsRow> => {
-        const out: Record<string, WeightsRow> = {};
-        for (const ct of CLASS_TYPES) {
-          const k = normalizeClassType(String(ct));
-          // defaults for TCPR/TCPL as requested; others keep previous defaults
-          let ssaDef: number | string = 1.5;
-          let ciaDef: number | string = 3;
-          let formDef: number | string = 2.5;
+function buildDefaults(): Record<string, WeightsRow> {
+  const out: Record<string, WeightsRow> = {};
+  for (const ct of CLASS_TYPES) {
+    const k = normalizeClassType(typeof ct === "string" ? ct : (ct as any).value);
+    // defaults for TCPR/TCPL as requested; others keep previous defaults
+    let ssaDef: number | string = 1.5;
+    let ciaDef: number | string = 3;
+    let formDef: number | string = 2.5;
           if (k === 'TCPL') {
             ssaDef = 1;
             ciaDef = 3.25;
@@ -285,59 +279,74 @@ export default function AcademicControllerWeightsPage() {
           };
         }
 
-        // Ensure single THEORY key exists (server or CLASS_TYPES may provide it)
-        if (!out['THEORY']) {
-          out['THEORY'] = {
-            ssa1: 1.5,
-            cia1: 3,
-            formative1: 2.5,
-            internal_mark_weights: [...DEFAULT_INTERNAL_MARK_WEIGHTS_17],
-          };
-        }
+  // Ensure single THEORY key exists (server or CLASS_TYPES may provide it)
+  if (!out['THEORY']) {
+    out['THEORY'] = {
+      ssa1: 1.5,
+      cia1: 3,
+      formative1: 2.5,
+      internal_mark_weights: [...DEFAULT_INTERNAL_MARK_WEIGHTS_17],
+    };
+  }
 
-        return out;
-      };
+  return out;
+}
 
-      const applyAny = (src: any) => {
-        const defaults = buildDefaults();
-        if (!src || typeof src !== 'object') return defaults;
-        const out: Record<string, WeightsRow> = { ...defaults };
-        const all = Array.from(new Set<string>([...CLASS_TYPES.map((ct) => normalizeClassType(String(ct))), 'THEORY']));
+function applyAny(src: any): Record<string, WeightsRow> {
+  const defaults = buildDefaults();
+  if (!src || typeof src !== 'object') return defaults;
+  const out: Record<string, WeightsRow> = { ...defaults };
+  const all = Array.from(new Set<string>([...CLASS_TYPES.map((ct) => normalizeClassType(typeof ct === "string" ? ct : (ct as any).value)), 'THEORY', ...INTERNAL_MARK_TABLE_CLASS_TYPES.map(ct => normalizeClassType(String(ct)))]));
 
-        // Prefer explicit single THEORY key only
-        const theorySeed = src['THEORY'] ?? src['Theory'] ?? src['theory'] ?? null;
-        if (theorySeed && typeof theorySeed === 'object') {
-          src['THEORY'] = theorySeed;
-        }
+  // Normalise a THEORY alias so any casing variant from the server is accepted.
+  const theorySeed = src['THEORY'] ?? src['Theory'] ?? src['theory'] ?? null;
+  if (theorySeed && typeof theorySeed === 'object') {
+    src = { ...src, THEORY: theorySeed };
+  }
 
-        for (const k of all) {
-          const w = src[k] ?? src[String(k)] ?? src[String(k).toUpperCase()] ?? null;
-          if (!w || typeof w !== 'object') continue;
-          const im = Array.isArray((w as any).internal_mark_weights) ? (w as any).internal_mark_weights : null;
-          const seedRow = {
-            ssa1: (w as any).ssa1 ?? out[k].ssa1,
-            cia1: (w as any).cia1 ?? out[k].cia1,
-            formative1: (w as any).formative1 ?? out[k].formative1,
-          };
-          out[k] = {
-            ssa1: seedRow.ssa1,
-            cia1: seedRow.cia1,
-            formative1: seedRow.formative1,
-            internal_mark_weights: normalizeInternalWeights(k, (im && im.length ? im : out[k].internal_mark_weights) as any, seedRow),
-          };
-        }
-        return out;
-      };
+  for (const k of all) {
+    const w = src[k] ?? src[String(k)] ?? src[String(k).toUpperCase()] ?? null;
+    if (!w || typeof w !== 'object') continue;
+    const im = Array.isArray((w as any).internal_mark_weights) ? (w as any).internal_mark_weights : null;
+    const seedRow = {
+      ssa1: (w as any).ssa1 ?? out[k].ssa1,
+      cia1: (w as any).cia1 ?? out[k].cia1,
+      formative1: (w as any).formative1 ?? out[k].formative1,
+    };
+    out[k] = {
+      ssa1: seedRow.ssa1,
+      cia1: seedRow.cia1,
+      formative1: seedRow.formative1,
+      internal_mark_weights: normalizeInternalWeights(k, (im && im.length ? im : out[k].internal_mark_weights) as any, seedRow),
+    };
+  }
+  return out;
+}
 
-      // Prefer server; fallback localStorage; else defaults
+export default function AcademicControllerWeightsPage() {
+  const [weights, setWeights] = useState<Record<string, WeightsRow>>({});
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    (async () => {
+      // Prefer server; fallback localStorage; else defaults.
+      // After our save pipeline, server is always the source of truth.
       try {
         const svc = await import('../../services/obe');
         const remote = await svc.fetchClassTypeWeights();
         const applied = applyAny(remote);
         setWeights(applied);
+        // Keep localStorage in sync with what the server returns so that
+        // if the server is temporarily unreachable the last-good state is used.
+        try { lsSet('iqac_class_type_weights', applied); } catch {}
         return;
       } catch {
-        // ignore
+        // Server unreachable — fall through to localStorage / defaults.
       }
 
       try {
@@ -345,8 +354,7 @@ export default function AcademicControllerWeightsPage() {
         const applied = applyAny(saved);
         setWeights(applied);
       } catch {
-        const applied = buildDefaults();
-        setWeights(applied);
+        setWeights(buildDefaults());
       } finally {
         setLoading(false);
       }
@@ -387,7 +395,7 @@ export default function AcademicControllerWeightsPage() {
     try {
       // normalize keys to use the canonical form (uppercase)
       const normalized: Record<string, any> = {};
-      const keysToSave = Array.from(new Set<string>([...CLASS_TYPES.map((ct) => normalizeClassType(String(ct))), 'THEORY']));
+      const keysToSave = Array.from(new Set<string>([...CLASS_TYPES.map((ct) => normalizeClassType(typeof ct === "string" ? ct : (ct as any).value)), 'THEORY', ...INTERNAL_MARK_TABLE_CLASS_TYPES.map(ct => normalizeClassType(String(ct)))]));
 
       for (const k of keysToSave) {
         const w = (weights[k] ?? weights[k.toLowerCase()] ?? weights[k.toUpperCase()] ?? {}) as any;
@@ -419,20 +427,43 @@ export default function AcademicControllerWeightsPage() {
         normalized.THEORY = normalized.THEORY || null;
       }
 
-      // Try saving to backend; if it fails, persist to localStorage as fallback
-      let savedToServer = false;
+      // ------------------------------------------------------------------ //
+      // STEP 1: POST the normalised weights to the server.
+      // ------------------------------------------------------------------ //
+      const svc = await import('../../services/obe');
       try {
-        const svc = await import('../../services/obe');
         await svc.upsertClassTypeWeights(normalized);
-        savedToServer = true;
-      } catch (e) {
-        // fallback to local storage
-        lsSet('iqac_class_type_weights', normalized);
+      } catch (e: any) {
+        // POST itself failed (network / auth / server error).
+        // Keep the user's edits alive in localStorage so they can retry.
+        try { lsSet('iqac_class_type_weights', normalized); } catch {}
+        setWeights(applyAny(normalized));
+        setError(
+          `Server save failed: ${(e as any)?.message || 'Network or permission error'}. ` +
+          'Your changes are saved in this browser only and will be lost on refresh. ' +
+          'Please contact an administrator if the problem persists.'
+        );
+        return;
       }
 
-      setWeights(normalized);
-      if (savedToServer) setSuccess('Weights saved to server successfully.');
-      else setSuccess('Saved locally (backend not reachable).');
+      // ------------------------------------------------------------------ //
+      // STEP 2: Re-fetch from server to verify what was actually stored.
+      // This guarantees the UI always reflects real DB state after a save.
+      // ------------------------------------------------------------------ //
+      try {
+        const remote = await svc.fetchClassTypeWeights();
+        const verified = applyAny(remote);
+        lsSet('iqac_class_type_weights', verified);
+        setWeights(verified);
+        setSuccess('Weights saved and verified from server successfully.');
+      } catch {
+        // Save succeeded but re-fetch failed (e.g. temporary network blip).
+        // Use the payload we just sent as the best available state.
+        const optimistic = applyAny(normalized);
+        lsSet('iqac_class_type_weights', optimistic);
+        setWeights(optimistic);
+        setSuccess('Weights saved to server (could not re-verify — will confirm on next refresh).');
+      }
     } catch (e: any) {
       setError(e?.message || 'Failed to save weights');
     } finally {
@@ -469,8 +500,8 @@ export default function AcademicControllerWeightsPage() {
               </thead>
               <tbody>
                 {CLASS_TYPES.map((ctLabel) => {
-                  const key = normalizeClassType(String(ctLabel));
-                  const label = String(ctLabel).charAt(0).toUpperCase() + String(ctLabel).slice(1);
+                  const key = normalizeClassType(typeof ctLabel === "string" ? ctLabel : (ctLabel as any).value);
+                  const label = typeof ctLabel === "string" ? ctLabel.charAt(0).toUpperCase() + ctLabel.slice(1) : (ctLabel as any).label;
                   return (
                     <tr key={key}>
                       <td style={{ border: '1px solid #ccc', padding: 8 }}>{label}</td>

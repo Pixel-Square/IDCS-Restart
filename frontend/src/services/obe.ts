@@ -76,8 +76,9 @@ type DraftResponse<T> = {
 };
 
 export type DraftAssessmentKey = 'ssa1' | 'review1' | 'ssa2' | 'review2' | 'cia1' | 'cia2' | 'formative1' | 'formative2' | 'model' | 'cdap';
+export type CqiAssessmentKey = `cqi_${string}`;
 
-export type DueAssessmentKey = DraftAssessmentKey;
+export type DueAssessmentKey = DraftAssessmentKey | 'articulation' | 'lca' | CqiAssessmentKey;
 
 function apiBase() {
   return getApiBase();
@@ -881,8 +882,16 @@ export type ClassTypeWeightsItem = {
 };
 
 export async function fetchClassTypeWeights(): Promise<Record<string, ClassTypeWeightsItem>> {
-  const url = `${apiBase()}/api/obe/iqac/class-type-weights`;
-  const res = await fetchWithAuth(url, { method: 'GET' });
+  const url = `${apiBase()}/api/obe/iqac/class-type-weights?_=${Date.now()}`;
+  const res = await fetchWithAuth(url, {
+    method: 'GET',
+    cache: 'no-store',
+    headers: {
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      Pragma: 'no-cache',
+      Expires: '0',
+    },
+  });
   if (res.status === 401) throw new Error('Authentication required to fetch class-type weights');
   if (!res.ok) await parseError(res, 'Fetch class-type weights failed');
   const data = await res.json();

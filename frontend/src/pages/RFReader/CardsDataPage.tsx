@@ -18,6 +18,11 @@ type MeLite = {
   };
 };
 
+function displayUsername(row: CardDataRow): string {
+  const u = String((row as any)?.username ?? '').trim();
+  return u || row.identifier;
+}
+
 /* ——— helpers ——————— */
 async function toBase64(src: string): Promise<string> {
   const res = await fetch(src);
@@ -259,7 +264,7 @@ export default function RFReaderCardsDataPage() {
       if (search.trim()) {
         const q = search.toLowerCase();
         if (
-          !(row.username || '').toLowerCase().includes(q) &&
+          !String(row.username || '').toLowerCase().includes(q) &&
           !row.identifier.toLowerCase().includes(q) &&
           !(row.rfid_uid || '').toLowerCase().includes(q)
         ) {
@@ -375,7 +380,7 @@ export default function RFReaderCardsDataPage() {
 
       const tableData = filteredData.map((row) => [
         row.identifier,
-        row.username,
+        displayUsername(row),
         row.role,
         row.department || '—',
         row.status,
@@ -408,7 +413,7 @@ export default function RFReaderCardsDataPage() {
 
   const removeRfid = async (row: CardDataRow) => {
     if (!row.rfid_uid) return;
-    const ok = window.confirm(`Remove RFID UID for ${row.username || row.identifier}?`);
+    const ok = window.confirm(`Remove RFID UID for ${displayUsername(row)}?`);
     if (!ok) return;
 
     const key = `${row.role}-${row.id}`;
@@ -503,7 +508,7 @@ export default function RFReaderCardsDataPage() {
         {hoveredRow && (() => {
           const row = hoveredRow;
           const profileImg = resolveProfileImageUrl(row.profile_image_url);
-          const fallback = (row.username || row.identifier || 'U').split(' ').filter(Boolean).map(n => n[0]).join('').toUpperCase().slice(0, 2);
+          const fallback = displayUsername(row).split(' ').filter(Boolean).map(n => n[0]).join('').toUpperCase().slice(0, 2);
           return (
             <div className="flex items-start gap-4">
               <div className="flex-shrink-0 w-16 h-16 rounded-2xl overflow-hidden border-2 border-white shadow-md bg-gray-100 flex justify-center items-center">
@@ -515,7 +520,7 @@ export default function RFReaderCardsDataPage() {
               </div>
               <div className="flex flex-col">
                 <span className="text-[10px] font-black text-indigo-500 tracking-widest uppercase mb-1">{row.role}</span>
-                <span className="text-sm font-bold text-gray-900 leading-tight">{row.username || row.identifier}</span>
+                <span className="text-sm font-bold text-gray-900 leading-tight">{displayUsername(row)}</span>
                 <span className="text-xs font-semibold text-gray-500 mt-0.5">{row.identifier}</span>
                 <span className="text-xs text-gray-400 mt-1">{row.department || '—'}</span>
                 <div className="mt-2 text-xs font-bold leading-none">
@@ -671,7 +676,7 @@ export default function RFReaderCardsDataPage() {
                     const busy = removingKey === key;
                     const disabled = busy || !row.rfid_uid;
                     const profileImageUrl = resolveProfileImageUrl(row.profile_image_url);
-                    const initials = (row.username || row.identifier || 'U')
+                    const initials = displayUsername(row)
                       .split(' ')
                       .filter(Boolean)
                       .map((n) => n[0])
@@ -703,7 +708,7 @@ export default function RFReaderCardsDataPage() {
                         {profileImageUrl && (
                           <img
                             src={profileImageUrl}
-                            alt={row.username || row.identifier}
+                            alt={displayUsername(row)}
                             className="absolute inset-0 w-9 h-9 rounded-full object-cover border border-gray-200 shadow-sm"
                             onError={(e) => {
                               (e.currentTarget as HTMLImageElement).style.display = 'none'
@@ -713,7 +718,7 @@ export default function RFReaderCardsDataPage() {
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-700 hover:text-indigo-600 transition-colors">
-                      {row.username || '—'}
+                      {String(row.username || '').trim() || '—'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {row.department || '—'}

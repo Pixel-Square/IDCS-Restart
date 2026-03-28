@@ -1063,6 +1063,214 @@ def _get_teaching_assignment_id_from_request(request, body: dict | None = None) 
     return _parse_int(qp.get('teaching_assignment_id'))
 
 
+def _normalize_cqi_assessment_type(value) -> str | None:
+    s = str(value or '').strip().lower()
+    return s or None
+
+
+def _normalize_cqi_co_numbers(value) -> list[int]:
+    nums: list[int] = []
+
+    def _push(raw):
+        try:
+            n = int(str(raw).strip())
+        except Exception:
+            return
+        if 1 <= n <= 20 and n not in nums:
+            nums.append(n)
+
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            if isinstance(item, str):
+                parts = re.findall(r'\d+', item)
+                if parts:
+                    for part in parts:
+                        _push(part)
+                    continue
+            _push(item)
+    elif isinstance(value, str):
+        for part in re.findall(r'\d+', value):
+            _push(part)
+    elif value is not None:
+        _push(value)
+
+    nums.sort()
+    return nums
+
+
+def _make_cqi_page_key(assessment_type: str | None, co_numbers: list[int], explicit_key=None) -> str | None:
+    explicit = str(explicit_key or '').strip()
+    if explicit:
+        return explicit
+    parts = []
+    if assessment_type:
+        parts.append(str(assessment_type).strip().lower())
+    if co_numbers:
+        parts.append(','.join(str(n) for n in co_numbers))
+    return ':'.join(parts) if parts else None
+
+
+def _resolve_cqi_page_context(request, body: dict | None = None) -> tuple[str | None, str | None, list[int]]:
+    qp = _get_query_params(request)
+    raw_page_key = None
+    raw_assessment = None
+    raw_co_numbers = None
+
+    if isinstance(body, dict):
+        raw_page_key = body.get('pageKey', body.get('page_key'))
+        raw_assessment = body.get('assessmentType', body.get('assessment_type'))
+        raw_co_numbers = body.get('coNumbers', body.get('co_numbers'))
+
+    if raw_page_key in (None, ''):
+        raw_page_key = qp.get('page_key') or qp.get('pageKey')
+    if raw_assessment in (None, ''):
+        raw_assessment = qp.get('assessment_type') or qp.get('assessmentType')
+    if raw_co_numbers in (None, '', []):
+        raw_co_numbers = qp.get('co_numbers') or qp.get('coNumbers')
+
+    assessment_type = _normalize_cqi_assessment_type(raw_assessment)
+    co_numbers = _normalize_cqi_co_numbers(raw_co_numbers)
+    page_key = _make_cqi_page_key(assessment_type, co_numbers, raw_page_key)
+    return page_key, assessment_type, co_numbers
+
+
+def _split_cqi_entries_payload(raw_entries) -> tuple[dict, dict]:
+    merged_entries: dict = {}
+    pages: dict = {}
+
+    if not isinstance(raw_entries, dict):
+        return merged_entries, pages
+
+    raw_pages = raw_entries.get('__pages')
+    if isinstance(raw_pages, dict):
+        pages = {str(k): v for k, v in raw_pages.items() if isinstance(v, dict)}
+
+    for key, value in raw_entries.items():
+        if str(key).startswith('__'):
+            continue
+        if isinstance(value, dict):
+            merged_entries[str(key)] = value
+
+    return merged_entries, pages
+
+
+def _find_cqi_page_snapshot(pages: dict, page_key: str | None, assessment_type: str | None, co_numbers: list[int]):
+    if not isinstance(pages, dict) or not pages:
+        return None
+
+    if page_key and isinstance(pages.get(page_key), dict):
+        return pages.get(page_key)
+
+    for snapshot in pages.values():
+        if not isinstance(snapshot, dict):
+            continue
+        snap_assessment = _normalize_cqi_assessment_type(snapshot.get('assessmentType', snapshot.get('assessment_type')))
+        snap_co_numbers = _normalize_cqi_co_numbers(snapshot.get('coNumbers', snapshot.get('co_numbers')))
+        if assessment_type and snap_assessment and snap_assessment != assessment_type:
+            continue
+        if co_numbers and snap_co_numbers and snap_co_numbers != co_numbers:
+            continue
+        return snapshot
+
+    return None
+
+
+def _extract_cqi_page_state(raw_entries, page_key: str | None, assessment_type: str | None, co_numbers: list[int], legacy_co_numbers=None):
+    merged_entries, pages = _split_cqi_entries_payload(raw_entries)
+    if pages:
+        snapshot = _find_cqi_page_snapshot(pages, page_key, assessment_type, co_numbers)
+        if not isinstance(snapshot, dict):
+            return None
+        entries = snapshot.get('entries') if isinstance(snapshot.get('entries'), dict) else {}
+        return {
+            'entries': entries,
+            'co_numbers': _normalize_cqi_co_numbers(snapshot.get('coNumbers', snapshot.get('co_numbers'))),
+            'assessment_type': _normalize_cqi_assessment_type(snapshot.get('assessmentType', snapshot.get('assessment_type'))),
+            'updated_at': snapshot.get('updatedAt'),
+            'updated_by': snapshot.get('updatedBy'),
+            'published_at': snapshot.get('publishedAt'),
+            'published_by': snapshot.get('publishedBy'),
+        }
+
+    if not isinstance(raw_entries, dict):
+        return None
+
+    legacy_nums = _normalize_cqi_co_numbers(legacy_co_numbers)
+    if page_key and co_numbers and legacy_nums and legacy_nums != co_numbers:
+        return None
+
+    return {
+        'entries': merged_entries,
+        'co_numbers': legacy_nums,
+        'assessment_type': assessment_type,
+        'updated_at': None,
+        'updated_by': None,
+        'published_at': None,
+        'published_by': None,
+    }
+
+
+def _merge_cqi_page_entries(pages: dict) -> tuple[dict, list[int]]:
+    merged: dict = {}
+    all_co_numbers: list[int] = []
+
+    for snapshot in pages.values():
+        if not isinstance(snapshot, dict):
+            continue
+        entries = snapshot.get('entries')
+        if isinstance(entries, dict):
+            for student_id, student_entries in entries.items():
+                if not isinstance(student_entries, dict):
+                    continue
+                student_key = str(student_id)
+                bucket = merged.setdefault(student_key, {})
+                bucket.update(student_entries)
+        for co_num in _normalize_cqi_co_numbers(snapshot.get('coNumbers', snapshot.get('co_numbers'))):
+            if co_num not in all_co_numbers:
+                all_co_numbers.append(co_num)
+
+    all_co_numbers.sort()
+    return merged, all_co_numbers
+
+
+def _build_cqi_entries_payload(existing_entries, page_key: str | None, assessment_type: str | None, co_numbers: list[int], entries: dict, *, meta_kind: str, user_id=None, legacy_co_numbers=None):
+    if not page_key:
+        return entries or {}, co_numbers, None
+
+    legacy_entries, pages = _split_cqi_entries_payload(existing_entries)
+    if not pages and legacy_entries:
+        legacy_page_key = _make_cqi_page_key(None, _normalize_cqi_co_numbers(legacy_co_numbers)) or page_key
+        pages[legacy_page_key] = {
+            'entries': legacy_entries,
+            **({'coNumbers': _normalize_cqi_co_numbers(legacy_co_numbers)} if _normalize_cqi_co_numbers(legacy_co_numbers) else {}),
+        }
+
+    snapshot = dict(pages.get(page_key) or {})
+    snapshot['entries'] = entries or {}
+    if assessment_type:
+        snapshot['assessmentType'] = assessment_type
+    if co_numbers:
+        snapshot['coNumbers'] = co_numbers
+
+    now_iso = timezone.now().isoformat()
+    if meta_kind == 'draft':
+        snapshot['updatedAt'] = now_iso
+        snapshot['updatedBy'] = user_id
+    else:
+        snapshot['publishedAt'] = now_iso
+        snapshot['publishedBy'] = user_id
+
+    pages[page_key] = snapshot
+    merged_entries, merged_co_numbers = _merge_cqi_page_entries(pages)
+
+    payload = {
+        '__version': 2,
+        '__pages': pages,
+    }
+    payload.update(merged_entries)
+    return payload, merged_co_numbers or co_numbers, snapshot
+
+
 def _resolve_section_name_from_ta(ta) -> str:
     if not ta:
         return ''
@@ -1356,18 +1564,27 @@ def _has_obe_master_permission(user) -> bool:
     if getattr(user, 'is_superuser', False):
         return True
 
+    def _normalized_names(items) -> set[str]:
+        out: set[str] = set()
+        for item in items or []:
+            name = str(getattr(item, 'name', item) or '').strip().upper()
+            if name:
+                out.add(name)
+        return out
+
     # IQAC/HAA users are treated as OBE masters for IQAC-managed configuration endpoints.
     # Note: this codebase uses BOTH Django auth groups (user.groups) AND custom roles (user.roles).
     # Allow either so an "IQAC role" user doesn't get blocked by missing Django group membership.
     if getattr(user, 'is_authenticated', False):
         try:
-            if user.groups.filter(name__in=['IQAC', 'HAA']).exists():
+            if {'IQAC', 'HAA'} & _normalized_names(user.groups.all()):
                 return True
         except Exception:
             pass
         try:
-            if getattr(user, 'roles', None) is not None and user.roles.filter(name__in=['IQAC', 'HAA']).exists():
-                return True
+            if getattr(user, 'roles', None) is not None:
+                if {'IQAC', 'HAA'} & _normalized_names(user.roles.all()):
+                    return True
         except Exception:
             try:
                 role_names = {str(r.name or '').strip().upper() for r in user.roles.all()}
@@ -1412,6 +1629,63 @@ def _require_publish_owner(request):
     return Response({'detail': 'Only the designated user may publish marks.'}, status=status.HTTP_403_FORBIDDEN)
 
 
+# ---------------------------------------------------------------------------
+# Shared helper: canonical slot-length enforcement for internal_mark_weights
+# ---------------------------------------------------------------------------
+_EXPECTED_INTERNAL_WEIGHTS_SLOTS = {'TCPL': 21}  # all other class types: 17
+_DEFAULT_INTERNAL_WEIGHTS_SLOTS = 17
+
+_TCPL_DEFAULT_21 = [
+    1.0, 3.25, 3.5, 0.0,  # CO1 SSA, CIA, LAB, CIA-Exam
+    1.0, 3.25, 3.5, 0.0,  # CO2
+    1.0, 3.25, 3.5, 0.0,  # CO3
+    1.0, 3.25, 3.5, 0.0,  # CO4
+    3.0, 3.0, 3.0, 3.0, 7.0,  # ME CO1-CO5
+]
+_THEORY_DEFAULT_17 = [1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 2.0, 2.0, 2.0, 2.0, 4.0]
+
+
+def _normalise_class_type_weights_array(class_type: str, arr) -> list:
+    """Return a properly-sized list of floats for the given class_type.
+
+    * TCPL expects 21 slots – old 17-slot arrays are automatically upgraded by
+      inserting a 0.0 CIA-Exam slot after every CO's LAB position.
+    * All other class types expect 17 slots.
+    * If ``arr`` is None / not a list the canonical defaults are returned.
+    """
+    ct = str(class_type or '').strip().upper()
+    expected = _EXPECTED_INTERNAL_WEIGHTS_SLOTS.get(ct, _DEFAULT_INTERNAL_WEIGHTS_SLOTS)
+    defaults = _TCPL_DEFAULT_21 if ct == 'TCPL' else _THEORY_DEFAULT_17
+
+    if not isinstance(arr, list):
+        return list(defaults)
+
+    if ct == 'TCPL':
+        if len(arr) == 17:
+            # Upgrade: insert CIA-Exam (0.0) slot after each CO's LAB value
+            out = []
+            for co in range(4):
+                base = co * 3
+                out.append(float(arr[base]) if base < len(arr) else 0.0)
+                out.append(float(arr[base + 1]) if base + 1 < len(arr) else 0.0)
+                out.append(float(arr[base + 2]) if base + 2 < len(arr) else 0.0)
+                out.append(0.0)  # CIA-Exam – default 0 for upgraded rows
+            for i in range(12, 17):
+                out.append(float(arr[i]) if i < len(arr) else 0.0)
+            return out  # always 21 elements
+        # Already 21-slot (or wrong length): pad / truncate
+        out = [float(x) for x in arr]
+        while len(out) < 21:
+            out.append(0.0)
+        return out[:21]
+
+    # Non-TCPL: 17 slots
+    out = [float(x) for x in arr]
+    while len(out) < expected:
+        out.append(defaults[len(out)] if len(out) < len(defaults) else 0.0)
+    return out[:expected]
+
+
 @api_view(['GET'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([AllowAny])
@@ -1420,7 +1694,7 @@ def class_type_weights_list(request):
     try:
         from .models import ClassTypeWeights
         try:
-            objs = ClassTypeWeights.objects.all()
+            objs = ClassTypeWeights.objects.all().order_by('id')
         except Exception:
             objs = []
     except ImportError:
@@ -1429,15 +1703,37 @@ def class_type_weights_list(request):
 
     out = {}
     for o in objs:
-        out[str(o.class_type).upper()] = {
+        ct = str(o.class_type or '').strip().upper()
+        if not ct:
+            continue
+        prev = out.get(ct)
+        current_updated = getattr(o, 'updated_at', None)
+        prev_updated = prev.get('updated_at_obj') if isinstance(prev, dict) else None
+        if prev is not None and prev_updated is not None and current_updated is not None and current_updated <= prev_updated:
+            continue
+        out[ct] = {
             'ssa1': float(o.ssa1) if o.ssa1 is not None else None,
             'cia1': float(o.cia1) if o.cia1 is not None else None,
             'formative1': float(o.formative1) if o.formative1 is not None else None,
-            'internal_mark_weights': (o.internal_mark_weights if isinstance(getattr(o, 'internal_mark_weights', None), list) else None),
+            # Always serve the canonically-sized array (upgrades legacy 17-slot TCPL rows).
+            'internal_mark_weights': _normalise_class_type_weights_array(
+                ct, o.internal_mark_weights if isinstance(getattr(o, 'internal_mark_weights', None), list) else None
+            ),
             'updated_at': (o.updated_at.isoformat() if getattr(o, 'updated_at', None) else None),
             'updated_by': o.updated_by,
+            'updated_at_obj': current_updated,
         }
-    return Response({'results': out})
+    for v in out.values():
+        if isinstance(v, dict):
+            v.pop('updated_at_obj', None)
+    resp = Response({'results': out})
+    try:
+        resp['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        resp['Pragma'] = 'no-cache'
+        resp['Expires'] = '0'
+    except Exception:
+        pass
+    return resp
 
 
 @api_view(['GET'])
@@ -1515,21 +1811,27 @@ def cqi_draft(request, subject_id: str):
     if ta is None:
         return Response({'detail': 'Invalid teaching_assignment_id.'}, status=status.HTTP_400_BAD_REQUEST)
 
+    body = request.data if isinstance(request.data, dict) else None
+    page_key, assessment_type, requested_co_numbers = _resolve_cqi_page_context(request, body)
+
     from .models import ObeCqiDraft
 
     if request.method == 'GET':
         obj = ObeCqiDraft.objects.filter(subject=subject, teaching_assignment=ta).first()
         if obj is None:
             return Response({'draft': None})
+        snapshot = _extract_cqi_page_state(obj.entries, page_key, assessment_type, requested_co_numbers)
+        if snapshot is None:
+            return Response({'draft': None})
         return Response(
             {
-                'draft': {'entries': obj.entries or {}},
-                'updated_at': obj.updated_at.isoformat() if getattr(obj, 'updated_at', None) else None,
-                'updated_by': getattr(obj, 'updated_by', None),
+                'draft': {'entries': snapshot.get('entries') or {}},
+                'updated_at': snapshot.get('updated_at') or (obj.updated_at.isoformat() if getattr(obj, 'updated_at', None) else None),
+                'updated_by': snapshot.get('updated_by', getattr(obj, 'updated_by', None)),
             }
         )
 
-    body = request.data if isinstance(request.data, dict) else {}
+    body = body or {}
     entries = body.get('entries', None)
     if entries is None:
         return Response({'detail': 'Missing entries.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -1537,11 +1839,21 @@ def cqi_draft(request, subject_id: str):
         return Response({'detail': 'entries must be an object.'}, status=status.HTTP_400_BAD_REQUEST)
 
     user_id = getattr(getattr(request, 'user', None), 'id', None)
+    existing = ObeCqiDraft.objects.filter(subject=subject, teaching_assignment=ta).first()
+    stored_entries, _merged_co_numbers, snapshot = _build_cqi_entries_payload(
+        existing.entries if existing is not None else None,
+        page_key,
+        assessment_type,
+        requested_co_numbers,
+        entries,
+        meta_kind='draft',
+        user_id=user_id,
+    )
     obj, _created = ObeCqiDraft.objects.update_or_create(
         subject=subject,
         teaching_assignment=ta,
         defaults={
-            'entries': entries or {},
+            'entries': stored_entries,
             'updated_by': user_id,
         },
     )
@@ -1549,8 +1861,8 @@ def cqi_draft(request, subject_id: str):
     return Response(
         {
             'status': 'ok',
-            'updated_at': obj.updated_at.isoformat() if getattr(obj, 'updated_at', None) else None,
-            'updated_by': getattr(obj, 'updated_by', None),
+            'updated_at': (snapshot or {}).get('updatedAt') or (obj.updated_at.isoformat() if getattr(obj, 'updated_at', None) else None),
+            'updated_by': (snapshot or {}).get('updatedBy', getattr(obj, 'updated_by', None)),
         }
     )
 
@@ -1581,18 +1893,24 @@ def cqi_published(request, subject_id: str):
     if ta is None:
         return Response({'detail': 'Invalid teaching_assignment_id.'}, status=status.HTTP_400_BAD_REQUEST)
 
+    page_key, assessment_type, requested_co_numbers = _resolve_cqi_page_context(request)
+
     from .models import ObeCqiPublished
 
     obj = ObeCqiPublished.objects.filter(subject=subject, teaching_assignment=ta).first()
     if obj is None:
         return Response({'published': None})
 
+    snapshot = _extract_cqi_page_state(obj.entries, page_key, assessment_type, requested_co_numbers, legacy_co_numbers=obj.co_numbers)
+    if snapshot is None:
+        return Response({'published': None})
+
     return Response(
         {
             'published': {
-                'publishedAt': obj.published_at.isoformat() if getattr(obj, 'published_at', None) else None,
-                'coNumbers': obj.co_numbers or [],
-                'entries': obj.entries or {},
+                'publishedAt': snapshot.get('published_at') or (obj.published_at.isoformat() if getattr(obj, 'published_at', None) else None),
+                'coNumbers': snapshot.get('co_numbers') or obj.co_numbers or [],
+                'entries': snapshot.get('entries') or {},
             }
         }
     )
@@ -1617,8 +1935,12 @@ def cqi_publish(request, subject_id: str):
         return Response({'detail': 'Invalid teaching_assignment_id.'}, status=status.HTTP_400_BAD_REQUEST)
 
     body = request.data if isinstance(request.data, dict) else {}
+    page_key, assessment_type, requested_co_numbers = _resolve_cqi_page_context(request, body)
     entries = body.get('entries')
     co_numbers = body.get('coNumbers', body.get('co_numbers'))
+    nums = _normalize_cqi_co_numbers(co_numbers)
+    if not nums:
+        nums = requested_co_numbers
 
     # Backward compatibility: if frontend doesn't send entries, publish latest draft.
     if entries is None:
@@ -1626,7 +1948,16 @@ def cqi_publish(request, subject_id: str):
             from .models import ObeCqiDraft
 
             d = ObeCqiDraft.objects.filter(subject=subject, teaching_assignment=ta).first()
-            entries = d.entries if d is not None else None
+            if d is not None:
+                if page_key:
+                    snapshot = _extract_cqi_page_state(d.entries, page_key, assessment_type, nums)
+                    entries = snapshot.get('entries') if snapshot else None
+                    if not nums and snapshot:
+                        nums = snapshot.get('co_numbers') or []
+                else:
+                    entries = d.entries
+            else:
+                entries = None
         except Exception:
             entries = None
 
@@ -1635,35 +1966,46 @@ def cqi_publish(request, subject_id: str):
     if not isinstance(entries, dict):
         return Response({'detail': 'entries must be an object.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    nums: list[int] = []
-    if isinstance(co_numbers, list):
-        for x in co_numbers:
-            try:
-                n = int(x)
-            except Exception:
-                continue
-            if 1 <= n <= 20 and n not in nums:
-                nums.append(n)
-    nums.sort()
-
     from .models import ObeCqiPublished
 
     user_id = getattr(getattr(request, 'user', None), 'id', None)
+    existing = ObeCqiPublished.objects.filter(subject=subject, teaching_assignment=ta).first()
+    stored_entries, merged_nums, snapshot = _build_cqi_entries_payload(
+        existing.entries if existing is not None else None,
+        page_key,
+        assessment_type,
+        nums,
+        entries,
+        meta_kind='published',
+        user_id=user_id,
+        legacy_co_numbers=existing.co_numbers if existing is not None else None,
+    )
     obj, _created = ObeCqiPublished.objects.update_or_create(
         subject=subject,
         teaching_assignment=ta,
         defaults={
-            'co_numbers': nums,
-            'entries': entries or {},
+            'co_numbers': merged_nums,
+            'entries': stored_entries,
             'published_by': user_id,
         },
     )
 
+    try:
+        _touch_lock_after_publish(
+            request,
+            subject_code=subject.code,
+            subject_name=str(getattr(subject, 'name', '') or subject.code),
+            assessment=_build_cqi_assessment_key(page_key=page_key, assessment_type=assessment_type, co_numbers=nums or requested_co_numbers),
+            teaching_assignment_id=ta_id,
+        )
+    except Exception:
+        pass
+
     return Response(
         {
             'status': 'ok',
-            'published_at': obj.published_at.isoformat() if getattr(obj, 'published_at', None) else None,
-            'published_by': getattr(obj, 'published_by', None),
+            'published_at': (snapshot or {}).get('publishedAt') or (obj.published_at.isoformat() if getattr(obj, 'published_at', None) else None),
+            'published_by': (snapshot or {}).get('publishedBy', getattr(obj, 'published_by', None)),
         }
     )
 
@@ -1714,25 +2056,43 @@ def class_type_weights_upsert(request):
             if not ct:
                 continue
 
+            # Server-side slot normalisation: TCPL must always be 21 slots, others 17.
+            if im is not None:
+                im = _normalise_class_type_weights_array(ct, im)
+
             existing = None
+            duplicates = []
             try:
-                existing = ClassTypeWeights.objects.filter(class_type=ct).first()
+                duplicates = list(ClassTypeWeights.objects.filter(class_type__iexact=ct).order_by('-updated_at', '-id'))
+                existing = duplicates[0] if duplicates else None
             except Exception:
                 existing = None
+                duplicates = []
             existing_im = getattr(existing, 'internal_mark_weights', None) if existing is not None else None
             if not isinstance(existing_im, list):
                 existing_im = []
 
-            obj, created = ClassTypeWeights.objects.update_or_create(
-                class_type=ct,
-                defaults={
-                    'ssa1': ssa if ssa is not None else 0,
-                    'cia1': cia if cia is not None else 0,
-                    'formative1': f1 if f1 is not None else 0,
-                    'internal_mark_weights': im if im is not None else existing_im,
-                    'updated_by': user_id,
-                },
-            )
+            if existing is not None:
+                obj = existing
+                obj.class_type = ct
+                obj.ssa1 = ssa if ssa is not None else 0
+                obj.cia1 = cia if cia is not None else 0
+                obj.formative1 = f1 if f1 is not None else 0
+                obj.internal_mark_weights = im if im is not None else existing_im
+                obj.updated_by = user_id
+                obj.save()
+                extra_ids = [d.id for d in duplicates[1:] if getattr(d, 'id', None) != getattr(obj, 'id', None)]
+                if extra_ids:
+                    ClassTypeWeights.objects.filter(id__in=extra_ids).delete()
+            else:
+                obj = ClassTypeWeights.objects.create(
+                    class_type=ct,
+                    ssa1=ssa if ssa is not None else 0,
+                    cia1=cia if cia is not None else 0,
+                    formative1=f1 if f1 is not None else 0,
+                    internal_mark_weights=im if im is not None else existing_im,
+                    updated_by=user_id,
+                )
             out[ct] = {
                 'ssa1': float(obj.ssa1),
                 'cia1': float(obj.cia1),
@@ -2263,9 +2623,168 @@ def _resolve_curriculum_row_for_subject(request, subject_code: str, teaching_ass
         return None
 
 
+def _is_cqi_assessment_key(assessment: str | None) -> bool:
+    return str(assessment or '').strip().lower().startswith('cqi_')
+
+
+def _assessment_enablement_key(assessment: str | None) -> str:
+    assessment_key = str(assessment or '').strip().lower()
+    if _is_cqi_assessment_key(assessment_key):
+        parts = [p for p in assessment_key.split('_') if p]
+        if len(parts) >= 2:
+            return str(parts[1]).strip().lower()
+        return 'model'
+    return assessment_key
+
+
+def _is_valid_mark_assessment_key(assessment: str | None, *, allow_documents: bool = True, allow_cqi: bool = False) -> bool:
+    assessment_key = str(assessment or '').strip().lower()
+    base = {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'}
+    if allow_documents:
+        base.update({'cdap', 'articulation', 'lca'})
+    if assessment_key in base:
+        return True
+    if allow_cqi and _is_cqi_assessment_key(assessment_key):
+        return True
+    return False
+
+
+def _normalize_cqi_page_key(page_key=None, assessment_type=None, co_numbers=None) -> str:
+    raw = str(page_key or '').strip().lower()
+    if raw:
+        return raw
+
+    assessment = str(assessment_type or '').strip().lower()
+    nums: list[int] = []
+    if isinstance(co_numbers, list):
+        for item in co_numbers:
+            try:
+                n = int(item)
+            except Exception:
+                continue
+            if n not in nums:
+                nums.append(n)
+    if assessment and nums:
+        return f"{assessment}:{','.join(str(n) for n in nums)}"
+    if assessment:
+        return assessment
+    return ''
+
+
+def _build_cqi_assessment_key(page_key=None, assessment_type=None, co_numbers=None) -> str:
+    normalized_page_key = _normalize_cqi_page_key(page_key=page_key, assessment_type=assessment_type, co_numbers=co_numbers)
+    if not normalized_page_key:
+        return 'cqi_model'
+
+    if ':' in normalized_page_key:
+        assessment, raw_numbers = normalized_page_key.split(':', 1)
+    else:
+        assessment, raw_numbers = normalized_page_key, ''
+
+    assessment_slug = re.sub(r'[^a-z0-9]+', '_', str(assessment or '').strip().lower()).strip('_') or 'model'
+    nums: list[str] = []
+    for piece in str(raw_numbers or '').split(','):
+        piece = str(piece or '').strip()
+        if not piece:
+            continue
+        if piece.isdigit() and piece not in nums:
+            nums.append(piece)
+    suffix = f"_{'_'.join(nums)}" if nums else ''
+    return f"cqi_{assessment_slug}{suffix}"
+
+
+def _is_cqi_pages_container(raw) -> bool:
+    return isinstance(raw, dict) and isinstance(raw.get('__pages'), dict)
+
+
+def _merge_cqi_entries(raw_entries) -> dict:
+    if not isinstance(raw_entries, dict):
+        return {}
+    if not _is_cqi_pages_container(raw_entries):
+        return raw_entries
+
+    merged: dict = {}
+    for payload in (raw_entries.get('__pages') or {}).values():
+        if not isinstance(payload, dict):
+            continue
+        page_entries = payload.get('entries')
+        if not isinstance(page_entries, dict):
+            continue
+        for student_id, student_entries in page_entries.items():
+            if not isinstance(student_entries, dict):
+                continue
+            bucket = merged.setdefault(str(student_id), {})
+            for co_key, value in student_entries.items():
+                bucket[str(co_key)] = value
+    return merged
+
+
+def _extract_cqi_page_payload(raw_entries, *, page_key=None, assessment_type=None, co_numbers=None) -> dict | None:
+    normalized_page_key = _normalize_cqi_page_key(page_key=page_key, assessment_type=assessment_type, co_numbers=co_numbers)
+    if not isinstance(raw_entries, dict):
+        return None
+    if _is_cqi_pages_container(raw_entries):
+        if not normalized_page_key:
+            return None
+        payload = (raw_entries.get('__pages') or {}).get(normalized_page_key)
+        return payload if isinstance(payload, dict) else None
+    return {
+        'page_key': normalized_page_key,
+        'assessment_type': str(assessment_type or '').strip().lower() or None,
+        'co_numbers': co_numbers if isinstance(co_numbers, list) else [],
+        'entries': raw_entries,
+    }
+
+
+def _upsert_cqi_page_payload(raw_entries, *, page_key=None, assessment_type=None, co_numbers=None, entries=None, published_at=None):
+    normalized_page_key = _normalize_cqi_page_key(page_key=page_key, assessment_type=assessment_type, co_numbers=co_numbers)
+    if not normalized_page_key:
+        return entries if isinstance(entries, dict) else {}
+
+    pages = {}
+    if _is_cqi_pages_container(raw_entries):
+        pages = dict(raw_entries.get('__pages') or {})
+
+    page_payload = {
+        'page_key': normalized_page_key,
+        'assessment_type': str(assessment_type or '').strip().lower() or None,
+        'co_numbers': [int(x) for x in (co_numbers or []) if str(x).strip().isdigit()],
+        'entries': entries if isinstance(entries, dict) else {},
+    }
+    if published_at is not None:
+        page_payload['published_at'] = published_at.isoformat() if hasattr(published_at, 'isoformat') else str(published_at)
+    pages[normalized_page_key] = page_payload
+    return {'__pages': pages}
+
+
+def _collect_cqi_co_numbers(raw_entries, fallback=None) -> list[int]:
+    nums: list[int] = []
+    if _is_cqi_pages_container(raw_entries):
+        for payload in (raw_entries.get('__pages') or {}).values():
+            if not isinstance(payload, dict):
+                continue
+            for item in payload.get('co_numbers') or []:
+                try:
+                    n = int(item)
+                except Exception:
+                    continue
+                if 1 <= n <= 20 and n not in nums:
+                    nums.append(n)
+    elif isinstance(fallback, list):
+        for item in fallback:
+            try:
+                n = int(item)
+            except Exception:
+                continue
+            if 1 <= n <= 20 and n not in nums:
+                nums.append(n)
+    nums.sort()
+    return nums
+
+
 def _enforce_assessment_enabled_for_course(request, *, subject_code: str, assessment: str, teaching_assignment_id: int | None = None):
     """Reject requests for disabled assessments on SPECIAL courses."""
-    assessment_key = str(assessment or '').strip().lower()
+    assessment_key = _assessment_enablement_key(assessment)
     if not assessment_key:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -6504,7 +7023,7 @@ def edit_window(request, assessment: str, subject_id: str):
         return err
 
     assessment_key = str(assessment or '').strip().lower()
-    if assessment_key not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model', 'cdap', 'articulation', 'lca'}:
+    if not _is_valid_mark_assessment_key(assessment_key, allow_documents=True, allow_cqi=True):
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
     qp = getattr(request, 'query_params', {}) if hasattr(request, 'query_params') else request.GET
@@ -6592,21 +7111,7 @@ def mark_table_lock_status(request, assessment: str, subject_id: str):
         return err
 
     assessment_key = str(assessment or '').strip().lower()
-    if assessment_key not in {
-        'ssa1',
-        'review1',
-        'ssa2',
-        'review2',
-        'cia1',
-        'cia2',
-        'formative1',
-        'formative2',
-        'model',
-        # Document-level assessments that still use the same publish/lock gate
-        'cdap',
-        'lca',
-        'articulation',
-    }:
+    if not _is_valid_mark_assessment_key(assessment_key, allow_documents=True, allow_cqi=True):
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
     subject_code = str(subject_id or '').strip()
@@ -7418,7 +7923,7 @@ def publish_request_create(request):
     except Exception:
         ta_id = None
 
-    if assessment not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model', 'cdap', 'articulation', 'lca'}:
+    if not _is_valid_mark_assessment_key(assessment, allow_documents=True, allow_cqi=True):
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
     if not subject_code:
         return Response({'detail': 'subject_code is required.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -7981,7 +8486,7 @@ def edit_request_create(request):
     except Exception:
         ta_id = None
 
-    if assessment not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model', 'cdap', 'articulation', 'lca'}:
+    if not _is_valid_mark_assessment_key(assessment, allow_documents=True, allow_cqi=True):
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
     if not subject_code:
         return Response({'detail': 'subject_code is required.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -8262,7 +8767,7 @@ def edit_requests_my_latest(request):
     except Exception:
         ta_id = None
 
-    if assessment not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model', 'cdap', 'articulation', 'lca'}:
+    if not _is_valid_mark_assessment_key(assessment, allow_documents=True, allow_cqi=True):
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
     if not subject_code:
         return Response({'detail': 'subject_code is required.'}, status=status.HTTP_400_BAD_REQUEST)

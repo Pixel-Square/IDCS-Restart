@@ -2412,7 +2412,7 @@ class CardsDataView(APIView):
     permission_classes = (IsAuthenticated,)
     
     def get(self, request):
-        if not request.user.roles.filter(name__in=["SECURITY", "LIBRARY", "IQAC", "ADMIN"]).exists():
+        if not _has_card_management_permission(request.user):
             return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
             
         students = StudentProfile.objects.select_related(
@@ -2430,12 +2430,7 @@ class CardsDataView(APIView):
             except Exception:
                 profile_image_url = None
 
-            username = ''
-            if s.user:
-                try:
-                    username = s.user.get_username()
-                except Exception:
-                    username = getattr(s.user, 'username', '') or ''
+            username = getattr(s.user, "username", "") if s.user else ""
             dept = ""
             if s.section and s.section.batch and s.section.batch.course and s.section.batch.course.department:
                 dept = s.section.batch.course.department.short_name or s.section.batch.course.department.code
@@ -2461,12 +2456,7 @@ class CardsDataView(APIView):
             except Exception:
                 profile_image_url = None
 
-            username = ''
-            if s.user:
-                try:
-                    username = s.user.get_username()
-                except Exception:
-                    username = getattr(s.user, 'username', '') or ''
+            username = getattr(s.user, "username", "") if s.user else ""
             dept = (s.department.short_name or s.department.code) if s.department else ""
             data.append({
                 "id": s.id,

@@ -1,4 +1,5 @@
  import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { Check } from 'lucide-react'
 import {
   assignUID,
   assignStaffUID,
@@ -40,6 +41,186 @@ function Row({ label, value, mono }: { label: string; value: string; mono?: bool
     <div className="flex justify-between items-center py-1 border-b border-gray-100 last:border-0">
       <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{label}</span>
       <span className={`text-sm font-medium text-gray-800 ${mono ? 'font-mono' : ''}`}>{value}</span>
+    </div>
+  )
+}
+
+function UnknownCardModal({
+  uid,
+  query,
+  onQueryChange,
+  results,
+  selected,
+  onSelectResult,
+  loading,
+  error,
+  onAssign,
+  onSkip,
+  assignSuccess,
+}: {
+  uid: string
+  query: string
+  onQueryChange: (q: string) => void
+  results: AssignCandidate[]
+  selected: AssignCandidate | null
+  onSelectResult: (r: AssignCandidate) => void
+  loading: boolean
+  error: string | null
+  onAssign: () => void
+  onSkip: () => void
+  assignSuccess: boolean
+}) {
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (inputRef.current) {
+      setTimeout(() => inputRef.current?.focus(), 100)
+    }
+  }, [])
+
+  if (assignSuccess) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+        <div className="relative bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden">
+          <div className="p-8 flex flex-col items-center justify-center space-y-4">
+            <div
+              className="w-20 h-20 rounded-full bg-green-100 flex items-center justify-center animate-in zoom-in"
+              style={{
+                animation: 'zoom-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)',
+              }}
+            >
+              <Check className="w-10 h-10 text-green-600" strokeWidth={3} />
+            </div>
+            <div className="text-center">
+              <h3 className="text-xl font-bold text-gray-900">Card Assigned!</h3>
+              <p className="text-sm text-gray-500 mt-2">RFID UID has been successfully assigned.</p>
+            </div>
+          </div>
+          <style>{`
+            @keyframes zoom-in {
+              from {
+                opacity: 0;
+                transform: scale(0.8);
+              }
+              to {
+                opacity: 1;
+                transform: scale(1);
+              }
+            }
+          `}</style>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+      <div className="relative bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-300">
+        {/* Header */}
+        <div className="bg-gradient-to-r from-amber-600 to-orange-500 px-6 py-4 text-white">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs font-semibold uppercase tracking-widest text-amber-100">Unknown Card Detected</div>
+          </div>
+          <div className="text-2xl font-bold">Assign Card</div>
+          <div className="text-xs text-amber-100 mt-2 font-mono">UID: {uid}</div>
+        </div>
+
+        {/* Content */}
+        <div className="p-6 space-y-4">
+          {/* Search */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-2">
+              Search Student or Staff
+            </label>
+            <input
+              ref={inputRef}
+              type="text"
+              value={query}
+              onChange={(e) => onQueryChange(e.target.value)}
+              placeholder="Type Reg No / Name / Staff ID..."
+              className="w-full border rounded-lg px-4 py-3 text-sm outline-none border-gray-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 transition"
+            />
+          </div>
+
+          {/* Error */}
+          {error && (
+            <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-xs text-red-600">
+              {error}
+            </div>
+          )}
+
+          {/* Results List */}
+          <div className="border rounded-lg overflow-hidden max-h-64 overflow-y-auto bg-gray-50">
+            {loading && (
+              <div className="p-4 text-xs text-gray-500 text-center">
+                <span className="inline-flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                  Searching…
+                </span>
+              </div>
+            )}
+
+            {!loading && query.trim().length === 0 && (
+              <div className="p-4 text-xs text-gray-400 text-center italic">
+                Start typing to search
+              </div>
+            )}
+
+            {!loading && query.trim().length > 0 && results.length === 0 && (
+              <div className="p-4 text-xs text-gray-400 text-center">
+                No results found
+              </div>
+            )}
+
+            {!loading &&
+              results.map((r) => {
+                const active = selected?.kind === r.kind && selected?.id === r.id
+                return (
+                  <button
+                    key={`${r.kind}:${r.id}`}
+                    onClick={() => onSelectResult(r)}
+                    className={`w-full text-left px-4 py-3 border-b last:border-b-0 transition ${
+                      active
+                        ? 'bg-amber-100 border-amber-200'
+                        : 'hover:bg-white border-gray-200'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <span
+                        className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold ${
+                          r.kind === 'student'
+                            ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
+                            : 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                        }`}
+                      >
+                        {r.kind === 'student' ? 'STUDENT' : 'STAFF'}
+                      </span>
+                    </div>
+                    <div className="text-sm font-semibold text-gray-900">{r.title}</div>
+                    {r.subtitle && <div className="text-xs text-gray-600 mt-1">{r.subtitle}</div>}
+                  </button>
+                )
+              })}
+          </div>
+
+          {/* Actions */}
+          <div className="flex gap-3">
+            <button
+              onClick={onAssign}
+              disabled={!selected}
+              className="flex-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white px-4 py-3 text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition"
+            >
+              Assign Card
+            </button>
+            <button
+              onClick={onSkip}
+              className="flex-1 rounded-lg border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-3 text-sm font-semibold transition"
+            >
+              Skip
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
@@ -216,6 +397,7 @@ export default function RFReaderAssignCardsPage() {
   const [assignError, setAssignError] = useState<string | null>(null)
   const [assignResults, setAssignResults] = useState<AssignCandidate[]>([])
   const [assignSelected, setAssignSelected] = useState<AssignCandidate | null>(null)
+  const [assignSuccess, setAssignSuccess] = useState(false)
 
   const [port, setPort] = useState<any | null>(null)
   const [deviceName, setDeviceName] = useState('')
@@ -445,13 +627,18 @@ export default function RFReaderAssignCardsPage() {
       if (assignSelected.kind === 'student') await assignUID(assignSelected.id, uid)
       else await assignStaffUID(assignSelected.id, uid)
 
-      setPendingUid(null)
-      setAssignQuery('')
-      setAssignResults([])
-      setAssignSelected(null)
-
-      lastScanRef.current = { uid: '', time: 0 }
-      await processUID(uid)
+      setAssignSuccess(true)
+      
+      // Auto-close after 1.5 seconds
+      setTimeout(() => {
+        setAssignSuccess(false)
+        setPendingUid(null)
+        setAssignQuery('')
+        setAssignResults([])
+        setAssignSelected(null)
+        lastScanRef.current = { uid: '', time: 0 }
+        processUID(uid)
+      }, 1500)
     } catch (e: any) {
       setAssignError(String(e?.message ?? e))
     }
@@ -464,6 +651,28 @@ export default function RFReaderAssignCardsPage() {
       )}
       {popup?.kind === 'staff' && (
         <StaffCard staff={popup.profile} uid={popup.uid} onClose={closePopup} />
+      )}
+
+      {pendingUid && (
+        <UnknownCardModal
+          uid={pendingUid}
+          query={assignQuery}
+          onQueryChange={setAssignQuery}
+          results={assignResults}
+          selected={assignSelected}
+          onSelectResult={setAssignSelected}
+          loading={assignLoading}
+          error={assignError}
+          onAssign={handleAssign}
+          onSkip={() => {
+            setPendingUid(null)
+            setAssignQuery('')
+            setAssignResults([])
+            setAssignSelected(null)
+            setAssignError(null)
+          }}
+          assignSuccess={assignSuccess}
+        />
       )}
 
       <div className="max-w-4xl mx-auto px-4 py-6 space-y-5">
@@ -541,90 +750,6 @@ export default function RFReaderAssignCardsPage() {
                 {serialError}
               </div>
             )}
-          </div>
-        </div>
-
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-          <div className="px-5 py-3 bg-gray-50 border-b border-gray-100 flex items-center justify-between">
-            <span className="text-sm font-semibold text-gray-700">Assign Card</span>
-            {pendingUid ? (
-              <span className="font-mono text-xs bg-amber-50 text-amber-700 border border-amber-200 rounded-md px-2 py-0.5">{pendingUid}</span>
-            ) : (
-              <span className="text-xs text-gray-400 italic">Scan an unrecognised card first</span>
-            )}
-          </div>
-
-          <div className="p-5 space-y-3">
-            <input
-              type="text"
-              value={assignQuery}
-              onChange={(e) => setAssignQuery(e.target.value)}
-              disabled={!pendingUid}
-              placeholder="Type Reg No / Student Name / Staff ID / Staff Name"
-              className="w-full border rounded-lg px-3 py-2 text-sm outline-none border-gray-200 disabled:bg-gray-50"
-            />
-
-            {assignError && (
-              <p className="text-xs text-red-500 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{assignError}</p>
-            )}
-
-            <div className="border rounded-lg overflow-hidden max-h-64 overflow-y-auto">
-              {assignLoading && <div className="p-3 text-xs text-gray-500">Searching…</div>}
-              {!assignLoading && pendingUid && assignResults.length === 0 && assignQuery.trim().length > 0 && (
-                <div className="p-3 text-xs text-gray-400">No results</div>
-              )}
-
-              {!assignLoading && assignResults.map((r) => {
-                const active = assignSelected?.kind === r.kind && assignSelected?.id === r.id
-                return (
-                  <button
-                    key={`${r.kind}:${r.id}`}
-                    onClick={() => setAssignSelected(r)}
-                    className={
-                      'w-full text-left px-3 py-2 border-b last:border-b-0 ' +
-                      (active ? 'bg-slate-100' : 'hover:bg-slate-50')
-                    }
-                  >
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={
-                          r.kind === 'student'
-                            ? 'text-[10px] px-2 py-0.5 rounded-full border font-semibold bg-indigo-50 border-indigo-200 text-indigo-700'
-                            : 'text-[10px] px-2 py-0.5 rounded-full border font-semibold bg-emerald-50 border-emerald-200 text-emerald-700'
-                        }
-                      >
-                        {r.kind === 'student' ? 'STUDENT' : 'STAFF'}
-                      </span>
-                      <div className="text-sm font-medium truncate">{r.title}</div>
-                    </div>
-                    {r.subtitle && <div className="text-xs opacity-70 mt-0.5">{r.subtitle}</div>}
-                  </button>
-                )
-              })}
-            </div>
-
-            <div className="flex gap-3">
-              <button
-                onClick={handleAssign}
-                disabled={!pendingUid || !assignSelected}
-                className="flex-1 rounded-lg bg-indigo-600 text-white px-4 py-2 text-sm font-semibold disabled:opacity-50"
-              >
-                Assign Card
-              </button>
-              <button
-                onClick={() => {
-                  setPendingUid(null)
-                  setAssignQuery('')
-                  setAssignResults([])
-                  setAssignSelected(null)
-                  setAssignError(null)
-                }}
-                disabled={!pendingUid}
-                className="flex-1 rounded-lg border px-4 py-2 text-sm font-semibold disabled:opacity-50"
-              >
-                Skip
-              </button>
-            </div>
           </div>
         </div>
       </div>

@@ -775,7 +775,7 @@ class ObeEditRequest(models.Model):
     subject_code = models.CharField(max_length=64, db_index=True)
     subject_name = models.CharField(max_length=255, blank=True, default='')
     section_name = models.CharField(max_length=64, blank=True, default='')
-    assessment = models.CharField(max_length=20, choices=ASSESSMENT_CHOICES)
+    assessment = models.CharField(max_length=64)
     scope = models.CharField(max_length=24, choices=SCOPE_CHOICES, db_index=True)
     reason = models.TextField(blank=True, default='')
 
@@ -959,7 +959,7 @@ class ObeMarkTableLock(models.Model):
     subject_name = models.CharField(max_length=255, blank=True, default='')
     section_name = models.CharField(max_length=64, blank=True, default='')
 
-    assessment = models.CharField(max_length=20, choices=ASSESSMENT_CHOICES, db_index=True)
+    assessment = models.CharField(max_length=64, db_index=True)
 
     # Published indicates the faculty has published at least once.
     is_published = models.BooleanField(default=False, db_index=True)
