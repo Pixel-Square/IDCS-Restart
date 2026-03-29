@@ -355,7 +355,7 @@ export default function CQIEntry({
   const [headerMaxVisible, setHeaderMaxVisible] = useState(true);
   const [draftLog, setDraftLog] = useState<{ updated_at?: string | null; updated_by?: any | null } | null>(null);
   const [publishedLog, setPublishedLog] = useState<{ published_at?: string | null } | null>(null);
-  const [readOnly, setReadOnly] = useState(false);
+  const [localPublished, setLocalPublished] = useState(false);
   const [autoSaveEnabled, setAutoSaveEnabled] = useState(true);
   const [dirty, setDirty] = useState(false);
   const [resettingMarks, setResettingMarks] = useState(false);
@@ -424,13 +424,17 @@ export default function CQIEntry({
     teachingAssignmentId,
     options: { poll: true },
   });
-  const isPublished = Boolean(markLock?.is_published || publishedLog?.published_at);
+  const isPublished = Boolean(localPublished || markLock?.is_published || publishedLog?.published_at);
+  
   const entryOpen = !isPublished
     ? true
-    : !editRequestsEnabled || Boolean(markLock?.entry_open) || Boolean(markEntryEditWindow?.allowed_by_approval);
-  const publishedEditLocked = Boolean(isPublished && editRequestsEnabled && !entryOpen);
-  const publishButtonIsRequestEdit = Boolean(isPublished && publishedEditLocked && editRequestsEnabled);
-  const editRequestsBlocked = Boolean(isPublished && publishedEditLocked && !editRequestsEnabled);
+    : Boolean(markLock?.entry_open) || Boolean(markEntryEditWindow?.allowed_by_approval);
+
+  const publishedEditLocked = Boolean(isPublished && !entryOpen);
+  
+  const publishButtonIsRequestEdit = Boolean(publishedEditLocked && editRequestsEnabled);
+  const editRequestsBlocked = Boolean(publishedEditLocked && !editRequestsEnabled);
+  const readOnly = publishedEditLocked;
   const {
     pending: markEntryReqPending,
     setPendingUntilMs: setMarkEntryReqPendingUntilMs,
@@ -442,10 +446,6 @@ export default function CQIEntry({
     scope: 'MARK_ENTRY',
     teachingAssignmentId,
   });
-
-  useEffect(() => {
-    setReadOnly(publishedEditLocked);
-  }, [publishedEditLocked]);
 
   // Load published snapshot (if present) and lock editing.
   useEffect(() => {
@@ -467,6 +467,7 @@ export default function CQIEntry({
             setCqiEntries(pub.entries || {});
             setDirty(false);
             setPublishedLog({ published_at: pub.publishedAt ?? null });
+            if (pub.publishedAt) setLocalPublished(true);
             return;
           }
         }
@@ -925,11 +926,11 @@ export default function CQIEntry({
           };
 
           return {
-            co1: scale(sums.co1, modelMaxes.co1, 2),
-            co2: scale(sums.co2, modelMaxes.co2, 2),
-            co3: scale(sums.co3, modelMaxes.co3, 2),
-            co4: scale(sums.co4, modelMaxes.co4, 2),
-            co5: scale(sums.co5, modelMaxes.co5, 4),
+            co1: sums.co1,
+            co2: sums.co2,
+            co3: sums.co3,
+            co4: sums.co4,
+            co5: sums.co5,
           };
         };
 
@@ -950,8 +951,8 @@ export default function CQIEntry({
 
         const [ssa1Res, ssa2Res, f1Res, f2Res, cia1Res, cia2Res, review1Res, review2Res, labF1Res, labF2Res, labCia1Res, labCia2Res, labModelRes] =
           await Promise.all([
-            needs12 && allow('ssa1') && !isLabLike ? fetchPublishedSsa1(subjectId, teachingAssignmentId).catch(() => ({ marks: {} })) : { marks: {} },
-            needs34 && allow('ssa2') && !isLabLike ? fetchPublishedSsa2(subjectId, teachingAssignmentId).catch(() => ({ marks: {} })) : { marks: {} },
+            needs12 && allow('ssa1') && !isLabLike ? (async () => { try { const p = await fetchPublishedSsa1(subjectId, teachingAssignmentId).catch(() => ({marks:{}})); try { const d = await fetchDraft<any>('ssa1', subjectId, teachingAssignmentId); if (d?.draft) return { ...p, draft: (d.draft as any).data ?? (d.draft as any).sheet ?? d.draft }; } catch{} return p; } catch { return {marks:{}} } })() : { marks: {} },
+            needs34 && allow('ssa2') && !isLabLike ? (async () => { try { const p = await fetchPublishedSsa2(subjectId, teachingAssignmentId).catch(() => ({marks:{}})); try { const d = await fetchDraft<any>('ssa2', subjectId, teachingAssignmentId); if (d?.draft) return { ...p, draft: (d.draft as any).data ?? (d.draft as any).sheet ?? d.draft }; } catch{} return p; } catch { return {marks:{}} } })() : { marks: {} },
 
             // THEORY/SPECIAL only: formative (skill+att)
             needs12 && allow('formative1') && !isLabLike && !isTcpr && !isTcpl ? fetchPublishedFormative1(subjectId, teachingAssignmentId).catch(() => ({ marks: {} })) : { marks: {} },
@@ -961,8 +962,8 @@ export default function CQIEntry({
             needs34 && allow('cia2') && !isLabLike ? fetchPublishedCiaSheet('cia2', subjectId, teachingAssignmentId).catch(() => ({ data: null })) : { data: null },
 
             // TCPR: review replaces formative
-            needs12 && allow('review1') && isTcpr ? fetchPublishedReview1(subjectId).catch(() => ({ marks: {} })) : { marks: {} },
-            needs34 && allow('review2') && isTcpr ? fetchPublishedReview2(subjectId).catch(() => ({ marks: {} })) : { marks: {} },
+            needs12 && allow('review1') && isTcpr ? (async () => { try { const p = await fetchPublishedReview1(subjectId).catch(() => ({marks:{}})); try { const d = await fetchDraft<any>('review1', subjectId, teachingAssignmentId); if (d?.draft) return { ...p, draft: (d.draft as any).data ?? (d.draft as any).sheet ?? d.draft }; } catch{} return p; } catch { return {marks:{}} } })() : { marks: {} },
+            needs34 && allow('review2') && isTcpr ? (async () => { try { const p = await fetchPublishedReview2(subjectId).catch(() => ({marks:{}})); try { const d = await fetchDraft<any>('review2', subjectId, teachingAssignmentId); if (d?.draft) return { ...p, draft: (d.draft as any).data ?? (d.draft as any).sheet ?? d.draft }; } catch{} return p; } catch { return {marks:{}} } })() : { marks: {} },
 
             // TCPL: LAB1/LAB2 stored under formative1/formative2 (lab-style)
             needs12 && allow('formative1') && isTcpl
@@ -1262,7 +1263,7 @@ export default function CQIEntry({
               const k = `co${coNum}` as keyof typeof modelScaled;
               if (k in modelScaled) {
                 meMark = Number((modelScaled as any)[k]);
-                meMax = coNum === 5 ? 4 : 2;
+                meMax = (modelMaxes as any)[k] || 0;
               }
             }
 
@@ -1270,8 +1271,19 @@ export default function CQIEntry({
               // THEORY/TCPL/TCPR: SSA1 and CIA1. LAB/PRACTICAL: CIA comes from lab sheet.
               if (!isLabLike) {
                 const ssa1Total = toNumOrNull((ssa1Res as any).marks[String(student.id)]);
-                const ssa1Half = ssa1Total == null ? null : Number(ssa1Total) / 2;
-                ssaMark = ssa1Half;
+                let ssaMarkVal: number | null = null;
+                const ssaDraftRows: any[] = (ssa1Res as any).draft?.rows || (ssa1Res as any).draft?.sheet?.rows || [];
+                const draftRow = ssaDraftRows.find((r) => String(r.studentId) === String(student.id));
+                if (draftRow) {
+                  const splitVal = coNum === 1 ? draftRow.co1 : draftRow.co2;
+                  if (splitVal !== "" && splitVal != null && !isNaN(Number(splitVal))) {
+                    ssaMarkVal = Number(splitVal);
+                  }
+                }
+                if (ssaMarkVal === null && ssa1Total != null) {
+                  ssaMarkVal = Number(ssa1Total) / 2;
+                }
+                ssaMark = ssaMarkVal;
                 ssaMax = coNum === 1 ? maxes.ssa1.co1 : maxes.ssa1.co2;
 
                 if (cia1Data) {
@@ -1346,8 +1358,19 @@ export default function CQIEntry({
             } else if (coNum === 3 || coNum === 4) {
               if (!isLabLike) {
                 const ssa2Total = toNumOrNull((ssa2Res as any).marks[String(student.id)]);
-                const ssa2Half = ssa2Total == null ? null : Number(ssa2Total) / 2;
-                ssaMark = ssa2Half;
+                let ssaMarkVal: number | null = null;
+                const ssaDraftRows: any[] = (ssa2Res as any).draft?.rows || (ssa2Res as any).draft?.sheet?.rows || [];
+                const draftRow = ssaDraftRows.find((r) => String(r.studentId) === String(student.id));
+                if (draftRow) {
+                  const splitVal = coNum === 3 ? draftRow.co3 : draftRow.co4;
+                  if (splitVal !== "" && splitVal != null && !isNaN(Number(splitVal))) {
+                    ssaMarkVal = Number(splitVal);
+                  }
+                }
+                if (ssaMarkVal === null && ssa2Total != null) {
+                  ssaMarkVal = Number(ssa2Total) / 2;
+                }
+                ssaMark = ssaMarkVal;
                 ssaMax = coNum === 3 ? maxes.ssa2.co3 : maxes.ssa2.co4;
 
                 if (cia2Data) {
@@ -1448,7 +1471,8 @@ export default function CQIEntry({
             if (meMark !== null && meMax > 0) {
               // For local model sheets: meMax is already 2/4 and mark is scaled to that; set w=meMax so contrib==mark.
               // For lab-like: meMax is the CO_MAX; treat it like a regular component with weight equal to meMax.
-              components.push({ key: 'me', mark: meMark, max: meMax, w: meMax });
+              const meWeight = (!isLabLike && modelScaled) ? (coNum === 5 ? 4 : 2) : meMax;
+              components.push({ key: 'me', mark: meMark, max: meMax, w: meWeight });
             }
 
             if (components.length > 0) {
@@ -1789,7 +1813,8 @@ export default function CQIEntry({
                 if (res && res.ok) {
                   const j = await res.json().catch(() => null);
                   setDirty(false);
-                  setPublishedLog({ published_at: j?.published_at ?? null });
+                  setLocalPublished(true);
+                  setPublishedLog({ published_at: j?.published_at ?? new Date().toISOString() });
                   refreshMarkLock({ silent: true });
                   refreshMarkEntryEditWindow({ silent: true });
                   alert('CQI published');
@@ -1807,7 +1832,7 @@ export default function CQIEntry({
             style={{ minWidth: 110 }}
             disabled={editRequestsBlocked || (publishButtonIsRequestEdit ? markEntryReqPending : readOnly || publishing)}
           >
-            {publishButtonIsRequestEdit ? (markEntryReqPending ? 'Request Pending' : 'Request Edit') : publishing ? 'Publishing…' : 'Publish'}
+            {publishButtonIsRequestEdit ? (markEntryReqPending ? 'Request Pending' : 'Request Edit') : editRequestsBlocked ? 'Published & Locked' : publishing ? 'Publishing…' : 'Publish'}
           </button>
         </div>
       </div>

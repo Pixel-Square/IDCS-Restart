@@ -6588,20 +6588,7 @@ class StudentMarksView(APIView):
                         qs = qs.filter(teaching_assignment_id__in=ta_ids)
                     row = qs.order_by('-published_at').only('entries', 'published_at').first()
                     if row and isinstance(getattr(row, 'entries', None), dict):
-                        raw_entries = row.entries or {}
-                        if isinstance(raw_entries.get('__pages'), dict):
-                            merged_entries = {}
-                            for payload in (raw_entries.get('__pages') or {}).values():
-                                page_entries = payload.get('entries') if isinstance(payload, dict) else None
-                                if not isinstance(page_entries, dict):
-                                    continue
-                                for student_id, student_entries in page_entries.items():
-                                    if not isinstance(student_entries, dict):
-                                        continue
-                                    merged_entries.setdefault(str(student_id), {}).update(student_entries)
-                            ent = merged_entries.get(str(sp.id)) or merged_entries.get(sp.id)
-                        else:
-                            ent = raw_entries.get(str(sp.id)) or raw_entries.get(sp.id)
+                        ent = row.entries.get(str(sp.id)) or row.entries.get(sp.id)
                         if isinstance(ent, dict):
                             cos = {str(k): _num(v) for k, v in ent.items()}
                 except Exception:

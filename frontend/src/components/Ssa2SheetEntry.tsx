@@ -233,6 +233,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
 
   const excelFileInputRef = useRef<HTMLInputElement | null>(null);
   const [excelBusy, setExcelBusy] = useState(false);
+  const [excelImportHelpOpen, setExcelImportHelpOpen] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -375,7 +376,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
     teachingAssignmentId,
   });
 
-  useLockBodyScroll(Boolean(publishedEditModalOpen) || Boolean(markManagerModal) || Boolean(viewMarksModalOpen));
+  useLockBodyScroll(Boolean(publishedEditModalOpen) || Boolean(markManagerModal) || Boolean(viewMarksModalOpen) || Boolean(excelImportHelpOpen));
 
   const editRequestsBlocked = Boolean(isPublished && publishedEditLocked && !editRequestsEnabled);
   const publishButtonIsRequestEdit = Boolean(isPublished && publishedEditLocked && editRequestsEnabled);
@@ -1345,6 +1346,11 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
 
   const triggerExcelImport = () => {
     if (tableBlocked) return;
+    setExcelImportHelpOpen(true);
+  };
+
+  const chooseExcelImportFile = () => {
+    if (tableBlocked) return;
     excelFileInputRef.current?.click();
   };
 
@@ -1616,18 +1622,63 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
           const prevRow = nextRows[idx] || {};
           const patch: any = {};
 
-          if (isAbsent) {
-            patch.co3 = 0;
-            patch.co4 = 0;
-            patch.total = 0;
-          } else {
-            if (q1 != null) patch.co3 = round1(clamp(q1, 0, q1Max));
-            if (q2 != null) patch.co4 = round1(clamp(q2, 0, q2Max));
+          const toReviewSplits = (rawMark: number | null, coKey: 'co3' | 'co4') => {
+            if (rawMark == null) return null;
+            const coMax = coKey === 'co3' ? CO_MAX.co3 : CO_MAX.co4;
+            const n0 = clamp(Math.trunc(rawMark), 0, coMax);
+            const splitCfgRaw = ((sheet as any)?.coSplitMax || {}) as { co3?: Array<number | ''>; co4?: Array<number | ''> };
+            const capsRaw = (coKey === 'co3' ? splitCfgRaw.co3 : splitCfgRaw.co4) || [];
+            const count = Math.max(1, Array.isArray(capsRaw) ? capsRaw.length : 0);
+            const caps = Array.from({ length: count }).map((_, i) => {
+              const v = (Array.isArray(capsRaw) ? capsRaw[i] : undefined) as any;
+              const cap = typeof v === 'number' && Number.isFinite(v) ? clamp(Math.trunc(v), 0, coMax) : coMax;
+              return cap;
+            });
 
-            if (totalX != null) {
-              patch.total = round1(clamp(totalX, 0, MAX_ASMT2));
-            } else if (q1 != null && q2 != null) {
-              patch.total = round1(clamp((patch.co3 as number) + (patch.co4 as number), 0, MAX_ASMT2));
+            let remaining = n0;
+            const out: Array<number | ''> = [];
+            for (let i = 0; i < count; i++) {
+              const cap = caps[i] ?? coMax;
+              const v = clamp(Math.min(remaining, cap), 0, coMax);
+              out.push(v);
+              remaining = clamp(remaining - v, 0, coMax);
+            }
+            return out;
+          };
+
+          if (isAbsent) {
+            if (isReview) {
+              patch.reviewCoMarks = { co3: [0], co4: [0] };
+              patch.total = 0;
+            } else {
+              patch.co3 = 0;
+              patch.co4 = 0;
+              patch.total = 0;
+            }
+          } else {
+            if (isReview) {
+              const prevReview = { ...((prevRow as any)?.reviewCoMarks || {}) } as { co3?: Array<number | ''>; co4?: Array<number | ''> };
+              const nextCo3 = toReviewSplits(q1, 'co3') ?? prevReview.co3;
+              const nextCo4 = toReviewSplits(q2, 'co4') ?? prevReview.co4;
+
+              const sumArr = (arr: any) =>
+                (Array.isArray(arr) ? arr : []).reduce<number>((acc, v) => acc + (typeof v === 'number' && Number.isFinite(v) ? v : 0), 0);
+
+              patch.reviewCoMarks = {
+                ...prevReview,
+                ...(nextCo3 != null ? { co3: nextCo3 } : {}),
+                ...(nextCo4 != null ? { co4: nextCo4 } : {}),
+              };
+              patch.total = round1(clamp(sumArr(nextCo3) + sumArr(nextCo4), 0, MAX_ASMT2));
+            } else {
+              if (q1 != null) patch.co3 = round1(clamp(q1, 0, q1Max));
+              if (q2 != null) patch.co4 = round1(clamp(q2, 0, q2Max));
+
+              if (totalX != null) {
+                patch.total = round1(clamp(totalX, 0, MAX_ASMT2));
+              } else if (q1 != null && q2 != null) {
+                patch.total = round1(clamp((patch.co3 as number) + (patch.co4 as number), 0, MAX_ASMT2));
+              }
             }
           }
 
@@ -1647,8 +1698,26 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
       for (let i = 0; i < nextRows.length; i++) {
         const before = existingRows[i] || {};
         const after = nextRows[i] || {};
-        if (!isNum(before.co3) && isNum(after.co3)) filledCells += 1;
-        if (!isNum(before.co4) && isNum(after.co4)) filledCells += 1;
+        if (isReview) {
+          const b3 = (before as any)?.reviewCoMarks?.co3;
+          const a3 = (after as any)?.reviewCoMarks?.co3;
+          const b4 = (before as any)?.reviewCoMarks?.co4;
+          const a4 = (after as any)?.reviewCoMarks?.co4;
+          const countNewNums = (b: any, a: any) => {
+            const bb = Array.isArray(b) ? b : [];
+            const aa = Array.isArray(a) ? a : [];
+            const len = Math.max(bb.length, aa.length);
+            let c = 0;
+            for (let j = 0; j < len; j++) {
+              if (!isNum(bb[j]) && isNum(aa[j])) c += 1;
+            }
+            return c;
+          };
+          filledCells += countNewNums(b3, a3) + countNewNums(b4, a4);
+        } else {
+          if (!isNum(before.co3) && isNum(after.co3)) filledCells += 1;
+          if (!isNum(before.co4) && isNum(after.co4)) filledCells += 1;
+        }
       }
 
       setSheet((prev) => ({ ...prev, rows: nextRows }));
@@ -1676,6 +1745,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+    setExcelImportHelpOpen(false);
     try {
       await importFromExcel(file);
     } catch (err: any) {
@@ -2025,6 +2095,83 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
             style={{ display: 'none' }}
             onChange={handleExcelFileSelect}
           />
+          {excelImportHelpOpen ? (
+            <ModalPortal>
+              <div
+                role="dialog"
+                aria-modal="true"
+                style={{
+                  position: 'fixed',
+                  inset: 0,
+                  background: 'rgba(0,0,0,0.35)',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  justifyContent: 'center',
+                  overflowY: 'auto',
+                  padding: 16,
+                  paddingTop: 40,
+                  paddingBottom: 40,
+                  zIndex: 80,
+                }}
+                onClick={() => setExcelImportHelpOpen(false)}
+              >
+                <div
+                  style={{
+                    width: 'min(720px, 96vw)',
+                    background: '#fff',
+                    borderRadius: 14,
+                    border: '1px solid #e5e7eb',
+                    padding: 14,
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                    <div style={{ fontWeight: 950, fontSize: 14, color: '#111827' }}>Import Excel format</div>
+                    <div style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>{displayLabel}</div>
+                    <button
+                      onClick={() => setExcelImportHelpOpen(false)}
+                      aria-label="Close"
+                      style={{ marginLeft: 8, border: 'none', background: 'transparent', fontSize: 20, lineHeight: 1, cursor: 'pointer' }}
+                    >
+                      ×
+                    </button>
+                  </div>
+
+                  <div style={{ fontSize: 13, color: '#374151', lineHeight: 1.5 }}>
+                    <div style={{ fontWeight: 800, marginBottom: 6 }}>Required headers (first row)</div>
+                    <ul style={{ margin: 0, paddingLeft: 18 }}>
+                      <li><b>Register No</b></li>
+                      <li><b>Student Name</b></li>
+                      <li><b>Q1</b> (CO-3 total)</li>
+                      <li><b>Q2</b> (CO-4 total)</li>
+                      <li><b>Status</b> (present/absent)</li>
+                    </ul>
+                    {isReview ? (
+                      <div style={{ marginTop: 10, fontSize: 12, color: '#6b7280' }}>
+                        For TCPR Review sheets, Q1/Q2 are imported into the Review CO columns (split rows are auto-filled from left to right).
+                      </div>
+                    ) : null}
+                    <div style={{ marginTop: 10, fontSize: 12, color: '#6b7280' }}>
+                      Tip: You can download the template from “Export Excel”, fill marks, then import it back.
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 14 }}>
+                    <button className="obe-btn" onClick={() => setExcelImportHelpOpen(false)} disabled={excelBusy}>Cancel</button>
+                    <button
+                      className="obe-btn obe-btn-primary"
+                      onClick={() => {
+                        chooseExcelImportFile();
+                      }}
+                      disabled={excelBusy || tableBlocked}
+                    >
+                      Choose file
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </ModalPortal>
+          ) : null}
         </div>
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
