@@ -1,17 +1,17 @@
-import React, { useMemo, useState } from 'react'
+import React, { useMemo, useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   BarChart2, Bell, BookMarked, BookOpen, CalendarCheck, CalendarDays,
   CheckSquare, ClipboardList, Clock, CreditCard, Database, DollarSign,
   FileText, HardHat, History, Inbox, Layers, MessageSquare, PenLine,
   Search, Settings, Shield, ScanLine, Star, UserCheck, UserPlus, Users,
-  X,
+  X, Loader2, AlertCircle,
   type LucideIcon,
 } from 'lucide-react'
 import DashboardLayout from '../../components/layout/DashboardLayout'
 import BuildingInfo from '../../components/BuildingInfo'
 import { PAGE_REGISTRY, type PageEntry } from '../../constants/pageRegistry'
-import { loadUCState, saveUCState, type UCState } from '../../utils/underConstruction'
+import { fetchUCState, saveUCState, seedUCState, type UCState } from '../../utils/underConstruction'
 
 // ── Icon map ──────────────────────────────────────────────────────────────
 const ICON_MAP: Record<string, LucideIcon> = {
@@ -267,15 +267,37 @@ function SectionHeader({
 // ── Main page ─────────────────────────────────────────────────────────────
 export default function UnderConstructionManagerPage() {
   const navigate      = useNavigate()
-  const [ucState, setUCState] = useState<UCState>(loadUCState)
+  const [ucState, setUCState] = useState<UCState>({})
   const [search, setSearch]   = useState('')
   const [preview, setPreview] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving]   = useState(false)
+  const [error, setError]     = useState<string | null>(null)
+
+  // ── Load from server on mount ─────────────────────────────────────────
+  useEffect(() => {
+    setLoading(true)
+    fetchUCState()
+      .then((state) => { setUCState(state); setError(null) })
+      .catch(() => setError('Failed to load configuration from server.'))
+      .finally(() => setLoading(false))
+  }, [])
 
   // ── State helpers ────────────────────────────────────────────────────────
-  function applyState(next: UCState) {
+  const applyState = useCallback(async (next: UCState) => {
     setUCState(next)
-    saveUCState(next)
-  }
+    setSaving(true)
+    setError(null)
+    try {
+      const saved = await saveUCState(next)
+      setUCState(saved)
+      seedUCState(saved)
+    } catch {
+      setError('Failed to save to server. Changes may not persist.')
+    } finally {
+      setSaving(false)
+    }
+  }, [])
 
   function toggleRole(path: string, role: string) {
     const current = (ucState[path] || []).map((r) => r.toUpperCase())
@@ -311,6 +333,17 @@ export default function UnderConstructionManagerPage() {
   const activePages = filtered.filter((p) => (ucState[p.path] || []).length === 0)
 
   // ── Render ───────────────────────────────────────────────────────────────
+  if (loading) {
+    return (
+      <DashboardLayout>
+        <div className="flex items-center justify-center h-64 gap-3 text-gray-500">
+          <Loader2 className="w-5 h-5 animate-spin" />
+          Loading configuration…
+        </div>
+      </DashboardLayout>
+    )
+  }
+
   return (
     <DashboardLayout>
       {preview && <PreviewModal onClose={() => setPreview(false)} />}
@@ -325,10 +358,12 @@ export default function UnderConstructionManagerPage() {
                 <HardHat className="w-5 h-5 text-amber-600" />
               </div>
               <div>
-                <h1 className="text-2xl font-bold text-gray-900">Under Construction Manager</h1>
+                <div className="flex items-center gap-2">
+                  <h1 className="text-2xl font-bold text-gray-900">Under Construction Manager</h1>
+                  {saving && <Loader2 className="w-4 h-4 animate-spin text-amber-500" />}
+                </div>
                 <p className="text-gray-500 mt-0.5 text-sm">
-                  Toggle pages under construction per role. Affected users will see the
-                  construction screen instead of the page.
+                  Toggle pages under construction per role. Changes are saved to the server instantly.
                 </p>
               </div>
             </div>
@@ -362,6 +397,14 @@ export default function UnderConstructionManagerPage() {
             </span>
           </div>
         </div>
+
+        {/* ── Error banner ────────────────────────────────────────────────── */}
+        {error && (
+          <div className="flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm">
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            {error}
+          </div>
+        )}
 
         {/* ── Search ──────────────────────────────────────────────────────── */}
         <div className="relative">

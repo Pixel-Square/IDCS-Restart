@@ -1,6 +1,7 @@
 ﻿import React, { useEffect, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { derivePrimaryRole, getMe } from "./services/auth";
+import { seedUCState } from "./utils/underConstruction";
 import Navbar from "./components/navigation/Navbar";
 import DashboardSidebar from './components/layout/DashboardSidebar';
 import { useSidebar } from './components/layout/SidebarContext';
@@ -176,6 +177,7 @@ export default function App() {
           profile_type: r.profile_type || null,
           profile: r.profile || null,
         };
+        seedUCState((r as any).under_construction || {});
         setUser(normalizedUser as Me);
       })
       .catch(() => { if (!cancelled) setUser(null) })
@@ -200,6 +202,7 @@ export default function App() {
         profile_type: detail.profile_type || null,
         profile: detail.profile || null,
       };
+      seedUCState((detail as any).under_construction || {});
       setUser(normalizedUser as Me);
     };
 

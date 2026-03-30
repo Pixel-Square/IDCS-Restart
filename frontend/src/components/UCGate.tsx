@@ -11,7 +11,7 @@ interface Props {
 /**
  * Wraps ALL authenticated routes and shows BuildingInfo if the current
  * page is marked Under Construction for the logged-in user's roles.
- * This catches every route regardless of whether it uses ProtectedRoute.
+ * UC state is seeded from the server via MeSerializer.under_construction on login.
  */
 export default function UCGate({ user, children }: Props) {
   const location = useLocation()
