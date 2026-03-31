@@ -575,7 +575,7 @@ export async function bulkDeleteDueSchedule(payload: { semester_id: number; subj
   return res.json();
 }
 
-export type QpPatternExam = 'CIA' | 'CIA1' | 'CIA2' | 'MODEL';
+export type QpPatternExam = 'CIA' | 'CIA1' | 'CIA2' | 'MODEL' | 'SSA1' | 'SSA2' | 'FORMATIVE1' | 'FORMATIVE2';
 
 export type QpPatternConfig = {
   marks: number[];

@@ -35,7 +35,7 @@ export default function AcademicControllerQPPage(): JSX.Element {
   const [selectedKey, setSelectedKey] = useState<string>(options[0]?.key || '');
   const selected = useMemo(() => options.find((o) => o.key === selectedKey) || null, [options, selectedKey]);
 
-  const [selectedExam, setSelectedExam] = useState<'CIA1' | 'CIA2' | 'MODEL'>('CIA1');
+  const [selectedExam, setSelectedExam] = useState<'SSA1' | 'SSA2' | 'FORMATIVE1' | 'FORMATIVE2' | 'CIA1' | 'CIA2' | 'MODEL'>('SSA1');
 
   const isReviewCfgClass = selected?.class_type === 'TCPR' || selected?.class_type === 'TCPL';
   const [selectedReviewExam, setSelectedReviewExam] = useState<'review1' | 'review2'>('review1');
@@ -513,8 +513,15 @@ export default function AcademicControllerQPPage(): JSX.Element {
 
       {tab === 'qp' ? (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-          {(['CIA1', 'CIA2', 'MODEL'] as const).map((k) => {
+          {(['SSA1', 'SSA2', 'FORMATIVE1', 'FORMATIVE2', 'CIA1', 'CIA2', 'MODEL'] as const).map((k) => {
             const active = selectedExam === k;
+            const label = k === 'SSA1' ? 'SSA 1' 
+              : k === 'SSA2' ? 'SSA 2'
+              : k === 'FORMATIVE1' ? 'FA 1'
+              : k === 'FORMATIVE2' ? 'FA 2'
+              : k === 'CIA1' ? 'CIA 1' 
+              : k === 'CIA2' ? 'CIA 2' 
+              : 'MODEL';
             return (
               <button
                 key={k}
@@ -522,7 +529,7 @@ export default function AcademicControllerQPPage(): JSX.Element {
                 className={active ? 'obe-btn obe-btn-primary' : 'obe-btn obe-btn-secondary'}
                 type="button"
               >
-                {k === 'CIA1' ? 'CIA 1' : k === 'CIA2' ? 'CIA 2' : 'MODEL'}
+                {label}
               </button>
             );
           })}
@@ -604,7 +611,15 @@ export default function AcademicControllerQPPage(): JSX.Element {
                 {' '}• QP: <strong>{selected.question_paper_type}</strong>
               </>
             ) : null}
-            {' '}• Exam: <strong>{selectedExam === 'CIA1' ? 'CIA 1' : selectedExam === 'CIA2' ? 'CIA 2' : 'MODEL'}</strong>
+            {' '}• Exam: <strong>{
+              selectedExam === 'SSA1' ? 'SSA 1'
+              : selectedExam === 'SSA2' ? 'SSA 2'
+              : selectedExam === 'FORMATIVE1' ? 'FA 1'
+              : selectedExam === 'FORMATIVE2' ? 'FA 2'
+              : selectedExam === 'CIA1' ? 'CIA 1' 
+              : selectedExam === 'CIA2' ? 'CIA 2' 
+              : 'MODEL'
+            }</strong>
           </div>
           {isLoading ? (
             <div style={{ marginTop: 6, fontSize: 12, color: '#6b7280' }}>Loading saved pattern…</div>
@@ -620,7 +635,15 @@ export default function AcademicControllerQPPage(): JSX.Element {
           <div style={{ fontWeight: 900, color: '#111827' }}>QP Pattern</div>
           <div style={{ fontSize: 12, color: '#6b7280' }}>
             {tab === 'qp'
-              ? `${selectedExam === 'CIA1' ? 'CIA 1' : selectedExam === 'CIA2' ? 'CIA 2' : 'MODEL'} • ${selected?.label || selectedKey}`
+              ? `${
+                  selectedExam === 'SSA1' ? 'SSA 1'
+                  : selectedExam === 'SSA2' ? 'SSA 2'
+                  : selectedExam === 'FORMATIVE1' ? 'FA 1'
+                  : selectedExam === 'FORMATIVE2' ? 'FA 2'
+                  : selectedExam === 'CIA1' ? 'CIA 1' 
+                  : selectedExam === 'CIA2' ? 'CIA 2' 
+                  : 'MODEL'
+                } • ${selected?.label || selectedKey}`
               : `${customExamKeys.find((k) => k.key === selectedCustomExam)?.label || selectedCustomExam} • ${selected?.label || selectedKey}${selectedBatch ? ` • ${selectedBatch.name}` : ''}`}
           </div>
         </div>
