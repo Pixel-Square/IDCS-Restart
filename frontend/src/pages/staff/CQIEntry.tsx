@@ -2072,10 +2072,33 @@ export default function CQIEntry({
 
       {publishedEditLocked ? (
         <div style={{ marginBottom: 12, border: '1px solid #fde68a', background: '#fffbeb', borderRadius: 10, padding: '10px 12px' }}>
-          <div style={{ fontWeight: 800, color: '#92400e' }}>Published & locked</div>
-          <div style={{ marginTop: 4, fontSize: 13, color: '#6b7280' }}>
-            CQI is read-only after publish. Use Request Edit to ask IQAC for edit access.
-            {markEntryReqPending ? ' Edit request is pending.' : ''}
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontWeight: 800, color: '#92400e' }}>Published & locked</div>
+              <div style={{ marginTop: 4, fontSize: 13, color: '#6b7280' }}>
+                CQI is read-only after publish. Use Request Edit to ask IQAC for edit access.
+                {markEntryReqPending ? ' Edit request is pending.' : ''}
+              </div>
+            </div>
+            <button
+              type="button"
+              className="obe-btn obe-btn-primary"
+              disabled={editRequestsBlocked || markEntryReqPending}
+              onClick={async () => {
+                if (editRequestsBlocked) return;
+                if (markEntryReqPending) return;
+                const mobileOk = await ensureMobileVerified();
+                if (!mobileOk) {
+                  alert('Please verify your mobile number in Profile before requesting edits.');
+                  window.location.href = '/profile';
+                  return;
+                }
+                setRequestEditOpen(true);
+                setActionError(null);
+              }}
+            >
+              {editRequestsBlocked ? 'Published & Locked' : markEntryReqPending ? 'Request Pending' : 'Request Edit'}
+            </button>
           </div>
         </div>
       ) : null}
