@@ -7,6 +7,8 @@ import { getCourseKey, readCourseSelectionMap } from './courseSelectionStorage';
 import { listFinalizedBundleConfigs } from '../../utils/coeBundleFinalizeStore';
 import krLogoSrc from '../../assets/krlogo.png';
 import newBannerSrc from '../../assets/new_banner.png';
+import { getAttendanceFilterKey, readCourseAbsenteesMap } from './attendanceStore';
+import { getSemesterStartSequence, generateDummyNumber } from './dummySequence';
 
 const SEMESTERS = ['SEM1', 'SEM2', 'SEM3', 'SEM4', 'SEM5', 'SEM6', 'SEM7', 'SEM8'] as const;
 const SHUFFLED_LIST_KEY = 'coe-students-shuffled-list-v1';
@@ -216,7 +218,10 @@ export default function OnePageReport() {
       const semester = cfg.semester;
       const department = cfg.department;
       const bundleSize = cfg.bundleSize;
-      const response = await fetchCoeStudentsMap({ department, semester });
+      const [response, startSequence] = await Promise.all([
+        fetchCoeStudentsMap({ department, semester }),
+        getSemesterStartSequence(department, semester)
+      ]);
       const semesterDigit = getSemesterDigit(semester);
       const filterKey = getCurrentFilterKey(department, semester);
       const persistedByDummy = readShuffledLists()[filterKey] || {};
@@ -226,7 +231,8 @@ export default function OnePageReport() {
           .map((row) => [row.dummy, row])
       );
 
-      let globalSequence = 0;
+      const absentCourseMap = readCourseAbsenteesMap(getAttendanceFilterKey(department, semester));
+      let globalSequence = startSequence;
       let foundNotFinalized = false;
 
       for (const deptBlock of response.departments) {
@@ -241,10 +247,16 @@ export default function OnePageReport() {
           });
           const selection = selectionMap[courseKey];
           if (selection?.eseType !== 'ESE') continue;
+          
+          const courseAbsentees = absentCourseMap.get(courseKey);
+          const originalStudents = (course.students || []).filter((student: CoeCourseStudent) => {
+            const regNo = String(student.reg_no || '').trim();
+            return regNo ? !(courseAbsentees?.has(regNo)) : true;
+          });
 
-          const students: BundleStudent[] = course.students.map((student: CoeCourseStudent) => {
+          const students: BundleStudent[] = originalStudents.map((student: CoeCourseStudent) => {
             globalSequence += 1;
-            const dummy = `KR00${deptCode}${semesterDigit}${String(globalSequence).padStart(5, '0')}`;
+            const dummy = generateDummyNumber(department, globalSequence);
             const saved = savedByDummy.get(dummy);
             const persisted = persistedByDummy[dummy];
 
@@ -367,12 +379,12 @@ export default function OnePageReport() {
     }
 
     const drawHeader = () => {
-      const leftBoxWidth = 68;
-      const leftBoxHeight = headerHeight - 4;
+      const leftBoxWidth = 85;
+      const leftBoxHeight = headerHeight - 2;
       const rightBoxSize = headerHeight - 4;
-      const leftBoxX = margin + 2;
+      const leftBoxX = margin + 1;
       const rightBoxX = pageWidth - margin - rightBoxSize - 3;
-      const leftBoxY = headerTop + 2;
+      const leftBoxY = headerTop + 1;
       const rightBoxY = headerTop + 2;
 
       const drawLogoInBox = (
@@ -402,8 +414,9 @@ export default function OnePageReport() {
           }
         }
 
-        const drawX = boxX + (boxW - drawW) / 2;
-        const drawY = boxY + (boxH - drawH) / 2;
+        const isLeftBox = boxX === leftBoxX;
+        const drawX = isLeftBox ? boxX : boxX + (boxW - drawW) / 2;
+        const drawY = isLeftBox ? boxY : boxY + (boxH - drawH) / 2;
         doc.addImage(dataUrl, 'PNG', drawX, drawY, drawW, drawH);
       };
 
@@ -449,9 +462,10 @@ export default function OnePageReport() {
       const mark = Math.max(0, Math.floor(Number(student.totalMarks || 0)));
       return sum + mark;
     }, 0);
+    const sumMaxMarks = bundle.students.reduce((sum) => sum + maxMarkPerStudent, 0);
+
     const averageMarks = totalStudents > 0 ? sumMarks / totalStudents : 0;
-    const percentage =
-      totalStudents > 0 ? (sumMarks / (totalStudents * maxMarkPerStudent)) * 100 : 0;
+    const percentage = sumMaxMarks > 0 ? (sumMarks / sumMaxMarks) * 100 : 0;
 
     const summaryRow = [
       {

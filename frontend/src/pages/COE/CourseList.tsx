@@ -252,6 +252,12 @@ export default function CourseList() {
               type="password"
               value={passwordInput}
               onChange={(e) => setPasswordInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handlePasswordConfirm();
+                }
+              }}
               className="w-full border border-gray-300 p-2 rounded mb-2 focus:outline-none focus:border-blue-500"
               placeholder="Password"
             />

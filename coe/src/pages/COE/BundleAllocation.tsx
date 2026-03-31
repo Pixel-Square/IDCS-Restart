@@ -10,6 +10,7 @@ import {
   setBundleFinalizeConfig,
 } from '../../utils/coeBundleFinalizeStore';
 import { getAttendanceFilterKey, readCourseAbsenteesMap } from './attendanceStore';
+import { getSemesterStartSequence, generateDummyNumber } from './dummySequence';
 
 const DEPARTMENTS = ['ALL', 'AIDS', 'AIML', 'CSE', 'CIVIL', 'ECE', 'EEE', 'IT', 'MECH'] as const;
 const SEMESTERS = ['SEM1', 'SEM2', 'SEM3', 'SEM4', 'SEM5', 'SEM6', 'SEM7', 'SEM8'] as const;
@@ -114,7 +115,10 @@ export default function BundleAllocation() {
       setLoading(true);
       setError(null);
       try {
-        const response = await fetchCoeStudentsMap({ department, semester });
+        const [response, startSequence] = await Promise.all([
+          fetchCoeStudentsMap({ department, semester }),
+          getSemesterStartSequence(department, semester)
+        ]);
         if (!active) return;
 
         const semesterDigit = getSemesterDigit(semester);
@@ -125,10 +129,7 @@ export default function BundleAllocation() {
         );
         const selectionMap = readCourseSelectionMap();
 
-        let globalSequence = 0;
-        const shuffledCourses: BundleCourse[] = [];
-
-        response.departments.forEach((deptBlock) => {
+          let globalSequence = startSequence;          const shuffledCourses: BundleCourse[] = [];        response.departments.forEach((deptBlock) => {
           const deptCode = DEPARTMENT_DUMMY_DIGITS[deptBlock.department] || '9';
 
           deptBlock.courses
@@ -158,7 +159,7 @@ export default function BundleAllocation() {
 
               const students: BundleStudent[] = originalStudents.map((student: CoeCourseStudent) => {
                 globalSequence += 1;
-                const dummy = `KR00${deptCode}${semesterDigit}${String(globalSequence).padStart(5, '0')}`;
+                const dummy = generateDummyNumber(department, globalSequence);
                 const saved = savedByDummy.get(dummy);
 
                 const resolvedRegNo = saved?.reg_no || student.reg_no;
@@ -180,7 +181,7 @@ export default function BundleAllocation() {
 
               const isCourseFullyMappedInDb = originalStudents.length > 0 && mappedInDbCount === originalStudents.length;
               const isCourseShuffledInDb = students.some((student) => student.isShuffled);
-              if (!isCourseFullyMappedInDb || !isCourseShuffledInDb) return;
+              // if (!isCourseFullyMappedInDb || !isCourseShuffledInDb) return;
 
               shuffledCourses.push({
                 department: deptBlock.department,
@@ -321,6 +322,12 @@ export default function BundleAllocation() {
               type="password"
               value={passwordInput}
               onChange={(e) => setPasswordInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handlePasswordConfirm();
+                }
+              }}
               className="w-full border border-gray-300 p-2 rounded mb-2 focus:outline-none focus:border-blue-500"
               placeholder="Password"
             />

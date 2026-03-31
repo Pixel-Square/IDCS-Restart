@@ -44,6 +44,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 function Shell({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isDesktopSidebarCollapsed, setIsDesktopSidebarCollapsed] = useState(false);
   const isAuthenticated = hasAccessToken();
   const isLoginPage = location.pathname === '/login';
 
@@ -63,7 +64,6 @@ function Shell({ children }: { children: React.ReactNode }) {
     { to: '/coe/students', label: 'Students' },
     { to: '/coe/arrears', label: 'Arrears' },
     { to: '/coe/bundle-allocation', label: 'Bundles' },
-    { to: '/coe/bundle-barcodes', label: 'Bundle Barcodes' },
     { to: '/coe/bar-scan', label: 'Bar Scan' },
     { to: '/coe/one-page-report', label: 'One Page Report' },
     { to: '/coe/retrival', label: 'Retrival Logs' },
@@ -91,9 +91,20 @@ function Shell({ children }: { children: React.ReactNode }) {
       <div className="relative min-h-screen">
         <header className="sticky top-0 z-40 border-b border-[#c8917f]/40 bg-gradient-to-r from-[#6f1d34] via-[#7a2038] to-[#a3462d] px-4 py-3 text-white shadow-sm sm:px-6">
           <div className="flex items-center justify-between">
-            <div>
-              <p className="text-lg font-bold">COE Portal</p>
-              <p className="text-xs text-white/80">Controller of Examinations Workspace</p>
+            <div className="flex items-center gap-3">
+              {isDesktopSidebarCollapsed && (
+                <button
+                  onClick={() => setIsDesktopSidebarCollapsed(false)}
+                  className="hidden lg:flex items-center justify-center rounded-lg border border-white/40 bg-white/10 p-2 text-white hover:bg-white/20"
+                  title="Expand Sidebar"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+                </button>
+              )}
+              <div>
+                <p className="text-lg font-bold">COE Portal</p>
+                <p className="text-xs text-white/80">Controller of Examinations Workspace</p>
+              </div>
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -115,11 +126,30 @@ function Shell({ children }: { children: React.ReactNode }) {
         </header>
 
         <aside
-          className={`fixed bottom-0 left-0 top-[73px] z-30 w-72 transform border-r border-white/35 bg-gradient-to-b from-[#5f1730] via-[#7a2038] to-[#a3462d] p-5 text-white shadow-2xl transition-transform duration-200 lg:translate-x-0 ${
-            isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
-          }`}
+          className={`fixed bottom-0 left-0 top-[65px] z-30 w-72 transform border-r border-white/35 bg-gradient-to-b from-[#5f1730] via-[#7a2038] to-[#a3462d] p-5 text-white shadow-2xl transition-transform duration-200 ${
+            isDesktopSidebarCollapsed ? 'lg:-translate-x-full' : 'lg:translate-x-0'
+          } ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
         >
           <div className="flex h-full flex-col">
+            <div className="mb-4 flex items-center justify-between lg:hidden">
+              <span className="text-sm font-semibold text-white/70">Menu</span>
+              <button
+                onClick={() => setIsSidebarOpen(false)}
+                className="rounded-lg p-1 hover:bg-white/10"
+              >
+                ✕
+              </button>
+            </div>
+            
+            <div className="mb-4 hidden items-center justify-end lg:flex">
+              <button
+                onClick={() => setIsDesktopSidebarCollapsed(true)}
+                className="rounded-lg p-1.5 hover:bg-white/10 text-white/70 hover:text-white"
+                title="Collapse Sidebar"
+              >
+                ✕
+              </button>
+            </div>
             <nav className="space-y-2">
               {topLinks.map((item) => (
                 <NavLink
@@ -186,13 +216,15 @@ function Shell({ children }: { children: React.ReactNode }) {
         {isSidebarOpen ? (
           <button
             type="button"
-            className="fixed bottom-0 left-0 right-0 top-[73px] z-20 bg-black/40 lg:hidden"
+            className="fixed bottom-0 left-0 right-0 top-[65px] z-20 bg-black/40 lg:hidden"
             onClick={() => setIsSidebarOpen(false)}
             aria-label="Close sidebar"
           />
         ) : null}
 
-        <div className="relative z-10 min-h-[calc(100vh-73px)] lg:pl-72">
+        <div className={`relative z-10 min-h-[calc(100vh-65px)] transition-all duration-200 ${
+          isDesktopSidebarCollapsed ? 'lg:pl-0' : 'lg:pl-72'
+        }`}>
           <main className="px-4 py-6 sm:px-6 lg:px-10 lg:py-8">{children}</main>
         </div>
       </div>

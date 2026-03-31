@@ -1059,6 +1059,12 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                       type={showConfirmPassword ? 'text' : 'password'}
                       value={confirmPassword}
                       onChange={(e) => setConfirmPassword(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleChangePassword();
+                        }
+                      }}
                       className="w-full rounded-md border px-3 py-2 pr-10"
                       disabled={changePasswordBusy}
                     />
@@ -1116,6 +1122,12 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                 type="password"
                 value={removePassword}
                 onChange={(e) => setRemovePassword(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleRemoveMobile();
+                  }
+                }}
                 className="mb-3 w-full rounded border px-3 py-2"
               />
               {removeError && <div className="mb-2 text-sm text-red-600">{removeError}</div>}

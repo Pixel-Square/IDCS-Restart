@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ScanLine, User, CreditCard, School } from 'lucide-react';
 import fetchWithAuth from '../../services/fetchAuth';
+import BarScanMarkEntry from './BarScanMarkEntry';
 
 interface StudentDetails {
   id: number;
@@ -14,7 +15,7 @@ interface StudentDetails {
   email: string;
   profile_image: string | null;
   dummy_number?: string | null;
-  qp_type?: 'QP1' | 'QP2' | 'TCPR';
+  qp_type?: 'QP1' | 'QP2' | 'TCPR' | 'OE';
 }
 
 export default function BarScan() {
@@ -23,6 +24,7 @@ export default function BarScan() {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [lastScanned, setLastScanned] = useState<string | null>(null);
+  const [activeEntryCode, setActiveEntryCode] = useState<string | null>(null);
   
   // This input captures the barcode scanner output
   const inputRef = useRef<HTMLInputElement>(null);
@@ -35,23 +37,21 @@ export default function BarScan() {
     return () => window.removeEventListener('click', focusInput);
   }, []);
 
-  const handleScan = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!scannedCode.trim()) return;
+    const processScanCode = async (codeToProcess: string) => {
 
+    if (!codeToProcess) return;
+    
+    setScannedCode(''); // Clear input for next scan immediately here as well
     setLoading(true);
     setError(null);
     setStudent(null);
-    const code = scannedCode.trim();
-    const targetUrl = new URL(`/coe/bar-scan/entry?code=${encodeURIComponent(code)}`, window.location.origin).toString();
+    const code = codeToProcess.trim();
 
-    // Open the mark entry page immediately so each scan gets its own tab.
-    const popup = window.open(targetUrl, '_blank');
-    if (!popup) {
-      setError('Popup blocked. Please allow popups for this site.');
-      setLoading(false);
-      return;
-    }
+    
+    // Open the mark entry page dynamically over the page
+    setActiveEntryCode(code);
+
+
 
     try {
       const res = await fetchWithAuth(`/api/academics/student/lookup/${encodeURIComponent(code)}/`);
@@ -70,13 +70,18 @@ export default function BarScan() {
       setError('Network error occurred.');
     } finally {
       setLoading(false);
-      setScannedCode(''); // Clear input for next scan
     }
   };
 
+  const handleScan = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await processScanCode(scannedCode);
+  };
+
   return (
-    <div className="p-6 max-w-7xl mx-auto">
-      <div className="flex flex-col md:flex-row gap-6 h-[calc(100vh-140px)]">
+    <div className="p-4 sm:p-6 w-full max-w-[100%] mx-auto">
+      {!activeEntryCode ? (
+        <div className="flex flex-col md:flex-row gap-6 h-[calc(100vh-140px)]">
         
         {/* Left Panel: Scanner Input & Status */}
         <div className="w-full md:w-1/3 bg-white rounded-xl shadow-sm border border-gray-200 p-6 flex flex-col items-center">
@@ -89,7 +94,7 @@ export default function BarScan() {
             Ensure the scanner is connected. Click anywhere on this page to activate scan mode.
           </p>
 
-          <form onSubmit={handleScan} className="w-full">
+          <form id="barscan-form" onSubmit={handleScan} className="w-full">
             <div className="relative">
               <input
                 ref={inputRef}
@@ -200,7 +205,17 @@ export default function BarScan() {
             )}
           </div>
         </div>
-      </div>
+        </div>
+      ) : (
+        <BarScanMarkEntry
+          key={activeEntryCode}
+          embeddedCode={activeEntryCode}
+          onClose={() => setActiveEntryCode(null)}
+          onNextScan={(newCode) => {
+             processScanCode(newCode);
+          }}
+        />
+      )}
     </div>
   );
 }
