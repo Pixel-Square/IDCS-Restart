@@ -28,7 +28,7 @@ import {
 import { fetchAssessmentMasterConfig } from '../../services/cdapDb';
 import { normalizeClassType } from '../../constants/classTypes';
 import { ensureMobileVerified } from '../../services/auth';
-import { useMarkEntryEditRequestsEnabled } from '../../utils/requestControl';
+import { useCqiEditRequestsEnabled } from '../../utils/requestControl';
 import { useEditRequestPending } from '../../hooks/useEditRequestPending';
 import { useMarkTableLock } from '../../hooks/useMarkTableLock';
 import { useEditWindow } from '../../hooks/useEditWindow';
@@ -419,7 +419,7 @@ export default function CQIEntry({
     return `cqi_${assessment}${coSuffix}` as const;
   }, [assessmentType, coNumbers]);
 
-  const editRequestsEnabled = useMarkEntryEditRequestsEnabled();
+  const editRequestsEnabled = useCqiEditRequestsEnabled();
   const {
     data: publishWindow,
     publishAllowed,
