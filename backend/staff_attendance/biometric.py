@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from django.db import IntegrityError
@@ -91,15 +91,29 @@ def upsert_attendance_from_punch(user, punch_dt: datetime, direction: str, sourc
     changed = False
     effective_direction = StaffBiometricPunchLog.Direction.IN
 
-    # Realtime policy: first punch of a date is IN, any later punch is OUT.
+    # Realtime policy:
+    # - First punch of the date is stored as IN (morning_in)
+    # - OUT (evening_out) is stored only when a punch arrives at least 30 minutes after morning_in
+    # - Punches before that 30-min threshold are ignored for attendance (but still logged in StaffBiometricPunchLog)
     if not record.morning_in:
         record.morning_in = punch_time
         changed = True
     else:
-        effective_direction = StaffBiometricPunchLog.Direction.OUT
-        if not record.evening_out or punch_time > record.evening_out:
-            record.evening_out = punch_time
-            changed = True
+        morning_dt = datetime.combine(target_date, record.morning_in)
+        punch_dt_local = datetime.combine(target_date, punch_time)
+
+        # Protect against clock anomalies where punch_time is earlier than morning_in.
+        if punch_dt_local < morning_dt:
+            punch_dt_local = morning_dt
+
+        if (punch_dt_local - morning_dt) < timedelta(minutes=30):
+            # Too soon: skip setting OUT.
+            effective_direction = 'SKIPPED'
+        else:
+            effective_direction = StaffBiometricPunchLog.Direction.OUT
+            if not record.evening_out or punch_time > record.evening_out:
+                record.evening_out = punch_time
+                changed = True
 
     if created:
         changed = True

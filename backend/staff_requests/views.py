@@ -118,8 +118,9 @@ def can_user_apply_with_template(user, template):
     # Check if user has any special role
     has_special_role = bool(user_role_names & SPL_ROLES)
     
-    # Determine if this is an SPL template
-    is_spl_template = template.name.endswith(' - SPL')
+    # Determine if this is an SPL template (robust to casing/extra spaces)
+    template_name = (getattr(template, 'name', '') or '').strip()
+    is_spl_template = template_name.upper().endswith(' - SPL')
     
     # Apply SPL logic:
     # - If user has special role and template is SPL → allow
@@ -145,6 +146,150 @@ def can_user_apply_with_template(user, template):
             return True
     
     return False
+
+
+def template_has_nonzero_allocation_for_user(user, template) -> bool:
+    """Return False when template has explicit per-role allotment of 0 for this user.
+
+    This is used to hide templates from availability endpoints. The create endpoint
+    still performs a strict validation via StaffRequestViewSet._validate_template_allocation.
+    """
+    try:
+        leave_policy = getattr(template, 'leave_policy', None) or {}
+        action = str(leave_policy.get('action') or '').strip().lower()
+        if action not in ['deduct', 'neutral']:
+            return True
+
+        def is_monthly_reset(policy: dict) -> bool:
+            token = str(policy.get('reset_period') or policy.get('reset_duration') or '').strip().lower()
+            return token == 'monthly'
+
+        def monthly_period_bounds(dt):
+            import calendar
+            from datetime import date
+
+            start = date(dt.year, dt.month, 1)
+            end = date(dt.year, dt.month, calendar.monthrange(dt.year, dt.month)[1])
+            return start, end
+
+        def request_units_in_period(req: StaffRequest, period_start, period_end) -> float:
+            # Late entry permissions count as 1 per request.
+            name = (getattr(req.template, 'name', '') or '').strip().lower()
+            if name in ['late entry permission', 'late entry permission - spl']:
+                eff = None
+                try:
+                    eff = req.form_data.get('date') or req.form_data.get('from_date') or req.form_data.get('start_date')
+                except Exception:
+                    eff = None
+                try:
+                    from datetime import datetime
+                    if isinstance(eff, str):
+                        eff = datetime.strptime(eff.strip(), '%Y-%m-%d').date()
+                except Exception:
+                    eff = None
+                if eff and period_start <= eff <= period_end:
+                    return 1.0
+                return 0.0
+
+            # Default: sum FN/AN-aware units by date.
+            try:
+                units_by_date = StaffRequestViewSet()._extract_requested_units_by_date_for_user(req.form_data or {}, user)
+            except Exception:
+                units_by_date = {}
+            total = 0.0
+            for d, u in (units_by_date or {}).items():
+                if d < period_start or d > period_end:
+                    continue
+                try:
+                    total += float(u or 0.0)
+                except (TypeError, ValueError):
+                    continue
+            return round(total, 2)
+
+        allotment = leave_policy.get('allotment_per_role')
+        if not isinstance(allotment, dict) or len(allotment) == 0:
+            # No per-role mapping configured: fall back to per-user balance when present.
+            # This supports setups where HR sets per-staff quotas for neutral forms
+            # (OD/Late Entry/Others) directly in StaffLeaveBalance.
+            try:
+                from .models import StaffLeaveBalance
+                bal = StaffLeaveBalance.objects.filter(
+                    staff=user,
+                    leave_type__iexact=(getattr(template, 'name', '') or '').strip(),
+                ).first()
+                if bal is not None:
+                    try:
+                        allocated = float(bal.balance or 0.0)
+                        if allocated <= 0.0:
+                            return False
+
+                        if is_monthly_reset(leave_policy):
+                            # Hide when monthly allocation is used up.
+                            period_start, period_end = monthly_period_bounds(timezone.localdate())
+                            used = 0.0
+                            qs = StaffRequest.objects.filter(
+                                applicant=user,
+                                template=template,
+                                status__in=['pending', 'approved'],
+                            ).select_related('template')
+                            for req in qs:
+                                used += request_units_in_period(req, period_start, period_end)
+                            remaining = round(allocated - used, 2)
+                            return remaining > 0.0
+
+                        return True
+                    except (TypeError, ValueError):
+                        return False
+            except Exception:
+                pass
+            # No mapping and no per-user balance configured => treat as 0 allocation.
+            return False
+
+        # Resolve allocation across all assigned roles and use the highest mapped value.
+        role_names = []
+        if hasattr(user, 'roles'):
+            role_names.extend(list(user.roles.values_list('name', flat=True)))
+        if hasattr(user, 'user_roles'):
+            role_names.extend(list(user.user_roles.values_list('role__name', flat=True)))
+
+        role_keys = []
+        for rn in role_names:
+            key = str(rn or '').strip().upper()
+            if key and key not in role_keys:
+                role_keys.append(key)
+        if not role_keys:
+            role_keys = ['STAFF']
+
+        normalized = {}
+        for k, v in allotment.items():
+            key = str(k or '').strip().upper()
+            if not key:
+                continue
+            try:
+                normalized[key] = float(v)
+            except (TypeError, ValueError):
+                normalized[key] = 0.0
+
+        allocated = max([float(normalized.get(k, 0.0)) for k in role_keys] or [0.0])
+        if allocated <= 0:
+            return False
+
+        if is_monthly_reset(leave_policy):
+            period_start, period_end = monthly_period_bounds(timezone.localdate())
+            used = 0.0
+            qs = StaffRequest.objects.filter(
+                applicant=user,
+                template=template,
+                status__in=['pending', 'approved'],
+            ).select_related('template')
+            for req in qs:
+                used += request_units_in_period(req, period_start, period_end)
+            remaining = round(allocated - used, 2)
+            return remaining > 0.0
+
+        return True
+    except Exception:
+        return True
 
 
 def is_salary_month_locked(target_date):
@@ -198,6 +343,7 @@ class RequestTemplateViewSet(viewsets.ModelViewSet):
         filtered_templates = [
             template for template in active_templates
             if can_user_apply_with_template(request.user, template)
+            and template_has_nonzero_allocation_for_user(request.user, template)
         ]
         
         serializer = self.get_serializer(filtered_templates, many=True)
@@ -329,6 +475,7 @@ class RequestTemplateViewSet(viewsets.ModelViewSet):
             filtered_absent = [
                 template for template in absent_templates
                 if can_user_apply_with_template(request.user, template)
+                and template_has_nonzero_allocation_for_user(request.user, template)
             ]
             
             return Response({
@@ -348,6 +495,9 @@ class RequestTemplateViewSet(viewsets.ModelViewSet):
         for template in templates:
             # Check if user can apply with this template (SPL logic)
             if not can_user_apply_with_template(request.user, template):
+                continue
+
+            if not template_has_nonzero_allocation_for_user(request.user, template):
                 continue
                 
             leave_policy = template.leave_policy
@@ -466,6 +616,10 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                 {'error': 'You are not authorized to use this request template'},
                 status=status.HTTP_403_FORBIDDEN
             )
+
+        allocation_error = self._validate_template_allocation(request.user, template, form_data=form_data)
+        if allocation_error:
+            return Response({'error': allocation_error}, status=status.HTTP_400_BAD_REQUEST)
         
         # Check if template has approval steps configured
         if not template.approval_steps.exists():
@@ -553,19 +707,250 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                     comments='Auto-approved: 10 mins late entry within allowed cutoff window.'
                 )
 
-                # Apply balance/attendance side effects exactly like final approval.
-                try:
-                    self._process_leave_balance(staff_request)
-                except Exception:
-                    pass
-                try:
-                    self._process_attendance_action(staff_request)
-                except Exception:
-                    pass
+                # Apply final-approval side effects.
+                self._run_final_approval_side_effects(staff_request, acted_by=request.user)
         
         # Return detailed response
         response_serializer = StaffRequestDetailSerializer(staff_request)
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+    def _is_monthly_reset_policy(self, leave_policy: dict) -> bool:
+        token = str((leave_policy or {}).get('reset_period') or (leave_policy or {}).get('reset_duration') or '').strip().lower()
+        return token == 'monthly'
+
+    def _monthly_period_bounds(self, dt):
+        import calendar
+        from datetime import date
+
+        start = date(dt.year, dt.month, 1)
+        end = date(dt.year, dt.month, calendar.monthrange(dt.year, dt.month)[1])
+        return start, end
+
+    def _request_units_for_usage(self, template, form_data, user, *, period_start=None, period_end=None) -> float:
+        """Compute how much allocation a request consumes for monthly usage checks."""
+        if self._is_late_entry_template(template):
+            # Late entry always consumes 1 unit per request, but monthly usage must
+            # still respect the request's effective date window.
+            if period_start or period_end:
+                effective_date = self._get_request_effective_date(form_data or {})
+                if not effective_date:
+                    return 0.0
+                if period_start and effective_date < period_start:
+                    return 0.0
+                if period_end and effective_date > period_end:
+                    return 0.0
+            return 1.0
+
+        units_by_date = self._extract_requested_units_by_date_for_user(form_data or {}, user)
+        if not units_by_date:
+            return 0.0
+
+        total = 0.0
+        for d, u in units_by_date.items():
+            if period_start and d < period_start:
+                continue
+            if period_end and d > period_end:
+                continue
+            try:
+                total += float(u or 0.0)
+            except (TypeError, ValueError):
+                continue
+        return round(total, 2)
+
+    def _used_units_in_month(self, user, template, *, period_start, period_end) -> float:
+        qs = StaffRequest.objects.filter(
+            applicant=user,
+            template=template,
+            status__in=['pending', 'approved'],
+        ).select_related('template')
+
+        used = 0.0
+        for req in qs:
+            used += self._request_units_for_usage(template, req.form_data or {}, user, period_start=period_start, period_end=period_end)
+        return round(used, 2)
+
+    def _resolve_template_allocation(self, user, template) -> float:
+        """Resolve allocation for user+template.
+
+        Priority:
+        1) leave_policy.allotment_per_role (role based)
+        2) StaffLeaveBalance (per-user configured allocation)
+        Missing allocation defaults to 0.
+        """
+        leave_policy = getattr(template, 'leave_policy', None) or {}
+        allotment = leave_policy.get('allotment_per_role')
+
+        if isinstance(allotment, dict) and len(allotment) > 0:
+            role_names = []
+            if hasattr(user, 'roles'):
+                role_names.extend(list(user.roles.values_list('name', flat=True)))
+            if hasattr(user, 'user_roles'):
+                role_names.extend(list(user.user_roles.values_list('role__name', flat=True)))
+
+            role_keys = []
+            for rn in role_names:
+                key = str(rn or '').strip().upper()
+                if key and key not in role_keys:
+                    role_keys.append(key)
+            if not role_keys:
+                role_keys = ['STAFF']
+
+            normalized = {}
+            for k, v in allotment.items():
+                key = str(k or '').strip().upper()
+                if not key:
+                    continue
+                try:
+                    normalized[key] = float(v)
+                except (TypeError, ValueError):
+                    normalized[key] = 0.0
+            return max([float(normalized.get(k, 0.0)) for k in role_keys] or [0.0])
+
+        try:
+            bal = StaffLeaveBalance.objects.filter(
+                staff=user,
+                leave_type__iexact=(getattr(template, 'name', '') or '').strip(),
+            ).first()
+            if bal is None:
+                return 0.0
+            return float(bal.balance or 0.0)
+        except Exception:
+            return 0.0
+
+    def _validate_template_allocation(self, user, template, *, form_data=None):
+        """Block applying forms when allocated count for the user's role is 0.
+
+        Applies only to deduct/neutral templates that have an explicit
+        `allotment_per_role` mapping. If mapping exists but user's role is missing,
+        it is treated as 0 allocation (safer default).
+        """
+        leave_policy = getattr(template, 'leave_policy', None) or {}
+        action = str(leave_policy.get('action') or '').strip().lower()
+        if action not in ['deduct', 'neutral']:
+            return None
+
+        allocated = float(self._resolve_template_allocation(user, template) or 0.0)
+        if allocated <= 0.0:
+            return 'You cannot apply this form because the allocated count is 0.'
+
+        # Monthly reset policy: block once used up for the month.
+        if self._is_monthly_reset_policy(leave_policy):
+            effective_date = self._get_request_effective_date(form_data or {}) or timezone.localdate()
+            period_start, period_end = self._monthly_period_bounds(effective_date)
+
+            used = self._used_units_in_month(user, template, period_start=period_start, period_end=period_end)
+            requested = self._request_units_for_usage(template, form_data or {}, user, period_start=period_start, period_end=period_end)
+            remaining = round(allocated - used, 2)
+            if remaining + 1e-9 < requested or remaining <= 0.0:
+                return 'You cannot apply this form because your monthly allocation is exhausted.'
+
+        return None
+
+    def _compute_overuse_lop_units(self, user, *, as_of_date=None):
+        """Compute LOP units generated purely by over-usage of allocated forms.
+
+        This covers cases like OD / Late Entry / CL etc where approved usage can
+        exceed the role allocation (balance overflow to LOP). Recalculation flows
+        must include this so LOP doesn't get overwritten back to absence-only.
+        """
+        from datetime import datetime
+
+        if as_of_date is None:
+            as_of_date = timezone.localdate()
+
+        approved_requests = (
+            StaffRequest.objects.filter(
+                applicant=user,
+                status='approved',
+                template__leave_policy__action__in=['deduct', 'neutral'],
+            )
+            .select_related('template')
+            .order_by('id')
+        )
+
+        # Group by template id to avoid re-parsing policy repeatedly.
+        by_template = {}
+        for req in approved_requests:
+            by_template.setdefault(req.template_id, []).append(req)
+
+        user_role = self._get_primary_role(user)
+        role_key = str(user_role or '').strip().upper()
+
+        total_overuse = 0.0
+        for _, reqs in by_template.items():
+            template = reqs[0].template
+            leave_policy = getattr(template, 'leave_policy', None) or {}
+            action = str(leave_policy.get('action') or '').strip().lower()
+            if action not in ['deduct', 'neutral']:
+                continue
+
+            allotment = leave_policy.get('allotment_per_role')
+            if not isinstance(allotment, dict) or len(allotment) == 0:
+                continue
+
+            normalized_allotment = {}
+            for k, v in allotment.items():
+                key = str(k or '').strip().upper()
+                if not key:
+                    continue
+                try:
+                    normalized_allotment[key] = float(v)
+                except (TypeError, ValueError):
+                    normalized_allotment[key] = 0.0
+
+            full_allotment = float(normalized_allotment.get(role_key, 0.0))
+            if full_allotment < 0:
+                full_allotment = 0.0
+
+            # Split policy: before split_date only first half is considered allocated.
+            effective_allotment = full_allotment
+            split_date_str = leave_policy.get('split_date')
+            if split_date_str:
+                try:
+                    split_date = datetime.strptime(str(split_date_str).strip(), '%Y-%m-%d').date()
+                    if as_of_date < split_date:
+                        effective_allotment = full_allotment / 2
+                except Exception:
+                    pass
+
+            window_from = None
+            window_to = None
+            from_str = leave_policy.get('from_date')
+            to_str = leave_policy.get('to_date')
+            if from_str and to_str:
+                try:
+                    window_from = datetime.strptime(str(from_str).strip(), '%Y-%m-%d').date()
+                    window_to = datetime.strptime(str(to_str).strip(), '%Y-%m-%d').date()
+                except Exception:
+                    window_from = None
+                    window_to = None
+
+            used_units = 0.0
+            for req in reqs:
+                # When claim_col is enabled for deduct forms, CL is not deducted at all.
+                if action == 'deduct':
+                    try:
+                        if bool((req.form_data or {}).get('claim_col')):
+                            continue
+                    except Exception:
+                        pass
+
+                units_by_date = self._extract_requested_units_by_date_for_user(req.form_data or {}, user)
+                for d, units in units_by_date.items():
+                    if window_from and d < window_from:
+                        continue
+                    if window_to and d > window_to:
+                        continue
+                    try:
+                        used_units += float(units or 0.0)
+                    except (TypeError, ValueError):
+                        continue
+
+            used_units = round(used_units, 2)
+            overuse = max(0.0, round(used_units - float(effective_allotment or 0.0), 2))
+            total_overuse += overuse
+
+        return round(total_overuse, 2)
 
     def _month_start(self, target_date):
         return date_type(target_date.year, target_date.month, 1)
@@ -645,6 +1030,300 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             return global_cfg.attendance_in_time_limit
 
         return default_limit
+
+    def _get_user_out_time_limit(self, user, target_date=None):
+        """Resolve out-time limit with staff override, special date, dept, then global fallback."""
+        from datetime import time
+        from django.db.models import Q
+        from staff_attendance.models import (
+            AttendanceSettings,
+            DepartmentAttendanceSettings,
+            StaffAttendanceTimeLimitOverride,
+            SpecialDepartmentDateAttendanceLimit,
+        )
+
+        default_limit = time(hour=17, minute=0)
+        target_date = target_date or timezone.localdate()
+
+        try:
+            staff_override = StaffAttendanceTimeLimitOverride.objects.filter(
+                user=user,
+                enabled=True,
+            ).first()
+            if staff_override and staff_override.attendance_out_time_limit:
+                return staff_override.attendance_out_time_limit
+        except Exception:
+            pass
+
+        try:
+            dept = None
+            if hasattr(user, 'staff_profile'):
+                if hasattr(user.staff_profile, 'get_current_department'):
+                    dept = user.staff_profile.get_current_department()
+                if not dept:
+                    dept = user.staff_profile.department
+
+            if dept:
+                special = SpecialDepartmentDateAttendanceLimit.objects.filter(
+                    enabled=True,
+                    departments=dept,
+                    from_date__lte=target_date,
+                ).filter(
+                    Q(to_date__isnull=True, from_date=target_date)
+                    | Q(to_date__isnull=False, to_date__gte=target_date)
+                ).order_by('-from_date', '-id').first()
+                if special and special.attendance_out_time_limit:
+                    return special.attendance_out_time_limit
+
+                dept_cfg = DepartmentAttendanceSettings.objects.filter(
+                    departments=dept,
+                    enabled=True,
+                ).first()
+                if dept_cfg and dept_cfg.attendance_out_time_limit:
+                    return dept_cfg.attendance_out_time_limit
+        except Exception:
+            pass
+
+        global_cfg = AttendanceSettings.objects.first()
+        if global_cfg and global_cfg.attendance_out_time_limit:
+            return global_cfg.attendance_out_time_limit
+
+        return default_limit
+
+    def _is_gatepass_auto_template(self, template):
+        name = (getattr(template, 'name', '') or '').strip().lower()
+        if name.startswith('casual leave'):
+            return True
+        if name.startswith('on duty'):
+            return True
+        if name.startswith('others'):
+            return True
+        if name.startswith('late entry permission'):
+            return True
+        return False
+
+    def _is_an_gatepass_eligible_request(self, staff_request):
+        if not self._is_gatepass_auto_template(staff_request.template):
+            return False
+
+        form_data = staff_request.form_data or {}
+        shift = self._normalize_shift(
+            form_data.get('shift', form_data.get('from_noon', form_data.get('from_shift')))
+        )
+        if shift != 'AN':
+            return False
+
+        name = (getattr(staff_request.template, 'name', '') or '').strip().lower()
+        if name.startswith('late entry permission'):
+            return self._normalize_late_duration(form_data.get('late_duration')) == '1 hr'
+
+        return name.startswith('casual leave') or name.startswith('on duty') or name.startswith('others')
+
+    def _resolve_gatepass_application_type(self):
+        from applications.models import ApplicationType
+
+        return (
+            ApplicationType.objects.filter(is_active=True)
+            .filter(
+                Q(code__iexact='GATEPASS')
+                | Q(name__iexact='Gatepass')
+                | Q(code__icontains='gate')
+                | Q(name__icontains='gatepass')
+            )
+            .order_by('id')
+            .first()
+        )
+
+    def _build_gatepass_payload(self, gatepass_fields, request_date, out_time, in_time, reason_text):
+        payload = {}
+        date_str = request_date.isoformat()
+        out_str = out_time.strftime('%H:%M')
+        in_str = in_time.strftime('%H:%M')
+
+        for fld in gatepass_fields:
+            key = fld.field_key
+            ftype = str(fld.field_type or '').upper()
+            meta = fld.meta or {}
+
+            if ftype == 'DATE OUT IN':
+                payload[key] = {
+                    'date': date_str,
+                    'out_time': out_str,
+                    'in_time': in_str,
+                }
+            elif ftype == 'DATE IN OUT':
+                payload[key] = {
+                    'date': date_str,
+                    'in_time': in_str,
+                    'out_time': out_str,
+                }
+            elif ftype == 'DATE':
+                payload[key] = date_str
+            elif ftype == 'TIME':
+                payload[key] = out_str
+            elif ftype == 'TEXT':
+                payload[key] = reason_text
+            elif ftype == 'NUMBER':
+                payload[key] = 1
+            elif ftype == 'BOOLEAN':
+                payload[key] = True
+            elif ftype == 'SELECT':
+                options = meta.get('options') if isinstance(meta, dict) else None
+                selected = 'AUTO'
+                if isinstance(options, list) and options:
+                    first_opt = options[0]
+                    if isinstance(first_opt, dict):
+                        selected = first_opt.get('value') or first_opt.get('label') or 'AUTO'
+                    else:
+                        selected = first_opt
+                payload[key] = selected
+            elif ftype == 'FILE':
+                payload[key] = ''
+            else:
+                payload[key] = reason_text
+
+        return payload
+
+    def _auto_create_gatepass_for_request(self, staff_request, acted_by=None):
+        """Create and auto-approve a gatepass application for eligible AN approvals."""
+        import logging
+        from datetime import datetime, timedelta
+
+        from applications import models as app_models
+        from applications.services import application_state, approval_engine
+
+        logger = logging.getLogger(__name__)
+
+        if staff_request.status != 'approved':
+            return None
+        if not self._is_an_gatepass_eligible_request(staff_request):
+            return None
+
+        gatepass_type = self._resolve_gatepass_application_type()
+        if gatepass_type is None:
+            logger.warning('Gatepass application type not found. Skipping auto-create for request %s', staff_request.id)
+            return None
+
+        request_date = self._get_request_effective_date(staff_request.form_data or {})
+        if not request_date:
+            logger.warning('Gatepass auto-create skipped: no effective date on request %s', staff_request.id)
+            return None
+
+        out_limit = self._get_user_out_time_limit(staff_request.applicant, request_date)
+        out_dt = datetime.combine(request_date, out_limit)
+
+        name = (getattr(staff_request.template, 'name', '') or '').strip().lower()
+        if name.startswith('late entry permission'):
+            out_dt = out_dt - timedelta(hours=1)
+            if out_dt.date() != request_date:
+                out_dt = datetime.combine(request_date, datetime.min.time())
+
+        in_dt = out_dt + timedelta(hours=1)
+
+        gatepass_fields = list(
+            app_models.ApplicationField.objects.filter(application_type=gatepass_type).order_by('order', 'id')
+        )
+        if not gatepass_fields:
+            logger.warning('Gatepass fields are not configured for application type %s', gatepass_type.id)
+            return None
+
+        reason_text = f'Auto gatepass from staff request #{staff_request.id} ({staff_request.template.name})'
+        payload = self._build_gatepass_payload(
+            gatepass_fields=gatepass_fields,
+            request_date=request_date,
+            out_time=out_dt.time(),
+            in_time=in_dt.time(),
+            reason_text=reason_text,
+        )
+
+        applicant = staff_request.applicant
+        staff_profile = getattr(applicant, 'staff_profile', None)
+        student_profile = getattr(applicant, 'student_profile', None)
+
+        application = app_models.Application.objects.create(
+            application_type=gatepass_type,
+            applicant_user=applicant,
+            staff_profile=staff_profile if getattr(staff_profile, 'pk', None) else None,
+            student_profile=student_profile if getattr(student_profile, 'pk', None) else None,
+            current_state=app_models.Application.ApplicationState.DRAFT,
+            status=app_models.Application.ApplicationState.DRAFT,
+        )
+
+        field_map = {f.field_key: f for f in gatepass_fields}
+        rows = []
+        for key, value in payload.items():
+            fld = field_map.get(key)
+            if fld is None:
+                continue
+            rows.append(
+                app_models.ApplicationData(
+                    application=application,
+                    field=fld,
+                    value=value,
+                )
+            )
+        if rows:
+            app_models.ApplicationData.objects.bulk_create(rows)
+
+        try:
+            application_state.submit_application(application, applicant)
+            application_state.approve_application(application)
+
+            final_step = None
+            try:
+                flow = approval_engine._get_flow_for_application(application)
+                if flow is not None:
+                    final_step = flow.steps.filter(is_final=True).order_by('order').first()
+                    if final_step is None:
+                        final_step = flow.steps.order_by('order').first()
+            except Exception:
+                final_step = None
+
+            app_models.ApprovalAction.objects.create(
+                application=application,
+                step=final_step,
+                acted_by=acted_by,
+                action=app_models.ApprovalAction.Action.APPROVED,
+                remarks=reason_text,
+            )
+        except Exception as exc:
+            logger.warning(
+                'Gatepass submit/approve flow unavailable for request %s; forcing APPROVED state. Error: %s',
+                staff_request.id,
+                exc,
+            )
+            now = timezone.now()
+            application.current_state = app_models.Application.ApplicationState.APPROVED
+            application.status = app_models.Application.ApplicationState.APPROVED
+            application.current_step = None
+            application.submitted_at = application.submitted_at or now
+            application.final_decision_at = now
+            application.save(
+                update_fields=['current_state', 'status', 'current_step', 'submitted_at', 'final_decision_at']
+            )
+
+        return application
+
+    def _run_final_approval_side_effects(self, staff_request, acted_by=None):
+        """Execute all post-final-approval side effects without blocking approval."""
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        try:
+            self._process_leave_balance(staff_request)
+        except Exception as e:
+            logger.exception('Failed to process leave balance for request %s: %s', staff_request.id, str(e))
+
+        try:
+            self._process_attendance_action(staff_request)
+        except Exception as e:
+            logger.exception('Failed to process attendance action for request %s: %s', staff_request.id, str(e))
+
+        try:
+            self._auto_create_gatepass_for_request(staff_request, acted_by=acted_by)
+        except Exception as e:
+            logger.exception('Failed to auto-create gatepass for request %s: %s', staff_request.id, str(e))
 
     def _validate_late_entry_rules(self, user, template, form_data):
         """Return an error message string when late-entry rules are violated; else None."""
@@ -871,7 +1550,9 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                     covered_units += covered_now
                     remaining_absent_units[req_date] = round(absent_left - covered_now, 2)
 
-        lop_count = round(max(0.0, absent_units_total - covered_units), 2)
+        absence_based_lop = round(max(0.0, absent_units_total - covered_units), 2)
+        overuse_lop = self._compute_overuse_lop_units(user)
+        lop_count = round(absence_based_lop + overuse_lop, 2)
 
         lop_balance, _ = StaffLeaveBalance.objects.get_or_create(
             staff=user,
@@ -1188,24 +1869,7 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                 # Check if this is the final step
                 if staff_request.is_final_step():
                     staff_request.mark_approved()
-                    
-                    # Process leave and attendance balance updates
-                    try:
-                        self._process_leave_balance(staff_request)
-                    except Exception as e:
-                        # Log and continue; do not fail the approval due to balance processing error
-                        import logging
-                        logger = logging.getLogger(__name__)
-                        logger.exception('Failed to process leave balance for request %s: %s', staff_request.id, str(e))
-                    
-                    # Process attendance status changes (for late entry permissions, etc.)
-                    try:
-                        self._process_attendance_action(staff_request)
-                    except Exception as e:
-                        # Log and continue; do not fail the approval due to attendance processing error
-                        import logging
-                        logger = logging.getLogger(__name__)
-                        logger.exception('Failed to process attendance action for request %s: %s', staff_request.id, str(e))
+                    self._run_final_approval_side_effects(staff_request, acted_by=user)
                     
                     message = 'Request approved successfully (final approval)'
                 else:
@@ -1420,20 +2084,15 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             
             allotment = leave_policy.get('allotment_per_role', {})
             overdraft_name = leave_policy.get('overdraft_name', 'LOP')
-            
-            if not allotment:
-                # If no allotment configured, just record as neutral without limits
-                balance_obj, created = StaffLeaveBalance.objects.get_or_create(
-                    staff=staff_request.applicant,
-                    leave_type=leave_type,
-                    defaults={'balance': 0.0}
-                )
-                logger.info(f'[LeaveBalance] Neutral (no allotment) - Balance object - Created: {created}, Initial Balance: {balance_obj.balance}')
-                
-                old_balance = balance_obj.balance
-                balance_obj.balance += days
-                balance_obj.save()
-                logger.info(f'[LeaveBalance] Neutral action - added {days} days: {old_balance} -> {balance_obj.balance}')
+
+            # Monthly-reset neutral forms: treat StaffLeaveBalance as allocation, not a mutable balance.
+            # Usage limits are enforced at submission time, so no balance mutation is needed here.
+            if self._is_monthly_reset_policy(leave_policy):
+                logger.info('[LeaveBalance] Neutral monthly-reset policy - skipping balance mutation for request %s', staff_request.id)
+            elif not allotment:
+                # No per-role allotment configured: do not mutate balances here.
+                # Allocation/limits must be configured via StaffLeaveBalance and are enforced at submission.
+                logger.info('[LeaveBalance] Neutral (no allotment) - skipping balance mutation for request %s', staff_request.id)
             else:
                 # Allotment configured - use deduction logic
                 balance_obj, created = StaffLeaveBalance.objects.get_or_create(
@@ -2805,6 +3464,72 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                 template for template in all_templates
                 if can_user_apply_with_template(request.user, template)
             ]
+            template_by_name = {t.name: t for t in templates}
+
+            def _monthly_display_balance_for_template(target_user, template_obj):
+                leave_policy_local = getattr(template_obj, 'leave_policy', None) or {}
+                action_local = str(leave_policy_local.get('action') or '').strip().lower()
+                if action_local not in ['deduct', 'neutral']:
+                    return None
+                today_local = timezone.localdate()
+
+                # Split-period policies (from/to + split_date) take precedence over
+                # monthly flags because CL uses split entitlement across one period.
+                split_date_str = leave_policy_local.get('split_date')
+                from_date_str = leave_policy_local.get('from_date')
+                to_date_str = leave_policy_local.get('to_date')
+                if split_date_str and from_date_str and to_date_str:
+                    try:
+                        from datetime import datetime
+                        split_date_local = datetime.strptime(str(split_date_str).strip(), '%Y-%m-%d').date()
+                        period_start_local = datetime.strptime(str(from_date_str).strip(), '%Y-%m-%d').date()
+                        period_end_local = datetime.strptime(str(to_date_str).strip(), '%Y-%m-%d').date()
+                    except Exception:
+                        return None
+
+                    # Outside configured period, don't override persisted balance.
+                    if today_local < period_start_local or today_local > period_end_local:
+                        return None
+
+                    allocated_local = float(self._resolve_template_allocation(target_user, template_obj) or 0.0)
+                    if allocated_local <= 0.0:
+                        return 0.0
+
+                    effective_alloc_local = allocated_local / 2.0 if today_local < split_date_local else allocated_local
+
+                    used_local = 0.0
+                    qs_local = StaffRequest.objects.filter(
+                        applicant=target_user,
+                        template=template_obj,
+                        status='approved',
+                    ).select_related('template')
+                    for req_local in qs_local:
+                        used_local += self._request_units_for_usage(
+                            template_obj,
+                            req_local.form_data or {},
+                            target_user,
+                            period_start=period_start_local,
+                            period_end=min(period_end_local, today_local),
+                        )
+
+                    return round(max(0.0, effective_alloc_local - used_local), 2)
+
+                # Monthly-reset policies: allocation - current-month usage (pending+approved).
+                if self._is_monthly_reset_policy(leave_policy_local):
+                    allocated_local = float(self._resolve_template_allocation(target_user, template_obj) or 0.0)
+                    if allocated_local <= 0.0:
+                        return 0.0
+
+                    period_start_local, period_end_local = self._monthly_period_bounds(today_local)
+                    used_local = self._used_units_in_month(
+                        target_user,
+                        template_obj,
+                        period_start=period_start_local,
+                        period_end=period_end_local,
+                    )
+                    return round(max(0.0, allocated_local - used_local), 2)
+
+                return None
             
             # Create sets of template names and overdraft names relevant to the user
             applicable_template_names = {template.name for template in templates}
@@ -2826,12 +3551,19 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                     balance_obj.leave_type in applicable_template_names
                     or balance_obj.leave_type in applicable_overdraft_names
                 ):
+                    display_balance = balance_obj.balance
+                    template_obj = template_by_name.get(balance_obj.leave_type)
+                    if template_obj is not None:
+                        monthly_display = _monthly_display_balance_for_template(user, template_obj)
+                        if monthly_display is not None:
+                            display_balance = monthly_display
+
                     balance_data.append({
                         'leave_type': balance_obj.leave_type,
-                        'balance': balance_obj.balance,
+                        'balance': display_balance,
                         'updated_at': balance_obj.updated_at.isoformat() if balance_obj.updated_at else None
                     })
-                    logger.info(f'[Balances] {balance_obj.leave_type}: {balance_obj.balance}')
+                    logger.info(f'[Balances] {balance_obj.leave_type}: {display_balance}')
             
             # Also include templates with leave_policy that don't have balances yet (show as 0)
             existing_leave_types = set(b['leave_type'] for b in balance_data)
@@ -2852,6 +3584,16 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                 if action in ['deduct', 'earn', 'neutral']:
                     # For deduct and neutral actions, initialize with allotment
                     if action in ['deduct', 'neutral']:
+                        monthly_display = _monthly_display_balance_for_template(user, template)
+                        if monthly_display is not None:
+                            balance_data.append({
+                                'leave_type': leave_type,
+                                'balance': monthly_display,
+                                'updated_at': None
+                            })
+                            existing_leave_types.add(leave_type)
+                            continue
+
                         from datetime import datetime, date
                         
                         allotment_per_role = leave_policy.get('allotment_per_role', {})
@@ -3341,15 +4083,7 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                 comments='Auto-approved by HR/Admin (applied on behalf of staff).'
             )
 
-            try:
-                self._process_leave_balance(staff_request)
-            except Exception:
-                pass
-
-            try:
-                self._process_attendance_action(staff_request)
-            except Exception:
-                pass
+            self._run_final_approval_side_effects(staff_request, acted_by=request.user)
 
         response_serializer = StaffRequestDetailSerializer(staff_request)
         return Response({
@@ -3524,15 +4258,7 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                         comments='Auto-approved by HR bulk Apply CL for LOP.'
                     )
 
-                    try:
-                        self._process_leave_balance(staff_request)
-                    except Exception:
-                        pass
-
-                    try:
-                        self._process_attendance_action(staff_request)
-                    except Exception:
-                        pass
+                    self._run_final_approval_side_effects(staff_request, acted_by=request.user)
 
                     applied_units += units
                     applied_count += 1
@@ -3595,16 +4321,78 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
 
         # Get user's primary role
         user_role = self._get_primary_role(target_user)
-        
-        # Get all active request templates
+
+        # Get all active request templates that this user can apply
         templates = RequestTemplate.objects.filter(is_active=True).exclude(leave_policy={})
-        
-        # Filter templates that this user's role can access
-        applicable_templates = []
-        for template in templates:
-            allowed_roles = template.allowed_roles or []
-            if user_role in allowed_roles or 'ALL' in allowed_roles:
-                applicable_templates.append(template.name)
+        applicable_templates = [
+            template for template in templates
+            if can_user_apply_with_template(target_user, template)
+        ]
+
+        def _monthly_display_balance_for_template(target_user_local, template_obj):
+            leave_policy_local = getattr(template_obj, 'leave_policy', None) or {}
+            action_local = str(leave_policy_local.get('action') or '').strip().lower()
+            if action_local not in ['deduct', 'neutral']:
+                return None
+            today_local = timezone.localdate()
+
+            # Split-period policies (from/to + split_date) take precedence over
+            # monthly flags because CL uses split entitlement across one period.
+            split_date_str = leave_policy_local.get('split_date')
+            from_date_str = leave_policy_local.get('from_date')
+            to_date_str = leave_policy_local.get('to_date')
+            if split_date_str and from_date_str and to_date_str:
+                try:
+                    from datetime import datetime
+                    split_date_local = datetime.strptime(str(split_date_str).strip(), '%Y-%m-%d').date()
+                    period_start_local = datetime.strptime(str(from_date_str).strip(), '%Y-%m-%d').date()
+                    period_end_local = datetime.strptime(str(to_date_str).strip(), '%Y-%m-%d').date()
+                except Exception:
+                    return None
+
+                # Outside configured period, don't override persisted balance.
+                if today_local < period_start_local or today_local > period_end_local:
+                    return None
+
+                allocated_local = float(self._resolve_template_allocation(target_user_local, template_obj) or 0.0)
+                if allocated_local <= 0.0:
+                    return 0.0
+
+                effective_alloc_local = allocated_local / 2.0 if today_local < split_date_local else allocated_local
+
+                used_local = 0.0
+                qs_local = StaffRequest.objects.filter(
+                    applicant=target_user_local,
+                    template=template_obj,
+                    status='approved',
+                ).select_related('template')
+                for req_local in qs_local:
+                    used_local += self._request_units_for_usage(
+                        template_obj,
+                        req_local.form_data or {},
+                        target_user_local,
+                        period_start=period_start_local,
+                        period_end=min(period_end_local, today_local),
+                    )
+
+                return round(max(0.0, effective_alloc_local - used_local), 2)
+
+            # Monthly-reset policies: allocation - current-month usage (pending+approved).
+            if self._is_monthly_reset_policy(leave_policy_local):
+                allocated_local = float(self._resolve_template_allocation(target_user_local, template_obj) or 0.0)
+                if allocated_local <= 0.0:
+                    return 0.0
+
+                period_start_local, period_end_local = self._monthly_period_bounds(today_local)
+                used_local = self._used_units_in_month(
+                    target_user_local,
+                    template_obj,
+                    period_start=period_start_local,
+                    period_end=period_end_local,
+                )
+                return round(max(0.0, allocated_local - used_local), 2)
+
+            return None
         
         # Get existing balances from DB
         existing_balances = {
@@ -3612,26 +4400,41 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             for b in StaffLeaveBalance.objects.filter(staff=target_user)
         }
         
-        # Build complete balance list: existing + missing leave types with 0 balance
+        # Build complete balance list with monthly-reset display logic.
         balance_data = []
         seen = set()
-        
-        # First add existing balances
-        for leave_type, balance in sorted(existing_balances.items()):
+
+        for template in sorted(applicable_templates, key=lambda t: t.name.lower()):
+            leave_type = template.name
+            monthly_display = _monthly_display_balance_for_template(target_user, template)
+
+            if monthly_display is not None:
+                display_balance = monthly_display
+            else:
+                if leave_type in existing_balances:
+                    display_balance = existing_balances[leave_type]
+                else:
+                    action = str((template.leave_policy or {}).get('action') or '').strip().lower()
+                    if action in ['deduct', 'neutral']:
+                        display_balance = float(self._resolve_template_allocation(target_user, template) or 0.0)
+                    else:
+                        display_balance = 0.0
+
             balance_data.append({
                 'leave_type': leave_type,
-                'balance': balance,
+                'balance': display_balance,
             })
             seen.add(leave_type)
-        
-        # Then add missing applicable templates with 0 balance
-        for template_name in sorted(applicable_templates):
-            if template_name not in seen:
+
+        # Keep additional balances that are not represented by applicable templates
+        # (e.g., custom/manual leave types, overdraft types).
+        for leave_type, balance in sorted(existing_balances.items()):
+            if leave_type not in seen:
                 balance_data.append({
-                    'leave_type': template_name,
-                    'balance': 0.0,
+                    'leave_type': leave_type,
+                    'balance': balance,
                 })
-                seen.add(template_name)
+                seen.add(leave_type)
         
         # Always include LOP as an editable field (even if not in templates)
         if 'LOP' not in seen:
@@ -3872,7 +4675,9 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                         covered_units += covered_now
                         remaining_absent_units[req_date] = round(absent_left - covered_now, 2)
 
-            lop_count = round(max(0.0, absent_units_total - covered_units), 2)
+            absence_based_lop = round(max(0.0, absent_units_total - covered_units), 2)
+            overuse_lop = self._compute_overuse_lop_units(user)
+            lop_count = round(absence_based_lop + overuse_lop, 2)
 
             lop_balance, _ = StaffLeaveBalance.objects.get_or_create(
                 staff=user,

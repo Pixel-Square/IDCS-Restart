@@ -3,7 +3,11 @@ import { Clock, RefreshCw } from 'lucide-react';
 import { getLeaveBalances, getActiveTemplates, getLateEntryStats } from '../services/staffRequests';
 import type { LeaveBalance, RequestTemplate, LateEntryStats } from '../types/staffRequests';
 
-export default function LeaveBalanceBadges() {
+interface LeaveBalanceBadgesProps {
+  month?: string;
+}
+
+export default function LeaveBalanceBadges({ month }: LeaveBalanceBadgesProps) {
   const [balances, setBalances] = useState<LeaveBalance[]>([]);
   const [templates, setTemplates] = useState<RequestTemplate[]>([]);
   const [lateStats, setLateStats] = useState<LateEntryStats | null>(null);
@@ -12,7 +16,7 @@ export default function LeaveBalanceBadges() {
 
   useEffect(() => {
     fetchBalances();
-  }, []);
+  }, [month]);
 
   const fetchBalances = async () => {
     setLoading(true);
@@ -21,7 +25,7 @@ export default function LeaveBalanceBadges() {
       const [data, tmpl, lateData] = await Promise.all([
         getLeaveBalances(),
         getActiveTemplates(),
-        getLateEntryStats().catch(() => null),
+        getLateEntryStats(month).catch(() => null),
       ]);
       setLateStats(lateData);
       const actualBalances = data.balances || [];

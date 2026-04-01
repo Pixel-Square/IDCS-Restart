@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Calendar, ChevronLeft, ChevronRight, CheckCircle, XCircle, AlertCircle, Clock, Plus, AlertTriangle, Trash2 } from 'lucide-react';
 import { apiClient } from '../../services/auth';
 import { getApiBase } from '../../services/apiBase';
@@ -270,22 +270,6 @@ export default function MyCalendarPage() {
     fetchColInfo();
   };
 
-  // Calculate permission count by duration
-  const permissionCountByDuration = useMemo(() => {
-    const counts: Record<string, number> = {};
-    
-    myRequests
-      .filter(req => req.template.name === 'Late Entry Permission')
-      .forEach(req => {
-        const duration = req.form_data?.late_duration;
-        if (duration) {
-          counts[duration] = (counts[duration] || 0) + 1;
-        }
-      });
-    
-    return counts;
-  }, [myRequests]);
-
   // Get leave status for a specific date from approved requests
   const getLeaveStatusForDate = (date: number): string | null => {
     const dateStr = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${String(date).padStart(2, '0')}`;
@@ -425,37 +409,8 @@ export default function MyCalendarPage() {
           <p className="text-gray-600 mt-1">Attendance calendar and request submissions</p>
         </div>
 
-        {/* Leave Balances */}
-        <LeaveBalanceBadges />
-
-        {/* Permission Count Split - moved under Leave Balances */}
-        {Object.keys(permissionCountByDuration).length > 0 && (
-          <div className="bg-white rounded-lg shadow-md p-4 mb-6">
-            <h4 className="font-semibold text-gray-900 mb-2 text-sm">Permission Count Split</h4>
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
-              {Object.entries(permissionCountByDuration)
-                .sort((a, b) => parseInt(a[0]) - parseInt(b[0]))
-                .map(([duration, count]) => {
-                  const label = duration === '10' ? '10 mins'
-                    : duration === '30' ? '30 mins'
-                    : duration === '60' ? '1 hr'
-                    : duration === '90' ? '1.5 hrs'
-                    : duration === '120' ? '2 hrs'
-                    : `${duration} mins`;
-
-                  return (
-                    <div key={duration} className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
-                      <span className="text-amber-900 font-medium">{label}</span>
-                      <span className="text-amber-700 font-bold ml-1">{count}</span>
-                    </div>
-                  );
-                })}
-            </div>
-            <p className="text-xs text-gray-500 mt-2">
-              Total late entry permissions: {Object.values(permissionCountByDuration).reduce((sum, count) => sum + count, 0)}
-            </p>
-          </div>
-        )}
+        {/* Leave balances + month-aware late-entry usage */}
+        <LeaveBalanceBadges month={`${selectedYear}-${String(selectedMonth).padStart(2, '0')}`} />
 
         {/* Info Box for Late Entry Feature */}
         {attendanceData && attendanceData.summary.absent_count > 0 && (
