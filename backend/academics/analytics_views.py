@@ -2146,7 +2146,7 @@ class MyClassAttendanceAnalyticsView(APIView):
                 entry['absent_count'] += absent_count
                 entry['leave_count'] += leave_count_daily
                 entry['od_count'] += od_count_daily
-                entry['total_count'] += present_count + absent_count + leave_count_daily
+                entry['total_count'] += present_count + absent_count
                 entry['is_locked'] = entry['is_locked'] or getattr(daily_session, 'is_locked', False)
                 entry['attendance_marked'] = entry['attendance_marked'] or ((present_count + absent_count) > 0)
                 entry['days_count'] += 1
