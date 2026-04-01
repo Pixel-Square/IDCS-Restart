@@ -5898,10 +5898,11 @@ def list_uploads(request):
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def cdap_revision(request, subject_id):
-    required = {'obe.view'} if request.method == 'GET' else {'obe.cdap.upload'}
-    auth = _require_permissions(request, required)
-    if auth:
-        return auth
+    if request.method == 'PUT':
+        required = {'obe.cdap.upload'}
+        auth = _require_permissions(request, required)
+        if auth:
+            return auth
 
     if request.method == 'GET':
         rev = CdapRevision.objects.filter(subject_id=subject_id).first()

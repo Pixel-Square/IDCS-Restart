@@ -1449,6 +1449,12 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                         type={showConfirmPassword ? "text" : "password"}
                         value={confirmPassword}
                         onChange={(e) => setConfirmPassword(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleChangePassword();
+                          }
+                        }}
                         className="w-full px-3 py-2 border rounded-md pr-10"
                         disabled={changePasswordBusy}
                       />
@@ -1505,7 +1511,7 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
               <div className="bg-white rounded-lg p-6 shadow-lg z-10 w-full max-w-md">
                 <h3 className="text-lg font-semibold mb-3">Remove Mobile Number</h3>
                 <p className="text-sm text-gray-600 mb-4">Enter your password to confirm removal of the mobile number.</p>
-                <input type="password" value={removePassword} onChange={(e)=>setRemovePassword(e.target.value)} className="w-full px-3 py-2 border rounded mb-3" />
+                <input type="password" value={removePassword} onChange={(e)=>setRemovePassword(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleRemoveMobile(); } }} className="w-full px-3 py-2 border rounded mb-3" />
                 {removeError && <div className="text-sm text-red-600 mb-2">{removeError}</div>}
                 <div className="flex justify-end gap-2">
                   <button onClick={() => setRemoveModalOpen(false)} className="px-3 py-2">Cancel</button>

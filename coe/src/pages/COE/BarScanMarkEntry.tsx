@@ -1,9 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
 import { getCachedMe } from '../../services/auth';
 
-type QpType = 'QP1' | 'QP2' | 'TCPR';
+type QpType = 'QP1' | 'QP2' | 'TCPR' | 'OE';
 
 type StudentDetails = {
   id: number;
@@ -22,10 +22,26 @@ type Question = { key: string; label: string; max: number };
 
 function getQuestions(qpType: QpType): Question[] {
   if (qpType === 'TCPR') {
-    return Array.from({ length: 12 }, (_, i) => {
+    const questions = Array.from({ length: 12 }, (_, i) => {
       const idx = i + 1;
       return { key: `q${idx}`, label: `Q${idx}`, max: idx <= 8 ? 2 : 16 };
     });
+    questions.push({ key: 'review', label: 'Review', max: 30 });
+    return questions;
+  }
+
+  if (qpType === 'OE') {
+    return [
+      { key: 'q1', label: 'Q1', max: 2 },
+      { key: 'q2', label: 'Q2', max: 2 },
+      { key: 'q3', label: 'Q3', max: 2 },
+      { key: 'q4', label: 'Q4', max: 2 },
+      { key: 'q5', label: 'Q5', max: 2 },
+      { key: 'q6', label: 'Q6', max: 2 },
+      { key: 'q7', label: 'Q7', max: 16 },
+      { key: 'q8', label: 'Q8', max: 16 },
+      { key: 'q9', label: 'Q9', max: 16 },
+    ];
   }
 
   if (qpType === 'QP2') {
@@ -68,15 +84,37 @@ function getQuestions(qpType: QpType): Question[] {
   ];
 }
 
-export default function BarScanMarkEntry() {
+interface BarScanMarkEntryProps {
+  embeddedCode?: string;
+  embeddedRegNo?: string;
+  embeddedName?: string;
+  embeddedQpType?: string;
+  embeddedDept?: string;
+  embeddedSem?: string;
+  embeddedDummy?: string;
+  onClose?: () => void;
+  onNextScan?: (code: string) => void;
+}
+
+export default function BarScanMarkEntry({ 
+  embeddedCode, 
+  embeddedRegNo,
+  embeddedName,
+  embeddedQpType,
+  embeddedDept,
+  embeddedSem,
+  embeddedDummy,
+  onClose, 
+  onNextScan 
+}: BarScanMarkEntryProps = {}) {
   const [searchParams] = useSearchParams();
-  const code = String(searchParams.get('code') || '').trim();
-  const queryRegNo = searchParams.get('reg_no');
-  const queryName = searchParams.get('name');
-  const queryQpType = searchParams.get('qp_type');
-  const queryDummy = searchParams.get('dummy_number');
-  const queryDept = searchParams.get('dept');
-  const querySem = searchParams.get('sem');
+  const code = embeddedCode || String(searchParams.get('code') || '').trim();
+  const queryRegNo = embeddedRegNo || searchParams.get('reg_no');
+  const queryName = embeddedName || searchParams.get('name');
+  const queryQpType = embeddedQpType || searchParams.get('qp_type');
+  const queryDummy = embeddedDummy || searchParams.get('dummy_number');
+  const queryDept = embeddedDept || searchParams.get('dept');
+  const querySem = embeddedSem || searchParams.get('sem');
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -90,11 +128,43 @@ export default function BarScanMarkEntry() {
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState('');
   const [validatingPassword, setValidatingPassword] = useState(false);
+  
+  // References for explicit tab focusing
+  const saveButtonRef = useRef<HTMLButtonElement>(null);
+
+  // This input captures the barcode scanner output while inside the Mark Entry screen
+  const entryScannerRef = React.useRef<HTMLInputElement>(null);
+  const [backgroundScanCode, setBackgroundScanCode] = useState<string>('');
+
+  // Keep focus on the hidden scanner input to allow consecutive scanning
+  useEffect(() => {
+    const focusScanner = () => {
+      // Don't steal focus if interacting with mark entry inputs or password modal
+      if (!isLocked && document.activeElement?.tagName === 'INPUT' && document.activeElement?.getAttribute('type') === 'number') {
+        return;
+      }
+      if (showPasswordModal) return;
+      
+      entryScannerRef.current?.focus();
+    };
+    
+    focusScanner();
+    window.addEventListener('click', focusScanner);
+    return () => window.removeEventListener('click', focusScanner);
+  }, [isLocked, showPasswordModal]);
+
+  const handleBackgroundScan = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (backgroundScanCode && onNextScan) {
+      onNextScan(backgroundScanCode);
+      setBackgroundScanCode('');
+    }
+  };
 
   const loadSavedMarks = (dummy: string, fallbackQp: QpType = 'QP1'): QpType => {
     const stored = localStorage.getItem(`marks_${dummy}`);
     const storedQp = localStorage.getItem(`marks_type_${dummy}`);
-    const finalQp = (storedQp === 'QP2' || storedQp === 'TCPR' || storedQp === 'QP1') ? storedQp as QpType : fallbackQp;
+    const finalQp = (storedQp === 'QP2' || storedQp === 'TCPR' || storedQp === 'OE' || storedQp === 'QP1') ? storedQp as QpType : fallbackQp;
 
     if (stored) {
       setMarks(JSON.parse(stored));
@@ -115,7 +185,7 @@ export default function BarScanMarkEntry() {
     // This avoids "Unable to load student details" for unsaved dummies.
     if (queryRegNo && queryName && queryQpType) {
        const qpTypeRaw = String(queryQpType).toUpperCase();
-       const qpType: QpType = qpTypeRaw === 'QP2' || qpTypeRaw === 'TCPR' ? qpTypeRaw as QpType : 'QP1';
+       const qpType: QpType = (qpTypeRaw === 'QP2' || qpTypeRaw === 'TCPR' || qpTypeRaw === 'OE') ? qpTypeRaw as QpType : 'QP1';
        setStudent({
           id: 0, // Mock ID
           reg_no: queryRegNo,
@@ -168,13 +238,13 @@ export default function BarScanMarkEntry() {
         const urlQpType = queryQpType ? String(queryQpType).toUpperCase() : null;
 
         let qpTypeRaw = 'QP1';
-        if (urlQpType === 'QP1' || urlQpType === 'QP2' || urlQpType === 'TCPR') {
+        if (urlQpType === 'QP1' || urlQpType === 'QP2' || urlQpType === 'TCPR' || urlQpType === 'OE') {
           qpTypeRaw = urlQpType;
         } else {
           qpTypeRaw = dbQpType;
         }
 
-        const qpType: QpType = (qpTypeRaw === 'QP2' || qpTypeRaw === 'TCPR') ? qpTypeRaw as QpType : 'QP1';
+        const qpType: QpType = (qpTypeRaw === 'QP2' || qpTypeRaw === 'TCPR' || qpTypeRaw === 'OE') ? qpTypeRaw as QpType : 'QP1';
 
         const finalDummy = queryDummy || data.dummy_number || code;
         setStudent({
@@ -238,6 +308,11 @@ export default function BarScanMarkEntry() {
       console.log('Saved marks for', student.dummy_number || student.reg_no, ':', marks);
       setSaved(true);
       setIsLocked(true);
+      
+      // Automatically focus back to the hidden barcode listener so they can instantly scan the next paper
+      setTimeout(() => {
+         entryScannerRef.current?.focus();
+      }, 0);
     } catch (err) {
       setError('Failed to save marks. Please try again.');
     } finally {
@@ -285,6 +360,19 @@ export default function BarScanMarkEntry() {
 
   return (
     <>
+      {/* Must not use "hidden" (display: none) or the input cannot be focused by the browser! */}
+      <form onSubmit={handleBackgroundScan} className="absolute left-[-9999px] top-0 m-0 p-0 overflow-hidden">
+         <input
+           ref={entryScannerRef}
+           type="text"
+           value={backgroundScanCode}
+           onChange={(e) => setBackgroundScanCode(e.target.value)}
+           autoComplete="off"
+           className="opacity-0 w-0 h-0"
+           tabIndex={-1}
+         />
+      </form>
+
       {showPasswordModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
           <div className="bg-white p-6 rounded-xl shadow-lg w-96">
@@ -294,6 +382,12 @@ export default function BarScanMarkEntry() {
               type="password"
               value={passwordInput}
               onChange={(e) => setPasswordInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handlePasswordConfirm();
+                }
+              }}
               className="w-full border border-gray-300 p-2 rounded mb-2 focus:outline-none focus:border-blue-500"
               placeholder="Password"
             />
@@ -317,10 +411,17 @@ export default function BarScanMarkEntry() {
         </div>
       )}
       
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
-        <div className="flex items-center justify-between rounded-xl border border-blue-100 bg-white p-6 shadow-sm">
+      <div className="w-full max-w-[100%] mx-auto py-4 space-y-4">
+        <div className="flex items-center justify-between rounded-xl border border-blue-100 bg-white p-4 sm:p-6 shadow-sm">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Barcode Mark Entry</h1>
+            <div className="flex items-center gap-3">
+              {onClose && (
+                <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full" aria-label="Close">
+                  ✕
+                </button>
+              )}
+              <h1 className="text-2xl font-bold text-gray-900">Barcode Mark Entry</h1>
+            </div>
             <p className="mt-2 text-sm text-gray-600">Dummy-based mark entry sheet generated from QP type.</p>
           </div>
           {student && (
@@ -334,6 +435,7 @@ export default function BarScanMarkEntry() {
                 </button>
               ) : (
                 <button
+                  ref={saveButtonRef}
                   onClick={handleSaveMarks}
                   disabled={saving}
                   className={`rounded-lg px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors ${
@@ -385,28 +487,48 @@ export default function BarScanMarkEntry() {
             </div>
           </div>
 
-          <div className="rounded-xl border border-gray-200 bg-white p-6 overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200 border border-gray-200 bg-white text-sm text-gray-700">
+          <div className="rounded-xl border border-gray-200 bg-white p-4 overflow-hidden">
+            <table className="w-full divide-y divide-gray-200 border border-gray-200 bg-white text-sm text-gray-700 table-fixed">
               <thead>
                 <tr className="bg-gray-100 text-left text-xs font-semibold uppercase tracking-wide text-gray-600">
-                  <th className="px-3 py-2">Dummy No</th>
+                  <th className="px-2 py-2 whitespace-nowrap w-32">Dummy No</th>
                   {questions.map((q) => (
-                    <th key={`head-${q.key}`} className="px-3 py-2 text-center">{q.label}</th>
+                    <th key={`head-${q.key}`} className="px-1 py-2 text-center">{q.label}</th>
                   ))}
-                  <th className="px-3 py-2 text-center">Total</th>
+                  <th className="px-2 py-2 text-center w-20">Total</th>
                 </tr>
               </thead>
               <tbody>
-                <tr>
-                  <td className="px-3 py-2 font-semibold font-mono text-blue-700">{student.dummy_number || '-'}</td>
+                <tr className="bg-gray-50 border-b border-gray-200">
+                  <td className="px-2 py-2 font-semibold whitespace-nowrap text-gray-600">Max</td>
                   {questions.map((q) => (
-                    <td key={`input-${q.key}`} className="px-2 py-2 text-center relative group">
+                    <td key={`max-${q.key}`} className="px-1 py-2 text-center font-semibold text-gray-700">{q.max}</td>
+                  ))}
+                  <td className="px-2 py-2 text-center font-bold text-gray-700">
+                    {student.qp_type === 'TCPR' ? 100 : questions.reduce((sum, q) => sum + q.max, 0)}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="px-2 py-3 font-semibold font-mono text-blue-700 whitespace-nowrap">{student.dummy_number || '-'}</td>
+                  {questions.map((q, index) => (
+                    <td key={`input-${q.key}`} className="px-1 py-1 text-center relative group">
                       <input
                         type="number"
                         min={0}
                         max={q.max}
                         value={marks[q.key] || ''}
                         disabled={isLocked}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Tab' && !e.shiftKey && index === questions.length - 1) {
+                            e.preventDefault();
+                            saveButtonRef.current?.focus();
+                          }
+                          // Allow "Enter" key on the last input to directly save marks
+                          if (e.key === 'Enter' && index === questions.length - 1) {
+                            e.preventDefault();
+                            handleSaveMarks();
+                          }
+                        }}
                         onChange={(e) => {
                           let val = e.target.value;
                           
@@ -422,7 +544,7 @@ export default function BarScanMarkEntry() {
                           setValidationNote(null);
                           setMarks((prev) => ({ ...prev, [q.key]: val }));
                         }}
-                        className={`w-20 rounded border px-2 py-1 text-center focus:outline-none focus:border-blue-500 ${
+                        className={`w-full min-w-[2rem] rounded border px-1 py-1 text-center focus:outline-none focus:border-blue-500 ${
                           isLocked 
                             ? 'bg-gray-100 text-gray-500 cursor-not-allowed border-gray-200' 
                             : 'border-gray-300'
@@ -430,20 +552,19 @@ export default function BarScanMarkEntry() {
                       />
                     </td>
                   ))}
-                  <td className="px-3 py-2 text-center font-semibold">
-                    {questions.reduce((sum, q) => {
-                      const n = Number(marks[q.key]);
-                      return Number.isFinite(n) ? sum + n : sum;
-                    }, 0)}
-                  </td>
-                </tr>
-                <tr className="bg-gray-50">
-                  <td className="px-3 py-2 font-semibold">Max</td>
-                  {questions.map((q) => (
-                    <td key={`max-${q.key}`} className="px-3 py-2 text-center font-semibold text-gray-700">{q.max}</td>
-                  ))}
-                  <td className="px-3 py-2 text-center font-semibold text-gray-700">
-                    {questions.reduce((sum, q) => sum + q.max, 0)}
+                  <td className="px-2 py-2 text-center font-bold text-base">
+                    {(() => {
+                      if (student.qp_type === 'TCPR') {
+                        const writtenMarks = questions.filter(q => q.key !== 'review').reduce((sum, q) => sum + (Number(marks[q.key]) || 0), 0);
+                        const reviewMarks = Number(marks['review']) || 0;
+                        return Math.round((writtenMarks / 80) * 70) + reviewMarks;
+                      }
+                      
+                      return questions.reduce((sum, q) => {
+                        const n = Number(marks[q.key]);
+                        return Number.isFinite(n) ? sum + n : sum;
+                      }, 0);
+                    })()}
                   </td>
                 </tr>
               </tbody>

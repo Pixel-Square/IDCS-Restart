@@ -5,14 +5,16 @@ import { jsPDF } from 'jspdf';
 import JsBarcode from 'jsbarcode';
 import { CoeCourseStudent, fetchCoeStudentsMap } from '../../services/coe';
 import { getCourseKey, readCourseSelectionMap } from './courseSelectionStorage';
+import { getAttendanceFilterKey, readCourseAbsenteesMap } from './attendanceStore';
+import { getSemesterStartSequence, generateDummyNumber } from './dummySequence';
 
 const SHUFFLED_LIST_KEY = 'coe-students-shuffled-list-v1';
 
 const DEPARTMENT_DUMMY_DIGITS: Record<string, string> = {
   AIDS: '1',
   AIML: '2',
-  CSE: '3',
-  CIVIL: '4',
+  CIVIL: '3',
+  CSE: '4',
   ECE: '5',
   EEE: '6',
   IT: '7',
@@ -103,13 +105,16 @@ export default function BundleBarcodeView() {
   const [pdfPreviewFileName, setPdfPreviewFileName] = useState('');
   const [pdfLoading, setPdfLoading] = useState(false);
 
-  useEffect(() => {
+    useEffect(() => {
     let active = true;
     (async () => {
       setLoading(true);
       setError(null);
       try {
-        const response = await fetchCoeStudentsMap({ department, semester });
+        const [response, startSequence] = await Promise.all([
+          fetchCoeStudentsMap({ department, semester }),
+          getSemesterStartSequence(department, semester)
+        ]);
         if (!active) return;
 
         const semesterDigit = getSemesterDigit(semester);
@@ -117,8 +122,9 @@ export default function BundleBarcodeView() {
         const persistedByDummy = readShuffledLists()[filterKey] || {};
         const savedByDummy = new Map((response.saved_dummies || []).filter((r) => r.semester === semester).map((r) => [r.dummy, r]));
         const selectionMap = readCourseSelectionMap();
+        const absentCourseMap = readCourseAbsenteesMap(getAttendanceFilterKey(department, semester));
 
-        let globalSequence = 0;
+        let globalSequence = startSequence;
         const gathered: { department: string; course_code?: string; course_name?: string; students: BundleStudent[] }[] = [];
 
         response.departments.forEach((deptBlock: any) => {
@@ -130,9 +136,17 @@ export default function BundleBarcodeView() {
               return selection?.eseType === 'ESE';
             })
             .forEach((course: any) => {
-              const students: BundleStudent[] = course.students.map((student: CoeCourseStudent) => {
+              const courseKey = getCourseKey({ department: deptBlock.department, semester, courseCode: course.course_code || '', courseName: course.course_name || '' });
+              const courseAbsentees = absentCourseMap.get(courseKey);
+
+              const originalStudents = (course.students || []).filter((student: CoeCourseStudent) => {
+                const regNo = String(student.reg_no || '').trim();
+                return regNo ? !(courseAbsentees?.has(regNo)) : true;
+              });
+
+              const students: BundleStudent[] = originalStudents.map((student: CoeCourseStudent) => {
                 globalSequence += 1;
-                const dummy = `KR00${deptCode}${semesterDigit}${String(globalSequence).padStart(5, '0')}`;
+                const dummy = generateDummyNumber(department, globalSequence);
                 const saved = savedByDummy.get(dummy);
                 const persisted = persistedByDummy[dummy];
                 const resolvedRegNo = saved?.reg_no || persisted?.reg_no || student.reg_no;
@@ -140,8 +154,16 @@ export default function BundleBarcodeView() {
                 return { reg_no: resolvedRegNo, name: resolvedName, dummy, isShuffled: Boolean(saved || persisted) };
               });
 
-              const isCourseShuffled = students.some((s) => s.isShuffled);
-              if (!isCourseShuffled) return;
+              const mappedInDbCount = students.filter((student) => {
+                const saved = savedByDummy.get(student.dummy);
+                const persisted = persistedByDummy[student.dummy];
+                return Boolean(saved || persisted);
+              }).length;
+
+              const isCourseFullyMappedInDb = originalStudents.length > 0 && mappedInDbCount === originalStudents.length;
+              const isCourseShuffledInDb = students.some((student) => student.isShuffled);
+
+              // if (!isCourseFullyMappedInDb || !isCourseShuffledInDb) return;
               gathered.push({ department: deptBlock.department, course_code: course.course_code, course_name: course.course_name, students });
             });
         });

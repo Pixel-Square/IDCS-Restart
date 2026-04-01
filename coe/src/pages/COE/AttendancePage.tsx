@@ -23,36 +23,60 @@ type CourseMeta = {
   department: string;
 };
 
+type CourseBlock = {
+  meta: CourseMeta;
+  rows: AttendanceRow[];
+  sessionKey: string;
+};
+
 export default function AttendancePage() {
   const [department, setDepartment] = useState<(typeof DEPARTMENTS)[number]>('ALL');
   const [semester, setSemester] = useState<(typeof SEMESTERS)[number]>('SEM1');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [rows, setRows] = useState<AttendanceRow[]>([]);
-  const [activeCourse, setActiveCourse] = useState<CourseMeta | null>(null);
+  const [courseBlocks, setCourseBlocks] = useState<CourseBlock[]>([]);
   const [attendanceDate, setAttendanceDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
-  const [statusMap, setStatusMap] = useState<Record<string, 'present' | 'absent'>>({});
-  const [isLocked, setIsLocked] = useState(false);
+  const [statusMaps, setStatusMaps] = useState<Record<string, Record<string, 'present' | 'absent'>>>({});
+  const [lockMaps, setLockMaps] = useState<Record<string, boolean>>({});
   const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [unlockTargetSession, setUnlockTargetSession] = useState<string>('');
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState('');
   const [validatingPassword, setValidatingPassword] = useState(false);
+  const [selectedCourseKey, setSelectedCourseKey] = useState<string>('');
+  const [searchRegNo, setSearchRegNo] = useState<string>('');
 
   const filterKey = useMemo(() => getAttendanceFilterKey(department, semester), [department, semester]);
-  const sessionKey = useMemo(() => {
-    if (!activeCourse) return '';
-    return getAttendanceSessionKey(filterKey, activeCourse.key, attendanceDate);
-  }, [activeCourse, attendanceDate, filterKey]);
 
-  useEffect(() => {
-    if (!sessionKey) {
-      setStatusMap({});
-      setIsLocked(false);
-      return;
+  // Filtered blocks based on course dropdown and search
+  const visibleBlocks = useMemo(() => {
+    let blocks = courseBlocks;
+    if (selectedCourseKey) {
+      blocks = blocks.filter((b) => b.meta.key === selectedCourseKey);
     }
-    setStatusMap(readAttendanceStatusMap(sessionKey));
-    setIsLocked(readAttendanceLock(sessionKey));
-  }, [sessionKey]);
+    if (searchRegNo.trim()) {
+      const query = searchRegNo.trim().toLowerCase();
+      blocks = blocks
+        .map((b) => ({
+          ...b,
+          rows: b.rows.filter((r) => r.reg_no.toLowerCase().includes(query)),
+        }))
+        .filter((b) => b.rows.length > 0);
+    }
+    return blocks;
+  }, [courseBlocks, selectedCourseKey, searchRegNo]);
+
+  // Load status and lock for all course blocks
+  useEffect(() => {
+    const newStatusMaps: Record<string, Record<string, 'present' | 'absent'>> = {};
+    const newLockMaps: Record<string, boolean> = {};
+    courseBlocks.forEach((block) => {
+      newStatusMaps[block.sessionKey] = readAttendanceStatusMap(block.sessionKey);
+      newLockMaps[block.sessionKey] = readAttendanceLock(block.sessionKey);
+    });
+    setStatusMaps(newStatusMaps);
+    setLockMaps(newLockMaps);
+  }, [courseBlocks]);
 
   useEffect(() => {
     let active = true;
@@ -66,7 +90,7 @@ export default function AttendancePage() {
 
         const selectionMap = readCourseSelectionMap();
         const ttMap = readTTScheduleMap(filterKey);
-        const activeCourseForDate = new Map<string, CourseMeta>();
+        const blocks: CourseBlock[] = [];
 
         response.departments.forEach((deptBlock) => {
           deptBlock.courses
@@ -78,7 +102,9 @@ export default function AttendancePage() {
                 courseName: course.course_name || '',
               });
               const selection = selectionMap[courseKey];
-              return selection ? selection.eseType === 'ESE' : true;
+              if (selection && selection.eseType !== 'ESE') return false;
+              const ttDate = ttMap[courseKey];
+              return ttDate === attendanceDate;
             })
             .forEach((course) => {
               const courseKey = getCourseKey({
@@ -87,48 +113,32 @@ export default function AttendancePage() {
                 courseCode: course.course_code || '',
                 courseName: course.course_name || '',
               });
-              const ttDate = ttMap[courseKey];
-              if (!ttDate || ttDate !== attendanceDate) return;
 
-              if (!activeCourseForDate.has(courseKey)) {
-                activeCourseForDate.set(courseKey, {
+              const list = (course.students || [])
+                .map((student) => ({
+                  reg_no: String(student.reg_no || '').trim(),
+                  name: String(student.name || ''),
+                  department: deptBlock.department,
+                }))
+                .filter((student) => Boolean(student.reg_no))
+                .sort((a, b) => a.reg_no.localeCompare(b.reg_no, undefined, { numeric: true, sensitivity: 'base' }));
+
+              blocks.push({
+                meta: {
                   key: courseKey,
                   courseCode: course.course_code || '',
                   courseName: course.course_name || 'Unnamed Course',
                   department: deptBlock.department,
-                });
-              }
+                },
+                rows: list,
+                sessionKey: getAttendanceSessionKey(filterKey, courseKey, attendanceDate),
+              });
             });
         });
 
-        const targetCourse = Array.from(activeCourseForDate.values())[0] || null;
-        setActiveCourse(targetCourse);
-
-        if (!targetCourse) {
-          setRows([]);
-          return;
-        }
-
-        const deptBlock = response.departments.find((d) => d.department === targetCourse.department);
-        const course = (deptBlock?.courses || []).find((c) =>
-          getCourseKey({
-            department: targetCourse.department,
-            semester,
-            courseCode: c.course_code || '',
-            courseName: c.course_name || '',
-          }) === targetCourse.key
-        );
-
-        const list = (course?.students || [])
-          .map((student) => ({
-            reg_no: String(student.reg_no || '').trim(),
-            name: String(student.name || ''),
-            department: targetCourse.department,
-          }))
-          .filter((student) => Boolean(student.reg_no))
-          .sort((a, b) => a.reg_no.localeCompare(b.reg_no, undefined, { numeric: true, sensitivity: 'base' }));
-
-        setRows(list);
+        setCourseBlocks(blocks);
+        setSelectedCourseKey('');
+        setSearchRegNo('');
       } catch (err) {
         if (!active) return;
         const message = err instanceof Error ? err.message : 'Failed to load attendance students.';
@@ -144,25 +154,36 @@ export default function AttendancePage() {
     };
   }, [department, semester, attendanceDate, filterKey]);
 
-  const presentCount = useMemo(() => rows.filter((row) => (statusMap[row.reg_no] || 'present') === 'present').length, [rows, statusMap]);
-  const absentCount = useMemo(() => rows.filter((row) => statusMap[row.reg_no] === 'absent').length, [rows, statusMap]);
+  const totalRows = useMemo(() => courseBlocks.reduce((acc, b) => acc + b.rows.length, 0), [courseBlocks]);
+  const totalPresent = useMemo(() => courseBlocks.reduce((acc, block) => {
+    const sm = statusMaps[block.sessionKey] || {};
+    return acc + block.rows.filter((row) => (sm[row.reg_no] || 'present') === 'present').length;
+  }, 0), [courseBlocks, statusMaps]);
+  const totalAbsent = useMemo(() => courseBlocks.reduce((acc, block) => {
+    const sm = statusMaps[block.sessionKey] || {};
+    return acc + block.rows.filter((row) => sm[row.reg_no] === 'absent').length;
+  }, 0), [courseBlocks, statusMaps]);
 
-  const setStatus = (regNo: string, status: 'present' | 'absent') => {
-    if (!sessionKey || isLocked) return;
+  const setStatus = (sessionKey: string, regNo: string, status: 'present' | 'absent') => {
+    if (!sessionKey || lockMaps[sessionKey]) return;
     writeAttendanceStatus(sessionKey, regNo, status);
-    setStatusMap((prev) => ({ ...prev, [regNo]: status }));
+    setStatusMaps((prev) => ({
+      ...prev,
+      [sessionKey]: { ...(prev[sessionKey] || {}), [regNo]: status },
+    }));
   };
 
-  const handleSaveAttendance = () => {
-    if (!sessionKey || isLocked) return;
+  const handleSaveAttendance = (sessionKey: string) => {
+    if (!sessionKey || lockMaps[sessionKey]) return;
     if (window.confirm('Are you sure you want to save the attendance? Once saved, absent students will not be in the dummy generation list.')) {
       writeAttendanceLock(sessionKey, true);
-      setIsLocked(true);
+      setLockMaps((prev) => ({ ...prev, [sessionKey]: true }));
     }
   };
 
-  const openUnlockConfirm = () => {
-    if (!sessionKey || !isLocked) return;
+  const openUnlockConfirm = (sessionKey: string) => {
+    if (!sessionKey || !lockMaps[sessionKey]) return;
+    setUnlockTargetSession(sessionKey);
     setPasswordInput('');
     setPasswordError('');
     setShowPasswordModal(true);
@@ -193,10 +214,11 @@ export default function AttendancePage() {
         throw new Error('Invalid password');
       }
 
-      writeAttendanceLock(sessionKey, false);
-      setIsLocked(false);
+      writeAttendanceLock(unlockTargetSession, false);
+      setLockMaps((prev) => ({ ...prev, [unlockTargetSession]: false }));
       setShowPasswordModal(false);
       setPasswordInput('');
+      setUnlockTargetSession('');
     } catch (err: any) {
       setPasswordError(err.message || 'Invalid password');
     } finally {
@@ -217,6 +239,12 @@ export default function AttendancePage() {
               type="password"
               value={passwordInput}
               onChange={(e) => setPasswordInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handlePasswordConfirm();
+                }
+              }}
               className="w-full border border-gray-300 p-2 rounded mb-2 focus:outline-none focus:border-blue-500"
               placeholder="Password"
             />
@@ -251,25 +279,6 @@ export default function AttendancePage() {
             Mark students as Present or Absent. Attendance opens only for courses with TT date matching the selected date.
           </p>
         </div>
-        {activeCourse && rows.length > 0 ? (
-          <div>
-            {isLocked ? (
-              <button
-                onClick={openUnlockConfirm}
-                className="rounded-lg px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors bg-yellow-600 hover:bg-yellow-700 focus:outline-none"
-              >
-                Edit
-              </button>
-            ) : (
-              <button
-                onClick={handleSaveAttendance}
-                className="rounded-lg px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors bg-blue-600 hover:bg-blue-700"
-              >
-                Save
-              </button>
-            )}
-          </div>
-        ) : null}
       </div>
 
       <div className="rounded-xl border border-gray-200 bg-white p-6">
@@ -310,7 +319,7 @@ export default function AttendancePage() {
             </select>
           </div>
 
-          <div className="md:col-span-2">
+          <div>
             <label className="mb-2 block text-sm font-medium text-gray-700" htmlFor="coe-attendance-date">
               Attendance Date
             </label>
@@ -322,18 +331,61 @@ export default function AttendancePage() {
               className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900"
             />
           </div>
+
+          <div>
+            <label className="mb-2 block text-sm font-medium text-gray-700" htmlFor="coe-attendance-course">
+              Course
+            </label>
+            <select
+              id="coe-attendance-course"
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900"
+              value={selectedCourseKey}
+              onChange={(e) => setSelectedCourseKey(e.target.value)}
+            >
+              <option value="">All Courses ({courseBlocks.length})</option>
+              {courseBlocks.map((block) => (
+                <option key={block.meta.key} value={block.meta.key}>
+                  {block.meta.courseName} ({block.meta.courseCode})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="md:col-span-2">
+            <label className="mb-2 block text-sm font-medium text-gray-700" htmlFor="coe-attendance-search">
+              Search Register Number
+            </label>
+            <div className="flex gap-2">
+              <input
+                id="coe-attendance-search"
+                type="text"
+                value={searchRegNo}
+                onChange={(e) => setSearchRegNo(e.target.value)}
+                placeholder="Enter register number..."
+                className="flex-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none"
+              />
+              {searchRegNo && (
+                <button
+                  onClick={() => setSearchRegNo('')}
+                  className="rounded-lg px-3 py-2 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
         </div>
 
         <div className="mt-4 rounded-md border border-[#ead7d0] bg-[#faf4f0] px-3 py-2 text-sm text-[#6a4a40]">
-          {activeCourse
-            ? `Active Course: ${activeCourse.courseName} (${activeCourse.courseCode || 'NO_CODE'})`
+          {courseBlocks.length > 0
+            ? `${courseBlocks.length} course(s) scheduled for ${attendanceDate}: ${courseBlocks.map((b) => b.meta.courseName).join(', ')}`
             : 'No TT course found for this date. Please set TT date from Course List.'}
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
-          <span className="rounded-md bg-emerald-50 px-3 py-1.5 text-emerald-700">Present: {presentCount}</span>
-          <span className="rounded-md bg-red-50 px-3 py-1.5 text-red-700">Absent: {absentCount}</span>
-          <span className="rounded-md bg-slate-50 px-3 py-1.5 text-slate-700">Total: {rows.length}</span>
+          <span className="rounded-md bg-emerald-50 px-3 py-1.5 text-emerald-700">Present: {totalPresent}</span>
+          <span className="rounded-md bg-red-50 px-3 py-1.5 text-red-700">Absent: {totalAbsent}</span>
+          <span className="rounded-md bg-slate-50 px-3 py-1.5 text-slate-700">Total: {totalRows}</span>
         </div>
       </div>
 
@@ -341,50 +393,93 @@ export default function AttendancePage() {
       {!loading && error ? <div className="rounded-xl border border-red-200 bg-red-50 p-6 text-red-700">{error}</div> : null}
 
       {!loading && !error ? (
-        <div className="rounded-xl border border-gray-200 bg-white p-6 space-y-3">
-          {!activeCourse ? (
+        courseBlocks.length === 0 ? (
+          <div className="rounded-xl border border-gray-200 bg-white p-6">
             <p className="text-sm text-gray-600">No TT-enabled course is open for attendance on {attendanceDate}.</p>
-          ) : rows.length === 0 ? (
-            <p className="text-sm text-gray-600">No students found for the selected course.</p>
-          ) : (
-            rows.map((row) => {
-              const status = statusMap[row.reg_no] || 'present';
-              return (
-                <div key={`${row.reg_no}-${row.department}`} className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                    <div>
-                      <p className="text-base font-semibold text-gray-900">{row.name || 'Unnamed Student'}</p>
-                      <p className="text-xs font-medium text-gray-500">{row.reg_no} | {row.department} | {semester}</p>
-                    </div>
+          </div>
+        ) : visibleBlocks.length === 0 ? (
+          <div className="rounded-xl border border-gray-200 bg-white p-6">
+            <p className="text-sm text-gray-600">No matching students found{searchRegNo ? ` for "${searchRegNo}"` : ''}.</p>
+          </div>
+        ) : (
+          visibleBlocks.map((block) => {
+            const sm = statusMaps[block.sessionKey] || {};
+            const locked = lockMaps[block.sessionKey] || false;
+            const blockPresent = block.rows.filter((r) => (sm[r.reg_no] || 'present') === 'present').length;
+            const blockAbsent = block.rows.filter((r) => sm[r.reg_no] === 'absent').length;
 
-                    <div className="inline-flex items-center gap-4 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm">
-                      <label className="inline-flex items-center gap-2">
-                        <input
-                          type="radio"
-                          name={`attendance-${row.reg_no}`}
-                          checked={status === 'present'}
-                          onChange={() => setStatus(row.reg_no, 'present')}
-                          disabled={isLocked}
-                        />
-                        Present
-                      </label>
-                      <label className="inline-flex items-center gap-2">
-                        <input
-                          type="radio"
-                          name={`attendance-${row.reg_no}`}
-                          checked={status === 'absent'}
-                          onChange={() => setStatus(row.reg_no, 'absent')}
-                          disabled={isLocked}
-                        />
-                        Absent
-                      </label>
-                    </div>
+            return (
+              <div key={block.sessionKey} className="rounded-xl border border-gray-200 bg-white p-6 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-bold text-gray-900">{block.meta.courseName}</h3>
+                    <p className="text-xs font-medium text-gray-500">{block.meta.courseCode || 'NO_CODE'} | {block.meta.department}</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs text-emerald-700 bg-emerald-50 px-2 py-1 rounded">{blockPresent} P</span>
+                    <span className="text-xs text-red-700 bg-red-50 px-2 py-1 rounded">{blockAbsent} A</span>
+                    {locked ? (
+                      <button
+                        onClick={() => openUnlockConfirm(block.sessionKey)}
+                        className="rounded-lg px-4 py-2 text-sm font-semibold text-white shadow-sm bg-yellow-600 hover:bg-yellow-700"
+                      >
+                        Edit
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleSaveAttendance(block.sessionKey)}
+                        className="rounded-lg px-4 py-2 text-sm font-semibold text-white shadow-sm bg-blue-600 hover:bg-blue-700"
+                      >
+                        Save
+                      </button>
+                    )}
                   </div>
                 </div>
-              );
-            })
-          )}
-        </div>
+
+                {block.rows.length === 0 ? (
+                  <p className="text-sm text-gray-600">No students found for this course.</p>
+                ) : (
+                  block.rows.map((row) => {
+                    const status = sm[row.reg_no] || 'present';
+                    const radioName = `attendance-${block.sessionKey}-${row.reg_no}`;
+                    return (
+                      <div key={`${row.reg_no}-${block.meta.key}`} className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                          <div>
+                            <p className="text-base font-semibold text-gray-900">{row.name || 'Unnamed Student'}</p>
+                            <p className="text-xs font-medium text-gray-500">{row.reg_no} | {row.department} | {semester}</p>
+                          </div>
+                          <div className="inline-flex items-center gap-4 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm">
+                            <label className="inline-flex items-center gap-2">
+                              <input
+                                type="radio"
+                                name={radioName}
+                                checked={status === 'present'}
+                                onChange={() => setStatus(block.sessionKey, row.reg_no, 'present')}
+                                disabled={locked}
+                              />
+                              Present
+                            </label>
+                            <label className="inline-flex items-center gap-2">
+                              <input
+                                type="radio"
+                                name={radioName}
+                                checked={status === 'absent'}
+                                onChange={() => setStatus(block.sessionKey, row.reg_no, 'absent')}
+                                disabled={locked}
+                              />
+                              Absent
+                            </label>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            );
+          })
+        )
       ) : null}
     </div>
   );

@@ -294,6 +294,12 @@ export default function BarScanMarkEntry() {
               type="password"
               value={passwordInput}
               onChange={(e) => setPasswordInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handlePasswordConfirm();
+                }
+              }}
               className="w-full border border-gray-300 p-2 rounded mb-2 focus:outline-none focus:border-blue-500"
               placeholder="Password"
             />
@@ -385,15 +391,15 @@ export default function BarScanMarkEntry() {
             </div>
           </div>
 
-          <div className="rounded-xl border border-gray-200 bg-white p-6 overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200 border border-gray-200 bg-white text-sm text-gray-700">
+          <div className="rounded-xl border border-gray-200 bg-white p-6 overflow-hidden">
+            <table className="min-w-full divide-y divide-gray-200 border border-gray-200 bg-white text-sm text-gray-700 table-fixed">
               <thead>
                 <tr className="bg-gray-100 text-left text-xs font-semibold uppercase tracking-wide text-gray-600">
-                  <th className="px-3 py-2">Dummy No</th>
+                  <th className="px-3 py-2 w-32">Dummy No</th>
                   {questions.map((q) => (
                     <th key={`head-${q.key}`} className="px-3 py-2 text-center">{q.label}</th>
                   ))}
-                  <th className="px-3 py-2 text-center">Total</th>
+                  <th className="px-3 py-2 text-center w-20">Total</th>
                 </tr>
               </thead>
               <tbody>
@@ -422,7 +428,7 @@ export default function BarScanMarkEntry() {
                           setValidationNote(null);
                           setMarks((prev) => ({ ...prev, [q.key]: val }));
                         }}
-                        className={`w-20 rounded border px-2 py-1 text-center focus:outline-none focus:border-blue-500 ${
+                        className={`w-full min-w-[2rem] rounded border px-2 py-1 text-center focus:outline-none focus:border-blue-500 ${
                           isLocked 
                             ? 'bg-gray-100 text-gray-500 cursor-not-allowed border-gray-200' 
                             : 'border-gray-300'

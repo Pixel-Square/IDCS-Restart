@@ -13,6 +13,26 @@ import {
 } from './courseSelectionStorage';
 import { readTTScheduleMap, setTTDateForCourse } from './ttScheduleStore';
 
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
+import krLogoSrc from '../../assets/krlogo.png';
+import newBannerSrc from '../../assets/new_banner.png';
+import idcsLogoSrc from '../../assets/idcs-logo.png';
+
+async function imageUrlToDataUrl(url: string): Promise<string> {
+  const res = await fetch(url);
+  const blob = await res.blob();
+  return await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      if (typeof reader.result === 'string') resolve(reader.result);
+      else reject(new Error('Failed to read image as data URL.'));
+    };
+    reader.onerror = () => reject(new Error('Failed to load image.'));
+    reader.readAsDataURL(blob);
+  });
+}
+
 const DEPARTMENTS = ['ALL', 'AIDS', 'AIML', 'CSE', 'CIVIL', 'ECE', 'EEE', 'IT', 'MECH'] as const;
 const SEMESTERS = ['SEM1', 'SEM2', 'SEM3', 'SEM4', 'SEM5', 'SEM6', 'SEM7', 'SEM8'] as const;
 const COURSE_SELECTION_LOCK_KEY = 'coe-course-selection-lock-v1';
@@ -43,6 +63,10 @@ export default function CourseList() {
   const [showTtModal, setShowTtModal] = useState(false);
   const [ttTargetCourseKey, setTtTargetCourseKey] = useState('');
   const [ttDateInput, setTtDateInput] = useState('');
+  const [cdapLoadingRow, setCdapLoadingRow] = useState<string | null>(null);
+  const [showCdapModal, setShowCdapModal] = useState(false);
+  const [cdapPdfUrl, setCdapPdfUrl] = useState<string | null>(null);
+  const [cdapCurrentRow, setCdapCurrentRow] = useState<CourseRow | null>(null);
 
   const getCurrentFilterKey = () => `${department}::${semester}`;
 
@@ -245,6 +269,263 @@ export default function CourseList() {
     }
   };
 
+  const handleCdapClick = async (e: React.MouseEvent, row: CourseRow) => {
+    e.preventDefault();
+    if (cdapLoadingRow) return;
+    setCdapLoadingRow(row.key);
+    try {
+      const res = await fetchWithAuth(`/api/obe/cdap-revision/${encodeURIComponent(row.courseCode)}`);
+      const cdap = await res.json();
+      
+      if (!res.ok) {
+        throw new Error(cdap.detail || 'Failed to fetch CDAP data');
+      }
+
+      if (!cdap.rows || cdap.rows.length === 0) {
+        alert(`No CDAP data uploaded for ${row.courseCode} yet.`);
+        setCdapLoadingRow(null);
+        return;
+      }
+
+      const doc = new jsPDF('portrait', 'mm', 'a4');
+      const pageWidth = doc.internal.pageSize.getWidth();
+
+      let leftLogoDataUrl = '', krLogoDataUrl = '', idcsLogoDataUrl = '';
+      try {
+        leftLogoDataUrl = await imageUrlToDataUrl(newBannerSrc);
+        krLogoDataUrl = await imageUrlToDataUrl(krLogoSrc);
+        idcsLogoDataUrl = await imageUrlToDataUrl(idcsLogoSrc);
+        
+        const bannerHeight = 42;
+        const logoHeight = 6;
+        const startY = 0;
+        
+        if (leftLogoDataUrl) {
+          const imgProps = doc.getImageProperties(leftLogoDataUrl);
+          const pdfWidth = (imgProps.width * bannerHeight) / imgProps.height;
+          doc.addImage(leftLogoDataUrl, 'PNG', 14, startY, pdfWidth, bannerHeight);
+        }
+        
+        let currentRightX = 210 - 14; // Start from right margin
+        const logosStartY = startY + (bannerHeight - logoHeight) / 2; // Center smaller logos vertically with the banner
+        
+        if (idcsLogoDataUrl) {
+          const imgProps = doc.getImageProperties(idcsLogoDataUrl);
+          const pdfWidth = (imgProps.width * logoHeight) / imgProps.height;
+          currentRightX -= pdfWidth;
+          doc.addImage(idcsLogoDataUrl, 'PNG', currentRightX, logosStartY, pdfWidth, logoHeight);
+        }
+
+        if (krLogoDataUrl) {
+          const imgProps = doc.getImageProperties(krLogoDataUrl);
+          const pdfWidth = (imgProps.width * logoHeight) / imgProps.height;
+          currentRightX -= (pdfWidth + 4); // 8mm gap between kr logo and idcs logo
+          doc.addImage(krLogoDataUrl, 'PNG', currentRightX, logosStartY, pdfWidth, logoHeight);
+        }
+
+      } catch (err) {
+        console.error('Failed to load logos', err);
+      }
+
+      doc.setFontSize(14);
+      doc.text(`SYLLABUS - ${row.courseCode} ${row.courseName}`, pageWidth / 2, 48, { align: 'center' });
+
+      // Build rows
+      const tableBody = (cdap.rows || []).map((r: any, idx: number) => {
+        return [
+          idx + 1,
+          r.content_type || '-',
+          r.part_no || '-',
+          r.topics || '-',
+          r.sub_topics || '-',
+          r.bt_level || '-'
+        ];
+      });
+
+      autoTable(doc, {
+        startY: 53,
+        head: [['#', 'Content type', 'PART NO.', 'TOPICS TO BE COVERED (SYLLBUS TOPICS)', 'SUB TOPICS (WHAT TO BE TAUGHT)', 'BT LEVEL']],
+        body: tableBody,
+        styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
+        headStyles: { fillColor: [63, 81, 181], textColor: [255, 255, 255] },
+        columnStyles: {
+           3: { cellWidth: 50 },
+           4: { cellWidth: 50 },
+        },
+        margin: { left: 14, right: 14 }
+      });
+
+      let finalY = (doc as any).lastAutoTable.finalY || 50;
+
+      // Add References
+      if (cdap.books) {
+         if (finalY + 30 > doc.internal.pageSize.getHeight()) {
+            doc.addPage();
+            finalY = 20;
+         }
+         doc.setFontSize(12);
+         doc.setFont('helvetica', 'bold');
+         doc.text('Reference Materials', 14, finalY + 15);
+         doc.setFontSize(10);
+         doc.setFont('helvetica', 'normal');
+         let currentY = finalY + 22;
+
+         if (cdap.books.textbook) {
+            doc.setFont('helvetica', 'bold');
+            doc.text('Textbooks:', 14, currentY);
+            doc.setFont('helvetica', 'normal');
+            
+            const tbLines = doc.splitTextToSize(cdap.books.textbook || '', pageWidth - 28);
+            currentY += 6;
+            doc.text(tbLines, 14, currentY);
+            currentY += (tbLines.length * 5) + 5;
+         }
+
+         if (cdap.books.reference) {
+            if (currentY + 20 > doc.internal.pageSize.getHeight()) {
+                doc.addPage();
+                currentY = 20;
+            }
+            doc.setFont('helvetica', 'bold');
+            doc.text('References:', 14, currentY);
+            doc.setFont('helvetica', 'normal');
+            
+            const refLines = doc.splitTextToSize(cdap.books.reference || '', pageWidth - 28);
+            currentY += 6;
+            doc.text(refLines, 14, currentY);
+         }
+      }
+
+      // Generate URL for preview
+      const pdfUrl = doc.output('bloburl');
+      setCdapPdfUrl(pdfUrl);
+      setCdapCurrentRow(row);
+      setShowCdapModal(true);
+    } catch (err: any) {
+      alert(err.message || 'Failed to fetch CDAP data');
+    } finally {
+      setCdapLoadingRow(null);
+    }
+  };
+
+  const downloadCdapPdf = async () => {
+    if (!cdapCurrentRow) return;
+    const doc = new jsPDF('portrait', 'mm', 'a4');
+    const pageWidth = doc.internal.pageSize.getWidth();
+
+    try {
+      const res = await fetchWithAuth(`/api/obe/cdap-revision/${encodeURIComponent(cdapCurrentRow.courseCode)}`);
+      const cdap = await res.json();
+
+      let leftLogoDataUrl = '', krLogoDataUrl = '', idcsLogoDataUrl = '';
+      try {
+        leftLogoDataUrl = await imageUrlToDataUrl(newBannerSrc);
+        krLogoDataUrl = await imageUrlToDataUrl(krLogoSrc);
+        idcsLogoDataUrl = await imageUrlToDataUrl(idcsLogoSrc);
+        
+        const bannerHeight = 42;
+        const logoHeight = 6;
+        const startY = 0;
+        
+        if (leftLogoDataUrl) {
+          const imgProps = doc.getImageProperties(leftLogoDataUrl);
+          const pdfWidth = (imgProps.width * bannerHeight) / imgProps.height;
+          doc.addImage(leftLogoDataUrl, 'PNG', 14, startY, pdfWidth, bannerHeight);
+        }
+        
+        let currentRightX = 210 - 14;
+        const logosStartY = startY + (bannerHeight - logoHeight) / 2;
+        
+        if (idcsLogoDataUrl) {
+          const imgProps = doc.getImageProperties(idcsLogoDataUrl);
+          const pdfWidth = (imgProps.width * logoHeight) / imgProps.height;
+          currentRightX -= pdfWidth;
+          doc.addImage(idcsLogoDataUrl, 'PNG', currentRightX, logosStartY, pdfWidth, logoHeight);
+        }
+
+        if (krLogoDataUrl) {
+          const imgProps = doc.getImageProperties(krLogoDataUrl);
+          const pdfWidth = (imgProps.width * logoHeight) / imgProps.height;
+          currentRightX -= (pdfWidth + 4);
+          doc.addImage(krLogoDataUrl, 'PNG', currentRightX, logosStartY, pdfWidth, logoHeight);
+        }
+      } catch (err) {
+        console.error('Failed to load logos', err);
+      }
+
+      doc.setFontSize(14);
+      doc.text(`SYLLABUS - ${cdapCurrentRow.courseCode} ${cdapCurrentRow.courseName}`, pageWidth / 2, 48, { align: 'center' });
+
+      const tableBody = (cdap.rows || []).map((r: any, idx: number) => {
+        return [
+          idx + 1,
+          r.content_type || '-',
+          r.part_no || '-',
+          r.topics || '-',
+          r.sub_topics || '-',
+          r.bt_level || '-'
+        ];
+      });
+
+      autoTable(doc, {
+        startY: 53,
+        head: [['#', 'Content type', 'PART NO.', 'TOPICS TO BE COVERED (SYLLBUS TOPICS)', 'SUB TOPICS (WHAT TO BE TAUGHT)', 'BT LEVEL']],
+        body: tableBody,
+        styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
+        headStyles: { fillColor: [63, 81, 181], textColor: [255, 255, 255] },
+        columnStyles: {
+           3: { cellWidth: 50 },
+           4: { cellWidth: 50 },
+        },
+        margin: { left: 14, right: 14 }
+      });
+
+      let finalY = (doc as any).lastAutoTable.finalY || 50;
+
+      if (cdap.books) {
+         if (finalY + 30 > doc.internal.pageSize.getHeight()) {
+            doc.addPage();
+            finalY = 20;
+         }
+         doc.setFontSize(12);
+         doc.setFont('helvetica', 'bold');
+         doc.text('Reference Materials', 14, finalY + 15);
+         doc.setFontSize(10);
+         doc.setFont('helvetica', 'normal');
+         let currentY = finalY + 22;
+
+         if (cdap.books.textbook) {
+            doc.setFont('helvetica', 'bold');
+            doc.text('Textbooks:', 14, currentY);
+            doc.setFont('helvetica', 'normal');
+            
+            const tbLines = doc.splitTextToSize(cdap.books.textbook || '', pageWidth - 28);
+            currentY += 6;
+            doc.text(tbLines, 14, currentY);
+            currentY += (tbLines.length * 5) + 5;
+         }
+
+         if (cdap.books.reference) {
+            if (currentY + 20 > doc.internal.pageSize.getHeight()) {
+                doc.addPage();
+                currentY = 20;
+            }
+            doc.setFont('helvetica', 'bold');
+            doc.text('References:', 14, currentY);
+            doc.setFont('helvetica', 'normal');
+            
+            const refLines = doc.splitTextToSize(cdap.books.reference || '', pageWidth - 28);
+            currentY += 6;
+            doc.text(refLines, 14, currentY);
+         }
+      }
+
+      doc.save(`${cdapCurrentRow.courseCode}-${cdapCurrentRow.courseName}.pdf`);
+    } catch (err) {
+      console.error('Failed to download CDAP PDF', err);
+    }
+  };
+
   const openTtCalendar = (courseKey: string) => {
     const current = ttScheduleMap[courseKey] || '';
     setTtTargetCourseKey(courseKey);
@@ -283,6 +564,12 @@ export default function CourseList() {
               type="password"
               value={passwordInput}
               onChange={(e) => setPasswordInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handlePasswordConfirm();
+                }
+              }}
               className="w-full border border-gray-300 p-2 rounded mb-2 focus:outline-none focus:border-blue-500"
               placeholder="Password"
             />
@@ -304,6 +591,54 @@ export default function CourseList() {
                 disabled={validatingPassword}
               >
                 {validatingPassword ? 'Verifying...' : 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showCdapModal && cdapCurrentRow && cdapPdfUrl ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="bg-white rounded-xl shadow-lg w-11/12 h-5/6 max-w-5xl flex flex-col">
+            <div className="flex items-center justify-between border-b border-gray-200 p-4">
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">{cdapCurrentRow.courseName}</h2>
+                <p className="text-sm text-gray-600">{cdapCurrentRow.courseCode}</p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowCdapModal(false);
+                  setCdapPdfUrl(null);
+                  setCdapCurrentRow(null);
+                }}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="flex-1 overflow-hidden">
+              <iframe
+                src={cdapPdfUrl || undefined}
+                className="w-full h-full border-0"
+                title="CDAP PDF Preview"
+              />
+            </div>
+            <div className="flex justify-end gap-3 border-t border-gray-200 p-4">
+              <button
+                onClick={() => {
+                  setShowCdapModal(false);
+                  setCdapPdfUrl(null);
+                  setCdapCurrentRow(null);
+                }}
+                className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-md"
+              >
+                Close
+              </button>
+              <button
+                onClick={downloadCdapPdf}
+                className="px-4 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700"
+              >
+                Download
               </button>
             </div>
           </div>
@@ -524,6 +859,16 @@ export default function CourseList() {
                             </div>
                           </div>
                         )}
+                      </div>
+
+                      <div className="relative inline-flex items-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-1.5 whitespace-nowrap">
+                        <button
+                          onClick={(e) => handleCdapClick(e, row)}
+                          disabled={cdapLoadingRow === row.key}
+                          className="text-sm font-medium text-blue-600 hover:text-blue-800 hover:underline disabled:opacity-50"
+                        >
+                          {cdapLoadingRow === row.key ? 'Loading...' : 'CDAP'}
+                        </button>
                       </div>
                     </div>
                   </div>
