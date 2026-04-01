@@ -12,9 +12,6 @@ import {
 import { getAttendanceFilterKey, readCourseAbsenteesMap } from './attendanceStore';
 import { getSemesterStartSequence, generateDummyNumber } from './dummySequence';
 
-const DEPARTMENTS = ['ALL', 'AIDS', 'AIML', 'CSE', 'CIVIL', 'ECE', 'EEE', 'IT', 'MECH'] as const;
-const SEMESTERS = ['SEM1', 'SEM2', 'SEM3', 'SEM4', 'SEM5', 'SEM6', 'SEM7', 'SEM8'] as const;
-
 const DEPARTMENT_DUMMY_DIGITS: Record<string, string> = {
   AIDS: '1',
   AIML: '2',
@@ -82,8 +79,11 @@ function chunkStudents(students: BundleStudent[], chunkSize: number): BundleStud
 }
 
 export default function BundleAllocation() {
-  const [department, setDepartment] = useState<(typeof DEPARTMENTS)[number]>('ALL');
-  const [semester, setSemester] = useState<(typeof SEMESTERS)[number]>('SEM1');
+  const [departments, setDepartments] = useState<string[]>(['ALL']);
+  const [semesters, setSemesters] = useState<string[]>(['SEM1']);
+  const [loadingDeps, setLoadingDeps] = useState(false);
+  const [department, setDepartment] = useState('ALL');
+  const [semester, setSemester] = useState('SEM1');
   const [bundleSizeInput, setBundleSizeInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -95,6 +95,71 @@ export default function BundleAllocation() {
   const [passwordError, setPasswordError] = useState('');
   const [validatingPassword, setValidatingPassword] = useState(false);
   const navigate = useNavigate();
+
+  // Fetch departments on mount
+  useEffect(() => {
+    let active = true;
+    setLoadingDeps(true);
+
+    (async () => {
+      try {
+        const res = await fetchWithAuth('/api/academics/departments/');
+        if (!active) return;
+        if (res.ok) {
+          const data = await res.json();
+          const depts = data.results || data || [];
+          const deptNames = depts
+            .map((d: any) => {
+              const label = d?.short_name || d?.code || d?.name || d;
+              return label ? String(label).trim().toUpperCase() : null;
+            })
+            .filter(Boolean);
+          setDepartments(['ALL', ...(deptNames as string[])]);
+          setDepartment('ALL');
+        } else {
+          console.warn('Failed to fetch departments, using defaults');
+          setDepartments(['ALL']);
+        }
+      } catch (err) {
+        if (active) console.warn('Error fetching departments:', err);
+      } finally {
+        if (active) setLoadingDeps(false);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Fetch semesters on mount
+  useEffect(() => {
+    let active = true;
+
+    (async () => {
+      try {
+        const res = await fetchWithAuth('/api/academics/semesters/');
+        if (!active) return;
+        if (res.ok) {
+          const data = await res.json();
+          const sems = data.results || data || [];
+          const semNames = sems.map((s: any) => s.name || s.code || s).filter(Boolean);
+          setSemesters(semNames.length > 0 ? semNames : ['SEM1']);
+          setSemester(semNames[0] || 'SEM1');
+        } else {
+          console.warn('Failed to fetch semesters, using defaults');
+          setSemesters(['SEM1']);
+        }
+      } catch (err) {
+        if (active) console.warn('Error fetching semesters:', err);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const absentCourseMap = useMemo(
     () => readCourseAbsenteesMap(getAttendanceFilterKey(department, semester)),
     [department, semester]
@@ -366,11 +431,12 @@ export default function BundleAllocation() {
             <label className="block text-sm font-medium text-gray-700 mb-2" htmlFor="bundle-department">Department</label>
             <select
               id="bundle-department"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 disabled:opacity-50"
               value={department}
-              onChange={(e) => setDepartment(e.target.value as (typeof DEPARTMENTS)[number])}
+              onChange={(e) => setDepartment(e.target.value)}
+              disabled={loadingDeps}
             >
-              {DEPARTMENTS.map((dept) => (
+              {departments.map((dept) => (
                 <option key={dept} value={dept}>
                   {dept}
                 </option>
@@ -384,9 +450,9 @@ export default function BundleAllocation() {
               id="bundle-semester"
               className="w-full border border-gray-300 rounded-lg px-3 py-2"
               value={semester}
-              onChange={(e) => setSemester(e.target.value as (typeof SEMESTERS)[number])}
+              onChange={(e) => setSemester(e.target.value)}
             >
-              {SEMESTERS.map((sem) => (
+              {semesters.map((sem) => (
                 <option key={sem} value={sem}>
                   {sem}
                 </option>

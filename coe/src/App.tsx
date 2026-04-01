@@ -16,6 +16,7 @@ import OnePageReport from './pages/COE/OnePageReport';
 import ProfilePage from './pages/ProfilePage';
 import QueriesPage from './pages/QueriesPage';
 import RetrivalPage from './pages/COE/RetrivalPage';
+import DataViewPage from './pages/DataViewPage';
 import { logout } from './services/auth';
 import StudentsList from './pages/COE/StudentsList';
 
@@ -60,6 +61,7 @@ function Shell({ children }: { children: React.ReactNode }) {
 
   const links = [
     { to: '/coe', label: 'Portal' },
+    { to: '/data-view', label: 'Database View' },
     { to: '/coe/courses', label: 'Courses' },
     { to: '/coe/attendance', label: 'Attendance' },
     { to: '/coe/students', label: 'Students' },
@@ -270,6 +272,7 @@ export default function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/dashboard" element={<RequireAuth><DashboardPage /></RequireAuth>} />
         <Route path="/profile" element={<RequireAuth><ProfilePage /></RequireAuth>} />
+        <Route path="/data-view" element={<RequireAuth><DataViewPage /></RequireAuth>} />
         <Route path="/queries" element={<RequireAuth><QueriesPage /></RequireAuth>} />
         <Route path="/coe" element={<RequireAuth><CoePortalPage user={readCachedUser()} /></RequireAuth>} />
         <Route path="/coe/students" element={<RequireAuth><StudentsList /></RequireAuth>} />

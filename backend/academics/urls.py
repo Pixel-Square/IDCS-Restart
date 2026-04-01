@@ -24,6 +24,7 @@ from .views import (
     MentorUnmapView,
     SpecialCourseAssessmentEditRequestViewSet,
     AcademicYearViewSet,
+    SemesterViewSet,
     StaffAssignedSubjectsView,
     SectionStudentsView,
     IQACCourseTeachingMapView,
@@ -53,6 +54,7 @@ router = DefaultRouter()
 router.register(r'section-advisors', SectionAdvisorViewSet, basename='section-advisor')
 router.register(r'teaching-assignments', TeachingAssignmentViewSet, basename='teaching-assignment')
 router.register(r'academic-years', AcademicYearViewSet, basename='academic-year')
+router.register(r'semesters', SemesterViewSet, basename='semester')
 router.register(r'subject-batches', SubjectBatchViewSet, basename='subject-batch')
 router.register(r'batch-years', BatchYearViewSet, basename='batch-year')
 router.register(r'period-attendance', PeriodAttendanceSessionViewSet, basename='period-attendance')

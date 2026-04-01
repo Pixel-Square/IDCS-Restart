@@ -27,9 +27,7 @@ import {
   readRetrivalApplyPayload,
 } from '../../utils/retrivalStore';
 import { readTTScheduleMap } from './ttScheduleStore';
-
-const DEPARTMENTS = ['ALL', 'AIDS', 'AIML', 'CSE', 'CIVIL', 'ECE', 'EEE', 'IT', 'MECH'] as const;
-const SEMESTERS = ['SEM1', 'SEM2', 'SEM3', 'SEM4', 'SEM5', 'SEM6', 'SEM7', 'SEM8'] as const;
+import fetchWithAuth from '../../services/fetchAuth';
 
 const DEPARTMENT_DUMMY_DIGITS: Record<string, string> = {
   AIDS: '1',
@@ -72,34 +70,12 @@ type ArrearShuffleMode = 'include' | 'separate';
 type PersistedShuffledStudent = { reg_no: string; name: string };
 type PersistedShuffledByDummy = Record<string, PersistedShuffledStudent>;
 
-const normalizeDeptFilter = (value: unknown): (typeof DEPARTMENTS)[number] | '' => {
-  const dept = String(value ?? '').trim().toUpperCase();
-  if ((DEPARTMENTS as readonly string[]).includes(dept) && dept !== 'ALL') {
-    return dept as (typeof DEPARTMENTS)[number];
-  }
-  return '';
-};
-
-const normalizeSemesterFilter = (value: unknown): (typeof SEMESTERS)[number] | '' => {
-  const text = String(value ?? '').trim().toUpperCase();
-  if (!text) return '';
-
-  if ((SEMESTERS as readonly string[]).includes(text)) {
-    return text as (typeof SEMESTERS)[number];
-  }
-
-  const match = text.match(/[1-8]/);
-  if (!match) return '';
-  const sem = `SEM${match[0]}`;
-  if ((SEMESTERS as readonly string[]).includes(sem)) {
-    return sem as (typeof SEMESTERS)[number];
-  }
-  return '';
-};
-
 export default function StudentsList() {
-  const [department, setDepartment] = useState<(typeof DEPARTMENTS)[number]>('ALL');
-  const [semester, setSemester] = useState<(typeof SEMESTERS)[number]>('SEM1');
+  const [departments, setDepartments] = useState<string[]>(['ALL']);
+  const [semesters, setSemesters] = useState<string[]>(['SEM1']);
+  const [loadingDeps, setLoadingDeps] = useState(false);
+  const [department, setDepartment] = useState('ALL');
+  const [semester, setSemester] = useState('SEM1');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<CoeStudentsMapResponse | null>(null);
@@ -116,6 +92,71 @@ export default function StudentsList() {
   const [activeEntryParams, setActiveEntryParams] = useState<any>(null);
   const [selectedDate, setSelectedDate] = useState<string>('');
   const processedRetrivalApplyKeyRef = useRef<string>('');
+
+  // Fetch departments on mount
+  useEffect(() => {
+    let active = true;
+    setLoadingDeps(true);
+
+    (async () => {
+      try {
+        const res = await fetchWithAuth('/api/academics/departments/');
+        if (!active) return;
+        if (res.ok) {
+          const data = await res.json();
+          const depts = data.results || data || [];
+          const deptNames = depts
+            .map((d: any) => {
+              const label = d?.short_name || d?.code || d?.name || d;
+              return label ? String(label).trim().toUpperCase() : null;
+            })
+            .filter(Boolean);
+          setDepartments(['ALL', ...(deptNames as string[])]);
+          setDepartment('ALL');
+        } else {
+          console.warn('Failed to fetch departments, using defaults');
+          setDepartments(['ALL']);
+        }
+      } catch (err) {
+        if (active) console.warn('Error fetching departments:', err);
+      } finally {
+        if (active) setLoadingDeps(false);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Fetch semesters on mount
+  useEffect(() => {
+    let active = true;
+
+    (async () => {
+      try {
+        const res = await fetchWithAuth('/api/academics/semesters/');
+        if (!active) return;
+        if (res.ok) {
+          const data = await res.json();
+          const sems = data.results || data || [];
+          const semNames = sems.map((s: any) => s.name || s.code || s).filter(Boolean);
+          setSemesters(semNames.length > 0 ? semNames : ['SEM1']);
+          setSemester(semNames[0] || 'SEM1');
+        } else {
+          console.warn('Failed to fetch semesters, using defaults');
+          setSemesters(['SEM1']);
+        }
+      } catch (err) {
+        if (active) console.warn('Error fetching semesters:', err);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const absentCourseMap = useMemo(
     () => readCourseAbsenteesMap(getAttendanceFilterKey(department, semester)),
     [department, semester]
@@ -146,18 +187,6 @@ export default function StudentsList() {
     });
     return keys;
   }, [selectedDate, ttScheduleMap]);
-
-  const semesterOptions = useMemo<(typeof SEMESTERS)[number][]>(() => {
-    const rawSemesters = (data as any)?.available_semesters;
-    const normalized = (Array.isArray(rawSemesters) ? rawSemesters : [])
-      .map((value: unknown) => normalizeSemesterFilter(value))
-      .filter((value): value is (typeof SEMESTERS)[number] => Boolean(value));
-
-    const unique = Array.from(new Set(normalized));
-    unique.sort((a, b) => getSemesterNumber(a) - getSemesterNumber(b));
-
-    return unique.length > 0 ? unique : [...SEMESTERS];
-  }, [data]);
 
   const getCurrentFilterKey = () => `${department}::${semester}`;
 
@@ -526,11 +555,11 @@ export default function StudentsList() {
   }, [department, semester]);
 
   useEffect(() => {
-    if (semesterOptions.length === 0) return;
-    if (!semesterOptions.includes(semester)) {
-      setSemester(semesterOptions[0]);
+    if (semesters.length === 0) return;
+    if (!semesters.includes(semester)) {
+      setSemester(semesters[0]);
     }
-  }, [semester, semesterOptions]);
+  }, [semester, semesters]);
 
   useEffect(() => {
     if (!enriched) return;
@@ -552,15 +581,30 @@ export default function StudentsList() {
       return;
     }
 
+    // Simple normalization helpers for payload records
+    const normalizeDeptFromRecord = (value: unknown): string => {
+      return String(value || '').trim().toUpperCase() || '';
+    };
+    const normalizeSemFromRecord = (value: unknown): string => {
+      const text = String(value || '').trim().toUpperCase();
+      if (semesters.includes(text)) return text;
+      const match = text.match(/[1-8]/);
+      if (match) {
+        const sem = `SEM${match[0]}`;
+        if (semesters.includes(sem)) return sem;
+      }
+      return '';
+    };
+
     const payloadDepartments = Array.from(new Set(
       payloadRecords
-        .map((record) => normalizeDeptFilter(record.department))
-        .filter((value): value is (typeof DEPARTMENTS)[number] => Boolean(value))
+        .map((record) => normalizeDeptFromRecord(record.department))
+        .filter(Boolean)
     ));
     const payloadSemesters = Array.from(new Set(
       payloadRecords
-        .map((record) => normalizeSemesterFilter(record.semester))
-        .filter((value): value is (typeof SEMESTERS)[number] => Boolean(value))
+        .map((record) => normalizeSemFromRecord(record.semester))
+        .filter(Boolean)
     ));
 
     // Align UI filter to payload context first so apply always targets the correct realtime list.
@@ -575,8 +619,8 @@ export default function StudentsList() {
 
     type RestoredMapping = {
       id: number;
-      department: (typeof DEPARTMENTS)[number] | '';
-      semester: (typeof SEMESTERS)[number] | '';
+      department: string;
+      semester: string;
       course_code: string;
       dummy: string;
       reg_no: string;
@@ -591,8 +635,8 @@ export default function StudentsList() {
 
     payloadRecords.forEach((record, index) => {
       const parsedIndex = Number(record.course_student_index ?? record.row_index ?? record.courseIndex);
-      const recDepartment = normalizeDeptFilter(record.department);
-      const recSemester = normalizeSemesterFilter(record.semester);
+      const recDepartment = normalizeDeptFromRecord(record.department);
+      const recSemester = normalizeSemFromRecord(record.semester);
       const mapping: RestoredMapping = {
         id: index,
         department: recDepartment,
@@ -1045,11 +1089,12 @@ export default function StudentsList() {
             </label>
             <select
               id="coe-department"
-              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none"
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none disabled:opacity-50"
               value={department}
-              onChange={(e) => setDepartment(e.target.value as (typeof DEPARTMENTS)[number])}
+              onChange={(e) => setDepartment(e.target.value)}
+              disabled={loadingDeps}
             >
-              {DEPARTMENTS.map((dept) => (
+              {departments.map((dept) => (
                 <option key={dept} value={dept}>
                   {dept}
                 </option>
@@ -1065,9 +1110,9 @@ export default function StudentsList() {
               id="coe-semester"
               className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none"
               value={semester}
-              onChange={(e) => setSemester(e.target.value as (typeof SEMESTERS)[number])}
+              onChange={(e) => setSemester(e.target.value)}
             >
-              {semesterOptions.map((sem) => (
+              {semesters.map((sem) => (
                 <option key={sem} value={sem}>
                   {sem}
                 </option>

@@ -11,9 +11,10 @@
   },
   "dependencies": {
     "axios": "^1.4.0",
+    "jsbarcode": "^3.12.1",
     "jspdf": "^4.1.0",
     "jspdf-autotable": "^5.0.7",
-    "jsbarcode": "^3.12.1",
+    "jszip": "^3.10.1",
     "lucide-react": "^0.563.0",
     "react": "^18.2.0",
     "react-barcode": "^1.6.1",

@@ -16,6 +16,15 @@ from datetime import timedelta
 
 from .permissions import IsHODOfDepartment
 
+
+COE_DEPARTMENT_ACCESS_PERMS = {
+    'coe.portal.access',
+    'coe.manage.exams',
+    'coe.manage.results',
+    'coe.manage.circulars',
+    'coe.manage.calendar',
+}
+
 from .models import (
     TeachingAssignment,
     SectionAdvisor,
@@ -26,6 +35,7 @@ from .models import (
     StudentProfile,
     SpecialCourseAssessmentSelection,
     SpecialCourseAssessmentEditRequest,
+    Semester,
 )
 from OBE.models import (
     Cia1Mark,
@@ -1879,26 +1889,66 @@ class HODStaffListView(APIView):
         return Response({'results': results})
 
 
+class SemesterViewSet(viewsets.ReadOnlyModelViewSet):
+    """Read-only ViewSet for Semester objects."""
+    queryset = Semester.objects.all().order_by('number')
+    permission_classes = (IsAuthenticated,)
+
+    def get_serializer_class(self):
+        from .serializers import SemesterSerializer
+        return SemesterSerializer
+
+
 class DepartmentsListView(APIView):
-    """Return a list of departments. Users with `academics.view_all_departments`
-    permission or staff users see all departments; others see only their effective
-    departments."""
+    """Return a list of teaching departments only (parent is NULL).
+    Users with `academics.view_all_departments` permission or staff users see all teaching departments;
+    others see only their effective teaching departments."""
     permission_classes = (IsAuthenticated,)
 
     def get(self, request):
         user = request.user
-        perms = get_user_permissions(user)
+        perms = set(get_user_permissions(user))
         from .models import Department
 
+        has_coe_role = False
+        try:
+            has_coe_role = bool(user.roles.filter(name__iexact='COE').exists())
+        except Exception:
+            has_coe_role = False
+
+        has_global_access = (
+            bool({'academics.view_all_departments', 'academics.view_all_staff'} & perms)
+            or bool(COE_DEPARTMENT_ACCESS_PERMS & perms)
+            or has_coe_role
+            or user.is_superuser
+        )
+
         # accept either view_all_departments or view_all_staff permission as global access
-        if ({'academics.view_all_departments', 'academics.view_all_staff'} & perms) or user.is_superuser:
-            qs = Department.objects.all()
+        if has_global_access:
+            # Filter for teaching departments only (parent is NULL)
+            qs = Department.objects.filter(parent__isnull=True)
         else:
             # Use effective departments (own dept + DepartmentRole HOD/AHOD mappings)
             dept_ids = get_user_effective_departments(user) or []
             if not dept_ids:
                 return Response({'results': []})
-            qs = Department.objects.filter(id__in=dept_ids)
+
+            # Determine which of the effective departments are themselves teaching departments (parent NULL)
+            teaching_ids = set(
+                Department.objects.filter(id__in=dept_ids, parent__isnull=True).values_list('id', flat=True)
+            )
+
+            # For non-teaching departments, include their parent (the actual teaching department)
+            parent_ids = set(
+                Department.objects.filter(id__in=dept_ids, parent__isnull=False).values_list('parent_id', flat=True)
+            )
+
+            allowed_ids = list(teaching_ids | parent_ids)
+            if not allowed_ids:
+                return Response({'results': []})
+
+            # Filter for teaching departments only (parent is NULL)
+            qs = Department.objects.filter(id__in=allowed_ids, parent__isnull=True)
 
         results = []
         for d in qs:

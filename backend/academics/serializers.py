@@ -4,7 +4,7 @@ from django.utils import timezone
 
 from .models import TeachingAssignment
 from .models import SpecialCourseAssessmentEditRequest
-from academics.models import Subject, Section
+from academics.models import Subject, Section, Semester
 from accounts.utils import get_user_permissions
 from academics.models import SectionAdvisor, StaffProfile
 from academics.models import AcademicYear
@@ -14,6 +14,17 @@ from academics.models import StudentProfile
 from academics.models import PeriodAttendanceSession, PeriodAttendanceRecord
 from timetable.models import TimetableSlot
 from academics.models import AttendanceUnlockRequest
+
+
+class SemesterSerializer(serializers.ModelSerializer):
+    name = serializers.SerializerMethodField(read_only=True)
+    
+    class Meta:
+        model = Semester
+        fields = ('id', 'number', 'name')
+    
+    def get_name(self, obj):
+        return f"SEM{obj.number}"
 
 
 class AcademicYearSerializer(serializers.ModelSerializer):
