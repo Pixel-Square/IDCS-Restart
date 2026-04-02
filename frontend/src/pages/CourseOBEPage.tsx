@@ -41,6 +41,8 @@ export default function CourseOBEPage(): JSX.Element {
   const [classTypeLockedFromTA, setClassTypeLockedFromTA] = React.useState(false);
   // courseMetaLoaded becomes true once the dept-rows DB fetch completes (success or error).
   const [courseMetaLoaded, setCourseMetaLoaded] = React.useState(false);
+  // QP type derived from the teaching assignment API (reliable for cross-dept staff).
+  const [taQpType, setTaQpType] = React.useState<string>('');
   const [courseQpType, setCourseQpType] = React.useState<string>(() => {
     if (!courseId) return 'QP1';
     try {
@@ -125,6 +127,13 @@ export default function CourseOBEPage(): JSX.Element {
           setCourseClassType(taCt);
           setClassTypeLockedFromTA(true);
           try { localStorage.setItem(`obe_class_type_${courseId}`, taCt); } catch {}
+        }
+        // Capture QP type from the teaching assignment (cross-department staff
+        // may not see CurriculumDepartment rows for other departments, so the TA
+        // API is the only reliable source for QP type in those cases).
+        const taQp = String((picked as any)?.question_paper_type || '').trim().toUpperCase();
+        if (taQp && taQp !== 'TCPR') {
+          setTaQpType(taQp);
         }
       } catch {
         // ignore
@@ -211,11 +220,15 @@ export default function CourseOBEPage(): JSX.Element {
         }
         // DB always wins for QP type — save back to localStorage as updated cache.
         // For elective-only courses (no CurriculumDepartment row), fall back to the elective's QP type.
+        // For cross-department staff (no dept row visible), fall back to the teaching assignment's QP type.
         {
           // Read from database: check both field names (question_paper_type from CurriculumDepartment, qp_type from CurriculumMaster)
           let qp = getQpType(pick);
           // When no dept-curriculum row was found, use the elective subject's QP type.
           if (!qp && electiveQpType) qp = electiveQpType;
+          // When still empty, use the QP type from the teaching assignment API
+          // (cross-department staff may not see curriculum rows for other departments).
+          if (!qp && taQpType) qp = taQpType;
           // For backward compat: TCPR stored as QP type means class_type=TCPR — use QP1 pattern.
           // If database has empty/null value, default to QP1
           const finalQp = qp && qp !== 'TCPR' ? qp : 'QP1';
@@ -243,7 +256,7 @@ export default function CourseOBEPage(): JSX.Element {
       }
     })();
     return () => { mounted = false; };
-  }, [courseId]);
+  }, [courseId, taQpType]);
 
   if (!code) {
     return (

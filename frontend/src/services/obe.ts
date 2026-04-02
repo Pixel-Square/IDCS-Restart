@@ -4,6 +4,7 @@ export type TeachingAssignmentItem = {
   subject_code: string;
   subject_name: string;
   class_type?: string | null;
+  question_paper_type?: string | null;
   curriculum_row_id?: number | null;
   elective_subject_id?: number | null;
   elective_subject_name?: string | null;

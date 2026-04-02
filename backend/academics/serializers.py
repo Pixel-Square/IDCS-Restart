@@ -37,6 +37,7 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
     subject_code = serializers.SerializerMethodField(read_only=True)
     subject_name = serializers.SerializerMethodField(read_only=True)
     class_type = serializers.SerializerMethodField(read_only=True)
+    question_paper_type = serializers.SerializerMethodField(read_only=True)
     section_name = serializers.SerializerMethodField(read_only=True)
     section_id = serializers.IntegerField(source='section.id', read_only=True)
     elective_subject_id = serializers.SerializerMethodField(read_only=True)
@@ -54,6 +55,7 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
             'subject_code',
             'subject_name',
             'class_type',
+            'question_paper_type',
             'section_name',
             'section_id',
             'elective_subject_id',
@@ -251,6 +253,34 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
                 ct = getattr(row, 'class_type', None) or getattr(getattr(row, 'master', None), 'class_type', None)
                 if ct:
                     return ct
+        except Exception:
+            return None
+
+        return None
+
+    def get_question_paper_type(self, obj):
+        """Return question_paper_type from the curriculum row.
+
+        Cross-department staff may not have access to CurriculumDepartment rows
+        via the curriculum API, so we expose this here from the linked row.
+        """
+        try:
+            # Elective assignments store question_paper_type on ElectiveSubject
+            if getattr(obj, 'elective_subject', None):
+                qpt = getattr(obj.elective_subject, 'question_paper_type', None)
+                if qpt:
+                    return qpt
+
+            row = getattr(obj, 'curriculum_row', None) or self._curriculum_row_for_obj(obj)
+            if row:
+                # Prefer CurriculumDepartment.question_paper_type (current),
+                # fall back to CurriculumMaster.qp_type (legacy)
+                qpt = getattr(row, 'question_paper_type', None)
+                if qpt:
+                    return qpt
+                master = getattr(row, 'master', None)
+                if master:
+                    return getattr(master, 'qp_type', None)
         except Exception:
             return None
 
