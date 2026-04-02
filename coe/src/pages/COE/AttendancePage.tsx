@@ -260,6 +260,7 @@ export default function AttendancePage() {
         const message = err instanceof Error ? err.message : 'Failed to load attendance students.';
         setError(message);
       } finally {
+        // eslint-disable-next-line no-unsafe-finally
         if (!active) return;
         setLoading(false);
       }

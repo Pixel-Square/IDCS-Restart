@@ -627,7 +627,7 @@ export default function OBEPage(): JSX.Element {
         const allMarks = cos.flatMap((cfg) => marksByCo[String(cfg.coNumber)] || []);
         const avgMark = _avgMarks(allMarks);
         const ciaExamRaw = row?.ciaExam;
-        const ciaExam = ciaExamRaw === '' || ciaExamRaw == null ? '' : (Number.isFinite(Number(ciaExamRaw)) ? Number(ciaExamRaw) : '');
+        const ciaExam: number | '' = ciaExamRaw === '' || ciaExamRaw == null ? '' : (Number.isFinite(Number(ciaExamRaw)) ? Number(ciaExamRaw) : '');
         const coAttainment = cos.map((cfg) => ({
           coNumber: cfg.coNumber,
           mark: _avgMarks(marksByCo[String(cfg.coNumber)] || []),

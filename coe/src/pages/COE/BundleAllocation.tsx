@@ -264,6 +264,7 @@ export default function BundleAllocation() {
         setError(message);
         setCourses([]);
       } finally {
+        // eslint-disable-next-line no-unsafe-finally
         if (!active) return;
         setLoading(false);
       }

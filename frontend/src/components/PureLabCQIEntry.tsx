@@ -137,12 +137,17 @@ export default function PureLabCQIEntry({ subjectId, teachingAssignmentId }: Pro
   const publishButtonIsRequestEdit = publishedEditLocked && editRequestsEnabled;
   const editRequestsBlocked = publishedEditLocked && !editRequestsEnabled;
 
-  const { data: editReqData, refresh: refreshEditReq } = useEditRequestPending({
+  const {
+    pending: editRequestPending,
+    setPendingUntilMs: setEditReqPendingUntilMs,
+    refresh: refreshEditReq,
+  } = useEditRequestPending({
+    enabled: Boolean(editRequestsEnabled) && Boolean(subjectId),
     assessment: 'cqi_model',
-    subjectCode: String(subjectId || ''),
+    subjectCode: subjectId ? String(subjectId) : null,
+    scope: 'MARK_ENTRY',
     teachingAssignmentId,
   });
-  const editRequestPending = Boolean(editReqData?.has_pending);
 
   // ── Data state ───────────────────────────────────────────────────────
   const [roster, setRoster]           = useState<Student[]>([]);

@@ -36,6 +36,7 @@ export default function CoePortalPage({ user }: Props) {
         const message = err instanceof Error ? err.message : 'Failed to load COE portal context.';
         setError(message);
       } finally {
+        // eslint-disable-next-line no-unsafe-finally
         if (!mounted) return;
         setLoading(false);
       }

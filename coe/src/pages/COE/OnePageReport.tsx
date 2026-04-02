@@ -37,9 +37,6 @@ const DEPARTMENT_SHORT: Record<string, string> = {
   AIML: 'AM',
 };
 
-type PersistedShuffledStudent = { reg_no: string; name: string };
-type PersistedShuffledByDummy = Record<string, PersistedShuffledStudent>;
-
 type BundleStudent = {
   dummy: string;
   reg_no: string;
@@ -181,14 +178,13 @@ export default function OnePageReport() {
     const normalizedCode = String(code || '').trim().toUpperCase();
     if (!normalizedCode) return { status: 'not_found' };
 
-    const selectionMap = await fetchCourseSelectionMapFromApi(department, semester);
-
     const finalizedConfigs = listFinalizedBundleConfigs();
     if (finalizedConfigs.length === 0) return { status: 'not_found' };
 
     for (const cfg of finalizedConfigs) {
       const semester = cfg.semester;
       const department = cfg.department;
+      const selectionMap = await fetchCourseSelectionMapFromApi(department, semester);
       const bundleSize = cfg.bundleSize;
       const [response, startSequence] = await Promise.all([
         fetchCoeStudentsMap({ department, semester }),

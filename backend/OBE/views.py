@@ -5295,6 +5295,7 @@ def obe_progress_overview(request):
     except Exception:
         try:
             # Fallback via Role model m2m if available
+            from accounts.models import Role
             role_qs = Role.objects.filter(userrole__user=user)
             role_names = {str(r.name or '').strip().upper() for r in role_qs}
         except Exception:

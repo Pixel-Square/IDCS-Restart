@@ -1626,7 +1626,7 @@ export default function CQIEntry({
                 if (!ciaData) return null;
                 const rows = ciaData.rowsByStudentId || {};
                 const row = rows[String(studentId)] || {};
-                if (Boolean((row as any)?.absent)) return null;
+                if ((row as any)?.absent) return null;
                 const qObj = (row as any)?.q && typeof (row as any).q === 'object' ? (row as any).q : (row as any);
 
                 // Detect legacy CIA2 labeling: all COs ≤ 2 means legacy (CO1=first, CO2=second)
@@ -1678,7 +1678,7 @@ export default function CQIEntry({
                 // CO2: Cycle1(SSA1_co2→1, CIA1_CO2→2, FA1_co2→2) + Cycle2(SSA2_first→1, CIA2_CO2→2, FA2_first→2) + Model(co2→4)
                 
                 // SSA
-                let ssaConv = 0; let ssaMax = 2; // w = 1 + 1
+                let ssaConv = 0; const ssaMax = 2; // w = 1 + 1
                 const s1 = readSsaCo(ssa1Res, student.id, 'co2');
                 if (s1 != null) { ssaConv += (s1 / (maxes.ssa1.co2 || 1)) * 1; }
                 const s2 = readSsaCo(ssa2Res, student.id, 'co3');
@@ -1686,7 +1686,7 @@ export default function CQIEntry({
                 if (s1 != null || s2 != null) components.push({ key: 'ssa', mark: round2(ssaConv), max: ssaMax, w: ssaMax });
 
                 // CIA: CIA1 questions tagged CO=2 + CIA2 questions tagged CO=2
-                let ciaConv = 0; let ciaMax = 4; // w = 2 + 2
+                let ciaConv = 0; const ciaMax = 4; // w = 2 + 2
                 const c1 = readCiaCo(cia1Data, cia1Questions, student.id, 2, false);
                 if (c1) { ciaConv += (c1.mark / (c1.max || 1)) * 2; }
                 const c2 = readCiaCo(cia2Data, cia2Questions, student.id, 2, true);
@@ -1694,7 +1694,7 @@ export default function CQIEntry({
                 if (c1 || c2) components.push({ key: 'cia', mark: round2(ciaConv), max: ciaMax, w: ciaMax });
 
                 // FA
-                let faConv = 0; let faMax = 4; // w = 2 + 2
+                let faConv = 0; const faMax = 4; // w = 2 + 2
                 const f1 = readFaCo(f1Res, student.id, 'skill2', 'att2');
                 if (f1 != null) { faConv += (f1 / (maxes.f1.co2 || 1)) * 2; }
                 const f2 = readFaCo(f2Res, student.id, 'skill1', 'att1');

@@ -84,6 +84,7 @@ export default function CourseList() {
         const message = err instanceof Error ? err.message : 'Failed to load courses.';
         setError(message);
       } finally {
+        // eslint-disable-next-line no-unsafe-finally
         if (!active) return;
         setLoading(false);
       }

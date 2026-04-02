@@ -294,6 +294,7 @@ export default function BarScanMarkEntry({
            });
         }
       } finally {
+        // eslint-disable-next-line no-unsafe-finally
         if (!active) return;
         setLoading(false);
       }
@@ -543,7 +544,7 @@ export default function BarScanMarkEntry({
                           }
                         }}
                         onChange={(e) => {
-                          let val = e.target.value;
+                          const val = e.target.value;
                           
                           if (val !== '') {
                             const num = Number(val);

@@ -1126,8 +1126,8 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
 
         // Prefer entered/draft marks (staff view), fallback to published.
         // Also extract per-CO splits from draft rows when available.
-        let ssa1CoSplitsLocal: Record<string, any> = {};
-        let ssa2CoSplitsLocal: Record<string, any> = {};
+        const ssa1CoSplitsLocal: Record<string, any> = {};
+        const ssa2CoSplitsLocal: Record<string, any> = {};
         if (allow('ssa1')) {
           if (!preferPublished('ssa1')) {
             try {

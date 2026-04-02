@@ -40,8 +40,6 @@ type BundleStudent = {
   isShuffled: boolean;
 };
 
-type PersistedShuffledStudent = { reg_no: string; name: string };
-type PersistedShuffledByDummy = Record<string, PersistedShuffledStudent>;
 type PersistedDummyRange = { start: number; count: number };
 
 function getCurrentFilterKey(department: string, semester: string): string {
@@ -175,6 +173,7 @@ export default function BundleBarcodeView() {
         setError(err instanceof Error ? err.message : 'Failed to load bundles');
         setBundles([]);
       } finally {
+        // eslint-disable-next-line no-unsafe-finally
         if (!active) return;
         setLoading(false);
       }
