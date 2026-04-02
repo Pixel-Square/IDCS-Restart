@@ -2610,40 +2610,54 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
     const projectPages = Array.isArray(cqiPublished?.pages) ? cqiPublished.pages : [];
 
     if (effectiveClassType === 'PROJECT' && !isPrbl) {
-      const getProjectPageInput = (studentId: number, assessment: 'review1' | 'review2') => {
-        const page = projectPages.find((pg) => String(pg?.assessmentType || '').toLowerCase() === assessment);
-        if (!page || !page.entries || typeof page.entries !== 'object') return null;
-        const row = (page.entries as any)?.[studentId] ?? (page.entries as any)?.[String(studentId)] ?? null;
-        if (!row || typeof row !== 'object') return null;
-        const raw = (row as any)?.co1;
-        return raw == null ? null : Number(raw);
+      // Single combined CQI for project: look for 'project_combined' page
+      const getCombinedCqiMark = (studentId: number): number | null => {
+        // Check project_combined page first (new single-CQI approach)
+        const combinedPage = projectPages.find((pg) => String(pg?.assessmentType || '').toLowerCase() === 'project_combined');
+        if (combinedPage?.entries && typeof combinedPage.entries === 'object') {
+          const row = (combinedPage.entries as any)?.[studentId] ?? (combinedPage.entries as any)?.[String(studentId)] ?? null;
+          if (row && typeof row === 'object') {
+            const raw = (row as any)?.cqiMark ?? (row as any)?.co1;
+            return raw == null ? null : Number(raw);
+          }
+          // Direct numeric entry
+          const direct = (combinedPage.entries as any)?.[studentId] ?? (combinedPage.entries as any)?.[String(studentId)];
+          if (direct != null && typeof direct === 'number') return direct;
+        }
+        return null;
       };
+
+      const PROJECT_CQI_RATE = 0.6;    // take 60% of CQI mark
+      const PROJECT_TOTAL_MAX = 60;     // review1(30) + review2(30)
+      const THRESHOLD_MARKS = round2((PROJECT_TOTAL_MAX * THRESHOLD_PERCENT) / 100); // 34.8
 
       return computedRows.map((r: any) => {
         const review1Base = typeof r.cells?.[0] === 'number' && Number.isFinite(r.cells[0]) ? Number(r.cells[0]) : null;
         const review2Base = typeof r.cells?.[1] === 'number' && Number.isFinite(r.cells[1]) ? Number(r.cells[1]) : null;
 
-        const addFromProjectCqi = (base: number | null, input: number | null) => {
-          if (base == null || input == null || !Number.isFinite(input)) return 0;
-          return computeCqiAdd({ coValue: base, coMax: 30, input });
-        };
+        // Combined original total (out of 60)
+        const combinedOrig = (review1Base ?? 0) + (review2Base ?? 0);
+        const hasAnyMark = review1Base != null || review2Base != null;
 
-        const add1 = activeTab === 'after-cqi' ? addFromProjectCqi(review1Base, getProjectPageInput(Number(r.id), 'review1')) : 0;
-        const add2 = activeTab === 'after-cqi' ? addFromProjectCqi(review2Base, getProjectPageInput(Number(r.id), 'review2')) : 0;
-
-        const colVals = [
-          review1Base == null ? null : clamp(round2(review1Base + add1), 0, 30),
-          review2Base == null ? null : clamp(round2(review2Base + add2), 0, 30),
-        ];
-        let effTotal = colVals.some((v) => typeof v === 'number' && Number.isFinite(v))
-          ? round2(colVals.reduce((sum, v) => sum + (typeof v === 'number' && Number.isFinite(v) ? v : 0), 0))
-          : r.total;
-        // Cap total at 58% if original total was below 58%.
-        const originalProjectPct = (r.total != null && maxTotal > 0) ? (r.total / maxTotal) * 100 : 0;
-        if (effTotal != null && originalProjectPct < THRESHOLD_PERCENT) {
-          const totalCap = round2((maxTotal * THRESHOLD_PERCENT) / 100);
-          effTotal = Math.min(effTotal, totalCap);
+        // CQI: single combined mark for the whole project
+        let cqiAdd = 0;
+        if (activeTab === 'after-cqi' && hasAnyMark) {
+          const cqiMark = getCombinedCqiMark(Number(r.id));
+          if (cqiMark != null && Number.isFinite(cqiMark) && cqiMark > 0) {
+            const originalPct = (combinedOrig / PROJECT_TOTAL_MAX) * 100;
+            if (originalPct < THRESHOLD_PERCENT) {
+              // Take 60% of CQI mark, cap so total doesn't exceed 58%
+              const rawAdd = cqiMark * PROJECT_CQI_RATE;
+              const maxAllowed = Math.max(0, THRESHOLD_MARKS - combinedOrig);
+              cqiAdd = Math.min(rawAdd, maxAllowed);
+            }
+          }
         }
+
+        // Column values stay unchanged (CQI applies to total, not per-review)
+        const colVals = [review1Base, review2Base];
+
+        let effTotal = hasAnyMark ? round2(combinedOrig + cqiAdd) : r.total;
         if (effTotal != null) effTotal = clamp(effTotal, 0, maxTotal);
         const effPct = effTotal != null && maxTotal ? round2((effTotal / maxTotal) * 100) : r.pct;
         return { ...r, colVals, effTotal, effPct };

@@ -18,6 +18,7 @@ import Cia1Entry from './Cia1Entry';
 import Cia2Entry from './Cia2Entry';
 import CQIEntry from '../pages/staff/CQIEntry';
 import PureLabCQIEntry from './PureLabCQIEntry';
+import PureProjectCQIEntry from './PureProjectCQIEntry';
 import DashboardWidgets from './layout/DashboardWidgets';
 import {
   DraftAssessmentKey,
@@ -43,7 +44,7 @@ type TabKey = BaseTabKey | CqiTabKey;
 
 type CqiPlacement = {
   showAfter: 'cia1' | 'cia2' | 'model' | 'review1' | 'review2';
-  assessmentType: 'cia1' | 'cia2' | 'model' | 'review1' | 'review2';
+  assessmentType: 'cia1' | 'cia2' | 'model' | 'review1' | 'review2' | 'project_combined';
   cos: string[];
 };
 
@@ -631,9 +632,9 @@ export default function MarkEntryTabs({
           { showAfter: 'model', assessmentType: 'model', cos: ['CO1'] },
         ] as CqiPlacement[];
       }
+      // Single combined CQI after Review 2 — covers both reviews together
       return [
-        { showAfter: 'review1', assessmentType: 'review1', cos: ['CO1'] },
-        { showAfter: 'review2', assessmentType: 'review2', cos: ['CO1'] },
+        { showAfter: 'review2', assessmentType: 'project_combined', cos: ['CO1'] },
       ] as CqiPlacement[];
     }
     // LAB / PURE_LAB: single CQI tab after Cycle 3 (model) – handled by PureLabCQIEntry
@@ -666,6 +667,8 @@ export default function MarkEntryTabs({
       if ((isPrblRaw && placement.assessmentType === 'model' && normalizedEffectiveClassType === 'PROJECT') ||
           (isQp1Final && placement.assessmentType === 'model')) {
         cqiLabel = 'CQI (CYCLE1, CYCLE2, CYCLE3)';
+      } else if (placement.assessmentType === 'project_combined' && normalizedEffectiveClassType === 'PROJECT') {
+        cqiLabel = 'CQI (Combined)';
       } else {
         cqiLabel = `CQI (${placement.assessmentType.toUpperCase()} ${placement.cos.join(', ')})`;
       }
@@ -1501,6 +1504,15 @@ export default function MarkEntryTabs({
                       />
                     );
                   }
+                  // Pure Project: single combined CQI covering Review 1 + Review 2
+                  if (normalizedEffectiveClassType === 'PROJECT' && !isPrblRaw) {
+                    return (
+                      <PureProjectCQIEntry
+                        subjectId={subjectId}
+                        teachingAssignmentId={selectedTaId ?? undefined}
+                      />
+                    );
+                  }
                   return (
                     <CQIEntry
                       key={`${activeCqi?.assessmentType || 'model'}:${(activeCqi?.cos || []).join('_')}`}
@@ -1509,7 +1521,7 @@ export default function MarkEntryTabs({
                       classType={effectiveClassType ?? null}
                       questionPaperType={questionPaperType ?? null}
                       enabledAssessments={effectiveEnabled ?? null}
-                      assessmentType={activeCqi?.assessmentType || 'model'}
+                      assessmentType={(activeCqi?.assessmentType || 'model') as 'cia1' | 'cia2' | 'model' | 'review1' | 'review2'}
                       cos={activeCqi?.cos || ['CO1', 'CO2', 'CO3', 'CO4', 'CO5']}
                       cqiDivider={Number(cqiConfig?.divider) || 2}
                       cqiMultiplier={Number(cqiConfig?.multiplier) || 0.15}
