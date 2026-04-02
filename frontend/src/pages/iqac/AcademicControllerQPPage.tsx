@@ -124,11 +124,22 @@ export default function AcademicControllerQPPage(): JSX.Element {
   const [selectedCustomExam, setSelectedCustomExam] = useState<string>('SSA1');
   const [customIsOverride, setCustomIsOverride] = useState<boolean>(false);
 
-  // Determine if current exam uses CO-wise pattern (SSA/FA) or question-wise pattern (CIA/MODEL)
-  const isCoWisePattern = useMemo(() => {
+  // All exam types (SSA, FA, CIA, MODEL) use the same question-wise (Marks + CO) pattern format.
+  // Previously SSA/FA used a CO-column grid, but that didn't allow flexible CO mapping per QP type.
+  const isCoWisePattern = false;
+
+  // Which CO columns to show/store for the current CO-wise exam + QP type
+  const visibleCosForExam = useMemo((): number[] => {
     const exam = tab === 'custom' ? selectedCustomExam : selectedExam;
-    return exam === 'SSA1' || exam === 'SSA2' || exam === 'FORMATIVE1' || exam === 'FORMATIVE2';
-  }, [tab, selectedExam, selectedCustomExam]);
+    if (!isCoWisePattern) return [1, 2, 3, 4, 5];
+    const qpCode = selectedClassType === 'THEORY'
+      ? (selectedQpType || '').toUpperCase().replace(/\s+/g, '')
+      : '';
+    const isQp1Final = qpCode === 'QP1FINAL' || qpCode === 'QP1FINALYEAR';
+    if (exam === 'SSA1' || exam === 'FORMATIVE1') return [1, 2];
+    if (exam === 'SSA2' || exam === 'FORMATIVE2') return isQp1Final ? [2, 3] : [3, 4];
+    return [1, 2, 3, 4, 5];
+  }, [tab, selectedExam, selectedCustomExam, isCoWisePattern, selectedClassType, selectedQpType]);
 
   const backendKey = useMemo(() => {
     const class_type = selectedClassType;
@@ -167,16 +178,22 @@ export default function AcademicControllerQPPage(): JSX.Element {
 
         if (isCoWisePattern) {
           // For SSA/FA: Convert from backend format to CO-wise rows
-          // Backend stores: marks[0]=CO1 marks, marks[1]=CO2 marks, etc.
-          const coWise: CoWisePatternRow[] = marks.length > 0 ? [{
-            description: 'Assessment Component',
-            co1: marks[0] != null ? String(marks[0]) : '',
-            co2: marks[1] != null ? String(marks[1]) : '',
-            co3: marks[2] != null ? String(marks[2]) : '',
-            co4: marks[3] != null ? String(marks[3]) : '',
-            co5: marks[4] != null ? String(marks[4]) : '',
-          }] : [{ description: 'Assessment Component', co1: '', co2: '', co3: '', co4: '', co5: '' }];
-          setCoWiseRows(coWise);
+          // Uses stored cos[] array to map marks to correct CO fields
+          const row: CoWisePatternRow = { description: 'Assessment Component', co1: '', co2: '', co3: '', co4: '', co5: '' };
+          if (marks.length > 0 && cos.length > 0) {
+            for (let i = 0; i < marks.length && i < cos.length; i++) {
+              const coNum = Number(cos[i]);
+              if (coNum >= 1 && coNum <= 5) {
+                (row as any)[`co${coNum}`] = marks[i] != null ? String(marks[i]) : '';
+              }
+            }
+          } else if (marks.length > 0) {
+            // Legacy fallback: marks[0]=CO1, marks[1]=CO2, etc.
+            for (let i = 0; i < marks.length && i < 5; i++) {
+              (row as any)[`co${i + 1}`] = marks[i] != null ? String(marks[i]) : '';
+            }
+          }
+          setCoWiseRows([row]);
           setPatternRows([]);
         } else {
           // For CIA/MODEL: Question-wise pattern
@@ -309,15 +326,20 @@ export default function AcademicControllerQPPage(): JSX.Element {
 
         if (isCoWisePattern) {
           // For SSA/FA: Convert from backend format to CO-wise rows
-          const coWise: CoWisePatternRow[] = marks.length > 0 ? [{
-            description: 'Assessment Component',
-            co1: marks[0] != null ? String(marks[0]) : '',
-            co2: marks[1] != null ? String(marks[1]) : '',
-            co3: marks[2] != null ? String(marks[2]) : '',
-            co4: marks[3] != null ? String(marks[3]) : '',
-            co5: marks[4] != null ? String(marks[4]) : '',
-          }] : [{ description: 'Assessment Component', co1: '', co2: '', co3: '', co4: '', co5: '' }];
-          setCoWiseRows(coWise);
+          const row: CoWisePatternRow = { description: 'Assessment Component', co1: '', co2: '', co3: '', co4: '', co5: '' };
+          if (marks.length > 0 && cos.length > 0) {
+            for (let i = 0; i < marks.length && i < cos.length; i++) {
+              const coNum = Number(cos[i]);
+              if (coNum >= 1 && coNum <= 5) {
+                (row as any)[`co${coNum}`] = marks[i] != null ? String(marks[i]) : '';
+              }
+            }
+          } else if (marks.length > 0) {
+            for (let i = 0; i < marks.length && i < 5; i++) {
+              (row as any)[`co${i + 1}`] = marks[i] != null ? String(marks[i]) : '';
+            }
+          }
+          setCoWiseRows([row]);
           setPatternRows([]);
         } else {
           // For CIA/MODEL: Question-wise pattern
@@ -498,28 +520,27 @@ export default function AcademicControllerQPPage(): JSX.Element {
       let cos: (number | string)[] = [];
 
       if (isCoWisePattern) {
-        // For SSA/FA: Convert CO-wise format to backend format
-        // We'll store marks for each CO (CO1-CO5) in the marks array
+        // For SSA/FA: Only store marks for the visible/relevant COs
         if (coWiseRows.length === 0) {
           setError('Add at least one row.');
           return;
         }
-        
-        // Take the first row and extract CO marks
-        const row = coWiseRows[0];
-        const co1 = Number((row.co1 || '0').trim());
-        const co2 = Number((row.co2 || '0').trim());
-        const co3 = Number((row.co3 || '0').trim());
-        const co4 = Number((row.co4 || '0').trim());
-        const co5 = Number((row.co5 || '0').trim());
 
-        if (![co1, co2, co3, co4, co5].every((v) => Number.isFinite(v) && v >= 0)) {
-          setError('All CO marks must be non-negative numbers.');
-          return;
+        const row = coWiseRows[0];
+        const extractedMarks: number[] = [];
+        const extractedCos: number[] = [];
+        for (const coNum of visibleCosForExam) {
+          const val = Number(String((row as any)[`co${coNum}`] || '0').trim());
+          if (!Number.isFinite(val) || val < 0) {
+            setError(`CO${coNum} marks must be a non-negative number.`);
+            return;
+          }
+          extractedMarks.push(val);
+          extractedCos.push(coNum);
         }
 
-        marks = [co1, co2, co3, co4, co5];
-        cos = [1, 2, 3, 4, 5]; // CO labels
+        marks = extractedMarks;
+        cos = extractedCos;
       } else {
         // For CIA/MODEL: Question-wise format
         const cleaned = patternRows.map((r) => ({ marks: String(r.marks ?? '').trim(), co: String((r as any)?.co ?? '').trim() }));
@@ -823,18 +844,16 @@ export default function AcademicControllerQPPage(): JSX.Element {
               <thead>
                 <tr>
                   <th style={{ textAlign: 'left', fontSize: 12, color: '#6b7280', padding: '8px 6px', borderBottom: '1px solid #e5e7eb', fontWeight: 800 }}>Component</th>
-                  <th style={{ textAlign: 'center', fontSize: 12, color: '#6b7280', padding: '8px 6px', borderBottom: '1px solid #e5e7eb', fontWeight: 800 }}>CO1<br/>Marks</th>
-                  <th style={{ textAlign: 'center', fontSize: 12, color: '#6b7280', padding: '8px 6px', borderBottom: '1px solid #e5e7eb', fontWeight: 800 }}>CO2<br/>Marks</th>
-                  <th style={{ textAlign: 'center', fontSize: 12, color: '#6b7280', padding: '8px 6px', borderBottom: '1px solid #e5e7eb', fontWeight: 800 }}>CO3<br/>Marks</th>
-                  <th style={{ textAlign: 'center', fontSize: 12, color: '#6b7280', padding: '8px 6px', borderBottom: '1px solid #e5e7eb', fontWeight: 800 }}>CO4<br/>Marks</th>
-                  <th style={{ textAlign: 'center', fontSize: 12, color: '#6b7280', padding: '8px 6px', borderBottom: '1px solid #e5e7eb', fontWeight: 800 }}>CO5<br/>Marks</th>
+                  {visibleCosForExam.map((coNum) => (
+                    <th key={coNum} style={{ textAlign: 'center', fontSize: 12, color: '#6b7280', padding: '8px 6px', borderBottom: '1px solid #e5e7eb', fontWeight: 800 }}>CO{coNum}<br/>Marks</th>
+                  ))}
                   <th style={{ width: 120, borderBottom: '1px solid #e5e7eb' }} />
                 </tr>
               </thead>
               <tbody>
                 {coWiseRows.length === 0 ? (
                   <tr>
-                    <td colSpan={7} style={{ padding: 10, color: '#6b7280', textAlign: 'center' }}>No components yet. Click + to add.</td>
+                    <td colSpan={visibleCosForExam.length + 2} style={{ padding: 10, color: '#6b7280', textAlign: 'center' }}>No components yet. Click + to add.</td>
                   </tr>
                 ) : (
                   coWiseRows.map((r, idx) => (
@@ -849,66 +868,23 @@ export default function AcademicControllerQPPage(): JSX.Element {
                           style={{ minWidth: 150 }}
                         />
                       </td>
-                      <td style={{ padding: '8px 6px', borderBottom: '1px solid #f3f4f6', textAlign: 'center' }}>
-                        <input
-                          className="obe-input"
-                          type="number"
-                          min={0}
-                          step="0.5"
-                          value={r.co1 || ''}
-                          onChange={(e) => updateCoWiseMarks(idx, 'co1', e.target.value)}
-                          placeholder="0"
-                          style={{ maxWidth: 80, textAlign: 'center' }}
-                        />
-                      </td>
-                      <td style={{ padding: '8px 6px', borderBottom: '1px solid #f3f4f6', textAlign: 'center' }}>
-                        <input
-                          className="obe-input"
-                          type="number"
-                          min={0}
-                          step="0.5"
-                          value={r.co2 || ''}
-                          onChange={(e) => updateCoWiseMarks(idx, 'co2', e.target.value)}
-                          placeholder="0"
-                          style={{ maxWidth: 80, textAlign: 'center' }}
-                        />
-                      </td>
-                      <td style={{ padding: '8px 6px', borderBottom: '1px solid #f3f4f6', textAlign: 'center' }}>
-                        <input
-                          className="obe-input"
-                          type="number"
-                          min={0}
-                          step="0.5"
-                          value={r.co3 || ''}
-                          onChange={(e) => updateCoWiseMarks(idx, 'co3', e.target.value)}
-                          placeholder="0"
-                          style={{ maxWidth: 80, textAlign: 'center' }}
-                        />
-                      </td>
-                      <td style={{ padding: '8px 6px', borderBottom: '1px solid #f3f4f6', textAlign: 'center' }}>
-                        <input
-                          className="obe-input"
-                          type="number"
-                          min={0}
-                          step="0.5"
-                          value={r.co4 || ''}
-                          onChange={(e) => updateCoWiseMarks(idx, 'co4', e.target.value)}
-                          placeholder="0"
-                          style={{ maxWidth: 80, textAlign: 'center' }}
-                        />
-                      </td>
-                      <td style={{ padding: '8px 6px', borderBottom: '1px solid #f3f4f6', textAlign: 'center' }}>
-                        <input
-                          className="obe-input"
-                          type="number"
-                          min={0}
-                          step="0.5"
-                          value={r.co5 || ''}
-                          onChange={(e) => updateCoWiseMarks(idx, 'co5', e.target.value)}
-                          placeholder="0"
-                          style={{ maxWidth: 80, textAlign: 'center' }}
-                        />
-                      </td>
+                      {visibleCosForExam.map((coNum) => {
+                        const field = `co${coNum}` as 'co1' | 'co2' | 'co3' | 'co4' | 'co5';
+                        return (
+                          <td key={coNum} style={{ padding: '8px 6px', borderBottom: '1px solid #f3f4f6', textAlign: 'center' }}>
+                            <input
+                              className="obe-input"
+                              type="number"
+                              min={0}
+                              step="0.5"
+                              value={r[field] || ''}
+                              onChange={(e) => updateCoWiseMarks(idx, field, e.target.value)}
+                              placeholder="0"
+                              style={{ maxWidth: 80, textAlign: 'center' }}
+                            />
+                          </td>
+                        );
+                      })}
                       <td style={{ padding: '8px 6px', borderBottom: '1px solid #f3f4f6' }}>
                         <button type="button" className="obe-btn obe-btn-danger" onClick={() => deleteRow(idx)}>
                           Delete
@@ -959,27 +935,13 @@ export default function AcademicControllerQPPage(): JSX.Element {
                           style={{ maxWidth: 160 }}
                         >
                           <option value="">Select</option>
-                          {(tab === 'custom' ? selectedCustomExam : selectedExam) === 'MODEL' ? (
-                            <>
-                              <option value="1">1</option>
-                              <option value="2">2</option>
-                              <option value="3">3</option>
-                              <option value="4">4</option>
-                              <option value="5">5</option>
-                            </>
-                          ) : (tab === 'custom' ? selectedCustomExam : selectedExam) === 'CIA2' || (tab === 'custom' ? selectedCustomExam : selectedExam) === 'SSA2' || (tab === 'custom' ? selectedCustomExam : selectedExam) === 'FORMATIVE2' ? (
-                            <>
-                              <option value="3">3</option>
-                              <option value="4">4</option>
-                              <option value="3&4">3&4</option>
-                            </>
-                          ) : (
-                            <>
-                              <option value="1">1</option>
-                              <option value="2">2</option>
-                              <option value="1&2">1&2</option>
-                            </>
-                          )}
+                          <option value="1">1</option>
+                          <option value="2">2</option>
+                          <option value="1&2">1&2</option>
+                          <option value="3">3</option>
+                          <option value="4">4</option>
+                          <option value="3&4">3&4</option>
+                          <option value="5">5</option>
                         </select>
                       </td>
                       <td style={{ padding: '8px 6px', borderBottom: '1px solid #f3f4f6' }}>

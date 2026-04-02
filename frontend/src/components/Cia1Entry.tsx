@@ -169,7 +169,7 @@ function parseCo(raw: unknown): CoValue {
   return 1;
 }
 
-type CoPair = { a: 1 | 3; b: 2 | 4 };
+type CoPair = { a: number; b: number };
 
 function coPairForAssessment(assessmentKey: AssessmentKey): CoPair {
   return assessmentKey === 'cia2' ? { a: 3, b: 4 } : { a: 1, b: 2 };
@@ -182,14 +182,15 @@ function isSplitCo(co: CoValue): boolean {
 function coWeights(co: CoValue, pair: CoPair): { a: number; b: number } {
   if (isSplitCo(co)) return { a: 0.5, b: 0.5 };
 
-  // For CIA2, allow legacy configs that still use 1/2 tagging.
-  const isLegacyCia2 = pair.a === 3;
-  const mapsToA = co === pair.a || (isLegacyCia2 && co === 1);
-  const mapsToB = co === pair.b || (isLegacyCia2 && co === 2);
+  // For the default CIA2 pair {a:3, b:4}, allow legacy configs that still tag
+  // questions as CO1/CO2 instead of CO3/CO4.
+  const isDefaultCia2Pair = pair.a === 3 && pair.b === 4;
+  const mapsToA = co === pair.a || (isDefaultCia2Pair && co === 1);
+  const mapsToB = co === pair.b || (isDefaultCia2Pair && co === 2);
   if (mapsToA) return { a: 1, b: 0 };
   if (mapsToB) return { a: 0, b: 1 };
 
-  // Any other CO (e.g., CO-5) is not represented in CIA's 2-CO attainment panel.
+  // Any other CO is not represented in CIA's 2-CO attainment panel.
   // Treat as "no contribution" rather than mis-attributing it.
   return { a: 0, b: 0 };
 }
@@ -199,13 +200,6 @@ function effectiveCoWeightsForQuestion(questions: QuestionDef[], idx: number, pa
   if (!q) return { a: 0, b: 0 };
   // Primary: explicit split configured.
   if (isSplitCo(q.co)) return { a: 0.5, b: 0.5 };
-
-  // Fallback for legacy configs: if no split question exists, treat the last question
-  // (typically the "O" column in the Excel template, often Q9) as split 50/50.
-  const hasAnySplit = questions.some((x) => isSplitCo(x.co));
-  const isLast = idx === questions.length - 1;
-  const looksLikeQ9 = String(q.key || '').toLowerCase() === 'q9' || String(q.label || '').toLowerCase().includes('q9');
-  if (!hasAnySplit && isLast && looksLikeQ9) return { a: 0.5, b: 0.5 };
 
   return coWeights(q.co, pair);
 }
@@ -251,9 +245,9 @@ function clamp(n: number, min: number, max: number) {
 
 function pct(mark: number, max: number) {
   if (!max) return '-';
-  const p = (mark / max) * 100;
-  if (!Number.isFinite(p)) return '-';
-  const s = p.toFixed(1);
+  const ratio = (mark / max) * 100;
+  if (!Number.isFinite(ratio)) return '-';
+  const s = ratio.toFixed(1);
   return s.endsWith('.0') ? s.slice(0, -2) : s;
 }
 
@@ -291,6 +285,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   const assessmentKey: AssessmentKey = assessmentKeyProp || 'cia1';
   const assessmentLabel = assessmentKey === 'cia2' ? 'CIA 2' : 'CIA 1';
   const coPair = useMemo(() => coPairForAssessment(assessmentKey), [assessmentKey]);
+
   const [masterCfg, setMasterCfg] = useState<any>(null);
   const [masterCfgWarning, setMasterCfgWarning] = useState<string | null>(null);
   const [iqacPattern, setIqacPattern] = useState<{ marks: number[]; cos?: Array<number | string> } | null>(null);
@@ -409,6 +404,21 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
 
     return qpTypeKey === 'QP2' ? normalizeQuestionsForQp2(baseFromMaster) : baseFromMaster;
   }, [masterCfg, assessmentKey, iqacPattern, coPair.a, qpTypeKey]);
+
+  // Derive the actual display CO pair from the loaded pattern questions.
+  // e.g. QP1 FINAL YEAR CIA2 may assign CO2 & CO3 instead of the default CO3 & CO4.
+  // Must be declared AFTER questions (which depends on iqacPattern) to avoid TDZ.
+  const effectiveCoPair = useMemo((): CoPair => {
+    const coNums: number[] = [];
+    for (const q of questions) {
+      const co = q.co;
+      if (typeof co === 'number' && co >= 1 && co <= 5 && !coNums.includes(co)) coNums.push(co);
+    }
+    coNums.sort((x, y) => x - y);
+    if (coNums.length >= 2) return { a: coNums[0], b: coNums[1] };
+    if (coNums.length === 1) return { a: coNums[0], b: coNums[0] };
+    return coPair;
+  }, [questions, coPair]);
 
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -1258,12 +1268,12 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
     let b = 0;
     for (let i = 0; i < questions.length; i++) {
       const q = questions[i];
-      const w = effectiveCoWeightsForQuestion(questions, i, coPair);
+      const w = effectiveCoWeightsForQuestion(questions, i, effectiveCoPair);
       a += q.max * w.a;
       b += q.max * w.b;
     }
     return { a, b };
-  }, [questions, coPair]);
+  }, [questions, effectiveCoPair]);
 
   const effectiveCoMax = useMemo(() => {
     const hasIqacCoMapping = (() => {
@@ -1279,13 +1289,13 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
     }
 
     const cfg = ((masterCfg as any)?.assessments?.[assessmentKey]?.coMax ?? (masterCfg as any)?.assessments?.cia1?.coMax) as any;
-    const rawA = Number(cfg?.[`co${coPair.a}`] ?? cfg?.co1);
-    const rawB = Number(cfg?.[`co${coPair.b}`] ?? cfg?.co2);
+    const rawA = Number(cfg?.[`co${effectiveCoPair.a}`] ?? cfg?.co1);
+    const rawB = Number(cfg?.[`co${effectiveCoPair.b}`] ?? cfg?.co2);
     return {
       a: Number.isFinite(rawA) ? Math.max(0, rawA) : questionCoMax.a,
       b: Number.isFinite(rawB) ? Math.max(0, rawB) : questionCoMax.b,
     };
-  }, [masterCfg, questionCoMax, assessmentKey, coPair, iqacPattern]);
+  }, [masterCfg, questionCoMax, assessmentKey, effectiveCoPair, iqacPattern]);
 
   const visibleBtls = useMemo(() => {
     const set = new Set<number>();
@@ -1743,10 +1753,10 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
           absentKind: effectiveAbsentKind,
           ...emptyQ,
           total: 'ABSENT',
-          [`co${coPair.a}_mark`]: '',
-          [`co${coPair.a}_pct`]: '',
-          [`co${coPair.b}_mark`]: '',
-          [`co${coPair.b}_pct`]: '',
+          [`co${effectiveCoPair.a}_mark`]: '',
+          [`co${effectiveCoPair.a}_pct`]: '',
+          [`co${effectiveCoPair.b}_mark`]: '',
+          [`co${effectiveCoPair.b}_pct`]: '',
           ...Object.fromEntries(
             visibleBtls.flatMap((n) => [
               [`btl${n}_mark`, ''],
@@ -1769,7 +1779,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       let co2 = 0;
       for (let qi = 0; qi < questions.length; qi++) {
         const q = questions[qi];
-        const w = effectiveCoWeightsForQuestion(questions, qi, coPair);
+        const w = effectiveCoWeightsForQuestion(questions, qi, effectiveCoPair);
         const m = Number(qMarks[q.key] || 0);
         co1 += m * w.a;
         co2 += m * w.b;
@@ -1789,10 +1799,10 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         absentKind: exportAbsentKind,
         ...qMarks,
         total,
-        [`co${coPair.a}_mark`]: co1,
-        [`co${coPair.a}_pct`]: pct(co1, effectiveCoMax.a),
-        [`co${coPair.b}_mark`]: co2,
-        [`co${coPair.b}_pct`]: pct(co2, effectiveCoMax.b),
+        [`co${effectiveCoPair.a}_mark`]: co1,
+        [`co${effectiveCoPair.a}_pct`]: pct(co1, effectiveCoMax.a),
+        [`co${effectiveCoPair.b}_mark`]: co2,
+        [`co${effectiveCoPair.b}_pct`]: pct(co2, effectiveCoMax.b),
         ...Object.fromEntries(
           visibleBtls.flatMap((n) => [
             [`btl${n}_mark`, btl[n as 1 | 2 | 3 | 4 | 5 | 6]],
@@ -2390,7 +2400,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
             <div style={{ marginLeft: 8, padding: 6, border: '1px solid #d1d5db', borderRadius: 8, minWidth: 160 }}>{sheet.batchLabel}</div>
           </label>
           <div style={{ fontSize: 12, color: '#6b7280', alignSelf: 'center' }}>
-            Total max: {totalsMax} | Questions: {questions.length} | COs: {coPair.a}–{coPair.b} | BTLs: 1–6
+            Total max: {totalsMax} | Questions: {questions.length} | COs: {effectiveCoPair.a}–{effectiveCoPair.b} | BTLs: 1–6
           </div>
         </div>
       </div>
@@ -2539,10 +2549,10 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                   </th>
                 ))}
                 <th style={cellTh} colSpan={2}>
-                  CO-{coPair.a}
+                  CO-{effectiveCoPair.a}
                 </th>
                 <th style={cellTh} colSpan={2}>
-                  CO-{coPair.b}
+                  CO-{effectiveCoPair.b}
                 </th>
                 {visibleBtls.map((n) => (
                   <th key={`btl-head-${n}`} style={cellTh} colSpan={2}>
@@ -2677,7 +2687,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                 let co2 = 0;
                 for (let qi = 0; qi < questions.length; qi++) {
                   const q = questions[qi];
-                  const w = effectiveCoWeightsForQuestion(questions, qi, coPair);
+                  const w = effectiveCoWeightsForQuestion(questions, qi, effectiveCoPair);
                   const m = Number(qMarks[q.key] || 0);
                   co1 += m * w.a;
                   co2 += m * w.b;
@@ -2978,7 +2988,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                       let coB = 0;
                       for (let qi = 0; qi < questions.length; qi++) {
                         const q = questions[qi];
-                        const w = effectiveCoWeightsForQuestion(questions, qi, coPair);
+                        const w = effectiveCoWeightsForQuestion(questions, qi, effectiveCoPair);
                         const m = Number(qMarks[q.key] || 0);
                         coA += m * w.a;
                         coB += m * w.b;

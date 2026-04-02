@@ -7,6 +7,7 @@ CLASS_TYPE_CHOICES = (
     ('THEORY', 'Theory'),
     ('THEORY_PMBL', 'Theory (PMBL)'),
     ('LAB', 'Lab'),
+    ('PURE_LAB', 'Pure Lab'),
     ('TCPL', 'Tcpl'),
     ('TCPR', 'Tcpr'),
     ('PRACTICAL', 'Practical'),

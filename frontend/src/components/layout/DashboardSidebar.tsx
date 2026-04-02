@@ -54,6 +54,7 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
   applications_admin: Layout,
   applications_inbox: ClipboardList,
   applications_home: Layout,
+  external_management: Users,
   idscan_test: ScanLine,
   idscan_gatepass: Shield,
   idscan_gatescan: Shield,
@@ -525,6 +526,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     !flags.is_student;
   if (canPbasManage && !items.some((item) => item.key === 'pbas_manager')) {
     items.push({ key: 'pbas_manager', label: 'PBAS Manager', to: '/iqac/pbas' });
+  }
+
+  // IQAC External Management
+  if (isIqac && !items.some((item) => item.key === 'external_management')) {
+    items.push({ key: 'external_management', label: 'External Management', to: '/iqac/external-management' });
   }
 
   // PS (Principal Secretary) specific features

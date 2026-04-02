@@ -93,8 +93,8 @@ function round1(n: number) {
 function pct(mark: number | null, max: number) {
   if (mark == null) return '';
   if (!Number.isFinite(max) || max <= 0) return '0';
-  const p = (mark / max) * 100;
-  return `${Number.isFinite(p) ? p.toFixed(0) : 0}`;
+  const ratio = (mark / max) * 100;
+  return `${Number.isFinite(ratio) ? ratio.toFixed(0) : 0}`;
 }
 
 function readFiniteNumber(value: any): number | null {

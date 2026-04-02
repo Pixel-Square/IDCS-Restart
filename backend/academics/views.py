@@ -7781,3 +7781,212 @@ class ExtStaffProfileUsersView(APIView):
             for u in qs
         ]
         return Response(data)
+
+
+class ExtStaffProfileBulkImportView(APIView):
+    """Bulk import external staff profiles from an uploaded Excel (.xlsx) or CSV file.
+
+    POST /api/academics/ext-staff-profiles/import/
+
+    Expected columns (case-insensitive, spaces/underscores ignored):
+        Username, Email, Password, First Name, Last Name, Designation, Organisation,
+        Department, Mobile, Gender, Qualification, PhD Status, Total Experience,
+        Date of Birth, Notes
+
+    Required: Username, Email, First Name
+
+    Returns:
+        { imported: int, total: int, errors: [{ row: int, errors: [str] }] }
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def _is_allowed(self, user) -> bool:
+        if user.is_superuser:
+            return True
+        if user.has_perm('academics.view_staffs_page'):
+            return True
+        try:
+            if user.roles.filter(name__iexact='IQAC').exists():
+                return True
+        except Exception:
+            pass
+        return False
+
+    @staticmethod
+    def _col(row: dict, *names: str) -> str:
+        """Extract a value from a row dict using any of the given normalised key names."""
+        for name in names:
+            needle = name.lower().replace(' ', '').replace('_', '').replace('-', '')
+            for k, v in row.items():
+                if k.lower().replace(' ', '').replace('_', '').replace('-', '') == needle:
+                    return str(v).strip() if v is not None else ''
+        return ''
+
+    def post(self, request):
+        import csv
+        import io
+        import openpyxl
+
+        user = request.user
+        if not self._is_allowed(user):
+            return Response(
+                {'detail': 'You do not have permission to import external staff profiles.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        file_obj = request.FILES.get('file')
+        if not file_obj:
+            return Response({'detail': 'No file provided.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        filename = file_obj.name.lower()
+        if not (filename.endswith('.xlsx') or filename.endswith('.csv')):
+            return Response(
+                {'detail': 'Only .xlsx and .csv files are supported.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ── Parse file ────────────────────────────────────────────────────────
+        rows: list[dict] = []
+        if filename.endswith('.xlsx'):
+            try:
+                wb = openpyxl.load_workbook(file_obj, read_only=True, data_only=True)
+                ws = wb.active
+                headers: list[str] | None = None
+                for excel_row in ws.iter_rows(values_only=True):
+                    if headers is None:
+                        headers = [str(c).strip() if c is not None else '' for c in excel_row]
+                        continue
+                    row_data = {
+                        h: (str(v).strip() if v is not None else '')
+                        for h, v in zip(headers, excel_row)
+                    }
+                    rows.append(row_data)
+            except Exception as exc:
+                return Response(
+                    {'detail': f'Failed to parse Excel file: {exc}'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        else:
+            try:
+                content = file_obj.read().decode('utf-8-sig')
+                reader = csv.DictReader(io.StringIO(content))
+                for row in reader:
+                    rows.append({k.strip(): (v.strip() if v else '') for k, v in row.items()})
+            except Exception as exc:
+                return Response(
+                    {'detail': f'Failed to parse CSV file: {exc}'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        if not rows:
+            return Response(
+                {'detail': 'File is empty or has no data rows.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ── Process rows ──────────────────────────────────────────────────────
+        from django.contrib.auth import get_user_model
+        from .models import ExtStaffProfile
+
+        User = get_user_model()
+        errors: list[dict] = []
+        imported = 0
+        seen_usernames: set[str] = set()
+        seen_emails: set[str] = set()
+
+        for idx, row in enumerate(rows, start=2):  # row 1 is header
+            username     = self._col(row, 'username', 'user name', 'user_name')
+            email        = self._col(row, 'email', 'emailaddress', 'email address', 'email_address')
+            password     = self._col(row, 'password', 'pwd')
+            first_name   = self._col(row, 'firstname', 'first name', 'first_name', 'name', 'faculty name', 'name of the faculty')
+            last_name    = self._col(row, 'lastname', 'last name', 'last_name')
+            designation  = self._col(row, 'designation', 'desig')
+            organisation = self._col(row, 'organisation', 'organization', 'org', 'department', 'dept', 'department working in')
+            mobile       = self._col(row, 'mobile', 'mobilenumber', 'mobile number', 'phone', 'contact')
+            gender       = self._col(row, 'gender', 'genderspecification', 'gender specification')
+            qualification = self._col(row, 'qualification', 'qualificationspecification', 'qualification specification')
+            phd_status   = self._col(row, 'phdstatus', 'phd status', 'phd')
+            experience   = self._col(row, 'totalexperience', 'total experience', 'experience')
+            dob          = self._col(row, 'dateofbirth', 'date of birth', 'dob')
+            notes_text   = self._col(row, 'notes', 'remarks')
+            teaching     = self._col(row, 'teaching', 'facultytype', 'type of faculty')
+            faculty_id   = self._col(row, 'facultyid', 'faculty id', 'staffid', 'staff id')
+
+            # Build additional notes from extra fields
+            extra_notes_parts = []
+            if teaching:
+                extra_notes_parts.append(f'Teaching: {teaching}')
+            if faculty_id:
+                extra_notes_parts.append(f'Faculty ID: {faculty_id}')
+            if mobile:
+                extra_notes_parts.append(f'Mobile: {mobile}')
+            if gender:
+                extra_notes_parts.append(f'Gender: {gender}')
+            if qualification:
+                extra_notes_parts.append(f'Qualification: {qualification}')
+            if phd_status:
+                extra_notes_parts.append(f'PhD Status: {phd_status}')
+            if experience:
+                extra_notes_parts.append(f'Total Experience: {experience}')
+            if dob:
+                extra_notes_parts.append(f'Date of Birth: {dob}')
+            if notes_text:
+                extra_notes_parts.append(notes_text)
+
+            full_notes = '\n'.join(extra_notes_parts)
+
+            # ── Validate required fields ──
+            row_errors: list[str] = []
+            if not username:
+                row_errors.append('Username is required.')
+            if not email:
+                row_errors.append('Email is required.')
+            if not first_name:
+                row_errors.append('First Name (or Name) is required.')
+
+            if username and username.lower() in seen_usernames:
+                row_errors.append(f'Duplicate username "{username}" in uploaded file.')
+            if email and email.lower() in seen_emails:
+                row_errors.append(f'Duplicate email "{email}" in uploaded file.')
+
+            if row_errors:
+                errors.append({'row': idx, 'errors': row_errors})
+                continue
+
+            seen_usernames.add(username.lower())
+            seen_emails.add(email.lower())
+
+            # ── Check DB duplicates ──
+            if User.objects.filter(username__iexact=username).exists():
+                errors.append({'row': idx, 'errors': [f'Username "{username}" already exists in the system.']})
+                continue
+            if User.objects.filter(email__iexact=email).exists():
+                errors.append({'row': idx, 'errors': [f'Email "{email}" already exists in the system.']})
+                continue
+
+            # ── Create User and ExtStaffProfile ──
+            try:
+                new_user = User.objects.create_user(
+                    username=username,
+                    email=email,
+                    password=password or 'changeme123',
+                    first_name=first_name,
+                    last_name=last_name or '',
+                )
+
+                ExtStaffProfile.objects.create(
+                    user=new_user,
+                    designation=designation,
+                    organisation=organisation,
+                    notes=full_notes,
+                    is_active=True,
+                )
+                imported += 1
+            except Exception as exc:
+                errors.append({'row': idx, 'errors': [str(exc)]})
+
+        return Response({
+            'imported': imported,
+            'total': len(rows),
+            'errors': errors,
+        })

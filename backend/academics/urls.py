@@ -50,7 +50,7 @@ from .student_import_views import StudentImportTemplateDownloadView, StudentBulk
 from .rfreader_views import RFReaderGateListCreateView, RFReaderStudentListCreateView, RFReaderLastScanView
 from .public_views import PublicProfileLookupView
 from .barcode_views import StudentBarcodeLookupView
-from .views import ExtStaffProfileListCreateView, ExtStaffProfileDetailView, ExtStaffProfileUsersView
+from .views import ExtStaffProfileListCreateView, ExtStaffProfileDetailView, ExtStaffProfileUsersView, ExtStaffProfileBulkImportView
 
 
 router = DefaultRouter()
@@ -169,5 +169,6 @@ urlpatterns = [
     # External Staff Profiles
     path('ext-staff-profiles/', ExtStaffProfileListCreateView.as_view(), name='ext-staff-profiles-list'),
     path('ext-staff-profiles/available-users/', ExtStaffProfileUsersView.as_view(), name='ext-staff-profiles-users'),
+    path('ext-staff-profiles/import/', ExtStaffProfileBulkImportView.as_view(), name='ext-staff-profiles-import'),
     path('ext-staff-profiles/<int:pk>/', ExtStaffProfileDetailView.as_view(), name='ext-staff-profiles-detail'),
 ]

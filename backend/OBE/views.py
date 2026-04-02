@@ -1925,6 +1925,9 @@ def cqi_published(request, subject_id: str):
 
     page_key, assessment_type, requested_co_numbers = _resolve_cqi_page_context(request)
 
+    qp = _get_query_params(request)
+    want_page_entries = str(qp.get('include_page_entries', '')).strip().lower() in ('1', 'true', 'yes')
+
     from .models import ObeCqiPublished
 
     obj = ObeCqiPublished.objects.filter(subject=subject, teaching_assignment=ta).first()
@@ -1933,19 +1936,23 @@ def cqi_published(request, subject_id: str):
 
     snapshot = _extract_cqi_page_state(obj.entries, page_key, assessment_type, requested_co_numbers, legacy_co_numbers=obj.co_numbers)
 
-    def _build_pages_info(raw_entries):
+    def _build_pages_info(raw_entries, *, include_entries=False):
         """Return list of published page summaries from paged entries."""
         _, pgs = _split_cqi_entries_payload(raw_entries or {})
-        return [
-            {
+        out = []
+        for pk, snap in pgs.items():
+            if not isinstance(snap, dict) or not snap.get('publishedAt'):
+                continue
+            item = {
                 'key': str(pk),
                 'assessmentType': snap.get('assessmentType'),
                 'coNumbers': _normalize_cqi_co_numbers(snap.get('coNumbers', snap.get('co_numbers'))),
                 'publishedAt': snap.get('publishedAt'),
             }
-            for pk, snap in pgs.items()
-            if isinstance(snap, dict) and snap.get('publishedAt')
-        ]
+            if include_entries:
+                item['entries'] = snap.get('entries') if isinstance(snap.get('entries'), dict) else {}
+            out.append(item)
+        return out
 
     if snapshot is None:
         # When no specific page params requested and the record uses the new paged format,
@@ -1960,7 +1967,7 @@ def cqi_published(request, subject_id: str):
                     'publishedAt': latest_pub,
                     'coNumbers': merged_co_nums,
                     'entries': all_merged,
-                    'pages': _build_pages_info(obj.entries),
+                    'pages': _build_pages_info(obj.entries, include_entries=want_page_entries),
                 }})
         return Response({'published': None})
 
@@ -1970,7 +1977,7 @@ def cqi_published(request, subject_id: str):
                 'publishedAt': snapshot.get('published_at') or (obj.published_at.isoformat() if getattr(obj, 'published_at', None) else None),
                 'coNumbers': snapshot.get('co_numbers') or obj.co_numbers or [],
                 'entries': snapshot.get('entries') or {},
-                'pages': _build_pages_info(obj.entries),
+                'pages': _build_pages_info(obj.entries, include_entries=want_page_entries),
             }
         }
     )
@@ -4036,6 +4043,97 @@ def assessment_draft(request, assessment: str, subject_id: str):
     return Response({'subject': {'code': subject.code, 'name': subject.name}, 'draft': draft_data, 'updated_at': updated_at, 'updated_by': updated_by})
 
 
+def _extract_review_co_splits(subject, assessment_key, co_keys, ta=None):
+    co_splits = {}
+    try:
+        from .models import AssessmentDraft
+        drafts = AssessmentDraft.objects.filter(
+            subject=subject,
+            assessment=assessment_key,
+        ).order_by('-updated_at')
+        if ta is not None:
+            draft = drafts.filter(teaching_assignment=ta).first() or drafts.first()
+        else:
+            draft = drafts.first()
+        if draft and isinstance(draft.data, dict):
+            sheet = draft.data.get('sheet', draft.data)
+            rows = sheet.get('rows', []) if isinstance(sheet, dict) else []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                sid = str(row.get('studentId', '')).strip()
+                if not sid:
+                    continue
+                entry = {}
+                for ck in co_keys:
+                    val = None
+                    reviewCoMarks = row.get('reviewCoMarks')
+                    if isinstance(reviewCoMarks, dict):
+                        raw_arr = reviewCoMarks.get(ck)
+                        if isinstance(raw_arr, list):
+                            try:
+                                val = sum([float(x) for x in raw_arr if x not in ('', None)])
+                            except (ValueError, TypeError):
+                                pass
+                    if val is None:
+                        dir_val = row.get(ck)
+                        if dir_val not in ('', None):
+                            try:
+                                val = float(dir_val)
+                            except (ValueError, TypeError):
+                                pass
+                    if val is not None:
+                        entry[ck] = val
+                if entry:
+                    co_splits[sid] = entry
+    except Exception:
+        pass
+    return co_splits
+
+def _extract_ssa_co_splits(subject, assessment_key, co_keys, ta=None):
+    """Extract per-CO split marks from SSA draft data.
+
+    Returns dict: { studentId_str: { co_key: value, ... } }
+    """
+    co_splits = {}
+    try:
+        from .models import AssessmentDraft
+        drafts = AssessmentDraft.objects.filter(
+            subject=subject,
+            assessment=assessment_key,
+        ).order_by('-updated_at')
+        if ta is not None:
+            draft = drafts.filter(teaching_assignment=ta).first() or drafts.first()
+        else:
+            draft = drafts.first()
+        if draft and isinstance(draft.data, dict):
+            sheet = draft.data.get('sheet', draft.data)
+            rows = sheet.get('rows', []) if isinstance(sheet, dict) else []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                sid = str(row.get('studentId', '')).strip()
+                if not sid:
+                    continue
+                entry = {}
+                all_present = True
+                for ck in co_keys:
+                    val = row.get(ck)
+                    if val == '' or val is None:
+                        all_present = False
+                        break
+                    try:
+                        entry[ck] = float(val)
+                    except (TypeError, ValueError):
+                        all_present = False
+                        break
+                if all_present and entry:
+                    co_splits[sid] = entry
+    except Exception:
+        pass
+    return co_splits
+
+
 @api_view(['GET'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
@@ -4057,7 +4155,9 @@ def ssa1_published(request, subject_id: str):
         marks = _safe_marks_map_for_subject(Ssa1Mark, subject=subject, ta=ta, strict_scope=strict_scope)
     except (OperationalError, ProgrammingError):
         marks = {}
-    return Response({'subject': {'code': subject.code, 'name': subject.name}, 'marks': marks})
+        ta = None
+    co_splits = _extract_ssa_co_splits(subject, 'ssa1', ['co1', 'co2'], ta=ta)
+    return Response({'subject': {'code': subject.code, 'name': subject.name}, 'marks': marks, 'co_splits': co_splits})
 
 
 @api_view(['POST'])
@@ -4165,7 +4265,9 @@ def review1_published(request, subject_id: str):
         marks = _safe_marks_map_for_subject(Review1Mark, subject=subject, ta=ta, strict_scope=strict_scope)
     except (OperationalError, ProgrammingError):
         marks = {}
-    return Response({'subject': {'code': subject.code, 'name': subject.name}, 'marks': marks})
+        ta = None
+    co_splits = _extract_review_co_splits(subject, 'review1', ['co1', 'co2'], ta=ta)
+    return Response({'subject': {'code': subject.code, 'name': subject.name}, 'marks': marks, 'co_splits': co_splits})
 
 
 @api_view(['POST'])
@@ -4273,7 +4375,9 @@ def ssa2_published(request, subject_id: str):
         marks = _safe_marks_map_for_subject(Ssa2Mark, subject=subject, ta=ta, strict_scope=strict_scope)
     except (OperationalError, ProgrammingError):
         marks = {}
-    return Response({'subject': {'code': subject.code, 'name': subject.name}, 'marks': marks})
+        ta = None
+    co_splits = _extract_ssa_co_splits(subject, 'ssa2', ['co3', 'co4'], ta=ta)
+    return Response({'subject': {'code': subject.code, 'name': subject.name}, 'marks': marks, 'co_splits': co_splits})
 
 
 @api_view(['POST'])
@@ -4381,7 +4485,9 @@ def review2_published(request, subject_id: str):
         marks = _safe_marks_map_for_subject(Review2Mark, subject=subject, ta=ta, strict_scope=strict_scope)
     except (OperationalError, ProgrammingError):
         marks = {}
-    return Response({'subject': {'code': subject.code, 'name': subject.name}, 'marks': marks})
+        ta = None
+    co_splits = _extract_review_co_splits(subject, 'review2', ['co3', 'co4'], ta=ta)
+    return Response({'subject': {'code': subject.code, 'name': subject.name}, 'marks': marks, 'co_splits': co_splits})
 
 
 @api_view(['POST'])

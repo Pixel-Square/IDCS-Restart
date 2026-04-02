@@ -234,11 +234,6 @@ function effectiveCoWeightsForQuestion(questions: QuestionDef[], idx: number): {
   if (!q) return { co1: 0, co2: 0 };
   if (q.co === '1&2') return { co1: 0.5, co2: 0.5 };
 
-  const hasAnySplit = questions.some((x) => x.co === '1&2');
-  const isLast = idx === questions.length - 1;
-  const looksLikeQ9 = String(q.key || '').toLowerCase() === 'q9' || String(q.label || '').toLowerCase().includes('q9');
-  if (!hasAnySplit && isLast && looksLikeQ9) return { co1: 0.5, co2: 0.5 };
-
   return coWeights(q.co);
 }
 
@@ -251,11 +246,6 @@ function effectiveCoWeightsForQuestion34(questions: QuestionDef34[], idx: number
   const q = questions[idx];
   if (!q) return { co3: 0, co4: 0 };
   if (q.co === '3&4') return { co3: 0.5, co4: 0.5 };
-
-  const hasAnySplit = questions.some((x) => x.co === '3&4');
-  const isLast = idx === questions.length - 1;
-  const looksLikeQ9 = String(q.key || '').toLowerCase() === 'q9' || String(q.label || '').toLowerCase().includes('q9');
-  if (!hasAnySplit && isLast && looksLikeQ9) return { co3: 0.5, co4: 0.5 };
 
   return coWeights34(q.co);
 }

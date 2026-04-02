@@ -12,6 +12,7 @@ import {
   createPublishRequest,
   fetchDraft,
   fetchEditWindow,
+  fetchIqacQpPattern,
   fetchMarkTableLockStatus,
   fetchMyLatestEditRequest,
   fetchPublishedFormative,
@@ -33,6 +34,7 @@ import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
 import { useMarkEntryEditRequestsEnabled } from '../utils/requestControl';
 import { normalizeRegisterNo, registerNoKeys } from '../utils/excelImport';
 import { clearLocalDraftCache } from '../utils/obeDraftCache';
+import { normalizeObeClassType } from '../constants/classTypes';
 import { getApiBase } from '../services/apiBase';
 
 const API_BASE = getApiBase();
@@ -81,6 +83,8 @@ interface Formative1ListProps {
   teachingAssignmentId?: number;
   assessmentKey?: 'formative1' | 'formative2';
   skipMarkManager?: boolean;
+  classType?: string | null;
+  questionPaperType?: string | null;
 }
 
 const DEFAULT_MAX_PART = 5;
@@ -134,8 +138,8 @@ function readFiniteNumber(value: any): number | null {
 
 function pct(mark: number, max: number) {
   if (!max) return '-';
-  const p = (mark / max) * 100;
-  return `${Number.isFinite(p) ? p.toFixed(0) : 0}`;
+  const ratio = (mark / max) * 100;
+  return `${Number.isFinite(ratio) ? ratio.toFixed(0) : 0}`;
 }
 
 function compareRegNo(aRaw: unknown, bRaw: unknown): number {
@@ -220,11 +224,76 @@ function shortenRegisterNo(registerNo: string): string {
   return registerNo.slice(-8);
 }
 
-export default function Formative1List({ subjectId, teachingAssignmentId, assessmentKey: assessmentKeyProp, skipMarkManager = false }: Formative1ListProps) {
+export default function Formative1List({ subjectId, teachingAssignmentId, assessmentKey: assessmentKeyProp, skipMarkManager = false, classType, questionPaperType }: Formative1ListProps) {
   const assessmentKey: FormativeKey = (assessmentKeyProp as FormativeKey) || 'formative1';
   const assessmentLabel = assessmentKey === 'formative2' ? 'Formative 2' : 'Formative 1';
-  const CO_A = assessmentKey === 'formative2' ? 3 : 1;
-  const CO_B = assessmentKey === 'formative2' ? 4 : 2;
+  const DEFAULT_CO_A = assessmentKey === 'formative2' ? 3 : 1;
+  const DEFAULT_CO_B = assessmentKey === 'formative2' ? 4 : 2;
+
+  // ── IQAC QP Pattern: derive actual CO numbers for display ──
+  const [iqacPattern, setIqacPattern] = useState<{ marks?: number[]; cos?: Array<number | string> } | null>(null);
+
+  const classTypeKey = useMemo(() => {
+    const v = String(normalizeObeClassType(classType) || '').trim().toUpperCase();
+    return v || '';
+  }, [classType]);
+
+  const qpTypeKey = useMemo(() => {
+    return String(questionPaperType ?? '').trim().toUpperCase();
+  }, [questionPaperType]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!classTypeKey) { setIqacPattern(null); return; }
+      const qpForApi = classTypeKey === 'THEORY' ? (qpTypeKey || null) : null;
+      const examForApi = assessmentKey === 'formative2' ? 'FORMATIVE2' : 'FORMATIVE1';
+      try {
+        const res: any = await fetchIqacQpPattern({ class_type: classTypeKey, question_paper_type: qpForApi, exam: examForApi as any });
+        if (!alive) return;
+        const p = Array.isArray(res?.pattern?.marks) ? res.pattern.marks : [];
+        setIqacPattern(p.length ? (res.pattern as any) : null);
+      } catch {
+        if (alive) setIqacPattern(null);
+      }
+    })();
+    return () => { alive = false; };
+  }, [classTypeKey, qpTypeKey, assessmentKey]);
+
+  const CO_A = useMemo(() => {
+    const cos = Array.isArray(iqacPattern?.cos) ? iqacPattern!.cos : null;
+    if (cos && cos.length) {
+      const nums = cos
+        .flatMap((c) => {
+          const s = String(c ?? '');
+          if (s.includes('&')) return s.split('&').map(Number);
+          const m = s.match(/\d+/);
+          return m ? [Number(m[0])] : [];
+        })
+        .filter((n) => Number.isFinite(n) && n >= 1 && n <= 5);
+      const unique = [...new Set(nums)].sort((a, b) => a - b);
+      if (unique.length >= 1) return unique[0];
+    }
+    return DEFAULT_CO_A;
+  }, [iqacPattern, DEFAULT_CO_A]);
+
+  const CO_B = useMemo(() => {
+    const cos = Array.isArray(iqacPattern?.cos) ? iqacPattern!.cos : null;
+    if (cos && cos.length) {
+      const nums = cos
+        .flatMap((c) => {
+          const s = String(c ?? '');
+          if (s.includes('&')) return s.split('&').map(Number);
+          const m = s.match(/\d+/);
+          return m ? [Number(m[0])] : [];
+        })
+        .filter((n) => Number.isFinite(n) && n >= 1 && n <= 5);
+      const unique = [...new Set(nums)].sort((a, b) => a - b);
+      if (unique.length >= 2) return unique[1];
+      if (unique.length === 1) return unique[0];
+    }
+    return DEFAULT_CO_B;
+  }, [iqacPattern, DEFAULT_CO_B]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [students, setStudents] = useState<Student[]>([]);

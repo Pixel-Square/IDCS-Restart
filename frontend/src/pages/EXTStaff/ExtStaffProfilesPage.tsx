@@ -1,8 +1,19 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { UserPlus, Trash2, Search, Copy, Check, AlertCircle, RefreshCw, GripVertical } from 'lucide-react';
+import { UserPlus, Trash2, Search, Copy, Check, AlertCircle, RefreshCw, GripVertical, Upload, Download, X, FileText, CheckCircle2 } from 'lucide-react';
 import fetchWithAuth from '../../services/fetchAuth';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
+
+interface ImportError {
+  row: number;
+  errors: string[];
+}
+
+interface ImportResult {
+  imported: number;
+  total: number;
+  errors: ImportError[];
+}
 
 interface AvailableUser {
   id: number;
@@ -70,6 +81,14 @@ export default function ExtStaffProfilesPage() {
   // Drag state
   const [dragUserId, setDragUserId] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState(false);
+
+  // Import modal state
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const importFileInputRef = useRef<HTMLInputElement>(null);
 
   const tableDropRef = useRef<HTMLDivElement>(null);
 
@@ -174,6 +193,119 @@ export default function ExtStaffProfilesPage() {
     }
   };
 
+  // ── Import functions ───────────────────────────────────────────────────────
+
+  const handleDownloadTemplate = () => {
+    import('xlsx').then((XLSX) => {
+      const templateHeaders = [
+        'Username',
+        'Email',
+        'Password',
+        'First Name',
+        'Last Name',
+        'Teaching',
+        'Faculty ID',
+        'Designation',
+        'Department (Working In)',
+        'Date of Birth',
+        'Mobile Number',
+        'Gender',
+        'Qualification',
+        'PhD Status',
+        'Total Experience',
+        'Notes',
+      ];
+      const sampleRow = [
+        'john.doe',
+        'john.doe@example.com',
+        'password123',
+        'John',
+        'Doe',
+        'Visiting Faculty',
+        'VF001',
+        'Assistant Professor',
+        'Computer Science',
+        '1990-01-15',
+        '9876543210',
+        'Male',
+        'M.Tech, Ph.D',
+        'Completed',
+        '10 years',
+        'Internal examiner',
+      ];
+
+      const ws = XLSX.utils.aoa_to_sheet([templateHeaders, sampleRow]);
+
+      // Set column widths
+      ws['!cols'] = [
+        { wch: 16 }, { wch: 28 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
+        { wch: 18 }, { wch: 12 }, { wch: 22 }, { wch: 24 }, { wch: 14 },
+        { wch: 16 }, { wch: 10 }, { wch: 22 }, { wch: 14 }, { wch: 16 }, { wch: 28 },
+      ];
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'External Staff Template');
+      XLSX.writeFile(wb, 'external_staff_import_template.xlsx');
+    });
+  };
+
+  const handleImportFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] ?? null;
+    setImportError(null);
+    setImportResult(null);
+
+    if (file) {
+      const name = file.name.toLowerCase();
+      if (!name.endsWith('.xlsx') && !name.endsWith('.csv')) {
+        setImportError('Only .xlsx and .csv files are supported.');
+        setImportFile(null);
+        return;
+      }
+    }
+    setImportFile(file);
+  };
+
+  const handleImportUpload = async () => {
+    if (!importFile) return;
+    setImporting(true);
+    setImportError(null);
+    setImportResult(null);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', importFile);
+
+      const res = await fetchWithAuth('/api/academics/ext-staff-profiles/import/', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setImportError(data.detail || 'Upload failed. Please try again.');
+      } else {
+        setImportResult(data as ImportResult);
+        if ((data as ImportResult).imported > 0) {
+          await loadAvailableUsers();
+          await loadProfiles();
+        }
+      }
+    } catch {
+      setImportError('Network error. Please check your connection and try again.');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const handleImportModalClose = () => {
+    setImportFile(null);
+    setImportResult(null);
+    setImportError(null);
+    if (importFileInputRef.current) importFileInputRef.current.value = '';
+    setImportModalOpen(false);
+  };
+
   // ── Filtered lists ─────────────────────────────────────────────────────────
 
   const filteredUsers = availableUsers.filter((u) => {
@@ -202,11 +334,33 @@ export default function ExtStaffProfilesPage() {
   return (
     <div style={{ padding: 24, maxWidth: 1300, margin: '0 auto' }}>
       {/* Header */}
-      <div style={{ marginBottom: 20 }}>
-        <div style={{ fontSize: 22, fontWeight: 900, color: '#111827' }}>External Staff Profiles</div>
-        <div style={{ fontSize: 13, color: '#6b7280', marginTop: 4 }}>
-          Select a user from the left panel (click <strong>+</strong> or drag into the table) to create an External Staff Profile with a unique 16-character UID.
+      <div style={{ marginBottom: 20, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 22, fontWeight: 900, color: '#111827' }}>External Staff Profiles</div>
+          <div style={{ fontSize: 13, color: '#6b7280', marginTop: 4 }}>
+            Select a user from the left panel (click <strong>+</strong> or drag into the table) to create an External Staff Profile with a unique 16-character UID.
+          </div>
         </div>
+        <button
+          onClick={() => setImportModalOpen(true)}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '8px 14px',
+            background: 'linear-gradient(180deg, #4f46e5, #4338ca)',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 8,
+            fontWeight: 700,
+            fontSize: 13,
+            cursor: 'pointer',
+            boxShadow: '0 1px 3px rgba(67, 56, 202, 0.25)',
+          }}
+        >
+          <Upload size={15} />
+          Import External Staff
+        </button>
       </div>
 
       {error && (
@@ -580,6 +734,262 @@ export default function ExtStaffProfilesPage() {
               >
                 {deletingId === confirmDelete.id ? 'Removing…' : 'Remove'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Import Modal ── */}
+      {importModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+            padding: 16,
+          }}
+          onClick={handleImportModalClose}
+        >
+          <div
+            style={{
+              background: '#fff',
+              borderRadius: 14,
+              boxShadow: '0 20px 60px rgba(0,0,0,0.25)',
+              width: 'min(560px, 100%)',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '16px 20px',
+                borderBottom: '1px solid #e5e7eb',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Upload size={18} style={{ color: '#4f46e5' }} />
+                <span style={{ fontWeight: 800, fontSize: 16, color: '#111827' }}>Import External Staff</span>
+              </div>
+              <button
+                onClick={handleImportModalClose}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: '#6b7280',
+                  padding: 4,
+                }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div style={{ padding: 20 }}>
+              {/* Info box */}
+              <div
+                style={{
+                  background: '#eef2ff',
+                  border: '1px solid #c7d2fe',
+                  borderRadius: 10,
+                  padding: 14,
+                  marginBottom: 20,
+                }}
+              >
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <FileText size={18} style={{ color: '#4f46e5', flexShrink: 0, marginTop: 2 }} />
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 13, color: '#3730a3', marginBottom: 6 }}>
+                      Step 1 — Download the template
+                    </div>
+                    <div style={{ fontSize: 12, color: '#4338ca', marginBottom: 10, lineHeight: 1.5 }}>
+                      Fill in the template with external staff details. The template includes columns for:
+                      <br />
+                      <strong>Username</strong>, <strong>Email</strong>, <strong>First Name</strong> (required) —
+                      Password, Last Name, Teaching, Faculty ID, Designation, Department, Date of Birth, Mobile, Gender, Qualification, PhD Status, Experience, Notes.
+                    </div>
+                    <button
+                      onClick={handleDownloadTemplate}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        padding: '7px 12px',
+                        background: '#4f46e5',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: 6,
+                        fontWeight: 700,
+                        fontSize: 12,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <Download size={14} />
+                      Download Template
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* File upload */}
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontWeight: 700, fontSize: 13, color: '#374151', marginBottom: 8 }}>
+                  Step 2 — Upload filled file
+                </div>
+                <input
+                  ref={importFileInputRef}
+                  type="file"
+                  accept=".xlsx,.csv"
+                  onChange={handleImportFileChange}
+                  style={{
+                    width: '100%',
+                    padding: 8,
+                    border: '1px solid #d1d5db',
+                    borderRadius: 8,
+                    fontSize: 13,
+                    cursor: 'pointer',
+                  }}
+                />
+                <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>
+                  Accepts .xlsx or .csv — max 5 MB
+                </div>
+              </div>
+
+              {/* Import error */}
+              {importError && (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 8,
+                    padding: 12,
+                    background: '#fef2f2',
+                    border: '1px solid #fecaca',
+                    borderRadius: 8,
+                    color: '#b91c1c',
+                    fontSize: 13,
+                    marginBottom: 16,
+                  }}
+                >
+                  <AlertCircle size={16} style={{ flexShrink: 0, marginTop: 1 }} />
+                  <span>{importError}</span>
+                </div>
+              )}
+
+              {/* Import result */}
+              {importResult && (
+                <div style={{ marginBottom: 16 }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: 12,
+                      background: importResult.imported > 0 ? '#f0fdf4' : '#fffbeb',
+                      border: `1px solid ${importResult.imported > 0 ? '#bbf7d0' : '#fde68a'}`,
+                      borderRadius: 8,
+                      color: importResult.imported > 0 ? '#166534' : '#92400e',
+                      fontSize: 13,
+                      fontWeight: 600,
+                      marginBottom: importResult.errors.length > 0 ? 12 : 0,
+                    }}
+                  >
+                    <CheckCircle2 size={16} style={{ flexShrink: 0 }} />
+                    <span>
+                      {importResult.imported > 0
+                        ? `Successfully imported ${importResult.imported} of ${importResult.total} record${importResult.total !== 1 ? 's' : ''}!`
+                        : `No records imported (${importResult.total} row${importResult.total !== 1 ? 's' : ''} processed).`}
+                    </span>
+                  </div>
+
+                  {importResult.errors.length > 0 && (
+                    <div
+                      style={{
+                        border: '1px solid #fecaca',
+                        borderRadius: 8,
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <div
+                        style={{
+                          padding: '8px 12px',
+                          background: '#fef2f2',
+                          borderBottom: '1px solid #fecaca',
+                          fontWeight: 700,
+                          fontSize: 12,
+                          color: '#b91c1c',
+                        }}
+                      >
+                        {importResult.errors.length} row error{importResult.errors.length !== 1 ? 's' : ''}:
+                      </div>
+                      <div style={{ maxHeight: 160, overflowY: 'auto' }}>
+                        {importResult.errors.map((err, idx) => (
+                          <div
+                            key={idx}
+                            style={{
+                              padding: '8px 12px',
+                              borderBottom: idx < importResult.errors.length - 1 ? '1px solid #fee2e2' : 'none',
+                              fontSize: 12,
+                            }}
+                          >
+                            <span style={{ fontWeight: 700, color: '#991b1b' }}>Row {err.row}:</span>{' '}
+                            <span style={{ color: '#7f1d1d' }}>{err.errors.join('; ')}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Actions */}
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                <button
+                  onClick={handleImportModalClose}
+                  disabled={importing}
+                  style={{
+                    padding: '8px 16px',
+                    background: '#fff',
+                    border: '1px solid #d1d5db',
+                    borderRadius: 8,
+                    fontWeight: 600,
+                    fontSize: 13,
+                    cursor: importing ? 'not-allowed' : 'pointer',
+                    color: '#374151',
+                  }}
+                >
+                  {importResult ? 'Close' : 'Cancel'}
+                </button>
+                {!importResult && (
+                  <button
+                    onClick={handleImportUpload}
+                    disabled={!importFile || importing}
+                    style={{
+                      padding: '8px 16px',
+                      background: !importFile || importing ? '#9ca3af' : '#4f46e5',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: 8,
+                      fontWeight: 700,
+                      fontSize: 13,
+                      cursor: !importFile || importing ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    {importing ? 'Importing…' : 'Upload & Import'}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>

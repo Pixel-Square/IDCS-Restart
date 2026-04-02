@@ -9,6 +9,7 @@ import {
   createEditRequest,
   createPublishRequest,
   fetchDraft,
+  fetchIqacQpPattern,
   fetchMyTeachingAssignments,
   fetchPublishedReview2,
   fetchPublishedSsa2,
@@ -32,8 +33,9 @@ import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
 import { clearLocalDraftCache } from '../utils/obeDraftCache';
 import { useMarkEntryEditRequestsEnabled } from '../utils/requestControl';
 import { normalizeRegisterNo } from '../utils/excelImport';
+import { normalizeObeClassType } from '../constants/classTypes';
 
-type Props = { subjectId: string; teachingAssignmentId?: number; label?: string; assessmentKey?: 'ssa2' | 'review2' };
+type Props = { subjectId: string; teachingAssignmentId?: number; label?: string; assessmentKey?: 'ssa2' | 'review2'; classType?: string | null; questionPaperType?: string | null };
 
 type Ssa2Row = {
   studentId: number;
@@ -92,8 +94,8 @@ function round1(n: number) {
 function pct(mark: number | null, max: number) {
   if (mark == null) return '';
   if (!Number.isFinite(max) || max <= 0) return '0';
-  const p = (mark / max) * 100;
-  return `${Number.isFinite(p) ? p.toFixed(0) : 0}`;
+  const ratio = (mark / max) * 100;
+  return `${Number.isFinite(ratio) ? ratio.toFixed(0) : 0}`;
 }
 
 function readFiniteNumber(value: any): number | null {
@@ -180,7 +182,7 @@ function shortenRegisterNo(registerNo: string): string {
   return String(registerNo || '').trim();
 }
 
-export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label, assessmentKey = 'ssa2' }: Props) {
+export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label, assessmentKey = 'ssa2', classType, questionPaperType }: Props) {
   const displayLabel = String(label || 'SSA2');
   const isReview = assessmentKey === 'review2';
   const showTotalColumn = false;
@@ -191,6 +193,73 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
   const publishNow = assessmentKey === 'review2' ? publishReview2 : publishSsa2;
   const [masterCfg, setMasterCfg] = useState<any>(null);
   const [taMeta, setTaMeta] = useState<{ courseName?: string; courseCode?: string; className?: string } | null>(null);
+
+  // ── IQAC QP Pattern: derive effective CO numbers for display ──
+  const [iqacPattern, setIqacPattern] = useState<{ marks?: number[]; cos?: Array<number | string> } | null>(null);
+
+  const classTypeKey = useMemo(() => {
+    const v = String(normalizeObeClassType(classType) || '').trim().toUpperCase();
+    return v || '';
+  }, [classType]);
+
+  const qpTypeKey = useMemo(() => {
+    return String(questionPaperType ?? '').trim().toUpperCase();
+  }, [questionPaperType]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!classTypeKey) { setIqacPattern(null); return; }
+      const qpForApi = classTypeKey === 'THEORY' ? (qpTypeKey || null) : null;
+      const examForApi = assessmentKey === 'review2' ? 'SSA2' : 'SSA2';
+      try {
+        const res: any = await fetchIqacQpPattern({ class_type: classTypeKey, question_paper_type: qpForApi, exam: examForApi as any });
+        if (!alive) return;
+        const p = Array.isArray(res?.pattern?.marks) ? res.pattern.marks : [];
+        setIqacPattern(p.length ? (res.pattern as any) : null);
+      } catch {
+        if (alive) setIqacPattern(null);
+      }
+    })();
+    return () => { alive = false; };
+  }, [classTypeKey, qpTypeKey, assessmentKey]);
+
+  // Derive effective CO numbers from IQAC pattern (default: 3, 4 for SSA2)
+  const effectiveCoA = useMemo(() => {
+    const cos = Array.isArray(iqacPattern?.cos) ? iqacPattern!.cos : null;
+    if (cos && cos.length) {
+      const nums = cos
+        .flatMap((c) => {
+          const s = String(c ?? '');
+          if (s.includes('&')) return s.split('&').map(Number);
+          const m = s.match(/\d+/);
+          return m ? [Number(m[0])] : [];
+        })
+        .filter((n) => Number.isFinite(n) && n >= 1 && n <= 5);
+      const unique = [...new Set(nums)].sort((a, b) => a - b);
+      if (unique.length >= 1) return unique[0];
+    }
+    return 3;
+  }, [iqacPattern]);
+
+  const effectiveCoB = useMemo(() => {
+    const cos = Array.isArray(iqacPattern?.cos) ? iqacPattern!.cos : null;
+    if (cos && cos.length) {
+      const nums = cos
+        .flatMap((c) => {
+          const s = String(c ?? '');
+          if (s.includes('&')) return s.split('&').map(Number);
+          const m = s.match(/\d+/);
+          return m ? [Number(m[0])] : [];
+        })
+        .filter((n) => Number.isFinite(n) && n >= 1 && n <= 5);
+      const unique = [...new Set(nums)].sort((a, b) => a - b);
+      if (unique.length >= 2) return unique[1];
+      if (unique.length === 1) return unique[0];
+    }
+    return 4;
+  }, [iqacPattern]);
+
   const [sheet, setSheet] = useState<Ssa2Sheet>({
     termLabel: 'KRCT AY25-26',
     batchLabel: subjectId,
@@ -1022,7 +1091,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
       const ok1 = sumSplit(a) <= CO_MAX.co3 + 1e-6;
       const ok2 = sumSplit(b) <= CO_MAX.co4 + 1e-6;
       if (!ok1 || !ok2) {
-        alert('CO split totals must not exceed 15 for CO-3 and CO-4.');
+        alert(`CO split totals must not exceed 15 for CO-${effectiveCoA} and CO-${effectiveCoB}.`);
         return;
       }
     }
@@ -2156,8 +2225,8 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
                     <ul style={{ margin: 0, paddingLeft: 18 }}>
                       <li><b>Register No</b></li>
                       <li><b>Student Name</b></li>
-                      <li><b>Q1</b> (CO-3 total)</li>
-                      <li><b>Q2</b> (CO-4 total)</li>
+                      <li><b>Q1</b> (CO-{effectiveCoA} total)</li>
+                      <li><b>Q2</b> (CO-{effectiveCoB} total)</li>
                       <li><b>Status</b> (present/absent)</li>
                     </ul>
                     {isReview ? (
@@ -2330,7 +2399,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
             Max {displayLabel}: <strong style={{ color: '#111' }}>{MAX_ASMT2}</strong>
           </div>
           <div>
-            CO-3 max: <strong style={{ color: '#111' }}>{CO_MAX.co3}</strong> • CO-4 max: <strong style={{ color: '#111' }}>{CO_MAX.co4}</strong>
+            CO-{effectiveCoA} max: <strong style={{ color: '#111' }}>{CO_MAX.co3}</strong> • CO-{effectiveCoB} max: <strong style={{ color: '#111' }}>{CO_MAX.co4}</strong>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <div style={{ fontSize: 13, color: '#6b7280' }}>Selected BTLs:</div>
@@ -2398,15 +2467,15 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
             <tr>
               <th style={cellTh}>
                 <div style={{ fontWeight: 800 }}>COs</div>
-                <div style={{ fontSize: 12 }}>3,4</div>
+                <div style={{ fontSize: 12 }}>{effectiveCoA},{effectiveCoB}</div>
               </th>
               {showTotalColumn ? <th style={cellTh} /> : null}
 
               <th style={cellTh} colSpan={isReview ? reviewCo3ColumnCount * 2 : 2}>
-                {isReview ? renderCoSplitHeaderCell('co3', CO_MAX.co3, co3TotalSplit) : 'CO-3'}
+                {isReview ? renderCoSplitHeaderCell('co3', CO_MAX.co3, co3TotalSplit) : `CO-${effectiveCoA}`}
               </th>
               <th style={cellTh} colSpan={isReview ? reviewCo4ColumnCount * 2 : 2}>
-                {isReview ? renderCoSplitHeaderCell('co4', CO_MAX.co4, co4TotalSplit) : 'CO-4'}
+                {isReview ? renderCoSplitHeaderCell('co4', CO_MAX.co4, co4TotalSplit) : `CO-${effectiveCoB}`}
               </th>
 
               {visibleBtlIndices.map((n) => (
@@ -2835,12 +2904,12 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
                   <tr>
                     <th style={cellTh}>
                       <div style={{ fontWeight: 800 }}>COs</div>
-                      <div style={{ fontSize: 12 }}>3,4</div>
+                      <div style={{ fontSize: 12 }}>{effectiveCoA},{effectiveCoB}</div>
                     </th>
                     {showTotalColumn ? <th style={cellTh} /> : null}
 
-                    <th style={cellTh} colSpan={2}>CO-3</th>
-                    <th style={cellTh} colSpan={2}>CO-4</th>
+                    <th style={cellTh} colSpan={2}>CO-{effectiveCoA}</th>
+                    <th style={cellTh} colSpan={2}>CO-{effectiveCoB}</th>
 
                     {visibleBtlIndices.map((n) => (
                       <th key={`btl-head-${n}`} style={cellTh} colSpan={2}>
@@ -2997,11 +3066,11 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
                         <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{MAX_ASMT2}</td>
                       </tr>
                       <tr>
-                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>CO-3 max</td>
+                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>CO-{effectiveCoA} max</td>
                         <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{CO_MAX.co3}</td>
                       </tr>
                       <tr>
-                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>CO-4 max</td>
+                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>CO-{effectiveCoB} max</td>
                         <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{CO_MAX.co4}</td>
                       </tr>
                       <tr>

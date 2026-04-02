@@ -98,7 +98,7 @@ type CoMeta = {
 type Props = {
   subjectId?: string | null;
   teachingAssignmentId?: number;
-  assessmentKey: 'formative1' | 'formative2' | 'review1' | 'review2';
+  assessmentKey: 'formative1' | 'formative2' | 'review1' | 'review2' | 'model';
   label: string;
   coA: number;
   coB: number;
@@ -167,7 +167,7 @@ function clampInt(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, Math.trunc(n)));
 }
 
-function storageKey(assessmentKey: 'formative1' | 'formative2' | 'review1' | 'review2', subjectId: string, teachingAssignmentId?: number) {
+function storageKey(assessmentKey: 'formative1' | 'formative2' | 'review1' | 'review2' | 'model', subjectId: string, teachingAssignmentId?: number) {
   return `${assessmentKey}_sheet_${subjectId}_ta_${String(teachingAssignmentId ?? 'none')}`;
 }
 
@@ -332,8 +332,8 @@ function constrainReviewComponentsTotal(components: ReviewComponent[]): ReviewCo
 function pct(mark: number | null, max: number): string {
   if (mark == null) return '';
   if (!Number.isFinite(max) || max <= 0) return '0';
-  const p = (mark / max) * 100;
-  return `${Number.isFinite(p) ? p.toFixed(0) : 0}`;
+  const ratio = (mark / max) * 100;
+  return `${Number.isFinite(ratio) ? ratio.toFixed(0) : 0}`;
 }
 
 function buildCoConfigs(sheet: LabSheet, allCos: number[], coA: number, coB: number): Record<string, CoConfig> {
@@ -402,7 +402,7 @@ export default function LabEntry({
   useSsaPublishedLockUi,
   projectReviewMode,
 }: Props) {
-  const reviewFixedTable = assessmentKey === 'review1' || assessmentKey === 'review2';
+  const reviewFixedTable = assessmentKey === 'review1' || assessmentKey === 'review2' || assessmentKey === 'model';
   const isProjectReviewMode = Boolean(projectReviewMode && reviewFixedTable);
 
   // `selectableCosArr` controls what we render in Mark Manager.
@@ -2483,7 +2483,7 @@ export default function LabEntry({
                 <table className="obe-table" style={{ minWidth: minTableWidth, width: '100%', borderCollapse: 'collapse' }}>
                   <thead>
                     <tr>
-                      <th style={cellTh} colSpan={4 + reviewComponents.length}>
+                      <th style={cellTh} colSpan={5 + reviewComponents.length}>
                         {draft.sheet.termLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {draft.sheet.batchLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {label}
                       </th>
                     </tr>
@@ -2495,6 +2495,7 @@ export default function LabEntry({
                         <th key={`pr_title_${component.id}`} style={cellTh}>{isProjectReviewMode ? 'CO1' : component.title || `Title ${idx + 1}`}</th>
                       ))}
                       <th style={cellTh}>Total</th>
+                      <th style={cellTh}>%</th>
                     </tr>
                     <tr>
                       <th style={cellTh}> </th>
@@ -2504,12 +2505,13 @@ export default function LabEntry({
                         <th key={`pr_max_${component.id}`} style={cellTh}>{component.max}</th>
                       ))}
                       <th style={cellTh}>{REVIEW_TOTAL_MAX}</th>
+                      <th style={cellTh}>100</th>
                     </tr>
                   </thead>
                   <tbody>
                     {publishedEditLocked ? (
                       <tr>
-                        <td colSpan={4 + reviewComponents.length} style={{ padding: 14, textAlign: 'center', color: '#065f46', fontWeight: 900 }}>
+                        <td colSpan={5 + reviewComponents.length} style={{ padding: 14, textAlign: 'center', color: '#065f46', fontWeight: 900 }}>
                           Published — students hidden
                         </td>
                       </tr>
@@ -2554,13 +2556,16 @@ export default function LabEntry({
                                 </td>
                               ))}
                               <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{total}</td>
+                              <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center', color: (!row && total === 0) ? '#94a3b8' : (total / REVIEW_TOTAL_MAX >= 0.58 ? '#16a34a' : '#dc2626') }}>
+                                {(!row && total === 0) ? '—' : `${((total / REVIEW_TOTAL_MAX) * 100).toFixed(2)}%`}
+                              </td>
                             </tr>
                           );
                         })}
 
                         {renderStudents.length === 0 ? (
                           <tr>
-                            <td colSpan={4 + reviewComponents.length} style={{ padding: 10, color: '#6b7280' }}>
+                            <td colSpan={5 + reviewComponents.length} style={{ padding: 10, color: '#6b7280' }}>
                               No students.
                             </td>
                           </tr>

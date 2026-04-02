@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
-import { getMe, login } from '../services/auth';
+import { getMe, login, logout } from '../services/auth';
 
 function getNextPath(search: string): string {
   try {
@@ -35,7 +35,23 @@ export default function LoginPage() {
 
     try {
       await login(identifier.trim(), password);
-      await getMe();
+      const me = await getMe();
+
+      // Only users with COE portal access may use this site.
+      const roles: string[] = (me?.roles ?? []).map((r: string) => r.toUpperCase());
+      const perms: string[] = me?.permissions ?? [];
+      const email: string = (me?.email ?? '').toLowerCase();
+      const hasCoeAccess =
+        roles.includes('COE') ||
+        perms.includes('coe.portal.access') ||
+        email === 'coe@krct.ac.in';
+
+      if (!hasCoeAccess) {
+        logout();
+        setError('Access denied. You do not have COE portal access.');
+        return;
+      }
+
       navigate(getNextPath(location.search), { replace: true });
     } catch (err: any) {
       const message = String(err?.response?.data?.detail || err?.message || 'Login failed.');

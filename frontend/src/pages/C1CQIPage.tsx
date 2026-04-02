@@ -155,14 +155,7 @@ function effectiveCoWeightsForQuestion(questions: QuestionDef[], idx: number): R
 
   const parsed = toCoNums(q.co);
 
-  // Backward-compat: if the sheet does not declare any split-CO questions,
-  // and the last question looks like Q9, treat it as a 50/50 CO1+CO2 split.
-  const hasAnySplit = questions.some((x) => toCoNums(x.co).length > 1);
-  const isLast = idx === questions.length - 1;
-  const looksLikeQ9 = String(q.key || '').toLowerCase() === 'q9' || String(q.label || '').toLowerCase().includes('q9');
-  const effective = !hasAnySplit && isLast && looksLikeQ9 ? ([1, 2] as CoNum[]) : parsed;
-
-  return coWeightsFromCos(effective);
+  return coWeightsFromCos(parsed);
 }
 
 function compareStudentName(a: { name?: string; reg_no?: string }, b: { name?: string; reg_no?: string }) {

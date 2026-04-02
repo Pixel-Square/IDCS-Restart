@@ -1,0 +1,12 @@
+--- src/pages/InternalMarkCoursePage.tsx
++++ src/pages/InternalMarkCoursePage.tsx
+@@ -1909,6 +1909,9 @@
+       if (ssa1Co2Mark == null && ssa1Total != null) {
+         ssa1Co2Mark = clamp(Number(ssa1Total) / 2, 0, maxes.ssa1.co2);
+       }
++      if (s.id == 1401 || s.id == 1601 || s.registerNo == '811722114001') {
++        console.log("DEBUG STUDENT", s.id, "ssa1Split", ssa1Split, "ssa1Total", ssa1Total, "ssa1Co1Mark", ssa1Co1Mark, "published.ssa1", published.ssa1);
++      }
+ 
+       let ssa2Co3Mark: number | null = null;
+       let ssa2Co4Mark: number | null = null;

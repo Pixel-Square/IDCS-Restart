@@ -17,6 +17,7 @@ import Ssa2Entry from './Ssa2Entry';
 import Cia1Entry from './Cia1Entry';
 import Cia2Entry from './Cia2Entry';
 import CQIEntry from '../pages/staff/CQIEntry';
+import PureLabCQIEntry from './PureLabCQIEntry';
 import DashboardWidgets from './layout/DashboardWidgets';
 import {
   DraftAssessmentKey,
@@ -222,16 +223,14 @@ function getVisibleTabs(classType: string | null | undefined, enabledAssessments
     });
   }
 
-  // LAB: only show lab assessments (no SSA/Formative)
-  if (ct === 'LAB') {
-    const allowedLabTabs = new Set(['dashboard', 'cia1', 'cia2']);
-    if (enabled.has('model')) allowedLabTabs.add('model');
-    return BASE_TABS.filter((t) => allowedLabTabs.has(t.key)).map((t) => {
-      if (t.key === 'cia1') return { ...t, label: 'CIA 1 LAB' };
-      if (t.key === 'cia2') return { ...t, label: 'CIA 2 LAB' };
-      if (t.key === 'model') return { ...t, label: 'MODEL LAB' };
-      return t;
-    });
+  // LAB / PURE_LAB: Cycle 1, Cycle 2, Cycle 3 (records), + CQI (final internal only)
+  if (ct === 'LAB' || ct === 'PURE_LAB') {
+    return [
+      { key: 'dashboard', label: 'Dashboard' },
+      { key: 'cia1', label: 'Cycle 1 LAB' },
+      { key: 'cia2', label: 'Cycle 2 LAB' },
+      { key: 'model', label: 'Cycle 3 (Records)' },
+    ] as TabDef[];
   }
 
   // Default (including THEORY/TCPR): show everything
@@ -613,25 +612,63 @@ export default function MarkEntryTabs({
   const effectiveEnabled = facultyEnabledAssessments === undefined ? enabledAssessments : facultyEnabledAssessments;
   const baseVisibleTabs = useMemo(() => getVisibleTabs(effectiveClassTypeForTabs, effectiveEnabled), [effectiveClassTypeForTabs, enabledAssessments, facultyEnabledAssessments]);
 
+  const isPrblRaw = useMemo(() => {
+    const raw = String(effectiveClassType ?? '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    return raw === 'PRBL' || raw.includes('PRBL');
+  }, [effectiveClassType]);
+
+  // QP1FINAL: Theory courses with QP1FINAL question paper type get a single combined CQI after MODEL
+  const isQp1Final = useMemo(() => {
+    const qp = String(questionPaperType || '').trim().toUpperCase().replace(/\s/g, '');
+    return normalizedEffectiveClassType === 'THEORY' && qp === 'QP1FINAL';
+  }, [normalizedEffectiveClassType, questionPaperType]);
+
   const cqiPlacements = useMemo(() => {
     if (normalizedEffectiveClassType === 'PROJECT') {
+      // PRBL: single combined CQI at the end covering all three cycles
+      if (isPrblRaw) {
+        return [
+          { showAfter: 'model', assessmentType: 'model', cos: ['CO1'] },
+        ] as CqiPlacement[];
+      }
       return [
         { showAfter: 'review1', assessmentType: 'review1', cos: ['CO1'] },
         { showAfter: 'review2', assessmentType: 'review2', cos: ['CO1'] },
+      ] as CqiPlacement[];
+    }
+    // LAB / PURE_LAB: single CQI tab after Cycle 3 (model) – handled by PureLabCQIEntry
+    if (normalizedEffectiveClassType === 'PURE_LAB' || normalizedEffectiveClassType === 'LAB') {
+      return [] as CqiPlacement[];
+    }
+    // QP1FINAL (Theory): single combined CQI after MODEL covering all three cycles
+    if (isQp1Final) {
+      return [
+        { showAfter: 'model', assessmentType: 'model', cos: ['CO1', 'CO2', 'CO3'] },
       ] as CqiPlacement[];
     }
     const options = Array.isArray(cqiConfig?.options) ? cqiConfig.options : [];
     return options
       .map((raw) => parseCqiOption(raw))
       .filter((x): x is CqiPlacement => Boolean(x));
-  }, [cqiConfig, normalizedEffectiveClassType]);
+  }, [cqiConfig, normalizedEffectiveClassType, isPrblRaw, isQp1Final]);
 
   const visibleTabs = useMemo(() => {
     const out: TabDef[] = [...baseVisibleTabs];
+    // LAB / PURE_LAB: inject a dedicated CQI tab after Cycle 3 (model key)
+    if (normalizedEffectiveClassType === 'PURE_LAB' || normalizedEffectiveClassType === 'LAB') {
+      out.push({ key: 'cqi_0' as any, label: 'CQI (Final)', cqi: { showAfter: 'model', assessmentType: 'model', cos: ['CO1'] } });
+      return out;
+    }
     if (!cqiPlacements.length) return out;
 
     cqiPlacements.forEach((placement, idxPlacement) => {
-      const cqiLabel = `CQI (${placement.assessmentType.toUpperCase()} ${placement.cos.join(', ')})`;
+      let cqiLabel: string;
+      if ((isPrblRaw && placement.assessmentType === 'model' && normalizedEffectiveClassType === 'PROJECT') ||
+          (isQp1Final && placement.assessmentType === 'model')) {
+        cqiLabel = 'CQI (CYCLE1, CYCLE2, CYCLE3)';
+      } else {
+        cqiLabel = `CQI (${placement.assessmentType.toUpperCase()} ${placement.cos.join(', ')})`;
+      }
       const cqiTab: TabDef = {
         key: `cqi_${idxPlacement}`,
         label: cqiLabel,
@@ -648,7 +685,7 @@ export default function MarkEntryTabs({
       else out.push(cqiTab);
     });
     return out;
-  }, [baseVisibleTabs, cqiPlacements]);
+  }, [baseVisibleTabs, cqiPlacements, isPrblRaw, isQp1Final, normalizedEffectiveClassType]);
 
   useEffect(() => {
     if (!subjectId) return;
@@ -1216,7 +1253,7 @@ export default function MarkEntryTabs({
                       coB={2}
                     />
                   ) : (
-                    <Formative1List subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
+                    <Formative1List subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} classType={effectiveClassType ?? null} questionPaperType={questionPaperType ?? null} />
                   );
                 }
 
@@ -1231,7 +1268,7 @@ export default function MarkEntryTabs({
                       coB={3}
                     />
                   ) : (
-                    <Formative2List subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />
+                    <Formative2List subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} classType={effectiveClassType ?? null} questionPaperType={questionPaperType ?? null} />
                   );
                 }
 
@@ -1247,7 +1284,7 @@ export default function MarkEntryTabs({
                     />
                   );
                 }
-                if (active === 'ssa2') return <Ssa2Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />;
+                if (active === 'ssa2') return <Ssa2Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} classType={effectiveClassType ?? null} questionPaperType={questionPaperType ?? null} />;
                 if (active === 'review2') {
                   return normalizedEffectiveClassType === 'TCPR' ? (
                     <Review2SheetEntry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} label="Review 2" />
@@ -1261,16 +1298,33 @@ export default function MarkEntryTabs({
                 }
 
                 if (active === 'cia1') {
+                  if (normalizedEffectiveClassType === 'PURE_LAB') {
+                    return (
+                      <LabCourseMarksEntry
+                        subjectId={subjectId}
+                        teachingAssignmentId={selectedTaId ?? undefined}
+                        assessmentKey="cia1"
+                        label="Cycle 1 LAB"
+                        coA={1}
+                        coB={null}
+                        initialEnabledCos={[1]}
+                        pureLab
+                        classType={effectiveClassType ?? null}
+                        viewerMode={Boolean(activeForcedViewerMode)}
+                      />
+                    );
+                  }
                   if (normalizedEffectiveClassType === 'LAB') {
                     return (
                       <LabCourseMarksEntry
                         subjectId={subjectId}
                         teachingAssignmentId={selectedTaId ?? undefined}
                         assessmentKey="cia1"
-                        label="CIA 1 LAB"
+                        label="Cycle 1 LAB"
                         coA={1}
                         coB={2}
                         initialEnabledCos={[1, 2]}
+                        classType={effectiveClassType ?? null}
                         viewerMode={Boolean(activeForcedViewerMode)}
                       />
                     );
@@ -1282,7 +1336,6 @@ export default function MarkEntryTabs({
                         teachingAssignmentId={selectedTaId ?? undefined}
                         assessmentKey="cia1"
                         viewerMode={Boolean(activeForcedViewerMode)}
-                        classType={effectiveClassType ?? null}
                       />
                     );
                   }
@@ -1307,16 +1360,33 @@ export default function MarkEntryTabs({
                 }
 
                 if (active === 'cia2') {
+                  if (normalizedEffectiveClassType === 'PURE_LAB') {
+                    return (
+                      <LabCourseMarksEntry
+                        subjectId={subjectId}
+                        teachingAssignmentId={selectedTaId ?? undefined}
+                        assessmentKey="cia2"
+                        label="Cycle 2 LAB"
+                        coA={1}
+                        coB={null}
+                        initialEnabledCos={[1]}
+                        pureLab
+                        classType={effectiveClassType ?? null}
+                        viewerMode={Boolean(activeForcedViewerMode)}
+                      />
+                    );
+                  }
                   if (normalizedEffectiveClassType === 'LAB') {
                     return (
                       <LabCourseMarksEntry
                         subjectId={subjectId}
                         teachingAssignmentId={selectedTaId ?? undefined}
                         assessmentKey="cia2"
-                        label="CIA 2 LAB"
+                        label="Cycle 2 LAB"
                         coA={3}
                         coB={4}
-                        initialEnabledCos={[3, 4, 5]}
+                        initialEnabledCos={[3, 4]}
+                        classType={effectiveClassType ?? null}
                         viewerMode={Boolean(activeForcedViewerMode)}
                       />
                     );
@@ -1328,7 +1398,6 @@ export default function MarkEntryTabs({
                         teachingAssignmentId={selectedTaId ?? undefined}
                         assessmentKey="cia2"
                         viewerMode={Boolean(activeForcedViewerMode)}
-                        classType={effectiveClassType ?? null}
                       />
                     );
                   }
@@ -1353,28 +1422,52 @@ export default function MarkEntryTabs({
                 }
 
                 if (active === 'model') {
+                  if (normalizedEffectiveClassType === 'PURE_LAB') {
+                    return (
+                      <LabCourseMarksEntry
+                        subjectId={subjectId}
+                        teachingAssignmentId={selectedTaId ?? undefined}
+                        assessmentKey="model"
+                        label="Cycle 3 (Records)"
+                        coA={1}
+                        coB={null}
+                        initialEnabledCos={[1]}
+                        pureLab
+                        pureLabCycle3
+                        ciaExamAvailable={false}
+                        classType={effectiveClassType ?? null}
+                        viewerMode={Boolean(activeForcedViewerMode)}
+                      />
+                    );
+                  }
                   if (normalizedEffectiveClassType === 'LAB') {
                     return (
                       <LabCourseMarksEntry
                         subjectId={subjectId}
                         teachingAssignmentId={selectedTaId ?? undefined}
                         assessmentKey="model"
-                        label="MODEL LAB"
+                        label="Cycle 3 (Records)"
                         coA={5}
                         coB={null}
                         initialEnabledCos={[5]}
+                        ciaExamAvailable={false}
+                        classType={effectiveClassType ?? null}
                         viewerMode={Boolean(activeForcedViewerMode)}
                       />
                     );
                   }
                   if (normalizedEffectiveClassType === 'PROJECT') {
                     return (
-                      <ReviewCourseMarkEntery
+                      <LabEntry
                         subjectId={subjectId}
                         teachingAssignmentId={selectedTaId ?? undefined}
                         assessmentKey="model"
-                        viewerMode={Boolean(activeForcedViewerMode)}
-                        classType={effectiveClassType ?? null}
+                        label="MODEL"
+                        coA={1}
+                        coB={1}
+                        allCos={[1]}
+                        useSsaPublishedLockUi
+                        projectReviewMode
                       />
                     );
                   }
@@ -1399,6 +1492,15 @@ export default function MarkEntryTabs({
                 }
 
                 if (String(active).startsWith('cqi_')) {
+                  // Pure Lab: use dedicated PureLabCQIEntry (single final CQI, no per-CO)
+                  if (normalizedEffectiveClassType === 'PURE_LAB') {
+                    return (
+                      <PureLabCQIEntry
+                        subjectId={subjectId}
+                        teachingAssignmentId={selectedTaId ?? undefined}
+                      />
+                    );
+                  }
                   return (
                     <CQIEntry
                       key={`${activeCqi?.assessmentType || 'model'}:${(activeCqi?.cos || []).join('_')}`}

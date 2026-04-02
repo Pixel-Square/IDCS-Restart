@@ -360,7 +360,7 @@ export default function CourseOBEPage(): JSX.Element {
               <LCAInstructionsPage courseCode={courseId} courseName={courseName} initialTab={lcaInitialTab} />
             )}
             {activeTab === 'internal_mark' && (
-              <InternalMarkCoursePage courseId={courseId} enabledAssessments={courseEnabledAssessments} classType={courseClassType} />
+              <InternalMarkCoursePage courseId={courseId} enabledAssessments={courseEnabledAssessments} classType={courseClassType} questionPaperType={courseQpType} />
             )}
             {activeTab === 'result_analysis' && (
               <ResultAnalysisPage courseId={courseId} classType={courseClassType} enabledAssessments={courseEnabledAssessments} />
