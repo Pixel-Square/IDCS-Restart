@@ -59,16 +59,56 @@ function getSemesterDigit(value: string): string {
 type AugStudent = CoeCourseStudent & {
   enrollmentId: string;
   dummy: string;
-  saved_qp_type?: 'QP1' | 'QP2' | 'TCPR';
+  saved_qp_type?: 'QP1' | 'QP2' | 'TCPR' | 'TCPL' | 'OE';
 };
 type AugCourse = CoeCourseGroup & { students: AugStudent[]; shuffled?: boolean };
 type AugDept = CoeDepartmentCourseMap & { courses: AugCourse[] };
 type EnrichedData = { department_filter: string; semester_filter: string | null; departments: AugDept[] };
 const SHUFFLE_LOCK_KEY = 'coe-students-shuffle-lock-v1';
 const SHUFFLED_LIST_KEY = 'coe-students-shuffled-list-v1';
+const ASSIGNING_STORE_KEY = 'coe-assigning-v1';
+const COURSE_BUNDLE_DUMMY_STORE_KEY = 'coe-course-bundle-dummies-v1';
 type ArrearShuffleMode = 'include' | 'separate';
 type PersistedShuffledStudent = { reg_no: string; name: string };
 type PersistedShuffledByDummy = Record<string, PersistedShuffledStudent>;
+type PersistedBundleInfo = { name: string; scripts: number };
+type CourseBundleDummyMap = Record<string, { courseDummies: string[]; bundles: Record<string, string[]> }>;
+type CourseBundleDummyStore = Record<string, CourseBundleDummyMap>;
+type PersistedAssigningStore = Record<string, Array<{ courseKey: string; valuators?: Array<{ bundles?: PersistedBundleInfo[] }> }>>;
+
+function readAssigningStoreForBundleDummies(): PersistedAssigningStore {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(ASSIGNING_STORE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as PersistedAssigningStore;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function readCourseBundleDummyStore(): CourseBundleDummyStore {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(COURSE_BUNDLE_DUMMY_STORE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as CourseBundleDummyStore;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeCourseBundleDummyStore(store: CourseBundleDummyStore) {
+  if (typeof window === 'undefined') return;
+  const keys = Object.keys(store || {});
+  if (keys.length === 0) {
+    window.localStorage.removeItem(COURSE_BUNDLE_DUMMY_STORE_KEY);
+    return;
+  }
+  window.localStorage.setItem(COURSE_BUNDLE_DUMMY_STORE_KEY, JSON.stringify(store));
+}
 
 export default function StudentsList() {
   const [departments, setDepartments] = useState<string[]>(['ALL']);
@@ -524,6 +564,70 @@ export default function StudentsList() {
   }, [data, semester, selectionMap, absentCourseMap]);
 
   useEffect(() => {
+    if (!enriched) return;
+    if (department === 'ALL') return;
+
+    const filterKey = `${department}::${semester}`;
+    const assigningStore = readAssigningStoreForBundleDummies();
+    const bundleDefsByCourse: Record<string, PersistedBundleInfo[]> = {};
+
+    Object.entries(assigningStore).forEach(([storeKey, assignments]) => {
+      if (!storeKey.startsWith(`${department}::${semester}::`)) return;
+      (assignments || []).forEach((assignment) => {
+        const allBundles: PersistedBundleInfo[] = [];
+        (assignment.valuators || []).forEach((valuator) => {
+          (valuator.bundles || []).forEach((bundle) => {
+            const scripts = Number(bundle.scripts) || 0;
+            const name = String(bundle.name || '').trim();
+            if (!name || scripts <= 0) return;
+            allBundles.push({ name, scripts });
+          });
+        });
+        if (allBundles.length > 0) {
+          bundleDefsByCourse[assignment.courseKey] = allBundles;
+        }
+      });
+    });
+
+    const byCourse: CourseBundleDummyMap = {};
+
+    enriched.departments.forEach((dept) => {
+      if (dept.department !== department) return;
+
+      dept.courses.forEach((course) => {
+        const courseKey = getCourseKey({
+          department: dept.department,
+          semester,
+          courseCode: course.course_code || '',
+          courseName: course.course_name || '',
+        });
+
+        const courseDummies = ((course.students as AugStudent[]) || [])
+          .map((student) => String(student.dummy || '').trim())
+          .filter(Boolean);
+
+        const bundles: Record<string, string[]> = {};
+        const defs = bundleDefsByCourse[courseKey] || [];
+        let pointer = 0;
+        defs.forEach((bundle) => {
+          const slice = courseDummies.slice(pointer, pointer + bundle.scripts);
+          bundles[bundle.name] = slice;
+          pointer += bundle.scripts;
+        });
+
+        byCourse[courseKey] = {
+          courseDummies,
+          bundles,
+        };
+      });
+    });
+
+    const store = readCourseBundleDummyStore();
+    store[filterKey] = byCourse;
+    writeCourseBundleDummyStore(store);
+  }, [department, semester, enriched]);
+
+  useEffect(() => {
     let active = true;
 
     (async () => {
@@ -873,7 +977,7 @@ export default function StudentsList() {
 
     setSaving(true);
     try {
-      const records: { reg_no: string; dummy: string; semester: string; qp_type: 'QP1' | 'QP2' | 'TCPR' }[] = [];
+      const records: { reg_no: string; dummy: string; semester: string; qp_type: 'QP1' | 'QP2' | 'TCPR' | 'TCPL' | 'OE' }[] = [];
       enriched.departments.forEach((dept) => {
         dept.courses.forEach((course) => {
           const courseKey = getCourseKey({
@@ -883,7 +987,7 @@ export default function StudentsList() {
             courseName: course.course_name || '',
           });
           const conf = selectionMap[courseKey];
-          const qpType = conf?.qpType === 'QP2' || conf?.qpType === 'TCPR' ? conf.qpType : 'QP1';
+          const qpType = conf?.qpType || 'QP1';
 
           (course.students as AugStudent[]).forEach((student) => {
              records.push({

@@ -61,7 +61,6 @@ function Shell({ children }: { children: React.ReactNode }) {
 
   const links = [
     { to: '/coe', label: 'Portal' },
-    { to: '/data-view', label: 'Database View' },
     { to: '/coe/courses', label: 'Courses' },
     { to: '/coe/attendance', label: 'Attendance' },
     { to: '/coe/students', label: 'Students' },
@@ -70,7 +69,6 @@ function Shell({ children }: { children: React.ReactNode }) {
     { to: '/coe/assigning', label: 'Assigning' },
     { to: '/coe/bar-scan', label: 'Bar Scan' },
     { to: '/coe/one-page-report', label: 'One Page Report' },
-    { to: '/coe/retrival', label: 'Retrival Logs' },
   ];
 
   const bottomLinks = [{ to: '/queries', label: 'Raise Token' }];
@@ -134,7 +132,7 @@ function Shell({ children }: { children: React.ReactNode }) {
             isDesktopSidebarCollapsed ? 'lg:-translate-x-full' : 'lg:translate-x-0'
           } ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
         >
-          <div className="flex h-full flex-col">
+          <div className="flex h-full flex-col overflow-y-auto scrollbar-thin scrollbar-thumb-white/30 scrollbar-track-transparent hover:scrollbar-thumb-white/50">
             <div className="mb-4 flex items-center justify-between lg:hidden">
               <span className="text-sm font-semibold text-white/70">Menu</span>
               <button

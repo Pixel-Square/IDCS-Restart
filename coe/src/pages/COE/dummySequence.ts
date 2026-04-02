@@ -65,14 +65,17 @@ export function generateDummyNumber(department: string, globalSequence: number):
   const DEPARTMENT_DUMMY_DIGITS: Record<string, string> = {
     AIDS: '01',
     AIML: '02',
+    CE: '03',
     CIVIL: '03',
     CSE: '04',
     ECE: '05',
     EEE: '06',
     IT: '07',
+    ME: '08',
     MECH: '08',
   };
   
-  const deptCode = DEPARTMENT_DUMMY_DIGITS[department] || '09';
+  const normalizedDepartment = String(department || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const deptCode = DEPARTMENT_DUMMY_DIGITS[normalizedDepartment] || '00';
   return `E256${deptCode}${String(globalSequence).padStart(5, '0')}`;
 }

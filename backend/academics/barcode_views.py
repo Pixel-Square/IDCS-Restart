@@ -76,6 +76,6 @@ class StudentBarcodeLookupView(APIView):
             "email": student.user.email,
             "profile_image": student.profile_image.url if student.profile_image else None,
             "dummy_number": matched_dummy,
-            "qp_type": matched_qp_type if matched_qp_type in ('QP1', 'QP2', 'TCPR') else 'QP1',
+            "qp_type": matched_qp_type if matched_qp_type in ('QP1', 'QP2', 'TCPR', 'TCPL', 'OE') else 'QP1',
         }
         return Response(data)

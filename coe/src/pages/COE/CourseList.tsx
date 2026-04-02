@@ -72,6 +72,8 @@ export default function CourseList() {
   const [ttTargetCourseKey, setTtTargetCourseKey] = useState('');
   const [ttDateInput, setTtDateInput] = useState('');
   const [ttDateInput2, setTtDateInput2] = useState('');
+  const [ttSessionInput, setTtSessionInput] = useState<'FN' | 'AN'>('FN');
+  const [ttSessionInput2, setTtSessionInput2] = useState<'FN' | 'AN'>('FN');
   const [ttTargetQpType, setTtTargetQpType] = useState<QpType>('QP1');
   const [cdapLoadingRow, setCdapLoadingRow] = useState<string | null>(null);
   const [showCdapModal, setShowCdapModal] = useState(false);
@@ -753,19 +755,23 @@ export default function CourseList() {
     setTtTargetQpType(qpType);
     setTtDateInput(parts[0] || '');
     setTtDateInput2(parts[1] || '');
+    setTtSessionInput('FN');
+    setTtSessionInput2('FN');
     setShowTtModal(true);
   };
 
   const saveTtDate = () => {
     const filterKey = getCurrentFilterKey();
-    const isTcprOrTcpl = ttTargetQpType === 'TCPR' || ttTargetQpType === 'TCPL';
-    const dateValue = isTcprOrTcpl ? `${ttDateInput}|${ttDateInput2}` : ttDateInput;
+    const isTcpr = ttTargetQpType === 'TCPR';
+    const dateValue = isTcpr ? `${ttDateInput}|${ttDateInput2}` : ttDateInput;
     setTTDateForCourse(filterKey, ttTargetCourseKey, dateValue);
     setTtScheduleMap(readTTScheduleMap(filterKey));
     setShowTtModal(false);
     setTtTargetCourseKey('');
     setTtDateInput('');
     setTtDateInput2('');
+    setTtSessionInput('FN');
+    setTtSessionInput2('FN');
     setTtTargetQpType('QP1');
   };
 
@@ -777,6 +783,8 @@ export default function CourseList() {
     setTtTargetCourseKey('');
     setTtDateInput('');
     setTtDateInput2('');
+    setTtSessionInput('FN');
+    setTtSessionInput2('FN');
     setTtTargetQpType('QP1');
   };
 
@@ -1100,15 +1108,59 @@ export default function CourseList() {
                               onPaste={(e) => e.preventDefault()}
                               className="w-full border border-gray-300 p-2 text-sm rounded mb-4 focus:outline-none focus:border-indigo-500"
                             />
+                            <div className="mb-4 flex items-center gap-4 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-xs font-medium text-gray-700">
+                              <span className="text-gray-500">Session</span>
+                              <label className="inline-flex items-center gap-1">
+                                <input
+                                  type="radio"
+                                  name="tt-session-1"
+                                  checked={ttSessionInput === 'FN'}
+                                  onChange={() => setTtSessionInput('FN')}
+                                />
+                                FN
+                              </label>
+                              <label className="inline-flex items-center gap-1">
+                                <input
+                                  type="radio"
+                                  name="tt-session-1"
+                                  checked={ttSessionInput === 'AN'}
+                                  onChange={() => setTtSessionInput('AN')}
+                                />
+                                AN
+                              </label>
+                            </div>
                             {(ttTargetQpType === 'TCPR' || ttTargetQpType === 'TCPL') && (
-                              <input
-                                type="date"
-                                value={ttDateInput2}
-                                onChange={(e) => setTtDateInput2(e.target.value)}
-                                onKeyDown={(e) => e.preventDefault()}
-                                onPaste={(e) => e.preventDefault()}
-                                className="w-full border border-gray-300 p-2 text-sm rounded mb-4 focus:outline-none focus:border-indigo-500"
-                              />
+                              <>
+                                <input
+                                  type="date"
+                                  value={ttDateInput2}
+                                  onChange={(e) => setTtDateInput2(e.target.value)}
+                                  onKeyDown={(e) => e.preventDefault()}
+                                  onPaste={(e) => e.preventDefault()}
+                                  className="w-full border border-gray-300 p-2 text-sm rounded mb-4 focus:outline-none focus:border-indigo-500"
+                                />
+                                <div className="mb-4 flex items-center gap-4 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-xs font-medium text-gray-700">
+                                  <span className="text-gray-500">Session</span>
+                                  <label className="inline-flex items-center gap-1">
+                                    <input
+                                      type="radio"
+                                      name="tt-session-2"
+                                      checked={ttSessionInput2 === 'FN'}
+                                      onChange={() => setTtSessionInput2('FN')}
+                                    />
+                                    FN
+                                  </label>
+                                  <label className="inline-flex items-center gap-1">
+                                    <input
+                                      type="radio"
+                                      name="tt-session-2"
+                                      checked={ttSessionInput2 === 'AN'}
+                                      onChange={() => setTtSessionInput2('AN')}
+                                    />
+                                    AN
+                                  </label>
+                                </div>
+                              </>
                             )}
                             <div className="flex justify-end space-x-2">
                               <button
@@ -1117,6 +1169,8 @@ export default function CourseList() {
                                   setTtTargetCourseKey('');
                                   setTtDateInput('');
                                   setTtDateInput2('');
+                                  setTtSessionInput('FN');
+                                  setTtSessionInput2('FN');
                                   setTtTargetQpType('QP1');
                                 }}
                                 className="px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-100 rounded-md transition-colors"

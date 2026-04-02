@@ -1,32 +1,60 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  findAllocationsForFaculty,
   parseCourseKey,
   getDummiesForFilter,
+  getCourseDummiesForAllocation,
+  getBundleDummiesForAllocation,
   readMarksStore,
   writeMarksStore,
   getMarksKey,
+  assigningUpdateEventName,
+  marksUpdateEventName,
   type FacultyAllocation,
   type MarkEntry,
   type PersistedShuffledStudent,
 } from '../stores/coeStore';
+import { fetchFacultyAllocations } from '../services/assignments';
 
 type CourseBlock = {
   allocation: FacultyAllocation;
   courseCode: string;
   courseName: string;
+  bundleName?: string;
   dummies: string[];
   marksKey: string;
 };
 
 const MARK_COLUMNS = ['Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Total'];
 
+const DEPARTMENT_DUMMY_DIGITS: Record<string, string> = {
+  AIDS: '01',
+  AIML: '02',
+  CE: '03',
+  CIVIL: '03',
+  CSE: '04',
+  ECE: '05',
+  EEE: '06',
+  IT: '07',
+  ME: '08',
+  MECH: '08',
+};
+
+function createFallbackDummies(department: string, startIndex: number, count: number): string[] {
+  const normalizedDepartment = String(department || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const deptDigit = DEPARTMENT_DUMMY_DIGITS[normalizedDepartment] || '00';
+  return Array.from({ length: count }, (_, index) => `E256${deptDigit}${String(startIndex + index + 1).padStart(5, '0')}`);
+}
+
 export default function MarkEntryPage() {
   const navigate = useNavigate();
   const facultyCode = sessionStorage.getItem('esv-faculty-code') || '';
   const [saving, setSaving] = useState(false);
+  const [allocations, setAllocations] = useState<FacultyAllocation[]>([]);
+  const [loadingAllocations, setLoadingAllocations] = useState(false);
   const [marksMap, setMarksMap] = useState<Record<string, MarkEntry[]>>({});
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [marksRefreshTrigger, setMarksRefreshTrigger] = useState(0);
 
   // Redirect if no faculty code
   useEffect(() => {
@@ -35,34 +63,122 @@ export default function MarkEntryPage() {
     }
   }, [facultyCode, navigate]);
 
-  const allocations = useMemo(() => findAllocationsForFaculty(facultyCode), [facultyCode]);
+  useEffect(() => {
+    if (!facultyCode) {
+      navigate('/', { replace: true });
+      return;
+    }
 
-  // Build course blocks with dummy numbers
+    let active = true;
+
+    const loadAllocations = async () => {
+      setLoadingAllocations(true);
+      try {
+        const results = await fetchFacultyAllocations(facultyCode);
+        if (!active) return;
+        setAllocations(results);
+      } finally {
+        if (active) {
+          setLoadingAllocations(false);
+        }
+      }
+    };
+
+    void loadAllocations();
+
+    return () => {
+      active = false;
+    };
+  }, [facultyCode, navigate, refreshTrigger]);
+
+  useEffect(() => {
+    const handleRefresh = () => {
+      setRefreshTrigger((prev) => prev + 1);
+    };
+
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'coe-assigning-v1' || e.key === 'coe-course-bundle-dummies-v1' || e.key === null) {
+        handleRefresh();
+      }
+    };
+
+    const channel = typeof BroadcastChannel !== 'undefined'
+      ? new BroadcastChannel('coe-assigning-updates-v1')
+      : null;
+
+    const handleBroadcastMessage = (event: MessageEvent) => {
+      if (event.data === 'updated') {
+        handleRefresh();
+      }
+    };
+
+    window.addEventListener(assigningUpdateEventName, handleRefresh);
+    window.addEventListener('storage', handleStorageChange);
+    channel?.addEventListener('message', handleBroadcastMessage);
+
+    return () => {
+      window.removeEventListener(assigningUpdateEventName, handleRefresh);
+      window.removeEventListener('storage', handleStorageChange);
+      channel?.removeEventListener('message', handleBroadcastMessage);
+      channel?.close();
+    };
+  }, []);
+
+  // Build course blocks with dummy numbers, handling bundles
   const courseBlocks = useMemo<CourseBlock[]>(() => {
-    return allocations.map((alloc) => {
+    const blocks: CourseBlock[] = [];
+
+    allocations.forEach((alloc) => {
       const parsed = parseCourseKey(alloc.courseKey);
-      const dummyMap = getDummiesForFilter(alloc.department, alloc.semester);
+      const courseDummies = getCourseDummiesForAllocation(alloc.department, alloc.semester, alloc.courseKey);
 
-      // Collect all dummy numbers for this filter, then take only the allocated script count
-      const allDummies = Object.keys(dummyMap).sort();
-      // We show exactly the number of scripts allocated
-      // If no shuffled dummies exist yet, generate placeholder numbers
-      const dummies = allDummies.length > 0
-        ? allDummies.slice(0, alloc.scripts)
-        : Array.from({ length: alloc.scripts }, (_, i) => `D${String(i + 1).padStart(3, '0')}`);
+      if (alloc.bundles && alloc.bundles.length > 0) {
+        let dummyPointer = 0;
+        alloc.bundles.forEach((bundle) => {
+          const exactBundleDummies = getBundleDummiesForAllocation(
+            alloc.department,
+            alloc.semester,
+            alloc.courseKey,
+            bundle.name
+          );
+          const courseSlice = courseDummies.slice(dummyPointer, dummyPointer + bundle.scripts);
+          const resolved = exactBundleDummies.length > 0
+            ? exactBundleDummies
+            : courseSlice;
+          const bundleDummies = resolved.length > 0
+            ? resolved.slice(0, bundle.scripts)
+            : createFallbackDummies(parsed.department || alloc.department, dummyPointer, bundle.scripts);
 
-      return {
-        allocation: alloc,
-        courseCode: parsed.courseCode,
-        courseName: parsed.courseName,
-        dummies,
-        marksKey: getMarksKey(facultyCode, alloc.courseKey),
-      };
+          blocks.push({
+            allocation: alloc,
+            courseCode: parsed.courseCode,
+            courseName: parsed.courseName,
+            bundleName: bundle.name,
+            dummies: bundleDummies,
+            marksKey: getMarksKey(facultyCode, `${alloc.courseKey}::${bundle.name}`),
+          });
+
+          dummyPointer += bundle.scripts;
+        });
+      } else {
+        const dummies = courseDummies.length > 0
+          ? courseDummies.slice(0, alloc.scripts)
+          : createFallbackDummies(parsed.department || alloc.department, 0, alloc.scripts);
+
+        blocks.push({
+          allocation: alloc,
+          courseCode: parsed.courseCode,
+          courseName: parsed.courseName,
+          dummies,
+          marksKey: getMarksKey(facultyCode, alloc.courseKey),
+        });
+      }
     });
+
+    return blocks;
   }, [allocations, facultyCode]);
 
-  // Load marks from store
-  useEffect(() => {
+  const loadMarksFromStore = () => {
     const store = readMarksStore();
     const initial: Record<string, MarkEntry[]> = {};
     courseBlocks.forEach((block) => {
@@ -76,7 +192,32 @@ export default function MarkEntryPage() {
       }
     });
     setMarksMap(initial);
-  }, [courseBlocks]);
+  };
+
+  // Load marks from store
+  useEffect(() => {
+    loadMarksFromStore();
+  }, [courseBlocks, marksRefreshTrigger]);
+
+  useEffect(() => {
+    const handleMarksChange = () => {
+      setMarksRefreshTrigger((prev) => prev + 1);
+    };
+
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'esv-marks-v1' || e.key === null) {
+        handleMarksChange();
+      }
+    };
+
+    window.addEventListener(marksUpdateEventName, handleMarksChange);
+    window.addEventListener('storage', handleStorageChange);
+
+    return () => {
+      window.removeEventListener(marksUpdateEventName, handleMarksChange);
+      window.removeEventListener('storage', handleStorageChange);
+    };
+  }, []);
 
   const handleMarkChange = (marksKey: string, dummyIdx: number, colIdx: number, value: string) => {
     const num = value === '' ? null : parseInt(value, 10);
@@ -103,6 +244,7 @@ export default function MarkEntryPage() {
       store[key] = entries;
     });
     writeMarksStore(store);
+    loadMarksFromStore();
     setSaving(true);
     setTimeout(() => setSaving(false), 1200);
   };
@@ -123,7 +265,7 @@ export default function MarkEntryPage() {
           <p className="mt-1 text-sm text-white/80">
             Faculty Code: <span className="font-semibold text-white">{facultyCode}</span>
             {' '} &middot; {' '}
-            <span className="text-white/70">{allocations.length} course(s) allocated</span>
+            <span className="text-white/70">{loadingAllocations ? 'Loading…' : `${allocations.length} course(s) allocated`}</span>
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -144,7 +286,11 @@ export default function MarkEntryPage() {
       </div>
 
       {/* Allocation summary */}
-      {allocations.length === 0 ? (
+      {loadingAllocations ? (
+        <div className="rounded-xl bg-white/95 border border-[#d9b7ac] p-6">
+          <p className="text-sm text-[#6f4a3f]">Loading assignments from COE…</p>
+        </div>
+      ) : allocations.length === 0 ? (
         <div className="rounded-xl bg-white/95 border border-[#d9b7ac] p-6">
           <p className="text-sm text-[#6f4a3f]">No allocations found. Please contact the COE.</p>
         </div>
@@ -156,14 +302,21 @@ export default function MarkEntryPage() {
               {/* Course header */}
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="text-lg font-bold text-[#5a192f]">{block.courseName || 'Unnamed Course'}</h3>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-lg font-bold text-[#5a192f]">{block.courseName || 'Unnamed Course'}</h3>
+                    {block.bundleName && (
+                      <span className="px-2 py-0.5 rounded-full bg-[#6f1d34] text-white text-[10px] uppercase tracking-wider font-bold">
+                        Bundle: {block.bundleName}
+                      </span>
+                    )}
+                  </div>
                   <p className="text-xs font-medium text-[#6f4a3f]">
                     {block.courseCode} | {block.allocation.department} | {block.allocation.semester} | {block.allocation.date}
                   </p>
                 </div>
                 <div className="flex items-center gap-3 text-sm">
                   <span className="rounded-md bg-[#faf4f0] border border-[#d9b7ac] px-3 py-1 text-[#b2472e] font-medium">
-                    Scripts: {block.allocation.scripts}
+                    {block.bundleName ? `Bundle Scripts: ${block.dummies.length}` : `Scripts: ${block.allocation.scripts}`}
                   </span>
                   <span className="rounded-md bg-[#faf4f0] border border-[#d9b7ac] px-3 py-1 text-[#6f4a3f]">
                     Dummies: {block.dummies.length}

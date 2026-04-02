@@ -6,6 +6,7 @@ from .views import (
     CoePortalContextView,
     CoeStudentsCourseMapView,
 )
+from .assignments_views import CoeAssignmentStoreView
 from .views_save import CoeResetExamDummies, CoeSaveExamDummies
 
 urlpatterns = [
@@ -16,4 +17,5 @@ urlpatterns = [
     path('arrears/<int:pk>/', CoeArrearStudentDetailView.as_view(), name='coe_arrear_student_detail'),
     path('save-dummies/', CoeSaveExamDummies.as_view(), name='coe_save_dummies'),
     path('reset-dummies/', CoeResetExamDummies.as_view(), name='coe_reset_dummies'),
+    path('assignments/', CoeAssignmentStoreView.as_view(), name='coe_assignments'),
 ]

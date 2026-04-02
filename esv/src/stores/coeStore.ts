@@ -5,12 +5,21 @@
  */
 
 const ASSIGNING_STORE_KEY = 'coe-assigning-v1';
+const ASSIGNING_UPDATED_EVENT = 'coe:assigning-updated';
 const SHUFFLED_LIST_KEY = 'coe-students-shuffled-list-v1';
+const COURSE_BUNDLE_DUMMY_STORE_KEY = 'coe-course-bundle-dummies-v1';
+
+export type PersistedBundle = {
+  id: string;
+  name: string;
+  scripts: number;
+};
 
 export type PersistedValuator = {
   facultyCode: string;
   facultyName: string;
   scripts: number;
+  bundles: PersistedBundle[];
 };
 
 export type PersistedAssignment = {
@@ -35,49 +44,60 @@ export type FacultyAllocation = {
   semester: string;
   date: string;
   courseKey: string;
+  facultyName?: string;
   scripts: number;
+  bundles: PersistedBundle[];
 };
 
 /**
  * Given a faculty code, find all their allocations across all store keys.
  */
 export function findAllocationsForFaculty(facultyCode: string): FacultyAllocation[] {
+  // Clear any potential stale state if we want to be absolutely sure,
+  // though readAssigningStore already reads fresh from localStorage.
   const store = readAssigningStore();
   const code = facultyCode.trim().toUpperCase();
   if (!code) return [];
 
-  // Dummy code bypass for testing
-  if (code === '123456' && Object.keys(store).length === 0) {
-    return [{ storeKey: 'TEST::SEM1::2026-03-31', department: 'TEST', semester: 'SEM1', date: '2026-03-31', courseKey: 'TEST::SEM1::CS101::Demo Course', scripts: 5 }];
-  }
-
   const results: FacultyAllocation[] = [];
 
   Object.entries(store).forEach(([storeKey, assignments]) => {
-    // storeKey = "DEPT::SEM::DATE"
+    // storeKey = "DEPT::SEM::DATE" (from coe app)
     const parts = storeKey.split('::');
+    if (parts.length < 3) return; // Skip invalid keys
+
     const department = parts[0] || '';
     const semester = parts[1] || '';
     const date = parts[2] || '';
 
     (assignments || []).forEach((assignment) => {
       (assignment.valuators || []).forEach((valuator) => {
-        if (valuator.facultyCode.trim().toUpperCase() === code && valuator.scripts > 0) {
-          results.push({
-            storeKey,
-            department,
-            semester,
-            date,
-            courseKey: assignment.courseKey,
-            scripts: valuator.scripts,
-          });
+        const vCode = String(valuator.facultyCode || '').trim().toUpperCase();
+        if (vCode === code) {
+          const hasScripts = Number(valuator.scripts) > 0;
+          const hasBundles = Array.isArray(valuator.bundles) && valuator.bundles.length > 0;
+          
+          if (hasScripts || hasBundles) {
+            results.push({
+              storeKey,
+              department,
+              semester,
+              date,
+              courseKey: assignment.courseKey,
+              scripts: Number(valuator.scripts) || 0,
+              bundles: Array.isArray(valuator.bundles) ? valuator.bundles : [],
+            });
+          }
         }
       });
     });
   });
 
-  return results;
+  // Sort by date descending
+  return results.sort((a, b) => b.date.localeCompare(a.date));
 }
+
+export const assigningUpdateEventName = ASSIGNING_UPDATED_EVENT;
 
 /**
  * Read the shuffled dummy list to get dummy numbers.
@@ -86,6 +106,8 @@ export function findAllocationsForFaculty(facultyCode: string): FacultyAllocatio
  */
 export type PersistedShuffledStudent = { reg_no: string; name: string };
 type ShuffledStore = Record<string, Record<string, PersistedShuffledStudent>>;
+type CourseBundleDummyMap = Record<string, { courseDummies: string[]; bundles: Record<string, string[]> }>;
+type CourseBundleDummyStore = Record<string, CourseBundleDummyMap>;
 
 export function readShuffledStore(): ShuffledStore {
   try {
@@ -105,6 +127,31 @@ export function getDummiesForFilter(department: string, semester: string): Recor
   return store[filterKey] || {};
 }
 
+function readCourseBundleDummyStore(): CourseBundleDummyStore {
+  try {
+    const raw = localStorage.getItem(COURSE_BUNDLE_DUMMY_STORE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function getCourseDummiesForAllocation(department: string, semester: string, courseKey: string): string[] {
+  const store = readCourseBundleDummyStore();
+  const filterKey = `${department}::${semester}`;
+  const courseEntry = store[filterKey]?.[courseKey];
+  return Array.isArray(courseEntry?.courseDummies) ? [...courseEntry.courseDummies] : [];
+}
+
+export function getBundleDummiesForAllocation(department: string, semester: string, courseKey: string, bundleName: string): string[] {
+  const store = readCourseBundleDummyStore();
+  const filterKey = `${department}::${semester}`;
+  const courseEntry = store[filterKey]?.[courseKey];
+  if (!courseEntry || !courseEntry.bundles) return [];
+  const rows = courseEntry.bundles[bundleName];
+  return Array.isArray(rows) ? [...rows] : [];
+}
+
 /**
  * Extract course code and course name from a courseKey.
  * courseKey = "DEPT::SEM::COURSE_CODE::COURSE_NAME"
@@ -120,6 +167,7 @@ export function parseCourseKey(courseKey: string): { department: string; semeste
 }
 
 const ESV_MARKS_KEY = 'esv-marks-v1';
+const ESV_MARKS_UPDATED_EVENT = 'esv:marks-updated';
 
 export type MarkEntry = {
   dummy: string;
@@ -138,9 +186,13 @@ export function readMarksStore(): MarksStore {
 }
 
 export function writeMarksStore(store: MarksStore) {
-  localStorage.setItem(ESV_MARKS_KEY, JSON.stringify(store));
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(ESV_MARKS_KEY, JSON.stringify(store));
+  window.dispatchEvent(new CustomEvent(ESV_MARKS_UPDATED_EVENT));
 }
 
 export function getMarksKey(facultyCode: string, courseKey: string): string {
   return `${facultyCode.trim()}::${courseKey}`;
 }
+
+export const marksUpdateEventName = ESV_MARKS_UPDATED_EVENT;

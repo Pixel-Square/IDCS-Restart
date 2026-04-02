@@ -16,8 +16,8 @@ const SHUFFLED_LIST_KEY = 'coe-students-shuffled-list-v1';
 const DEPARTMENT_DUMMY_DIGITS: Record<string, string> = {
   AIDS: '1',
   AIML: '2',
-  CSE: '3',
-  CIVIL: '4',
+  CIVIL: '3',
+  CSE: '4',
   ECE: '5',
   EEE: '6',
   IT: '7',

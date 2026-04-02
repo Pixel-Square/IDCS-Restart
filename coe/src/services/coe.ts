@@ -44,7 +44,7 @@ export type CoeSavedDummyMapItem = {
   reg_no: string;
   name: string;
   semester: string;
-  qp_type: 'QP1' | 'QP2' | 'TCPR';
+  qp_type: 'QP1' | 'QP2' | 'TCPR' | 'TCPL' | 'OE';
 };
 
 export type CoeArrearRecord = {
@@ -85,7 +85,7 @@ export async function fetchCoeStudentsMap(params: { department: string; semester
   return res.json();
 }
 
-export async function saveCoeStudentDummies(payload: { records: { reg_no: string; dummy: string; semester: string; qp_type: 'QP1' | 'QP2' | 'TCPR' }[]; password: string }) {
+export async function saveCoeStudentDummies(payload: { records: { reg_no: string; dummy: string; semester: string; qp_type: 'QP1' | 'QP2' | 'TCPR' | 'TCPL' | 'OE' }[]; password: string }) {
   const res = await fetchWithAuth('/api/coe/save-dummies/', {
     method: 'POST',
     body: JSON.stringify(payload),

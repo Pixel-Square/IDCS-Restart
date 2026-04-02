@@ -44,3 +44,18 @@ class CoeArrearStudent(models.Model):
     def __str__(self):
         return f"{self.department} {self.semester} {self.course_code} {self.student_register_number}"
 
+
+class CoeAssignmentStore(models.Model):
+    """Stores COE assignment data keyed by department/semester/date."""
+
+    store_key = models.CharField(max_length=64, unique=True, db_index=True)
+    assignments = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+
+    def __str__(self):
+        return self.store_key
+

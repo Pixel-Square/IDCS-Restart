@@ -46,7 +46,7 @@ class CoeSaveExamDummies(APIView):
                 semester = rec.get('semester')
                 qp_type = str(rec.get('qp_type') or 'QP1').strip().upper()
 
-                if qp_type not in ('QP1', 'QP2', 'TCPR'):
+                if qp_type not in ('QP1', 'QP2', 'TCPR', 'TCPL', 'OE'):
                     qp_type = 'QP1'
 
                 if not (reg_no and dummy and semester):

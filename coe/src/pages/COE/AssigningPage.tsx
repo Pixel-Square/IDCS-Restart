@@ -5,8 +5,22 @@ import { getCourseKey, readCourseSelectionMap } from './courseSelectionStorage';
 import { readTTScheduleMap } from './ttScheduleStore';
 import fetchWithAuth from '../../services/fetchAuth';
 import { getCachedMe } from '../../services/auth';
+import { getBundleFinalizeConfig } from '../../utils/coeBundleFinalizeStore';
+import { getAttendanceFilterKey, readCourseAbsenteesMap } from './attendanceStore';
 
 const ASSIGNING_STORE_KEY = 'coe-assigning-v1';
+const ASSIGNING_UPDATED_EVENT = 'coe:assigning-updated';
+
+const DEPARTMENT_SHORT: Record<string, string> = {
+  CIVIL: 'CE',
+  IT: 'IT',
+  CSE: 'CS',
+  MECH: 'ME',
+  ECE: 'EC',
+  EEE: 'EE',
+  AIDS: 'AD',
+  AIML: 'AM',
+};
 
 type StaffInfo = { staff_id: string; name: string };
 
@@ -30,6 +44,7 @@ type CourseAssignment = {
   department: string;
   totalStudents: number;
   valuators: ValuatorRow[];
+  availableBundles: { name: string; scripts: number }[];
 };
 
 /* ---- localStorage persistence ---- */
@@ -50,7 +65,15 @@ function readPersistedStore(): PersistedStore {
 
 function writePersistedStore(store: PersistedStore) {
   localStorage.setItem(ASSIGNING_STORE_KEY, JSON.stringify(store));
+  window.dispatchEvent(new CustomEvent(ASSIGNING_UPDATED_EVENT));
+  if (typeof BroadcastChannel !== 'undefined') {
+    const channel = new BroadcastChannel('coe-assigning-updates-v1');
+    channel.postMessage('updated');
+    channel.close();
+  }
 }
+
+export const assigningUpdateEventName = ASSIGNING_UPDATED_EVENT;
 
 function makeStoreKey(dept: string, sem: string, date: string) {
   return `${dept}::${sem}::${date}`;
@@ -159,6 +182,25 @@ export default function AssigningPage() {
     };
   }, []);
 
+  useEffect(() => {
+    const syncExistingAssignments = async () => {
+      const store = readPersistedStore();
+      if (Object.keys(store).length === 0) return;
+
+      try {
+        await fetchWithAuth('/api/coe/assignments/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ stores: store }),
+        });
+      } catch (error) {
+        console.warn('Failed to sync existing COE assignments to backend', error);
+      }
+    };
+
+    void syncExistingAssignments();
+  }, []);
+
   // Fetch semesters on mount
   useEffect(() => {
     let active = true;
@@ -229,7 +271,13 @@ export default function AssigningPage() {
         const persisted = readPersistedStore()[storeKey] || [];
         const persistedByCourseKey = new Map(persisted.map((p) => [p.courseKey, p]));
 
+        const bundleConfig = getBundleFinalizeConfig(department, semester);
+        const absentCourseMap = readCourseAbsenteesMap(getAttendanceFilterKey(department, semester));
+
         const newAssignments: CourseAssignment[] = [];
+
+        // Universal store to handle "ALL" department filter
+        const allPersisted = readPersistedStore();
 
         response.departments.forEach((deptBlock) => {
           deptBlock.courses.forEach((course) => {
@@ -246,6 +294,37 @@ export default function AssigningPage() {
 
             // Only courses for selected date
             if (!dateCourseKeys.has(courseKey)) return;
+
+            // Important: Use a course-specific store key to ensure data is found
+            // even if the user changes the main "Department" filter to "ALL"
+            const courseStoreKey = makeStoreKey(deptBlock.department, semester, selectedDate);
+            const coursePersisted = allPersisted[courseStoreKey] || [];
+            const persistedByCourseKey = new Map(coursePersisted.map((p) => [p.courseKey, p]));
+
+            // Calculate available bundles from allocation logic
+            const availableBundles: { name: string; scripts: number }[] = [];
+            if (bundleConfig?.finalized && bundleConfig.bundleSize > 0) {
+              const courseAbsentees = absentCourseMap.get(courseKey);
+              const originalStudents = (course.students || []).filter((s: any) => {
+                const regNo = String(s.reg_no || '').trim();
+                return regNo ? !courseAbsentees?.has(regNo) : true;
+              });
+
+              const totalValid = originalStudents.length;
+              const bundleCount = Math.ceil(totalValid / bundleConfig.bundleSize);
+              const deptShort = DEPARTMENT_SHORT[deptBlock.department] || String(deptBlock.department || '').slice(0, 2).toUpperCase();
+
+              for (let i = 0; i < bundleCount; i++) {
+                const start = i * bundleConfig.bundleSize;
+                const end = Math.min(start + bundleConfig.bundleSize, totalValid);
+                const scripts = end - start;
+                const seq = String(i + 1).padStart(3, '0');
+                availableBundles.push({
+                  name: `${course.course_code || 'COURSE'}${deptShort}${seq}`,
+                  scripts,
+                });
+              }
+            }
 
             const totalStudents = (course.students || []).length;
             const saved = persistedByCourseKey.get(courseKey);
@@ -283,6 +362,7 @@ export default function AssigningPage() {
               department: deptBlock.department,
               totalStudents,
               valuators,
+              availableBundles,
             });
           });
         });
@@ -596,29 +676,64 @@ export default function AssigningPage() {
 
   /* ---- Save & Lock ---- */
   const handleSave = useCallback(() => {
-    const storeKey = makeStoreKey(department, semester, selectedDate);
     const store = readPersistedStore();
-    store[storeKey] = assignments.map((a) => ({
-      courseKey: a.courseKey,
-      valuators: a.valuators
-        .filter((v) => v.facultyCode.trim())
-        .map((v) => ({
-          facultyCode: v.facultyCode.trim(),
-          facultyName: v.facultyName,
-          scripts: v.scripts,
-          bundles: v.bundles,
-        })),
-    }));
-    writePersistedStore(store);
 
-    // Lock after saving
-    const lockStore = readLockStore();
-    lockStore[storeKey] = true;
-    writeLockStore(lockStore);
-    setIsLocked(true);
+    // Group current assignments by their real department to allow "ALL" filter saving
+    const byDept: Record<string, CourseAssignment[]> = {};
+    assignments.forEach((a) => {
+      if (!byDept[a.department]) byDept[a.department] = [];
+      byDept[a.department].push(a);
+    });
 
-    setSaving(true);
-    setTimeout(() => setSaving(false), 1200);
+    Object.entries(byDept).forEach(([deptName, deptAssignments]) => {
+      const storeKey = makeStoreKey(deptName, semester, selectedDate);
+      store[storeKey] = deptAssignments.map((a) => ({
+        courseKey: a.courseKey,
+        valuators: a.valuators
+          .filter((v) => v.facultyCode.trim())
+          .map((v) => ({
+            facultyCode: v.facultyCode.trim(),
+            facultyName: v.facultyName,
+            scripts: v.scripts,
+            bundles: v.bundles,
+          })),
+      }));
+
+      // Lock each department's state
+      const lockStore = readLockStore();
+      lockStore[storeKey] = true;
+      writeLockStore(lockStore);
+    });
+
+    const persist = async () => {
+      setSaving(true);
+      writePersistedStore(store);
+
+      const response = await fetchWithAuth('/api/coe/assignments/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stores: store }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `Failed to save assignments (${response.status})`);
+      }
+
+      if (department !== 'ALL') {
+        setIsLocked(true);
+      } else {
+        setIsLocked(true);
+      }
+
+      setTimeout(() => setSaving(false), 1200);
+    };
+
+    persist().catch((error) => {
+      console.error('Failed to save assignments:', error);
+      alert('Assignments were saved locally, but the backend sync failed. ESV may not reflect the changes until this is fixed.');
+      setSaving(false);
+    });
   }, [assignments, department, semester, selectedDate]);
 
   /* ---- Edit (unlock with password) ---- */
@@ -776,184 +891,101 @@ export default function AssigningPage() {
             </div>
 
             {/* Bundle dropdown */}
-            {(() => {
-              const courseBundles = getCourseBundles(assignment);
-              const form = createBundleFormByCourse[assignment.courseKey] || { show: false, valuatorId: '', name: '', scripts: 0 };
+            <div className="rounded-md bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-200 px-4 py-3">
+              <label className="block text-xs font-semibold text-indigo-700 mb-2">Select Bundle</label>
+              <select
+                value={selectedBundleByCourse[assignment.courseKey] || ''}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setSelectedBundleByCourse({ ...selectedBundleByCourse, [assignment.courseKey]: val });
+                }}
+                className="w-full rounded-md border border-indigo-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:outline-none"
+              >
+                <option value="">-- Select a bundle --</option>
+                {assignment.availableBundles.map((b, idx) => {
+                  // Check if this bundle is already assigned to a valuator for THIS course
+                  const isAssigned = assignment.valuators.some(v => v.bundles.some(vb => vb.name === b.name));
+                  return (
+                    <option key={b.name} value={b.name} disabled={isAssigned}>
+                      Bundle {idx + 1}: {b.name} ({b.scripts} scripts) {isAssigned ? '— (Assigned)' : ''}
+                    </option>
+                  );
+                })}
+              </select>
 
-              return (
-                <div className="rounded-md bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-200 px-4 py-3 space-y-3">
-                  {/* View bundles tab */}
-                  <div>
-                    <div className="flex gap-2 mb-2">
-                      <button
-                        onClick={() =>
-                          setCreateBundleFormByCourse({
-                            ...createBundleFormByCourse,
-                            [assignment.courseKey]: { ...form, show: false },
-                          })
-                        }
-                        className={`text-xs font-semibold px-3 py-1.5 rounded-md transition ${
-                          !form.show
-                            ? 'text-indigo-700 bg-white border border-indigo-300'
-                            : 'text-indigo-600 bg-indigo-100 border border-transparent'
-                        }`}
-                      >
-                        View Bundles
-                      </button>
-                      <button
-                        onClick={() =>
-                          setCreateBundleFormByCourse({
-                            ...createBundleFormByCourse,
-                            [assignment.courseKey]: { ...form, show: true },
-                          })
-                        }
-                        className={`text-xs font-semibold px-3 py-1.5 rounded-md transition ${
-                          form.show
-                            ? 'text-indigo-700 bg-white border border-indigo-300'
-                            : 'text-indigo-600 bg-indigo-100 border border-transparent'
-                        }`}
-                      >
-                        Create Bundle
-                      </button>
+              {/* Selected bundle details */}
+              {selectedBundleByCourse[assignment.courseKey] && (() => {
+                const selectedBundle = assignment.availableBundles.find((b) => b.name === selectedBundleByCourse[assignment.courseKey]);
+                if (!selectedBundle) return null;
+
+                const assignedValuator = assignment.valuators.find((v) =>
+                  v.bundles.some((b) => b.name === selectedBundle.name),
+                );
+
+                return (
+                  <div className="rounded-md bg-white border border-indigo-300 px-3 py-2 mt-3 space-y-2">
+                    <div className="flex justify-between items-start">
+                      <p className="text-xs text-gray-600">
+                        <span className="font-semibold text-gray-900">{selectedBundle.name}</span>
+                        <br />
+                        Scripts: <span className="font-semibold text-indigo-600">{selectedBundle.scripts}</span>
+                        {assignedValuator && (
+                          <>
+                            <br />
+                            Assigned to: <span className="font-semibold text-gray-900">{assignedValuator.facultyName || assignedValuator.facultyCode}</span>
+                          </>
+                        )}
+                      </p>
+                      
+                      {!assignedValuator && !isLocked && (
+                        <div className="flex flex-col gap-2">
+                          <label className="text-[10px] font-bold text-gray-500 uppercase">Assign To</label>
+                          <div className="flex gap-2">
+                            <select
+                              id={`assign-bundle-to-${assignment.courseKey}`}
+                              className="rounded border border-gray-300 px-2 py-1 text-xs focus:outline-none focus:border-indigo-500"
+                              defaultValue=""
+                            >
+                              <option value="">-- Valuator --</option>
+                              {assignment.valuators.map(v => {
+                                const avail = v.scripts - getBundleTotal(v.bundles);
+                                const canFit = avail >= selectedBundle.scripts;
+                                return (
+                                  <option key={v.id} value={v.id} disabled={!canFit}>
+                                    {v.facultyName || v.facultyCode} ({avail} avail)
+                                  </option>
+                                );
+                              })}
+                            </select>
+                            <button
+                              onClick={() => {
+                                const sel = document.getElementById(`assign-bundle-to-${assignment.courseKey}`) as HTMLSelectElement;
+                                const vId = sel?.value;
+                                if (!vId) {
+                                  alert('Please select a valuator first');
+                                  return;
+                                }
+                                updateAssignment(assignment.courseKey, (a) => ({
+                                  ...a,
+                                  valuators: a.valuators.map(v => v.id === vId ? {
+                                    ...v,
+                                    bundles: [...v.bundles, { id: makeRowId(), name: selectedBundle.name, scripts: selectedBundle.scripts }]
+                                  } : v)
+                                }));
+                                setSelectedBundleByCourse({ ...selectedBundleByCourse, [assignment.courseKey]: '' });
+                              }}
+                              className="bg-indigo-600 text-white px-3 py-1 rounded text-xs font-semibold hover:bg-indigo-700"
+                            >
+                              Assign
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
-
-                  {/* View bundles section */}
-                  {!form.show && courseBundles.length > 0 && (
-                    <div>
-                      <label className="block text-xs font-semibold text-indigo-700 mb-2">Course Bundles</label>
-                      <select
-                        value={selectedBundleByCourse[assignment.courseKey] || ''}
-                        onChange={(e) => setSelectedBundleByCourse({ ...selectedBundleByCourse, [assignment.courseKey]: e.target.value })}
-                        className="w-full rounded-md border border-indigo-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:outline-none"
-                      >
-                        <option value="">-- Select a bundle --</option>
-                        {courseBundles.map((b) => (
-                          <option key={b.id} value={b.id}>
-                            {b.name} (allocated: {b.scripts}) • {b.facultyName}
-                          </option>
-                        ))}
-                      </select>
-
-                      {/* Selected bundle details */}
-                      {selectedBundleByCourse[assignment.courseKey] && (() => {
-                        const selectedBundle = courseBundles.find((b) => b.id === selectedBundleByCourse[assignment.courseKey]);
-                        if (!selectedBundle) return null;
-
-                        const valuatorOwner = assignment.valuators.find((v) =>
-                          v.bundles.some((b) => b.id === selectedBundle.id),
-                        );
-
-                        return (
-                          <div className="rounded-md bg-white border border-indigo-300 px-3 py-2 mt-2">
-                            <p className="text-xs text-gray-600">
-                              <span className="font-semibold text-gray-900">{selectedBundle.name}</span>
-                              <br />
-                              Allocated: <span className="font-semibold text-indigo-600">{selectedBundle.scripts} scripts</span>
-                              <br />
-                              Valuator: <span className="font-semibold text-gray-900">{selectedBundle.facultyName || 'Unknown'}</span>
-                              {valuatorOwner && (
-                                <>
-                                  <br />
-                                  Available in valuator's pool:{' '}
-                                  <span className="font-semibold text-green-600">
-                                    {valuatorOwner.scripts - getBundleTotal(valuatorOwner.bundles)} scripts
-                                  </span>
-                                </>
-                              )}
-                            </p>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  )}
-
-                  {/* Create bundle section */}
-                  {form.show && !isLocked && (
-                    <div className="space-y-3 bg-white rounded-md border border-indigo-300 px-3 py-3">
-                      <h4 className="font-semibold text-sm text-gray-900">Create Bundle</h4>
-
-                      <div>
-                        <label className="block text-xs font-medium text-gray-700 mb-1">Assign To Valuator</label>
-                        <select
-                          value={form.valuatorId}
-                          onChange={(e) =>
-                            setCreateBundleFormByCourse({
-                              ...createBundleFormByCourse,
-                              [assignment.courseKey]: { ...form, valuatorId: e.target.value },
-                            })
-                          }
-                          className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
-                        >
-                          <option value="">-- Select a valuator --</option>
-                          {assignment.valuators
-                            .filter((v) => v.facultyCode.trim())
-                            .map((v) => {
-                              const available = v.scripts - getBundleTotal(v.bundles);
-                              return (
-                                <option key={v.id} value={v.id}>
-                                  {v.facultyName || v.facultyCode} ({available} available)
-                                </option>
-                              );
-                            })}
-                        </select>
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-medium text-gray-700 mb-1">Bundle Name</label>
-                        <input
-                          type="text"
-                          placeholder="e.g., Group A"
-                          value={form.name}
-                          onChange={(e) =>
-                            setCreateBundleFormByCourse({
-                              ...createBundleFormByCourse,
-                              [assignment.courseKey]: { ...form, name: e.target.value },
-                            })
-                          }
-                          className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
-                        />
-                      </div>
-
-                      <div className="flex gap-2 items-end">
-                        <div className="flex-1">
-                          <label className="block text-xs font-medium text-gray-700 mb-1">Scripts</label>
-                          <input
-                            type="number"
-                            min={1}
-                            value={form.scripts || ''}
-                            onChange={(e) => {
-                              const val = parseInt(e.target.value, 10);
-                              if (!isNaN(val)) {
-                                setCreateBundleFormByCourse({
-                                  ...createBundleFormByCourse,
-                                  [assignment.courseKey]: { ...form, scripts: val },
-                                });
-                              }
-                            }}
-                            placeholder="0"
-                            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
-                          />
-                        </div>
-                        <button
-                          onClick={() => handleCreateBundleFromDropdown(assignment.courseKey)}
-                          className="rounded-md bg-indigo-600 text-white px-4 py-2 text-sm font-medium hover:bg-indigo-700"
-                        >
-                          Create
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* No bundles and not creating */}
-                  {!form.show && courseBundles.length === 0 && (
-                    <div className="text-sm text-gray-600 py-2">
-                      No bundles created yet. <button onClick={() => setCreateBundleFormByCourse({ ...createBundleFormByCourse, [assignment.courseKey]: { ...form, show: true } })} className="text-indigo-600 hover:underline">Create one</button> to get started.
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
+                );
+              })()}
+            </div>
 
             {/* Valuator rows */}
             <div className="overflow-x-auto">
@@ -1047,6 +1079,14 @@ export default function AssigningPage() {
                                       className="inline-block rounded-md bg-blue-50 border border-blue-200 px-2 py-1 text-blue-700 mr-1"
                                     >
                                       {b.name} ({b.scripts})
+                                      {!isLocked && (
+                                        <button
+                                          onClick={() => handleRemoveBundle(assignment.courseKey, row.id, b.id)}
+                                          className="ml-2 text-red-500 hover:text-red-700 focus:outline-none"
+                                        >
+                                          ×
+                                        </button>
+                                      )}
                                     </div>
                                   ))}
                                   <div className="text-gray-500 mt-1">
@@ -1057,118 +1097,18 @@ export default function AssigningPage() {
                             </div>
                           </td>
                           <td className="px-3 py-2 space-y-1">
-                            {!isLocked && row.scripts > 0 ? (
-                              <>
-                                <button
-                                  onClick={() => handleToggleBundleForm(assignment.courseKey, row.id)}
-                                  className="block rounded-md bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-100"
-                                >
-                                  {row.showBundleForm ? 'Cancel' : 'Add Bundle'}
-                                </button>
-                                {assignment.valuators.length > 1 ? (
-                                  <button
-                                    onClick={() => handleRemoveValuator(assignment.courseKey, row.id)}
-                                    className="block rounded-md bg-red-50 px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-100"
-                                  >
-                                    Remove
-                                  </button>
-                                ) : null}
-                              </>
-                            ) : assignment.valuators.length > 1 && !isLocked ? (
+                            {!isLocked && assignment.valuators.length > 1 && (
                               <button
                                 onClick={() => handleRemoveValuator(assignment.courseKey, row.id)}
-                                className="rounded-md bg-red-50 px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-100"
+                                className="block rounded-md bg-red-50 px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-100"
                               >
                                 Remove
                               </button>
-                            ) : null}
+                            )}
                           </td>
                         </tr>
 
-                        {/* Bundle form */}
-                        {row.showBundleForm && (
-                          <tr className="border-b border-gray-100 bg-gray-50">
-                            <td colSpan={6} className="px-3 py-4">
-                              <div className="space-y-3 max-w-md">
-                                <h4 className="font-semibold text-sm text-gray-900">Create Bundle</h4>
-                                <input
-                                  type="text"
-                                  placeholder="Bundle name (e.g., Group A)"
-                                  value={row.bundleFormName}
-                                  onChange={(e) =>
-                                    updateAssignment(assignment.courseKey, (a) => ({
-                                      ...a,
-                                      valuators: a.valuators.map((v) =>
-                                        v.id === row.id ? { ...v, bundleFormName: e.target.value } : v,
-                                      ),
-                                    }))
-                                  }
-                                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
-                                />
-                                <div className="flex gap-2 items-end">
-                                  <div className="flex-1">
-                                    <label className="block text-xs font-medium text-gray-600 mb-1">Scripts</label>
-                                    <input
-                                      type="number"
-                                      min={1}
-                                      max={bundleRemaining}
-                                      value={row.bundleFormScripts}
-                                      onChange={(e) => {
-                                        const val = parseInt(e.target.value, 10);
-                                        if (!isNaN(val)) {
-                                          updateAssignment(assignment.courseKey, (a) => ({
-                                            ...a,
-                                            valuators: a.valuators.map((v) =>
-                                              v.id === row.id ? { ...v, bundleFormScripts: val } : v,
-                                            ),
-                                          }));
-                                        }
-                                      }}
-                                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
-                                    />
-                                    <p className="mt-1 text-xs text-gray-500">
-                                      Remaining: {bundleRemaining}
-                                    </p>
-                                  </div>
-                                  <button
-                                    onClick={() => handleCreateBundle(assignment.courseKey, row.id)}
-                                    className="rounded-md bg-indigo-600 text-white px-4 py-2 text-sm font-medium hover:bg-indigo-700"
-                                  >
-                                    Create
-                                  </button>
-                                </div>
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-
-                        {/* Bundle removal options */}
-                        {row.bundles.length > 0 && (
-                          <tr className="border-b border-gray-100 bg-blue-50">
-                            <td colSpan={6} className="px-3 py-3">
-                              <div className="flex flex-wrap gap-2">
-                                {row.bundles.map((b) => (
-                                  <div
-                                    key={b.id}
-                                    className="inline-flex items-center gap-2 rounded-md border border-blue-300 bg-white px-3 py-1.5 text-sm"
-                                  >
-                                    <span className="font-medium text-gray-900">
-                                      {b.name} ({b.scripts} scripts)
-                                    </span>
-                                    {!isLocked && (
-                                      <button
-                                        onClick={() => handleRemoveBundle(assignment.courseKey, row.id, b.id)}
-                                        className="text-red-600 hover:text-red-800 font-bold text-lg leading-none"
-                                      >
-                                        ×
-                                      </button>
-                                    )}
-                                  </div>
-                                ))}
-                              </div>
-                            </td>
-                          </tr>
-                        )}
+                        {/* Bundle removal options row (remove this redundant block) */}
                       </React.Fragment>
                     );
                   })}
