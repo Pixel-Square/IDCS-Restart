@@ -888,10 +888,11 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
     academic_year = serializers.PrimaryKeyRelatedField(queryset=AcademicYear.objects.all(), required=False)
     curriculum_row_id = serializers.IntegerField(write_only=True, required=False)
     curriculum_row = serializers.SerializerMethodField(read_only=True)
+    subject_info = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = None  # set at import time to avoid circular import
-        fields = ('id', 'name', 'section', 'section_id', 'staff', 'staff_id', 'created_by', 'academic_year', 'curriculum_row_id', 'curriculum_row', 'student_ids', 'students', 'is_active', 'created_at', 'updated_at')
+        fields = ('id', 'name', 'section', 'section_id', 'staff', 'staff_id', 'created_by', 'academic_year', 'curriculum_row_id', 'curriculum_row', 'subject_info', 'student_ids', 'students', 'is_active', 'created_at', 'updated_at')
         read_only_fields = ('created_at', 'updated_at', 'created_by')
 
     def __init__(self, *args, **kwargs):
@@ -956,6 +957,38 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
             return {'id': row.id, 'course_code': getattr(row, 'course_code', None), 'course_name': getattr(row, 'course_name', None)}
         except Exception:
             return None
+
+    def get_subject_info(self, obj):
+        """Return subject code/name — using curriculum_row if available, else creator's elective TA."""
+        try:
+            row = getattr(obj, 'curriculum_row', None)
+            if row:
+                return {
+                    'course_code': getattr(row, 'course_code', None),
+                    'course_name': getattr(row, 'course_name', None),
+                }
+        except Exception:
+            pass
+        # Fallback: look up creator's elective teaching assignment
+        try:
+            creator_id = getattr(obj, 'created_by_id', None)
+            if not creator_id:
+                return None
+            from .models import TeachingAssignment
+            eta = TeachingAssignment.objects.filter(
+                staff_id=creator_id,
+                elective_subject__isnull=False,
+                is_active=True,
+            ).select_related('elective_subject').first()
+            if eta and getattr(eta, 'elective_subject', None):
+                es = eta.elective_subject
+                return {
+                    'course_code': getattr(es, 'course_code', None),
+                    'course_name': getattr(es, 'course_name', None),
+                }
+        except Exception:
+            pass
+        return None
 
     def create(self, validated_data):
         student_ids = validated_data.pop('student_ids', []) or []

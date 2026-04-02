@@ -151,6 +151,34 @@ export default function AssignedSubjectsPage() {
   }
 
   function openViewBatch(batch: any) {
+    // Enrich batch with subject info for elective batches (no curriculum_row)
+    if (!batch.curriculum_row) {
+      // First try: use subject_info from the API (works for assigned batches too)
+      if (batch.subject_info?.course_name) {
+        batch = {
+          ...batch,
+          _derived_subject_name: batch.subject_info.course_name,
+          _derived_subject_code: batch.subject_info.course_code || null,
+        }
+      } else {
+        // Fallback: find matching elective teaching assignment from current user's items
+        const batchStudentIds = new Set((batch.students || []).map((s: any) => Number(s.id)))
+        const electiveItems = items.filter((it: any) => it.elective_subject_id && !it.curriculum_row_id)
+        // If only one elective item exists, use it directly; otherwise try student overlap
+        let matchItem: any = electiveItems.length === 1 ? electiveItems[0] : null
+        if (!matchItem && electiveItems.length > 1 && batchStudentIds.size > 0) {
+          // Best-effort: pick the first elective item (staff typically has one elective subject)
+          matchItem = electiveItems[0]
+        }
+        if (matchItem) {
+          batch = {
+            ...batch,
+            _derived_subject_name: matchItem.subject_name || null,
+            _derived_subject_code: matchItem.subject_code || null,
+          }
+        }
+      }
+    }
     setViewBatch(batch)
     setViewBatchOpen(true)
   }
@@ -171,23 +199,35 @@ export default function AssignedSubjectsPage() {
     }).filter(Boolean) as number[]
     const next = (nums.length ? Math.max(...nums) : 0) + 1
     const name = `Batch ${next}`
-    // fetch students for section
+    // fetch students for section or elective choices
     try{
-      const sres = await fetchWithAuth(`/api/academics/sections/${item.section_id}/students/?page_size=1000`)
-      if (!sres.ok) {
-        const txt = await sres.text()
-        throw new Error(txt || 'Failed to load students')
+      let sdata
+      if (item.section_id) {
+        const sres = await fetchWithAuth(`/api/academics/sections/${item.section_id}/students/?page_size=1000`)
+        if (!sres.ok) {
+          const txt = await sres.text()
+          throw new Error(txt || 'Failed to load students')
+        }
+        sdata = await sres.json()
+      } else if (item.elective_subject_id) {
+        const sres = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${item.elective_subject_id}&page_size=1000`)
+        if (!sres.ok) {
+          const txt = await sres.text()
+          throw new Error(txt || 'Failed to load students')
+        }
+        sdata = await sres.json()
+      } else {
+        throw new Error('No student mapping available for this assignment')
       }
-      const sdata = await sres.json()
       const studsAll = (sdata.results || sdata)
       // exclude students already present in existing batches for this curriculum_row
+      // For elective subjects (no curriculum_row), match batches that also have no curriculum_row
       const crId = item.curriculum_row_id || item.curriculum_row?.id
       const excluded = new Set<number>()
-      if (crId) {
-        for (const b of batches) {
-          if (b.curriculum_row && b.curriculum_row.id === crId) {
-            for (const s of (b.students || [])) excluded.add(s.id)
-          }
+      for (const b of batches) {
+        const bCrId = b.curriculum_row?.id ?? null
+        if (crId ? (bCrId === crId) : (bCrId === null)) {
+          for (const s of (b.students || [])) excluded.add(s.id)
         }
       }
       const studIds = studsAll.map((s:any)=>s.id).filter((id:number)=> !excluded.has(id))
@@ -256,20 +296,20 @@ export default function AssignedSubjectsPage() {
       console.log('Student IDs:', studs.map(s => s.id))
       
       // Exclude students already in existing batches for this curriculum_row / subject
+      // For elective subjects (no curriculum_row), match batches that also have no curriculum_row
       const crId = item.curriculum_row_id || item.curriculum_row?.id
       const assignedBatchesByStudentId: Record<number, string[]> = {}
       const excluded = new Set<number>()
-      if (crId) {
-        for (const b of batches) {
-          if (b.curriculum_row && b.curriculum_row.id === crId) {
-            const batchName = String(b.name || '').trim() || 'Existing batch'
-            for (const s of (b.students || [])) {
-              const sid = Number((s as any).id)
-              if (!Number.isFinite(sid)) continue
-              excluded.add(sid)
-              if (!assignedBatchesByStudentId[sid]) assignedBatchesByStudentId[sid] = []
-              if (!assignedBatchesByStudentId[sid].includes(batchName)) assignedBatchesByStudentId[sid].push(batchName)
-            }
+      for (const b of batches) {
+        const bCrId = b.curriculum_row?.id ?? null
+        if (crId ? (bCrId === crId) : (bCrId === null)) {
+          const batchName = String(b.name || '').trim() || 'Existing batch'
+          for (const s of (b.students || [])) {
+            const sid = Number((s as any).id)
+            if (!Number.isFinite(sid)) continue
+            excluded.add(sid)
+            if (!assignedBatchesByStudentId[sid]) assignedBatchesByStudentId[sid] = []
+            if (!assignedBatchesByStudentId[sid].includes(batchName)) assignedBatchesByStudentId[sid].push(batchName)
           }
         }
       }
@@ -705,14 +745,19 @@ export default function AssignedSubjectsPage() {
                           )}
                         </div>
                         <div className="flex flex-wrap gap-2">
-                          <button 
-                            type="button" 
-                            className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors" 
-                            onClick={() => openPickerForAssignment(item)}
-                          >
-                            Create Batch
-                          </button>
-                          {!item.section_id && (
+                          {item.id > 0 && (
+                            <button 
+                              type="button" 
+                              className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors" 
+                              onClick={() => openPickerForAssignment(item)}
+                            >
+                              Create Batch
+                            </button>
+                          )}
+                          {item.id < 0 && (
+                            <span className="text-xs text-orange-600 bg-orange-50 px-2 py-1 rounded-full">Assigned via batch</span>
+                          )}
+                          {!item.section_id && item.id > 0 && (
                             <span className="text-xs text-gray-500 px-2 py-1">Department-wide elective</span>
                           )}
                         </div>
@@ -788,14 +833,19 @@ export default function AssignedSubjectsPage() {
 
                     {/* Actions */}
                     <div className="flex flex-wrap gap-2">
-                      <button 
-                        type="button" 
-                        className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors" 
-                        onClick={() => openPickerForAssignment(item)}
-                      >
-                        Create Batch
-                      </button>
-                      {!item.section_id && (
+                      {item.id > 0 && (
+                        <button 
+                          type="button" 
+                          className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors" 
+                          onClick={() => openPickerForAssignment(item)}
+                        >
+                          Create Batch
+                        </button>
+                      )}
+                      {item.id < 0 && (
+                        <span className="text-xs text-orange-600 bg-orange-50 px-2 py-1 rounded-full">Assigned via batch</span>
+                      )}
+                      {!item.section_id && item.id > 0 && (
                         <span className="text-xs text-gray-500 px-2 py-1">Dept-wide elective</span>
                       )}
                     </div>
@@ -916,10 +966,22 @@ export default function AssignedSubjectsPage() {
                     })
                   })()}
                   
-                  {/* Batches without curriculum_row */}
+                  {/* Batches without curriculum_row (elective subjects) */}
                   {groupedCreated['no_subject'] && groupedCreated['no_subject'].length > 0 && (
                     <div className="border-b border-gray-100 pb-4">
-                      <div className="font-bold text-gray-900 mb-3">Other Batches</div>
+                      <div className="font-bold text-gray-900 mb-3">
+                        {(() => {
+                          // Try to derive subject name from elective teaching assignments
+                          const electiveItem = items.find((it: any) => it.elective_subject_id && !it.curriculum_row_id)
+                          if (electiveItem?.subject_name || electiveItem?.subject_code) {
+                            return electiveItem.subject_name || electiveItem.subject_code
+                          }
+                          // Fallback: use subject_info from the first batch in this group
+                          const firstBatch = groupedCreated['no_subject']?.[0]
+                          if (firstBatch?.subject_info?.course_name) return firstBatch.subject_info.course_name
+                          return 'Other Batches'
+                        })()}
+                      </div>
                       <div className="space-y-3">
                         {groupedCreated['no_subject'].map((b:any) => (
                           <div key={b.id} className="bg-gray-50 rounded-lg p-4">
@@ -1054,10 +1116,21 @@ export default function AssignedSubjectsPage() {
                     })
                   })()}
                   
-                  {/* Assigned batches without curriculum_row */}
+                  {/* Assigned batches without curriculum_row (elective subjects) */}
                   {groupedAssigned['no_subject'] && groupedAssigned['no_subject'].length > 0 && (
                     <div className="border-b border-gray-100 pb-4">
-                      <div className="font-bold text-gray-900 mb-3">Other Assigned Batches</div>
+                      <div className="font-bold text-gray-900 mb-3">
+                        {(() => {
+                          const electiveItem = items.find((it: any) => it.elective_subject_id && !it.curriculum_row_id)
+                          if (electiveItem?.subject_name || electiveItem?.subject_code) {
+                            return electiveItem.subject_name || electiveItem.subject_code
+                          }
+                          // Fallback: use subject_info from the first batch in this group
+                          const firstBatch = groupedAssigned['no_subject']?.[0]
+                          if (firstBatch?.subject_info?.course_name) return firstBatch.subject_info.course_name
+                          return 'Other Assigned Batches'
+                        })()}
+                      </div>
                       <div className="space-y-3">
                         {groupedAssigned['no_subject'].map((b:any) => (
                           <div key={b.id} className="bg-blue-50 rounded-lg p-4 border border-blue-200">
@@ -1761,20 +1834,24 @@ export default function AssignedSubjectsPage() {
                 <h4 className="font-bold text-lg text-gray-900 mb-4">{viewBatch.name}</h4>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {/* Course Information */}
-                  {viewBatch.curriculum_row && (
-                    <div className="bg-white rounded-lg p-3">
-                      <div className="text-xs font-semibold text-gray-500 uppercase mb-1">Subject</div>
-                      <div className="font-semibold text-gray-900">
-                        {viewBatch.curriculum_row.course_name || 'Unnamed Subject'}
-                      </div>
-                      {viewBatch.curriculum_row.course_code && (
-                        <div className="text-sm text-blue-600 font-medium">
-                          {viewBatch.curriculum_row.course_code}
+                  {/* Course Information — from curriculum_row or derived from elective assignment */}
+                  {(() => {
+                    const subjectName = viewBatch.curriculum_row?.course_name || viewBatch._derived_subject_name || null
+                    const subjectCode = viewBatch.curriculum_row?.course_code || viewBatch._derived_subject_code || null
+                    return subjectName ? (
+                      <div className="bg-white rounded-lg p-3">
+                        <div className="text-xs font-semibold text-gray-500 uppercase mb-1">Subject</div>
+                        <div className="font-semibold text-gray-900">
+                          {subjectName}
                         </div>
-                      )}
-                    </div>
-                  )}
+                        {subjectCode && (
+                          <div className="text-sm text-blue-600 font-medium">
+                            {subjectCode}
+                          </div>
+                        )}
+                      </div>
+                    ) : null
+                  })()}
                   
                   {/* Show different information based on whether user created or was assigned */}
                   {viewBatch.created_by?.id === currentUserStaffId ? (

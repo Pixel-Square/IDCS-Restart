@@ -3065,13 +3065,13 @@ class StaffAssignedSubjectsView(APIView):
             bqs = StudentSubjectBatch.objects.filter(
                 staff=target,
                 is_active=True,
-                curriculum_row__isnull=False,
             ).select_related(
                 'curriculum_row',
                 'curriculum_row__department',
                 'curriculum_row__semester',
                 'section',
                 'academic_year',
+                'created_by',
             )
             if active_ay:
                 bqs = bqs.filter(academic_year=active_ay)
@@ -3127,70 +3127,165 @@ class StaffAssignedSubjectsView(APIView):
 
                 return None, None
 
+            # Build a cache of creator -> elective TAs so we can resolve subject info
+            # for elective batches (curriculum_row is NULL).
+            _creator_elective_ta_cache: dict = {}
+
+            def _resolve_elective_subject_for_batch(sb_obj):
+                """Look up elective subject info for a batch by checking creator's TAs."""
+                creator_id = getattr(sb_obj, 'created_by_id', None)
+                if not creator_id:
+                    return None, None, None, None, None  # code, name, elective_subject_id, dept_obj, sem_num
+                if creator_id not in _creator_elective_ta_cache:
+                    etas = TeachingAssignment.objects.filter(
+                        staff_id=creator_id,
+                        elective_subject__isnull=False,
+                        is_active=True,
+                    ).select_related(
+                        'elective_subject',
+                        'elective_subject__department',
+                        'elective_subject__semester',
+                    )
+                    try:
+                        if active_ay and etas.filter(academic_year=active_ay).exists():
+                            etas = etas.filter(academic_year=active_ay)
+                    except Exception:
+                        pass
+                    _creator_elective_ta_cache[creator_id] = list(etas)
+
+                etas = _creator_elective_ta_cache.get(creator_id, [])
+                if not etas:
+                    return None, None, None, None, None
+
+                # If there's only one elective TA, use it; otherwise pick first match
+                eta = etas[0]
+                es = getattr(eta, 'elective_subject', None)
+                if not es:
+                    return None, None, None, None, None
+
+                dept_obj = None
+                try:
+                    dept = getattr(es, 'department', None)
+                    if dept:
+                        dept_obj = {
+                            'id': getattr(dept, 'id', None),
+                            'code': getattr(dept, 'code', None),
+                            'name': getattr(dept, 'name', None),
+                            'short_name': getattr(dept, 'short_name', None),
+                        }
+                except Exception:
+                    dept_obj = None
+
+                sem_num = None
+                try:
+                    sem_num = getattr(getattr(es, 'semester', None), 'number', None)
+                except Exception:
+                    sem_num = None
+
+                return (
+                    getattr(es, 'course_code', None),
+                    getattr(es, 'course_name', None),
+                    getattr(es, 'pk', None),
+                    dept_obj,
+                    sem_num,
+                )
+
             for sb in bqs:
                 try:
                     cr = getattr(sb, 'curriculum_row', None)
-                    if not cr:
-                        continue
-
                     batch_info = {'id': sb.pk, 'name': getattr(sb, 'name', None)}
-
                     section_id, section_name = _infer_batch_section(sb)
 
-                    # If the subject already exists (as a TeachingAssignment), attach the batch
-                    # only to the matching section row.
-                    key = (int(cr.pk), int(section_id) if section_id is not None else None)
-                    existing_rows = by_key.get(key)
-                    if not existing_rows and section_id is None:
-                        existing_rows = by_key.get((int(cr.pk), None))
-                    if existing_rows:
-                        for existing in existing_rows:
-                            lst = existing.get('subject_batches')
-                            if not isinstance(lst, list):
-                                lst = []
-                            if not any(int(x.get('id')) == int(sb.pk) for x in lst if isinstance(x, dict) and x.get('id') is not None):
-                                lst.append(batch_info)
-                            existing['subject_batches'] = lst
-                        continue
+                    if cr:
+                        # ── Curriculum-row based batch (non-elective) ──
+                        key = (int(cr.pk), int(section_id) if section_id is not None else None)
+                        existing_rows = by_key.get(key)
+                        if not existing_rows and section_id is None:
+                            existing_rows = by_key.get((int(cr.pk), None))
+                        if existing_rows:
+                            for existing in existing_rows:
+                                lst = existing.get('subject_batches')
+                                if not isinstance(lst, list):
+                                    lst = []
+                                if not any(int(x.get('id')) == int(sb.pk) for x in lst if isinstance(x, dict) and x.get('id') is not None):
+                                    lst.append(batch_info)
+                                existing['subject_batches'] = lst
+                            continue
 
-                    # Otherwise create a minimal row so the batch-staff can still see the subject.
-
-                    dept_obj = None
-                    try:
-                        dept = getattr(cr, 'department', None)
-                        if dept:
-                            dept_obj = {
-                                'id': getattr(dept, 'id', None),
-                                'code': getattr(dept, 'code', None),
-                                'name': getattr(dept, 'name', None),
-                                'short_name': getattr(dept, 'short_name', None),
-                            }
-                    except Exception:
                         dept_obj = None
+                        try:
+                            dept = getattr(cr, 'department', None)
+                            if dept:
+                                dept_obj = {
+                                    'id': getattr(dept, 'id', None),
+                                    'code': getattr(dept, 'code', None),
+                                    'name': getattr(dept, 'name', None),
+                                    'short_name': getattr(dept, 'short_name', None),
+                                }
+                        except Exception:
+                            dept_obj = None
 
-                    sem_num = None
-                    try:
-                        sem_num = getattr(getattr(cr, 'semester', None), 'number', None)
-                    except Exception:
                         sem_num = None
+                        try:
+                            sem_num = getattr(getattr(cr, 'semester', None), 'number', None)
+                        except Exception:
+                            sem_num = None
 
-                    results.append({
-                        'id': -int(sb.pk),
-                        'subject_code': getattr(cr, 'course_code', None),
-                        'subject_name': getattr(cr, 'course_name', None),
-                        'class_type': 'BATCH',
-                        'section_name': section_name,
-                        'section_id': section_id,
-                        'elective_subject_id': None,
-                        'elective_subject_name': None,
-                        'curriculum_row_id': getattr(cr, 'pk', None),
-                        'batch': None,
-                        'semester': sem_num,
-                        'academic_year': getattr(getattr(sb, 'academic_year', None), 'name', None),
-                        'department': dept_obj,
-                        'subject_batches': [batch_info],
-                    })
-                    by_key.setdefault(key, []).append(results[-1])
+                        results.append({
+                            'id': -int(sb.pk),
+                            'subject_code': getattr(cr, 'course_code', None),
+                            'subject_name': getattr(cr, 'course_name', None),
+                            'class_type': 'BATCH',
+                            'section_name': section_name,
+                            'section_id': section_id,
+                            'elective_subject_id': None,
+                            'elective_subject_name': None,
+                            'curriculum_row_id': getattr(cr, 'pk', None),
+                            'batch': None,
+                            'semester': sem_num,
+                            'academic_year': getattr(getattr(sb, 'academic_year', None), 'name', None),
+                            'department': dept_obj,
+                            'subject_batches': [batch_info],
+                        })
+                        by_key.setdefault(key, []).append(results[-1])
+                    else:
+                        # ── Elective batch (no curriculum_row) ──
+                        # Derive subject info from the batch creator's elective teaching assignment.
+                        e_code, e_name, e_sub_id, e_dept, e_sem = _resolve_elective_subject_for_batch(sb)
+                        if not e_code and not e_name:
+                            continue  # can't determine subject at all
+
+                        # Check if an existing result already covers this elective subject
+                        matched = False
+                        for r in results:
+                            if r.get('elective_subject_id') and e_sub_id and int(r.get('elective_subject_id')) == int(e_sub_id):
+                                lst = r.get('subject_batches')
+                                if not isinstance(lst, list):
+                                    lst = []
+                                if not any(int(x.get('id')) == int(sb.pk) for x in lst if isinstance(x, dict) and x.get('id') is not None):
+                                    lst.append(batch_info)
+                                r['subject_batches'] = lst
+                                matched = True
+                                break
+                        if matched:
+                            continue
+
+                        results.append({
+                            'id': -int(sb.pk),
+                            'subject_code': e_code,
+                            'subject_name': e_name,
+                            'class_type': 'BATCH',
+                            'section_name': section_name,
+                            'section_id': section_id,
+                            'elective_subject_id': e_sub_id,
+                            'elective_subject_name': e_name,
+                            'curriculum_row_id': None,
+                            'batch': None,
+                            'semester': e_sem,
+                            'academic_year': getattr(getattr(sb, 'academic_year', None), 'name', None),
+                            'department': e_dept,
+                            'subject_batches': [batch_info],
+                        })
                 except Exception:
                     continue
         except Exception:
