@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
-import fetchWithAuth from '../services/fetchAuth';
 import { fetchMyTeachingAssignments } from '../services/obe';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
 import { fetchMasters } from '../services/curriculum';
@@ -1038,31 +1037,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
           console.warn('[Formative] My TAs fetch failed:', err);
         }
 
-        // If we found a TA and it's an elective (has elective_subject_id, no section_id), fetch from elective-choices
-        if (matchedTa && matchedTa.elective_subject_id && !matchedTa.section_id) {
-          // detected elective - fetching elective choices
-          try {
-            const esRes = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${encodeURIComponent(String(matchedTa.elective_subject_id))}`);
-            if (esRes.ok) {
-              const esData = await esRes.json();
-              const items = Array.isArray(esData.results) ? esData.results : Array.isArray(esData) ? esData : (esData.items || []);
-              // elective choices returned
-              roster = (items || []).map((s: any) => ({ 
-                id: Number(s.student_id ?? s.id), 
-                reg_no: String(s.reg_no ?? s.regno ?? ''),
-                name: String(s.name ?? s.full_name ?? s.username ?? ''),
-                section: s.section_name ?? s.section ?? null 
-              })).filter((s) => Number.isFinite(s.id));
-              if (mounted) setSubjectData({ subject_name: matchedTa.subject_name, section: matchedTa.section_name || 'Elective' });
-            } else {
-              console.warn('[Formative] Elective-choices API returned error:', esRes.status);
-            }
-          } catch (err) {
-            console.warn('[Formative] Elective-choices fetch failed:', err);
-          }
-        }
-
-        // If not elective or elective fetch failed, use regular TA roster.
+        // Always use TA roster (backend handles batch filtering for electives)
         // Also covers IQAC viewer path where matchedTa is null but teachingAssignmentId is provided.
         const rosterTaId: number | undefined = (matchedTa && matchedTa.id) || (teachingAssignmentId ?? undefined);
         if (!roster.length && rosterTaId) {

@@ -510,6 +510,41 @@ class TeachingAssignmentStudentsView(APIView):
                     'section': section_name,
                 })
 
+        # ── Batch-based student filtering ──
+        # If the TA owner has StudentSubjectBatch entries for this subject/year,
+        # restrict the student list to only those in the staff's batches.
+        # This ensures batch-assigned staff see only their batch students.
+        # Uses ta.staff_id (the TA owner) so HOD/IQAC views also see the correct filtered roster.
+        try:
+            from academics.models import StudentSubjectBatch as _SSB
+            batch_filter_qs = _SSB.objects.filter(
+                staff_id=ta.staff_id,
+                is_active=True,
+            )
+            if getattr(ta, 'academic_year_id', None):
+                batch_filter_qs = batch_filter_qs.filter(academic_year_id=ta.academic_year_id)
+            # For elective TAs (no curriculum_row), match by creator's elective TA overlap
+            # For regular TAs, match by curriculum_row
+            if getattr(ta, 'curriculum_row_id', None):
+                batch_filter_qs = batch_filter_qs.filter(curriculum_row_id=ta.curriculum_row_id)
+            else:
+                # Elective: match batches without curriculum_row
+                batch_filter_qs = batch_filter_qs.filter(curriculum_row__isnull=True)
+            user_batches = list(batch_filter_qs)
+            if user_batches:
+                batch_student_ids = set()
+                for ub in user_batches:
+                    try:
+                        batch_student_ids.update(
+                            ub.students.values_list('id', flat=True)
+                        )
+                    except Exception:
+                        pass
+                if batch_student_ids:
+                    students = [s for s in students if s.get('id') in batch_student_ids]
+        except Exception:
+            pass
+
         def _resolve_dept(ta_obj):
             dept = None
             try:

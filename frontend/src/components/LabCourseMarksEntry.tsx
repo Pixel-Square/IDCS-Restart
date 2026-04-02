@@ -3,7 +3,6 @@ import { ClipboardList } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster } from '../services/roster';
-import fetchWithAuth from '../services/fetchAuth';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
 import {
   confirmMarkManagerLock,
@@ -844,35 +843,16 @@ export default function LabCourseMarksEntry({
       setLoadingRoster(true);
       setRosterError(null);
       try {
-        // Try TA detail -> elective-choices when TA represents an elective
+        // Always use TA roster (backend handles batch filtering for electives)
         let studentsList: any[] | null = null;
-        try {
-          const taRes = await fetchWithAuth(`/api/academics/teaching-assignments/${teachingAssignmentId}/`);
-          if (taRes.ok) {
-            const taObj = await taRes.json();
-            if (taObj && taObj.elective_subject_id && !taObj.section_id) {
-              const esRes = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${encodeURIComponent(String(taObj.elective_subject_id))}`);
-              if (esRes.ok) {
-                const data = await esRes.json();
-                const items = Array.isArray(data.results) ? data.results : Array.isArray(data) ? data : (data.items || []);
-                studentsList = items.map((s: any) => ({ id: Number(s.student_id ?? s.id), reg_no: String(s.reg_no ?? s.regno ?? ''), name: String(s.name ?? s.full_name ?? s.username ?? ''), section: s.section_name ?? s.section ?? null }));
-              }
-            }
-          }
-        } catch (err) {
-          // ignore elective attempt
-        }
-
-        if (!studentsList) {
-          const res = await fetchTeachingAssignmentRoster(teachingAssignmentId);
-          setTaMeta({
-            courseName: String((res as any)?.teaching_assignment?.subject_name || ''),
-            courseCode: String((res as any)?.teaching_assignment?.subject_code || subjectId || ''),
-            className: String((res as any)?.teaching_assignment?.section_name || ''),
-          });
-          const roster = (res?.students || []) as any[];
-          studentsList = roster.map((s: any) => ({ id: Number(s.id), reg_no: String(s.reg_no ?? ''), name: String(s.name ?? ''), section: s.section ?? null }));
-        }
+        const res = await fetchTeachingAssignmentRoster(teachingAssignmentId);
+        setTaMeta({
+          courseName: String((res as any)?.teaching_assignment?.subject_name || ''),
+          courseCode: String((res as any)?.teaching_assignment?.subject_code || subjectId || ''),
+          className: String((res as any)?.teaching_assignment?.section_name || ''),
+        });
+        const roster = (res?.students || []) as any[];
+        studentsList = roster.map((s: any) => ({ id: Number(s.id), reg_no: String(s.reg_no ?? ''), name: String(s.name ?? ''), section: s.section ?? null }));
 
         if (!mounted) return;
         const sorted = (studentsList || [])

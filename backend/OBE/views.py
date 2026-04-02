@@ -170,13 +170,10 @@ def _get_students_for_teaching_assignment(ta):
                 students.append(sp)
         except Exception:
             students = []
-        return students
+    elif getattr(ta, 'section', None) is not None:
+        try:
+            from academics.models import StudentSectionAssignment, StudentProfile
 
-    # Prefer active StudentSectionAssignment entries for the section.
-    try:
-        from academics.models import StudentSectionAssignment, StudentProfile
-
-        if getattr(ta, 'section', None) is not None:
             s_qs = (
                 StudentSectionAssignment.objects.filter(section=ta.section, end_date__isnull=True)
                 .exclude(student__status__in=['INACTIVE', 'DEBAR'])
@@ -186,10 +183,9 @@ def _get_students_for_teaching_assignment(ta):
             for a in s_qs:
                 students.append(a.student)
 
-        # Also include legacy StudentProfile.section entries even when we already
-        # have students from StudentSectionAssignment, to avoid silently dropping
-        # students whose section assignment rows were never backfilled.
-        if getattr(ta, 'section', None) is not None:
+            # Also include legacy StudentProfile.section entries even when we already
+            # have students from StudentSectionAssignment, to avoid silently dropping
+            # students whose section assignment rows were never backfilled.
             try:
                 existing_ids = {int(getattr(s, 'id', None)) for s in students if getattr(s, 'id', None) is not None}
             except Exception:
@@ -209,8 +205,40 @@ def _get_students_for_teaching_assignment(ta):
                 if sid in existing_ids:
                     continue
                 students.append(sp)
-    except Exception:
-        students = []
+        except Exception:
+            students = []
+
+    # ── Batch-based student filtering ──
+    # If the TA's staff has StudentSubjectBatch entries for this subject/year,
+    # restrict the student list to only those in the staff's batches.
+    # This ensures batch-assigned staff see only their batch students in marks pages.
+    if students and getattr(ta, 'staff_id', None):
+        try:
+            from academics.models import StudentSubjectBatch as _SSB
+            batch_qs = _SSB.objects.filter(
+                staff_id=ta.staff_id,
+                is_active=True,
+            )
+            if getattr(ta, 'academic_year_id', None):
+                batch_qs = batch_qs.filter(academic_year_id=ta.academic_year_id)
+            if getattr(ta, 'curriculum_row_id', None):
+                batch_qs = batch_qs.filter(curriculum_row_id=ta.curriculum_row_id)
+            else:
+                batch_qs = batch_qs.filter(curriculum_row__isnull=True)
+            user_batches = list(batch_qs)
+            if user_batches:
+                batch_student_ids = set()
+                for ub in user_batches:
+                    try:
+                        batch_student_ids.update(
+                            ub.students.values_list('id', flat=True)
+                        )
+                    except Exception:
+                        pass
+                if batch_student_ids:
+                    students = [s for s in students if getattr(s, 'id', None) in batch_student_ids]
+        except Exception:
+            pass
 
     return students
 

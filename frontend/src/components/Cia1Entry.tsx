@@ -17,7 +17,6 @@ import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
 import fetchWithAuth from '../services/fetchAuth';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
-import { fetchMyTeachingAssignments } from '../services/obe';
 import { formatRemaining, usePublishWindow } from '../hooks/usePublishWindow';
 import { useEditWindow } from '../hooks/useEditWindow';
 import { useMarkTableLock } from '../hooks/useMarkTableLock';
@@ -897,69 +896,31 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       setError(null);
       try {
         let data: any = null;
-        
-        // First, get the user's teaching assignments for this subject to check if it's elective
-        let matchedTa: any = null;
+
+        // Try normal CIA marks API first
         try {
-          const myTAs = await fetchMyTeachingAssignments();
-          matchedTa = (myTAs || []).find((t: any) => {
-            const codeMatch = String(t.subject_code || '').trim().toUpperCase() === String(subjectId || '').trim().toUpperCase();
-            const idMatch = teachingAssignmentId ? t.id === teachingAssignmentId : false;
-            return idMatch || codeMatch;
-          });
-        } catch {
-          // ignore if can't fetch TAs
-        }
-
-        // If we found a TA and it's an elective (has elective_subject_id, no section_id), fetch from elective-choices
-        if (matchedTa && matchedTa.elective_subject_id && !matchedTa.section_id) {
-          try {
-            const esRes = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${encodeURIComponent(String(matchedTa.elective_subject_id))}`);
-            if (esRes.ok) {
-              const esData = await esRes.json();
-              const items = Array.isArray(esData.results) ? esData.results : Array.isArray(esData) ? esData : (esData.items || []);
-              data = { 
-                students: (items || []).map((s: any) => ({ 
-                  id: Number(s.student_id ?? s.id), 
-                  reg_no: String(s.reg_no ?? s.regno ?? ''),
-                  name: String(s.name ?? s.full_name ?? s.username ?? ''),
-                  section: s.section_name ?? s.section ?? null 
-                })), 
-                marks: {} 
-              };
+          data = await fetchCiaMarks(assessmentKey, subjectId, teachingAssignmentId);
+        } catch (err) {
+          console.warn('CIA marks fetch failed:', err);
+          // Try TA roster as final fallback (backend handles batch filtering for electives)
+          if (teachingAssignmentId) {
+            try {
+              const taResp = await fetchTeachingAssignmentRoster(teachingAssignmentId);
+              data = { students: taResp.students || [], marks: {} };
+            } catch {
+              console.warn('TA roster fallback failed');
             }
-          } catch (err) {
-            console.warn('Elective-choices fetch failed, falling back:', err);
           }
-        }
-
-        // If not elective or elective fetch failed, try normal CIA marks API
-        if (!data) {
-          try {
-            data = await fetchCiaMarks(assessmentKey, subjectId, teachingAssignmentId);
-          } catch (err) {
-            console.warn('CIA marks fetch failed:', err);
-            // Try TA roster as final fallback
-            if (matchedTa && matchedTa.id) {
-              try {
-                const taResp = await fetchTeachingAssignmentRoster(matchedTa.id);
-                data = { students: taResp.students || [], marks: {} };
-              } catch {
-                console.warn('TA roster fallback failed');
-              }
-            }
-            // If still no data, rethrow original error
-            if (!data) throw err;
-          }
+          // If still no data, rethrow original error
+          if (!data) throw err;
         }
 
         // If the marks API responded but did not include any roster students,
-        // fall back to the selected TA roster so the table can still be filled.
+        // fall back to the TA roster so the table can still be filled.
         if (data && Array.isArray((data as any).students) && ((data as any).students || []).length === 0) {
-          const taToUse = teachingAssignmentId ?? matchedTa?.id;
-          if (taToUse) {
+          if (teachingAssignmentId) {
             try {
-              const taResp = await fetchTeachingAssignmentRoster(Number(taToUse));
+              const taResp = await fetchTeachingAssignmentRoster(teachingAssignmentId);
               data = { ...(data as any), students: taResp.students || [] };
             } catch (err) {
               console.warn('CIA marks roster was empty and TA roster fallback failed:', err);

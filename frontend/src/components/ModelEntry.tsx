@@ -3,7 +3,6 @@ import * as XLSX from 'xlsx';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { normalizeObeClassType } from '../constants/classTypes';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
-import fetchWithAuth from '../services/fetchAuth';
 import * as OBE from '../services/obe';
 import { ensureMobileVerified } from '../services/auth';
 import { formatRemaining, usePublishWindow } from '../hooks/usePublishWindow';
@@ -380,31 +379,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     if (!silent) setLoading(true);
     if (!silent) setError(null);
     try {
-      // Try to detect elective TAs and use elective-choices mapping when appropriate
-      try {
-        const taRes = await fetchWithAuth(`/api/academics/teaching-assignments/${teachingAssignmentId}/`);
-        if (taRes.ok) {
-          const taObj = await taRes.json();
-          if (taObj && taObj.elective_subject_id && !taObj.section_id) {
-            const esRes = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${encodeURIComponent(String(taObj.elective_subject_id))}`);
-            if (!esRes.ok) throw new Error(`Elective-choices fetch failed: ${esRes.status}`);
-            const data = await esRes.json();
-            const items = Array.isArray(data.results) ? data.results : Array.isArray(data) ? data : (data.items || []);
-            const mapped = (items || []).map((s: any) => ({
-              id: Number(s.student_id ?? s.id),
-              reg_no: String(s.reg_no ?? s.registration_no ?? s.regno ?? ''),
-              name: String(s.name ?? s.full_name ?? s.username ?? ''),
-              section: s.section_name ?? s.section ?? null,
-            })) as TeachingAssignmentRosterStudent[];
-            const sorted = mapped.filter((s) => Number.isFinite(s.id)).sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
-            setStudents(sorted);
-            return;
-          }
-        }
-      } catch (err) {
-        // ignore and fall back to roster endpoint
-      }
-
+      // Always use TA roster (backend handles batch filtering for electives)
       const res = await fetchTeachingAssignmentRoster(teachingAssignmentId);
       const roster = (res?.students || []) as TeachingAssignmentRosterStudent[];
       const sorted = [...roster].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));

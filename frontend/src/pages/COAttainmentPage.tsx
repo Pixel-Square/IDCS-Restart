@@ -796,47 +796,19 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
       setLoadingRoster(true);
       setRosterError(null);
       try {
-        // Find the TA object to decide how to fetch students (section vs elective)
-        const ta = (tas || []).find((t) => t.id === selectedTaId) || null;
-        const studsRaw: any[] = [];
-
-        if (ta && (ta as any).elective_subject_id && !(ta as any).section_id) {
-          // Elective assignment — fetch students using elective-choices endpoint
-          const electiveId = (ta as any).elective_subject_id;
-          const res = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${encodeURIComponent(String(electiveId))}`);
-          if (!res.ok) throw new Error(`Elective-choices fetch failed: ${res.status}`);
-          const data = await res.json();
-          if (!mounted) return;
-          // API may return paginated results in `results` or a plain array
-          const items = Array.isArray(data.results) ? data.results : Array.isArray(data) ? data : (data.items || []);
-          const mapped = (items || []).map((s: any) => ({
-            id: Number(s.student_id ?? s.id),
-            reg_no: String(s.reg_no ?? s.registration_no ?? s.regno ?? ''),
-            name: String(s.name ?? s.full_name ?? s.username ?? s.student_name ?? ''),
-            section: s.section_name ?? s.section ?? null,
-            section_id: s.section_id ?? null,
-          }));
-          if (!mounted) return;
-          setStudents(
-            mapped
-              .filter((s) => Number.isFinite(s.id))
-              .sort(compareStudentName),
-          );
-        } else {
-          // Default: teaching-assignment roster endpoint
-          const resp = await fetchTeachingAssignmentRoster(selectedTaId);
-          if (!mounted) return;
-          const roster = (resp.students || [])
-            .map((s: TeachingAssignmentRosterStudent) => ({
-              id: Number(s.id),
-              reg_no: String(s.reg_no ?? ''),
-              name: String(s.name ?? ''),
-              section: s.section ?? null,
-            }))
-            .filter((s) => Number.isFinite(s.id))
-            .sort(compareStudentName);
-          setStudents(roster);
-        }
+        // Always use TA roster (backend handles batch filtering for electives)
+        const resp = await fetchTeachingAssignmentRoster(selectedTaId);
+        if (!mounted) return;
+        const roster = (resp.students || [])
+          .map((s: TeachingAssignmentRosterStudent) => ({
+            id: Number(s.id),
+            reg_no: String(s.reg_no ?? ''),
+            name: String(s.name ?? ''),
+            section: s.section ?? null,
+          }))
+          .filter((s) => Number.isFinite(s.id))
+          .sort(compareStudentName);
+        setStudents(roster);
       } catch (e: any) {
         if (!mounted) return;
         setStudents([]);
