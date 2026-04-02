@@ -7,4 +7,9 @@
       Import CSV
     </a>
   </li>
+  <li>
+    <a href="{% url 'admin:accounts_user_delete_by_email' %}" class="deletelink" style="background: #dc2626;" onclick="return window.open(this.href, 'user_delete_by_email', 'height=720,width=980,resizable=yes,scrollbars=yes').focus(), false;">
+      Delete by Email
+    </a>
+  </li>
 {% endblock %}

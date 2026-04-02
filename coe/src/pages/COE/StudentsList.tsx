@@ -17,7 +17,7 @@ import {
 import {
   CourseSelection,
   getCourseKey,
-  readCourseSelectionMap,
+  fetchCourseSelectionMapFromApi,
 } from './courseSelectionStorage';
 import { getAttendanceFilterKey, readCourseAbsenteesMap } from './attendanceStore';
 import { getSemesterStartSequence, generateDummyNumber } from './dummySequence';
@@ -27,6 +27,9 @@ import {
   readRetrivalApplyPayload,
 } from '../../utils/retrivalStore';
 import { readTTScheduleMap } from './ttScheduleStore';
+import { kvHydrate, kvSave } from '../../utils/coeKvStore';
+import { hydrateShuffledListStore, readShuffleLocks, writeShuffleLocks, markFilterAsShuffled, unmarkFilterAsShuffled, isFilterShuffled, readShuffledLists, writeShuffledLists, getPersistedShuffledForFilter, setPersistedShuffledForFilter, clearPersistedShuffledForFilter, PersistedShuffledByDummy } from './shuffledListStore';
+import { hydrateMarksStore, getMarksQpType } from './marksStore';
 import fetchWithAuth from '../../services/fetchAuth';
 
 const DEPARTMENT_DUMMY_DIGITS: Record<string, string> = {
@@ -70,7 +73,6 @@ const ASSIGNING_STORE_KEY = 'coe-assigning-v1';
 const COURSE_BUNDLE_DUMMY_STORE_KEY = 'coe-course-bundle-dummies-v1';
 type ArrearShuffleMode = 'include' | 'separate';
 type PersistedShuffledStudent = { reg_no: string; name: string };
-type PersistedShuffledByDummy = Record<string, PersistedShuffledStudent>;
 type PersistedBundleInfo = { name: string; scripts: number };
 type CourseBundleDummyMap = Record<string, { courseDummies: string[]; bundles: Record<string, string[]> }>;
 type CourseBundleDummyStore = Record<string, CourseBundleDummyMap>;
@@ -104,10 +106,10 @@ function writeCourseBundleDummyStore(store: CourseBundleDummyStore) {
   if (typeof window === 'undefined') return;
   const keys = Object.keys(store || {});
   if (keys.length === 0) {
-    window.localStorage.removeItem(COURSE_BUNDLE_DUMMY_STORE_KEY);
+    kvSave(COURSE_BUNDLE_DUMMY_STORE_KEY, null);
     return;
   }
-  window.localStorage.setItem(COURSE_BUNDLE_DUMMY_STORE_KEY, JSON.stringify(store));
+  kvSave(COURSE_BUNDLE_DUMMY_STORE_KEY, store);
 }
 
 export default function StudentsList() {
@@ -197,6 +199,16 @@ export default function StudentsList() {
     };
   }, []);
 
+  // Hydrate all KV stores from DB on mount
+  useEffect(() => {
+    Promise.all([
+      hydrateShuffledListStore(),
+      hydrateMarksStore(),
+      kvHydrate(ASSIGNING_STORE_KEY),
+      kvHydrate(COURSE_BUNDLE_DUMMY_STORE_KEY),
+    ]).catch(() => {});
+  }, []);
+
   const absentCourseMap = useMemo(
     () => readCourseAbsenteesMap(getAttendanceFilterKey(department, semester)),
     [department, semester]
@@ -229,88 +241,6 @@ export default function StudentsList() {
   }, [selectedDate, ttScheduleMap]);
 
   const getCurrentFilterKey = () => `${department}::${semester}`;
-
-  const readShuffleLocks = (): Record<string, boolean> => {
-    if (typeof window === 'undefined') return {};
-    try {
-      const raw = window.localStorage.getItem(SHUFFLE_LOCK_KEY);
-      if (!raw) return {};
-      const parsed = JSON.parse(raw) as Record<string, boolean>;
-      return parsed && typeof parsed === 'object' ? parsed : {};
-    } catch {
-      return {};
-    }
-  };
-
-  const writeShuffleLocks = (locks: Record<string, boolean>) => {
-    if (typeof window === 'undefined') return;
-    const keys = Object.keys(locks || {}).filter((k) => Boolean(locks[k]));
-    if (keys.length > 0) {
-      window.localStorage.setItem(SHUFFLE_LOCK_KEY, JSON.stringify(locks));
-      return;
-    }
-    window.localStorage.removeItem(SHUFFLE_LOCK_KEY);
-  };
-
-  const markFilterAsShuffled = (filterKey: string) => {
-    const locks = readShuffleLocks();
-    locks[filterKey] = true;
-    writeShuffleLocks(locks);
-  };
-
-  const unmarkFilterAsShuffled = (filterKey: string) => {
-    const locks = readShuffleLocks();
-    if (locks[filterKey]) {
-      delete locks[filterKey];
-      writeShuffleLocks(locks);
-    }
-  };
-
-  const isFilterShuffled = (filterKey: string) => {
-    const locks = readShuffleLocks();
-    return Boolean(locks[filterKey]);
-  };
-
-  const readShuffledLists = (): Record<string, PersistedShuffledByDummy> => {
-    if (typeof window === 'undefined') return {};
-    try {
-      const raw = window.localStorage.getItem(SHUFFLED_LIST_KEY);
-      if (!raw) return {};
-      const parsed = JSON.parse(raw) as Record<string, PersistedShuffledByDummy>;
-      return parsed && typeof parsed === 'object' ? parsed : {};
-    } catch {
-      return {};
-    }
-  };
-
-  const writeShuffledLists = (lists: Record<string, PersistedShuffledByDummy>) => {
-    if (typeof window === 'undefined') return;
-    const keys = Object.keys(lists || {});
-    if (keys.length > 0) {
-      window.localStorage.setItem(SHUFFLED_LIST_KEY, JSON.stringify(lists));
-      return;
-    }
-    window.localStorage.removeItem(SHUFFLED_LIST_KEY);
-  };
-
-  const getPersistedShuffledForFilter = (filterKey: string): PersistedShuffledByDummy => {
-    const lists = readShuffledLists();
-    return lists[filterKey] || {};
-  };
-
-  const setPersistedShuffledForFilter = (filterKey: string, shuffledByDummy: PersistedShuffledByDummy) => {
-    const lists = readShuffledLists();
-    lists[filterKey] = shuffledByDummy;
-    writeShuffledLists(lists);
-  };
-
-  const clearPersistedShuffledForFilter = (filterKey: string) => {
-    const lists = readShuffledLists();
-    if (lists[filterKey]) {
-      delete lists[filterKey];
-      writeShuffledLists(lists);
-    }
-  };
 
   const closePdfPreview = () => {
     setPdfPreviewUrl((prev) => {
@@ -474,7 +404,7 @@ export default function StudentsList() {
   };
 
   useEffect(() => {
-    setSelectionMap(readCourseSelectionMap());
+    fetchCourseSelectionMapFromApi(department, semester).then(setSelectionMap);
   }, [department, semester]);
 
   // Build enriched data with stable per-row dummy and enrollmentId whenever API `data` or `semester` changes

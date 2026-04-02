@@ -8024,8 +8024,68 @@ class ExtStaffProfileDetailView(APIView):
     def delete(self, request, pk):
         self._check_permission(request)
         obj = self._get_obj(pk)
+        # Also delete the associated user
+        user = obj.user
         obj.delete()
+        if user:
+            user.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ExtStaffProfileBulkDeleteView(APIView):
+    """
+    POST /api/academics/ext-staff-profiles/bulk-delete/
+    Body: { "ids": [1, 2, 3] }
+    Deletes multiple ExtStaffProfile records at once.
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request):
+        current_user = request.user
+        if not current_user.is_superuser and not current_user.has_perm('academics.view_staffs_page'):
+            # Also allow IQAC role
+            try:
+                if not current_user.roles.filter(name__iexact='IQAC').exists():
+                    return Response(
+                        {'detail': 'You do not have permission to delete ext staff profiles.'},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+            except Exception:
+                return Response(
+                    {'detail': 'You do not have permission to delete ext staff profiles.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        from .models import ExtStaffProfile
+
+        ids = request.data.get('ids', [])
+        if not ids or not isinstance(ids, list):
+            return Response(
+                {'detail': 'No IDs provided. Expected {"ids": [1, 2, 3]}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        deleted_count = 0
+        errors = []
+        for profile_id in ids:
+            try:
+                profile = ExtStaffProfile.objects.get(pk=profile_id)
+                # Also delete the associated user
+                profile_user = profile.user
+                profile.delete()
+                if profile_user:
+                    profile_user.delete()
+                deleted_count += 1
+            except ExtStaffProfile.DoesNotExist:
+                errors.append(f'Profile with ID {profile_id} not found.')
+            except Exception as exc:
+                errors.append(f'Error deleting ID {profile_id}: {exc}')
+
+        return Response({
+            'deleted': deleted_count,
+            'total': len(ids),
+            'errors': errors,
+        })
 
 
 class ExtStaffProfileUsersView(APIView):
@@ -8158,6 +8218,7 @@ class ExtStaffProfileBulkImportView(APIView):
 
         # ── Process rows ──────────────────────────────────────────────────────
         from django.contrib.auth import get_user_model
+        from django.contrib.auth.models import Group
         from .models import ExtStaffProfile
 
         User = get_user_model()
@@ -8166,55 +8227,71 @@ class ExtStaffProfileBulkImportView(APIView):
         seen_usernames: set[str] = set()
         seen_emails: set[str] = set()
 
+        # Get or create Ext_staff group
+        ext_staff_group, _ = Group.objects.get_or_create(name='Ext_staff')
+
         for idx, row in enumerate(rows, start=2):  # row 1 is header
+            salutation   = self._col(row, 'salutation', 'title', 'prefix')
+            full_name    = self._col(row, 'fullname', 'full name', 'full_name', 'name', 'faculty name', 'name of the faculty')
             username     = self._col(row, 'username', 'user name', 'user_name')
             email        = self._col(row, 'email', 'emailaddress', 'email address', 'email_address')
             password     = self._col(row, 'password', 'pwd')
-            first_name   = self._col(row, 'firstname', 'first name', 'first_name', 'name', 'faculty name', 'name of the faculty')
+            first_name   = self._col(row, 'firstname', 'first name', 'first_name')
             last_name    = self._col(row, 'lastname', 'last name', 'last_name')
             designation  = self._col(row, 'designation', 'desig')
             organisation = self._col(row, 'organisation', 'organization', 'org', 'department', 'dept', 'department working in')
             mobile       = self._col(row, 'mobile', 'mobilenumber', 'mobile number', 'phone', 'contact')
             gender       = self._col(row, 'gender', 'genderspecification', 'gender specification')
-            qualification = self._col(row, 'qualification', 'qualificationspecification', 'qualification specification')
+            ug_spec      = self._col(row, 'ugspecialization', 'ug specialization', 'ug with specialization', 'ug')
+            pg_spec      = self._col(row, 'pgspecialization', 'pg specialization', 'pg with specialization', 'pg')
             phd_status   = self._col(row, 'phdstatus', 'phd status', 'phd')
             experience   = self._col(row, 'totalexperience', 'total experience', 'experience')
+            engg_exp     = self._col(row, 'engineeringcollegeexperience', 'engineering college experience', 'engg college experience', 'engg exp')
             dob          = self._col(row, 'dateofbirth', 'date of birth', 'dob')
             notes_text   = self._col(row, 'notes', 'remarks')
             teaching     = self._col(row, 'teaching', 'facultytype', 'type of faculty')
             faculty_id   = self._col(row, 'facultyid', 'faculty id', 'staffid', 'staff id')
+            # Bank details
+            acc_holder   = self._col(row, 'accountholdername', 'account holder name', 'holder name')
+            acc_number   = self._col(row, 'accountnumber', 'account number', 'account no').lstrip("'")  # Remove leading apostrophe if present
+            bank_name    = self._col(row, 'bankname', 'bank name', 'name of bank')
+            branch_name  = self._col(row, 'bankbranchname', 'bank branch name', 'branch name', 'branch')
+            ifsc         = self._col(row, 'ifsccode', 'ifsc code', 'ifsc')
 
-            # Build additional notes from extra fields
-            extra_notes_parts = []
-            if teaching:
-                extra_notes_parts.append(f'Teaching: {teaching}')
-            if faculty_id:
-                extra_notes_parts.append(f'Faculty ID: {faculty_id}')
-            if mobile:
-                extra_notes_parts.append(f'Mobile: {mobile}')
-            if gender:
-                extra_notes_parts.append(f'Gender: {gender}')
-            if qualification:
-                extra_notes_parts.append(f'Qualification: {qualification}')
-            if phd_status:
-                extra_notes_parts.append(f'PhD Status: {phd_status}')
-            if experience:
-                extra_notes_parts.append(f'Total Experience: {experience}')
+            # If no first_name but full_name provided, use full_name as first_name
+            if not first_name and full_name:
+                first_name = full_name
+
+            # Auto-generate username if not provided: salutation + space + full_name
+            if not username:
+                name_part = full_name or first_name or ''
+                if salutation and name_part:
+                    username = f"{salutation} {name_part}"
+                elif name_part:
+                    username = name_part.replace(' ', '_').lower()
+
+            # Only keep non-structured notes in the notes field
+            full_notes = notes_text or ''
+
+            # Parse date_of_birth
+            parsed_dob = None
             if dob:
-                extra_notes_parts.append(f'Date of Birth: {dob}')
-            if notes_text:
-                extra_notes_parts.append(notes_text)
-
-            full_notes = '\n'.join(extra_notes_parts)
+                from datetime import datetime
+                for fmt in ('%Y-%m-%d', '%d-%m-%Y', '%d/%m/%Y', '%Y/%m/%d', '%m/%d/%Y'):
+                    try:
+                        parsed_dob = datetime.strptime(dob, fmt).date()
+                        break
+                    except ValueError:
+                        continue
 
             # ── Validate required fields ──
             row_errors: list[str] = []
             if not username:
-                row_errors.append('Username is required.')
+                row_errors.append('Username could not be generated. Provide Salutation and Full Name, or a Username.')
             if not email:
                 row_errors.append('Email is required.')
             if not first_name:
-                row_errors.append('First Name (or Name) is required.')
+                row_errors.append('Full Name (or First Name) is required.')
 
             if username and username.lower() in seen_usernames:
                 row_errors.append(f'Duplicate username "{username}" in uploaded file.')
@@ -8228,12 +8305,56 @@ class ExtStaffProfileBulkImportView(APIView):
             seen_usernames.add(username.lower())
             seen_emails.add(email.lower())
 
-            # ── Check DB duplicates ──
+            # ── Check for existing user by email - UPDATE instead of error ──
+            existing_user = User.objects.filter(email__iexact=email).first()
+            
+            if existing_user:
+                # Update existing user and their ExtStaffProfile
+                try:
+                    existing_user.first_name = first_name
+                    existing_user.last_name = last_name or ''
+                    if password:
+                        existing_user.set_password(password)
+                    existing_user.save()
+                    
+                    # Add to Ext_staff group if not already
+                    existing_user.groups.add(ext_staff_group)
+                    
+                    # Update or create ExtStaffProfile
+                    profile, created = ExtStaffProfile.objects.update_or_create(
+                        user=existing_user,
+                        defaults={
+                            'salutation': salutation,
+                            'designation': designation,
+                            'organisation': organisation,
+                            'teaching': teaching,
+                            'faculty_id': faculty_id,
+                            'department': organisation,
+                            'mobile': mobile,
+                            'gender': gender,
+                            'ug_specialization': ug_spec,
+                            'pg_specialization': pg_spec,
+                            'phd_status': phd_status,
+                            'total_experience': experience,
+                            'engg_college_experience': engg_exp,
+                            'date_of_birth': parsed_dob,
+                            'account_holder_name': acc_holder,
+                            'account_number': acc_number,
+                            'bank_name': bank_name,
+                            'bank_branch_name': branch_name,
+                            'ifsc_code': ifsc,
+                            'notes': full_notes,
+                            'is_active': True,
+                        }
+                    )
+                    imported += 1
+                except Exception as exc:
+                    errors.append({'row': idx, 'errors': [f'Failed to update: {exc}']})
+                continue
+
+            # ── Check if username is taken by another user ──
             if User.objects.filter(username__iexact=username).exists():
                 errors.append({'row': idx, 'errors': [f'Username "{username}" already exists in the system.']})
-                continue
-            if User.objects.filter(email__iexact=email).exists():
-                errors.append({'row': idx, 'errors': [f'Email "{email}" already exists in the system.']})
                 continue
 
             # ── Create User and ExtStaffProfile ──
@@ -8245,11 +8366,30 @@ class ExtStaffProfileBulkImportView(APIView):
                     first_name=first_name,
                     last_name=last_name or '',
                 )
+                # Add user to Ext_staff group
+                new_user.groups.add(ext_staff_group)
 
                 ExtStaffProfile.objects.create(
                     user=new_user,
+                    salutation=salutation,
                     designation=designation,
                     organisation=organisation,
+                    teaching=teaching,
+                    faculty_id=faculty_id,
+                    department=organisation,  # organisation is also the department
+                    mobile=mobile,
+                    gender=gender,
+                    ug_specialization=ug_spec,
+                    pg_specialization=pg_spec,
+                    phd_status=phd_status,
+                    total_experience=experience,
+                    engg_college_experience=engg_exp,
+                    date_of_birth=parsed_dob,
+                    account_holder_name=acc_holder,
+                    account_number=acc_number,
+                    bank_name=bank_name,
+                    bank_branch_name=branch_name,
+                    ifsc_code=ifsc,
                     notes=full_notes,
                     is_active=True,
                 )

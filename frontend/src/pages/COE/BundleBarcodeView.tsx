@@ -4,7 +4,8 @@ import Barcode from 'react-barcode';
 import { jsPDF } from 'jspdf';
 import JsBarcode from 'jsbarcode';
 import { CoeCourseStudent, fetchCoeStudentsMap } from '../../services/coe';
-import { getCourseKey, readCourseSelectionMap } from './courseSelectionStorage';
+import { getCourseKey, fetchCourseSelectionMapFromApi } from './courseSelectionStorage';
+import { readShuffledLists, hydrateShuffledListStore, PersistedShuffledByDummy } from './shuffledListStore';
 
 const SHUFFLED_LIST_KEY = 'coe-students-shuffled-list-v1';
 
@@ -43,19 +44,6 @@ type PersistedDummyRange = { start: number; count: number };
 
 function getCurrentFilterKey(department: string, semester: string): string {
   return `${department}::${semester}`;
-}
-
-function readShuffledLists(): Record<string, PersistedShuffledByDummy> {
-  if (typeof window === 'undefined') return {};
-
-  try {
-    const raw = window.localStorage.getItem(SHUFFLED_LIST_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as Record<string, PersistedShuffledByDummy>;
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
 }
 
 function getSemesterDigit(value: string): string {
@@ -106,6 +94,10 @@ export default function BundleBarcodeView() {
   useEffect(() => {
     let active = true;
     (async () => {
+      // Hydrate shuffled list store from DB
+      await hydrateShuffledListStore().catch(() => {});
+      if (!active) return;
+
       setLoading(true);
       setError(null);
       try {
@@ -116,7 +108,7 @@ export default function BundleBarcodeView() {
         const filterKey = getCurrentFilterKey(department, semester);
         const persistedByDummy = readShuffledLists()[filterKey] || {};
         const savedByDummy = new Map((response.saved_dummies || []).filter((r) => r.semester === semester).map((r) => [r.dummy, r]));
-        const selectionMap = readCourseSelectionMap();
+        const selectionMap = await fetchCourseSelectionMapFromApi(department, semester);
 
         let globalSequence = 0;
         const gathered: { department: string; course_code?: string; course_name?: string; students: BundleStudent[] }[] = [];

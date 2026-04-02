@@ -2,9 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { jsPDF } from 'jspdf';
 
 import { fetchCoeStudentsMap } from '../../services/coe';
-import { getCourseKey, readCourseSelectionMap } from './courseSelectionStorage';
-import { getAttendanceFilterKey, getAttendanceSessionKey, readAttendanceStatusMap, writeAttendanceStatus, readAttendanceLock, writeAttendanceLock } from './attendanceStore';
-import { readTTScheduleMap } from './ttScheduleStore';
+import { getCourseKey, fetchCourseSelectionMapFromApi } from './courseSelectionStorage';
+import { getAttendanceFilterKey, getAttendanceSessionKey, readAttendanceStatusMap, writeAttendanceStatus, readAttendanceLock, writeAttendanceLock, hydrateAttendanceStore } from './attendanceStore';
+import { readTTScheduleMap, hydrateTtScheduleStore } from './ttScheduleStore';
 import { getCachedMe } from '../../services/auth';
 import fetchWithAuth from '../../services/fetchAuth';
 import krLogoSrc from '../../assets/krlogo.png';
@@ -90,6 +90,12 @@ export default function AttendancePage() {
 
   // Fetch departments on mount
   useEffect(() => {
+    // Hydrate attendance + TT schedule stores from DB
+    Promise.all([
+      hydrateAttendanceStore(),
+      hydrateTtScheduleStore(),
+    ]).catch(() => {});
+
     let active = true;
     setLoadingDeps(true);
 
@@ -194,7 +200,7 @@ export default function AttendancePage() {
         const response = await fetchCoeStudentsMap({ department, semester });
         if (!active) return;
 
-        const selectionMap = readCourseSelectionMap();
+        const selectionMap = await fetchCourseSelectionMapFromApi(department, semester);
         const ttMap = readTTScheduleMap(filterKey);
         const blocks: CourseBlock[] = [];
 

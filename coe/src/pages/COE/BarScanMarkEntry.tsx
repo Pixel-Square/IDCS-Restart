@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
 import { getCachedMe } from '../../services/auth';
+import { hydrateMarksStore, getMarksForDummy, getMarksQpType, saveMarksForDummy } from './marksStore';
 
 type QpType = 'QP1' | 'QP2' | 'TCPR' | 'TCPL' | 'OE';
 
@@ -98,10 +99,10 @@ interface BarScanMarkEntryProps {
 
 function readStoredMarkQpType(dummyNumber: string): QpType | null {
   if (typeof window === 'undefined') return null;
-
-  const stored = window.localStorage.getItem(`marks_type_${dummyNumber}`);
-  const qpType = String(stored || '').trim().toUpperCase();
-  return qpType === 'QP1' || qpType === 'QP2' || qpType === 'TCPR' || qpType === 'TCPL' || qpType === 'OE' ? (qpType as QpType) : null;
+  const qpType = getMarksQpType(dummyNumber);
+  if (!qpType) return null;
+  const upper = String(qpType).toUpperCase();
+  return upper === 'QP1' || upper === 'QP2' || upper === 'TCPR' || upper === 'TCPL' || upper === 'OE' ? (upper as QpType) : null;
 }
 
 export default function BarScanMarkEntry({ 
@@ -145,6 +146,11 @@ export default function BarScanMarkEntry({
   const entryScannerRef = React.useRef<HTMLInputElement>(null);
   const [backgroundScanCode, setBackgroundScanCode] = useState<string>('');
 
+  // Hydrate marks store from DB on mount
+  useEffect(() => {
+    hydrateMarksStore().catch(() => {});
+  }, []);
+
   // Keep focus on the hidden scanner input to allow consecutive scanning
   useEffect(() => {
     const focusScanner = () => {
@@ -171,12 +177,12 @@ export default function BarScanMarkEntry({
   };
 
   const loadSavedMarks = (dummy: string, fallbackQp: QpType = 'QP1'): QpType => {
-    const stored = localStorage.getItem(`marks_${dummy}`);
-    const storedQp = localStorage.getItem(`marks_type_${dummy}`);
+    const entry = getMarksForDummy(dummy);
+    const storedQp = entry?.qp_type;
     const finalQp = (storedQp === 'QP2' || storedQp === 'TCPR' || storedQp === 'TCPL' || storedQp === 'OE' || storedQp === 'QP1') ? storedQp as QpType : fallbackQp;
 
-    if (stored) {
-      setMarks(JSON.parse(stored));
+    if (entry?.marks) {
+      setMarks(entry.marks);
       setIsLocked(true);
       setSaved(true);
     }
@@ -311,8 +317,7 @@ export default function BarScanMarkEntry({
       // Simulating network delay for save
       await new Promise(resolve => setTimeout(resolve, 800));
       
-      localStorage.setItem(`marks_${student.dummy_number || student.reg_no}`, JSON.stringify(marks));
-      localStorage.setItem(`marks_type_${student.dummy_number || student.reg_no}`, student.qp_type);
+      saveMarksForDummy(student.dummy_number || student.reg_no, marks, student.qp_type);
       
       setSaved(true);
       setIsLocked(true);

@@ -189,3 +189,40 @@ export async function bulkUpsertCoeArrears(rows: CoeArrearPayload[]) {
   return res.json() as Promise<{ created: number; updated: number; errors: string[] }>;
 }
 
+/* ── COE Course Selection persistence ─────────────────────────── */
+
+export type CourseSelectionData = {
+  selected: boolean;
+  qpType: string;
+  eseType: string;
+};
+
+export type CourseSelectionResponse = {
+  selections: Record<string, CourseSelectionData>;
+  is_locked: boolean;
+};
+
+export async function fetchCoeCourseSel(key: string): Promise<CourseSelectionResponse> {
+  const qp = new URLSearchParams();
+  qp.set('key', key);
+  const res = await fetchWithAuth(`/api/coe/course-selections/?${qp.toString()}`);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to fetch course selections: ${res.status} ${text}`);
+  }
+  return res.json();
+}
+
+export async function saveCoeCourseSel(key: string, selections: Record<string, CourseSelectionData>, is_locked: boolean): Promise<{ saved: boolean }> {
+  const res = await fetchWithAuth('/api/coe/course-selections/', {
+    method: 'POST',
+    body: JSON.stringify({ key, selections, is_locked }),
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to save course selections: ${res.status} ${text}`);
+  }
+  return res.json();
+}
+

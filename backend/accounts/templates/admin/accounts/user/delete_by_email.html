@@ -1,0 +1,137 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+<div style="max-width: 900px;">
+  <h1>{{ title }}</h1>
+
+  {% if stage == 'upload' %}
+    <p style="color:#dc2626; margin-top: 6px; font-weight: 600;">
+      ⚠️ This will permanently delete users. Use with caution.
+    </p>
+
+    <div style="display:flex; gap: 14px; flex-wrap: wrap; margin: 12px 0;">
+      <div style="flex: 1 1 400px; border: 1px solid #dc2626; border-radius: 10px; padding: 16px; background: #fef2f2;">
+        <div style="font-weight: 700; margin-bottom: 12px; color: #991b1b;">Step 1 — Download Template</div>
+        <p style="font-size: 13px; color: #374151; margin-bottom: 12px;">
+          Download the Excel template and fill in the email addresses of users you want to delete (one per row).
+        </p>
+        <a href="?download_template=1" class="button" style="background: #1d4ed8; color: #fff; text-decoration: none; padding: 8px 16px; border-radius: 6px; display: inline-block;">
+          📥 Download Template
+        </a>
+      </div>
+
+      <div style="flex: 1 1 400px; border: 1px solid #f59e0b; border-radius: 10px; padding: 16px; background: #fffbeb;">
+        <div style="font-weight: 700; margin-bottom: 12px; color: #92400e;">Step 2 — Upload Filled File</div>
+        
+        <form method="post" enctype="multipart/form-data" style="display:flex; flex-direction: column; gap: 12px;">
+          {% csrf_token %}
+          <input type="hidden" name="stage" value="preview" />
+          <div>
+            <input type="file" name="file" accept=".xlsx,.xls,.csv" required style="font-size: 14px;"/>
+            <div style="font-size: 11px; color: #6b7280; margin-top: 4px;">Accepts .xlsx, .xls, or .csv — max 5 MB</div>
+          </div>
+          <button type="submit" class="default" style="background: #f59e0b; color: #000; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+            Preview Deletions
+          </button>
+        </form>
+      </div>
+    </div>
+
+  {% elif stage == 'preview' %}
+    <div style="background: #fef2f2; border: 2px solid #dc2626; border-radius: 10px; padding: 16px; margin: 12px 0;">
+      <div style="font-weight: 700; font-size: 18px; color: #991b1b; margin-bottom: 10px;">
+        ⚠️ Confirm Deletion
+      </div>
+      <p style="font-size: 14px; color: #374151;">
+        Found <strong>{{ found_count }}</strong> user(s) to delete out of <strong>{{ total_emails }}</strong> email(s) in the file.
+      </p>
+
+      {% if not_found %}
+        <div style="margin-top: 12px; background: #fff7ed; border: 1px solid #fdba74; border-radius: 8px; padding: 10px;">
+          <div style="font-weight: 600; color: #9a3412; font-size: 13px;">{{ not_found|length }} email(s) not found:</div>
+          <div style="font-size: 12px; color: #78350f; max-height: 100px; overflow-y: auto; margin-top: 6px;">
+            {% for e in not_found %}{{ e }}{% if not forloop.last %}, {% endif %}{% endfor %}
+          </div>
+        </div>
+      {% endif %}
+
+      {% if users %}
+        <div style="margin-top: 16px;">
+          <div style="font-weight: 600; color: #991b1b; margin-bottom: 8px;">Users that will be PERMANENTLY deleted:</div>
+          <div style="border: 1px solid #e5e7eb; border-radius: 8px; overflow: auto; max-height: 300px; background: #fff;">
+            <table style="border-collapse: collapse; width: 100%; min-width: 500px;">
+              <thead>
+                <tr style="background: #f9fafb;">
+                  <th style="border-bottom: 1px solid #e5e7eb; padding: 8px; text-align: left; font-size: 12px;">#</th>
+                  <th style="border-bottom: 1px solid #e5e7eb; padding: 8px; text-align: left; font-size: 12px;">Username</th>
+                  <th style="border-bottom: 1px solid #e5e7eb; padding: 8px; text-align: left; font-size: 12px;">Email</th>
+                  <th style="border-bottom: 1px solid #e5e7eb; padding: 8px; text-align: left; font-size: 12px;">Last Login</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for u in users %}
+                <tr>
+                  <td style="border-top: 1px solid #f3f4f6; padding: 8px; font-size: 12px;">{{ forloop.counter }}</td>
+                  <td style="border-top: 1px solid #f3f4f6; padding: 8px; font-size: 12px;">{{ u.username }}</td>
+                  <td style="border-top: 1px solid #f3f4f6; padding: 8px; font-size: 12px; font-family: monospace;">{{ u.email }}</td>
+                  <td style="border-top: 1px solid #f3f4f6; padding: 8px; font-size: 12px;">{{ u.last_login|default:"Never" }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <form method="post" style="margin-top: 16px; display: flex; gap: 12px;">
+          {% csrf_token %}
+          <input type="hidden" name="stage" value="confirm" />
+          <input type="hidden" name="token" value="{{ token }}" />
+          <button type="submit" class="default" style="background: #dc2626; color: #fff; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;" onclick="return confirm('Are you ABSOLUTELY sure? This will permanently delete {{ found_count }} user(s). This action cannot be undone.');">
+            🗑️ Delete {{ found_count }} User(s)
+          </button>
+          <a href="{% url 'admin:accounts_user_delete_by_email' %}" style="background: #6b7280; color: #fff; padding: 10px 20px; border: none; border-radius: 6px; text-decoration: none; font-weight: 600;">
+            Cancel
+          </a>
+        </form>
+      {% else %}
+        <p style="color: #dc2626; font-weight: 600; margin-top: 12px;">No users to delete.</p>
+        <a href="{% url 'admin:accounts_user_delete_by_email' %}" style="background: #6b7280; color: #fff; padding: 10px 20px; border: none; border-radius: 6px; text-decoration: none; font-weight: 600; display: inline-block; margin-top: 12px;">
+          ← Go Back
+        </a>
+      {% endif %}
+    </div>
+
+  {% elif stage == 'result' %}
+    <div style="border-radius: 10px; padding: 16px; margin: 12px 0; {% if deleted_count > 0 %}background: #f0fdf4; border: 2px solid #22c55e;{% else %}background: #fef2f2; border: 2px solid #dc2626;{% endif %}">
+      {% if deleted_count > 0 %}
+        <div style="font-weight: 700; font-size: 18px; color: #166534; margin-bottom: 10px;">
+          ✅ Successfully deleted {{ deleted_count }} user(s)
+        </div>
+      {% else %}
+        <div style="font-weight: 700; font-size: 18px; color: #991b1b; margin-bottom: 10px;">
+          ❌ No users were deleted
+        </div>
+      {% endif %}
+
+      {% if errors %}
+        <div style="margin-top: 12px; background: #fff7ed; border: 1px solid #fdba74; border-radius: 8px; padding: 10px;">
+          <div style="font-weight: 600; color: #9a3412; font-size: 13px;">{{ errors|length }} error(s):</div>
+          <div style="font-size: 12px; color: #78350f; max-height: 150px; overflow-y: auto; margin-top: 6px;">
+            {% for e in errors %}<div>{{ e }}</div>{% endfor %}
+          </div>
+        </div>
+      {% endif %}
+
+      <div style="margin-top: 16px; display: flex; gap: 12px;">
+        <a href="{% url 'admin:accounts_user_delete_by_email' %}" style="background: #1d4ed8; color: #fff; padding: 10px 20px; border: none; border-radius: 6px; text-decoration: none; font-weight: 600;">
+          Delete More Users
+        </a>
+        <a href="{% url 'admin:accounts_user_changelist' %}" style="background: #6b7280; color: #fff; padding: 10px 20px; border: none; border-radius: 6px; text-decoration: none; font-weight: 600;">
+          ← Back to Users
+        </a>
+      </div>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

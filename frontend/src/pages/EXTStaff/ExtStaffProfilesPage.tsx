@@ -28,8 +28,26 @@ interface ExtStaffProfile {
   username: string;
   email: string;
   full_name: string;
+  salutation: string;
   designation: string;
   organisation: string;
+  teaching: string;
+  faculty_id: string;
+  department: string;
+  mobile: string;
+  gender: string;
+  ug_specialization: string;
+  pg_specialization: string;
+  phd_status: string;
+  total_experience: string;
+  engg_college_experience: string;
+  date_of_birth: string | null;
+  account_holder_name: string;
+  account_number: string;
+  bank_name: string;
+  bank_branch_name: string;
+  ifsc_code: string;
+  passbook_proof: string | null;
   notes: string;
   is_active: boolean;
   created_at: string;
@@ -77,6 +95,11 @@ export default function ExtStaffProfilesPage() {
   const [addingUserId, setAddingUserId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<ExtStaffProfile | null>(null);
+
+  // Selection state for bulk operations
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
 
   // Drag state
   const [dragUserId, setDragUserId] = useState<number | null>(null);
@@ -164,6 +187,11 @@ export default function ExtStaffProfilesPage() {
       });
       if (!res.ok) throw new Error('Failed to delete');
       setConfirmDelete(null);
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(profile.id);
+        return next;
+      });
       await loadAvailableUsers();
       await loadProfiles();
     } catch (e: any) {
@@ -172,6 +200,31 @@ export default function ExtStaffProfilesPage() {
       setDeletingId(null);
     }
   }, [loadAvailableUsers, loadProfiles]);
+
+  // ── Bulk Delete ────────────────────────────────────────────────────────────
+
+  const bulkDeleteProfiles = useCallback(async () => {
+    if (selectedIds.size === 0) return;
+    setBulkDeleting(true);
+    setError(null);
+    try {
+      const res = await fetchWithAuth('/api/academics/ext-staff-profiles/bulk-delete/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: Array.from(selectedIds) }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail || 'Failed to delete');
+      setConfirmBulkDelete(false);
+      setSelectedIds(new Set());
+      await loadAvailableUsers();
+      await loadProfiles();
+    } catch (e: any) {
+      setError(e?.message || 'Error deleting profiles');
+    } finally {
+      setBulkDeleting(false);
+    }
+  }, [selectedIds, loadAvailableUsers, loadProfiles]);
 
   // ── Drag ───────────────────────────────────────────────────────────────────
 
@@ -198,11 +251,10 @@ export default function ExtStaffProfilesPage() {
   const handleDownloadTemplate = () => {
     import('xlsx').then((XLSX) => {
       const templateHeaders = [
-        'Username',
+        'Salutation',
+        'Full Name',
         'Email',
         'Password',
-        'First Name',
-        'Last Name',
         'Teaching',
         'Faculty ID',
         'Designation',
@@ -210,17 +262,23 @@ export default function ExtStaffProfilesPage() {
         'Date of Birth',
         'Mobile Number',
         'Gender',
-        'Qualification',
+        'UG Specialization',
+        'PG Specialization',
         'PhD Status',
         'Total Experience',
+        'Engineering College Experience (Years)',
+        'Account Holder Name',
+        'Account Number',
+        'Bank Name',
+        'Bank Branch Name',
+        'IFSC Code',
         'Notes',
       ];
       const sampleRow = [
-        'john.doe',
+        'Dr.',
+        'John Doe',
         'john.doe@example.com',
         'password123',
-        'John',
-        'Doe',
         'Visiting Faculty',
         'VF001',
         'Assistant Professor',
@@ -228,9 +286,16 @@ export default function ExtStaffProfilesPage() {
         '1990-01-15',
         '9876543210',
         'Male',
-        'M.Tech, Ph.D',
+        'B.E / B.Tech - Mechanical Engineering',
+        'M.E / M.Tech - Structural Engineering',
         'Completed',
         '10 years',
+        '5',
+        'John Doe',
+        "'1234567890123456",
+        'State Bank of India',
+        'Chennai Main Branch',
+        'SBIN0001234',
         'Internal examiner',
       ];
 
@@ -238,9 +303,11 @@ export default function ExtStaffProfilesPage() {
 
       // Set column widths
       ws['!cols'] = [
-        { wch: 16 }, { wch: 28 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
+        { wch: 10 }, { wch: 22 }, { wch: 28 }, { wch: 14 },
         { wch: 18 }, { wch: 12 }, { wch: 22 }, { wch: 24 }, { wch: 14 },
-        { wch: 16 }, { wch: 10 }, { wch: 22 }, { wch: 14 }, { wch: 16 }, { wch: 28 },
+        { wch: 16 }, { wch: 10 }, { wch: 35 }, { wch: 35 }, { wch: 14 }, 
+        { wch: 16 }, { wch: 28 }, { wch: 22 }, { wch: 22 }, { wch: 22 },
+        { wch: 28 }, { wch: 14 }, { wch: 28 },
       ];
 
       const wb = XLSX.utils.book_new();
@@ -328,6 +395,31 @@ export default function ExtStaffProfilesPage() {
       p.full_name.toLowerCase().includes(q)
     );
   });
+
+  // ── Selection handlers ─────────────────────────────────────────────────────
+
+  const allSelected = filteredProfiles.length > 0 && selectedIds.size === filteredProfiles.length;
+  const someSelected = selectedIds.size > 0 && selectedIds.size < filteredProfiles.length;
+
+  const toggleSelectAll = () => {
+    if (allSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredProfiles.map((p) => p.id)));
+    }
+  };
+
+  const toggleSelect = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
@@ -539,6 +631,28 @@ export default function ExtStaffProfilesPage() {
                 Ext Staff Profiles
                 <span style={{ marginLeft: 6, fontWeight: 600, color: '#6b7280' }}>({filteredProfiles.length})</span>
               </div>
+              {selectedIds.size > 0 && (
+                <button
+                  onClick={() => setConfirmBulkDelete(true)}
+                  disabled={bulkDeleting}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    padding: '6px 12px',
+                    background: '#dc2626',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: 6,
+                    fontWeight: 700,
+                    fontSize: 12,
+                    cursor: bulkDeleting ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  <Trash2 size={13} />
+                  Delete Selected ({selectedIds.size})
+                </button>
+              )}
               {dragOver && (
                 <span style={{ fontSize: 12, color: '#2563eb', fontWeight: 700 }}>Drop to add →</span>
               )}
@@ -568,11 +682,21 @@ export default function ExtStaffProfilesPage() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: '#f3f4f6' }}>
-                    {['#', 'Username', 'Full Name', 'Email', 'Ext UID (16-char)', 'Status', 'Added', 'Action'].map((h) => (
+                    <th style={{ padding: '8px 12px', textAlign: 'center', borderBottom: '1px solid #e5e7eb', width: 40 }}>
+                      <input
+                        type="checkbox"
+                        checked={allSelected}
+                        ref={(el) => { if (el) el.indeterminate = someSelected; }}
+                        onChange={toggleSelectAll}
+                        style={{ cursor: 'pointer', width: 15, height: 15 }}
+                        title="Select All"
+                      />
+                    </th>
+                    {['#', 'Salutation', 'Username', 'Full Name', 'Faculty ID', 'Mobile', 'Gender', 'UG Spec', 'PG Spec', 'PhD', 'Experience', 'Engg Exp', 'DOB', 'Account Holder', 'Account No', 'Bank', 'Branch', 'IFSC', 'Passbook', 'Ext UID', 'Status', 'Action'].map((h) => (
                       <th
                         key={h}
                         style={{
-                          padding: '8px 12px',
+                          padding: '8px 10px',
                           textAlign: 'left',
                           fontWeight: 800,
                           fontSize: 11,
@@ -589,13 +713,13 @@ export default function ExtStaffProfilesPage() {
                 <tbody>
                   {loadingProfiles ? (
                     <tr>
-                      <td colSpan={8} style={{ padding: 24, textAlign: 'center', color: '#9ca3af' }}>
+                      <td colSpan={23} style={{ padding: 24, textAlign: 'center', color: '#9ca3af' }}>
                         Loading…
                       </td>
                     </tr>
                   ) : filteredProfiles.length === 0 ? (
                     <tr>
-                      <td colSpan={8} style={{ padding: 32, textAlign: 'center', color: '#9ca3af' }}>
+                      <td colSpan={23} style={{ padding: 32, textAlign: 'center', color: '#9ca3af' }}>
                         {dragOver
                           ? 'Drop a user here to add them'
                           : profileSearch
@@ -607,23 +731,57 @@ export default function ExtStaffProfilesPage() {
                     filteredProfiles.map((p, idx) => (
                       <tr
                         key={p.id}
-                        style={{ background: idx % 2 === 1 ? '#f9fafb' : '#fff' }}
+                        style={{ background: selectedIds.has(p.id) ? '#eff6ff' : idx % 2 === 1 ? '#f9fafb' : '#fff' }}
                       >
-                        <td style={{ padding: '8px 12px', color: '#9ca3af', fontWeight: 600 }}>{idx + 1}</td>
-                        <td style={{ padding: '8px 12px', fontWeight: 700, color: '#111827' }}>@{p.username}</td>
-                        <td style={{ padding: '8px 12px', color: '#374151' }}>{p.full_name || '—'}</td>
-                        <td style={{ padding: '8px 12px', color: '#6b7280' }}>{p.email}</td>
-                        <td style={{ padding: '8px 12px' }}>
+                        <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(p.id)}
+                            onChange={() => toggleSelect(p.id)}
+                            style={{ cursor: 'pointer', width: 15, height: 15 }}
+                          />
+                        </td>
+                        <td style={{ padding: '8px 10px', color: '#9ca3af', fontWeight: 600 }}>{idx + 1}</td>
+                        <td style={{ padding: '8px 10px', color: '#6b7280' }}>{p.salutation || '—'}</td>
+                        <td style={{ padding: '8px 10px', fontWeight: 700, color: '#111827', whiteSpace: 'nowrap' }}>@{p.username}</td>
+                        <td style={{ padding: '8px 10px', color: '#374151', whiteSpace: 'nowrap' }}>{p.full_name || '—'}</td>
+                        <td style={{ padding: '8px 10px', color: '#6b7280' }}>{p.faculty_id || '—'}</td>
+                        <td style={{ padding: '8px 10px', color: '#6b7280' }}>{p.mobile || '—'}</td>
+                        <td style={{ padding: '8px 10px', color: '#6b7280' }}>{p.gender || '—'}</td>
+                        <td style={{ padding: '8px 10px', color: '#6b7280', maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.ug_specialization}>{p.ug_specialization || '—'}</td>
+                        <td style={{ padding: '8px 10px', color: '#6b7280', maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.pg_specialization}>{p.pg_specialization || '—'}</td>
+                        <td style={{ padding: '8px 10px', color: '#6b7280' }}>{p.phd_status || '—'}</td>
+                        <td style={{ padding: '8px 10px', color: '#6b7280' }}>{p.total_experience || '—'}</td>
+                        <td style={{ padding: '8px 10px', color: '#6b7280' }}>{p.engg_college_experience || '—'}</td>
+                        <td style={{ padding: '8px 10px', color: '#6b7280', whiteSpace: 'nowrap' }}>{p.date_of_birth || '—'}</td>
+                        <td style={{ padding: '8px 10px', color: '#6b7280' }}>{p.account_holder_name || '—'}</td>
+                        <td style={{ padding: '8px 10px', color: '#6b7280', fontFamily: 'monospace' }}>{p.account_number || '—'}</td>
+                        <td style={{ padding: '8px 10px', color: '#6b7280' }}>{p.bank_name || '—'}</td>
+                        <td style={{ padding: '8px 10px', color: '#6b7280' }}>{p.bank_branch_name || '—'}</td>
+                        <td style={{ padding: '8px 10px', color: '#6b7280' }}>{p.ifsc_code || '—'}</td>
+                        <td style={{ padding: '8px 10px', color: '#6b7280' }}>
+                          {p.passbook_proof ? (
+                            <a
+                              href={p.passbook_proof}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{ color: '#2563eb', textDecoration: 'underline', fontSize: 12 }}
+                            >
+                              View
+                            </a>
+                          ) : '—'}
+                        </td>
+                        <td style={{ padding: '8px 10px' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                             <code
                               style={{
                                 background: '#eff6ff',
                                 border: '1px solid #bfdbfe',
                                 borderRadius: 5,
-                                padding: '2px 7px',
-                                fontSize: 12,
+                                padding: '2px 6px',
+                                fontSize: 11,
                                 fontFamily: 'monospace',
-                                letterSpacing: 1,
+                                letterSpacing: 0.5,
                                 color: '#1d4ed8',
                                 fontWeight: 800,
                               }}
@@ -633,7 +791,7 @@ export default function ExtStaffProfilesPage() {
                             <CopyButton text={p.ext_uid} />
                           </div>
                         </td>
-                        <td style={{ padding: '8px 12px' }}>
+                        <td style={{ padding: '8px 10px' }}>
                           <span
                             style={{
                               display: 'inline-block',
@@ -648,10 +806,7 @@ export default function ExtStaffProfilesPage() {
                             {p.is_active ? 'Active' : 'Inactive'}
                           </span>
                         </td>
-                        <td style={{ padding: '8px 12px', color: '#6b7280', whiteSpace: 'nowrap' }}>
-                          {p.created_at ? new Date(p.created_at).toLocaleDateString() : '—'}
-                        </td>
-                        <td style={{ padding: '8px 12px' }}>
+                        <td style={{ padding: '8px 10px' }}>
                           <button
                             onClick={() => setConfirmDelete(p)}
                             disabled={deletingId === p.id}
@@ -733,6 +888,58 @@ export default function ExtStaffProfilesPage() {
                 disabled={deletingId === confirmDelete.id}
               >
                 {deletingId === confirmDelete.id ? 'Removing…' : 'Remove'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Confirm Bulk Delete Modal ── */}
+      {confirmBulkDelete && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.35)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+          }}
+          onClick={() => setConfirmBulkDelete(false)}
+        >
+          <div
+            style={{
+              background: '#fff',
+              borderRadius: 14,
+              border: '1px solid #e5e7eb',
+              padding: 20,
+              width: 'min(420px, 94vw)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontWeight: 900, fontSize: 15, color: '#111827', marginBottom: 8 }}>Delete Selected Profiles</div>
+            <div style={{ fontSize: 13, color: '#374151', marginBottom: 16 }}>
+              Are you sure you want to delete <strong>{selectedIds.size}</strong> selected external staff profile{selectedIds.size > 1 ? 's' : ''}?
+              <br /><br />
+              <span style={{ color: '#9ca3af', fontSize: 12 }}>The user accounts will not be deleted.</span>
+            </div>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button
+                className="obe-btn"
+                onClick={() => setConfirmBulkDelete(false)}
+                disabled={bulkDeleting}
+              >
+                Cancel
+              </button>
+              <button
+                className="obe-btn obe-btn-danger"
+                onClick={bulkDeleteProfiles}
+                disabled={bulkDeleting}
+              >
+                {bulkDeleting ? 'Deleting…' : `Delete ${selectedIds.size}`}
               </button>
             </div>
           </div>

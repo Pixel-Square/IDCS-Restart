@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { fetchCoeStudentsMap } from '../../services/coe';
-import { getCourseKey, readCourseSelectionMap } from './courseSelectionStorage';
+import { getCourseKey, fetchCourseSelectionMapFromApi } from './courseSelectionStorage';
 import { readTTScheduleMap } from './ttScheduleStore';
+import { kvHydrate, kvSave } from '../../utils/coeKvStore';
 import fetchWithAuth from '../../services/fetchAuth';
 import { getCachedMe } from '../../services/auth';
 import { getBundleFinalizeConfig } from '../../utils/coeBundleFinalizeStore';
@@ -64,7 +65,7 @@ function readPersistedStore(): PersistedStore {
 }
 
 function writePersistedStore(store: PersistedStore) {
-  localStorage.setItem(ASSIGNING_STORE_KEY, JSON.stringify(store));
+  kvSave(ASSIGNING_STORE_KEY, store);
   window.dispatchEvent(new CustomEvent(ASSIGNING_UPDATED_EVENT));
   if (typeof BroadcastChannel !== 'undefined') {
     const channel = new BroadcastChannel('coe-assigning-updates-v1');
@@ -96,7 +97,7 @@ function readLockStore(): Record<string, boolean> {
 }
 
 function writeLockStore(store: Record<string, boolean>) {
-  localStorage.setItem(LOCK_STORE_KEY, JSON.stringify(store));
+  kvSave(LOCK_STORE_KEY, store);
 }
 
 /* ---- Faculty cache (session-level) ---- */
@@ -148,6 +149,12 @@ export default function AssigningPage() {
 
   // Fetch departments on mount
   useEffect(() => {
+    // Hydrate KV stores from DB
+    Promise.all([
+      kvHydrate(ASSIGNING_STORE_KEY),
+      kvHydrate(LOCK_STORE_KEY),
+    ]).catch(() => {});
+
     let active = true;
     setLoadingDeps(true);
 
@@ -266,7 +273,7 @@ export default function AssigningPage() {
         const response = await fetchCoeStudentsMap({ department, semester });
         if (!active) return;
 
-        const selectionMap = readCourseSelectionMap();
+        const selectionMap = await fetchCourseSelectionMapFromApi(department, semester);
         const storeKey = makeStoreKey(department, semester, selectedDate);
         const persisted = readPersistedStore()[storeKey] || [];
         const persistedByCourseKey = new Map(persisted.map((p) => [p.courseKey, p]));

@@ -3,12 +3,14 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import JsBarcode from 'jsbarcode';
 import { CoeCourseStudent, fetchCoeStudentsMap } from '../../services/coe';
-import { getCourseKey, readCourseSelectionMap } from './courseSelectionStorage';
+import { getCourseKey, fetchCourseSelectionMapFromApi } from './courseSelectionStorage';
 import { listFinalizedBundleConfigs } from '../../utils/coeBundleFinalizeStore';
 import krLogoSrc from '../../assets/krlogo.png';
 import newBannerSrc from '../../assets/newban.jpeg';
 import { getAttendanceFilterKey, readCourseAbsenteesMap } from './attendanceStore';
 import { getSemesterStartSequence, generateDummyNumber } from './dummySequence';
+import { readShuffledLists, hydrateShuffledListStore, PersistedShuffledByDummy } from './shuffledListStore';
+import { readStudentTotalMarks, hydrateMarksStore } from './marksStore';
 import fetchWithAuth from '../../services/fetchAuth';
 
 const SHUFFLED_LIST_KEY = 'coe-students-shuffled-list-v1';
@@ -72,50 +74,12 @@ function getSemesterDigit(value: string): string {
   return '0';
 }
 
-function readShuffledLists(): Record<string, PersistedShuffledByDummy> {
-  if (typeof window === 'undefined') return {};
-
-  try {
-    const raw = window.localStorage.getItem(SHUFFLED_LIST_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as Record<string, PersistedShuffledByDummy>;
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
 function chunkStudents(students: BundleStudent[], chunkSize: number): BundleStudent[][] {
   const chunks: BundleStudent[][] = [];
   for (let i = 0; i < students.length; i += chunkSize) {
     chunks.push(students.slice(i, i + chunkSize));
   }
   return chunks;
-}
-
-function readStudentTotalMarks(dummy: string): { hasSavedMarks: boolean; totalMarks: number } {
-  if (typeof window === 'undefined') {
-    return { hasSavedMarks: false, totalMarks: 0 };
-  }
-
-  const raw = window.localStorage.getItem(`marks_${dummy}`);
-  if (!raw) return { hasSavedMarks: false, totalMarks: 0 };
-
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    if (!parsed || typeof parsed !== 'object') {
-      return { hasSavedMarks: false, totalMarks: 0 };
-    }
-
-    const totalMarks = Object.values(parsed).reduce<number>((acc, value) => {
-      const num = Number(value);
-      return Number.isFinite(num) ? acc + num : acc;
-    }, 0);
-
-    return { hasSavedMarks: true, totalMarks };
-  } catch {
-    return { hasSavedMarks: false, totalMarks: 0 };
-  }
 }
 
 function sanitizeFileName(value: string): string {
@@ -198,6 +162,14 @@ export default function OnePageReport() {
   const [previewFileName, setPreviewFileName] = useState('one-page-report.pdf');
 
   useEffect(() => {
+    // Hydrate KV stores from DB on mount
+    Promise.all([
+      hydrateShuffledListStore(),
+      hydrateMarksStore(),
+    ]).catch(() => {});
+  }, []);
+
+  useEffect(() => {
     return () => {
       if (previewUrl) {
         URL.revokeObjectURL(previewUrl);
@@ -209,7 +181,7 @@ export default function OnePageReport() {
     const normalizedCode = String(code || '').trim().toUpperCase();
     if (!normalizedCode) return { status: 'not_found' };
 
-    const selectionMap = readCourseSelectionMap();
+    const selectionMap = await fetchCourseSelectionMapFromApi(department, semester);
 
     const finalizedConfigs = listFinalizedBundleConfigs();
     if (finalizedConfigs.length === 0) return { status: 'not_found' };

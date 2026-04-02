@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { ScanLine, User, CreditCard, School } from 'lucide-react';
 import fetchWithAuth from '../../services/fetchAuth';
 import BarScanMarkEntry from './BarScanMarkEntry';
+import { getMarksQpType } from './marksStore';
 
 interface StudentDetails {
   id: number;
@@ -20,10 +21,10 @@ interface StudentDetails {
 
 function readStoredMarkQpType(dummyNumber: string): StudentDetails['qp_type'] {
   if (typeof window === 'undefined') return undefined;
-
-  const stored = window.localStorage.getItem(`marks_type_${dummyNumber}`);
-  const qpType = String(stored || '').trim().toUpperCase();
-  return qpType === 'QP1' || qpType === 'QP2' || qpType === 'TCPR' || qpType === 'TCPL' || qpType === 'OE' ? qpType : undefined;
+  const qpType = getMarksQpType(dummyNumber);
+  if (!qpType) return undefined;
+  const upper = String(qpType).toUpperCase();
+  return upper === 'QP1' || upper === 'QP2' || upper === 'TCPR' || upper === 'TCPL' || upper === 'OE' ? upper : undefined;
 }
 
 export default function BarScan() {

@@ -1,5 +1,5 @@
 import { fetchCoeStudentsMap } from '../../services/coe';
-import { getCourseKey, readCourseSelectionMap } from './courseSelectionStorage';
+import { getCourseKey, fetchCourseSelectionMapFromApi } from './courseSelectionStorage';
 import { getAttendanceFilterKey, readCourseAbsenteesMap } from './attendanceStore';
 
 const EVEN_SEMESTERS = ['SEM8', 'SEM6', 'SEM4', 'SEM2'];
@@ -19,10 +19,10 @@ export async function getSemesterStartSequence(department: string, targetSemeste
   const semsToFetch = semestersToCheck.slice(0, targetIndex);
   
   let startSequence = 0;
-  const selectionMap = readCourseSelectionMap();
   
   const results = await Promise.allSettled(
     semsToFetch.map(async (sem) => {
+      const selectionMap = await fetchCourseSelectionMapFromApi(department, sem);
       const res = await fetchCoeStudentsMap({ department, semester: sem });
       const absentCourseMap = readCourseAbsenteesMap(getAttendanceFilterKey(department, sem));
       

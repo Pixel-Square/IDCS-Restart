@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 
-import { CoeStudentsMapResponse, fetchCoeStudentsMap } from '../../services/coe';
+import { CoeStudentsMapResponse, fetchCoeStudentsMap, fetchCoeCourseSel, saveCoeCourseSel } from '../../services/coe';
 import fetchWithAuth from '../../services/fetchAuth';
 import { getCachedMe } from '../../services/auth';
 import {
@@ -8,10 +8,8 @@ import {
   EseType,
   QpType,
   getCourseKey,
-  readCourseSelectionMap,
-  writeCourseSelectionMap,
 } from './courseSelectionStorage';
-import { readTTScheduleMap, setTTDateForCourse } from './ttScheduleStore';
+import { readTTScheduleMap, setTTDateForCourse, hydrateTtScheduleStore } from './ttScheduleStore';
 
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -31,8 +29,6 @@ async function imageUrlToDataUrl(url: string): Promise<string> {
     reader.readAsDataURL(blob);
   });
 }
-
-const COURSE_SELECTION_LOCK_KEY = 'coe-course-selection-lock-v1';
 
 type CourseRow = {
   department: string;
@@ -67,6 +63,7 @@ export default function CourseList() {
   const [passwordError, setPasswordError] = useState('');
   const [validatingPassword, setValidatingPassword] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [selLoading, setSelLoading] = useState(false);
   const [ttScheduleMap, setTtScheduleMap] = useState<Record<string, string>>({});
   const [showTtModal, setShowTtModal] = useState(false);
   const [ttTargetCourseKey, setTtTargetCourseKey] = useState('');
@@ -83,6 +80,9 @@ export default function CourseList() {
 
   // Fetch departments on mount
   useEffect(() => {
+    // Hydrate TT schedule store from DB
+    hydrateTtScheduleStore().catch(() => {});
+
     let active = true;
     setLoadingDeps(true);
 
@@ -147,48 +147,34 @@ export default function CourseList() {
 
   const getCurrentFilterKey = () => `${department}::${semester}`;
 
-  const readLocks = (): Record<string, boolean> => {
-    if (typeof window === 'undefined') return {};
-    try {
-      const raw = window.localStorage.getItem(COURSE_SELECTION_LOCK_KEY);
-      if (!raw) return {};
-      const parsed = JSON.parse(raw) as Record<string, boolean>;
-      return parsed && typeof parsed === 'object' ? parsed : {};
-    } catch {
-      return {};
-    }
-  };
-
-  const writeLocks = (locks: Record<string, boolean>) => {
-    if (typeof window === 'undefined') return;
-    const keys = Object.keys(locks || {}).filter((k) => Boolean(locks[k]));
-    if (keys.length > 0) {
-      window.localStorage.setItem(COURSE_SELECTION_LOCK_KEY, JSON.stringify(locks));
-      return;
-    }
-    window.localStorage.removeItem(COURSE_SELECTION_LOCK_KEY);
-  };
-
-  const setFilterLock = (filterKey: string, lock: boolean) => {
-    const locks = readLocks();
-    if (lock) {
-      locks[filterKey] = true;
-    } else if (locks[filterKey]) {
-      delete locks[filterKey];
-    }
-    writeLocks(locks);
-  };
-
-  const isFilterLocked = (filterKey: string) => Boolean(readLocks()[filterKey]);
-
+  // ── Fetch persisted selections from DB on filter change ──
   useEffect(() => {
-    setSelectionMap(readCourseSelectionMap());
-  }, []);
-
-  useEffect(() => {
-    setIsLocked(isFilterLocked(getCurrentFilterKey()));
-    setHasUnsavedChanges(false);
-    setTtScheduleMap(readTTScheduleMap(getCurrentFilterKey()));
+    let active = true;
+    (async () => {
+      setSelLoading(true);
+      try {
+        const res = await fetchCoeCourseSel(getCurrentFilterKey());
+        if (!active) return;
+        if (res.selections && Object.keys(res.selections).length > 0) {
+          setSelectionMap(res.selections as Record<string, CourseSelection>);
+        } else {
+          setSelectionMap({});
+        }
+        setIsLocked(res.is_locked);
+      } catch {
+        if (!active) return;
+        setSelectionMap({});
+        setIsLocked(false);
+      } finally {
+        if (active) {
+          setSelLoading(false);
+          setHasUnsavedChanges(false);
+          setTtScheduleMap(readTTScheduleMap(getCurrentFilterKey()));
+        }
+      }
+    })();
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [department, semester]);
 
   useEffect(() => {
@@ -328,12 +314,11 @@ export default function CourseList() {
       }
 
       if (passwordMode === 'save') {
-        writeCourseSelectionMap(selectionMap);
-        setFilterLock(getCurrentFilterKey(), true);
+        await saveCoeCourseSel(getCurrentFilterKey(), selectionMap, true);
         setIsLocked(true);
         setHasUnsavedChanges(false);
       } else {
-        setFilterLock(getCurrentFilterKey(), false);
+        await saveCoeCourseSel(getCurrentFilterKey(), selectionMap, false);
         setIsLocked(false);
       }
 

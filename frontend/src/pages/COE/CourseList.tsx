@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 
-import { CoeStudentsMapResponse, fetchCoeStudentsMap } from '../../services/coe';
+import { CoeStudentsMapResponse, fetchCoeStudentsMap, fetchCoeCourseSel, saveCoeCourseSel } from '../../services/coe';
 import fetchWithAuth from '../../services/fetchAuth';
 import { getCachedMe } from '../../services/auth';
 import {
@@ -8,13 +8,10 @@ import {
   EseType,
   QpType,
   getCourseKey,
-  readCourseSelectionMap,
-  writeCourseSelectionMap,
 } from './courseSelectionStorage';
 
 const DEPARTMENTS = ['ALL', 'AIDS', 'AIML', 'CSE', 'CIVIL', 'ECE', 'EEE', 'IT', 'MECH'] as const;
 const SEMESTERS = ['SEM1', 'SEM2', 'SEM3', 'SEM4', 'SEM5', 'SEM6', 'SEM7', 'SEM8'] as const;
-const COURSE_SELECTION_LOCK_KEY = 'coe-course-selection-lock-v1';
 
 type CourseRow = {
   department: string;
@@ -38,50 +35,38 @@ export default function CourseList() {
   const [passwordError, setPasswordError] = useState('');
   const [validatingPassword, setValidatingPassword] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [selLoading, setSelLoading] = useState(false);
 
   const getCurrentFilterKey = () => `${department}::${semester}`;
 
-  const readLocks = (): Record<string, boolean> => {
-    if (typeof window === 'undefined') return {};
-    try {
-      const raw = window.localStorage.getItem(COURSE_SELECTION_LOCK_KEY);
-      if (!raw) return {};
-      const parsed = JSON.parse(raw) as Record<string, boolean>;
-      return parsed && typeof parsed === 'object' ? parsed : {};
-    } catch {
-      return {};
-    }
-  };
-
-  const writeLocks = (locks: Record<string, boolean>) => {
-    if (typeof window === 'undefined') return;
-    const keys = Object.keys(locks || {}).filter((k) => Boolean(locks[k]));
-    if (keys.length > 0) {
-      window.localStorage.setItem(COURSE_SELECTION_LOCK_KEY, JSON.stringify(locks));
-      return;
-    }
-    window.localStorage.removeItem(COURSE_SELECTION_LOCK_KEY);
-  };
-
-  const setFilterLock = (filterKey: string, lock: boolean) => {
-    const locks = readLocks();
-    if (lock) {
-      locks[filterKey] = true;
-    } else if (locks[filterKey]) {
-      delete locks[filterKey];
-    }
-    writeLocks(locks);
-  };
-
-  const isFilterLocked = (filterKey: string) => Boolean(readLocks()[filterKey]);
-
+  // ── Fetch persisted selections from DB on filter change ──
   useEffect(() => {
-    setSelectionMap(readCourseSelectionMap());
-  }, []);
-
-  useEffect(() => {
-    setIsLocked(isFilterLocked(getCurrentFilterKey()));
-    setHasUnsavedChanges(false);
+    let active = true;
+    (async () => {
+      setSelLoading(true);
+      try {
+        const res = await fetchCoeCourseSel(getCurrentFilterKey());
+        if (!active) return;
+        if (res.selections && Object.keys(res.selections).length > 0) {
+          setSelectionMap(res.selections as Record<string, CourseSelection>);
+        } else {
+          setSelectionMap({});
+        }
+        setIsLocked(res.is_locked);
+      } catch {
+        if (!active) return;
+        // If fetch fails, start with empty defaults
+        setSelectionMap({});
+        setIsLocked(false);
+      } finally {
+        if (active) {
+          setSelLoading(false);
+          setHasUnsavedChanges(false);
+        }
+      }
+    })();
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [department, semester]);
 
   useEffect(() => {
@@ -221,12 +206,13 @@ export default function CourseList() {
       }
 
       if (passwordMode === 'save') {
-        writeCourseSelectionMap(selectionMap);
-        setFilterLock(getCurrentFilterKey(), true);
+        // Persist selections + locked to the database
+        await saveCoeCourseSel(getCurrentFilterKey(), selectionMap, true);
         setIsLocked(true);
         setHasUnsavedChanges(false);
       } else {
-        setFilterLock(getCurrentFilterKey(), false);
+        // Unlock in database
+        await saveCoeCourseSel(getCurrentFilterKey(), selectionMap, false);
         setIsLocked(false);
       }
 
@@ -301,7 +287,7 @@ export default function CourseList() {
           ) : (
             <button
               onClick={openSaveConfirm}
-              disabled={loading || rows.length === 0 || !hasUnsavedChanges}
+              disabled={loading || selLoading || rows.length === 0 || !hasUnsavedChanges}
               className="rounded-lg px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Save

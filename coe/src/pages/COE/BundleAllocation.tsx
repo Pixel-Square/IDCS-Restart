@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { CoeCourseStudent, fetchCoeStudentsMap } from '../../services/coe';
-import { getCourseKey, readCourseSelectionMap } from './courseSelectionStorage';
+import { getCourseKey, fetchCourseSelectionMapFromApi } from './courseSelectionStorage';
 import fetchWithAuth from '../../services/fetchAuth';
 import { getCachedMe } from '../../services/auth';
 import {
@@ -192,7 +192,7 @@ export default function BundleAllocation() {
             .filter((row) => row.semester === semester)
             .map((row) => [row.dummy, row])
         );
-        const selectionMap = readCourseSelectionMap();
+        const selectionMap = await fetchCourseSelectionMapFromApi(department, semester);
 
           let globalSequence = startSequence;          const shuffledCourses: BundleCourse[] = [];        response.departments.forEach((deptBlock) => {
           const deptCode = DEPARTMENT_DUMMY_DIGITS[deptBlock.department] || '9';
