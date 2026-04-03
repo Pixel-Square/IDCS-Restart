@@ -929,15 +929,9 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         }
         if (!mounted) return;
         const roster = (data.students || []).slice().sort((a, b) => {
-          const an = String(a?.name || '').trim().toLowerCase();
-          const bn = String(b?.name || '').trim().toLowerCase();
-          if (an && bn) {
-            const byName = an.localeCompare(bn);
-            if (byName) return byName;
-          } else if (an || bn) {
-            return an ? -1 : 1;
-          }
-          return String(a?.reg_no || '').localeCompare(String(b?.reg_no || ''), undefined, { numeric: true, sensitivity: 'base' });
+          const aLast3 = parseInt(String(a?.reg_no || '').slice(-3), 10);
+          const bLast3 = parseInt(String(b?.reg_no || '').slice(-3), 10);
+          return (isNaN(aLast3) ? 9999 : aLast3) - (isNaN(bLast3) ? 9999 : bLast3);
         });
 
         setStudents(roster);

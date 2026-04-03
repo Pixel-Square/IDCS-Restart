@@ -7978,8 +7978,15 @@ class ExtStaffProfileListCreateView(APIView):
     permission_classes = (IsAuthenticated,)
 
     def _check_permission(self, request):
-        if not request.user.is_superuser and not request.user.has_perm('academics.view_staffs_page'):
-            raise PermissionDenied('You do not have permission to manage ext staff profiles.')
+        user = request.user
+        if user.is_superuser or user.has_perm('academics.view_staffs_page'):
+            return
+        try:
+            if user.roles.filter(name__iexact='IQAC').exists() or user.roles.filter(name__iexact='COE').exists():
+                return
+        except Exception:
+            pass
+        raise PermissionDenied('You do not have permission to manage ext staff profiles.')
 
     def get(self, request):
         self._check_permission(request)
@@ -8005,8 +8012,15 @@ class ExtStaffProfileDetailView(APIView):
     permission_classes = (IsAuthenticated,)
 
     def _check_permission(self, request):
-        if not request.user.is_superuser and not request.user.has_perm('academics.view_staffs_page'):
-            raise PermissionDenied('You do not have permission to manage ext staff profiles.')
+        user = request.user
+        if user.is_superuser or user.has_perm('academics.view_staffs_page'):
+            return
+        try:
+            if user.roles.filter(name__iexact='IQAC').exists() or user.roles.filter(name__iexact='COE').exists():
+                return
+        except Exception:
+            pass
+        raise PermissionDenied('You do not have permission to manage ext staff profiles.')
 
     def _get_obj(self, pk):
         from .models import ExtStaffProfile
@@ -8043,9 +8057,9 @@ class ExtStaffProfileBulkDeleteView(APIView):
     def post(self, request):
         current_user = request.user
         if not current_user.is_superuser and not current_user.has_perm('academics.view_staffs_page'):
-            # Also allow IQAC role
+            # Also allow IQAC and COE roles
             try:
-                if not current_user.roles.filter(name__iexact='IQAC').exists():
+                if not (current_user.roles.filter(name__iexact='IQAC').exists() or current_user.roles.filter(name__iexact='COE').exists()):
                     return Response(
                         {'detail': 'You do not have permission to delete ext staff profiles.'},
                         status=status.HTTP_403_FORBIDDEN,
@@ -8096,8 +8110,15 @@ class ExtStaffProfileUsersView(APIView):
     permission_classes = (IsAuthenticated,)
 
     def get(self, request):
-        if not request.user.is_superuser and not request.user.has_perm('academics.view_staffs_page'):
-            raise PermissionDenied()
+        user = request.user
+        if user.is_superuser or user.has_perm('academics.view_staffs_page'):
+            pass  # allowed
+        else:
+            try:
+                if not (user.roles.filter(name__iexact='IQAC').exists() or user.roles.filter(name__iexact='COE').exists()):
+                    raise PermissionDenied()
+            except Exception:
+                raise PermissionDenied()
         from django.contrib.auth import get_user_model
         from .models import ExtStaffProfile
         User = get_user_model()
@@ -8121,8 +8142,8 @@ class ExtStaffProfileBulkImportView(APIView):
     POST /api/academics/ext-staff-profiles/import/
 
     Expected columns (case-insensitive, spaces/underscores ignored):
-        Username, Email, Password, First Name, Last Name, Designation, Organisation,
-        Department, Mobile, Gender, Qualification, PhD Status, Total Experience,
+        Username, Email, Password, First Name, Last Name, Designation, College Name,
+        Department, Mobile, Gender, PhD Status, Total Experience,
         Date of Birth, Notes
 
     Required: Username, Email, First Name
@@ -8138,7 +8159,7 @@ class ExtStaffProfileBulkImportView(APIView):
         if user.has_perm('academics.view_staffs_page'):
             return True
         try:
-            if user.roles.filter(name__iexact='IQAC').exists():
+            if user.roles.filter(name__iexact='IQAC').exists() or user.roles.filter(name__iexact='COE').exists():
                 return True
         except Exception:
             pass
@@ -8228,7 +8249,7 @@ class ExtStaffProfileBulkImportView(APIView):
         seen_emails: set[str] = set()
 
         # Get or create Ext_staff group
-        ext_staff_group, _ = Group.objects.get_or_create(name='Ext_staff')
+        ext_staff_group, _ = Group.objects.get_or_create(name='EXT_STAFF')
 
         for idx, row in enumerate(rows, start=2):  # row 1 is header
             salutation   = self._col(row, 'salutation', 'title', 'prefix')
@@ -8239,7 +8260,8 @@ class ExtStaffProfileBulkImportView(APIView):
             first_name   = self._col(row, 'firstname', 'first name', 'first_name')
             last_name    = self._col(row, 'lastname', 'last name', 'last_name')
             designation  = self._col(row, 'designation', 'desig')
-            organisation = self._col(row, 'organisation', 'organization', 'org', 'department', 'dept', 'department working in')
+            college_name = self._col(row, 'collegename', 'college name', 'college', 'nameofcollege', 'name of college', 'institute')
+            department   = self._col(row, 'department', 'dept', 'department working in')
             mobile       = self._col(row, 'mobile', 'mobilenumber', 'mobile number', 'phone', 'contact')
             gender       = self._col(row, 'gender', 'genderspecification', 'gender specification')
             ug_spec      = self._col(row, 'ugspecialization', 'ug specialization', 'ug with specialization', 'ug')
@@ -8326,10 +8348,10 @@ class ExtStaffProfileBulkImportView(APIView):
                         defaults={
                             'salutation': salutation,
                             'designation': designation,
-                            'organisation': organisation,
+                            'college_name': college_name,
                             'teaching': teaching,
                             'faculty_id': faculty_id,
-                            'department': organisation,
+                            'department': department,
                             'mobile': mobile,
                             'gender': gender,
                             'ug_specialization': ug_spec,
@@ -8373,10 +8395,10 @@ class ExtStaffProfileBulkImportView(APIView):
                     user=new_user,
                     salutation=salutation,
                     designation=designation,
-                    organisation=organisation,
+                    college_name=college_name,
                     teaching=teaching,
                     faculty_id=faculty_id,
-                    department=organisation,  # organisation is also the department
+                    department=department,
                     mobile=mobile,
                     gender=gender,
                     ug_specialization=ug_spec,
@@ -8402,3 +8424,365 @@ class ExtStaffProfileBulkImportView(APIView):
             'total': len(rows),
             'errors': errors,
         })
+
+
+# ---------------------------------------------------------------------------
+# ExtStaffFormSettings views - Registration form management
+# ---------------------------------------------------------------------------
+
+class ExtStaffFormSettingsView(APIView):
+    """
+    GET  /api/academics/ext-staff-form/settings/  - Get form settings
+    PUT  /api/academics/ext-staff-form/settings/  - Update form settings
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def _check_permission(self, request):
+        user = request.user
+        if user.is_superuser or user.has_perm('academics.view_staffs_page'):
+            return
+        try:
+            if user.roles.filter(name__iexact='IQAC').exists() or user.roles.filter(name__iexact='COE').exists():
+                return
+        except Exception:
+            pass
+        raise PermissionDenied('You do not have permission to manage ext staff form settings.')
+
+    def get(self, request):
+        self._check_permission(request)
+        from .models import ExtStaffFormSettings
+        settings_obj = ExtStaffFormSettings.get_or_create_settings()
+        
+        # Build the share URL
+        share_url = request.build_absolute_uri(f'/ext-register/{settings_obj.form_code}/')
+        
+        return Response({
+            'form_code': settings_obj.form_code,
+            'form_title': settings_obj.form_title,
+            'form_description': settings_obj.form_description,
+            'is_accepting_responses': settings_obj.is_accepting_responses,
+            'field_config': settings_obj.field_config,
+            'share_url': share_url,
+            'available_fields': ExtStaffFormSettings.get_available_fields(),
+            'updated_at': settings_obj.updated_at,
+        })
+
+    def put(self, request):
+        self._check_permission(request)
+        from .models import ExtStaffFormSettings
+        settings_obj = ExtStaffFormSettings.get_or_create_settings()
+        
+        data = request.data
+        if 'form_title' in data:
+            settings_obj.form_title = data['form_title']
+        if 'form_description' in data:
+            settings_obj.form_description = data['form_description']
+        if 'is_accepting_responses' in data:
+            settings_obj.is_accepting_responses = data['is_accepting_responses']
+        if 'field_config' in data:
+            settings_obj.field_config = data['field_config']
+        
+        settings_obj.updated_by = request.user
+        settings_obj.save()
+        
+        share_url = request.build_absolute_uri(f'/ext-register/{settings_obj.form_code}/')
+        
+        return Response({
+            'form_code': settings_obj.form_code,
+            'form_title': settings_obj.form_title,
+            'form_description': settings_obj.form_description,
+            'is_accepting_responses': settings_obj.is_accepting_responses,
+            'field_config': settings_obj.field_config,
+            'share_url': share_url,
+            'updated_at': settings_obj.updated_at,
+        })
+
+
+class ExtStaffPublicFormView(APIView):
+    """
+    GET  /api/academics/ext-staff-form/public/<form_code>/  - Get public form config
+    POST /api/academics/ext-staff-form/public/<form_code>/  - Submit registration
+    """
+    permission_classes = []  # Public endpoint
+    authentication_classes = []  # No auth required
+
+    def get(self, request, form_code):
+        from .models import ExtStaffFormSettings
+        try:
+            settings_obj = ExtStaffFormSettings.objects.get(form_code=form_code)
+        except ExtStaffFormSettings.DoesNotExist:
+            return Response({'detail': 'Form not found.'}, status=status.HTTP_404_NOT_FOUND)
+        
+        if not settings_obj.is_accepting_responses:
+            return Response({
+                'form_code': form_code,
+                'form_title': settings_obj.form_title,
+                'is_accepting_responses': False,
+                'message': 'This form is currently not accepting responses.',
+            })
+        
+        # Return only enabled fields
+        enabled_fields = [f for f in settings_obj.field_config if f.get('enabled', False)]
+        enabled_fields.sort(key=lambda x: x.get('order', 999))
+        
+        return Response({
+            'form_code': form_code,
+            'form_title': settings_obj.form_title,
+            'form_description': settings_obj.form_description,
+            'is_accepting_responses': True,
+            'fields': enabled_fields,
+        })
+
+    def post(self, request, form_code):
+        from .models import ExtStaffFormSettings, ExtStaffProfile
+        from django.contrib.auth import get_user_model
+        
+        User = get_user_model()
+        
+        try:
+            settings_obj = ExtStaffFormSettings.objects.get(form_code=form_code)
+        except ExtStaffFormSettings.DoesNotExist:
+            return Response({'detail': 'Form not found.'}, status=status.HTTP_404_NOT_FOUND)
+        
+        if not settings_obj.is_accepting_responses:
+            return Response(
+                {'detail': 'This form is not accepting responses.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        data = request.data
+        errors = {}
+        
+        # Get user_id from signup step
+        user_id = data.get('user_id')
+        if not user_id:
+            return Response(
+                {'detail': 'User ID is required. Please complete signup first.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            user = User.objects.get(pk=user_id)
+        except User.DoesNotExist:
+            return Response(
+                {'detail': 'Invalid user. Please signup again.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Get enabled fields for validation
+        enabled_fields = [f for f in settings_obj.field_config if f.get('enabled', False)]
+        
+        # Validate required fields (exclude email since already captured in signup)
+        for field in enabled_fields:
+            field_name = field['field']
+            if field_name == 'email':  # Email already captured
+                continue
+            if field.get('required', False):
+                value = data.get(field_name, '')
+                if not value or (isinstance(value, str) and not value.strip()):
+                    errors[field_name] = f"{field.get('label', field_name)} is required."
+        
+        # Validate full_name
+        full_name = data.get('full_name', '').strip()
+        if not full_name:
+            errors['full_name'] = 'Full Name is required.'
+        
+        if errors:
+            return Response({'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Update user's name
+        salutation = data.get('salutation', '').strip()
+        if salutation and full_name:
+            username = f"{salutation} {full_name}"
+        else:
+            username = full_name
+        
+        # Parse date_of_birth
+        dob = data.get('date_of_birth', '')
+        parsed_dob = None
+        if dob:
+            from datetime import datetime
+            for fmt in ('%Y-%m-%d', '%d-%m-%Y', '%d/%m/%Y'):
+                try:
+                    parsed_dob = datetime.strptime(dob, fmt).date()
+                    break
+                except ValueError:
+                    continue
+        
+        try:
+            # Update user info
+            user.username = username
+            user.first_name = full_name
+            user.save()
+            
+            # Handle file upload for passbook_proof
+            passbook_file = request.FILES.get('passbook_proof')
+            
+            # Get or create ExtStaffProfile
+            profile, _ = ExtStaffProfile.objects.get_or_create(user=user)
+            
+            # Update profile fields
+            profile.salutation = salutation
+            profile.designation = data.get('designation', '')
+            profile.college_name = data.get('college_name', '')
+            profile.teaching = data.get('teaching', '')
+            profile.faculty_id = data.get('faculty_id', '')
+            profile.department = data.get('department', '')
+            profile.mobile = data.get('mobile', '')
+            profile.gender = data.get('gender', '')
+            profile.ug_specialization = data.get('ug_specialization', '')
+            profile.pg_specialization = data.get('pg_specialization', '')
+            profile.phd_status = data.get('phd_status', '')
+            profile.total_experience = data.get('total_experience', '')
+            profile.engg_college_experience = data.get('engg_college_experience', '')
+            profile.date_of_birth = parsed_dob
+            profile.account_holder_name = data.get('account_holder_name', '')
+            profile.account_number = data.get('account_number', '')
+            profile.bank_name = data.get('bank_name', '')
+            profile.bank_branch_name = data.get('bank_branch_name', '')
+            profile.ifsc_code = data.get('ifsc_code', '')
+            profile.is_active = True
+            
+            if passbook_file:
+                profile.passbook_proof = passbook_file
+            
+            profile.save()
+            
+            return Response({
+                'success': True,
+                'message': 'Registration successful! Your profile has been saved.',
+                'ext_uid': profile.ext_uid,
+                'username': username,
+                'email': user.email,
+            }, status=status.HTTP_201_CREATED)
+            
+        except Exception as exc:
+            return Response(
+                {'detail': f'Registration failed: {str(exc)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class ExtStaffCheckEmailView(APIView):
+    """
+    POST /api/academics/ext-staff-form/public/<form_code>/check-email/
+    Check if email already exists in the system.
+    """
+    permission_classes = []
+    authentication_classes = []
+
+    def post(self, request, form_code):
+        from .models import ExtStaffFormSettings
+        from django.contrib.auth import get_user_model
+        
+        User = get_user_model()
+        
+        # Verify form exists and is accepting responses
+        try:
+            settings_obj = ExtStaffFormSettings.objects.get(form_code=form_code)
+        except ExtStaffFormSettings.DoesNotExist:
+            return Response({'detail': 'Form not found.'}, status=status.HTTP_404_NOT_FOUND)
+        
+        if not settings_obj.is_accepting_responses:
+            return Response(
+                {'detail': 'This form is not accepting responses.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        email = request.data.get('email', '').strip().lower()
+        if not email:
+            return Response({'error': 'Email is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check if email exists
+        exists = User.objects.filter(email__iexact=email).exists()
+        
+        return Response({
+            'email': email,
+            'exists': exists,
+            'message': 'Email already registered. Please login to update your profile.' if exists else 'Email available for registration.',
+        })
+
+
+class ExtStaffSignupView(APIView):
+    """
+    POST /api/academics/ext-staff-form/public/<form_code>/signup/
+    Create a new user with email and password.
+    """
+    permission_classes = []
+    authentication_classes = []
+
+    def post(self, request, form_code):
+        from .models import ExtStaffFormSettings, ExtStaffProfile
+        from django.contrib.auth import get_user_model
+        from django.contrib.auth.models import Group
+        
+        User = get_user_model()
+        
+        # Verify form exists and is accepting responses
+        try:
+            settings_obj = ExtStaffFormSettings.objects.get(form_code=form_code)
+        except ExtStaffFormSettings.DoesNotExist:
+            return Response({'detail': 'Form not found.'}, status=status.HTTP_404_NOT_FOUND)
+        
+        if not settings_obj.is_accepting_responses:
+            return Response(
+                {'detail': 'This form is not accepting responses.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        email = request.data.get('email', '').strip().lower()
+        password = request.data.get('password', '')
+        confirm_password = request.data.get('confirm_password', '')
+        
+        errors = {}
+        
+        # Validate email
+        if not email:
+            errors['email'] = 'Email is required.'
+        elif User.objects.filter(email__iexact=email).exists():
+            errors['email'] = 'Email already registered.'
+        
+        # Validate password
+        if not password:
+            errors['password'] = 'Password is required.'
+        elif len(password) < 6:
+            errors['password'] = 'Password must be at least 6 characters.'
+        
+        # Validate confirm password
+        if password != confirm_password:
+            errors['confirm_password'] = 'Passwords do not match.'
+        
+        if errors:
+            return Response({'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            # Create user with email as username initially
+            new_user = User.objects.create_user(
+                username=email,
+                email=email,
+                password=password,
+            )
+            
+            # Add to Ext_staff group
+            ext_staff_group, _ = Group.objects.get_or_create(name='EXT_STAFF')
+            new_user.groups.add(ext_staff_group)
+            
+            # Create empty ExtStaffProfile
+            profile = ExtStaffProfile.objects.create(
+                user=new_user,
+                is_active=True,
+            )
+            
+            return Response({
+                'success': True,
+                'message': 'Account created successfully. Please complete your profile.',
+                'user_id': new_user.id,
+                'email': email,
+                'ext_uid': profile.ext_uid,
+            }, status=status.HTTP_201_CREATED)
+            
+        except Exception as exc:
+            return Response(
+                {'detail': f'Signup failed: {str(exc)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

@@ -52,6 +52,7 @@ from .rfreader_views import RFReaderGateListCreateView, RFReaderStudentListCreat
 from .public_views import PublicProfileLookupView
 from .barcode_views import StudentBarcodeLookupView
 from .views import ExtStaffProfileListCreateView, ExtStaffProfileDetailView, ExtStaffProfileUsersView, ExtStaffProfileBulkImportView, ExtStaffProfileBulkDeleteView
+from .views import ExtStaffFormSettingsView, ExtStaffPublicFormView, ExtStaffCheckEmailView, ExtStaffSignupView
 
 
 router = DefaultRouter()
@@ -174,4 +175,10 @@ urlpatterns = [
     path('ext-staff-profiles/import/', ExtStaffProfileBulkImportView.as_view(), name='ext-staff-profiles-import'),
     path('ext-staff-profiles/bulk-delete/', ExtStaffProfileBulkDeleteView.as_view(), name='ext-staff-profiles-bulk-delete'),
     path('ext-staff-profiles/<int:pk>/', ExtStaffProfileDetailView.as_view(), name='ext-staff-profiles-detail'),
+    
+    # External Staff Registration Form
+    path('ext-staff-form/settings/', ExtStaffFormSettingsView.as_view(), name='ext-staff-form-settings'),
+    path('ext-staff-form/public/<str:form_code>/', ExtStaffPublicFormView.as_view(), name='ext-staff-form-public'),
+    path('ext-staff-form/public/<str:form_code>/check-email/', ExtStaffCheckEmailView.as_view(), name='ext-staff-check-email'),
+    path('ext-staff-form/public/<str:form_code>/signup/', ExtStaffSignupView.as_view(), name='ext-staff-signup'),
 ]

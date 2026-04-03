@@ -355,6 +355,26 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
     }
   }
 
+  // ── Filter state ──────────────────────────────────────────────────────
+  const [regNoFilter, setRegNoFilter] = useState('');
+
+  const filteredRows = useMemo(() => {
+    const trimmed = regNoFilter.trim();
+    const filtered = !trimmed
+      ? rows
+      : rows.filter((r) => {
+          const regNo = r.student.reg_no ?? '';
+          const last3 = regNo.slice(-3);
+          return last3.startsWith(trimmed);
+        });
+    // Sort by last 3 digits of reg_no numerically
+    return [...filtered].sort((a, b) => {
+      const aLast3 = parseInt(a.student.reg_no?.slice(-3) ?? '0', 10);
+      const bLast3 = parseInt(b.student.reg_no?.slice(-3) ?? '0', 10);
+      return aLast3 - bLast3;
+    });
+  }, [rows, regNoFilter]);
+
   // ── Render ────────────────────────────────────────────────────────────
   const isViewOnly   = editRequestsBlocked || (isPublished && !editRequestPending);
   const flaggedCount = rows.filter((r) => r.needsCqi).length;
@@ -461,6 +481,40 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
         </div>
       )}
 
+      {/* Reg No Filter */}
+      <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+        <label style={{ fontSize: 12, fontWeight: 700, color: '#475569', whiteSpace: 'nowrap' }}>
+          Filter by Last 3 Digits of Reg No:
+        </label>
+        <input
+          type="text"
+          maxLength={3}
+          value={regNoFilter}
+          onChange={(e) => setRegNoFilter(e.target.value.replace(/\D/g, ''))}
+          placeholder="e.g. 023"
+          style={{
+            padding: '5px 10px', borderRadius: 6, border: '1px solid #cbd5e1',
+            fontSize: 12, width: 90,
+          }}
+        />
+        {regNoFilter && (
+          <button
+            onClick={() => setRegNoFilter('')}
+            style={{
+              padding: '4px 10px', borderRadius: 6, border: '1px solid #cbd5e1',
+              background: '#f1f5f9', fontSize: 12, cursor: 'pointer', fontWeight: 600, color: '#475569',
+            }}
+          >
+            Clear
+          </button>
+        )}
+        {regNoFilter && (
+          <span style={{ fontSize: 12, color: '#64748b' }}>
+            {filteredRows.length} of {rows.length} students
+          </span>
+        )}
+      </div>
+
       {/* Table */}
       <div style={{ overflowX: 'auto', marginBottom: 16 }}>
         <table style={{ borderCollapse: 'collapse', minWidth: 700, width: '100%' }}>
@@ -478,7 +532,7 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
             </tr>
           </thead>
           <tbody>
-            {rows.map((r, idx) => {
+            {filteredRows.map((r, idx) => {
               const sid = String(r.student.id);
               const rowBg = r.needsCqi ? '#fef2f2' : idx % 2 === 0 ? '#fff' : '#f9fafb';
               return (
@@ -577,6 +631,13 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
               <tr>
                 <td colSpan={9} style={{ ...cellStyle, color: '#94a3b8', textAlign: 'center', padding: 24 }}>
                   No student data available. Ensure Review 1 and Review 2 are published first.
+                </td>
+              </tr>
+            )}
+            {rows.length > 0 && filteredRows.length === 0 && (
+              <tr>
+                <td colSpan={9} style={{ ...cellStyle, color: '#94a3b8', textAlign: 'center', padding: 24 }}>
+                  No students match the filter &ldquo;{regNoFilter}&rdquo;.
                 </td>
               </tr>
             )}

@@ -83,7 +83,7 @@ function CopyButton({ text }: { text: string }) {
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
-export default function ExtStaffProfilesPage() {
+export default function ExternalManagement() {
   const [availableUsers, setAvailableUsers] = useState<AvailableUser[]>([]);
   const [profiles, setProfiles] = useState<ExtStaffProfile[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
@@ -425,31 +425,18 @@ export default function ExtStaffProfilesPage() {
   // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
-    <div style={{ padding: 24, maxWidth: 1300, margin: '0 auto' }}>
+    <div className="rounded-2xl border border-[#d9b7ac] bg-white/95 p-6 shadow-[0_20px_45px_-30px_rgba(111,29,52,0.55)]">
       {/* Header */}
       <div style={{ marginBottom: 20, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <div style={{ fontSize: 22, fontWeight: 900, color: '#111827' }}>External Staff Profiles</div>
+          <div className="text-xl font-bold text-[#5a192f]">External Staff Profiles</div>
           <div style={{ fontSize: 13, color: '#6b7280', marginTop: 4 }}>
             Select a user from the left panel (click <strong>+</strong> or drag into the table) to create an External Staff Profile with a unique 16-character UID.
           </div>
         </div>
         <button
           onClick={() => setImportModalOpen(true)}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            padding: '8px 14px',
-            background: 'linear-gradient(180deg, #4f46e5, #4338ca)',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 8,
-            fontWeight: 700,
-            fontSize: 13,
-            cursor: 'pointer',
-            boxShadow: '0 1px 3px rgba(67, 56, 202, 0.25)',
-          }}
+          className="inline-flex items-center gap-2 rounded-lg bg-[#6f1d34] px-4 py-2 text-sm font-semibold text-white hover:bg-[#591729]"
         >
           <Upload size={15} />
           Import External Staff
@@ -611,9 +598,9 @@ export default function ExtStaffProfilesPage() {
             onDragLeave={() => setDragOver(false)}
             onDrop={handleDrop}
             style={{
-              border: dragOver ? '2px dashed #3b82f6' : '1px solid #e5e7eb',
+              border: dragOver ? '2px dashed #6f1d34' : '1px solid #e5e7eb',
               borderRadius: 12,
-              background: dragOver ? '#eff6ff' : '#fff',
+              background: dragOver ? '#fdf2f4' : '#fff',
               overflow: 'hidden',
               transition: 'border 0.15s, background 0.15s',
             }}
@@ -655,7 +642,7 @@ export default function ExtStaffProfilesPage() {
                 </button>
               )}
               {dragOver && (
-                <span style={{ fontSize: 12, color: '#2563eb', fontWeight: 700 }}>Drop to add →</span>
+                <span style={{ fontSize: 12, color: '#6f1d34', fontWeight: 700 }}>Drop to add →</span>
               )}
               <div style={{ position: 'relative' }}>
                 <Search size={13} style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: '#9ca3af' }} />
@@ -732,7 +719,7 @@ export default function ExtStaffProfilesPage() {
                     filteredProfiles.map((p, idx) => (
                       <tr
                         key={p.id}
-                        style={{ background: selectedIds.has(p.id) ? '#eff6ff' : idx % 2 === 1 ? '#f9fafb' : '#fff' }}
+                        style={{ background: selectedIds.has(p.id) ? '#fdf2f4' : idx % 2 === 1 ? '#f9fafb' : '#fff' }}
                       >
                         <td style={{ padding: '8px 12px', textAlign: 'center' }}>
                           <input
@@ -766,7 +753,7 @@ export default function ExtStaffProfilesPage() {
                               href={p.passbook_proof}
                               target="_blank"
                               rel="noopener noreferrer"
-                              style={{ color: '#2563eb', textDecoration: 'underline', fontSize: 12 }}
+                              style={{ color: '#6f1d34', textDecoration: 'underline', fontSize: 12 }}
                             >
                               View
                             </a>
@@ -776,14 +763,14 @@ export default function ExtStaffProfilesPage() {
                           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                             <code
                               style={{
-                                background: '#eff6ff',
-                                border: '1px solid #bfdbfe',
+                                background: '#fdf2f4',
+                                border: '1px solid #f5c6cb',
                                 borderRadius: 5,
                                 padding: '2px 6px',
                                 fontSize: 11,
                                 fontFamily: 'monospace',
                                 letterSpacing: 0.5,
-                                color: '#1d4ed8',
+                                color: '#6f1d34',
                                 fontWeight: 800,
                               }}
                             >
@@ -877,16 +864,16 @@ export default function ExtStaffProfilesPage() {
             </div>
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
               <button
-                className="obe-btn"
                 onClick={() => setConfirmDelete(null)}
                 disabled={deletingId === confirmDelete.id}
+                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
               >
                 Cancel
               </button>
               <button
-                className="obe-btn obe-btn-danger"
                 onClick={() => deleteProfile(confirmDelete)}
                 disabled={deletingId === confirmDelete.id}
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700"
               >
                 {deletingId === confirmDelete.id ? 'Removing…' : 'Remove'}
               </button>
@@ -929,16 +916,16 @@ export default function ExtStaffProfilesPage() {
             </div>
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
               <button
-                className="obe-btn"
                 onClick={() => setConfirmBulkDelete(false)}
                 disabled={bulkDeleting}
+                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
               >
                 Cancel
               </button>
               <button
-                className="obe-btn obe-btn-danger"
                 onClick={bulkDeleteProfiles}
                 disabled={bulkDeleting}
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700"
               >
                 {bulkDeleting ? 'Deleting…' : `Delete ${selectedIds.size}`}
               </button>
@@ -986,7 +973,7 @@ export default function ExtStaffProfilesPage() {
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Upload size={18} style={{ color: '#4f46e5' }} />
+                <Upload size={18} style={{ color: '#6f1d34' }} />
                 <span style={{ fontWeight: 800, fontSize: 16, color: '#111827' }}>Import External Staff</span>
               </div>
               <button
@@ -1008,20 +995,20 @@ export default function ExtStaffProfilesPage() {
               {/* Info box */}
               <div
                 style={{
-                  background: '#eef2ff',
-                  border: '1px solid #c7d2fe',
+                  background: '#fdf2f4',
+                  border: '1px solid #f5c6cb',
                   borderRadius: 10,
                   padding: 14,
                   marginBottom: 20,
                 }}
               >
                 <div style={{ display: 'flex', gap: 10 }}>
-                  <FileText size={18} style={{ color: '#4f46e5', flexShrink: 0, marginTop: 2 }} />
+                  <FileText size={18} style={{ color: '#6f1d34', flexShrink: 0, marginTop: 2 }} />
                   <div>
-                    <div style={{ fontWeight: 700, fontSize: 13, color: '#3730a3', marginBottom: 6 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13, color: '#5a192f', marginBottom: 6 }}>
                       Step 1 — Download the template
                     </div>
-                    <div style={{ fontSize: 12, color: '#4338ca', marginBottom: 10, lineHeight: 1.5 }}>
+                    <div style={{ fontSize: 12, color: '#6f4a3f', marginBottom: 10, lineHeight: 1.5 }}>
                       Fill in the template with external staff details. The template includes columns for:
                       <br />
                       <strong>Username</strong>, <strong>Email</strong>, <strong>First Name</strong> (required) —
@@ -1029,19 +1016,7 @@ export default function ExtStaffProfilesPage() {
                     </div>
                     <button
                       onClick={handleDownloadTemplate}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 6,
-                        padding: '7px 12px',
-                        background: '#4f46e5',
-                        color: '#fff',
-                        border: 'none',
-                        borderRadius: 6,
-                        fontWeight: 700,
-                        fontSize: 12,
-                        cursor: 'pointer',
-                      }}
+                      className="inline-flex items-center gap-2 rounded-lg bg-[#6f1d34] px-3 py-2 text-sm font-semibold text-white hover:bg-[#591729]"
                     >
                       <Download size={14} />
                       Download Template
@@ -1166,16 +1141,7 @@ export default function ExtStaffProfilesPage() {
                 <button
                   onClick={handleImportModalClose}
                   disabled={importing}
-                  style={{
-                    padding: '8px 16px',
-                    background: '#fff',
-                    border: '1px solid #d1d5db',
-                    borderRadius: 8,
-                    fontWeight: 600,
-                    fontSize: 13,
-                    cursor: importing ? 'not-allowed' : 'pointer',
-                    color: '#374151',
-                  }}
+                  className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
                 >
                   {importResult ? 'Close' : 'Cancel'}
                 </button>
@@ -1183,16 +1149,9 @@ export default function ExtStaffProfilesPage() {
                   <button
                     onClick={handleImportUpload}
                     disabled={!importFile || importing}
-                    style={{
-                      padding: '8px 16px',
-                      background: !importFile || importing ? '#9ca3af' : '#4f46e5',
-                      color: '#fff',
-                      border: 'none',
-                      borderRadius: 8,
-                      fontWeight: 700,
-                      fontSize: 13,
-                      cursor: !importFile || importing ? 'not-allowed' : 'pointer',
-                    }}
+                    className={`rounded-lg px-4 py-2 text-sm font-semibold text-white ${
+                      !importFile || importing ? 'bg-gray-400 cursor-not-allowed' : 'bg-[#6f1d34] hover:bg-[#591729]'
+                    }`}
                   >
                     {importing ? 'Importing…' : 'Upload & Import'}
                   </button>

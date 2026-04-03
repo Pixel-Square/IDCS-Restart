@@ -138,11 +138,13 @@ class MobileOtp(models.Model):
 
 
 def _get_profile_type(user):
-    # Return 'STUDENT' or 'STAFF' based on attached profile
+    # Return 'STUDENT', 'STAFF', or 'EXT_STAFF' based on attached profile
     if hasattr(user, 'student_profile') and user.student_profile is not None:
         return 'STUDENT'
     if hasattr(user, 'staff_profile') and user.staff_profile is not None:
         return 'STAFF'
+    if hasattr(user, 'ext_staff_profile') and user.ext_staff_profile is not None:
+        return 'EXT_STAFF'
     return None
 
 
@@ -153,7 +155,7 @@ def validate_roles_for_user(user, roles):
     """
     profile = _get_profile_type(user)
     if profile is None:
-        raise ValidationError('User must have exactly one profile (student or staff) before assigning roles.')
+        raise ValidationError('User must have exactly one profile (student, staff, or external staff) before assigning roles.')
 
     # normalize role names
     role_names = {getattr(r, 'name', str(r)).upper() for r in roles}
@@ -177,10 +179,15 @@ def validate_roles_for_user(user, roles):
         'PRINCIPAL',
         'PS',
     }
+    
+    # External staff can only have EXT_STAFF role
+    EXT_STAFF_ALLOWED = {'EXT_STAFF'}
 
 
     if profile == 'STUDENT':
         invalid = role_names - STUDENT_ALLOWED
+    elif profile == 'EXT_STAFF':
+        invalid = role_names - EXT_STAFF_ALLOWED
     else:
         invalid = role_names & {'STUDENT'}  # staff must not have STUDENT
 
